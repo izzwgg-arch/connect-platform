@@ -14,7 +14,8 @@
     "@connect/db": "workspace:*",
     "@connect/integrations": "workspace:*",
     "bullmq": "^5.58.0",
-    "ioredis": "^5.8.0"
+    "ioredis": "^5.8.0",
+    "@connect/security": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.20.5",

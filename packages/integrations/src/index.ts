@@ -21,6 +21,13 @@ export interface PbxProvider {
   fetchCdr(input: { tenantId: string; from: string; to: string }): Promise<Array<Record<string, unknown>>>;
 }
 
+export type TwilioCredentials = {
+  accountSid: string;
+  authToken: string;
+  messagingServiceSid?: string;
+  fromNumber?: string;
+};
+
 export class FakeNumberProvider implements NumberProvider {
   async searchNumbers(_input: { areaCode?: string; type?: string }): Promise<Array<{ e164: string; monthlyPrice: number }>> {
     return [
@@ -38,40 +45,58 @@ export class FakeNumberProvider implements NumberProvider {
 export class FakeSmsProvider implements SmsProvider {
   async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId: string }> {
     const providerMessageId = `fake-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    console.log(`[FakeSmsProvider] tenant=${input.tenantId} from=${input.from} to=${input.to} body=${input.body}`);
+    // Keep fake provider logs metadata-only and avoid logging message body/credentials.
+    console.log(`[FakeSmsProvider] tenant=${input.tenantId} from=${input.from} to=${input.to}`);
     return { status: "SENT", providerMessageId };
   }
 }
 
 export class TwilioSmsProvider implements SmsProvider {
   private client: any;
-  private fromFallback: string;
+  private credentials: TwilioCredentials;
+  private testMode: boolean;
 
-  constructor() {
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    if (!sid || !token) {
-      throw new Error("Twilio env vars are missing (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN)");
+  constructor(credentials: TwilioCredentials, testMode = true) {
+    this.credentials = credentials;
+    this.testMode = testMode;
+
+    if (!credentials.accountSid || !credentials.authToken) {
+      throw new Error("Twilio credentials are incomplete");
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const twilio = require("twilio");
-    this.client = twilio(sid, token);
-    this.fromFallback = process.env.TWILIO_FROM_NUMBER || "";
+
+    if (!this.testMode) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const twilio = require("twilio");
+      this.client = twilio(credentials.accountSid, credentials.authToken);
+    }
   }
 
   async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string }> {
-    const res = await this.client.messages.create({
+    if (this.testMode) {
+      return {
+        status: "SENT",
+        providerMessageId: `twilio-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      };
+    }
+
+    const payload: Record<string, string> = {
       to: input.to,
-      from: input.from || this.fromFallback,
       body: input.body
-    });
+    };
+
+    if (this.credentials.messagingServiceSid) {
+      payload.messagingServiceSid = this.credentials.messagingServiceSid;
+    } else if (this.credentials.fromNumber) {
+      payload.from = this.credentials.fromNumber;
+    } else {
+      payload.from = input.from;
+    }
+
+    const res = await this.client.messages.create(payload);
     return { status: "SENT", providerMessageId: res.sid };
   }
 }
 
 export function getSmsProvider(): SmsProvider {
-  if ((process.env.SMS_PROVIDER || "fake").toLowerCase() === "twilio") {
-    return new TwilioSmsProvider();
-  }
   return new FakeSmsProvider();
 }

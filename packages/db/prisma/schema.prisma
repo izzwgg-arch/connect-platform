@@ -34,68 +34,77 @@ enum SmsMessageStatus {
   DELIVERED
 }
 
+enum IntegrationProvider {
+  TWILIO
+  VOIPMS
+}
+
 model Tenant {
-  id                           String             @id @default(cuid())
-  name                         String
-  isApproved                   Boolean            @default(false)
-  dailySmsCap                  Int                @default(100)
-  perSecondRate                Float              @default(1.0)
-  firstCampaignRequiresApproval Boolean           @default(true)
-  createdAt                    DateTime           @default(now())
-  users                        User[]
-  tenDlcSubs                   TenDlcSubmission[]
-  campaigns                    SmsCampaign[]
-  numbers                      PhoneNumber[]
-  audits                       AuditLog[]
+  id                            String               @id @default(cuid())
+  name                          String
+  isApproved                    Boolean              @default(false)
+  dailySmsCap                   Int                  @default(100)
+  perSecondRate                 Float                @default(1.0)
+  firstCampaignRequiresApproval Boolean              @default(true)
+  createdAt                     DateTime             @default(now())
+  users                         User[]
+  tenDlcSubs                    TenDlcSubmission[]
+  campaigns                     SmsCampaign[]
+  numbers                       PhoneNumber[]
+  audits                        AuditLog[]
+  providerCredentials           ProviderCredential[]
 }
 
 model User {
-  id           String   @id @default(cuid())
-  tenantId     String
-  email        String   @unique
-  passwordHash String
-  role         String   @default("USER")
-  createdAt    DateTime @default(now())
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                         String               @id @default(cuid())
+  tenantId                   String
+  email                      String               @unique
+  passwordHash               String
+  role                       String               @default("USER")
+  createdAt                  DateTime             @default(now())
+  tenant                     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents                AuditLog[]           @relation("AuditActor")
+  createdProviderCredentials ProviderCredential[] @relation("ProviderCredentialCreatedBy")
+  updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
 }
 
 model TenDlcSubmission {
-  id                     String       @id @default(cuid())
-  tenantId               String
-  legalName              String
-  dba                    String?
-  einEncrypted           String
-  businessType           String
-  websiteUrl             String
-  addressStreet          String
-  addressCity            String
-  addressState           String
-  addressPostalCode      String
-  addressCountry         String
-  supportEmail           String
-  supportPhone           String
-  useCaseCategory        String
-  sampleMessage1         String
-  sampleMessage2         String
-  sampleMessage3         String
-  optInMethod            String
-  optInWorkflow          String
-  optInProofUrl          String?
-  messagesPerDay         Int
-  messagesPerMonth       Int
-  includesEmbeddedLinks  Boolean
-  includesPhoneNumbers   Boolean
-  includesAffiliateMktg  Boolean
-  ageGatedContent        Boolean
-  termsAccepted          Boolean
-  signatureName          String
-  signatureDate          DateTime
-  status                 TenDlcStatus @default(SUBMITTED)
-  internalNotes          String?
-  submittedAt            DateTime?
-  reviewedAt             DateTime?
-  createdAt              DateTime      @default(now())
-  tenant                 Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    String       @id @default(cuid())
+  tenantId              String
+  legalName             String
+  dba                   String?
+  einEncrypted          String
+  businessType          String
+  websiteUrl            String
+  addressStreet         String
+  addressCity           String
+  addressState          String
+  addressPostalCode     String
+  addressCountry        String
+  supportEmail          String
+  supportPhone          String
+  useCaseCategory       String
+  sampleMessage1        String
+  sampleMessage2        String
+  sampleMessage3        String
+  optInMethod           String
+  optInWorkflow         String
+  optInProofUrl         String?
+  messagesPerDay        Int
+  messagesPerMonth      Int
+  includesEmbeddedLinks Boolean
+  includesPhoneNumbers  Boolean
+  includesAffiliateMktg Boolean
+  ageGatedContent       Boolean
+  termsAccepted         Boolean
+  signatureName         String
+  signatureDate         DateTime
+  status                TenDlcStatus @default(SUBMITTED)
+  internalNotes         String?
+  submittedAt           DateTime?
+  reviewedAt            DateTime?
+  createdAt             DateTime     @default(now())
+  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model SmsCampaign {
@@ -131,20 +140,42 @@ model SmsMessage {
 }
 
 model PhoneNumber {
-  id         String   @id @default(cuid())
-  tenantId   String
-  e164       String
-  status     String   @default("purchased")
-  createdAt  DateTime @default(now())
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  tenantId  String
+  e164      String
+  status    String   @default("purchased")
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model ProviderCredential {
+  id                   String              @id @default(cuid())
+  tenantId             String
+  provider             IntegrationProvider
+  label                String?
+  isEnabled            Boolean             @default(false)
+  credentialsEncrypted String
+  credentialsKeyId     String              @default("v1")
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  createdByUserId      String
+  updatedByUserId      String
+  tenant               Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser        User                @relation("ProviderCredentialCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUser        User                @relation("ProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, provider])
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  tenantId   String
-  action     String
-  entityType String
-  entityId   String
-  createdAt  DateTime @default(now())
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id          String               @id @default(cuid())
+  tenantId    String
+  action      String
+  entityType  String
+  entityId    String
+  actorUserId String?
+  provider    IntegrationProvider?
+  createdAt   DateTime             @default(now())
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorUser   User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 }

@@ -33,6 +33,25 @@ export const tenDlcSubmissionSchema = z.object({
   signatureDate: z.string().min(8)
 });
 
+export const twilioSettingsSchema = z
+  .object({
+    accountSid: z.string().regex(/^AC[a-zA-Z0-9]{20,}$/, "Invalid account SID format"),
+    authToken: z.string().min(1),
+    messagingServiceSid: z.string().regex(/^MG[a-zA-Z0-9]{20,}$/).optional().or(z.literal("")),
+    fromNumber: z.string().min(7).optional().or(z.literal("")),
+    label: z.string().max(80).optional().or(z.literal(""))
+  })
+  .superRefine((data, ctx) => {
+    const hasService = !!data.messagingServiceSid;
+    const hasFrom = !!data.fromNumber;
+    if (!hasService && !hasFrom) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Either messagingServiceSid or fromNumber is required"
+      });
+    }
+  });
+
 export function assessSmsRisk(message: string): { riskScore: number; reasons: string[] } {
   const text = message.trim();
   const lower = text.toLowerCase();

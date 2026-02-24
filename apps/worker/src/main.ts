@@ -1,16 +1,60 @@
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
-import { getSmsProvider } from "@connect/integrations";
+import { decryptJson } from "@connect/security";
+import { FakeSmsProvider, SmsProvider, TwilioCredentials, TwilioSmsProvider } from "@connect/integrations";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
-const smsProvider = getSmsProvider();
 
 const tenantLastSend = new Map<string, number>();
 let lastGlobalSend = 0;
 
+const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number }>();
+const providerCacheTtlMs = 60_000;
+const smsProviderTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getTenantSmsProvider(tenantId: string): Promise<SmsProvider> {
+  const cached = providerCache.get(tenantId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.provider;
+  }
+
+  const twilioCred = await db.providerCredential.findUnique({
+    where: { tenantId_provider: { tenantId, provider: "TWILIO" } }
+  });
+
+  if (!twilioCred || !twilioCred.isEnabled) {
+    const fake = new FakeSmsProvider();
+    providerCache.set(tenantId, { provider: fake, expiresAt: Date.now() + providerCacheTtlMs });
+    return fake;
+  }
+
+  try {
+    const decrypted = decryptJson<TwilioCredentials>(twilioCred.credentialsEncrypted);
+    if (!decrypted.accountSid || !decrypted.authToken || (!decrypted.messagingServiceSid && !decrypted.fromNumber)) {
+      throw new Error("incomplete_credentials");
+    }
+    const twilio = new TwilioSmsProvider(decrypted, smsProviderTestMode);
+    providerCache.set(tenantId, { provider: twilio, expiresAt: Date.now() + providerCacheTtlMs });
+    return twilio;
+  } catch {
+    await db.auditLog.create({
+      data: {
+        tenantId,
+        action: "SMS_PROVIDER_FALLBACK_FAKE",
+        entityType: "ProviderCredential",
+        entityId: twilioCred.id,
+        provider: "TWILIO"
+      }
+    });
+    const fake = new FakeSmsProvider();
+    providerCache.set(tenantId, { provider: fake, expiresAt: Date.now() + providerCacheTtlMs });
+    return fake;
+  }
 }
 
 async function enforceThrottle(tenantId: string, perSecondRate: number) {
@@ -97,6 +141,7 @@ const worker = new Worker(
       await enforceDailyCap(tenant.id, tenant.dailySmsCap);
       await enforceThrottle(tenant.id, tenant.perSecondRate);
 
+      const smsProvider = await getTenantSmsProvider(tenant.id);
       const sent = await smsProvider.sendMessage({
         tenantId: tenant.id,
         to: msg.toNumber,

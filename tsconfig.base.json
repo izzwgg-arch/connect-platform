@@ -10,9 +10,18 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@connect/shared": ["packages/shared/src"],
-      "@connect/db": ["packages/db/src"],
-      "@connect/integrations": ["packages/integrations/src"]
+      "@connect/shared": [
+        "packages/shared/src"
+      ],
+      "@connect/db": [
+        "packages/db/src"
+      ],
+      "@connect/integrations": [
+        "packages/integrations/src"
+      ],
+      "@connect/security": [
+        "packages/security/src"
+      ]
     }
   }
 }
