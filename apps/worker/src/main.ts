@@ -13,14 +13,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function enforceThrottle(tenantId: string) {
+async function enforceThrottle(tenantId: string, perSecondRate: number) {
   const now = Date.now();
 
   const globalMinIntervalMs = 200;
   const globalWait = Math.max(0, globalMinIntervalMs - (now - lastGlobalSend));
   if (globalWait > 0) await sleep(globalWait);
 
-  const tenantMinIntervalMs = 1000;
+  const safeRate = perSecondRate > 0 ? perSecondRate : 1.0;
+  const tenantMinIntervalMs = Math.max(1, Math.floor(1000 / safeRate));
   const tenantLast = tenantLastSend.get(tenantId) || 0;
   const tenantWait = Math.max(0, tenantMinIntervalMs - (Date.now() - tenantLast));
   if (tenantWait > 0) await sleep(tenantWait);
@@ -30,41 +31,74 @@ async function enforceThrottle(tenantId: string) {
   lastGlobalSend = mark;
 }
 
-async function enforceDailyCap(tenantId: string) {
-  const tenant = await db.tenant.findUnique({ where: { id: tenantId } });
-  const cap = tenant?.smsDailyCap ?? 100;
-
+async function enforceDailyCap(tenantId: string, dailySmsCap: number) {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
 
-  const sentToday = await db.smsMessage.count({
+  const sentOrQueuedToday = await db.smsMessage.count({
     where: {
       campaign: { tenantId },
-      status: { in: ["SENT", "DELIVERED"] },
-      sentAt: { gte: start }
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+      createdAt: { gte: start }
     }
   });
 
-  if (sentToday >= cap) {
-    throw new Error(`Daily cap reached for tenant ${tenantId}: ${cap}`);
+  if (sentOrQueuedToday > dailySmsCap) {
+    throw new Error(`Daily cap exceeded for tenant ${tenantId}: cap=${dailySmsCap}, current=${sentOrQueuedToday}`);
   }
+}
+
+async function finalizeCampaignStatus(campaignId: string) {
+  const remaining = await db.smsMessage.count({ where: { campaignId, status: { in: ["QUEUED", "SENDING"] } } });
+  if (remaining > 0) return;
+
+  const failedCount = await db.smsMessage.count({ where: { campaignId, status: "FAILED" } });
+  const nextStatus = failedCount > 0 ? "FAILED" : "SENT";
+  await db.smsCampaign.update({ where: { id: campaignId }, data: { status: nextStatus } });
 }
 
 const worker = new Worker(
   "sms-send",
   async (job) => {
     const payload = job.data as { messageId: string; tenantId: string };
-    const msg = await db.smsMessage.findUnique({ where: { id: payload.messageId }, include: { campaign: true } });
+    const msg = await db.smsMessage.findUnique({
+      where: { id: payload.messageId },
+      include: { campaign: { include: { tenant: true } } }
+    });
     if (!msg) return;
 
-    await db.smsMessage.update({ where: { id: msg.id }, data: { status: "SENDING" } });
+    const campaign = msg.campaign;
+    const tenant = campaign.tenant;
+
+    if (!tenant.isApproved) {
+      await db.smsCampaign.update({
+        where: { id: campaign.id },
+        data: { status: "PAUSED", holdReason: "Tenant unapproved during processing." }
+      });
+      await db.smsMessage.update({
+        where: { id: msg.id },
+        data: { status: "FAILED", error: "Tenant unapproved during processing." }
+      });
+      await db.auditLog.create({
+        data: {
+          tenantId: tenant.id,
+          action: "SMS_CAMPAIGN_PAUSED_TENANT_UNAPPROVED",
+          entityType: "SmsCampaign",
+          entityId: campaign.id
+        }
+      });
+      return;
+    }
+
+    await db.smsMessage.update({ where: { id: msg.id }, data: { status: "SENDING", error: null } });
+    await db.smsCampaign.updateMany({ where: { id: campaign.id, status: { notIn: ["PAUSED", "FAILED"] } }, data: { status: "SENDING" } });
 
     try {
-      await enforceDailyCap(payload.tenantId);
-      await enforceThrottle(payload.tenantId);
+      await enforceDailyCap(tenant.id, tenant.dailySmsCap);
+      await enforceThrottle(tenant.id, tenant.perSecondRate);
 
       const sent = await smsProvider.sendMessage({
-        tenantId: payload.tenantId,
+        tenantId: tenant.id,
         to: msg.toNumber,
         from: msg.fromNumber,
         body: msg.body,
@@ -83,37 +117,50 @@ const worker = new Worker(
 
       await db.auditLog.create({
         data: {
-          tenantId: payload.tenantId,
+          tenantId: tenant.id,
           action: "SMS_MESSAGE_SENT",
           entityType: "SmsMessage",
           entityId: msg.id
         }
       });
-
-      await db.smsCampaign.updateMany({ where: { id: msg.campaignId }, data: { status: "SENDING" } });
     } catch (err: any) {
-      await db.smsMessage.update({
-        where: { id: msg.id },
-        data: {
-          status: "FAILED",
-          error: err?.message || "unknown worker error"
-        }
-      });
-      await db.auditLog.create({
-        data: {
-          tenantId: payload.tenantId,
-          action: "SMS_MESSAGE_FAILED",
-          entityType: "SmsMessage",
-          entityId: msg.id
-        }
-      });
+      const attempts = typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
+      const thisAttempt = (job.attemptsMade || 0) + 1;
+      const finalAttempt = thisAttempt >= attempts;
+
+      if (finalAttempt) {
+        await db.smsMessage.update({
+          where: { id: msg.id },
+          data: { status: "FAILED", error: err?.message || "unknown worker error" }
+        });
+        await db.auditLog.create({
+          data: {
+            tenantId: tenant.id,
+            action: "SMS_MESSAGE_FAILED_FINAL",
+            entityType: "SmsMessage",
+            entityId: msg.id
+          }
+        });
+      } else {
+        await db.smsMessage.update({
+          where: { id: msg.id },
+          data: { status: "QUEUED", error: `retrying: ${err?.message || "unknown"}` }
+        });
+        await db.auditLog.create({
+          data: {
+            tenantId: tenant.id,
+            action: "SMS_MESSAGE_RETRY_SCHEDULED",
+            entityType: "SmsMessage",
+            entityId: msg.id
+          }
+        });
+      }
+
+      await finalizeCampaignStatus(campaign.id);
       throw err;
     }
 
-    const remaining = await db.smsMessage.count({ where: { campaignId: msg.campaignId, status: { in: ["QUEUED", "SENDING"] } } });
-    if (remaining === 0) {
-      await db.smsCampaign.update({ where: { id: msg.campaignId }, data: { status: "SENT" } });
-    }
+    await finalizeCampaignStatus(campaign.id);
   },
   { connection: redis, concurrency: 5 }
 );

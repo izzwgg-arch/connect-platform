@@ -33,21 +33,52 @@ export const tenDlcSubmissionSchema = z.object({
   signatureDate: z.string().min(8)
 });
 
-const forbiddenPatterns = [
-  /guaranteed\s+income/i,
-  /free\s+money/i,
-  /crypto\s+giveaway/i,
-  /bitcoin\s+doubling/i
-];
+export function assessSmsRisk(message: string): { riskScore: number; reasons: string[] } {
+  const text = message.trim();
+  const lower = text.toLowerCase();
+  const reasons: string[] = [];
+  let score = 0;
 
-export function validateCampaignMessage(message: string): { ok: boolean; reason?: string } {
-  if (message.length < 3 || message.length > 320) {
-    return { ok: false, reason: "Message length must be 3-320 chars" };
+  if (text.length < 12) {
+    score += 20;
+    reasons.push("message_too_short");
   }
-  for (const pattern of forbiddenPatterns) {
-    if (pattern.test(message)) {
-      return { ok: false, reason: "Message content failed compliance screening" };
+
+  const suspiciousShorteners = /(bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|ow\.ly)/i;
+  if (suspiciousShorteners.test(text)) {
+    score += 45;
+    reasons.push("suspicious_shortener");
+  }
+
+  const phishingKeywords = /(verify\s+your\s+account|password\s+reset|confirm\s+your\s+identity|urgent\s+action\s+required)/i;
+  if (phishingKeywords.test(text) && /(https?:\/\/|www\.)/i.test(text)) {
+    score += 55;
+    reasons.push("credential_harvest_pattern");
+  }
+
+  if (/(https?:\/\/|www\.)/i.test(text) && text.replace(/https?:\/\/\S+/gi, "").trim().length < 8) {
+    score += 50;
+    reasons.push("link_only_message");
+  }
+
+  if (/(free\s+money|guaranteed\s+income|crypto\s+giveaway|bitcoin\s+doubling)/i.test(lower)) {
+    score += 40;
+    reasons.push("financial_scam_pattern");
+  }
+
+  return { riskScore: score, reasons };
+}
+
+export function normalizeSmsWithStop(message: string):
+  | { ok: true; message: string; appendedStop: boolean }
+  | { ok: false; reason: string } {
+  const cleaned = message.trim();
+  if (!/\bstop\b/i.test(cleaned)) {
+    const appended = `${cleaned} Reply STOP to opt out.`;
+    if (appended.length > 160) {
+      return { ok: false, reason: "stop_append_would_exceed_160_chars" };
     }
+    return { ok: true, message: appended, appendedStop: true };
   }
-  return { ok: true };
+  return { ok: true, message: cleaned, appendedStop: false };
 }

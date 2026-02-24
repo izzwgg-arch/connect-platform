@@ -18,6 +18,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/dashboard/sms">SMS</Link>
             <Link href="/dashboard/10dlc">10DLC</Link>
             <Link href="/dashboard/admin/10dlc">Admin 10DLC</Link>
+            <Link href="/dashboard/admin/tenants">Admin Tenants</Link>
+            <Link href="/dashboard/admin/campaigns">Admin Campaigns</Link>
             <Link href="/legal/privacy">Privacy</Link>
             <Link href="/legal/terms">Terms</Link>
           </aside>

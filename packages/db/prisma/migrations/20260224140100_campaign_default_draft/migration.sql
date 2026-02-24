@@ -1,0 +1,1 @@
+ALTER TABLE "SmsCampaign" ALTER COLUMN "status" SET DEFAULT 'DRAFT';
