@@ -44,4 +44,3 @@ export type Tenant = z.infer<typeof TenantSchema>;
 export type TenDlcSubmission = z.infer<typeof TenDlcSubmissionSchema>;
 export type SmsCampaign = z.infer<typeof SmsCampaignSchema>;
 export type PhoneNumber = z.infer<typeof PhoneNumberSchema>;
-EOF

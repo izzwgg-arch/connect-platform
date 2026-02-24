@@ -95,4 +95,3 @@ app.listen({ host: "0.0.0.0", port }).catch((e) => {
   app.log.error(e);
   process.exit(1);
 });
-EOF

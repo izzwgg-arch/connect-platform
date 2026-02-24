@@ -15,7 +15,7 @@ export interface PbxProvider {
 }
 
 export class FakeNumberProvider implements NumberProvider {
-  async searchNumbers(): Promise<Array<{ e164: string; monthlyPrice: number }>> {
+  async searchNumbers(_input: { areaCode?: string; type?: string }): Promise<Array<{ e164: string; monthlyPrice: number }>> {
     return [
       { e164: "+16465550100", monthlyPrice: 1.5 },
       { e164: "+16465550101", monthlyPrice: 1.5 },
@@ -39,4 +39,3 @@ export class FakeSmsProvider implements SmsProvider {
     return { status: "queued" };
   }
 }
-EOF

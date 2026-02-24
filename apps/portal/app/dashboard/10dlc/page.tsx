@@ -12,4 +12,3 @@ export default function TenDlc(){
   }
   return <div className="card"><h1>Business Texting Registration (10DLC)</h1><p>10DLC registration supports compliant A2P messaging and improves delivery trust. Submit accurate business identity and messaging intent.</p><input value={legalName} onChange={e=>setLegalName(e.target.value)} /><button onClick={submit}>Submit</button><pre>{resp}</pre></div>;
 }
-EOF

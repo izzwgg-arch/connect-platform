@@ -25,4 +25,3 @@ services:
       - /opt/connectcomms/env/.env.platform
     ports:
       - "127.0.0.1:3002:3002"
-EOF

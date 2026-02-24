@@ -1,9 +1,24 @@
-node_modules
-.pnpm-store
-.turbo
-.next
-dist
-coverage
+# build outputs
+dist/
+build/
+.out/
+.next/
+.turbo/
+coverage/
+
+# logs
+logs/
+*.log
+
+# env
 .env
 .env.*
-!.env.example
+!/apps/**/.env.example
+!/packages/**/.env.example
+
+# docker
+node_modules/
+**/node_modules/
+
+# prisma artifacts (keep migrations)
+prisma/dev.db
