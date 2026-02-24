@@ -39,6 +39,11 @@ enum IntegrationProvider {
   VOIPMS
 }
 
+enum SmsSendMode {
+  TEST
+  LIVE
+}
+
 model Tenant {
   id                            String               @id @default(cuid())
   name                          String
@@ -46,6 +51,9 @@ model Tenant {
   dailySmsCap                   Int                  @default(100)
   perSecondRate                 Float                @default(1.0)
   firstCampaignRequiresApproval Boolean              @default(true)
+  smsSendMode                   SmsSendMode          @default(TEST)
+  smsLiveEnabledAt              DateTime?
+  smsLiveEnabledByUserId        String?
   createdAt                     DateTime             @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
@@ -53,6 +61,8 @@ model Tenant {
   numbers                       PhoneNumber[]
   audits                        AuditLog[]
   providerCredentials           ProviderCredential[]
+  webhookEvents                 SmsWebhookEvent[]
+  smsLiveEnabledByUser          User?                @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
 }
 
 model User {
@@ -66,6 +76,7 @@ model User {
   auditEvents                AuditLog[]           @relation("AuditActor")
   createdProviderCredentials ProviderCredential[] @relation("ProviderCredentialCreatedBy")
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
+  smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
 }
 
 model TenDlcSubmission {
@@ -126,17 +137,37 @@ model SmsCampaign {
 }
 
 model SmsMessage {
-  id                String           @id @default(cuid())
-  campaignId        String
-  toNumber          String
-  fromNumber        String
-  body              String
-  status            SmsMessageStatus @default(QUEUED)
-  providerMessageId String?
-  error             String?
-  createdAt         DateTime         @default(now())
-  sentAt            DateTime?
-  campaign          SmsCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  id                   String           @id @default(cuid())
+  campaignId           String
+  toNumber             String
+  fromNumber           String
+  body                 String
+  status               SmsMessageStatus @default(QUEUED)
+  providerMessageId    String?
+  providerStatus       String?
+  lastProviderUpdateAt DateTime?
+  deliveryUpdatedAt    DateTime?
+  error                String?
+  createdAt            DateTime         @default(now())
+  sentAt               DateTime?
+  campaign             SmsCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  webhookEvents        SmsWebhookEvent[]
+}
+
+model SmsWebhookEvent {
+  id                String              @id @default(cuid())
+  tenantId          String?
+  provider          IntegrationProvider
+  messageId         String?
+  providerMessageId String
+  eventType         String
+  payload           Json
+  receivedAt        DateTime            @default(now())
+  tenant            Tenant?             @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  message           SmsMessage?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([provider, providerMessageId])
+  @@index([tenantId, receivedAt])
 }
 
 model PhoneNumber {

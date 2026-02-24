@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
@@ -141,6 +142,32 @@ const worker = new Worker(
       await enforceDailyCap(tenant.id, tenant.dailySmsCap);
       await enforceThrottle(tenant.id, tenant.perSecondRate);
 
+      if (tenant.smsSendMode === "TEST") {
+        const simulatedId = `SIMULATED_${randomUUID()}`;
+        const now = new Date();
+        await db.smsMessage.update({
+          where: { id: msg.id },
+          data: {
+            status: "SENT",
+            providerMessageId: simulatedId,
+            providerStatus: "simulated",
+            lastProviderUpdateAt: now,
+            sentAt: now,
+            error: null
+          }
+        });
+        await db.auditLog.create({
+          data: {
+            tenantId: tenant.id,
+            action: "SMS_MESSAGE_SIMULATED",
+            entityType: "SmsMessage",
+            entityId: msg.id
+          }
+        });
+        await finalizeCampaignStatus(campaign.id);
+        return;
+      }
+
       const smsProvider = await getTenantSmsProvider(tenant.id);
       const sent = await smsProvider.sendMessage({
         tenantId: tenant.id,
@@ -155,6 +182,8 @@ const worker = new Worker(
         data: {
           status: "SENT",
           providerMessageId: sent.providerMessageId || null,
+          providerStatus: "sent",
+          lastProviderUpdateAt: new Date(),
           sentAt: new Date(),
           error: null
         }
@@ -176,7 +205,7 @@ const worker = new Worker(
       if (finalAttempt) {
         await db.smsMessage.update({
           where: { id: msg.id },
-          data: { status: "FAILED", error: err?.message || "unknown worker error" }
+          data: { status: "FAILED", error: err?.message || "unknown worker error", providerStatus: "failed", lastProviderUpdateAt: new Date(), deliveryUpdatedAt: new Date() }
         });
         await db.auditLog.create({
           data: {

@@ -100,3 +100,10 @@ export class TwilioSmsProvider implements SmsProvider {
 export function getSmsProvider(): SmsProvider {
   return new FakeSmsProvider();
 }
+
+
+export function validateTwilioRequest(authToken: string, signature: string, url: string, params: Record<string, string>): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const twilio = require("twilio");
+  return twilio.validateRequest(authToken, signature, url, params);
+}

@@ -7,7 +7,7 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { FakeNumberProvider } from "@connect/integrations";
+import { FakeNumberProvider, validateTwilioRequest } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
 const app = Fastify({ logger: true });
@@ -88,6 +88,23 @@ function ensureCredentialCrypto(reply: any): boolean {
   if (canUseCredentialCrypto) return true;
   reply.status(503).send({ error: "provider_settings_unavailable", message: "Provider settings are unavailable until credential encryption is configured." });
   return false;
+}
+
+async function getTenantTwilioCredentials(tenantId: string): Promise<{ recordId: string; creds: TwilioCredentialPayload } | null> {
+  const record = await db.providerCredential.findUnique({
+    where: { tenantId_provider: { tenantId, provider: "TWILIO" } }
+  });
+  if (!record || !record.isEnabled) return null;
+
+  try {
+    const creds = decryptJson<TwilioCredentialPayload>(record.credentialsEncrypted);
+    if (!creds.accountSid || !creds.authToken || (!creds.messagingServiceSid && !creds.fromNumber)) {
+      return null;
+    }
+    return { recordId: record.id, creds };
+  } catch {
+    return null;
+  }
 }
 
 async function enqueueCampaignMessages(campaignId: string, tenantId: string) {
@@ -201,7 +218,8 @@ app.post("/auth/signup", async (req, reply) => {
       isApproved: false,
       dailySmsCap: 100,
       perSecondRate: 1.0,
-      firstCampaignRequiresApproval: true
+      firstCampaignRequiresApproval: true,
+      smsSendMode: "TEST"
     }
   });
 
@@ -252,20 +270,20 @@ app.get("/settings/providers", async (req, reply) => {
     orderBy: { updatedAt: "desc" }
   });
 
-  const result = creds.map((row) => {
+  return creds.map((row) => {
     let preview: Record<string, string | null> = {};
     try {
       if (row.provider === "TWILIO") {
         const decrypted = decryptJson<TwilioCredentialPayload>(row.credentialsEncrypted);
         preview = {
           accountSid: maskValue(decrypted.accountSid),
-          authToken: decrypted.authToken ? "????????????????????????" : null,
+          authToken: decrypted.authToken ? "********" : null,
           messagingServiceSid: maskValue(decrypted.messagingServiceSid),
           fromNumber: maskValue(decrypted.fromNumber, 2, 2)
         };
       }
     } catch {
-      preview = { accountSid: null, authToken: "????????????????????????", messagingServiceSid: null, fromNumber: null };
+      preview = { accountSid: null, authToken: "********", messagingServiceSid: null, fromNumber: null };
     }
 
     return {
@@ -276,8 +294,6 @@ app.get("/settings/providers", async (req, reply) => {
       preview
     };
   });
-
-  return result;
 });
 
 app.put("/settings/providers/twilio", async (req, reply) => {
@@ -336,7 +352,7 @@ app.put("/settings/providers/twilio", async (req, reply) => {
     updatedAt: updated.updatedAt,
     preview: {
       accountSid: maskValue(payload.accountSid),
-      authToken: "????????????????????????",
+      authToken: "********",
       messagingServiceSid: maskValue(payload.messagingServiceSid),
       fromNumber: maskValue(payload.fromNumber, 2, 2)
     }
@@ -404,6 +420,68 @@ app.post("/settings/providers/twilio/disable", async (req, reply) => {
   });
 
   return { provider: "TWILIO", isEnabled: false, updatedAt: updated.updatedAt };
+});
+
+app.get("/settings/sms-mode", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+  return {
+    smsSendMode: tenant.smsSendMode,
+    smsLiveEnabledAt: tenant.smsLiveEnabledAt
+  };
+});
+
+app.post("/settings/sms-mode", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ mode: z.enum(["TEST", "LIVE"]) }).parse(req.body);
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  if (input.mode === "LIVE") {
+    const twilioCred = await getTenantTwilioCredentials(admin.tenantId);
+    if (!twilioCred) {
+      return reply.status(400).send({ error: "live_mode_requires_enabled_valid_twilio" });
+    }
+
+    const updated = await db.tenant.update({
+      where: { id: admin.tenantId },
+      data: {
+        smsSendMode: "LIVE",
+        smsLiveEnabledAt: new Date(),
+        smsLiveEnabledByUserId: admin.sub
+      }
+    });
+
+    await audit({
+      tenantId: admin.tenantId,
+      actorUserId: admin.sub,
+      action: `SMS_SEND_MODE_CHANGED_${tenant.smsSendMode}_TO_LIVE`,
+      entityType: "Tenant",
+      entityId: admin.tenantId,
+      provider: "TWILIO"
+    });
+
+    return { smsSendMode: updated.smsSendMode, smsLiveEnabledAt: updated.smsLiveEnabledAt };
+  }
+
+  const updated = await db.tenant.update({
+    where: { id: admin.tenantId },
+    data: { smsSendMode: "TEST" }
+  });
+  await audit({
+    tenantId: admin.tenantId,
+    actorUserId: admin.sub,
+    action: `SMS_SEND_MODE_CHANGED_${tenant.smsSendMode}_TO_TEST`,
+    entityType: "Tenant",
+    entityId: admin.tenantId
+  });
+
+  return { smsSendMode: updated.smsSendMode, smsLiveEnabledAt: updated.smsLiveEnabledAt };
 });
 
 app.post("/ten-dlc/submit", async (req) => {
@@ -660,13 +738,106 @@ app.post("/admin/sms/campaigns/:id/reject", async (req, reply) => {
   return updated;
 });
 
-app.post("/webhooks/twilio/sms-status", async (req) => {
-  const body = req.body as Record<string, string>;
-  const sid = body.MessageSid;
-  const status = body.MessageStatus;
-  if (!sid || !status) return { ok: true };
-  const mapped = status === "delivered" ? "DELIVERED" : status === "failed" ? "FAILED" : "SENT";
-  await db.smsMessage.updateMany({ where: { providerMessageId: sid }, data: { status: mapped as any } });
+app.post("/webhooks/twilio/sms-status", async (req, reply) => {
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const signature = String(req.headers["x-twilio-signature"] || "");
+  if (!signature) {
+    return reply.status(400).send({ error: "missing_twilio_signature" });
+  }
+
+  const body = (req.body || {}) as Record<string, string>;
+  const sid = String(body.MessageSid || "");
+  const statusRaw = String(body.MessageStatus || "").toLowerCase();
+  const host = String(req.headers.host || "app.connectcomunications.com");
+  const proto = String(req.headers["x-forwarded-proto"] || "https");
+  const url = `${proto}://${host}/webhooks/twilio/sms-status`;
+
+  const message = sid
+    ? await db.smsMessage.findFirst({ where: { providerMessageId: sid }, include: { campaign: { include: { tenant: true } } } })
+    : null;
+
+  if (!message) {
+    await db.smsWebhookEvent.create({
+      data: {
+        tenantId: null,
+        provider: "TWILIO",
+        messageId: null,
+        providerMessageId: sid || "unknown",
+        eventType: statusRaw || "unmatched",
+        payload: body as any
+      }
+    });
+    return { ok: true };
+  }
+
+  const twilioCred = await getTenantTwilioCredentials(message.campaign.tenantId);
+  if (!twilioCred) {
+    await db.smsWebhookEvent.create({
+      data: {
+        tenantId: message.campaign.tenantId,
+        provider: "TWILIO",
+        messageId: message.id,
+        providerMessageId: sid || "unknown",
+        eventType: "missing_or_invalid_tenant_credentials",
+        payload: body as any
+      }
+    });
+    return reply.status(403).send({ error: "invalid_signature" });
+  }
+
+  const isValid = validateTwilioRequest(twilioCred.creds.authToken, signature, url, body);
+  if (!isValid) {
+    await db.smsWebhookEvent.create({
+      data: {
+        tenantId: message.campaign.tenantId,
+        provider: "TWILIO",
+        messageId: message.id,
+        providerMessageId: sid || "unknown",
+        eventType: "invalid_signature",
+        payload: body as any
+      }
+    });
+    return reply.status(403).send({ error: "invalid_signature" });
+  }
+
+  let mapped: "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "FAILED" = "SENT";
+  if (statusRaw === "delivered") mapped = "DELIVERED";
+  else if (statusRaw === "failed" || statusRaw === "undelivered") mapped = "FAILED";
+  else if (statusRaw === "queued") mapped = "QUEUED";
+  else if (statusRaw === "accepted") mapped = "SENDING";
+  else if (statusRaw === "sent") mapped = "SENT";
+
+  const now = new Date();
+  await db.smsMessage.update({
+    where: { id: message.id },
+    data: {
+      status: mapped,
+      providerStatus: statusRaw || null,
+      lastProviderUpdateAt: now,
+      deliveryUpdatedAt: mapped === "DELIVERED" || mapped === "FAILED" ? now : null
+    }
+  });
+
+  await db.smsWebhookEvent.create({
+    data: {
+      tenantId: message.campaign.tenantId,
+      provider: "TWILIO",
+      messageId: message.id,
+      providerMessageId: sid || "unknown",
+      eventType: statusRaw || "unknown",
+      payload: body as any
+    }
+  });
+
+  await audit({
+    tenantId: message.campaign.tenantId,
+    action: "SMS_WEBHOOK_STATUS_UPDATED",
+    entityType: "SmsMessage",
+    entityId: message.id,
+    provider: "TWILIO"
+  });
+
   return { ok: true };
 });
 
