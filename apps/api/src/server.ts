@@ -7,7 +7,12 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { FakeNumberProvider, validateTwilioRequest } from "@connect/integrations";
+import {
+  FakeNumberProvider,
+  sendTwilioTestMessage,
+  validateTwilioCredentials,
+  validateTwilioRequest
+} from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
 const app = Fastify({ logger: true });
@@ -40,6 +45,10 @@ type CampaignDecision = {
   riskScore: number;
   normalizedMessage: string;
 };
+
+const twilioCredCache = new Map<string, { recordId: string; creds: TwilioCredentialPayload; expiresAt: number }>();
+const twilioCredCacheTtlMs = 60_000;
+const testSendLimiter = new Map<string, number[]>();
 
 function encodeEin(rawEin: string): string {
   return Buffer.from(rawEin, "utf8").toString("base64");
@@ -77,7 +86,7 @@ function getUser(req: any): JwtUser {
 
 async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
   const user = getUser(req);
-  if (user.role !== "ADMIN") {
+  if (user.role !== "ADMIN" && user.role !== "SUPER_ADMIN") {
     reply.status(403).send({ error: "forbidden" });
     return null;
   }
@@ -91,6 +100,11 @@ function ensureCredentialCrypto(reply: any): boolean {
 }
 
 async function getTenantTwilioCredentials(tenantId: string): Promise<{ recordId: string; creds: TwilioCredentialPayload } | null> {
+  const cached = twilioCredCache.get(tenantId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { recordId: cached.recordId, creds: cached.creds };
+  }
+
   const record = await db.providerCredential.findUnique({
     where: { tenantId_provider: { tenantId, provider: "TWILIO" } }
   });
@@ -101,6 +115,7 @@ async function getTenantTwilioCredentials(tenantId: string): Promise<{ recordId:
     if (!creds.accountSid || !creds.authToken || (!creds.messagingServiceSid && !creds.fromNumber)) {
       return null;
     }
+    twilioCredCache.set(tenantId, { recordId: record.id, creds, expiresAt: Date.now() + twilioCredCacheTtlMs });
     return { recordId: record.id, creds };
   } catch {
     return null;
@@ -125,6 +140,28 @@ async function dailyUsageCount(tenantId: string): Promise<number> {
       createdAt: { gte: start }
     }
   });
+}
+
+async function latestTenDlcStatus(tenantId: string): Promise<string | null> {
+  const latest = await db.tenDlcSubmission.findFirst({
+    where: { tenantId },
+    orderBy: { createdAt: "desc" },
+    select: { status: true }
+  });
+  return latest?.status || null;
+}
+
+function checkAndConsumeTestSendQuota(tenantId: string): boolean {
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const entries = (testSendLimiter.get(tenantId) || []).filter((t) => t >= oneHourAgo);
+  if (entries.length >= 5) {
+    testSendLimiter.set(tenantId, entries);
+    return false;
+  }
+  entries.push(now);
+  testSendLimiter.set(tenantId, entries);
+  return true;
 }
 
 async function decideCampaignPolicy(params: {
@@ -226,9 +263,7 @@ app.post("/auth/signup", async (req, reply) => {
   const passwordHash = await bcrypt.hash(input.password, 10);
   const normalizedEmail = input.email.toLowerCase();
   const role = normalizedEmail.startsWith("support") && normalizedEmail.endsWith("@connectcomunications.com") ? "ADMIN" : "USER";
-  const user = await db.user.create({
-    data: { tenantId: tenant.id, email: input.email, passwordHash, role }
-  });
+  const user = await db.user.create({ data: { tenantId: tenant.id, email: input.email, passwordHash, role } });
 
   await audit({ tenantId: tenant.id, actorUserId: user.id, action: "TENANT_SIGNUP_CREATED", entityType: "Tenant", entityId: tenant.id });
 
@@ -265,10 +300,7 @@ app.get("/settings/providers", async (req, reply) => {
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
-  const creds = await db.providerCredential.findMany({
-    where: { tenantId: admin.tenantId },
-    orderBy: { updatedAt: "desc" }
-  });
+  const creds = await db.providerCredential.findMany({ where: { tenantId: admin.tenantId }, orderBy: { updatedAt: "desc" } });
 
   return creds.map((row) => {
     let preview: Record<string, string | null> = {};
@@ -286,13 +318,7 @@ app.get("/settings/providers", async (req, reply) => {
       preview = { accountSid: null, authToken: "********", messagingServiceSid: null, fromNumber: null };
     }
 
-    return {
-      provider: row.provider,
-      label: row.label,
-      isEnabled: row.isEnabled,
-      updatedAt: row.updatedAt,
-      preview
-    };
+    return { provider: row.provider, isEnabled: row.isEnabled, label: row.label, updatedAt: row.updatedAt, preview };
   });
 });
 
@@ -311,9 +337,7 @@ app.put("/settings/providers/twilio", async (req, reply) => {
   };
 
   const encrypted = encryptJson(payload);
-  const existing = await db.providerCredential.findUnique({
-    where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } }
-  });
+  const existing = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } } });
 
   const updated = await db.providerCredential.upsert({
     where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } },
@@ -329,12 +353,14 @@ app.put("/settings/providers/twilio", async (req, reply) => {
     },
     update: {
       label: payload.label || existing?.label || "Primary Twilio",
+      isEnabled: false,
       credentialsEncrypted: encrypted,
       credentialsKeyId: "v1",
-      isEnabled: false,
       updatedByUserId: admin.sub
     }
   });
+
+  twilioCredCache.delete(admin.tenantId);
 
   await audit({
     tenantId: admin.tenantId,
@@ -364,18 +390,25 @@ app.post("/settings/providers/twilio/enable", async (req, reply) => {
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
-  const record = await db.providerCredential.findUnique({
-    where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } }
-  });
+  const record = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } } });
   if (!record) return reply.status(404).send({ error: "provider_not_configured" });
 
+  let creds: TwilioCredentialPayload;
   try {
-    const decrypted = decryptJson<TwilioCredentialPayload>(record.credentialsEncrypted);
-    if (!decrypted.accountSid || !decrypted.authToken || (!decrypted.messagingServiceSid && !decrypted.fromNumber)) {
-      return reply.status(400).send({ error: "provider_credentials_invalid" });
+    creds = decryptJson<TwilioCredentialPayload>(record.credentialsEncrypted);
+    if (!creds.accountSid || !creds.authToken || (!creds.messagingServiceSid && !creds.fromNumber)) {
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_VALIDATION_FAILED", entityType: "ProviderCredential", entityId: record.id, provider: "TWILIO" });
+      return reply.status(400).send({ error: "TWILIO_VALIDATION_FAILED", message: "Twilio credential fields are incomplete." });
     }
   } catch {
-    return reply.status(400).send({ error: "provider_credentials_invalid" });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_VALIDATION_FAILED", entityType: "ProviderCredential", entityId: record.id, provider: "TWILIO" });
+    return reply.status(400).send({ error: "TWILIO_VALIDATION_FAILED", message: "Unable to decrypt Twilio credentials." });
+  }
+
+  const validation = await validateTwilioCredentials(creds);
+  if (!validation.ok) {
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_VALIDATION_FAILED", entityType: "ProviderCredential", entityId: record.id, provider: "TWILIO" });
+    return reply.status(400).send({ error: "TWILIO_VALIDATION_FAILED", message: validation.message });
   }
 
   const updated = await db.providerCredential.update({
@@ -383,14 +416,10 @@ app.post("/settings/providers/twilio/enable", async (req, reply) => {
     data: { isEnabled: true, updatedByUserId: admin.sub }
   });
 
-  await audit({
-    tenantId: admin.tenantId,
-    actorUserId: admin.sub,
-    action: "PROVIDER_CREDENTIAL_ENABLED",
-    entityType: "ProviderCredential",
-    entityId: updated.id,
-    provider: "TWILIO"
-  });
+  twilioCredCache.delete(admin.tenantId);
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_VALIDATED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_ENABLED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
 
   return { provider: "TWILIO", isEnabled: true, updatedAt: updated.updatedAt };
 });
@@ -400,36 +429,55 @@ app.post("/settings/providers/twilio/disable", async (req, reply) => {
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
-  const record = await db.providerCredential.findUnique({
-    where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } }
-  });
+  const record = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider: "TWILIO" } } });
   if (!record) return reply.status(404).send({ error: "provider_not_configured" });
 
-  const updated = await db.providerCredential.update({
-    where: { id: record.id },
-    data: { isEnabled: false, updatedByUserId: admin.sub }
-  });
+  const updated = await db.providerCredential.update({ where: { id: record.id }, data: { isEnabled: false, updatedByUserId: admin.sub } });
+  twilioCredCache.delete(admin.tenantId);
 
-  await audit({
-    tenantId: admin.tenantId,
-    actorUserId: admin.sub,
-    action: "PROVIDER_CREDENTIAL_DISABLED",
-    entityType: "ProviderCredential",
-    entityId: updated.id,
-    provider: "TWILIO"
-  });
-
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_DISABLED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
   return { provider: "TWILIO", isEnabled: false, updatedAt: updated.updatedAt };
+});
+
+app.post("/settings/providers/twilio/test-send", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  if (!checkAndConsumeTestSendQuota(admin.tenantId)) {
+    return reply.status(429).send({ error: "TEST_SEND_RATE_LIMITED", message: "Test SMS limit reached (5 per hour)." });
+  }
+
+  const input = z.object({ to: z.string().min(8), message: z.string().min(1).max(160) }).parse(req.body);
+  const twilioCred = await getTenantTwilioCredentials(admin.tenantId);
+  if (!twilioCred) {
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "TWILIO_TEST_SEND_FAILED", entityType: "ProviderCredential", entityId: "tenant", provider: "TWILIO" });
+    return reply.status(400).send({ error: "TWILIO_TEST_SEND_FAILED", message: "Twilio provider must be enabled with valid credentials." });
+  }
+
+  const sent = await sendTwilioTestMessage(twilioCred.creds, input.to, input.message);
+  if (!sent.ok) {
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "TWILIO_TEST_SEND_FAILED", entityType: "ProviderCredential", entityId: twilioCred.recordId, provider: "TWILIO" });
+    return reply.status(400).send({ error: "TWILIO_TEST_SEND_FAILED", message: sent.message });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "TWILIO_TEST_SEND_SUCCESS", entityType: "ProviderCredential", entityId: twilioCred.recordId, provider: "TWILIO" });
+  return { success: true, providerMessageId: sent.providerMessageId };
 });
 
 app.get("/settings/sms-mode", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
+
   const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const latestStatus = await latestTenDlcStatus(admin.tenantId);
   return {
     smsSendMode: tenant.smsSendMode,
-    smsLiveEnabledAt: tenant.smsLiveEnabledAt
+    smsLiveEnabledAt: tenant.smsLiveEnabledAt,
+    tenDlcApproved: latestStatus === "APPROVED",
+    tenDlcStatus: latestStatus
   };
 });
 
@@ -443,9 +491,17 @@ app.post("/settings/sms-mode", async (req, reply) => {
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
   if (input.mode === "LIVE") {
+    const tenDlcStatus = await latestTenDlcStatus(admin.tenantId);
+    const isSuperAdmin = admin.role === "SUPER_ADMIN";
+    if (tenDlcStatus !== "APPROVED" && !isSuperAdmin) {
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGE_REJECTED", entityType: "Tenant", entityId: admin.tenantId, provider: "TWILIO" });
+      return reply.status(400).send({ error: "10DLC_NOT_APPROVED", message: "10DLC approval is required before enabling LIVE SMS sending." });
+    }
+
     const twilioCred = await getTenantTwilioCredentials(admin.tenantId);
     if (!twilioCred) {
-      return reply.status(400).send({ error: "live_mode_requires_enabled_valid_twilio" });
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGE_REJECTED", entityType: "Tenant", entityId: admin.tenantId, provider: "TWILIO" });
+      return reply.status(400).send({ error: "LIVE_MODE_REQUIRES_ENABLED_TWILIO", message: "Enable validated Twilio credentials before LIVE mode." });
     }
 
     const updated = await db.tenant.update({
@@ -457,30 +513,12 @@ app.post("/settings/sms-mode", async (req, reply) => {
       }
     });
 
-    await audit({
-      tenantId: admin.tenantId,
-      actorUserId: admin.sub,
-      action: `SMS_SEND_MODE_CHANGED_${tenant.smsSendMode}_TO_LIVE`,
-      entityType: "Tenant",
-      entityId: admin.tenantId,
-      provider: "TWILIO"
-    });
-
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGED", entityType: "Tenant", entityId: admin.tenantId, provider: "TWILIO" });
     return { smsSendMode: updated.smsSendMode, smsLiveEnabledAt: updated.smsLiveEnabledAt };
   }
 
-  const updated = await db.tenant.update({
-    where: { id: admin.tenantId },
-    data: { smsSendMode: "TEST" }
-  });
-  await audit({
-    tenantId: admin.tenantId,
-    actorUserId: admin.sub,
-    action: `SMS_SEND_MODE_CHANGED_${tenant.smsSendMode}_TO_TEST`,
-    entityType: "Tenant",
-    entityId: admin.tenantId
-  });
-
+  const updated = await db.tenant.update({ where: { id: admin.tenantId }, data: { smsSendMode: "TEST" } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGED", entityType: "Tenant", entityId: admin.tenantId });
   return { smsSendMode: updated.smsSendMode, smsLiveEnabledAt: updated.smsLiveEnabledAt };
 });
 

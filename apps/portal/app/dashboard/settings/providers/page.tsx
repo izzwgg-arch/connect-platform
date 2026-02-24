@@ -41,6 +41,11 @@ export default function ProviderSettingsPage() {
   const [smsMode, setSmsMode] = useState<"TEST" | "LIVE">("TEST");
   const [smsLiveEnabledAt, setSmsLiveEnabledAt] = useState<string | null>(null);
   const [confirmLive, setConfirmLive] = useState(false);
+  const [tenDlcApproved, setTenDlcApproved] = useState(false);
+  const [tenDlcStatus, setTenDlcStatus] = useState<string | null>(null);
+  const [isSavingEnable, setIsSavingEnable] = useState(false);
+  const [testTo, setTestTo] = useState("+15555551234");
+  const [testMessage, setTestMessage] = useState("Test message from Connect Communications");
 
   async function loadProviders() {
     const token = localStorage.getItem("token") || "";
@@ -68,11 +73,13 @@ export default function ProviderSettingsPage() {
     if (json?.smsSendMode === "LIVE" || json?.smsSendMode === "TEST") {
       setSmsMode(json.smsSendMode);
       setSmsLiveEnabledAt(json.smsLiveEnabledAt || null);
+      setTenDlcApproved(!!json.tenDlcApproved);
+      setTenDlcStatus(json.tenDlcStatus || null);
     }
   }
 
   useEffect(() => {
-    if (role === "ADMIN") {
+    if (role === "ADMIN" || role === "SUPER_ADMIN") {
       loadProviders();
       loadSmsMode();
     }
@@ -94,10 +101,17 @@ export default function ProviderSettingsPage() {
 
   async function setEnabled(enabled: boolean) {
     const token = localStorage.getItem("token") || "";
-    await fetch(`${apiBase}/settings/providers/twilio/${enabled ? "enable" : "disable"}`, {
+    setIsSavingEnable(true);
+    const res = await fetch(`${apiBase}/settings/providers/twilio/${enabled ? "enable" : "disable"}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` }
     });
+    const json = await res.json();
+    setResult(JSON.stringify(json, null, 2));
+    if (enabled && res.ok) {
+      setResult(JSON.stringify({ ...json, message: "Credentials validated successfully" }, null, 2));
+    }
+    setIsSavingEnable(false);
     await loadProviders();
   }
 
@@ -106,6 +120,11 @@ export default function ProviderSettingsPage() {
       setResult(JSON.stringify({ error: "Please confirm LIVE mode before saving." }));
       return;
     }
+    if (smsMode === "LIVE" && !tenDlcApproved && role !== "SUPER_ADMIN") {
+      setResult(JSON.stringify({ error: "10DLC approval required before LIVE mode." }));
+      return;
+    }
+
     const token = localStorage.getItem("token") || "";
     const res = await fetch(`${apiBase}/settings/sms-mode`, {
       method: "POST",
@@ -117,7 +136,18 @@ export default function ProviderSettingsPage() {
     await loadSmsMode();
   }
 
-  if (role !== "ADMIN") {
+  async function sendTestSms() {
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/settings/providers/twilio/test-send`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ to: testTo, message: testMessage })
+    });
+    const json = await res.json();
+    setResult(JSON.stringify(json, null, 2));
+  }
+
+  if (role !== "ADMIN" && role !== "SUPER_ADMIN") {
     return (
       <div className="card">
         <h1>Provider Settings</h1>
@@ -145,13 +175,19 @@ export default function ProviderSettingsPage() {
       </form>
 
       <div style={{ marginTop: 12 }}>
-        <button onClick={() => setEnabled(true)}>Enable Twilio</button>
-        <button onClick={() => setEnabled(false)}>Disable Twilio</button>
+        <button disabled={isSavingEnable} onClick={() => setEnabled(true)}>
+          {isSavingEnable ? "Validating..." : "Enable Twilio"}
+        </button>
+        <button disabled={isSavingEnable} onClick={() => setEnabled(false)}>Disable Twilio</button>
       </div>
 
       <h2>Sending Mode</h2>
       <p>Current mode: <strong>{smsMode}</strong></p>
       {smsLiveEnabledAt ? <p>LIVE enabled at: {new Date(smsLiveEnabledAt).toLocaleString()}</p> : null}
+      <p>10DLC status: <strong>{tenDlcStatus || "none"}</strong></p>
+      {!tenDlcApproved && role !== "SUPER_ADMIN" ? (
+        <p><strong>10DLC approval required before LIVE mode.</strong></p>
+      ) : null}
       <div>
         <label>
           <input
@@ -172,6 +208,7 @@ export default function ProviderSettingsPage() {
             name="smsMode"
             value="LIVE"
             checked={smsMode === "LIVE"}
+            disabled={!tenDlcApproved && role !== "SUPER_ADMIN"}
             onChange={() => setSmsMode("LIVE")}
           />
           LIVE (real sending)
@@ -187,6 +224,12 @@ export default function ProviderSettingsPage() {
         </div>
       ) : null}
       <button onClick={saveSmsMode}>Save Sending Mode</button>
+
+      <h3>Send Test SMS</h3>
+      <p><strong>This will send a real SMS and may incur charges.</strong></p>
+      <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="+15555551234" />
+      <input value={testMessage} onChange={(e) => setTestMessage(e.target.value)} placeholder="Test message" />
+      <button onClick={sendTestSms}>Send Test SMS</button>
 
       <h3>Configured Providers</h3>
       <ul>

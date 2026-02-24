@@ -45,7 +45,6 @@ export class FakeNumberProvider implements NumberProvider {
 export class FakeSmsProvider implements SmsProvider {
   async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId: string }> {
     const providerMessageId = `fake-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    // Keep fake provider logs metadata-only and avoid logging message body/credentials.
     console.log(`[FakeSmsProvider] tenant=${input.tenantId} from=${input.from} to=${input.to}`);
     return { status: "SENT", providerMessageId };
   }
@@ -97,10 +96,56 @@ export class TwilioSmsProvider implements SmsProvider {
   }
 }
 
+export async function validateTwilioCredentials(credentials: TwilioCredentials): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const twilio = require("twilio");
+    const client = twilio(credentials.accountSid, credentials.authToken);
+
+    await client.api.accounts(credentials.accountSid).fetch();
+
+    if (credentials.messagingServiceSid) {
+      await client.messaging.v1.services(credentials.messagingServiceSid).fetch();
+    }
+
+    if (credentials.fromNumber) {
+      const list = await client.incomingPhoneNumbers.list({ phoneNumber: credentials.fromNumber, limit: 1 });
+      if (!Array.isArray(list) || list.length === 0) {
+        return { ok: false, message: "Twilio fromNumber was not found in the account." };
+      }
+    }
+
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Unable to validate Twilio credentials. Check account SID, auth token, and sender configuration." };
+  }
+}
+
+export async function sendTwilioTestMessage(credentials: TwilioCredentials, to: string, body: string): Promise<{ ok: true; providerMessageId: string } | { ok: false; message: string }> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const twilio = require("twilio");
+    const client = twilio(credentials.accountSid, credentials.authToken);
+
+    const payload: Record<string, string> = { to, body };
+    if (credentials.messagingServiceSid) {
+      payload.messagingServiceSid = credentials.messagingServiceSid;
+    } else if (credentials.fromNumber) {
+      payload.from = credentials.fromNumber;
+    } else {
+      return { ok: false, message: "Twilio sender configuration missing (messagingServiceSid or fromNumber)." };
+    }
+
+    const res = await client.messages.create(payload);
+    return { ok: true, providerMessageId: String(res.sid) };
+  } catch {
+    return { ok: false, message: "Twilio test send failed. Verify destination number and account configuration." };
+  }
+}
+
 export function getSmsProvider(): SmsProvider {
   return new FakeSmsProvider();
 }
-
 
 export function validateTwilioRequest(authToken: string, signature: string, url: string, params: Record<string, string>): boolean {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
