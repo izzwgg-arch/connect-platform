@@ -5,6 +5,8 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - /opt/connectcomms/env/.env.platform
+    environment:
+      SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
     ports:
       - "127.0.0.1:3001:3001"
     networks:
@@ -43,6 +45,7 @@ services:
       SMS_PROVIDER: ${SMS_PROVIDER:-fake}
       SIMULATE_PROVIDER_FAILURE_TWILIO: ${SIMULATE_PROVIDER_FAILURE_TWILIO:-false}
       SIMULATE_PROVIDER_FAILURE_VOIPMS: ${SIMULATE_PROVIDER_FAILURE_VOIPMS:-false}
+      SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
     networks:
       - default
       - infra_default

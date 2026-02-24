@@ -9,10 +9,15 @@ import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import {
   FakeNumberProvider,
+  NumberProvider,
   sendTwilioTestMessage,
+  TwilioNumberProvider,
+  TwilioCredentials,
   validateTwilioCredentials,
   validateTwilioRequest,
-  validateVoipMsCredentials
+  validateVoipMsCredentials,
+  VoipMsCredentials,
+  VoipMsNumberProvider
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
@@ -26,7 +31,7 @@ const DEFAULT_PER_SECOND = 5;
 const DEFAULT_MAX_CAMPAIGN = 2000;
 
 const app = Fastify({ logger: true });
-const numberProvider = new FakeNumberProvider();
+const fallbackNumberProvider = new FakeNumberProvider();
 
 app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
@@ -34,6 +39,7 @@ app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
+const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 if (!canUseCredentialCrypto) app.log.warn("Provider credential endpoints disabled: CREDENTIALS_MASTER_KEY missing or invalid");
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
@@ -71,10 +77,18 @@ function encodeEin(rawEin: string): string {
   return Buffer.from(rawEin, "utf8").toString("base64");
 }
 
+function isE164(phone: string): boolean {
+  return /^\+[1-9]\d{7,14}$/.test(phone);
+}
+
 function maskValue(value: string | undefined | null, start = 6, end = 4): string | null {
   if (!value) return null;
   if (value.length <= start + end) return "*".repeat(Math.max(4, value.length));
   return `${value.slice(0, start)}${"*".repeat(value.length - start - end)}${value.slice(-end)}`;
+}
+
+function credCacheKey(tenantId: string, provider: ProviderName): string {
+  return `${tenantId}:${provider}`;
 }
 
 async function audit(params: {
@@ -110,14 +124,19 @@ async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
   return user;
 }
 
+async function requireSuperAdmin(req: any, reply: any): Promise<JwtUser | null> {
+  const user = getUser(req);
+  if (user.role !== "SUPER_ADMIN") {
+    reply.status(403).send({ error: "forbidden" });
+    return null;
+  }
+  return user;
+}
+
 function ensureCredentialCrypto(reply: any): boolean {
   if (canUseCredentialCrypto) return true;
   reply.status(503).send({ error: "provider_settings_unavailable", message: "Provider settings are unavailable until credential encryption is configured." });
   return false;
-}
-
-function credCacheKey(tenantId: string, provider: ProviderName): string {
-  return `${tenantId}:${provider}`;
 }
 
 async function getTenantProviderCredentials(tenantId: string, provider: ProviderName, requireEnabled = true): Promise<{ recordId: string; creds: any } | null> {
@@ -157,36 +176,17 @@ async function providerIsReady(tenantId: string, provider: ProviderName): Promis
   return !!(c.username && c.password && c.fromNumber);
 }
 
-async function enqueueCampaignMessages(campaignId: string, tenantId: string) {
-  const messages = await db.smsMessage.findMany({ where: { campaignId } });
-  for (const msg of messages) {
-    await db.smsMessage.update({ where: { id: msg.id }, data: { status: "QUEUED", error: null } });
-    await smsQueue.add("send", { messageId: msg.id, tenantId }, { removeOnComplete: true, attempts: 3 });
+async function getNumberProviderClient(tenantId: string, provider: ProviderName): Promise<NumberProvider> {
+  const creds = await getTenantProviderCredentials(tenantId, provider, true);
+  if (!creds) throw new Error("provider_not_enabled");
+
+  if (provider === "TWILIO") {
+    const c = creds.creds as TwilioCredentials;
+    return new TwilioNumberProvider(c, providerTestMode);
   }
-}
 
-async function dailyUsageCount(tenantId: string): Promise<number> {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  return db.smsMessage.count({ where: { campaign: { tenantId }, status: { in: ["QUEUED", "SENDING", "SENT"] }, createdAt: { gte: start } } });
-}
-
-async function latestTenDlcStatus(tenantId: string): Promise<string | null> {
-  const latest = await db.tenDlcSubmission.findFirst({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { status: true } });
-  return latest?.status || null;
-}
-
-function checkAndConsumeTestSendQuota(tenantId: string): boolean {
-  const now = Date.now();
-  const oneHourAgo = now - 60 * 60 * 1000;
-  const entries = (testSendLimiter.get(tenantId) || []).filter((t) => t >= oneHourAgo);
-  if (entries.length >= 5) {
-    testSendLimiter.set(tenantId, entries);
-    return false;
-  }
-  entries.push(now);
-  testSendLimiter.set(tenantId, entries);
-  return true;
+  const c = creds.creds as VoipMsCredentials;
+  return new VoipMsNumberProvider(c, providerTestMode);
 }
 
 async function getUsageAndFailureStats(tenantId: string): Promise<{ todaySent: number; hourSent: number; failureRate15m: number }> {
@@ -219,13 +219,7 @@ async function getProviderHealthSummary(tenantId: string): Promise<Record<string
   const out: Record<string, { sent: number; failed: number; circuitOpenUntil: string | null; lastErrorCode: string | null; lastErrorAt: string | null }> = {};
   for (const r of rows) {
     if (!out[r.provider]) {
-      out[r.provider] = {
-        sent: 0,
-        failed: 0,
-        circuitOpenUntil: r.circuitOpenUntil ? r.circuitOpenUntil.toISOString() : null,
-        lastErrorCode: r.lastErrorCode || null,
-        lastErrorAt: r.lastErrorAt ? r.lastErrorAt.toISOString() : null
-      };
+      out[r.provider] = { sent: 0, failed: 0, circuitOpenUntil: r.circuitOpenUntil ? r.circuitOpenUntil.toISOString() : null, lastErrorCode: r.lastErrorCode || null, lastErrorAt: r.lastErrorAt ? r.lastErrorAt.toISOString() : null };
     }
     out[r.provider].sent += r.sentCount;
     out[r.provider].failed += r.failCount;
@@ -234,6 +228,38 @@ async function getProviderHealthSummary(tenantId: string): Promise<Record<string
   if (!out.TWILIO) out.TWILIO = { sent: 0, failed: 0, circuitOpenUntil: null, lastErrorCode: null, lastErrorAt: null };
   if (!out.VOIPMS) out.VOIPMS = { sent: 0, failed: 0, circuitOpenUntil: null, lastErrorCode: null, lastErrorAt: null };
   return out;
+}
+
+async function enqueueCampaignMessages(campaignId: string, tenantId: string) {
+  const messages = await db.smsMessage.findMany({ where: { campaignId } });
+  for (const msg of messages) {
+    await db.smsMessage.update({ where: { id: msg.id }, data: { status: "QUEUED", error: null } });
+    await smsQueue.add("send", { messageId: msg.id, tenantId }, { removeOnComplete: true, attempts: 3 });
+  }
+}
+
+async function dailyUsageCount(tenantId: string): Promise<number> {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return db.smsMessage.count({ where: { campaign: { tenantId }, status: { in: ["QUEUED", "SENDING", "SENT"] }, createdAt: { gte: start } } });
+}
+
+async function latestTenDlcStatus(tenantId: string): Promise<string | null> {
+  const latest = await db.tenDlcSubmission.findFirst({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { status: true } });
+  return latest?.status || null;
+}
+
+function checkAndConsumeTestSendQuota(tenantId: string): boolean {
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const entries = (testSendLimiter.get(tenantId) || []).filter((t) => t >= oneHourAgo);
+  if (entries.length >= 5) {
+    testSendLimiter.set(tenantId, entries);
+    return false;
+  }
+  entries.push(now);
+  testSendLimiter.set(tenantId, entries);
+  return true;
 }
 
 function sanitizeLimitInput(input: { dailySmsLimit: number; hourlySmsLimit: number; perSecondRateLimit: number; maxCampaignSize: number }) {
@@ -256,13 +282,7 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
   const normalized = normalizeSmsWithStop(message);
   if (!normalized.ok) {
     await audit({ tenantId, actorUserId, action: "SMS_ENFORCE_STOP_APPEND_TOO_LONG", entityType: "Tenant", entityId: tenantId });
-    return {
-      status: "NEEDS_APPROVAL",
-      requiresApproval: true,
-      holdReason: "STOP instruction required but message would exceed 160 characters. Manual review required.",
-      riskScore: 45,
-      normalizedMessage: message
-    };
+    return { status: "NEEDS_APPROVAL", requiresApproval: true, holdReason: "STOP instruction required but message would exceed 160 characters. Manual review required.", riskScore: 45, normalizedMessage: message };
   }
 
   if (normalized.appendedStop) await audit({ tenantId, actorUserId, action: "SMS_STOP_INSTRUCTION_APPENDED", entityType: "Tenant", entityId: tenantId });
@@ -276,42 +296,25 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
   const risk = assessSmsRisk(normalized.message);
   if (risk.riskScore >= 70) {
     await audit({ tenantId, actorUserId, action: "SMS_RISK_REQUIRES_APPROVAL", entityType: "Tenant", entityId: tenantId });
-    return {
-      status: "NEEDS_APPROVAL",
-      requiresApproval: true,
-      holdReason: `Risk score ${risk.riskScore}: ${risk.reasons.join(", ")}`,
-      riskScore: risk.riskScore,
-      normalizedMessage: normalized.message
-    };
+    return { status: "NEEDS_APPROVAL", requiresApproval: true, holdReason: `Risk score ${risk.riskScore}: ${risk.reasons.join(", ")}`, riskScore: risk.riskScore, normalizedMessage: normalized.message };
   }
 
   if (!tenant.isApproved) {
     await audit({ tenantId, actorUserId, action: "SMS_TENANT_NOT_APPROVED", entityType: "Tenant", entityId: tenantId });
-    return {
-      status: "NEEDS_APPROVAL",
-      requiresApproval: true,
-      holdReason: "Tenant is not approved for outbound messaging.",
-      riskScore: risk.riskScore,
-      normalizedMessage: normalized.message
-    };
+    return { status: "NEEDS_APPROVAL", requiresApproval: true, holdReason: "Tenant is not approved for outbound messaging.", riskScore: risk.riskScore, normalizedMessage: normalized.message };
   }
 
   const sentCampaignCount = await db.smsCampaign.count({ where: { tenantId, status: "SENT" } });
   if (tenant.firstCampaignRequiresApproval && sentCampaignCount === 0) {
     await audit({ tenantId, actorUserId, action: "SMS_FIRST_CAMPAIGN_APPROVAL_REQUIRED", entityType: "Tenant", entityId: tenantId });
-    return {
-      status: "NEEDS_APPROVAL",
-      requiresApproval: true,
-      holdReason: "First campaign requires admin approval.",
-      riskScore: risk.riskScore,
-      normalizedMessage: normalized.message
-    };
+    return { status: "NEEDS_APPROVAL", requiresApproval: true, holdReason: "First campaign requires admin approval.", riskScore: risk.riskScore, normalizedMessage: normalized.message };
   }
 
   return { status: "QUEUED", requiresApproval: false, holdReason: null, riskScore: risk.riskScore, normalizedMessage: normalized.message };
 }
 
 app.get("/health", async () => ({ ok: true }));
+
 const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
 
 app.post("/auth/signup", async (req, reply) => {
@@ -331,7 +334,8 @@ app.post("/auth/signup", async (req, reply) => {
       smsSuspended: false,
       smsRoutingMode: "FAILOVER",
       smsPrimaryProvider: "TWILIO",
-      smsSecondaryProvider: "VOIPMS"
+      smsSecondaryProvider: "VOIPMS",
+      numberPurchaseEnabled: true
     }
   });
 
@@ -341,7 +345,6 @@ app.post("/auth/signup", async (req, reply) => {
   const user = await db.user.create({ data: { tenantId: tenant.id, email: input.email, passwordHash, role } });
 
   await audit({ tenantId: tenant.id, actorUserId: user.id, action: "TENANT_SIGNUP_CREATED", entityType: "Tenant", entityId: tenant.id });
-
   const token = await reply.jwtSign({ sub: user.id, tenantId: tenant.id, email: user.email, role: user.role });
   return { token, user: { id: user.id, email: user.email, role: user.role }, tenant: { id: tenant.id, name: tenant.name } };
 });
@@ -375,18 +378,9 @@ app.get("/settings/sms-limits", async (req, reply) => {
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
   const usage = await getUsageAndFailureStats(admin.tenantId);
   return {
-    limits: {
-      dailySmsLimit: tenant.dailySmsLimit,
-      hourlySmsLimit: tenant.hourlySmsLimit,
-      perSecondRateLimit: tenant.perSecondRateLimit,
-      maxCampaignSize: tenant.maxCampaignSize
-    },
+    limits: { dailySmsLimit: tenant.dailySmsLimit, hourlySmsLimit: tenant.hourlySmsLimit, perSecondRateLimit: tenant.perSecondRateLimit, maxCampaignSize: tenant.maxCampaignSize },
     usage,
-    suspension: {
-      smsSuspended: tenant.smsSuspended,
-      smsSuspendedReason: tenant.smsSuspendedReason,
-      smsSuspendedAt: tenant.smsSuspendedAt
-    }
+    suspension: { smsSuspended: tenant.smsSuspended, smsSuspendedReason: tenant.smsSuspendedReason, smsSuspendedAt: tenant.smsSuspendedAt }
   };
 });
 
@@ -455,17 +449,8 @@ app.post("/settings/sms-limits", async (req, reply) => {
   }
 
   return {
-    limits: {
-      dailySmsLimit: updated.dailySmsLimit,
-      hourlySmsLimit: updated.hourlySmsLimit,
-      perSecondRateLimit: updated.perSecondRateLimit,
-      maxCampaignSize: updated.maxCampaignSize
-    },
-    suspension: {
-      smsSuspended: updated.smsSuspended,
-      smsSuspendedReason: updated.smsSuspendedReason,
-      smsSuspendedAt: updated.smsSuspendedAt
-    }
+    limits: { dailySmsLimit: updated.dailySmsLimit, hourlySmsLimit: updated.hourlySmsLimit, perSecondRateLimit: updated.perSecondRateLimit, maxCampaignSize: updated.maxCampaignSize },
+    suspension: { smsSuspended: updated.smsSuspended, smsSuspendedReason: updated.smsSuspendedReason, smsSuspendedAt: updated.smsSuspendedAt }
   };
 });
 
@@ -481,20 +466,10 @@ app.get("/settings/providers", async (req, reply) => {
     try {
       if (row.provider === "TWILIO") {
         const d = decryptJson<TwilioCredentialPayload>(row.credentialsEncrypted);
-        preview = {
-          accountSid: maskValue(d.accountSid),
-          authToken: d.authToken ? "********" : null,
-          messagingServiceSid: maskValue(d.messagingServiceSid),
-          fromNumber: maskValue(d.fromNumber, 2, 2)
-        };
+        preview = { accountSid: maskValue(d.accountSid), authToken: d.authToken ? "********" : null, messagingServiceSid: maskValue(d.messagingServiceSid), fromNumber: maskValue(d.fromNumber, 2, 2) };
       } else if (row.provider === "VOIPMS") {
         const d = decryptJson<VoipMsCredentialPayload>(row.credentialsEncrypted);
-        preview = {
-          username: maskValue(d.username, 2, 2),
-          password: d.password ? "********" : null,
-          fromNumber: maskValue(d.fromNumber, 2, 2),
-          apiBaseUrl: d.apiBaseUrl || null
-        };
+        preview = { username: maskValue(d.username, 2, 2), password: d.password ? "********" : null, fromNumber: maskValue(d.fromNumber, 2, 2), apiBaseUrl: d.apiBaseUrl || null };
       }
     } catch {
       preview = {};
@@ -648,11 +623,7 @@ app.get("/settings/sms-routing", async (req, reply) => {
   const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
-  const [twilio, voipms, health] = await Promise.all([
-    providerIsReady(admin.tenantId, "TWILIO"),
-    providerIsReady(admin.tenantId, "VOIPMS"),
-    getProviderHealthSummary(admin.tenantId)
-  ]);
+  const [twilio, voipms, health] = await Promise.all([providerIsReady(admin.tenantId, "TWILIO"), providerIsReady(admin.tenantId, "VOIPMS"), getProviderHealthSummary(admin.tenantId)]);
 
   let activeDecision: "PRIMARY" | "SECONDARY" | "LOCKED" = "PRIMARY";
   if (tenant.smsProviderLock) activeDecision = "LOCKED";
@@ -679,9 +650,7 @@ app.post("/settings/sms-routing", async (req, reply) => {
 
   const input = z.object({ routingMode: z.enum(["SINGLE_PRIMARY", "FAILOVER"]), primaryProvider: z.enum(["TWILIO", "VOIPMS"]), secondaryProvider: z.enum(["TWILIO", "VOIPMS"]).nullable().optional() }).parse(req.body);
 
-  if (input.secondaryProvider && input.secondaryProvider === input.primaryProvider) {
-    return reply.status(400).send({ error: "ROUTING_INVALID", message: "Primary and secondary providers must differ." });
-  }
+  if (input.secondaryProvider && input.secondaryProvider === input.primaryProvider) return reply.status(400).send({ error: "ROUTING_INVALID", message: "Primary and secondary providers must differ." });
 
   const primaryReady = await providerIsReady(admin.tenantId, input.primaryProvider as ProviderName);
   if (!primaryReady) return reply.status(400).send({ error: "ROUTING_INVALID", message: "Primary provider must be enabled and validated." });
@@ -733,6 +702,181 @@ app.post("/settings/sms-routing/unlock", async (req, reply) => {
   await db.tenant.update({ where: { id: admin.tenantId }, data: { smsProviderLock: null, smsProviderLockReason: null, smsProviderLockedAt: null, smsProviderLockedByUserId: null } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_PROVIDER_UNLOCKED", entityType: "Tenant", entityId: admin.tenantId });
   return { unlocked: true };
+});
+
+app.get("/numbers", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const rows = await db.phoneNumber.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
+  return rows.map((n) => ({
+    id: n.id,
+    provider: n.provider,
+    phoneNumber: n.phoneNumber,
+    friendlyName: n.friendlyName,
+    capabilities: n.capabilities,
+    region: n.region,
+    areaCode: n.areaCode,
+    monthlyCostCents: n.monthlyCostCents,
+    status: n.status,
+    purchasedAt: n.purchasedAt,
+    releasedAt: n.releasedAt,
+    isDefaultSms: tenant.defaultSmsFromNumberId === n.id
+  }));
+});
+
+app.post("/numbers/search", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+  if (!tenant.numberPurchaseEnabled) return reply.status(403).send({ error: "NUMBER_PURCHASE_DISABLED" });
+
+  const input = z.object({ provider: z.enum(["TWILIO", "VOIPMS"]), type: z.enum(["local", "tollfree"]).default("local"), areaCode: z.string().optional(), contains: z.string().optional(), limit: z.number().int().positive().max(50).optional() }).parse(req.body);
+
+  if (!(await providerIsReady(admin.tenantId, input.provider as ProviderName))) {
+    return reply.status(400).send({ error: "PROVIDER_NOT_READY", message: "Provider is not enabled and validated." });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_SEARCHED", entityType: "Tenant", entityId: admin.tenantId, provider: input.provider as ProviderName });
+
+  try {
+    const provider = await getNumberProviderClient(admin.tenantId, input.provider as ProviderName);
+    const found = await provider.searchNumbers({ type: input.type, areaCode: input.areaCode, contains: input.contains, limit: input.limit || 20 });
+    return { provider: input.provider, results: found };
+  } catch (e: any) {
+    if (String(e?.code || "").includes("VOIPMS_NUMBER_SEARCH_UNAVAILABLE")) {
+      return reply.status(200).send({ provider: input.provider, unavailable: true, message: "VoIP.ms number search not available yet", results: [] });
+    }
+    return reply.status(400).send({ error: "NUMBER_SEARCH_FAILED", message: "Unable to search numbers with selected provider." });
+  }
+});
+
+app.post("/numbers/purchase", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+  if (!tenant.numberPurchaseEnabled) return reply.status(403).send({ error: "NUMBER_PURCHASE_DISABLED" });
+
+  const input = z.object({ provider: z.enum(["TWILIO", "VOIPMS"]), phoneNumber: z.string(), makeDefaultSms: z.boolean().optional() }).parse(req.body);
+  if (!isE164(input.phoneNumber)) return reply.status(400).send({ error: "INVALID_PHONE_NUMBER" });
+
+  if (!(await providerIsReady(admin.tenantId, input.provider as ProviderName))) {
+    return reply.status(400).send({ error: "PROVIDER_NOT_READY", message: "Provider is not enabled and validated." });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_PURCHASE_REQUESTED", entityType: "Tenant", entityId: admin.tenantId, provider: input.provider as ProviderName });
+
+  let purchased: any = null;
+  let providerClient: NumberProvider = fallbackNumberProvider;
+  try {
+    providerClient = await getNumberProviderClient(admin.tenantId, input.provider as ProviderName);
+    purchased = await providerClient.purchaseNumber({ phoneNumber: input.phoneNumber });
+
+    const created = await db.phoneNumber.create({
+      data: {
+        tenantId: admin.tenantId,
+        provider: input.provider,
+        phoneNumber: purchased.phoneNumber,
+        providerId: purchased.providerId,
+        capabilities: purchased.capabilities as any,
+        monthlyCostCents: purchased.monthlyCostCents || null,
+        areaCode: purchased.phoneNumber.slice(2, 5),
+        status: "ACTIVE"
+      }
+    });
+
+    if (input.makeDefaultSms) {
+      await db.tenant.update({ where: { id: admin.tenantId }, data: { defaultSmsFromNumberId: created.id } });
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_DEFAULT_SET", entityType: "PhoneNumber", entityId: created.id, provider: input.provider as ProviderName });
+    }
+
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_PURCHASED", entityType: "PhoneNumber", entityId: created.id, provider: input.provider as ProviderName });
+    return { number: created };
+  } catch (e: any) {
+    if (purchased?.providerId) {
+      try {
+        await providerClient.releaseNumber({ providerId: purchased.providerId, phoneNumber: purchased.phoneNumber });
+      } catch {
+        await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_RELEASE_REQUESTED", entityType: "PhoneNumber", entityId: purchased.providerId, provider: input.provider as ProviderName });
+      }
+    }
+    return reply.status(400).send({ error: "NUMBER_PURCHASE_FAILED", message: "Unable to purchase number." });
+  }
+});
+
+app.post("/numbers/:id/set-default-sms", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+  const number = await db.phoneNumber.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!number) return reply.status(404).send({ error: "number_not_found" });
+  if (number.status !== "ACTIVE") return reply.status(400).send({ error: "number_not_active" });
+
+  await db.tenant.update({ where: { id: admin.tenantId }, data: { defaultSmsFromNumberId: number.id } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_DEFAULT_SET", entityType: "PhoneNumber", entityId: number.id, provider: number.provider as ProviderName });
+  return { ok: true };
+});
+
+app.post("/numbers/:id/release", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  const number = await db.phoneNumber.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!tenant || !number) return reply.status(404).send({ error: "number_not_found" });
+  if (tenant.defaultSmsFromNumberId === number.id) {
+    return reply.status(400).send({ error: "CANNOT_RELEASE_DEFAULT_NUMBER", message: "Set a different default number before releasing this one." });
+  }
+
+  await db.phoneNumber.update({ where: { id: number.id }, data: { status: "RELEASING" } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_RELEASE_REQUESTED", entityType: "PhoneNumber", entityId: number.id, provider: number.provider as ProviderName });
+
+  try {
+    const provider = await getNumberProviderClient(admin.tenantId, number.provider as ProviderName);
+    await provider.releaseNumber({ providerId: number.providerId || undefined, phoneNumber: number.phoneNumber });
+    const updated = await db.phoneNumber.update({ where: { id: number.id }, data: { status: "RELEASED", releasedAt: new Date() } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "NUMBER_RELEASED", entityType: "PhoneNumber", entityId: number.id, provider: number.provider as ProviderName });
+    return { number: updated };
+  } catch {
+    return reply.status(400).send({ error: "NUMBER_RELEASE_FAILED", message: "Unable to release number with provider." });
+  }
+});
+
+app.get("/admin/numbers", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const query = z.object({ provider: z.enum(["TWILIO", "VOIPMS"]).optional(), status: z.enum(["ACTIVE", "RELEASING", "RELEASED", "SUSPENDED"]).optional(), tenantId: z.string().optional() }).parse(req.query || {});
+  const rows = await db.phoneNumber.findMany({
+    where: {
+      provider: query.provider,
+      status: query.status,
+      tenantId: query.tenantId
+    },
+    orderBy: { createdAt: "desc" },
+    include: { tenant: true }
+  });
+  return rows.map((r) => ({ ...r, tenantName: r.tenant.name, isOrphaned: !r.providerId && r.status === "ACTIVE" }));
+});
+
+app.post("/admin/tenants/:id/number-purchase-enabled", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+  const input = z.object({ enabled: z.boolean() }).parse(req.body);
+  const updated = await db.tenant.update({ where: { id }, data: { numberPurchaseEnabled: input.enabled } });
+  await audit({ tenantId: updated.id, actorUserId: admin.sub, action: "NUMBER_ASSIGNMENT_UPDATED", entityType: "Tenant", entityId: updated.id });
+  return { tenantId: updated.id, numberPurchaseEnabled: updated.numberPurchaseEnabled };
 });
 
 app.post("/settings/providers/twilio/test-send", async (req, reply) => {
@@ -881,13 +1025,11 @@ app.get("/admin/tenants", async (req, reply) => {
   if (!admin) return;
 
   const tenants = await db.tenant.findMany({ orderBy: { createdAt: "desc" } });
-  const rows = await Promise.all(
-    tenants.map(async (t) => {
-      const userCount = await db.user.count({ where: { tenantId: t.id } });
-      const campaignCount = await db.smsCampaign.count({ where: { tenantId: t.id } });
-      return { id: t.id, name: t.name, isApproved: t.isApproved, dailySmsCap: t.dailySmsCap, perSecondRate: t.perSecondRate, firstCampaignRequiresApproval: t.firstCampaignRequiresApproval, stats: { users: userCount, campaigns: campaignCount } };
-    })
-  );
+  const rows = await Promise.all(tenants.map(async (t) => {
+    const userCount = await db.user.count({ where: { tenantId: t.id } });
+    const campaignCount = await db.smsCampaign.count({ where: { tenantId: t.id } });
+    return { id: t.id, name: t.name, isApproved: t.isApproved, dailySmsCap: t.dailySmsCap, perSecondRate: t.perSecondRate, firstCampaignRequiresApproval: t.firstCampaignRequiresApproval, stats: { users: userCount, campaigns: campaignCount } };
+  }));
 
   return rows;
 });
@@ -910,7 +1052,6 @@ app.get("/admin/sms/provider-health", async (req, reply) => {
   const rows = await db.providerHealth.findMany({ where: { windowStart: { gte: since } }, include: { tenant: true }, orderBy: { updatedAt: "desc" } });
 
   const byTenant: Record<string, { tenantId: string; tenantName: string; sent: number; failed: number; openCircuits: number; providers: Record<string, { sent: number; failed: number }> }> = {};
-  let failoversRecent = 0;
   for (const r of rows) {
     const key = r.tenantId;
     if (!byTenant[key]) byTenant[key] = { tenantId: r.tenantId, tenantName: r.tenant.name, sent: 0, failed: 0, openCircuits: 0, providers: {} };
@@ -922,9 +1063,7 @@ app.get("/admin/sms/provider-health", async (req, reply) => {
     byTenant[key].providers[r.provider].failed += r.failCount;
   }
 
-  const failoverAudits = await db.auditLog.count({ where: { action: "SMS_PROVIDER_FAILOVER_USED", createdAt: { gte: since } } });
-  failoversRecent += failoverAudits;
-
+  const failoversRecent = await db.auditLog.count({ where: { action: "SMS_PROVIDER_FAILOVER_USED", createdAt: { gte: since } } });
   const tenantRows = Object.values(byTenant).sort((a, b) => b.failed - a.failed);
   const topFailingTenants = tenantRows.slice(0, 10);
   const circuitsOpen = tenantRows.filter((t) => t.openCircuits > 0);
@@ -935,23 +1074,77 @@ app.get("/admin/sms/provider-health", async (req, reply) => {
   };
 
   const recentLocks = await db.auditLog.findMany({ where: { action: "SMS_PROVIDER_LOCKED", createdAt: { gte: since } }, orderBy: { createdAt: "desc" }, take: 20 });
-
   return { topFailingTenants, circuitsOpen, providerDistribution, recentLocks, failoversRecent };
 });
 
 app.post("/sms/campaigns", async (req, reply) => {
   const user = getUser(req);
-  const input = z.object({ name: z.string().min(2), fromNumber: z.string().min(7), message: z.string().min(3).max(320), audienceType: z.string().default("manual"), recipients: z.array(z.string().min(8)).min(1) }).parse(req.body);
+  const input = z.object({
+    name: z.string().min(2),
+    fromNumber: z.string().min(7).optional(),
+    fromNumberId: z.string().optional(),
+    message: z.string().min(3).max(320),
+    audienceType: z.string().default("manual"),
+    recipients: z.array(z.string().min(8)).min(1)
+  }).parse(req.body);
 
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
+  let selectedNumber = null as any;
+  if (input.fromNumberId) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { id: input.fromNumberId, tenantId: user.tenantId } });
+  } else if (input.fromNumber) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { phoneNumber: input.fromNumber, tenantId: user.tenantId } });
+  } else if (tenant.defaultSmsFromNumberId) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { id: tenant.defaultSmsFromNumberId, tenantId: user.tenantId } });
+  }
+
+  if (tenant.smsSendMode === "LIVE") {
+    if (!selectedNumber) return reply.status(400).send({ error: "NO_SENDER_NUMBER", message: "You must purchase/assign a sending number before sending in LIVE mode." });
+    if (selectedNumber.status !== "ACTIVE") return reply.status(400).send({ error: "SENDER_NUMBER_NOT_ACTIVE" });
+  }
+
+  const effectiveFrom = selectedNumber?.phoneNumber || input.fromNumber || "+15550000000";
+
+  const allowedProviders: string[] = [];
+  if (tenant.smsProviderLock) {
+    allowedProviders.push(tenant.smsProviderLock);
+  } else if (tenant.smsRoutingMode === "SINGLE_PRIMARY") {
+    allowedProviders.push(tenant.smsPrimaryProvider);
+  } else {
+    allowedProviders.push(tenant.smsPrimaryProvider);
+    if (tenant.smsSecondaryProvider) allowedProviders.push(tenant.smsSecondaryProvider);
+  }
+
+  let forcedNeedsApproval = false;
+  if (tenant.smsSendMode === "LIVE" && selectedNumber && !allowedProviders.includes(selectedNumber.provider)) {
+    forcedNeedsApproval = true;
+  }
+
   const decision = await decideCampaignPolicy({ tenant, tenantId: user.tenantId, actorUserId: user.sub, message: input.message, recipientsCount: input.recipients.length });
   if ("reject" in decision) return reply.status(400).send({ error: decision.reject });
 
-  const campaign = await db.smsCampaign.create({ data: { tenantId: user.tenantId, name: input.name, message: decision.normalizedMessage, fromNumber: input.fromNumber, audienceType: input.audienceType, status: decision.status, requiresApproval: decision.requiresApproval, holdReason: decision.holdReason, riskScore: decision.riskScore } });
+  const campaignStatus = forcedNeedsApproval ? "NEEDS_APPROVAL" : decision.status;
+  const holdReason = forcedNeedsApproval ? "SENDER_PROVIDER_MISMATCH" : decision.holdReason;
 
-  const createdMessages = await Promise.all(input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: campaign.id, toNumber: to, fromNumber: input.fromNumber, body: decision.normalizedMessage, status: "QUEUED" } })));
+  const campaign = await db.smsCampaign.create({
+    data: {
+      tenantId: user.tenantId,
+      name: input.name,
+      message: decision.normalizedMessage,
+      fromNumber: effectiveFrom,
+      audienceType: input.audienceType,
+      status: campaignStatus,
+      requiresApproval: campaignStatus === "NEEDS_APPROVAL",
+      holdReason,
+      riskScore: decision.riskScore
+    }
+  });
+
+  const createdMessages = await Promise.all(
+    input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: campaign.id, toNumber: to, fromNumber: effectiveFrom, fromNumberId: selectedNumber?.id || null, body: decision.normalizedMessage, status: "QUEUED" } }))
+  );
 
   if (campaign.status === "QUEUED") {
     await enqueueCampaignMessages(campaign.id, user.tenantId);
@@ -1058,19 +1251,6 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
   await audit({ tenantId: message.campaign.tenantId, action: "SMS_WEBHOOK_STATUS_UPDATED", entityType: "SmsMessage", entityId: message.id, provider: "TWILIO" });
 
   return { ok: true };
-});
-
-app.post("/numbers/search", async (req) => {
-  const input = z.object({ areaCode: z.string().optional(), type: z.string().optional() }).parse(req.body);
-  return numberProvider.searchNumbers(input);
-});
-
-app.post("/numbers/purchase", async (req) => {
-  const user = getUser(req);
-  const input = z.object({ e164: z.string() }).parse(req.body);
-  const provider = await numberProvider.purchaseNumber({ e164: input.e164, tenantId: user.tenantId });
-  const record = await db.phoneNumber.create({ data: { tenantId: user.tenantId, e164: input.e164, status: "purchased" } });
-  return { provider, record };
 });
 
 const port = Number(process.env.PORT || 3001);

@@ -49,6 +49,18 @@ enum SmsProviderRoutingMode {
   FAILOVER
 }
 
+enum PhoneNumberProvider {
+  TWILIO
+  VOIPMS
+}
+
+enum PhoneNumberStatus {
+  ACTIVE
+  RELEASING
+  RELEASED
+  SUSPENDED
+}
+
 model Tenant {
   id                            String                 @id @default(cuid())
   name                          String
@@ -73,17 +85,21 @@ model Tenant {
   smsProviderLockReason         String?
   smsProviderLockedAt           DateTime?
   smsProviderLockedByUserId     String?
+  defaultSmsFromNumberId        String?
+  defaultVoiceFromNumberId      String?
+  numberPurchaseEnabled         Boolean                @default(true)
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
   campaigns                     SmsCampaign[]
-  numbers                       PhoneNumber[]
+  numbers                       PhoneNumber[]          @relation("TenantOwnedNumbers")
   audits                        AuditLog[]
   providerCredentials           ProviderCredential[]
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
+  defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
 }
 
 model User {
@@ -163,6 +179,7 @@ model SmsMessage {
   campaignId           String
   toNumber             String
   fromNumber           String
+  fromNumberId         String?
   body                 String
   status               SmsMessageStatus     @default(QUEUED)
   providerMessageId    String?
@@ -177,6 +194,7 @@ model SmsMessage {
   createdAt            DateTime             @default(now())
   sentAt               DateTime?
   campaign             SmsCampaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  fromNumberRef        PhoneNumber?         @relation("SmsMessageFromNumber", fields: [fromNumberId], references: [id], onDelete: SetNull)
   webhookEvents        SmsWebhookEvent[]
 }
 
@@ -215,12 +233,27 @@ model ProviderHealth {
 }
 
 model PhoneNumber {
-  id        String   @id @default(cuid())
-  tenantId  String
-  e164      String
-  status    String   @default("purchased")
-  createdAt DateTime @default(now())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id               String              @id @default(cuid())
+  tenantId         String
+  provider         PhoneNumberProvider
+  phoneNumber      String              @unique
+  providerId       String?
+  friendlyName     String?
+  capabilities     Json?
+  region           String?
+  areaCode         String?
+  monthlyCostCents Int?
+  status           PhoneNumberStatus   @default(ACTIVE)
+  purchasedAt      DateTime            @default(now())
+  releasedAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  tenant           Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForTenants Tenant[]           @relation("TenantDefaultSmsFromNumber")
+  smsMessages      SmsMessage[]        @relation("SmsMessageFromNumber")
+
+  @@index([tenantId, status])
+  @@index([provider, status])
 }
 
 model ProviderCredential {

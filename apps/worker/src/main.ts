@@ -22,12 +22,6 @@ const tokenBuckets = new Map<string, { tokens: number; lastRefillMs: number }>()
 
 type ProviderName = "TWILIO" | "VOIPMS";
 
-type RoutingDecision = {
-  primary: ProviderName | null;
-  secondary: ProviderName | null;
-  primaryRoute: "PRIMARY" | "LOCKED";
-};
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -124,13 +118,8 @@ async function shouldAutoSuspendForFailureRate(tenantId: string): Promise<boolea
 }
 
 async function suspendTenant(tenantId: string, reason: string, actorEntityId: string) {
-  await db.tenant.update({
-    where: { id: tenantId },
-    data: { smsSuspended: true, smsSuspendedReason: reason, smsSuspendedAt: new Date() }
-  });
-  await db.auditLog.create({
-    data: { tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: actorEntityId }
-  });
+  await db.tenant.update({ where: { id: tenantId }, data: { smsSuspended: true, smsSuspendedReason: reason, smsSuspendedAt: new Date() } });
+  await db.auditLog.create({ data: { tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: actorEntityId } });
 }
 
 async function finalizeCampaignStatus(campaignId: string) {
@@ -142,26 +131,16 @@ async function finalizeCampaignStatus(campaignId: string) {
 }
 
 async function getCircuitOpenUntil(tenantId: string, provider: ProviderName): Promise<Date | null> {
-  const row = await db.providerHealth.findFirst({
-    where: { tenantId, provider },
-    orderBy: { updatedAt: "desc" }
-  });
+  const row = await db.providerHealth.findFirst({ where: { tenantId, provider }, orderBy: { updatedAt: "desc" } });
   if (!row?.circuitOpenUntil) return null;
   if (row.circuitOpenUntil > new Date()) return row.circuitOpenUntil;
 
   await db.providerHealth.update({ where: { id: row.id }, data: { circuitOpenUntil: null } });
-  await db.auditLog.create({
-    data: { tenantId, action: "SMS_PROVIDER_CIRCUIT_CLOSED", entityType: "ProviderHealth", entityId: row.id, provider }
-  });
+  await db.auditLog.create({ data: { tenantId, action: "SMS_PROVIDER_CIRCUIT_CLOSED", entityType: "ProviderHealth", entityId: row.id, provider } });
   return null;
 }
 
-async function recordProviderHealth(
-  tenantId: string,
-  provider: ProviderName,
-  success: boolean,
-  errorCode?: string
-): Promise<void> {
+async function recordProviderHealth(tenantId: string, provider: ProviderName, success: boolean, errorCode?: string): Promise<void> {
   const windowStart = bucketStart5m();
   const row = await db.providerHealth.upsert({
     where: { tenantId_provider_windowStart: { tenantId, provider, windowStart } },
@@ -187,37 +166,31 @@ async function recordProviderHealth(
   if (row.failCount >= 20 && failRate >= 0.4) {
     const openUntil = new Date(Date.now() + 15 * 60 * 1000);
     await db.providerHealth.update({ where: { id: row.id }, data: { circuitOpenUntil: openUntil } });
-    await db.auditLog.create({
-      data: {
-        tenantId,
-        action: "SMS_PROVIDER_CIRCUIT_OPENED",
-        entityType: "ProviderHealth",
-        entityId: row.id,
-        provider
-      }
-    });
+    await db.auditLog.create({ data: { tenantId, action: "SMS_PROVIDER_CIRCUIT_OPENED", entityType: "ProviderHealth", entityId: row.id, provider } });
   }
 }
 
-async function buildRoutingDecision(tenant: any): Promise<RoutingDecision> {
-  const lock = tenant.smsProviderLock as ProviderName | null;
-  if (lock) {
-    return { primary: lock, secondary: null, primaryRoute: "LOCKED" };
+async function resolveSenderNumber(msg: any, tenantId: string): Promise<any | null> {
+  if (msg.fromNumberId) {
+    return db.phoneNumber.findFirst({ where: { id: msg.fromNumberId, tenantId, status: "ACTIVE" } });
   }
+  return db.phoneNumber.findFirst({ where: { tenantId, phoneNumber: msg.fromNumber, status: "ACTIVE" } });
+}
 
-  const primary = tenant.smsPrimaryProvider as ProviderName;
-  const secondary = (tenant.smsSecondaryProvider as ProviderName | null) || null;
-
+function buildRoutingAttemptOrder(tenant: any): Array<{ provider: ProviderName; route: "PRIMARY" | "SECONDARY" | "LOCKED" }> {
+  if (tenant.smsProviderLock) {
+    return [{ provider: tenant.smsProviderLock as ProviderName, route: "LOCKED" }];
+  }
   if (tenant.smsRoutingMode === "SINGLE_PRIMARY") {
-    return { primary, secondary: null, primaryRoute: "PRIMARY" };
+    return [{ provider: tenant.smsPrimaryProvider as ProviderName, route: "PRIMARY" }];
   }
 
-  const circuitOpenPrimary = await getCircuitOpenUntil(tenant.id, primary);
-  if (circuitOpenPrimary && secondary) {
-    return { primary: secondary, secondary: null, primaryRoute: "SECONDARY" as any };
+  const out: Array<{ provider: ProviderName; route: "PRIMARY" | "SECONDARY" | "LOCKED" }> = [];
+  out.push({ provider: tenant.smsPrimaryProvider as ProviderName, route: "PRIMARY" });
+  if (tenant.smsSecondaryProvider && tenant.smsSecondaryProvider !== tenant.smsPrimaryProvider) {
+    out.push({ provider: tenant.smsSecondaryProvider as ProviderName, route: "SECONDARY" });
   }
-
-  return { primary, secondary, primaryRoute: "PRIMARY" };
+  return out;
 }
 
 const worker = new Worker(
@@ -312,15 +285,19 @@ const worker = new Worker(
         return;
       }
 
-      const route = await buildRoutingDecision(tenant);
-      const attempts: Array<{ provider: ProviderName; route: "PRIMARY" | "SECONDARY" | "LOCKED" }> = [];
-
-      if (route.primary) {
-        const routeLabel = tenant.smsProviderLock ? "LOCKED" : route.primaryRoute === "PRIMARY" ? "PRIMARY" : "SECONDARY";
-        attempts.push({ provider: route.primary, route: routeLabel as any });
+      const senderNumber = await resolveSenderNumber(msg, tenant.id);
+      if (!senderNumber) {
+        await db.smsMessage.update({ where: { id: msg.id }, data: { status: "FAILED", error: "NO_SENDER_NUMBER" } });
+        await finalizeCampaignStatus(msg.campaignId);
+        return;
       }
-      if (tenant.smsRoutingMode === "FAILOVER" && !tenant.smsProviderLock && route.secondary && route.secondary !== route.primary) {
-        attempts.push({ provider: route.secondary, route: "SECONDARY" });
+
+      let attempts = buildRoutingAttemptOrder(tenant);
+      attempts = attempts.filter((a) => a.provider === senderNumber.provider);
+      if (attempts.length === 0) {
+        await db.smsMessage.update({ where: { id: msg.id }, data: { status: "FAILED", error: "SENDER_PROVIDER_MISMATCH" } });
+        await finalizeCampaignStatus(msg.campaignId);
+        return;
       }
 
       let sentOk = false;
@@ -328,13 +305,10 @@ const worker = new Worker(
 
       for (let i = 0; i < attempts.length; i += 1) {
         const candidate = attempts[i];
-        if (!candidate.provider) continue;
 
         if (!tenant.smsProviderLock) {
           const openUntil = await getCircuitOpenUntil(tenant.id, candidate.provider);
-          if (openUntil) {
-            continue;
-          }
+          if (openUntil) continue;
         }
 
         const providerClient = await getProviderClient(tenant.id, candidate.provider);
@@ -344,7 +318,7 @@ const worker = new Worker(
           const sent = await providerClient.sendMessage({
             tenantId: tenant.id,
             to: msg.toNumber,
-            from: msg.fromNumber,
+            from: senderNumber.phoneNumber,
             body: msg.body,
             idempotencyKey: msg.id
           });
@@ -362,20 +336,13 @@ const worker = new Worker(
               providerErrorCode: null,
               lastProviderUpdateAt: now,
               sentAt: now,
-              error: null
+              error: null,
+              fromNumberId: senderNumber.id
             }
           });
 
           await recordProviderHealth(tenant.id, candidate.provider, true);
-          await db.auditLog.create({
-            data: {
-              tenantId: tenant.id,
-              action: candidate.route === "SECONDARY" ? "SMS_PROVIDER_FAILOVER_USED" : "SMS_MESSAGE_SENT",
-              entityType: "SmsMessage",
-              entityId: msg.id,
-              provider: candidate.provider
-            }
-          });
+          await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_SENT", entityType: "SmsMessage", entityId: msg.id, provider: candidate.provider } });
           sentOk = true;
           break;
         } catch (err: any) {
@@ -396,10 +363,10 @@ const worker = new Worker(
             }
           });
 
-          const canTrySecondary = tenant.smsRoutingMode === "FAILOVER" && !tenant.smsProviderLock && i === 0 && normalized.retryable;
-          if (!canTrySecondary) {
-            break;
-          }
+          const attemptsMax = typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
+          const thisAttempt = (job.attemptsMade || 0) + 1;
+          const finalAttempt = thisAttempt >= attemptsMax;
+          if (finalAttempt || !normalized.retryable) break;
         }
       }
 
@@ -409,17 +376,7 @@ const worker = new Worker(
         const finalAttempt = thisAttempt >= attemptsMax;
 
         if (finalAttempt) {
-          const msgText = String(lastErr?.message || "provider send failed");
-          await db.smsMessage.update({
-            where: { id: msg.id },
-            data: {
-              status: "FAILED",
-              error: msgText,
-              providerStatus: "failed",
-              lastProviderUpdateAt: new Date(),
-              deliveryUpdatedAt: new Date()
-            }
-          });
+          await db.smsMessage.update({ where: { id: msg.id }, data: { status: "FAILED", error: String(lastErr?.message || "provider send failed"), providerStatus: "failed", lastProviderUpdateAt: new Date(), deliveryUpdatedAt: new Date() } });
           await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_FAILED_FINAL", entityType: "SmsMessage", entityId: msg.id } });
         } else {
           await db.smsMessage.update({ where: { id: msg.id }, data: { status: "QUEUED", error: "retrying provider send" } });
