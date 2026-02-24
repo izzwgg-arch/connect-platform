@@ -1,0 +1,1 @@
+export default function Privacy(){return <div className="card"><h1>Privacy Policy</h1><p>We process customer data to deliver communications services, security controls, and regulatory compliance. Access is restricted by tenant scope and role.</p><p>Data retention, deletion requests, and incident response are handled through authenticated support workflows.</p></div>}

@@ -1,0 +1,21 @@
+{
+  "name": "connect-platform",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.30.2",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier -w .",
+    "db:generate": "pnpm --filter @connect/db prisma:generate",
+    "db:migrate": "pnpm --filter @connect/db prisma:migrate"
+  },
+  "devDependencies": {
+    "eslint": "^9.36.0",
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.2"
+  }
+}

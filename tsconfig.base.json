@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@connect/shared": ["packages/shared/src"],
+      "@connect/db": ["packages/db/src"],
+      "@connect/integrations": ["packages/integrations/src"]
+    }
+  }
+}

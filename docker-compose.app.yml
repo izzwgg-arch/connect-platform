@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - /opt/connectcomms/env/.env.platform
+    ports:
+      - "127.0.0.1:3001:3001"
+
+  portal:
+    build:
+      context: .
+      dockerfile: apps/portal/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  realtime:
+    build:
+      context: .
+      dockerfile: apps/realtime/Dockerfile
+    env_file:
+      - /opt/connectcomms/env/.env.platform
+    ports:
+      - "127.0.0.1:3002:3002"
+EOF
