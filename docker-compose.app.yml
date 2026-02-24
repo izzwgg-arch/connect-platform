@@ -7,15 +7,20 @@ services:
       - /opt/connectcomms/env/.env.platform
     ports:
       - "127.0.0.1:3001:3001"
+    networks:
+      - default
+      - infra_default
 
   portal:
     build:
       context: .
       dockerfile: apps/portal/Dockerfile
     environment:
-      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001
+      NEXT_PUBLIC_API_URL: https://app.connectcomunications.com/api
     ports:
       - "127.0.0.1:3000:3000"
+    networks:
+      - default
 
   realtime:
     build:
@@ -25,3 +30,21 @@ services:
       - /opt/connectcomms/env/.env.platform
     ports:
       - "127.0.0.1:3002:3002"
+    networks:
+      - default
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file:
+      - /opt/connectcomms/env/.env.platform
+    environment:
+      SMS_PROVIDER: ${SMS_PROVIDER:-fake}
+    networks:
+      - default
+      - infra_default
+
+networks:
+  infra_default:
+    external: true

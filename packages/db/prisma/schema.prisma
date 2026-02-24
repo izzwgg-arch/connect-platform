@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
 }
 
@@ -8,15 +8,39 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum TenDlcStatus {
+  DRAFT
+  SUBMITTED
+  NEEDS_INFO
+  APPROVED
+  REJECTED
+}
+
+enum CampaignStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+}
+
+enum SmsMessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  DELIVERED
+}
+
 model Tenant {
-  id          String             @id @default(cuid())
-  name        String
-  createdAt   DateTime           @default(now())
-  users       User[]
-  tenDlcSubs  TenDlcSubmission[]
-  campaigns   SmsCampaign[]
-  numbers     PhoneNumber[]
-  audits      AuditLog[]
+  id           String             @id @default(cuid())
+  name         String
+  smsDailyCap  Int                @default(100)
+  createdAt    DateTime           @default(now())
+  users        User[]
+  tenDlcSubs   TenDlcSubmission[]
+  campaigns    SmsCampaign[]
+  numbers      PhoneNumber[]
+  audits       AuditLog[]
 }
 
 model User {
@@ -24,29 +48,75 @@ model User {
   tenantId     String
   email        String   @unique
   passwordHash String
-  role         String   @default("owner")
+  role         String   @default("OWNER")
   createdAt    DateTime @default(now())
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model TenDlcSubmission {
-  id         String   @id @default(cuid())
-  tenantId   String
-  legalName  String
-  status     String   @default("submitted")
-  createdAt  DateTime @default(now())
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                     String      @id @default(cuid())
+  tenantId               String
+  legalName              String
+  dba                    String?
+  einEncrypted           String
+  businessType           String
+  websiteUrl             String
+  addressStreet          String
+  addressCity            String
+  addressState           String
+  addressPostalCode      String
+  addressCountry         String
+  supportEmail           String
+  supportPhone           String
+  useCaseCategory        String
+  sampleMessage1         String
+  sampleMessage2         String
+  sampleMessage3         String
+  optInMethod            String
+  optInWorkflow          String
+  optInProofUrl          String?
+  messagesPerDay         Int
+  messagesPerMonth       Int
+  includesEmbeddedLinks  Boolean
+  includesPhoneNumbers   Boolean
+  includesAffiliateMktg  Boolean
+  ageGatedContent        Boolean
+  termsAccepted          Boolean
+  signatureName          String
+  signatureDate          DateTime
+  status                 TenDlcStatus @default(SUBMITTED)
+  internalNotes          String?
+  submittedAt            DateTime?
+  reviewedAt             DateTime?
+  createdAt              DateTime     @default(now())
+  tenant                 Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model SmsCampaign {
-  id         String   @id @default(cuid())
-  tenantId   String
-  name       String
-  message    String
-  audience   String
-  status     String   @default("draft")
-  createdAt  DateTime @default(now())
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id           String         @id @default(cuid())
+  tenantId     String
+  name         String
+  message      String
+  fromNumber   String
+  audienceType String
+  status       CampaignStatus @default(QUEUED)
+  createdAt    DateTime       @default(now())
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messages     SmsMessage[]
+}
+
+model SmsMessage {
+  id                String           @id @default(cuid())
+  campaignId        String
+  toNumber          String
+  fromNumber        String
+  body              String
+  status            SmsMessageStatus @default(QUEUED)
+  providerMessageId String?
+  error             String?
+  createdAt         DateTime         @default(now())
+  sentAt            DateTime?
+  campaign          SmsCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 }
 
 model PhoneNumber {

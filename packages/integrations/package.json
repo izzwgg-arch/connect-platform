@@ -8,5 +8,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo lint-integrations"
+  },
+  "dependencies": {
+    "twilio": "^5.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0"
   }
 }
