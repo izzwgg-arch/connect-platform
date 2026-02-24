@@ -3,7 +3,14 @@ import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
-import { FakeSmsProvider, SmsProvider, TwilioCredentials, TwilioSmsProvider } from "@connect/integrations";
+import {
+  normalizeProviderError,
+  SmsProvider,
+  TwilioCredentials,
+  TwilioSmsProvider,
+  VoipMsCredentials,
+  VoipMsSmsProvider
+} from "@connect/integrations";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -11,48 +18,55 @@ const smsQueue = new Queue("sms-send", { connection: redis });
 const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number }>();
 const providerCacheTtlMs = 60_000;
 const smsProviderTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
-
 const tokenBuckets = new Map<string, { tokens: number; lastRefillMs: number }>();
+
+type ProviderName = "TWILIO" | "VOIPMS";
+
+type RoutingDecision = {
+  primary: ProviderName | null;
+  secondary: ProviderName | null;
+  primaryRoute: "PRIMARY" | "LOCKED";
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getTenantSmsProvider(tenantId: string): Promise<SmsProvider> {
-  const cached = providerCache.get(tenantId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.provider;
-  }
+function providerCacheKey(tenantId: string, provider: ProviderName): string {
+  return `${tenantId}:${provider}`;
+}
 
-  const twilioCred = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId, provider: "TWILIO" } } });
+function bucketStart5m(now = new Date()): Date {
+  const d = new Date(now);
+  d.setSeconds(0, 0);
+  d.setMinutes(Math.floor(d.getMinutes() / 5) * 5);
+  return d;
+}
 
-  if (!twilioCred || !twilioCred.isEnabled) {
-    const fake = new FakeSmsProvider();
-    providerCache.set(tenantId, { provider: fake, expiresAt: Date.now() + providerCacheTtlMs });
-    return fake;
-  }
+async function getProviderClient(tenantId: string, provider: ProviderName): Promise<SmsProvider | null> {
+  const key = providerCacheKey(tenantId, provider);
+  const cached = providerCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.provider;
+
+  const credential = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId, provider } } });
+  if (!credential || !credential.isEnabled) return null;
 
   try {
-    const decrypted = decryptJson<TwilioCredentials>(twilioCred.credentialsEncrypted);
-    if (!decrypted.accountSid || !decrypted.authToken || (!decrypted.messagingServiceSid && !decrypted.fromNumber)) {
-      throw new Error("incomplete_credentials");
+    if (provider === "TWILIO") {
+      const decrypted = decryptJson<TwilioCredentials>(credential.credentialsEncrypted);
+      if (!decrypted.accountSid || !decrypted.authToken || (!decrypted.messagingServiceSid && !decrypted.fromNumber)) return null;
+      const client = new TwilioSmsProvider(decrypted, smsProviderTestMode);
+      providerCache.set(key, { provider: client, expiresAt: Date.now() + providerCacheTtlMs });
+      return client;
     }
-    const twilio = new TwilioSmsProvider(decrypted, smsProviderTestMode);
-    providerCache.set(tenantId, { provider: twilio, expiresAt: Date.now() + providerCacheTtlMs });
-    return twilio;
+
+    const decrypted = decryptJson<VoipMsCredentials>(credential.credentialsEncrypted);
+    if (!decrypted.username || !decrypted.password || !decrypted.fromNumber) return null;
+    const client = new VoipMsSmsProvider(decrypted, smsProviderTestMode);
+    providerCache.set(key, { provider: client, expiresAt: Date.now() + providerCacheTtlMs });
+    return client;
   } catch {
-    await db.auditLog.create({
-      data: {
-        tenantId,
-        action: "SMS_PROVIDER_FALLBACK_FAKE",
-        entityType: "ProviderCredential",
-        entityId: twilioCred.id,
-        provider: "TWILIO"
-      }
-    });
-    const fake = new FakeSmsProvider();
-    providerCache.set(tenantId, { provider: fake, expiresAt: Date.now() + providerCacheTtlMs });
-    return fake;
+    return null;
   }
 }
 
@@ -98,17 +112,13 @@ async function shouldAutoSuspendForFailureRate(tenantId: string): Promise<boolea
   });
 
   if (recent.length === 0) return false;
-
   let failed = 0;
   let total = 0;
   for (const msg of recent) {
     if (msg.status === "QUEUED") continue;
     total += 1;
-    if (msg.status === "FAILED" || (msg.providerStatus || "").toLowerCase() === "undelivered") {
-      failed += 1;
-    }
+    if (msg.status === "FAILED" || (msg.providerStatus || "").toLowerCase() === "undelivered") failed += 1;
   }
-
   if (total === 0) return false;
   return failed > 30 && failed / total > 0.4;
 }
@@ -116,19 +126,10 @@ async function shouldAutoSuspendForFailureRate(tenantId: string): Promise<boolea
 async function suspendTenant(tenantId: string, reason: string, actorEntityId: string) {
   await db.tenant.update({
     where: { id: tenantId },
-    data: {
-      smsSuspended: true,
-      smsSuspendedReason: reason,
-      smsSuspendedAt: new Date()
-    }
+    data: { smsSuspended: true, smsSuspendedReason: reason, smsSuspendedAt: new Date() }
   });
   await db.auditLog.create({
-    data: {
-      tenantId,
-      action: "SMS_TENANT_SUSPENDED",
-      entityType: "Tenant",
-      entityId: actorEntityId
-    }
+    data: { tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: actorEntityId }
   });
 }
 
@@ -138,6 +139,85 @@ async function finalizeCampaignStatus(campaignId: string) {
   const failedCount = await db.smsMessage.count({ where: { campaignId, status: "FAILED" } });
   const nextStatus = failedCount > 0 ? "FAILED" : "SENT";
   await db.smsCampaign.update({ where: { id: campaignId }, data: { status: nextStatus } });
+}
+
+async function getCircuitOpenUntil(tenantId: string, provider: ProviderName): Promise<Date | null> {
+  const row = await db.providerHealth.findFirst({
+    where: { tenantId, provider },
+    orderBy: { updatedAt: "desc" }
+  });
+  if (!row?.circuitOpenUntil) return null;
+  if (row.circuitOpenUntil > new Date()) return row.circuitOpenUntil;
+
+  await db.providerHealth.update({ where: { id: row.id }, data: { circuitOpenUntil: null } });
+  await db.auditLog.create({
+    data: { tenantId, action: "SMS_PROVIDER_CIRCUIT_CLOSED", entityType: "ProviderHealth", entityId: row.id, provider }
+  });
+  return null;
+}
+
+async function recordProviderHealth(
+  tenantId: string,
+  provider: ProviderName,
+  success: boolean,
+  errorCode?: string
+): Promise<void> {
+  const windowStart = bucketStart5m();
+  const row = await db.providerHealth.upsert({
+    where: { tenantId_provider_windowStart: { tenantId, provider, windowStart } },
+    create: {
+      tenantId,
+      provider,
+      windowStart,
+      sentCount: success ? 1 : 0,
+      failCount: success ? 0 : 1,
+      lastErrorCode: success ? null : errorCode || null,
+      lastErrorAt: success ? null : new Date()
+    },
+    update: {
+      sentCount: success ? { increment: 1 } : undefined,
+      failCount: success ? undefined : { increment: 1 },
+      lastErrorCode: success ? undefined : errorCode || null,
+      lastErrorAt: success ? undefined : new Date()
+    }
+  });
+
+  const total = row.sentCount + row.failCount;
+  const failRate = total > 0 ? row.failCount / total : 0;
+  if (row.failCount >= 20 && failRate >= 0.4) {
+    const openUntil = new Date(Date.now() + 15 * 60 * 1000);
+    await db.providerHealth.update({ where: { id: row.id }, data: { circuitOpenUntil: openUntil } });
+    await db.auditLog.create({
+      data: {
+        tenantId,
+        action: "SMS_PROVIDER_CIRCUIT_OPENED",
+        entityType: "ProviderHealth",
+        entityId: row.id,
+        provider
+      }
+    });
+  }
+}
+
+async function buildRoutingDecision(tenant: any): Promise<RoutingDecision> {
+  const lock = tenant.smsProviderLock as ProviderName | null;
+  if (lock) {
+    return { primary: lock, secondary: null, primaryRoute: "LOCKED" };
+  }
+
+  const primary = tenant.smsPrimaryProvider as ProviderName;
+  const secondary = (tenant.smsSecondaryProvider as ProviderName | null) || null;
+
+  if (tenant.smsRoutingMode === "SINGLE_PRIMARY") {
+    return { primary, secondary: null, primaryRoute: "PRIMARY" };
+  }
+
+  const circuitOpenPrimary = await getCircuitOpenUntil(tenant.id, primary);
+  if (circuitOpenPrimary && secondary) {
+    return { primary: secondary, secondary: null, primaryRoute: "SECONDARY" as any };
+  }
+
+  return { primary, secondary, primaryRoute: "PRIMARY" };
 }
 
 const worker = new Worker(
@@ -220,49 +300,134 @@ const worker = new Worker(
             status: "SENT",
             providerMessageId: `SIMULATED_${randomUUID()}`,
             providerStatus: "simulated",
+            providerAttemptedAt: now,
+            providerRoute: "PRIMARY",
             lastProviderUpdateAt: now,
             sentAt: now,
             error: null
           }
         });
         await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_SIMULATED", entityType: "SmsMessage", entityId: msg.id } });
-      } else {
-        const provider = await getTenantSmsProvider(tenant.id);
-        const sent = await provider.sendMessage({ tenantId: tenant.id, to: msg.toNumber, from: msg.fromNumber, body: msg.body, idempotencyKey: msg.id });
-        await db.smsMessage.update({
-          where: { id: msg.id },
-          data: {
-            status: "SENT",
-            providerMessageId: sent.providerMessageId || null,
-            providerStatus: "sent",
-            lastProviderUpdateAt: new Date(),
-            sentAt: new Date(),
-            error: null
+        await finalizeCampaignStatus(msg.campaignId);
+        return;
+      }
+
+      const route = await buildRoutingDecision(tenant);
+      const attempts: Array<{ provider: ProviderName; route: "PRIMARY" | "SECONDARY" | "LOCKED" }> = [];
+
+      if (route.primary) {
+        const routeLabel = tenant.smsProviderLock ? "LOCKED" : route.primaryRoute === "PRIMARY" ? "PRIMARY" : "SECONDARY";
+        attempts.push({ provider: route.primary, route: routeLabel as any });
+      }
+      if (tenant.smsRoutingMode === "FAILOVER" && !tenant.smsProviderLock && route.secondary && route.secondary !== route.primary) {
+        attempts.push({ provider: route.secondary, route: "SECONDARY" });
+      }
+
+      let sentOk = false;
+      let lastErr: any = null;
+
+      for (let i = 0; i < attempts.length; i += 1) {
+        const candidate = attempts[i];
+        if (!candidate.provider) continue;
+
+        if (!tenant.smsProviderLock) {
+          const openUntil = await getCircuitOpenUntil(tenant.id, candidate.provider);
+          if (openUntil) {
+            continue;
           }
-        });
-        await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_SENT", entityType: "SmsMessage", entityId: msg.id } });
+        }
+
+        const providerClient = await getProviderClient(tenant.id, candidate.provider);
+        if (!providerClient) continue;
+
+        try {
+          const sent = await providerClient.sendMessage({
+            tenantId: tenant.id,
+            to: msg.toNumber,
+            from: msg.fromNumber,
+            body: msg.body,
+            idempotencyKey: msg.id
+          });
+
+          const now = new Date();
+          await db.smsMessage.update({
+            where: { id: msg.id },
+            data: {
+              status: "SENT",
+              provider: candidate.provider,
+              providerMessageId: sent.providerMessageId || null,
+              providerStatus: sent.providerStatus || "sent",
+              providerAttemptedAt: now,
+              providerRoute: candidate.route,
+              providerErrorCode: null,
+              lastProviderUpdateAt: now,
+              sentAt: now,
+              error: null
+            }
+          });
+
+          await recordProviderHealth(tenant.id, candidate.provider, true);
+          await db.auditLog.create({
+            data: {
+              tenantId: tenant.id,
+              action: candidate.route === "SECONDARY" ? "SMS_PROVIDER_FAILOVER_USED" : "SMS_MESSAGE_SENT",
+              entityType: "SmsMessage",
+              entityId: msg.id,
+              provider: candidate.provider
+            }
+          });
+          sentOk = true;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const normalized = normalizeProviderError(candidate.provider, err);
+          await recordProviderHealth(tenant.id, candidate.provider, false, normalized.code);
+
+          await db.smsMessage.update({
+            where: { id: msg.id },
+            data: {
+              provider: candidate.provider,
+              providerStatus: "failed",
+              providerAttemptedAt: new Date(),
+              providerRoute: candidate.route,
+              providerErrorCode: normalized.code,
+              error: normalized.humanMessage,
+              lastProviderUpdateAt: new Date()
+            }
+          });
+
+          const canTrySecondary = tenant.smsRoutingMode === "FAILOVER" && !tenant.smsProviderLock && i === 0 && normalized.retryable;
+          if (!canTrySecondary) {
+            break;
+          }
+        }
+      }
+
+      if (!sentOk) {
+        const attemptsMax = typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
+        const thisAttempt = (job.attemptsMade || 0) + 1;
+        const finalAttempt = thisAttempt >= attemptsMax;
+
+        if (finalAttempt) {
+          const msgText = String(lastErr?.message || "provider send failed");
+          await db.smsMessage.update({
+            where: { id: msg.id },
+            data: {
+              status: "FAILED",
+              error: msgText,
+              providerStatus: "failed",
+              lastProviderUpdateAt: new Date(),
+              deliveryUpdatedAt: new Date()
+            }
+          });
+          await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_FAILED_FINAL", entityType: "SmsMessage", entityId: msg.id } });
+        } else {
+          await db.smsMessage.update({ where: { id: msg.id }, data: { status: "QUEUED", error: "retrying provider send" } });
+          await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_RETRY_SCHEDULED", entityType: "SmsMessage", entityId: msg.id } });
+          throw lastErr || new Error("provider send failed");
+        }
       }
     } catch (err: any) {
-      const attempts = typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
-      const thisAttempt = (job.attemptsMade || 0) + 1;
-      const finalAttempt = thisAttempt >= attempts;
-
-      if (finalAttempt) {
-        await db.smsMessage.update({
-          where: { id: msg.id },
-          data: {
-            status: "FAILED",
-            error: err?.message || "unknown worker error",
-            providerStatus: "failed",
-            lastProviderUpdateAt: new Date(),
-            deliveryUpdatedAt: new Date()
-          }
-        });
-        await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_FAILED_FINAL", entityType: "SmsMessage", entityId: msg.id } });
-      } else {
-        await db.smsMessage.update({ where: { id: msg.id }, data: { status: "QUEUED", error: `retrying: ${err?.message || "unknown"}` } });
-        await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_MESSAGE_RETRY_SCHEDULED", entityType: "SmsMessage", entityId: msg.id } });
-      }
       await finalizeCampaignStatus(msg.campaignId);
       throw err;
     }

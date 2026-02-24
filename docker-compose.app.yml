@@ -41,6 +41,8 @@ services:
       - /opt/connectcomms/env/.env.platform
     environment:
       SMS_PROVIDER: ${SMS_PROVIDER:-fake}
+      SIMULATE_PROVIDER_FAILURE_TWILIO: ${SIMULATE_PROVIDER_FAILURE_TWILIO:-false}
+      SIMULATE_PROVIDER_FAILURE_VOIPMS: ${SIMULATE_PROVIDER_FAILURE_VOIPMS:-false}
     networks:
       - default
       - infra_default

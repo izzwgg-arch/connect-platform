@@ -44,24 +44,36 @@ enum SmsSendMode {
   LIVE
 }
 
+enum SmsProviderRoutingMode {
+  SINGLE_PRIMARY
+  FAILOVER
+}
+
 model Tenant {
-  id                            String               @id @default(cuid())
+  id                            String                 @id @default(cuid())
   name                          String
-  isApproved                    Boolean              @default(false)
-  dailySmsCap                   Int                  @default(100)
-  perSecondRate                 Float                @default(1.0)
-  firstCampaignRequiresApproval Boolean              @default(true)
-  smsSendMode                   SmsSendMode          @default(TEST)
+  isApproved                    Boolean                @default(false)
+  dailySmsCap                   Int                    @default(100)
+  perSecondRate                 Float                  @default(1.0)
+  firstCampaignRequiresApproval Boolean                @default(true)
+  smsSendMode                   SmsSendMode            @default(TEST)
   smsLiveEnabledAt              DateTime?
   smsLiveEnabledByUserId        String?
-  dailySmsLimit                 Int                  @default(500)
-  hourlySmsLimit                Int                  @default(100)
-  perSecondRateLimit            Int                  @default(5)
-  maxCampaignSize               Int                  @default(2000)
-  smsSuspended                  Boolean              @default(false)
+  dailySmsLimit                 Int                    @default(500)
+  hourlySmsLimit                Int                    @default(100)
+  perSecondRateLimit            Int                    @default(5)
+  maxCampaignSize               Int                    @default(2000)
+  smsSuspended                  Boolean                @default(false)
   smsSuspendedReason            String?
   smsSuspendedAt                DateTime?
-  createdAt                     DateTime             @default(now())
+  smsRoutingMode                SmsProviderRoutingMode @default(FAILOVER)
+  smsPrimaryProvider            IntegrationProvider    @default(TWILIO)
+  smsSecondaryProvider          IntegrationProvider?   @default(VOIPMS)
+  smsProviderLock               IntegrationProvider?
+  smsProviderLockReason         String?
+  smsProviderLockedAt           DateTime?
+  smsProviderLockedByUserId     String?
+  createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
   campaigns                     SmsCampaign[]
@@ -69,7 +81,9 @@ model Tenant {
   audits                        AuditLog[]
   providerCredentials           ProviderCredential[]
   webhookEvents                 SmsWebhookEvent[]
-  smsLiveEnabledByUser          User?                @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
+  providerHealth                ProviderHealth[]
+  smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
+  smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
 }
 
 model User {
@@ -84,6 +98,7 @@ model User {
   createdProviderCredentials ProviderCredential[] @relation("ProviderCredentialCreatedBy")
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
+  smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
 }
 
 model TenDlcSubmission {
@@ -144,20 +159,24 @@ model SmsCampaign {
 }
 
 model SmsMessage {
-  id                   String           @id @default(cuid())
+  id                   String               @id @default(cuid())
   campaignId           String
   toNumber             String
   fromNumber           String
   body                 String
-  status               SmsMessageStatus @default(QUEUED)
+  status               SmsMessageStatus     @default(QUEUED)
   providerMessageId    String?
   providerStatus       String?
+  provider             IntegrationProvider?
+  providerErrorCode    String?
+  providerAttemptedAt  DateTime?
+  providerRoute        String?
   lastProviderUpdateAt DateTime?
   deliveryUpdatedAt    DateTime?
   error                String?
-  createdAt            DateTime         @default(now())
+  createdAt            DateTime             @default(now())
   sentAt               DateTime?
-  campaign             SmsCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign             SmsCampaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   webhookEvents        SmsWebhookEvent[]
 }
 
@@ -175,6 +194,24 @@ model SmsWebhookEvent {
 
   @@index([provider, providerMessageId])
   @@index([tenantId, receivedAt])
+}
+
+model ProviderHealth {
+  id               String              @id @default(cuid())
+  tenantId         String
+  provider         IntegrationProvider
+  windowStart      DateTime
+  sentCount        Int                 @default(0)
+  failCount        Int                 @default(0)
+  lastErrorCode    String?
+  lastErrorAt      DateTime?
+  circuitOpenUntil DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, windowStart])
+  @@index([tenantId, provider])
 }
 
 model PhoneNumber {

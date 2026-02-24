@@ -12,7 +12,7 @@ export interface SmsSendInput {
 }
 
 export interface SmsProvider {
-  sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string }>;
+  sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string; providerStatus?: string }>;
 }
 
 export interface PbxProvider {
@@ -27,6 +27,21 @@ export type TwilioCredentials = {
   messagingServiceSid?: string;
   fromNumber?: string;
 };
+
+export type VoipMsCredentials = {
+  username: string;
+  password: string;
+  fromNumber: string;
+  apiBaseUrl?: string;
+};
+
+export type NormalizedProviderError = {
+  code: "TEMP_RATE_LIMIT" | "TEMP_PROVIDER_DOWN" | "TEMP_CARRIER" | "PERM_INVALID_NUMBER" | "PERM_OPTED_OUT" | "PERM_POLICY";
+  retryable: boolean;
+  humanMessage: string;
+};
+
+const VOIPMS_DEFAULT_BASE = "https://voip.ms/api/v1/rest.php";
 
 export class FakeNumberProvider implements NumberProvider {
   async searchNumbers(_input: { areaCode?: string; type?: string }): Promise<Array<{ e164: string; monthlyPrice: number }>> {
@@ -43,10 +58,10 @@ export class FakeNumberProvider implements NumberProvider {
 }
 
 export class FakeSmsProvider implements SmsProvider {
-  async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId: string }> {
+  async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId: string; providerStatus: string }> {
     const providerMessageId = `fake-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     console.log(`[FakeSmsProvider] tenant=${input.tenantId} from=${input.from} to=${input.to}`);
-    return { status: "SENT", providerMessageId };
+    return { status: "SENT", providerMessageId, providerStatus: "simulated" };
   }
 }
 
@@ -70,29 +85,97 @@ export class TwilioSmsProvider implements SmsProvider {
     }
   }
 
-  async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string }> {
+  async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string; providerStatus?: string }> {
+    if ((process.env.SIMULATE_PROVIDER_FAILURE_TWILIO || "false").toLowerCase() === "true") {
+      const err: any = new Error("Simulated Twilio provider outage");
+      err.provider = "TWILIO";
+      err.status = 503;
+      err.code = "SIM_TWILIO_DOWN";
+      throw err;
+    }
+
     if (this.testMode) {
       return {
         status: "SENT",
-        providerMessageId: `twilio-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        providerMessageId: `twilio-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        providerStatus: "queued"
       };
     }
 
-    const payload: Record<string, string> = {
-      to: input.to,
-      body: input.body
-    };
+    const payload: Record<string, string> = { to: input.to, body: input.body };
+    if (this.credentials.messagingServiceSid) payload.messagingServiceSid = this.credentials.messagingServiceSid;
+    else if (this.credentials.fromNumber) payload.from = this.credentials.fromNumber;
+    else payload.from = input.from;
 
-    if (this.credentials.messagingServiceSid) {
-      payload.messagingServiceSid = this.credentials.messagingServiceSid;
-    } else if (this.credentials.fromNumber) {
-      payload.from = this.credentials.fromNumber;
-    } else {
-      payload.from = input.from;
+    try {
+      const res = await this.client.messages.create(payload);
+      return { status: "SENT", providerMessageId: res.sid, providerStatus: String(res.status || "sent") };
+    } catch (e: any) {
+      e.provider = "TWILIO";
+      throw e;
+    }
+  }
+}
+
+export class VoipMsSmsProvider implements SmsProvider {
+  private credentials: VoipMsCredentials;
+  private testMode: boolean;
+
+  constructor(credentials: VoipMsCredentials, testMode = true) {
+    this.credentials = credentials;
+    this.testMode = testMode;
+
+    if (!credentials.username || !credentials.password || !credentials.fromNumber) {
+      throw new Error("VoIP.ms credentials are incomplete");
+    }
+  }
+
+  async sendMessage(input: SmsSendInput): Promise<{ status: string; providerMessageId?: string; providerStatus?: string }> {
+    if ((process.env.SIMULATE_PROVIDER_FAILURE_VOIPMS || "false").toLowerCase() === "true") {
+      const err: any = new Error("Simulated VoIP.ms provider outage");
+      err.provider = "VOIPMS";
+      err.status = 503;
+      err.code = "SIM_VOIPMS_DOWN";
+      throw err;
     }
 
-    const res = await this.client.messages.create(payload);
-    return { status: "SENT", providerMessageId: res.sid };
+    if (this.testMode) {
+      return {
+        status: "SENT",
+        providerMessageId: `voipms-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        providerStatus: "accepted"
+      };
+    }
+
+    const base = this.credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
+    const url = new URL(base);
+    url.searchParams.set("api_username", this.credentials.username);
+    url.searchParams.set("api_password", this.credentials.password);
+    url.searchParams.set("method", "sendSMS");
+    url.searchParams.set("did", this.credentials.fromNumber || input.from);
+    url.searchParams.set("dst", input.to);
+    url.searchParams.set("message", input.body);
+
+    try {
+      const res = await fetch(url.toString(), { method: "GET" });
+      const json: any = await res.json().catch(() => ({}));
+      const status = String(json.status || "").toLowerCase();
+      if (!res.ok || status !== "success") {
+        const err: any = new Error("VoIP.ms send failed");
+        err.provider = "VOIPMS";
+        err.status = res.status;
+        err.code = json.response?.code || json.code || "VOIPMS_SEND_FAILED";
+        throw err;
+      }
+      return {
+        status: "SENT",
+        providerMessageId: String(json.sms || json.id || `voipms-${Date.now()}`),
+        providerStatus: "sent"
+      };
+    } catch (e: any) {
+      e.provider = "VOIPMS";
+      throw e;
+    }
   }
 }
 
@@ -121,6 +204,33 @@ export async function validateTwilioCredentials(credentials: TwilioCredentials):
   }
 }
 
+export async function validateVoipMsCredentials(credentials: VoipMsCredentials): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!/^\+?[1-9][0-9]{7,15}$/.test(credentials.fromNumber)) {
+    return { ok: false, message: "VoIP.ms fromNumber format is invalid." };
+  }
+
+  if ((process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false") {
+    return { ok: true };
+  }
+
+  try {
+    const base = credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
+    const url = new URL(base);
+    url.searchParams.set("api_username", credentials.username);
+    url.searchParams.set("api_password", credentials.password);
+    url.searchParams.set("method", "getBalance");
+
+    const res = await fetch(url.toString(), { method: "GET" });
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok || String(json.status || "").toLowerCase() !== "success") {
+      return { ok: false, message: "VoIP.ms validation failed. Check API credentials and account status." };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Unable to validate VoIP.ms credentials." };
+  }
+}
+
 export async function sendTwilioTestMessage(credentials: TwilioCredentials, to: string, body: string): Promise<{ ok: true; providerMessageId: string } | { ok: false; message: string }> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -141,6 +251,33 @@ export async function sendTwilioTestMessage(credentials: TwilioCredentials, to: 
   } catch {
     return { ok: false, message: "Twilio test send failed. Verify destination number and account configuration." };
   }
+}
+
+export function normalizeProviderError(provider: "TWILIO" | "VOIPMS", err: any): NormalizedProviderError {
+  const status = Number(err?.status || err?.statusCode || 0);
+  const code = String(err?.code || "").toLowerCase();
+  const msg = String(err?.message || "Provider error");
+
+  if (status === 429 || code.includes("rate") || code.includes("throttle")) {
+    return { code: "TEMP_RATE_LIMIT", retryable: true, humanMessage: "Provider rate limit reached." };
+  }
+  if (status >= 500 || code.includes("down") || code.includes("timeout") || code.includes("sim_")) {
+    return { code: "TEMP_PROVIDER_DOWN", retryable: true, humanMessage: `${provider} temporary outage.` };
+  }
+  if (code.includes("carrier") || code.includes("queue")) {
+    return { code: "TEMP_CARRIER", retryable: true, humanMessage: "Carrier temporary rejection." };
+  }
+  if (code.includes("21614") || code.includes("invalid") || code.includes("number")) {
+    return { code: "PERM_INVALID_NUMBER", retryable: false, humanMessage: "Invalid destination number." };
+  }
+  if (code.includes("opt") || code.includes("stop")) {
+    return { code: "PERM_OPTED_OUT", retryable: false, humanMessage: "Recipient opted out." };
+  }
+  if (code.includes("policy") || code.includes("compliance") || msg.toLowerCase().includes("policy")) {
+    return { code: "PERM_POLICY", retryable: false, humanMessage: "Provider policy restriction." };
+  }
+
+  return { code: "TEMP_PROVIDER_DOWN", retryable: true, humanMessage: "Temporary provider failure." };
 }
 
 export function getSmsProvider(): SmsProvider {

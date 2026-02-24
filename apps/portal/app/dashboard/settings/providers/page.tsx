@@ -16,16 +16,11 @@ function readJwtRole(): string {
 }
 
 type ProviderRow = {
-  provider: string;
+  provider: "TWILIO" | "VOIPMS";
   label?: string;
   isEnabled: boolean;
   updatedAt: string;
-  preview?: {
-    accountSid?: string | null;
-    authToken?: string | null;
-    messagingServiceSid?: string | null;
-    fromNumber?: string | null;
-  };
+  preview?: Record<string, string | null>;
 };
 
 type SmsLimitsPayload = {
@@ -47,50 +42,82 @@ type SmsLimitsPayload = {
   };
 };
 
+type RoutingPayload = {
+  smsRoutingMode: "SINGLE_PRIMARY" | "FAILOVER";
+  smsPrimaryProvider: "TWILIO" | "VOIPMS";
+  smsSecondaryProvider: "TWILIO" | "VOIPMS" | null;
+  smsProviderLock: "TWILIO" | "VOIPMS" | null;
+  smsProviderLockReason?: string | null;
+  providerEnabled: { TWILIO: boolean; VOIPMS: boolean };
+  health: Record<string, { sent: number; failed: number; circuitOpenUntil: string | null; lastErrorCode: string | null; lastErrorAt: string | null }>;
+  activeProviderDecision: "PRIMARY" | "SECONDARY" | "LOCKED";
+};
+
 export default function ProviderSettingsPage() {
   const role = useMemo(() => (typeof window !== "undefined" ? readJwtRole() : ""), []);
+
+  const [providers, setProviders] = useState<ProviderRow[]>([]);
+  const [smsLimits, setSmsLimits] = useState<SmsLimitsPayload | null>(null);
+  const [routing, setRouting] = useState<RoutingPayload | null>(null);
+  const [result, setResult] = useState("");
+
   const [accountSid, setAccountSid] = useState("");
   const [authToken, setAuthToken] = useState("");
   const [messagingServiceSid, setMessagingServiceSid] = useState("");
   const [fromNumber, setFromNumber] = useState("");
   const [label, setLabel] = useState("Primary Twilio");
-  const [providerStatus, setProviderStatus] = useState("Not Configured");
-  const [providers, setProviders] = useState<ProviderRow[]>([]);
-  const [result, setResult] = useState("");
+
+  const [voipUsername, setVoipUsername] = useState("");
+  const [voipPassword, setVoipPassword] = useState("");
+  const [voipFrom, setVoipFrom] = useState("");
+  const [voipApiBaseUrl, setVoipApiBaseUrl] = useState("");
+  const [voipLabel, setVoipLabel] = useState("Primary VoIP.ms");
+
   const [smsMode, setSmsMode] = useState<"TEST" | "LIVE">("TEST");
   const [smsLiveEnabledAt, setSmsLiveEnabledAt] = useState<string | null>(null);
   const [confirmLive, setConfirmLive] = useState(false);
   const [tenDlcApproved, setTenDlcApproved] = useState(false);
   const [tenDlcStatus, setTenDlcStatus] = useState<string | null>(null);
-  const [isSavingEnable, setIsSavingEnable] = useState(false);
+
   const [testTo, setTestTo] = useState("+15555551234");
   const [testMessage, setTestMessage] = useState("Test message from Connect Communications");
-  const [smsLimits, setSmsLimits] = useState<SmsLimitsPayload | null>(null);
+
+  const [routingMode, setRoutingMode] = useState<"SINGLE_PRIMARY" | "FAILOVER">("FAILOVER");
+  const [primaryProvider, setPrimaryProvider] = useState<"TWILIO" | "VOIPMS">("TWILIO");
+  const [secondaryProvider, setSecondaryProvider] = useState<"TWILIO" | "VOIPMS" | "">("VOIPMS");
+  const [lockProvider, setLockProvider] = useState<"TWILIO" | "VOIPMS">("TWILIO");
+  const [lockReason, setLockReason] = useState("Manual provider lock");
+
+  const token = () => localStorage.getItem("token") || "";
 
   async function loadProviders() {
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/settings/providers`, { headers: { Authorization: `Bearer ${token}` } });
-    const json = await res.json();
-    const rows = Array.isArray(json) ? json : [];
-    setProviders(rows);
-    const twilio = rows.find((r: ProviderRow) => r.provider === "TWILIO");
-    if (!twilio) {
-      setProviderStatus("Not Configured");
-      return;
+    const res = await fetch(`${apiBase}/settings/providers`, { headers: { Authorization: `Bearer ${token()}` } });
+    const rows = (await res.json()) as ProviderRow[];
+    setProviders(Array.isArray(rows) ? rows : []);
+
+    const tw = rows.find((r) => r.provider === "TWILIO");
+    if (tw) {
+      setLabel(tw.label || "Primary Twilio");
+      setAccountSid((tw.preview?.accountSid as string) || "");
+      setAuthToken("********");
+      setMessagingServiceSid((tw.preview?.messagingServiceSid as string) || "");
+      setFromNumber((tw.preview?.fromNumber as string) || "");
     }
-    setProviderStatus(twilio.isEnabled ? "Enabled" : "Disabled");
-    setLabel(twilio.label || "Primary Twilio");
-    if (twilio.preview?.accountSid) setAccountSid(twilio.preview.accountSid);
-    setAuthToken("********");
-    if (twilio.preview?.messagingServiceSid) setMessagingServiceSid(twilio.preview.messagingServiceSid);
-    if (twilio.preview?.fromNumber) setFromNumber(twilio.preview.fromNumber);
+
+    const vp = rows.find((r) => r.provider === "VOIPMS");
+    if (vp) {
+      setVoipLabel(vp.label || "Primary VoIP.ms");
+      setVoipUsername((vp.preview?.username as string) || "");
+      setVoipPassword("********");
+      setVoipFrom((vp.preview?.fromNumber as string) || "");
+      setVoipApiBaseUrl((vp.preview?.apiBaseUrl as string) || "");
+    }
   }
 
   async function loadSmsMode() {
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/settings/sms-mode`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${apiBase}/settings/sms-mode`, { headers: { Authorization: `Bearer ${token()}` } });
     const json = await res.json();
-    if (json?.smsSendMode === "LIVE" || json?.smsSendMode === "TEST") {
+    if (json?.smsSendMode) {
       setSmsMode(json.smsSendMode);
       setSmsLiveEnabledAt(json.smsLiveEnabledAt || null);
       setTenDlcApproved(!!json.tenDlcApproved);
@@ -99,10 +126,22 @@ export default function ProviderSettingsPage() {
   }
 
   async function loadSmsLimits() {
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/settings/sms-limits`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${apiBase}/settings/sms-limits`, { headers: { Authorization: `Bearer ${token()}` } });
     const json = await res.json();
     if (json?.limits) setSmsLimits(json);
+  }
+
+  async function loadRouting() {
+    const res = await fetch(`${apiBase}/settings/sms-routing`, { headers: { Authorization: `Bearer ${token()}` } });
+    const json = (await res.json()) as RoutingPayload;
+    if (json?.smsRoutingMode) {
+      setRouting(json);
+      setRoutingMode(json.smsRoutingMode);
+      setPrimaryProvider(json.smsPrimaryProvider);
+      setSecondaryProvider(json.smsSecondaryProvider || "");
+      setLockProvider(json.smsProviderLock || "TWILIO");
+      setLockReason(json.smsProviderLockReason || "Manual provider lock");
+    }
   }
 
   useEffect(() => {
@@ -110,37 +149,83 @@ export default function ProviderSettingsPage() {
       loadProviders();
       loadSmsMode();
       loadSmsLimits();
+      loadRouting();
     }
   }, [role]);
 
   async function saveTwilio(e: FormEvent) {
     e.preventDefault();
-    const token = localStorage.getItem("token") || "";
     const res = await fetch(`${apiBase}/settings/providers/twilio`, {
       method: "PUT",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
       body: JSON.stringify({ accountSid, authToken, messagingServiceSid, fromNumber, label })
     });
-    const json = await res.json();
-    setResult(JSON.stringify(json, null, 2));
+    setResult(JSON.stringify(await res.json(), null, 2));
     setAuthToken("********");
     await loadProviders();
   }
 
-  async function setEnabled(enabled: boolean) {
-    const token = localStorage.getItem("token") || "";
-    setIsSavingEnable(true);
+  async function toggleTwilio(enabled: boolean) {
     const res = await fetch(`${apiBase}/settings/providers/twilio/${enabled ? "enable" : "disable"}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token()}` }
     });
-    const json = await res.json();
-    setResult(JSON.stringify(json, null, 2));
-    if (enabled && res.ok) {
-      setResult(JSON.stringify({ ...json, message: "Credentials validated successfully" }, null, 2));
-    }
-    setIsSavingEnable(false);
+    setResult(JSON.stringify(await res.json(), null, 2));
     await loadProviders();
+  }
+
+  async function saveVoipms(e: FormEvent) {
+    e.preventDefault();
+    const res = await fetch(`${apiBase}/settings/providers/voipms`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ username: voipUsername, password: voipPassword, fromNumber: voipFrom, apiBaseUrl: voipApiBaseUrl || undefined, label: voipLabel })
+    });
+    setResult(JSON.stringify(await res.json(), null, 2));
+    setVoipPassword("********");
+    await loadProviders();
+  }
+
+  async function toggleVoipms(enabled: boolean) {
+    const res = await fetch(`${apiBase}/settings/providers/voipms/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token()}` }
+    });
+    setResult(JSON.stringify(await res.json(), null, 2));
+    await loadProviders();
+  }
+
+  async function saveRouting() {
+    const res = await fetch(`${apiBase}/settings/sms-routing`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({
+        routingMode,
+        primaryProvider,
+        secondaryProvider: routingMode === "FAILOVER" && secondaryProvider ? secondaryProvider : null
+      })
+    });
+    setResult(JSON.stringify(await res.json(), null, 2));
+    await loadRouting();
+  }
+
+  async function lockRouting() {
+    const res = await fetch(`${apiBase}/settings/sms-routing/lock`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ provider: lockProvider, reason: lockReason })
+    });
+    setResult(JSON.stringify(await res.json(), null, 2));
+    await loadRouting();
+  }
+
+  async function unlockRouting() {
+    const res = await fetch(`${apiBase}/settings/sms-routing/unlock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token()}` }
+    });
+    setResult(JSON.stringify(await res.json(), null, 2));
+    await loadRouting();
   }
 
   async function saveSmsMode() {
@@ -148,63 +233,43 @@ export default function ProviderSettingsPage() {
       setResult(JSON.stringify({ error: "Please confirm LIVE mode before saving." }));
       return;
     }
-    if (smsMode === "LIVE" && !tenDlcApproved && role !== "SUPER_ADMIN") {
-      setResult(JSON.stringify({ error: "10DLC approval required before LIVE mode." }));
-      return;
-    }
-
-    const token = localStorage.getItem("token") || "";
     const res = await fetch(`${apiBase}/settings/sms-mode`, {
       method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
       body: JSON.stringify({ mode: smsMode })
     });
-    const json = await res.json();
-    setResult(JSON.stringify(json, null, 2));
+    setResult(JSON.stringify(await res.json(), null, 2));
     await loadSmsMode();
   }
 
   async function sendTestSms() {
-    const token = localStorage.getItem("token") || "";
     const res = await fetch(`${apiBase}/settings/providers/twilio/test-send`, {
       method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
       body: JSON.stringify({ to: testTo, message: testMessage })
     });
-    const json = await res.json();
-    setResult(JSON.stringify(json, null, 2));
+    setResult(JSON.stringify(await res.json(), null, 2));
   }
 
   async function requestReview() {
-    const token = localStorage.getItem("token") || "";
     const res = await fetch(`${apiBase}/settings/sms-limits`, {
       method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token()}` },
       body: JSON.stringify({ requestReview: true })
     });
-    const json = await res.json();
-    setResult(JSON.stringify(json, null, 2));
+    setResult(JSON.stringify(await res.json(), null, 2));
   }
 
   if (role !== "ADMIN" && role !== "SUPER_ADMIN") {
-    return (
-      <div className="card">
-        <h1>Provider Settings</h1>
-        <p>Insufficient permissions.</p>
-      </div>
-    );
+    return <div className="card"><h1>Provider Settings</h1><p>Insufficient permissions.</p></div>;
   }
 
   return (
     <div className="card">
       <h1>Provider Settings</h1>
-      <h2>SMS Providers</h2>
-      <p>Status: <strong>{providerStatus}</strong></p>
-      <p>Credentials are encrypted and cannot be viewed after saving. You can replace them at any time.</p>
-      <p>Enable provider to start real SMS sending. Otherwise system runs in test mode.</p>
 
+      <h2>Twilio</h2>
       <form onSubmit={saveTwilio}>
-        <h3>Twilio</h3>
         <input placeholder="Account SID" value={accountSid} onChange={(e) => setAccountSid(e.target.value)} />
         <input placeholder="Auth Token" value={authToken} onChange={(e) => setAuthToken(e.target.value)} />
         <input placeholder="Messaging Service SID" value={messagingServiceSid} onChange={(e) => setMessagingServiceSid(e.target.value)} />
@@ -212,54 +277,74 @@ export default function ProviderSettingsPage() {
         <input placeholder="Label" value={label} onChange={(e) => setLabel(e.target.value)} />
         <button type="submit">Save Twilio Credentials</button>
       </form>
+      <button onClick={() => toggleTwilio(true)}>Enable Twilio</button>
+      <button onClick={() => toggleTwilio(false)}>Disable Twilio</button>
 
-      <div style={{ marginTop: 12 }}>
-        <button disabled={isSavingEnable} onClick={() => setEnabled(true)}>
-          {isSavingEnable ? "Validating..." : "Enable Twilio"}
-        </button>
-        <button disabled={isSavingEnable} onClick={() => setEnabled(false)}>Disable Twilio</button>
+      <h2>VoIP.ms</h2>
+      <form onSubmit={saveVoipms}>
+        <input placeholder="VoIP.ms Username" value={voipUsername} onChange={(e) => setVoipUsername(e.target.value)} />
+        <input placeholder="VoIP.ms Password" value={voipPassword} onChange={(e) => setVoipPassword(e.target.value)} />
+        <input placeholder="From Number" value={voipFrom} onChange={(e) => setVoipFrom(e.target.value)} />
+        <input placeholder="API Base URL (optional)" value={voipApiBaseUrl} onChange={(e) => setVoipApiBaseUrl(e.target.value)} />
+        <input placeholder="Label" value={voipLabel} onChange={(e) => setVoipLabel(e.target.value)} />
+        <button type="submit">Save VoIP.ms Credentials</button>
+      </form>
+      <button onClick={() => toggleVoipms(true)}>Enable VoIP.ms</button>
+      <button onClick={() => toggleVoipms(false)}>Disable VoIP.ms</button>
+
+      <h2>Routing</h2>
+      <p>Current active decision: <strong>{routing?.activeProviderDecision || "PRIMARY"}</strong></p>
+      <label>
+        <input type="radio" checked={routingMode === "FAILOVER"} onChange={() => setRoutingMode("FAILOVER")} />
+        FAILOVER
+      </label>
+      <label style={{ marginLeft: 12 }}>
+        <input type="radio" checked={routingMode === "SINGLE_PRIMARY"} onChange={() => setRoutingMode("SINGLE_PRIMARY")} />
+        SINGLE_PRIMARY
+      </label>
+      <div>
+        <select value={primaryProvider} onChange={(e) => setPrimaryProvider(e.target.value as "TWILIO" | "VOIPMS")}>
+          <option value="TWILIO">TWILIO</option>
+          <option value="VOIPMS">VOIPMS</option>
+        </select>
+        {routingMode === "FAILOVER" ? (
+          <select value={secondaryProvider} onChange={(e) => setSecondaryProvider(e.target.value as "TWILIO" | "VOIPMS" | "") }>
+            <option value="">None</option>
+            <option value="TWILIO">TWILIO</option>
+            <option value="VOIPMS">VOIPMS</option>
+          </select>
+        ) : null}
+        <button onClick={saveRouting}>Save Routing</button>
       </div>
+
+      <h3>Lock Provider</h3>
+      <select value={lockProvider} onChange={(e) => setLockProvider(e.target.value as "TWILIO" | "VOIPMS")}>
+        <option value="TWILIO">TWILIO</option>
+        <option value="VOIPMS">VOIPMS</option>
+      </select>
+      <input value={lockReason} onChange={(e) => setLockReason(e.target.value)} placeholder="Lock reason" />
+      <button onClick={lockRouting}>Lock</button>
+      <button onClick={unlockRouting}>Unlock</button>
+
+      <h3>Health</h3>
+      <p>TWILIO: sent {routing?.health?.TWILIO?.sent || 0}, failed {routing?.health?.TWILIO?.failed || 0}, circuit {routing?.health?.TWILIO?.circuitOpenUntil || "closed"}</p>
+      <p>VOIPMS: sent {routing?.health?.VOIPMS?.sent || 0}, failed {routing?.health?.VOIPMS?.failed || 0}, circuit {routing?.health?.VOIPMS?.circuitOpenUntil || "closed"}</p>
 
       <h2>Sending Mode</h2>
       <p>Current mode: <strong>{smsMode}</strong></p>
       {smsLiveEnabledAt ? <p>LIVE enabled at: {new Date(smsLiveEnabledAt).toLocaleString()}</p> : null}
       <p>10DLC status: <strong>{tenDlcStatus || "none"}</strong></p>
-      {!tenDlcApproved && role !== "SUPER_ADMIN" ? (
-        <p><strong>10DLC approval required before LIVE mode.</strong></p>
-      ) : null}
-      <div>
-        <label>
-          <input
-            type="radio"
-            name="smsMode"
-            value="TEST"
-            checked={smsMode === "TEST"}
-            onChange={() => {
-              setSmsMode("TEST");
-              setConfirmLive(false);
-            }}
-          />
-          TEST (safe)
-        </label>
-        <label style={{ marginLeft: 12 }}>
-          <input
-            type="radio"
-            name="smsMode"
-            value="LIVE"
-            checked={smsMode === "LIVE"}
-            disabled={!tenDlcApproved && role !== "SUPER_ADMIN"}
-            onChange={() => setSmsMode("LIVE")}
-          />
-          LIVE (real sending)
-        </label>
-      </div>
+      {!tenDlcApproved && role !== "SUPER_ADMIN" ? <p><strong>10DLC approval required before LIVE mode.</strong></p> : null}
+      <label>
+        <input type="radio" name="smsMode" value="TEST" checked={smsMode === "TEST"} onChange={() => { setSmsMode("TEST"); setConfirmLive(false); }} /> TEST
+      </label>
+      <label style={{ marginLeft: 12 }}>
+        <input type="radio" name="smsMode" value="LIVE" checked={smsMode === "LIVE"} disabled={!tenDlcApproved && role !== "SUPER_ADMIN"} onChange={() => setSmsMode("LIVE")} /> LIVE
+      </label>
       {smsMode === "LIVE" ? (
         <div>
           <p><strong>LIVE mode sends real SMS and may incur charges. Ensure 10DLC compliance.</strong></p>
-          <label>
-            <input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} />
-            I understand this will send real SMS.
-          </label>
+          <label><input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} /> I understand this will send real SMS.</label>
         </div>
       ) : null}
       <button onClick={saveSmsMode}>Save Sending Mode</button>
@@ -288,9 +373,7 @@ export default function ProviderSettingsPage() {
           <p>Per-second limit: <strong>{smsLimits.limits.perSecondRateLimit}</strong></p>
           <p>Max campaign size: <strong>{smsLimits.limits.maxCampaignSize}</strong></p>
         </div>
-      ) : (
-        <p>Loading usage and limits...</p>
-      )}
+      ) : <p>Loading usage and limits...</p>}
 
       <h3>Configured Providers</h3>
       <ul>
