@@ -61,6 +61,20 @@ enum PhoneNumberStatus {
   SUSPENDED
 }
 
+enum SubscriptionStatus {
+  NONE
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
 model Tenant {
   id                            String                 @id @default(cuid())
   name                          String
@@ -88,6 +102,8 @@ model Tenant {
   defaultSmsFromNumberId        String?
   defaultVoiceFromNumberId      String?
   numberPurchaseEnabled         Boolean                @default(true)
+  smsSubscriptionRequired       Boolean                @default(true)
+  smsBillingEnforced            Boolean                @default(true)
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
@@ -97,6 +113,9 @@ model Tenant {
   providerCredentials           ProviderCredential[]
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
+  subscription                  Subscription?
+  paymentEvents                 PaymentEvent[]
+  usageLedger                   UsageLedger[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
   defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
@@ -115,6 +134,67 @@ model User {
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
+}
+
+model Subscription {
+  id                      String             @id @default(cuid())
+  tenantId                String             @unique
+  planCode                String
+  priceCents              Int
+  currency                String             @default("USD")
+  status                  SubscriptionStatus @default(NONE)
+  currentPeriodStart      DateTime?
+  currentPeriodEnd        DateTime?
+  cancelAtPeriodEnd       Boolean            @default(false)
+  provider                String             @default("SOLA_CARDKNOX")
+  providerCustomerId      String?
+  providerSubscriptionId  String?
+  providerPaymentMethodId String?
+  paymentMethodBrand      String?
+  paymentMethodLast4      String?
+  paymentMethodExpMonth   String?
+  paymentMethodExpYear    String?
+  lastPaymentStatus       PaymentStatus?
+  lastPaymentAt           DateTime?
+  lastFailureReason       String?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  tenant                  Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentEvents           PaymentEvent[]
+}
+
+model PaymentEvent {
+  id              String       @id @default(cuid())
+  tenantId        String
+  subscriptionId  String?
+  provider        String
+  providerEventId String?
+  type            String
+  status          PaymentStatus
+  amountCents     Int?
+  currency        String?
+  payload         Json
+  receivedAt      DateTime     @default(now())
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, receivedAt])
+  @@unique([provider, providerEventId])
+}
+
+model UsageLedger {
+  id            String   @id @default(cuid())
+  tenantId      String
+  type          String
+  quantity      Int      @default(1)
+  unitPriceCents Int
+  totalCents    Int
+  referenceId   String?
+  occurredAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, occurredAt])
 }
 
 model TenDlcSubmission {
@@ -233,24 +313,24 @@ model ProviderHealth {
 }
 
 model PhoneNumber {
-  id               String              @id @default(cuid())
-  tenantId         String
-  provider         PhoneNumberProvider
-  phoneNumber      String              @unique
-  providerId       String?
-  friendlyName     String?
-  capabilities     Json?
-  region           String?
-  areaCode         String?
-  monthlyCostCents Int?
-  status           PhoneNumberStatus   @default(ACTIVE)
-  purchasedAt      DateTime            @default(now())
-  releasedAt       DateTime?
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  tenant           Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultForTenants Tenant[]           @relation("TenantDefaultSmsFromNumber")
-  smsMessages      SmsMessage[]        @relation("SmsMessageFromNumber")
+  id                String              @id @default(cuid())
+  tenantId          String
+  provider          PhoneNumberProvider
+  phoneNumber       String              @unique
+  providerId        String?
+  friendlyName      String?
+  capabilities      Json?
+  region            String?
+  areaCode          String?
+  monthlyCostCents  Int?
+  status            PhoneNumberStatus   @default(ACTIVE)
+  purchasedAt       DateTime            @default(now())
+  releasedAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  tenant            Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForTenants Tenant[]            @relation("TenantDefaultSmsFromNumber")
+  smsMessages       SmsMessage[]        @relation("SmsMessageFromNumber")
 
   @@index([tenantId, status])
   @@index([provider, status])

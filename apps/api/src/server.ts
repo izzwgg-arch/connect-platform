@@ -17,7 +17,8 @@ import {
   validateTwilioRequest,
   validateVoipMsCredentials,
   VoipMsCredentials,
-  VoipMsNumberProvider
+  VoipMsNumberProvider,
+  SolaCardknoxAdapter
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
@@ -72,6 +73,41 @@ type CampaignDecision = {
 const providerCredCache = new Map<string, { recordId: string; creds: any; expiresAt: number }>();
 const providerCredCacheTtlMs = 60_000;
 const testSendLimiter = new Map<string, number[]>();
+
+const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
+const BILLING_PLAN_PRICE_CENTS = 1000;
+
+function getSolaAdapter(): SolaCardknoxAdapter {
+  return new SolaCardknoxAdapter({
+    baseUrl: process.env.SOLA_CARDKNOX_API_BASE_URL,
+    apiKey: process.env.SOLA_CARDKNOX_API_KEY,
+    apiSecret: process.env.SOLA_CARDKNOX_API_SECRET,
+    webhookSecret: process.env.SOLA_CARDKNOX_WEBHOOK_SECRET,
+    mode: (process.env.SOLA_CARDKNOX_MODE as "sandbox" | "prod" | undefined) || "sandbox",
+    simulate: (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true"
+  });
+}
+
+async function getOrCreateSubscription(tenantId: string) {
+  const existing = await db.subscription.findUnique({ where: { tenantId } });
+  if (existing) return existing;
+  return db.subscription.create({
+    data: {
+      tenantId,
+      planCode: BILLING_PLAN_CODE,
+      priceCents: BILLING_PLAN_PRICE_CENTS,
+      status: "NONE"
+    }
+  });
+}
+
+async function enforceBillingForLive(tenantId: string): Promise<boolean> {
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId } });
+  if (!tenant) return false;
+  if (!tenant.smsBillingEnforced || !tenant.smsSubscriptionRequired) return true;
+  const sub = await db.subscription.findUnique({ where: { tenantId } });
+  return sub?.status === "ACTIVE";
+}
 
 function encodeEin(rawEin: string): string {
   return Buffer.from(rawEin, "utf8").toString("base64");
@@ -358,7 +394,7 @@ app.post("/auth/login", async (req, reply) => {
 });
 
 app.addHook("preHandler", async (req, reply) => {
-  if (["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status"].includes(req.url)) return;
+  if (['/health', '/auth/signup', '/auth/login', '/webhooks/twilio/sms-status', '/webhooks/sola-cardknox'].includes(req.url)) return;
   try {
     await req.jwtVerify();
   } catch {
@@ -931,6 +967,12 @@ app.post("/settings/sms-mode", async (req, reply) => {
       return reply.status(400).send({ error: "10DLC_NOT_APPROVED", message: "10DLC approval is required before enabling LIVE SMS sending." });
     }
 
+    const billingReady = await enforceBillingForLive(admin.tenantId);
+    if (!billingReady) {
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGE_REJECTED", entityType: "Tenant", entityId: admin.tenantId });
+      return reply.status(400).send({ error: "SUBSCRIPTION_REQUIRED", message: "Active SMS subscription is required before enabling LIVE mode." });
+    }
+
     const primaryReady = await providerIsReady(admin.tenantId, tenant.smsPrimaryProvider as ProviderName);
     if (!primaryReady) {
       await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGE_REJECTED", entityType: "Tenant", entityId: admin.tenantId, provider: tenant.smsPrimaryProvider as ProviderName });
@@ -1249,6 +1291,299 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
   await db.smsMessage.update({ where: { id: message.id }, data: { status: mapped, providerStatus: statusRaw || null, lastProviderUpdateAt: now, deliveryUpdatedAt: mapped === "DELIVERED" || mapped === "FAILED" ? now : null } });
   await db.smsWebhookEvent.create({ data: { tenantId: message.campaign.tenantId, provider: "TWILIO", messageId: message.id, providerMessageId: sid || "unknown", eventType: statusRaw || "unknown", payload: body as any } });
   await audit({ tenantId: message.campaign.tenantId, action: "SMS_WEBHOOK_STATUS_UPDATED", entityType: "SmsMessage", entityId: message.id, provider: "TWILIO" });
+
+  return { ok: true };
+});
+
+app.get("/billing/subscription", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const sub = await getOrCreateSubscription(admin.tenantId);
+  return {
+    planCode: sub.planCode,
+    priceCents: sub.priceCents,
+    status: sub.status,
+    currentPeriodStart: sub.currentPeriodStart,
+    currentPeriodEnd: sub.currentPeriodEnd,
+    providerSubscriptionId: sub.providerSubscriptionId,
+    lastPaymentStatus: sub.lastPaymentStatus,
+    lastPaymentAt: sub.lastPaymentAt,
+    paymentMethod: sub.providerPaymentMethodId
+      ? {
+          brand: sub.paymentMethodBrand || null,
+          last4: sub.paymentMethodLast4 || null,
+          expMonth: sub.paymentMethodExpMonth || null,
+          expYear: sub.paymentMethodExpYear || null
+        }
+      : null
+  };
+});
+
+app.post("/billing/subscription/start", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({ billingEmail: z.string().email(), paymentToken: z.string().min(4) }).parse(req.body);
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const adapter = getSolaAdapter();
+  const sub = await getOrCreateSubscription(admin.tenantId);
+
+  try {
+    const customerId = sub.providerCustomerId || (await adapter.createCustomer({ tenantId: tenant.id, billingEmail: input.billingEmail, tenantName: tenant.name })).providerCustomerId;
+    const pm = await adapter.attachPaymentMethod(customerId, input.paymentToken);
+    const created = await adapter.createSubscription(customerId, pm.providerPaymentMethodId, BILLING_PLAN_CODE, BILLING_PLAN_PRICE_CENTS);
+
+    const updated = await db.subscription.update({
+      where: { id: sub.id },
+      data: {
+        planCode: BILLING_PLAN_CODE,
+        priceCents: BILLING_PLAN_PRICE_CENTS,
+        status: "ACTIVE",
+        provider: "SOLA_CARDKNOX",
+        providerCustomerId: customerId,
+        providerSubscriptionId: created.providerSubscriptionId,
+        providerPaymentMethodId: pm.providerPaymentMethodId,
+        paymentMethodBrand: pm.brand || null,
+        paymentMethodLast4: pm.last4 || null,
+        paymentMethodExpMonth: pm.expMonth || null,
+        paymentMethodExpYear: pm.expYear || null,
+        currentPeriodStart: created.currentPeriodStart || new Date(),
+        currentPeriodEnd: created.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        lastPaymentStatus: "SUCCEEDED",
+        lastPaymentAt: new Date(),
+        lastFailureReason: null
+      }
+    });
+
+    await db.paymentEvent.create({
+      data: {
+        tenantId: admin.tenantId,
+        subscriptionId: updated.id,
+        provider: "SOLA_CARDKNOX",
+        providerEventId: null,
+        type: "subscription_started",
+        status: "SUCCEEDED",
+        amountCents: BILLING_PLAN_PRICE_CENTS,
+        currency: "USD",
+        payload: { mode: process.env.SOLA_CARDKNOX_MODE || "sandbox" } as any
+      }
+    });
+
+    await db.usageLedger.create({
+      data: {
+        tenantId: admin.tenantId,
+        type: "SMS_SUBSCRIPTION_MONTHLY",
+        quantity: 1,
+        unitPriceCents: BILLING_PLAN_PRICE_CENTS,
+        totalCents: BILLING_PLAN_PRICE_CENTS,
+        referenceId: updated.id
+      }
+    });
+
+    await db.tenant.update({ where: { id: admin.tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_SUBSCRIPTION_STARTED", entityType: "Subscription", entityId: updated.id });
+
+    return { success: true, status: updated.status };
+  } catch (e: any) {
+    const msg = String(e?.code || e?.message || "BILLING_START_FAILED");
+    await db.paymentEvent.create({
+      data: {
+        tenantId: admin.tenantId,
+        subscriptionId: sub.id,
+        provider: "SOLA_CARDKNOX",
+        providerEventId: null,
+        type: "subscription_start_failed",
+        status: "FAILED",
+        amountCents: BILLING_PLAN_PRICE_CENTS,
+        currency: "USD",
+        payload: { error: msg } as any
+      }
+    });
+    return reply.status(400).send({ error: msg === "NOT_CONFIGURED" ? "NOT_CONFIGURED" : "BILLING_START_FAILED" });
+  }
+});
+
+app.post("/billing/subscription/cancel", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({ cancelAtPeriodEnd: z.boolean().default(true) }).parse(req.body);
+  const sub = await getOrCreateSubscription(admin.tenantId);
+  const adapter = getSolaAdapter();
+
+  if (sub.providerSubscriptionId) {
+    try {
+      await adapter.cancelSubscription(sub.providerSubscriptionId, input.cancelAtPeriodEnd);
+    } catch {}
+  }
+
+  const nextStatus = input.cancelAtPeriodEnd ? sub.status : "CANCELED";
+  const updated = await db.subscription.update({ where: { id: sub.id }, data: { cancelAtPeriodEnd: input.cancelAtPeriodEnd, status: nextStatus } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_SUBSCRIPTION_CANCELED", entityType: "Subscription", entityId: updated.id });
+  return { success: true, status: updated.status, cancelAtPeriodEnd: updated.cancelAtPeriodEnd };
+});
+
+app.post("/billing/subscription/update-payment-method", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({ paymentToken: z.string().min(4) }).parse(req.body);
+  const sub = await getOrCreateSubscription(admin.tenantId);
+  const adapter = getSolaAdapter();
+
+  if (!sub.providerCustomerId) return reply.status(400).send({ error: "NO_PROVIDER_CUSTOMER" });
+
+  const pm = await adapter.attachPaymentMethod(sub.providerCustomerId, input.paymentToken);
+  const updated = await db.subscription.update({
+    where: { id: sub.id },
+    data: {
+      providerPaymentMethodId: pm.providerPaymentMethodId,
+      paymentMethodBrand: pm.brand || null,
+      paymentMethodLast4: pm.last4 || null,
+      paymentMethodExpMonth: pm.expMonth || null,
+      paymentMethodExpYear: pm.expYear || null
+    }
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_PAYMENT_METHOD_UPDATED", entityType: "Subscription", entityId: updated.id });
+  return { success: true };
+});
+
+app.get("/admin/billing/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const rows = await db.tenant.findMany({ include: { subscription: true }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => ({
+    tenantId: r.id,
+    tenantName: r.name,
+    smsBillingEnforced: r.smsBillingEnforced,
+    smsSubscriptionRequired: r.smsSubscriptionRequired,
+    smsSuspended: r.smsSuspended,
+    subscription: r.subscription
+      ? {
+          status: r.subscription.status,
+          planCode: r.subscription.planCode,
+          currentPeriodEnd: r.subscription.currentPeriodEnd,
+          lastPaymentStatus: r.subscription.lastPaymentStatus,
+          lastFailureReason: r.subscription.lastFailureReason
+        }
+      : null
+  }));
+});
+
+app.get("/admin/billing/tenants/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+
+  const tenant = await db.tenant.findUnique({ where: { id }, include: { subscription: true } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const recentEvents = await db.paymentEvent.findMany({ where: { tenantId: id }, orderBy: { receivedAt: "desc" }, take: 20 });
+  return {
+    tenantId: tenant.id,
+    tenantName: tenant.name,
+    smsSuspended: tenant.smsSuspended,
+    subscription: tenant.subscription,
+    events: recentEvents
+  };
+});
+
+app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ status: z.enum(["NONE", "TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]), reason: z.string().min(3) }).parse(req.body);
+
+  const sub = await getOrCreateSubscription(id);
+  const updated = await db.subscription.update({ where: { id: sub.id }, data: { status: input.status, lastFailureReason: input.reason } });
+  await db.tenant.update({
+    where: { id },
+    data: input.status === "ACTIVE" ? { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } : { smsSuspended: true, smsSuspendedReason: "BILLING_OVERRIDE", smsSuspendedAt: new Date() }
+  });
+  await audit({ tenantId: id, actorUserId: admin.sub, action: "BILLING_OVERRIDE_STATUS", entityType: "Subscription", entityId: updated.id });
+  return { success: true };
+});
+
+app.post("/webhooks/sola-cardknox", async (req, reply) => {
+  const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
+  const adapter = getSolaAdapter();
+
+  if (!adapter.verifyWebhook(req.headers as any, rawBody)) {
+    return reply.status(403).send({ error: "invalid_signature" });
+  }
+
+  let event: any;
+  try {
+    event = adapter.parseWebhookEvent(rawBody);
+  } catch {
+    return reply.status(400).send({ error: "invalid_payload" });
+  }
+
+  if (event.eventId) {
+    const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
+    if (seen) return { ok: true, deduped: true };
+  }
+
+  const sub = await db.subscription.findFirst({
+    where: {
+      OR: [
+        event.providerSubscriptionId ? { providerSubscriptionId: event.providerSubscriptionId } : undefined,
+        event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : undefined
+      ].filter(Boolean) as any
+    }
+  });
+
+  const tenantId = sub?.tenantId || null;
+  await db.paymentEvent.create({
+    data: {
+      tenantId: tenantId || "",
+      subscriptionId: sub?.id || null,
+      provider: "SOLA_CARDKNOX",
+      providerEventId: event.eventId || null,
+      type: event.type,
+      status: event.status,
+      amountCents: event.amountCents || null,
+      currency: event.currency || "USD",
+      payload: event.payload as any
+    }
+  }).catch(async () => {
+    if (!tenantId) return;
+    await db.auditLog.create({ data: { tenantId, action: "BILLING_WEBHOOK_EVENT_ERROR", entityType: "Subscription", entityId: sub?.id || "unknown" } });
+  });
+
+  if (sub && tenantId) {
+    if (event.status === "SUCCEEDED") {
+      await db.subscription.update({
+        where: { id: sub.id },
+        data: {
+          status: "ACTIVE",
+          lastPaymentStatus: "SUCCEEDED",
+          lastPaymentAt: new Date(),
+          lastFailureReason: null,
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        }
+      });
+      await db.usageLedger.create({
+        data: {
+          tenantId,
+          type: "SMS_SUBSCRIPTION_MONTHLY",
+          quantity: 1,
+          unitPriceCents: event.amountCents || BILLING_PLAN_PRICE_CENTS,
+          totalCents: event.amountCents || BILLING_PLAN_PRICE_CENTS,
+          referenceId: sub.id
+        }
+      });
+      await db.tenant.update({ where: { id: tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
+      await audit({ tenantId, action: "SMS_TENANT_UNSUSPENDED", entityType: "Tenant", entityId: tenantId });
+    } else if (event.status === "FAILED") {
+      await db.subscription.update({ where: { id: sub.id }, data: { status: "PAST_DUE", lastPaymentStatus: "FAILED", lastFailureReason: event.type || "payment_failed" } });
+      await db.tenant.update({ where: { id: tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: new Date() } });
+      await audit({ tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: tenantId });
+    }
+  }
 
   return { ok: true };
 });

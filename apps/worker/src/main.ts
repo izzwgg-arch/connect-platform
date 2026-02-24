@@ -207,6 +207,17 @@ const worker = new Worker(
       await finalizeCampaignStatus(msg.campaignId);
       return;
     }
+    if (tenant.smsSendMode === 'LIVE' && tenant.smsBillingEnforced && tenant.smsSubscriptionRequired) {
+      const sub = await db.subscription.findUnique({ where: { tenantId: tenant.id } });
+      if (!sub || sub.status !== 'ACTIVE') {
+        await db.tenant.update({ where: { id: tenant.id }, data: { smsSuspended: true, smsSuspendedReason: 'BILLING_PAST_DUE', smsSuspendedAt: new Date() } });
+        await db.auditLog.create({ data: { tenantId: tenant.id, action: 'SMS_TENANT_SUSPENDED', entityType: 'Tenant', entityId: tenant.id } });
+        await db.smsCampaign.updateMany({ where: { id: msg.campaignId }, data: { status: 'PAUSED', holdReason: 'BILLING_PAST_DUE' } });
+        await db.smsMessage.update({ where: { id: msg.id }, data: { status: 'FAILED', error: 'BILLING_PAST_DUE' } });
+        await finalizeCampaignStatus(msg.campaignId);
+        return;
+      }
+    }
 
     if (await shouldAutoSuspendForFailureRate(tenant.id)) {
       await suspendTenant(tenant.id, "HIGH_FAILURE_RATE", tenant.id);
