@@ -15,6 +15,15 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
+const MAX_DAILY_LIMIT = 10000;
+const MAX_HOURLY_LIMIT = 2000;
+const MAX_PER_SECOND = 20;
+
+const DEFAULT_DAILY_LIMIT = 500;
+const DEFAULT_HOURLY_LIMIT = 100;
+const DEFAULT_PER_SECOND = 5;
+const DEFAULT_MAX_CAMPAIGN = 2000;
+
 const app = Fastify({ logger: true });
 const numberProvider = new FakeNumberProvider();
 
@@ -105,9 +114,7 @@ async function getTenantTwilioCredentials(tenantId: string): Promise<{ recordId:
     return { recordId: cached.recordId, creds: cached.creds };
   }
 
-  const record = await db.providerCredential.findUnique({
-    where: { tenantId_provider: { tenantId, provider: "TWILIO" } }
-  });
+  const record = await db.providerCredential.findUnique({ where: { tenantId_provider: { tenantId, provider: "TWILIO" } } });
   if (!record || !record.isEnabled) return null;
 
   try {
@@ -143,11 +150,7 @@ async function dailyUsageCount(tenantId: string): Promise<number> {
 }
 
 async function latestTenDlcStatus(tenantId: string): Promise<string | null> {
-  const latest = await db.tenDlcSubmission.findFirst({
-    where: { tenantId },
-    orderBy: { createdAt: "desc" },
-    select: { status: true }
-  });
+  const latest = await db.tenDlcSubmission.findFirst({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { status: true } });
   return latest?.status || null;
 }
 
@@ -164,6 +167,48 @@ function checkAndConsumeTestSendQuota(tenantId: string): boolean {
   return true;
 }
 
+async function getUsageAndFailureStats(tenantId: string): Promise<{ todaySent: number; hourSent: number; failureRate15m: number }> {
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+  const startHour = new Date(Date.now() - 60 * 60 * 1000);
+  const start15m = new Date(Date.now() - 15 * 60 * 1000);
+
+  const [todaySent, hourSent, recent] = await Promise.all([
+    db.smsMessage.count({ where: { campaign: { tenantId }, status: { in: ["SENT", "DELIVERED"] }, createdAt: { gte: startToday } } }),
+    db.smsMessage.count({ where: { campaign: { tenantId }, status: { in: ["SENT", "DELIVERED"] }, createdAt: { gte: startHour } } }),
+    db.smsMessage.findMany({ where: { campaign: { tenantId }, OR: [{ createdAt: { gte: start15m } }, { lastProviderUpdateAt: { gte: start15m } }] }, select: { status: true, providerStatus: true } })
+  ]);
+
+  let total = 0;
+  let failures = 0;
+  for (const msg of recent) {
+    if (msg.status === "QUEUED") continue;
+    total += 1;
+    if (msg.status === "FAILED" || (msg.providerStatus || "").toLowerCase() === "undelivered") failures += 1;
+  }
+
+  return { todaySent, hourSent, failureRate15m: total > 0 ? failures / total : 0 };
+}
+
+function sanitizeLimitInput(input: {
+  dailySmsLimit: number;
+  hourlySmsLimit: number;
+  perSecondRateLimit: number;
+  maxCampaignSize: number;
+}): {
+  dailySmsLimit: number;
+  hourlySmsLimit: number;
+  perSecondRateLimit: number;
+  maxCampaignSize: number;
+} {
+  return {
+    dailySmsLimit: Math.min(MAX_DAILY_LIMIT, Math.max(1, input.dailySmsLimit)),
+    hourlySmsLimit: Math.min(MAX_HOURLY_LIMIT, Math.max(1, input.hourlySmsLimit)),
+    perSecondRateLimit: Math.min(MAX_PER_SECOND, Math.max(1, input.perSecondRateLimit)),
+    maxCampaignSize: Math.max(1, input.maxCampaignSize)
+  };
+}
+
 async function decideCampaignPolicy(params: {
   tenant: any;
   tenantId: string;
@@ -172,6 +217,11 @@ async function decideCampaignPolicy(params: {
   recipientsCount: number;
 }): Promise<CampaignDecision | { reject: string }> {
   const { tenant, tenantId, actorUserId, message, recipientsCount } = params;
+
+  if (recipientsCount > tenant.maxCampaignSize) {
+    await audit({ tenantId, actorUserId, action: "SMS_CAMPAIGN_REJECTED_MAX_SIZE", entityType: "Tenant", entityId: tenantId });
+    return { reject: `Campaign exceeds maxCampaignSize (${tenant.maxCampaignSize})` };
+  }
 
   const normalized = normalizeSmsWithStop(message);
   if (!normalized.ok) {
@@ -230,22 +280,12 @@ async function decideCampaignPolicy(params: {
     };
   }
 
-  return {
-    status: "QUEUED",
-    requiresApproval: false,
-    holdReason: null,
-    riskScore: risk.riskScore,
-    normalizedMessage: normalized.message
-  };
+  return { status: "QUEUED", requiresApproval: false, holdReason: null, riskScore: risk.riskScore, normalizedMessage: normalized.message };
 }
 
 app.get("/health", async () => ({ ok: true }));
 
-const signupSchema = z.object({
-  tenantName: z.string().min(2),
-  email: z.string().email(),
-  password: z.string().min(8)
-});
+const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
 
 app.post("/auth/signup", async (req, reply) => {
   const input = signupSchema.parse(req.body);
@@ -256,7 +296,12 @@ app.post("/auth/signup", async (req, reply) => {
       dailySmsCap: 100,
       perSecondRate: 1.0,
       firstCampaignRequiresApproval: true,
-      smsSendMode: "TEST"
+      smsSendMode: "TEST",
+      dailySmsLimit: DEFAULT_DAILY_LIMIT,
+      hourlySmsLimit: DEFAULT_HOURLY_LIMIT,
+      perSecondRateLimit: DEFAULT_PER_SECOND,
+      maxCampaignSize: DEFAULT_MAX_CAMPAIGN,
+      smsSuspended: false
     }
   });
 
@@ -293,6 +338,124 @@ app.addHook("preHandler", async (req, reply) => {
 app.get("/me", async (req) => {
   const user = getUser(req);
   return { id: user.sub, tenantId: user.tenantId, email: user.email, role: user.role };
+});
+
+app.get("/settings/sms-limits", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const usage = await getUsageAndFailureStats(admin.tenantId);
+  return {
+    limits: {
+      dailySmsLimit: tenant.dailySmsLimit,
+      hourlySmsLimit: tenant.hourlySmsLimit,
+      perSecondRateLimit: tenant.perSecondRateLimit,
+      maxCampaignSize: tenant.maxCampaignSize
+    },
+    usage,
+    suspension: {
+      smsSuspended: tenant.smsSuspended,
+      smsSuspendedReason: tenant.smsSuspendedReason,
+      smsSuspendedAt: tenant.smsSuspendedAt
+    }
+  };
+});
+
+app.post("/settings/sms-limits", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({
+    dailySmsLimit: z.number().int().positive().optional(),
+    hourlySmsLimit: z.number().int().positive().optional(),
+    perSecondRateLimit: z.number().int().positive().optional(),
+    maxCampaignSize: z.number().int().positive().optional(),
+    smsSuspended: z.boolean().optional(),
+    smsSuspendedReason: z.string().max(200).optional(),
+    requestReview: z.boolean().optional()
+  }).parse(req.body);
+
+  if (input.requestReview) {
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_REVIEW_REQUESTED", entityType: "Tenant", entityId: admin.tenantId });
+    return { ok: true, requested: true };
+  }
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+
+  const isSuperAdmin = admin.role === "SUPER_ADMIN";
+  const desired = sanitizeLimitInput({
+    dailySmsLimit: input.dailySmsLimit ?? tenant.dailySmsLimit,
+    hourlySmsLimit: input.hourlySmsLimit ?? tenant.hourlySmsLimit,
+    perSecondRateLimit: input.perSecondRateLimit ?? tenant.perSecondRateLimit,
+    maxCampaignSize: input.maxCampaignSize ?? tenant.maxCampaignSize
+  });
+
+  if (!isSuperAdmin) {
+    if (
+      desired.dailySmsLimit > DEFAULT_DAILY_LIMIT ||
+      desired.hourlySmsLimit > DEFAULT_HOURLY_LIMIT ||
+      desired.perSecondRateLimit > DEFAULT_PER_SECOND ||
+      desired.maxCampaignSize > DEFAULT_MAX_CAMPAIGN
+    ) {
+      return reply.status(403).send({ error: "LIMIT_INCREASE_NOT_ALLOWED", message: "ADMIN cannot raise limits beyond default system baselines." });
+    }
+  }
+
+  if (
+    desired.dailySmsLimit > MAX_DAILY_LIMIT ||
+    desired.hourlySmsLimit > MAX_HOURLY_LIMIT ||
+    desired.perSecondRateLimit > MAX_PER_SECOND
+  ) {
+    return reply.status(400).send({ error: "LIMIT_EXCEEDS_GLOBAL_HARD_CAP" });
+  }
+
+  const updateData: any = {
+    dailySmsLimit: desired.dailySmsLimit,
+    hourlySmsLimit: desired.hourlySmsLimit,
+    perSecondRateLimit: desired.perSecondRateLimit,
+    maxCampaignSize: desired.maxCampaignSize
+  };
+
+  if (typeof input.smsSuspended === "boolean") {
+    updateData.smsSuspended = input.smsSuspended;
+    if (input.smsSuspended) {
+      updateData.smsSuspendedReason = input.smsSuspendedReason || "MANUAL_SUSPEND";
+      updateData.smsSuspendedAt = new Date();
+    } else {
+      updateData.smsSuspendedReason = null;
+      updateData.smsSuspendedAt = null;
+    }
+  }
+
+  const updated = await db.tenant.update({ where: { id: admin.tenantId }, data: updateData });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_LIMITS_UPDATED", entityType: "Tenant", entityId: admin.tenantId });
+  if (typeof input.smsSuspended === "boolean") {
+    await audit({
+      tenantId: admin.tenantId,
+      actorUserId: admin.sub,
+      action: input.smsSuspended ? "SMS_TENANT_SUSPENDED" : "SMS_TENANT_UNSUSPENDED",
+      entityType: "Tenant",
+      entityId: admin.tenantId
+    });
+  }
+
+  return {
+    limits: {
+      dailySmsLimit: updated.dailySmsLimit,
+      hourlySmsLimit: updated.hourlySmsLimit,
+      perSecondRateLimit: updated.perSecondRateLimit,
+      maxCampaignSize: updated.maxCampaignSize
+    },
+    suspension: {
+      smsSuspended: updated.smsSuspended,
+      smsSuspendedReason: updated.smsSuspendedReason,
+      smsSuspendedAt: updated.smsSuspendedAt
+    }
+  };
 });
 
 app.get("/settings/providers", async (req, reply) => {
@@ -361,15 +524,7 @@ app.put("/settings/providers/twilio", async (req, reply) => {
   });
 
   twilioCredCache.delete(admin.tenantId);
-
-  await audit({
-    tenantId: admin.tenantId,
-    actorUserId: admin.sub,
-    action: existing ? "PROVIDER_CREDENTIAL_UPDATED" : "PROVIDER_CREDENTIAL_CREATED",
-    entityType: "ProviderCredential",
-    entityId: updated.id,
-    provider: "TWILIO"
-  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: existing ? "PROVIDER_CREDENTIAL_UPDATED" : "PROVIDER_CREDENTIAL_CREATED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
 
   return {
     provider: "TWILIO",
@@ -411,13 +566,8 @@ app.post("/settings/providers/twilio/enable", async (req, reply) => {
     return reply.status(400).send({ error: "TWILIO_VALIDATION_FAILED", message: validation.message });
   }
 
-  const updated = await db.providerCredential.update({
-    where: { id: record.id },
-    data: { isEnabled: true, updatedByUserId: admin.sub }
-  });
-
+  const updated = await db.providerCredential.update({ where: { id: record.id }, data: { isEnabled: true, updatedByUserId: admin.sub } });
   twilioCredCache.delete(admin.tenantId);
-
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_VALIDATED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_ENABLED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
 
@@ -434,7 +584,6 @@ app.post("/settings/providers/twilio/disable", async (req, reply) => {
 
   const updated = await db.providerCredential.update({ where: { id: record.id }, data: { isEnabled: false, updatedByUserId: admin.sub } });
   twilioCredCache.delete(admin.tenantId);
-
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PROVIDER_CREDENTIAL_DISABLED", entityType: "ProviderCredential", entityId: updated.id, provider: "TWILIO" });
   return { provider: "TWILIO", isEnabled: false, updatedAt: updated.updatedAt };
 });
@@ -504,15 +653,7 @@ app.post("/settings/sms-mode", async (req, reply) => {
       return reply.status(400).send({ error: "LIVE_MODE_REQUIRES_ENABLED_TWILIO", message: "Enable validated Twilio credentials before LIVE mode." });
     }
 
-    const updated = await db.tenant.update({
-      where: { id: admin.tenantId },
-      data: {
-        smsSendMode: "LIVE",
-        smsLiveEnabledAt: new Date(),
-        smsLiveEnabledByUserId: admin.sub
-      }
-    });
-
+    const updated = await db.tenant.update({ where: { id: admin.tenantId }, data: { smsSendMode: "LIVE", smsLiveEnabledAt: new Date(), smsLiveEnabledByUserId: admin.sub } });
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SMS_SEND_MODE_CHANGED", entityType: "Tenant", entityId: admin.tenantId, provider: "TWILIO" });
     return { smsSendMode: updated.smsSendMode, smsLiveEnabledAt: updated.smsLiveEnabledAt };
   }
@@ -648,17 +789,8 @@ app.post("/sms/campaigns", async (req, reply) => {
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
-  const decision = await decideCampaignPolicy({
-    tenant,
-    tenantId: user.tenantId,
-    actorUserId: user.sub,
-    message: input.message,
-    recipientsCount: input.recipients.length
-  });
-
-  if ("reject" in decision) {
-    return reply.status(400).send({ error: decision.reject });
-  }
+  const decision = await decideCampaignPolicy({ tenant, tenantId: user.tenantId, actorUserId: user.sub, message: input.message, recipientsCount: input.recipients.length });
+  if ("reject" in decision) return reply.status(400).send({ error: decision.reject });
 
   const campaign = await db.smsCampaign.create({
     data: {
@@ -675,17 +807,7 @@ app.post("/sms/campaigns", async (req, reply) => {
   });
 
   const createdMessages = await Promise.all(
-    input.recipients.map((to) =>
-      db.smsMessage.create({
-        data: {
-          campaignId: campaign.id,
-          toNumber: to,
-          fromNumber: input.fromNumber,
-          body: decision.normalizedMessage,
-          status: "QUEUED"
-        }
-      })
-    )
+    input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: campaign.id, toNumber: to, fromNumber: input.fromNumber, body: decision.normalizedMessage, status: "QUEUED" } }))
   );
 
   if (campaign.status === "QUEUED") {
@@ -695,11 +817,7 @@ app.post("/sms/campaigns", async (req, reply) => {
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_HELD_FOR_APPROVAL", entityType: "SmsCampaign", entityId: campaign.id });
   }
 
-  return {
-    campaign,
-    queuedMessages: campaign.status === "QUEUED" ? createdMessages.length : 0,
-    holdReason: campaign.holdReason
-  };
+  return { campaign, queuedMessages: campaign.status === "QUEUED" ? createdMessages.length : 0, holdReason: campaign.holdReason };
 });
 
 app.get("/sms/campaigns", async (req) => {
@@ -738,13 +856,7 @@ app.post("/admin/sms/campaigns/:id/approve", async (req, reply) => {
 
   const updated = await db.smsCampaign.update({
     where: { id },
-    data: {
-      status: "QUEUED",
-      requiresApproval: false,
-      approvedAt: new Date(),
-      approvedByUserId: admin.sub,
-      holdReason: null
-    }
+    data: { status: "QUEUED", requiresApproval: false, approvedAt: new Date(), approvedByUserId: admin.sub, holdReason: null }
   });
 
   await enqueueCampaignMessages(id, campaign.tenantId);
@@ -762,13 +874,7 @@ app.post("/admin/sms/campaigns/:id/reject", async (req, reply) => {
 
   const updated = await db.smsCampaign.update({
     where: { id },
-    data: {
-      status: "FAILED",
-      requiresApproval: false,
-      approvedByUserId: admin.sub,
-      approvedAt: new Date(),
-      holdReason: input.reason
-    }
+    data: { status: "FAILED", requiresApproval: false, approvedByUserId: admin.sub, approvedAt: new Date(), holdReason: input.reason }
   });
 
   await db.smsMessage.updateMany({ where: { campaignId: id, status: { in: ["QUEUED", "SENDING"] } }, data: { status: "FAILED", error: `Rejected: ${input.reason}` } });
@@ -796,46 +902,19 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
     : null;
 
   if (!message) {
-    await db.smsWebhookEvent.create({
-      data: {
-        tenantId: null,
-        provider: "TWILIO",
-        messageId: null,
-        providerMessageId: sid || "unknown",
-        eventType: statusRaw || "unmatched",
-        payload: body as any
-      }
-    });
+    await db.smsWebhookEvent.create({ data: { tenantId: null, provider: "TWILIO", messageId: null, providerMessageId: sid || "unknown", eventType: statusRaw || "unmatched", payload: body as any } });
     return { ok: true };
   }
 
   const twilioCred = await getTenantTwilioCredentials(message.campaign.tenantId);
   if (!twilioCred) {
-    await db.smsWebhookEvent.create({
-      data: {
-        tenantId: message.campaign.tenantId,
-        provider: "TWILIO",
-        messageId: message.id,
-        providerMessageId: sid || "unknown",
-        eventType: "missing_or_invalid_tenant_credentials",
-        payload: body as any
-      }
-    });
+    await db.smsWebhookEvent.create({ data: { tenantId: message.campaign.tenantId, provider: "TWILIO", messageId: message.id, providerMessageId: sid || "unknown", eventType: "missing_or_invalid_tenant_credentials", payload: body as any } });
     return reply.status(403).send({ error: "invalid_signature" });
   }
 
   const isValid = validateTwilioRequest(twilioCred.creds.authToken, signature, url, body);
   if (!isValid) {
-    await db.smsWebhookEvent.create({
-      data: {
-        tenantId: message.campaign.tenantId,
-        provider: "TWILIO",
-        messageId: message.id,
-        providerMessageId: sid || "unknown",
-        eventType: "invalid_signature",
-        payload: body as any
-      }
-    });
+    await db.smsWebhookEvent.create({ data: { tenantId: message.campaign.tenantId, provider: "TWILIO", messageId: message.id, providerMessageId: sid || "unknown", eventType: "invalid_signature", payload: body as any } });
     return reply.status(403).send({ error: "invalid_signature" });
   }
 
@@ -857,24 +936,8 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
     }
   });
 
-  await db.smsWebhookEvent.create({
-    data: {
-      tenantId: message.campaign.tenantId,
-      provider: "TWILIO",
-      messageId: message.id,
-      providerMessageId: sid || "unknown",
-      eventType: statusRaw || "unknown",
-      payload: body as any
-    }
-  });
-
-  await audit({
-    tenantId: message.campaign.tenantId,
-    action: "SMS_WEBHOOK_STATUS_UPDATED",
-    entityType: "SmsMessage",
-    entityId: message.id,
-    provider: "TWILIO"
-  });
+  await db.smsWebhookEvent.create({ data: { tenantId: message.campaign.tenantId, provider: "TWILIO", messageId: message.id, providerMessageId: sid || "unknown", eventType: statusRaw || "unknown", payload: body as any } });
+  await audit({ tenantId: message.campaign.tenantId, action: "SMS_WEBHOOK_STATUS_UPDATED", entityType: "SmsMessage", entityId: message.id, provider: "TWILIO" });
 
   return { ok: true };
 });

@@ -54,6 +54,13 @@ model Tenant {
   smsSendMode                   SmsSendMode          @default(TEST)
   smsLiveEnabledAt              DateTime?
   smsLiveEnabledByUserId        String?
+  dailySmsLimit                 Int                  @default(500)
+  hourlySmsLimit                Int                  @default(100)
+  perSecondRateLimit            Int                  @default(5)
+  maxCampaignSize               Int                  @default(2000)
+  smsSuspended                  Boolean              @default(false)
+  smsSuspendedReason            String?
+  smsSuspendedAt                DateTime?
   createdAt                     DateTime             @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]

@@ -28,6 +28,25 @@ type ProviderRow = {
   };
 };
 
+type SmsLimitsPayload = {
+  limits: {
+    dailySmsLimit: number;
+    hourlySmsLimit: number;
+    perSecondRateLimit: number;
+    maxCampaignSize: number;
+  };
+  usage: {
+    todaySent: number;
+    hourSent: number;
+    failureRate15m: number;
+  };
+  suspension: {
+    smsSuspended: boolean;
+    smsSuspendedReason?: string | null;
+    smsSuspendedAt?: string | null;
+  };
+};
+
 export default function ProviderSettingsPage() {
   const role = useMemo(() => (typeof window !== "undefined" ? readJwtRole() : ""), []);
   const [accountSid, setAccountSid] = useState("");
@@ -46,6 +65,7 @@ export default function ProviderSettingsPage() {
   const [isSavingEnable, setIsSavingEnable] = useState(false);
   const [testTo, setTestTo] = useState("+15555551234");
   const [testMessage, setTestMessage] = useState("Test message from Connect Communications");
+  const [smsLimits, setSmsLimits] = useState<SmsLimitsPayload | null>(null);
 
   async function loadProviders() {
     const token = localStorage.getItem("token") || "";
@@ -78,10 +98,18 @@ export default function ProviderSettingsPage() {
     }
   }
 
+  async function loadSmsLimits() {
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/settings/sms-limits`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json();
+    if (json?.limits) setSmsLimits(json);
+  }
+
   useEffect(() => {
     if (role === "ADMIN" || role === "SUPER_ADMIN") {
       loadProviders();
       loadSmsMode();
+      loadSmsLimits();
     }
   }, [role]);
 
@@ -142,6 +170,17 @@ export default function ProviderSettingsPage() {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ to: testTo, message: testMessage })
+    });
+    const json = await res.json();
+    setResult(JSON.stringify(json, null, 2));
+  }
+
+  async function requestReview() {
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/settings/sms-limits`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ requestReview: true })
     });
     const json = await res.json();
     setResult(JSON.stringify(json, null, 2));
@@ -230,6 +269,28 @@ export default function ProviderSettingsPage() {
       <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="+15555551234" />
       <input value={testMessage} onChange={(e) => setTestMessage(e.target.value)} placeholder="Test message" />
       <button onClick={sendTestSms}>Send Test SMS</button>
+
+      <h3>Usage & Limits</h3>
+      {smsLimits ? (
+        <div>
+          {smsLimits.suspension.smsSuspended ? (
+            <div style={{ border: "1px solid #d22", background: "#ffecec", padding: 10, marginBottom: 8 }}>
+              <strong>SMS sending is suspended.</strong>
+              <div>Reason: {smsLimits.suspension.smsSuspendedReason || "N/A"}</div>
+              <button onClick={requestReview}>Request Review</button>
+            </div>
+          ) : null}
+          <p>Today sent: <strong>{smsLimits.usage.todaySent}</strong></p>
+          <p>This hour sent: <strong>{smsLimits.usage.hourSent}</strong></p>
+          <p>Failure rate (15m): <strong>{(smsLimits.usage.failureRate15m * 100).toFixed(1)}%</strong></p>
+          <p>Daily limit: <strong>{smsLimits.limits.dailySmsLimit}</strong></p>
+          <p>Hourly limit: <strong>{smsLimits.limits.hourlySmsLimit}</strong></p>
+          <p>Per-second limit: <strong>{smsLimits.limits.perSecondRateLimit}</strong></p>
+          <p>Max campaign size: <strong>{smsLimits.limits.maxCampaignSize}</strong></p>
+        </div>
+      ) : (
+        <p>Loading usage and limits...</p>
+      )}
 
       <h3>Configured Providers</h3>
       <ul>
