@@ -18,45 +18,43 @@ function readJwtRole(): string {
 export default function BillingPage() {
   const role = useMemo(() => (typeof window !== "undefined" ? readJwtRole() : ""), []);
   const [subscription, setSubscription] = useState<any>(null);
+  const [receipts, setReceipts] = useState<any[]>([]);
   const [billingEmail, setBillingEmail] = useState("support@connectcomunications.com");
-  const [paymentToken, setPaymentToken] = useState("");
   const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(true);
   const [message, setMessage] = useState("");
 
-  async function loadSubscription() {
+  async function load() {
     const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/billing/subscription`, { headers: { Authorization: `Bearer ${token}` } });
-    setSubscription(await res.json());
+    const [subRes, rcptRes] = await Promise.all([
+      fetch(`${apiBase}/billing/subscription`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${apiBase}/billing/receipts`, { headers: { Authorization: `Bearer ${token}` } })
+    ]);
+    setSubscription(await subRes.json());
+    const rc = await rcptRes.json();
+    setReceipts(Array.isArray(rc) ? rc : []);
   }
 
   useEffect(() => {
-    if (role === "ADMIN" || role === "SUPER_ADMIN") loadSubscription();
+    if (role === "ADMIN" || role === "SUPER_ADMIN") load();
   }, [role]);
 
-  async function startSubscription() {
-    if ((process.env.NEXT_PUBLIC_SOLA_CARDKNOX_ENABLED || "false") !== "true") {
-      setMessage("Cardknox SDK is not configured yet. Configure NEXT_PUBLIC_SOLA_CARDKNOX_ENABLED=true and hosted fields integration first.");
+  async function startHostedCheckout() {
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/billing/subscription/hosted-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ billingEmail })
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setMessage(JSON.stringify(json, null, 2));
       return;
     }
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/billing/subscription/start`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ billingEmail, paymentToken })
-    });
-    setMessage(JSON.stringify(await res.json(), null, 2));
-    await loadSubscription();
-  }
-
-  async function updatePaymentMethod() {
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(`${apiBase}/billing/subscription/update-payment-method`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ paymentToken })
-    });
-    setMessage(JSON.stringify(await res.json(), null, 2));
-    await loadSubscription();
+    if (json.redirectUrl) {
+      window.location.href = json.redirectUrl;
+      return;
+    }
+    setMessage("Hosted checkout URL was not returned.");
   }
 
   async function cancelSubscription() {
@@ -67,7 +65,7 @@ export default function BillingPage() {
       body: JSON.stringify({ cancelAtPeriodEnd })
     });
     setMessage(JSON.stringify(await res.json(), null, 2));
-    await loadSubscription();
+    await load();
   }
 
   if (role !== "ADMIN" && role !== "SUPER_ADMIN") {
@@ -77,26 +75,37 @@ export default function BillingPage() {
   return (
     <div className="card">
       <h1>Billing</h1>
-      <p>Plan: SMS Monthly $10 per tenant.</p>
+      <p><strong>Activate SMS Plan - $10/month</strong></p>
       <p>Status: <strong>{subscription?.status || "NONE"}</strong></p>
       <p>Current Period: {subscription?.currentPeriodStart ? new Date(subscription.currentPeriodStart).toLocaleDateString() : "-"} to {subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : "-"}</p>
-      <p>Payment Method: {subscription?.paymentMethod?.brand || "-"} {subscription?.paymentMethod?.last4 ? `****${subscription.paymentMethod.last4}` : ""}</p>
 
-      <h3>Start Subscription</h3>
-      <p>Use SOLA Cardknox tokenized payment capture. Raw card data is never stored by this app.</p>
+      <h3>Hosted Checkout</h3>
+      <p>Hosted checkout is the only billing method. Card data is never handled by this app.</p>
       <input value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} placeholder="Billing email" />
-      <input value={paymentToken} onChange={(e) => setPaymentToken(e.target.value)} placeholder="Cardknox payment token" />
-      <button onClick={startSubscription} disabled={!paymentToken}>Start $10/mo Subscription</button>
-
-      <h3>Update Payment Method</h3>
-      <input value={paymentToken} onChange={(e) => setPaymentToken(e.target.value)} placeholder="New Cardknox payment token" />
-      <button onClick={updatePaymentMethod} disabled={!paymentToken}>Update Payment Method</button>
+      <button onClick={startHostedCheckout} disabled={subscription?.status === "ACTIVE"}>Activate SMS Plan - $10/month</button>
 
       <h3>Cancel Subscription</h3>
       <label>
         <input type="checkbox" checked={cancelAtPeriodEnd} onChange={(e) => setCancelAtPeriodEnd(e.target.checked)} /> Cancel at period end
       </label>
       <button onClick={cancelSubscription}>Cancel Subscription</button>
+
+      <h3>Receipts</h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Amount</th><th>Period</th><th>Created</th></tr>
+        </thead>
+        <tbody>
+          {receipts.map((r) => (
+            <tr key={r.id}>
+              <td>{r.id}</td>
+              <td>${(Number(r.amountCents || 0) / 100).toFixed(2)}</td>
+              <td>{new Date(r.periodStart).toLocaleDateString()} - {new Date(r.periodEnd).toLocaleDateString()}</td>
+              <td>{new Date(r.createdAt).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
       {message ? <pre>{message}</pre> : null}
     </div>

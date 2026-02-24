@@ -41,6 +41,9 @@ const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { m
 const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
+if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true") {
+  throw new Error("SOLA_CARDKNOX_SIMULATE is not allowed in production");
+}
 if (!canUseCredentialCrypto) app.log.warn("Provider credential endpoints disabled: CREDENTIALS_MASTER_KEY missing or invalid");
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
@@ -73,6 +76,7 @@ type CampaignDecision = {
 const providerCredCache = new Map<string, { recordId: string; creds: any; expiresAt: number }>();
 const providerCredCacheTtlMs = 60_000;
 const testSendLimiter = new Map<string, number[]>();
+const billingRateLimiter = new Map<string, number[]>();
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -84,7 +88,12 @@ function getSolaAdapter(): SolaCardknoxAdapter {
     apiSecret: process.env.SOLA_CARDKNOX_API_SECRET,
     webhookSecret: process.env.SOLA_CARDKNOX_WEBHOOK_SECRET,
     mode: (process.env.SOLA_CARDKNOX_MODE as "sandbox" | "prod" | undefined) || "sandbox",
-    simulate: (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true"
+    simulate: (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true",
+    hostedSessionPath: process.env.SOLA_CARDKNOX_HOSTED_SESSION_PATH || "/hosted-checkout/sessions",
+    chargePath: process.env.SOLA_CARDKNOX_CHARGE_PATH || "/subscriptions/charge",
+    cancelPath: process.env.SOLA_CARDKNOX_CANCEL_PATH || "/subscriptions/cancel",
+    webhookSignatureHeader: process.env.SOLA_CARDKNOX_WEBHOOK_SIGNATURE_HEADER || "x-sola-signature",
+    webhookTimestampHeader: process.env.SOLA_CARDKNOX_WEBHOOK_TIMESTAMP_HEADER || "x-sola-timestamp"
   });
 }
 
@@ -107,6 +116,27 @@ async function enforceBillingForLive(tenantId: string): Promise<boolean> {
   if (!tenant.smsBillingEnforced || !tenant.smsSubscriptionRequired) return true;
   const sub = await db.subscription.findUnique({ where: { tenantId } });
   return sub?.status === "ACTIVE";
+}
+
+
+async function queueReceiptEmail(params: { tenantId: string; to: string; amountCents: number; periodEnd: Date; receiptId: string }) {
+  const endpoint = process.env.BILLING_RECEIPT_EMAIL_ENDPOINT;
+  if (!endpoint) return;
+  try {
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        to: params.to,
+        subject: "Your Connect Communications SMS Subscription Receipt",
+        amountCents: params.amountCents,
+        nextBillingDate: params.periodEnd.toISOString(),
+        receiptId: params.receiptId
+      })
+    });
+  } catch {
+    await db.auditLog.create({ data: { tenantId: params.tenantId, action: "BILLING_RECEIPT_EMAIL_FAILED", entityType: "Receipt", entityId: params.receiptId } });
+  }
 }
 
 function encodeEin(rawEin: string): string {
@@ -283,6 +313,19 @@ async function dailyUsageCount(tenantId: string): Promise<number> {
 async function latestTenDlcStatus(tenantId: string): Promise<string | null> {
   const latest = await db.tenDlcSubmission.findFirst({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { status: true } });
   return latest?.status || null;
+}
+
+function checkBillingRateLimit(key: string, max: number, windowMs: number): boolean {
+  const now = Date.now();
+  const threshold = now - windowMs;
+  const entries = (billingRateLimiter.get(key) || []).filter((x) => x >= threshold);
+  if (entries.length >= max) {
+    billingRateLimiter.set(key, entries);
+    return false;
+  }
+  entries.push(now);
+  billingRateLimiter.set(key, entries);
+  return true;
 }
 
 function checkAndConsumeTestSendQuota(tenantId: string): boolean {
@@ -1309,144 +1352,65 @@ app.get("/billing/subscription", async (req, reply) => {
     providerSubscriptionId: sub.providerSubscriptionId,
     lastPaymentStatus: sub.lastPaymentStatus,
     lastPaymentAt: sub.lastPaymentAt,
-    paymentMethod: sub.providerPaymentMethodId
-      ? {
-          brand: sub.paymentMethodBrand || null,
-          last4: sub.paymentMethodLast4 || null,
-          expMonth: sub.paymentMethodExpMonth || null,
-          expYear: sub.paymentMethodExpYear || null
-        }
-      : null
+    checkoutState: sub.status === "PENDING" ? "PENDING_FINALIZATION" : null
   };
 });
 
-app.post("/billing/subscription/start", async (req, reply) => {
+app.get("/billing/receipts", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.receipt.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
+});
+
+app.post("/billing/subscription/hosted-session", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
 
-  const input = z.object({ billingEmail: z.string().email(), paymentToken: z.string().min(4) }).parse(req.body);
-  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
-  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+  if (!checkBillingRateLimit(`hosted:${admin.tenantId}`, 10, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({ billingEmail: z.string().email() }).parse(req.body || {});
+  const sub = await getOrCreateSubscription(admin.tenantId);
+  if (sub.status === "ACTIVE") return reply.status(400).send({ error: "ALREADY_ACTIVE" });
 
   const adapter = getSolaAdapter();
+  const hosted = await adapter.createHostedSession({
+    tenantId: admin.tenantId,
+    subscriptionId: sub.id,
+    planCode: BILLING_PLAN_CODE,
+    amountCents: BILLING_PLAN_PRICE_CENTS,
+    successUrl: "https://app.connectcomunications.com/dashboard/billing?checkout=success",
+    cancelUrl: "https://app.connectcomunications.com/dashboard/billing?checkout=cancel"
+  });
+
+  await db.subscription.update({ where: { id: sub.id }, data: { status: "PENDING", billingEmail: input.billingEmail, providerSubscriptionId: hosted.providerSessionId || sub.providerSubscriptionId || sub.id } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_HOSTED_SESSION_CREATED", entityType: "Subscription", entityId: sub.id });
+
+  return { redirectUrl: hosted.redirectUrl };
+});
+
+app.get("/billing/subscription/checkout-return", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const q = z.object({ checkout: z.string().optional() }).parse(req.query || {});
   const sub = await getOrCreateSubscription(admin.tenantId);
-
-  try {
-    const customerId = sub.providerCustomerId || (await adapter.createCustomer({ tenantId: tenant.id, billingEmail: input.billingEmail, tenantName: tenant.name })).providerCustomerId;
-    const pm = await adapter.attachPaymentMethod(customerId, input.paymentToken);
-    const created = await adapter.createSubscription(customerId, pm.providerPaymentMethodId, BILLING_PLAN_CODE, BILLING_PLAN_PRICE_CENTS);
-
-    const updated = await db.subscription.update({
-      where: { id: sub.id },
-      data: {
-        planCode: BILLING_PLAN_CODE,
-        priceCents: BILLING_PLAN_PRICE_CENTS,
-        status: "ACTIVE",
-        provider: "SOLA_CARDKNOX",
-        providerCustomerId: customerId,
-        providerSubscriptionId: created.providerSubscriptionId,
-        providerPaymentMethodId: pm.providerPaymentMethodId,
-        paymentMethodBrand: pm.brand || null,
-        paymentMethodLast4: pm.last4 || null,
-        paymentMethodExpMonth: pm.expMonth || null,
-        paymentMethodExpYear: pm.expYear || null,
-        currentPeriodStart: created.currentPeriodStart || new Date(),
-        currentPeriodEnd: created.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        lastPaymentStatus: "SUCCEEDED",
-        lastPaymentAt: new Date(),
-        lastFailureReason: null
-      }
-    });
-
-    await db.paymentEvent.create({
-      data: {
-        tenantId: admin.tenantId,
-        subscriptionId: updated.id,
-        provider: "SOLA_CARDKNOX",
-        providerEventId: null,
-        type: "subscription_started",
-        status: "SUCCEEDED",
-        amountCents: BILLING_PLAN_PRICE_CENTS,
-        currency: "USD",
-        payload: { mode: process.env.SOLA_CARDKNOX_MODE || "sandbox" } as any
-      }
-    });
-
-    await db.usageLedger.create({
-      data: {
-        tenantId: admin.tenantId,
-        type: "SMS_SUBSCRIPTION_MONTHLY",
-        quantity: 1,
-        unitPriceCents: BILLING_PLAN_PRICE_CENTS,
-        totalCents: BILLING_PLAN_PRICE_CENTS,
-        referenceId: updated.id
-      }
-    });
-
-    await db.tenant.update({ where: { id: admin.tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
-    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_SUBSCRIPTION_STARTED", entityType: "Subscription", entityId: updated.id });
-
-    return { success: true, status: updated.status };
-  } catch (e: any) {
-    const msg = String(e?.code || e?.message || "BILLING_START_FAILED");
-    await db.paymentEvent.create({
-      data: {
-        tenantId: admin.tenantId,
-        subscriptionId: sub.id,
-        provider: "SOLA_CARDKNOX",
-        providerEventId: null,
-        type: "subscription_start_failed",
-        status: "FAILED",
-        amountCents: BILLING_PLAN_PRICE_CENTS,
-        currency: "USD",
-        payload: { error: msg } as any
-      }
-    });
-    return reply.status(400).send({ error: msg === "NOT_CONFIGURED" ? "NOT_CONFIGURED" : "BILLING_START_FAILED" });
-  }
+  return { message: "Payment received. Finalizing subscription...", checkout: q.checkout || null, status: sub.status };
 });
 
 app.post("/billing/subscription/cancel", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
+
   const input = z.object({ cancelAtPeriodEnd: z.boolean().default(true) }).parse(req.body);
   const sub = await getOrCreateSubscription(admin.tenantId);
-  const adapter = getSolaAdapter();
-
   if (sub.providerSubscriptionId) {
-    try {
-      await adapter.cancelSubscription(sub.providerSubscriptionId, input.cancelAtPeriodEnd);
-    } catch {}
+    try { await getSolaAdapter().cancelSubscription(sub.providerSubscriptionId, input.cancelAtPeriodEnd); } catch {}
   }
-
   const nextStatus = input.cancelAtPeriodEnd ? sub.status : "CANCELED";
   const updated = await db.subscription.update({ where: { id: sub.id }, data: { cancelAtPeriodEnd: input.cancelAtPeriodEnd, status: nextStatus } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_SUBSCRIPTION_CANCELED", entityType: "Subscription", entityId: updated.id });
   return { success: true, status: updated.status, cancelAtPeriodEnd: updated.cancelAtPeriodEnd };
-});
-
-app.post("/billing/subscription/update-payment-method", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
-  if (!admin) return;
-  const input = z.object({ paymentToken: z.string().min(4) }).parse(req.body);
-  const sub = await getOrCreateSubscription(admin.tenantId);
-  const adapter = getSolaAdapter();
-
-  if (!sub.providerCustomerId) return reply.status(400).send({ error: "NO_PROVIDER_CUSTOMER" });
-
-  const pm = await adapter.attachPaymentMethod(sub.providerCustomerId, input.paymentToken);
-  const updated = await db.subscription.update({
-    where: { id: sub.id },
-    data: {
-      providerPaymentMethodId: pm.providerPaymentMethodId,
-      paymentMethodBrand: pm.brand || null,
-      paymentMethodLast4: pm.last4 || null,
-      paymentMethodExpMonth: pm.expMonth || null,
-      paymentMethodExpYear: pm.expYear || null
-    }
-  });
-  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "BILLING_PAYMENT_METHOD_UPDATED", entityType: "Subscription", entityId: updated.id });
-  return { success: true };
 });
 
 app.get("/admin/billing/tenants", async (req, reply) => {
@@ -1466,7 +1430,9 @@ app.get("/admin/billing/tenants", async (req, reply) => {
           planCode: r.subscription.planCode,
           currentPeriodEnd: r.subscription.currentPeriodEnd,
           lastPaymentStatus: r.subscription.lastPaymentStatus,
-          lastFailureReason: r.subscription.lastFailureReason
+          lastFailureReason: r.subscription.lastFailureReason,
+          retryCount: r.subscription.retryCount,
+          nextRetryAt: r.subscription.nextRetryAt
         }
       : null
   }));
@@ -1481,20 +1447,14 @@ app.get("/admin/billing/tenants/:id", async (req, reply) => {
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
   const recentEvents = await db.paymentEvent.findMany({ where: { tenantId: id }, orderBy: { receivedAt: "desc" }, take: 20 });
-  return {
-    tenantId: tenant.id,
-    tenantName: tenant.name,
-    smsSuspended: tenant.smsSuspended,
-    subscription: tenant.subscription,
-    events: recentEvents
-  };
+  return { tenantId: tenant.id, tenantName: tenant.name, smsSuspended: tenant.smsSuspended, subscription: tenant.subscription, events: recentEvents };
 });
 
 app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   const { id } = req.params as { id: string };
-  const input = z.object({ status: z.enum(["NONE", "TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]), reason: z.string().min(3) }).parse(req.body);
+  const input = z.object({ status: z.enum(["NONE", "PENDING", "TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]), reason: z.string().min(3) }).parse(req.body);
 
   const sub = await getOrCreateSubscription(id);
   const updated = await db.subscription.update({ where: { id: sub.id }, data: { status: input.status, lastFailureReason: input.reason } });
@@ -1507,24 +1467,22 @@ app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
 });
 
 app.post("/webhooks/sola-cardknox", async (req, reply) => {
+  const ip = String((req.headers["x-forwarded-for"] || req.ip || "")).split(",")[0].trim();
+  if (!checkBillingRateLimit(`webhook:${ip}`, 240, 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
   const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
   const adapter = getSolaAdapter();
-
   if (!adapter.verifyWebhook(req.headers as any, rawBody)) {
     return reply.status(403).send({ error: "invalid_signature" });
   }
 
-  let event: any;
-  try {
-    event = adapter.parseWebhookEvent(rawBody);
-  } catch {
-    return reply.status(400).send({ error: "invalid_payload" });
-  }
+  const event = adapter.parseWebhookEvent(rawBody);
+  if (!event.eventId) return reply.status(400).send({ error: "missing_event_id" });
 
-  if (event.eventId) {
-    const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
-    if (seen) return { ok: true, deduped: true };
-  }
+  const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
+  if (seen) return { ok: true, deduped: true };
 
   const sub = await db.subscription.findFirst({
     where: {
@@ -1534,55 +1492,69 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
       ].filter(Boolean) as any
     }
   });
+  if (!sub) return { ok: true, unmatched: true };
 
-  const tenantId = sub?.tenantId || null;
   await db.paymentEvent.create({
     data: {
-      tenantId: tenantId || "",
-      subscriptionId: sub?.id || null,
+      tenantId: sub.tenantId,
+      subscriptionId: sub.id,
       provider: "SOLA_CARDKNOX",
-      providerEventId: event.eventId || null,
+      providerEventId: event.eventId,
       type: event.type,
       status: event.status,
       amountCents: event.amountCents || null,
       currency: event.currency || "USD",
       payload: event.payload as any
     }
-  }).catch(async () => {
-    if (!tenantId) return;
-    await db.auditLog.create({ data: { tenantId, action: "BILLING_WEBHOOK_EVENT_ERROR", entityType: "Subscription", entityId: sub?.id || "unknown" } });
   });
 
-  if (sub && tenantId) {
-    if (event.status === "SUCCEEDED") {
-      await db.subscription.update({
-        where: { id: sub.id },
-        data: {
-          status: "ACTIVE",
-          lastPaymentStatus: "SUCCEEDED",
-          lastPaymentAt: new Date(),
-          lastFailureReason: null,
-          currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-        }
-      });
-      await db.usageLedger.create({
-        data: {
-          tenantId,
-          type: "SMS_SUBSCRIPTION_MONTHLY",
-          quantity: 1,
-          unitPriceCents: event.amountCents || BILLING_PLAN_PRICE_CENTS,
-          totalCents: event.amountCents || BILLING_PLAN_PRICE_CENTS,
-          referenceId: sub.id
-        }
-      });
-      await db.tenant.update({ where: { id: tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
-      await audit({ tenantId, action: "SMS_TENANT_UNSUSPENDED", entityType: "Tenant", entityId: tenantId });
-    } else if (event.status === "FAILED") {
-      await db.subscription.update({ where: { id: sub.id }, data: { status: "PAST_DUE", lastPaymentStatus: "FAILED", lastFailureReason: event.type || "payment_failed" } });
-      await db.tenant.update({ where: { id: tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: new Date() } });
-      await audit({ tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: tenantId });
+  if (event.status === "SUCCEEDED") {
+    const periodStart = new Date();
+    const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const amount = event.amountCents || BILLING_PLAN_PRICE_CENTS;
+
+    await db.subscription.update({
+      where: { id: sub.id },
+      data: {
+        status: "ACTIVE",
+        lastPaymentStatus: "SUCCEEDED",
+        lastPaymentAt: periodStart,
+        lastFailureReason: null,
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
+        pastDueSince: null,
+        retryCount: 0,
+        nextRetryAt: null
+      }
+    });
+
+    await db.usageLedger.create({ data: { tenantId: sub.tenantId, type: "SMS_SUBSCRIPTION_MONTHLY", quantity: 1, unitPriceCents: amount, totalCents: amount, referenceId: sub.id } });
+    const receipt = await db.receipt.create({ data: { tenantId: sub.tenantId, subscriptionId: sub.id, amountCents: amount, periodStart, periodEnd } });
+
+    await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
+    await audit({ tenantId: sub.tenantId, action: "SMS_TENANT_UNSUSPENDED", entityType: "Tenant", entityId: sub.tenantId });
+
+    if (sub.billingEmail) {
+      await queueReceiptEmail({ tenantId: sub.tenantId, to: sub.billingEmail, amountCents: amount, periodEnd, receiptId: receipt.id });
     }
+  }
+
+  if (event.status === "FAILED") {
+    const now = new Date();
+    await db.subscription.update({
+      where: { id: sub.id },
+      data: {
+        status: "PAST_DUE",
+        lastPaymentStatus: "FAILED",
+        lastFailureReason: event.type || "payment_failed",
+        pastDueSince: sub.pastDueSince || now,
+        retryCount: 0,
+        nextRetryAt: new Date(now.getTime() + 24 * 60 * 60 * 1000)
+      }
+    });
+    await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: now } });
+    await db.alert.create({ data: { tenantId: sub.tenantId, severity: "CRITICAL", category: "BILLING", message: "Subscription payment failed; tenant suspended.", metadata: { providerEventId: event.eventId } as any } });
+    await audit({ tenantId: sub.tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: sub.tenantId });
   }
 
   return { ok: true };

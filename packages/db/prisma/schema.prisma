@@ -63,6 +63,7 @@ enum PhoneNumberStatus {
 
 enum SubscriptionStatus {
   NONE
+  PENDING
   TRIALING
   ACTIVE
   PAST_DUE
@@ -116,6 +117,8 @@ model Tenant {
   subscription                  Subscription?
   paymentEvents                 PaymentEvent[]
   usageLedger                   UsageLedger[]
+  receipts                      Receipt[]
+  alerts                        Alert[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
   defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
@@ -150,6 +153,7 @@ model Subscription {
   providerCustomerId      String?
   providerSubscriptionId  String?
   providerPaymentMethodId String?
+  billingEmail           String?
   paymentMethodBrand      String?
   paymentMethodLast4      String?
   paymentMethodExpMonth   String?
@@ -157,10 +161,14 @@ model Subscription {
   lastPaymentStatus       PaymentStatus?
   lastPaymentAt           DateTime?
   lastFailureReason       String?
+  pastDueSince            DateTime?
+  retryCount              Int                @default(0)
+  nextRetryAt             DateTime?
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
   tenant                  Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   paymentEvents           PaymentEvent[]
+  receipts                Receipt[]
 }
 
 model PaymentEvent {
@@ -366,4 +374,34 @@ model AuditLog {
   createdAt   DateTime             @default(now())
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   actorUser   User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+
+model Receipt {
+  id             String       @id @default(cuid())
+  tenantId       String
+  subscriptionId String
+  amountCents    Int
+  periodStart    DateTime
+  periodEnd      DateTime
+  createdAt      DateTime     @default(now())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+model Alert {
+  id          String   @id @default(cuid())
+  tenantId    String
+  severity    String
+  category    String
+  message     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  acknowledgedAt DateTime?
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([severity, createdAt])
 }

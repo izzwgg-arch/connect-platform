@@ -9,7 +9,8 @@ import {
   TwilioCredentials,
   TwilioSmsProvider,
   VoipMsCredentials,
-  VoipMsSmsProvider
+  VoipMsSmsProvider,
+  SolaCardknoxAdapter
 } from "@connect/integrations";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -193,6 +194,60 @@ function buildRoutingAttemptOrder(tenant: any): Array<{ provider: ProviderName; 
   return out;
 }
 
+
+function getSolaAdapter() {
+  return new SolaCardknoxAdapter({
+    baseUrl: process.env.SOLA_CARDKNOX_API_BASE_URL,
+    apiKey: process.env.SOLA_CARDKNOX_API_KEY,
+    apiSecret: process.env.SOLA_CARDKNOX_API_SECRET,
+    webhookSecret: process.env.SOLA_CARDKNOX_WEBHOOK_SECRET,
+    mode: (process.env.SOLA_CARDKNOX_MODE as "sandbox" | "prod" | undefined) || "sandbox",
+    simulate: (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true",
+    chargePath: process.env.SOLA_CARDKNOX_CHARGE_PATH || "/subscriptions/charge"
+  });
+}
+
+async function runDunningCycle(): Promise<void> {
+  const now = new Date();
+  const dueSubs = await db.subscription.findMany({ where: { status: "PAST_DUE", nextRetryAt: { lte: now } } });
+  for (const sub of dueSubs) {
+    const tenant = await db.tenant.findUnique({ where: { id: sub.tenantId } });
+    if (!tenant) continue;
+
+    const pastDueSince = sub.pastDueSince || sub.updatedAt;
+    const ageMs = now.getTime() - pastDueSince.getTime();
+    if (ageMs >= 7 * 24 * 60 * 60 * 1000) {
+      await db.subscription.update({ where: { id: sub.id }, data: { status: "CANCELED", nextRetryAt: null } });
+      await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: now } });
+      await db.auditLog.create({ data: { tenantId: sub.tenantId, action: "BILLING_SUBSCRIPTION_CANCELED_FOR_NONPAYMENT", entityType: "Subscription", entityId: sub.id } });
+      continue;
+    }
+
+    if (!sub.providerSubscriptionId) continue;
+    const adapter = getSolaAdapter();
+    try {
+      const charged = await adapter.chargeSubscription(sub.providerSubscriptionId, sub.priceCents || 1000);
+      if (charged.status === "SUCCEEDED") {
+        const periodStart = new Date();
+        const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const amount = charged.amountCents || sub.priceCents || 1000;
+        await db.subscription.update({ where: { id: sub.id }, data: { status: "ACTIVE", lastPaymentStatus: "SUCCEEDED", lastPaymentAt: periodStart, lastFailureReason: null, currentPeriodStart: periodStart, currentPeriodEnd: periodEnd, retryCount: 0, nextRetryAt: null, pastDueSince: null } });
+        await db.usageLedger.create({ data: { tenantId: sub.tenantId, type: "SMS_SUBSCRIPTION_MONTHLY", quantity: 1, unitPriceCents: amount, totalCents: amount, referenceId: sub.id } });
+        await db.receipt.create({ data: { tenantId: sub.tenantId, subscriptionId: sub.id, amountCents: amount, periodStart, periodEnd } });
+        await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: false, smsSuspendedReason: null, smsSuspendedAt: null } });
+        await db.auditLog.create({ data: { tenantId: sub.tenantId, action: "SMS_TENANT_UNSUSPENDED", entityType: "Tenant", entityId: sub.tenantId } });
+      } else {
+        throw new Error("charge_failed");
+      }
+    } catch {
+      const nextCount = (sub.retryCount || 0) + 1;
+      const retryDays = nextCount === 1 ? 1 : nextCount === 2 ? 3 : 5;
+      const nextRetryAt = new Date(now.getTime() + retryDays * 24 * 60 * 60 * 1000);
+      await db.subscription.update({ where: { id: sub.id }, data: { retryCount: nextCount, nextRetryAt, lastFailureReason: "dunning_retry_failed" } });
+    }
+  }
+}
+
 const worker = new Worker(
   "sms-send",
   async (job) => {
@@ -207,13 +262,13 @@ const worker = new Worker(
       await finalizeCampaignStatus(msg.campaignId);
       return;
     }
-    if (tenant.smsSendMode === 'LIVE' && tenant.smsBillingEnforced && tenant.smsSubscriptionRequired) {
+    if (tenant.smsSendMode === "LIVE" && tenant.smsBillingEnforced && tenant.smsSubscriptionRequired) {
       const sub = await db.subscription.findUnique({ where: { tenantId: tenant.id } });
-      if (!sub || sub.status !== 'ACTIVE') {
-        await db.tenant.update({ where: { id: tenant.id }, data: { smsSuspended: true, smsSuspendedReason: 'BILLING_PAST_DUE', smsSuspendedAt: new Date() } });
-        await db.auditLog.create({ data: { tenantId: tenant.id, action: 'SMS_TENANT_SUSPENDED', entityType: 'Tenant', entityId: tenant.id } });
-        await db.smsCampaign.updateMany({ where: { id: msg.campaignId }, data: { status: 'PAUSED', holdReason: 'BILLING_PAST_DUE' } });
-        await db.smsMessage.update({ where: { id: msg.id }, data: { status: 'FAILED', error: 'BILLING_PAST_DUE' } });
+      if (!sub || sub.status !== "ACTIVE") {
+        await db.tenant.update({ where: { id: tenant.id }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: new Date() } });
+        await db.auditLog.create({ data: { tenantId: tenant.id, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: tenant.id } });
+        await db.smsCampaign.updateMany({ where: { id: msg.campaignId }, data: { status: "PAUSED", holdReason: "BILLING_PAST_DUE" } });
+        await db.smsMessage.update({ where: { id: msg.id }, data: { status: "FAILED", error: "BILLING_PAST_DUE" } });
         await finalizeCampaignStatus(msg.campaignId);
         return;
       }
@@ -409,3 +464,9 @@ worker.on("completed", (job) => console.log(`sms job completed: ${job.id}`));
 worker.on("failed", (job, err) => console.error(`sms job failed: ${job?.id} -> ${err.message}`));
 
 console.log("SMS worker started");
+
+setInterval(() => {
+  runDunningCycle().catch((err) => console.error("dunning cycle failed", err?.message || err));
+}, 60 * 60 * 1000);
+
+runDunningCycle().catch((err) => console.error("initial dunning cycle failed", err?.message || err));
