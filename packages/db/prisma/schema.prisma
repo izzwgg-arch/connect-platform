@@ -102,6 +102,18 @@ enum DtmfMode {
   SIP_INFO
 }
 
+enum MobilePlatform {
+  IOS
+  ANDROID
+}
+
+enum CallInviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
 model Tenant {
   id                            String                 @id @default(cuid())
   name                          String
@@ -153,6 +165,8 @@ model Tenant {
   alerts                        Alert[]
   extensions                    Extension[]
   callRecords                   CallRecord[]
+  mobileDevices                 MobileDevice[]
+  callInvites                   CallInvite[]
   pbxTenantLink                 TenantPbxLink?
   pbxExtensionLinks             PbxExtensionLink[]
   pbxDidLinks                   PbxDidLink[]
@@ -177,6 +191,8 @@ model User {
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
   ownedExtensions            Extension[]          @relation("ExtensionOwner")
+  mobileDevices              MobileDevice[]
+  callInvites                CallInvite[]
 }
 
 model Subscription {
@@ -458,6 +474,7 @@ model Extension {
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerUser   User?             @relation("ExtensionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   pbxLink     PbxExtensionLink?
+  callInvites CallInvite[]
 
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])
@@ -572,4 +589,43 @@ model PbxJob {
 
   @@index([status, nextRunAt])
   @@index([tenantId, createdAt])
+}
+
+
+model MobileDevice {
+  id            String         @id @default(cuid())
+  tenantId      String
+  userId        String
+  platform      MobilePlatform
+  expoPushToken String         @unique
+  voipPushToken String?
+  deviceName    String?
+  lastSeenAt    DateTime       @default(now())
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([tenantId, platform])
+}
+
+model CallInvite {
+  id          String           @id @default(cuid())
+  tenantId    String
+  userId      String
+  extensionId String?
+  fromNumber  String
+  toExtension String
+  status      CallInviteStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  declinedAt  DateTime?
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extension   Extension?       @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([userId, status, expiresAt])
 }

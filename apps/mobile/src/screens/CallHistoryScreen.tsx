@@ -31,7 +31,7 @@ export function CallHistoryScreen() {
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <View style={{ borderBottomWidth: 1, borderBottomColor: "#e3e8ed", paddingVertical: 8 }}>
-                <Text style={ui.text}>{item.direction.toUpperCase()}  {item.fromNumber} -> {item.toNumber}</Text>
+                <Text style={ui.text}>{item.direction.toUpperCase()}  {item.fromNumber} -&gt; {item.toNumber}</Text>
                 <Text style={ui.text}>{new Date(item.startedAt).toLocaleString()}  Duration {item.durationSec}s</Text>
                 <TouchableOpacity style={ui.button} onPress={() => sip.dial(item.toNumber)}>
                   <Text style={ui.buttonText}>Redial</Text>

@@ -19,7 +19,15 @@ function parseBundle(raw: string): ProvisioningBundle {
     throw new Error("Invalid provisioning QR payload");
   }
 
-  return { sipUsername, sipPassword, sipWsUrl, sipDomain, outboundProxy: parsed.outboundProxy || parsed.provisioning?.outboundProxy || null, iceServers, dtmfMode };
+  return {
+    sipUsername,
+    sipPassword,
+    sipWsUrl,
+    sipDomain,
+    outboundProxy: parsed.outboundProxy || parsed.provisioning?.outboundProxy || null,
+    iceServers,
+    dtmfMode
+  };
 }
 
 export function QrProvisionScreen() {

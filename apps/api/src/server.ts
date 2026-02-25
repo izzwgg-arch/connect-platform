@@ -43,6 +43,8 @@ const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 const voiceSimulate = (process.env.VOICE_SIMULATE || "false").toLowerCase() === "true";
+const mobilePushSimulate = (process.env.MOBILE_PUSH_SIMULATE || "true").toLowerCase() !== "false";
+const mobilePushAccessToken = process.env.EXPO_PUSH_ACCESS_TOKEN || "";
 if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true") {
   throw new Error("SOLA_CARDKNOX_SIMULATE is not allowed in production");
 }
@@ -457,6 +459,59 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
   }
 
   return { status: "QUEUED", requiresApproval: false, holdReason: null, riskScore: risk.riskScore, normalizedMessage: normalized.message };
+}
+
+
+
+async function sendPushToUserDevices(input: {
+  tenantId: string;
+  userId: string;
+  payload: { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+}) {
+  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
+  if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
+
+  if (mobilePushSimulate) {
+    await db.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        action: "MOBILE_PUSH_SIMULATED",
+        entityType: "CallInvite",
+        entityId: input.payload.inviteId,
+        actorUserId: input.userId
+      }
+    });
+    return { queued: devices.length, simulated: true };
+  }
+
+  const messages = devices.map((d) => ({
+    to: d.expoPushToken,
+    sound: "default",
+    title: "Incoming call",
+    body: `Call from ${input.payload.fromNumber}`,
+    data: input.payload
+  }));
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (mobilePushAccessToken) headers.authorization = `Bearer ${mobilePushAccessToken}`;
+
+  await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(messages)
+  });
+
+  await db.auditLog.create({
+    data: {
+      tenantId: input.tenantId,
+      action: "MOBILE_PUSH_SENT",
+      entityType: "CallInvite",
+      entityId: input.payload.inviteId,
+      actorUserId: input.userId
+    }
+  });
+
+  return { queued: messages.length, simulated: false };
 }
 
 app.get("/health", async () => ({ ok: true }));
@@ -1739,6 +1794,139 @@ app.get("/voice/pending-jobs", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
   return db.pbxJob.findMany({ where: { tenantId: admin.tenantId, status: { in: ["QUEUED", "RUNNING", "FAILED"] } }, orderBy: { createdAt: "desc" }, take: 100 });
+});
+
+
+
+app.post("/mobile/devices/register", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    platform: z.enum(["IOS", "ANDROID"]),
+    expoPushToken: z.string().min(8),
+    voipPushToken: z.string().optional(),
+    deviceName: z.string().max(120).optional()
+  }).parse(req.body || {});
+
+  const saved = await db.mobileDevice.upsert({
+    where: { expoPushToken: input.expoPushToken },
+    create: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      platform: input.platform,
+      expoPushToken: input.expoPushToken,
+      voipPushToken: input.voipPushToken || null,
+      deviceName: input.deviceName || null,
+      lastSeenAt: new Date()
+    },
+    update: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      platform: input.platform,
+      voipPushToken: input.voipPushToken || null,
+      deviceName: input.deviceName || null,
+      lastSeenAt: new Date()
+    }
+  });
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
+  return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
+});
+
+app.post("/mobile/devices/unregister", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({ expoPushToken: z.string().min(8).optional() }).parse(req.body || {});
+
+  const out = await db.mobileDevice.deleteMany({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      ...(input.expoPushToken ? { expoPushToken: input.expoPushToken } : {})
+    }
+  });
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_UNREGISTERED", entityType: "MobileDevice", entityId: user.sub });
+  return { ok: true, removed: out.count };
+});
+
+app.get("/mobile/call-invites/pending", async (req, reply) => {
+  const user = getUser(req);
+  await db.callInvite.updateMany({ where: { tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { lt: new Date() } }, data: { status: "EXPIRED" } });
+  return db.callInvite.findMany({ where: { tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: new Date() } }, orderBy: { createdAt: "desc" }, take: 20 });
+});
+
+app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+  const input = z.object({ action: z.enum(["ACCEPTED", "DECLINED"]) }).parse(req.body || {});
+
+  const invite = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
+  if (!invite) return reply.status(404).send({ error: "INVITE_NOT_FOUND" });
+  if (invite.status !== "PENDING") return { ok: true, status: invite.status };
+  if (invite.expiresAt < new Date()) {
+    const expired = await db.callInvite.update({ where: { id: invite.id }, data: { status: "EXPIRED" } });
+    return { ok: false, status: expired.status, error: "INVITE_EXPIRED" };
+  }
+
+  const updated = await db.callInvite.update({
+    where: { id: invite.id },
+    data: {
+      status: input.action,
+      acceptedAt: input.action === "ACCEPTED" ? new Date() : null,
+      declinedAt: input.action === "DECLINED" ? new Date() : null
+    }
+  });
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: `MOBILE_CALL_INVITE_${input.action}`, entityType: "CallInvite", entityId: invite.id });
+  return { ok: true, status: updated.status };
+});
+
+app.post("/mobile/call-invites/test", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  if (!checkBillingRateLimit(`mobile-invite-test:${admin.tenantId}`, 20, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({
+    userId: z.string().optional(),
+    userEmail: z.string().email().optional(),
+    fromNumber: z.string().min(2),
+    toExtension: z.string().min(1),
+    expiresSec: z.number().int().min(15).max(120).default(45)
+  }).parse(req.body || {});
+
+  const target = input.userId
+    ? await db.user.findFirst({ where: { id: input.userId, tenantId: admin.tenantId } })
+    : await db.user.findFirst({ where: { email: input.userEmail || "", tenantId: admin.tenantId } });
+  if (!target) return reply.status(404).send({ error: "TARGET_USER_NOT_FOUND" });
+
+  const ext = await db.extension.findFirst({ where: { tenantId: admin.tenantId, ownerUserId: target.id }, orderBy: { createdAt: "asc" } });
+  const invite = await db.callInvite.create({
+    data: {
+      tenantId: admin.tenantId,
+      userId: target.id,
+      extensionId: ext?.id || null,
+      fromNumber: input.fromNumber,
+      toExtension: input.toExtension,
+      expiresAt: new Date(Date.now() + input.expiresSec * 1000),
+      status: "PENDING"
+    }
+  });
+
+  const push = await sendPushToUserDevices({
+    tenantId: admin.tenantId,
+    userId: target.id,
+    payload: {
+      type: "INCOMING_CALL",
+      inviteId: invite.id,
+      fromNumber: invite.fromNumber,
+      toExtension: invite.toExtension,
+      tenantId: admin.tenantId,
+      timestamp: new Date().toISOString()
+    }
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "MOBILE_CALL_INVITE_CREATED", entityType: "CallInvite", entityId: invite.id });
+  return { ok: true, inviteId: invite.id, expiresAt: invite.expiresAt, push };
 });
 
 app.post("/admin/pbx/instances", async (req, reply) => {

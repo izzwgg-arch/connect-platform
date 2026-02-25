@@ -334,6 +334,18 @@ async function runPbxJobCycle(): Promise<void> {
   }
 }
 
+
+
+async function runCallInviteExpiryCycle(): Promise<void> {
+  const expired = await db.callInvite.updateMany({
+    where: { status: "PENDING", expiresAt: { lt: new Date() } },
+    data: { status: "EXPIRED" }
+  });
+  if (expired.count > 0) {
+    console.log(`call invite expiry cycle marked ${expired.count} invites as EXPIRED`);
+  }
+}
+
 async function runPbxCdrSyncCycle(): Promise<void> {
   const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
   for (const link of links) {
@@ -618,6 +630,12 @@ setInterval(() => {
 setInterval(() => {
   runPbxCdrSyncCycle().catch((err) => console.error("pbx cdr sync failed", err?.message || err));
 }, 2 * 60 * 1000);
+
+setInterval(() => {
+  runCallInviteExpiryCycle().catch((err) => console.error("call invite expiry failed", err?.message || err));
+}, 30 * 1000);
+
+runCallInviteExpiryCycle().catch((err) => console.error("initial call invite expiry failed", err?.message || err));
 
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));
 runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed", err?.message || err));

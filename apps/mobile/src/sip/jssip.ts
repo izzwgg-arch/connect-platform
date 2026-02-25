@@ -19,7 +19,6 @@ export class JsSipClient implements SipClient {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
     this.events.onRegistrationState?.("registering");
 
-    // RN runtime wiring for JsSIP + react-native-webrtc in Expo dev client.
     const JsSIP = (await import("jssip")).default as any;
     const socket = new JsSIP.WebSocketInterface(this.bundle.sipWsUrl);
 
@@ -84,8 +83,7 @@ export class JsSipClient implements SipClient {
   }
 
   setSpeaker(_speakerOn: boolean) {
-    // Speaker routing on RN varies by platform and audio routing package.
-    // Intentionally no-op without adding unstable native side effects.
+    // Platform-specific audio routing can be layered in with native modules.
   }
 
   sendDtmf(digit: string) {

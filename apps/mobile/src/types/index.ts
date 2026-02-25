@@ -38,5 +38,26 @@ export type CallRecord = {
   disposition?: string;
 };
 
+export type CallInvite = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  extensionId?: string | null;
+  fromNumber: string;
+  toExtension: string;
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "EXPIRED";
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type IncomingCallPushPayload = {
+  type: "INCOMING_CALL";
+  inviteId: string;
+  fromNumber: string;
+  toExtension: string;
+  tenantId: string;
+  timestamp: string;
+};
+
 export type SipRegistrationState = "idle" | "registering" | "registered" | "failed";
 export type CallState = "idle" | "dialing" | "ringing" | "connected" | "ended";

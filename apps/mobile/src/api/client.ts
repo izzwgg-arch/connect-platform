@@ -50,3 +50,50 @@ export async function getCallHistory(token: string): Promise<CallRecord[]> {
   if (!res.ok) throw new Error(json?.error || "VOICE_CALLS_FAILED");
   return Array.isArray(json) ? (json as CallRecord[]) : [];
 }
+
+export async function registerMobileDevice(token: string, input: {
+  platform: "IOS" | "ANDROID";
+  expoPushToken: string;
+  voipPushToken?: string;
+  deviceName?: string;
+}) {
+  const res = await fetch(`${API_BASE}/mobile/devices/register`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MOBILE_REGISTER_FAILED");
+  return json;
+}
+
+export async function unregisterMobileDevice(token: string, expoPushToken?: string) {
+  const res = await fetch(`${API_BASE}/mobile/devices/unregister`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(expoPushToken ? { expoPushToken } : {})
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MOBILE_UNREGISTER_FAILED");
+  return json;
+}
+
+export async function getPendingInvites(token: string) {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/pending`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_FETCH_FAILED");
+  return Array.isArray(json) ? json : [];
+}
+
+export async function respondInvite(token: string, inviteId: string, action: "ACCEPTED" | "DECLINED") {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/${inviteId}/respond`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ action })
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_RESPOND_FAILED");
+  return json;
+}

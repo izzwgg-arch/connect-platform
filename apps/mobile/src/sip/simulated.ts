@@ -38,8 +38,6 @@ export class SimulatedSipClient implements SipClient {
   }
 
   setMute() {}
-
   setSpeaker() {}
-
   sendDtmf() {}
 }

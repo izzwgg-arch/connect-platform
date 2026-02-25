@@ -4,7 +4,6 @@ export const colors = {
   bg: "#eceef1",
   panel: "#ffffff",
   topbar: "#2f3237",
-  side: "#2e3135",
   border: "#d9dee4",
   text: "#1f2429",
   subText: "#485362",
