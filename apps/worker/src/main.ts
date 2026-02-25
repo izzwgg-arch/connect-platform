@@ -10,7 +10,8 @@ import {
   TwilioSmsProvider,
   VoipMsCredentials,
   VoipMsSmsProvider,
-  SolaCardknoxAdapter
+  SolaCardknoxAdapter,
+  WirePbxClient
 } from "@connect/integrations";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -248,6 +249,145 @@ async function runDunningCycle(): Promise<void> {
   }
 }
 
+
+
+function getPbxClient(input: { baseUrl: string; token: string; secret?: string | null }) {
+  return new WirePbxClient({
+    baseUrl: input.baseUrl,
+    apiToken: input.token,
+    apiSecret: input.secret || undefined,
+    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+    simulate: (process.env.PBX_SIMULATE || "false").toLowerCase() === "true"
+  });
+}
+
+async function runPbxJobCycle(): Promise<void> {
+  const jobs = await db.pbxJob.findMany({ where: { status: { in: ["QUEUED", "FAILED"] }, nextRunAt: { lte: new Date() } }, orderBy: { createdAt: "asc" }, take: 20 });
+  for (const job of jobs) {
+    try {
+      await db.pbxJob.update({ where: { id: job.id }, data: { status: "RUNNING", attempts: { increment: 1 } } });
+
+      const tenantLink: any = await db.tenantPbxLink.findUnique({ where: { tenantId: job.tenantId }, include: { pbxInstance: true } as any });
+      if (!tenantLink || tenantLink.status !== "LINKED" || !tenantLink.pbxInstance.isEnabled) {
+        throw new Error("PBX_NOT_LINKED");
+      }
+
+      const auth = decryptJson<{ token: string; secret?: string | null }>(tenantLink.pbxInstance.apiAuthEncrypted);
+      const pbx = getPbxClient({ baseUrl: tenantLink.pbxInstance.baseUrl, token: auth.token, secret: auth.secret || null });
+
+      if (job.type === "CREATE_EXTENSION") {
+        const payload = job.payload as any;
+        const created = await pbx.createExtension({ pbxTenantId: tenantLink.pbxTenantId || undefined, extensionNumber: String(payload.extensionNumber), displayName: String(payload.displayName) });
+        const dev = await pbx.createSipDevice({ pbxExtensionId: created.pbxExtensionId, enableWebrtc: !!payload.enableWebrtc, enableMobile: !!payload.enableMobile });
+        await db.pbxExtensionLink.upsert({
+          where: { tenantId_extensionId: { tenantId: job.tenantId, extensionId: String(payload.extensionId) } },
+          create: {
+            tenantId: job.tenantId,
+            extensionId: String(payload.extensionId),
+            pbxExtensionId: created.pbxExtensionId,
+            pbxSipUsername: dev.sipUsername || created.sipUsername,
+            pbxDeviceId: dev.pbxDeviceId || null,
+            isSuspended: false
+          },
+          update: {
+            pbxExtensionId: created.pbxExtensionId,
+            pbxSipUsername: dev.sipUsername || created.sipUsername,
+            pbxDeviceId: dev.pbxDeviceId || null,
+            isSuspended: false
+          }
+        });
+      }
+
+      if (job.type === "SUSPEND_EXTENSION") {
+        const payload = job.payload as any;
+        await pbx.suspendExtension(String(payload.pbxExtensionId), true);
+        if (payload.pbxExtensionLinkId) await db.pbxExtensionLink.update({ where: { id: String(payload.pbxExtensionLinkId) }, data: { isSuspended: true } });
+      }
+
+      if (job.type === "UNSUSPEND_EXTENSION") {
+        const payload = job.payload as any;
+        await pbx.suspendExtension(String(payload.pbxExtensionId), false);
+        if (payload.pbxExtensionLinkId) await db.pbxExtensionLink.update({ where: { id: String(payload.pbxExtensionLinkId) }, data: { isSuspended: false } });
+      }
+
+      if (job.type === "ASSIGN_DID") {
+        const payload = job.payload as any;
+        const number = await db.phoneNumber.findFirst({ where: { id: String(payload.phoneNumberId), tenantId: job.tenantId } });
+        if (!number) throw new Error("NUMBER_NOT_FOUND");
+        const did = await pbx.createDidRoute({ pbxTenantId: tenantLink.pbxTenantId || undefined, did: number.phoneNumber, routeType: String(payload.routeType), routeTarget: String(payload.routeTarget) });
+        await db.pbxDidLink.upsert({
+          where: { tenantId_phoneNumberId: { tenantId: job.tenantId, phoneNumberId: number.id } },
+          create: { tenantId: job.tenantId, phoneNumberId: number.id, pbxDidId: did.pbxDidId, routeType: String(payload.routeType) as any, routeTarget: String(payload.routeTarget) },
+          update: { pbxDidId: did.pbxDidId, routeType: String(payload.routeType) as any, routeTarget: String(payload.routeTarget) }
+        });
+      }
+
+      await db.pbxJob.update({ where: { id: job.id }, data: { status: "COMPLETED", lastError: null } });
+      await db.tenantPbxLink.update({ where: { id: tenantLink.id }, data: { status: "LINKED", lastError: null, lastSyncAt: new Date() } });
+      await db.auditLog.create({ data: { tenantId: job.tenantId, action: "PBX_JOB_COMPLETED", entityType: "PbxJob", entityId: job.id } });
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const backoffMinutes = Math.min(60, 2 ** Math.min(6, attempts));
+      await db.pbxJob.update({ where: { id: job.id }, data: { status: "FAILED", lastError: String(e?.message || "PBX_JOB_FAILED"), nextRunAt: new Date(Date.now() + backoffMinutes * 60 * 1000) } });
+      await db.auditLog.create({ data: { tenantId: job.tenantId, action: "PBX_JOB_FAILED", entityType: "PbxJob", entityId: job.id } });
+    }
+  }
+}
+
+async function runPbxCdrSyncCycle(): Promise<void> {
+  const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
+  for (const link of links) {
+    try {
+      if (!link?.pbxInstance) continue;
+      const auth = decryptJson<{ token: string; secret?: string | null }>(link.pbxInstance.apiAuthEncrypted);
+      const pbx = getPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret || null });
+      const cursor = await db.pbxCdrCursor.upsert({
+        where: { tenantId: link.tenantId },
+        create: { tenantId: link.tenantId, pbxInstanceId: link.pbxInstanceId, lastSeenCdrId: null, lastSeenTimestamp: null },
+        update: { pbxInstanceId: link.pbxInstanceId }
+      });
+
+      const fetched = await pbx.fetchCdrs({ pbxTenantId: link.pbxTenantId || undefined, lastSeenCdrId: cursor.lastSeenCdrId || undefined, lastSeenTimestamp: cursor.lastSeenTimestamp ? cursor.lastSeenTimestamp.toISOString() : undefined, limit: 200 });
+      for (const rec of fetched.records) {
+        await db.callRecord.upsert({
+          where: { tenantId_pbxCallId: { tenantId: link.tenantId, pbxCallId: rec.id } },
+          create: {
+            tenantId: link.tenantId,
+            direction: rec.direction,
+            fromNumber: rec.from,
+            toNumber: rec.to,
+            startedAt: new Date(rec.startedAt),
+            durationSec: rec.durationSec,
+            disposition: rec.disposition || null,
+            pbxCallId: rec.id
+          },
+          update: {
+            direction: rec.direction,
+            fromNumber: rec.from,
+            toNumber: rec.to,
+            startedAt: new Date(rec.startedAt),
+            durationSec: rec.durationSec,
+            disposition: rec.disposition || null
+          }
+        });
+      }
+
+      await db.pbxCdrCursor.update({
+        where: { tenantId: link.tenantId },
+        data: {
+          lastSeenCdrId: fetched.nextCursor?.lastSeenCdrId || cursor.lastSeenCdrId,
+          lastSeenTimestamp: fetched.nextCursor?.lastSeenTimestamp ? new Date(fetched.nextCursor.lastSeenTimestamp) : cursor.lastSeenTimestamp,
+          pbxInstanceId: link.pbxInstanceId
+        }
+      });
+      await db.tenantPbxLink.update({ where: { id: link.id }, data: { lastSyncAt: new Date(), status: "LINKED", lastError: null } });
+    } catch (e: any) {
+      await db.tenantPbxLink.update({ where: { id: link.id }, data: { status: "ERROR", lastError: String(e?.message || "PBX_CDR_SYNC_FAILED") } });
+      await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_CDR_SYNC_FAILED", entityType: "TenantPbxLink", entityId: link.id } });
+    }
+  }
+}
+
 const worker = new Worker(
   "sms-send",
   async (job) => {
@@ -470,3 +610,14 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 runDunningCycle().catch((err) => console.error("initial dunning cycle failed", err?.message || err));
+
+setInterval(() => {
+  runPbxJobCycle().catch((err) => console.error("pbx job cycle failed", err?.message || err));
+}, 60 * 1000);
+
+setInterval(() => {
+  runPbxCdrSyncCycle().catch((err) => console.error("pbx cdr sync failed", err?.message || err));
+}, 2 * 60 * 1000);
+
+runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));
+runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed", err?.message || err));

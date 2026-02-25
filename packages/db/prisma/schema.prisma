@@ -76,6 +76,27 @@ enum PaymentStatus {
   FAILED
 }
 
+enum PbxLinkStatus {
+  LINKED
+  UNLINKED
+  ERROR
+}
+
+enum PbxRouteType {
+  MAIN_IVR
+  RING_GROUP
+  QUEUE
+  EXTENSION
+  CUSTOM
+}
+
+enum PbxJobStatus {
+  QUEUED
+  RUNNING
+  FAILED
+  COMPLETED
+}
+
 model Tenant {
   id                            String                 @id @default(cuid())
   name                          String
@@ -119,6 +140,13 @@ model Tenant {
   usageLedger                   UsageLedger[]
   receipts                      Receipt[]
   alerts                        Alert[]
+  extensions                    Extension[]
+  callRecords                   CallRecord[]
+  pbxTenantLink                 TenantPbxLink?
+  pbxExtensionLinks             PbxExtensionLink[]
+  pbxDidLinks                   PbxDidLink[]
+  pbxCdrCursor                  PbxCdrCursor?
+  pbxJobs                       PbxJob[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
   defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
@@ -153,7 +181,7 @@ model Subscription {
   providerCustomerId      String?
   providerSubscriptionId  String?
   providerPaymentMethodId String?
-  billingEmail           String?
+  billingEmail            String?
   paymentMethodBrand      String?
   paymentMethodLast4      String?
   paymentMethodExpMonth   String?
@@ -172,7 +200,7 @@ model Subscription {
 }
 
 model PaymentEvent {
-  id              String       @id @default(cuid())
+  id              String        @id @default(cuid())
   tenantId        String
   subscriptionId  String?
   provider        String
@@ -182,25 +210,25 @@ model PaymentEvent {
   amountCents     Int?
   currency        String?
   payload         Json
-  receivedAt      DateTime     @default(now())
-  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receivedAt      DateTime      @default(now())
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
-  @@index([tenantId, receivedAt])
   @@unique([provider, providerEventId])
+  @@index([tenantId, receivedAt])
 }
 
 model UsageLedger {
-  id            String   @id @default(cuid())
-  tenantId      String
-  type          String
-  quantity      Int      @default(1)
+  id             String   @id @default(cuid())
+  tenantId       String
+  type           String
+  quantity       Int      @default(1)
   unitPriceCents Int
-  totalCents    Int
-  referenceId   String?
-  occurredAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  totalCents     Int
+  referenceId    String?
+  occurredAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, occurredAt])
 }
@@ -339,6 +367,7 @@ model PhoneNumber {
   tenant            Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
   defaultForTenants Tenant[]            @relation("TenantDefaultSmsFromNumber")
   smsMessages       SmsMessage[]        @relation("SmsMessageFromNumber")
+  pbxDidLinks       PbxDidLink[]
 
   @@index([tenantId, status])
   @@index([provider, status])
@@ -376,7 +405,6 @@ model AuditLog {
   actorUser   User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 }
 
-
 model Receipt {
   id             String       @id @default(cuid())
   tenantId       String
@@ -392,16 +420,139 @@ model Receipt {
 }
 
 model Alert {
-  id          String   @id @default(cuid())
-  tenantId    String
-  severity    String
-  category    String
-  message     String
-  metadata    Json?
-  createdAt   DateTime @default(now())
+  id             String    @id @default(cuid())
+  tenantId       String
+  severity       String
+  category       String
+  message        String
+  metadata       Json?
+  createdAt      DateTime  @default(now())
   acknowledgedAt DateTime?
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
   @@index([severity, createdAt])
+}
+
+model Extension {
+  id          String            @id @default(cuid())
+  tenantId    String
+  extNumber   String
+  displayName String
+  status      String            @default("ACTIVE")
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pbxLink     PbxExtensionLink?
+
+  @@unique([tenantId, extNumber])
+  @@index([tenantId, status])
+}
+
+model PbxInstance {
+  id               String          @id @default(cuid())
+  name             String
+  baseUrl          String
+  apiAuthEncrypted String
+  isEnabled        Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  tenantLinks      TenantPbxLink[]
+  cdrCursors       PbxCdrCursor[]
+  pbxJobs          PbxJob[]
+}
+
+model TenantPbxLink {
+  id            String        @id @default(cuid())
+  tenantId      String        @unique
+  pbxInstanceId String
+  pbxTenantId   String?
+  pbxDomain     String?
+  status        PbxLinkStatus @default(LINKED)
+  lastSyncAt    DateTime?
+  lastError     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pbxInstance   PbxInstance   @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+}
+
+model PbxExtensionLink {
+  id             String    @id @default(cuid())
+  tenantId       String
+  extensionId    String    @unique
+  pbxExtensionId String
+  pbxSipUsername String
+  pbxDeviceId    String?
+  isSuspended    Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension      Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, extensionId])
+  @@index([pbxExtensionId])
+}
+
+model PbxDidLink {
+  id            String       @id @default(cuid())
+  tenantId      String
+  phoneNumberId String
+  pbxDidId      String
+  routeType     PbxRouteType
+  routeTarget   String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumber   PhoneNumber  @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phoneNumberId])
+  @@index([tenantId, pbxDidId])
+}
+
+model PbxCdrCursor {
+  id                String      @id @default(cuid())
+  tenantId          String      @unique
+  pbxInstanceId     String
+  lastSeenCdrId     String?
+  lastSeenTimestamp DateTime?
+  updatedAt         DateTime    @updatedAt
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pbxInstance       PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+}
+
+model CallRecord {
+  id          String   @id @default(cuid())
+  tenantId    String
+  direction   String
+  fromNumber  String
+  toNumber    String
+  startedAt   DateTime
+  durationSec Int      @default(0)
+  disposition String?
+  pbxCallId   String
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, pbxCallId])
+  @@index([tenantId, startedAt])
+}
+
+model PbxJob {
+  id            String       @id @default(cuid())
+  tenantId      String
+  pbxInstanceId String?
+  type          String
+  payload       Json
+  status        PbxJobStatus @default(QUEUED)
+  attempts      Int          @default(0)
+  nextRunAt     DateTime     @default(now())
+  lastError     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pbxInstance   PbxInstance? @relation(fields: [pbxInstanceId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextRunAt])
+  @@index([tenantId, createdAt])
 }

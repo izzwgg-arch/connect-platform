@@ -467,3 +467,5 @@ export function validateTwilioRequest(authToken: string, signature: string, url:
 }
 
 export * from "./sola-cardknox";
+
+export * from "./pbx-wirepbx";

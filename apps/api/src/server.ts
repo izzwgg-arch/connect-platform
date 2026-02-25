@@ -18,7 +18,8 @@ import {
   validateVoipMsCredentials,
   VoipMsCredentials,
   VoipMsNumberProvider,
-  SolaCardknoxAdapter
+  SolaCardknoxAdapter,
+  WirePbxClient
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
@@ -95,6 +96,46 @@ function getSolaAdapter(): SolaCardknoxAdapter {
     webhookSignatureHeader: process.env.SOLA_CARDKNOX_WEBHOOK_SIGNATURE_HEADER || "x-sola-signature",
     webhookTimestampHeader: process.env.SOLA_CARDKNOX_WEBHOOK_TIMESTAMP_HEADER || "x-sola-timestamp"
   });
+}
+
+
+function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: string }): WirePbxClient {
+  const simulate = (process.env.PBX_SIMULATE || "false").toLowerCase() === "true";
+  const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
+  const token = config?.token || process.env.PBX_API_TOKEN;
+  const secret = config?.secret || process.env.PBX_API_SECRET;
+  return new WirePbxClient({
+    baseUrl,
+    apiToken: token,
+    apiSecret: secret,
+    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+    simulate
+  });
+}
+
+async function queuePbxJob(input: { tenantId: string; pbxInstanceId?: string | null; type: string; payload: any; lastError?: string | null }) {
+  return db.pbxJob.create({
+    data: {
+      tenantId: input.tenantId,
+      pbxInstanceId: input.pbxInstanceId || null,
+      type: input.type,
+      payload: input.payload as any,
+      status: "QUEUED",
+      attempts: 0,
+      nextRunAt: new Date(),
+      lastError: input.lastError || null
+    }
+  });
+}
+
+async function getTenantPbxLinkOrThrow(tenantId: string) {
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId }, include: { pbxInstance: true } });
+  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) {
+    const err: any = new Error("PBX_NOT_LINKED");
+    err.code = "PBX_NOT_LINKED";
+    throw err;
+  }
+  return link;
 }
 
 async function getOrCreateSubscription(tenantId: string) {
@@ -1336,6 +1377,313 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
   await audit({ tenantId: message.campaign.tenantId, action: "SMS_WEBHOOK_STATUS_UPDATED", entityType: "SmsMessage", entityId: message.id, provider: "TWILIO" });
 
   return { ok: true };
+});
+
+
+app.get("/pbx/status", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: admin.tenantId }, include: { pbxInstance: true } });
+  const pendingJobs = await db.pbxJob.count({ where: { tenantId: admin.tenantId, status: { in: ["QUEUED", "RUNNING"] } } });
+  return {
+    linked: !!link,
+    status: link?.status || "UNLINKED",
+    pbxInstanceId: link?.pbxInstanceId || null,
+    pbxInstanceName: link?.pbxInstance?.name || null,
+    pbxDomain: link?.pbxDomain || null,
+    pbxTenantId: link?.pbxTenantId || null,
+    lastSyncAt: link?.lastSyncAt || null,
+    lastError: link?.lastError || null,
+    pendingJobs
+  };
+});
+
+app.post("/pbx/link", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({ pbxInstanceId: z.string(), pbxTenantId: z.string().optional(), pbxDomain: z.string().optional() }).parse(req.body || {});
+
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.pbxInstanceId } });
+  if (!instance || !instance.isEnabled) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+
+  const linked = await db.tenantPbxLink.upsert({
+    where: { tenantId: admin.tenantId },
+    create: {
+      tenantId: admin.tenantId,
+      pbxInstanceId: input.pbxInstanceId,
+      pbxTenantId: input.pbxTenantId || null,
+      pbxDomain: input.pbxDomain || null,
+      status: "LINKED"
+    },
+    update: {
+      pbxInstanceId: input.pbxInstanceId,
+      pbxTenantId: input.pbxTenantId || null,
+      pbxDomain: input.pbxDomain || null,
+      status: "LINKED",
+      lastError: null
+    }
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_LINKED", entityType: "TenantPbxLink", entityId: linked.id });
+  return linked;
+});
+
+app.post("/pbx/unlink", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const linked = await db.tenantPbxLink.findUnique({ where: { tenantId: admin.tenantId } });
+  if (!linked) return { ok: true };
+  const updated = await db.tenantPbxLink.update({ where: { id: linked.id }, data: { status: "UNLINKED" } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_UNLINKED", entityType: "TenantPbxLink", entityId: updated.id });
+  return { ok: true, status: updated.status };
+});
+
+app.get("/pbx/extensions", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const rows = await db.pbxExtensionLink.findMany({ where: { tenantId: admin.tenantId }, include: { extension: true }, orderBy: { createdAt: "desc" } });
+  return rows;
+});
+
+app.post("/pbx/extensions", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  if (!checkBillingRateLimit(`pbx-ext-create:${admin.tenantId}`, 30, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({ extensionNumber: z.string().min(2), displayName: z.string().min(2), enableWebrtc: z.boolean().default(true), enableMobile: z.boolean().default(true) }).parse(req.body || {});
+  const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  const ext = await db.extension.create({ data: { tenantId: admin.tenantId, extNumber: input.extensionNumber, displayName: input.displayName } });
+
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const pbx = getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+
+  try {
+    const created = await pbx.createExtension({ pbxTenantId: link.pbxTenantId || undefined, extensionNumber: input.extensionNumber, displayName: input.displayName });
+    const dev = await pbx.createSipDevice({ pbxExtensionId: created.pbxExtensionId, enableWebrtc: input.enableWebrtc, enableMobile: input.enableMobile });
+
+    const saved = await db.pbxExtensionLink.create({
+      data: {
+        tenantId: admin.tenantId,
+        extensionId: ext.id,
+        pbxExtensionId: created.pbxExtensionId,
+        pbxSipUsername: dev.sipUsername || created.sipUsername,
+        pbxDeviceId: dev.pbxDeviceId || null,
+        isSuspended: false
+      }
+    });
+
+    const provisioning = {
+      sipServer: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
+      sipUsername: saved.pbxSipUsername,
+      sipPassword: dev.sipPassword,
+      sipDomain: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
+      outboundProxy: null,
+      stun: null,
+      turn: null,
+      websocketEndpoint: process.env.PBX_WS_ENDPOINT || null,
+      qrPayload: JSON.stringify({
+        type: "voice-provisioning",
+        sipServer: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
+        sipUsername: saved.pbxSipUsername,
+        sipPassword: dev.sipPassword,
+        sipDomain: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname
+      })
+    };
+
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_CREATED", entityType: "PbxExtensionLink", entityId: saved.id });
+    return { extension: ext, pbxLink: saved, provisioning };
+  } catch (e: any) {
+    await queuePbxJob({ tenantId: admin.tenantId, pbxInstanceId: link.pbxInstanceId, type: "CREATE_EXTENSION", payload: { extensionId: ext.id, extensionNumber: input.extensionNumber, displayName: input.displayName, enableWebrtc: input.enableWebrtc, enableMobile: input.enableMobile }, lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") });
+    await db.tenantPbxLink.update({ where: { id: link.id }, data: { status: "ERROR", lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_QUEUED", entityType: "Extension", entityId: ext.id });
+    return reply.status(202).send({ queued: true, error: "PBX_UNAVAILABLE", extensionId: ext.id });
+  }
+});
+
+app.post("/pbx/extensions/:id/suspend", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.pbxExtensionLink.findFirst({ where: { id, tenantId: admin.tenantId }, include: { extension: true, tenant: { include: { pbxTenantLink: { include: { pbxInstance: true } } } } } as any });
+  if (!row) return reply.status(404).send({ error: "extension_not_found" });
+
+  const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  try {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).suspendExtension(row.pbxExtensionId, true);
+    await db.pbxExtensionLink.update({ where: { id: row.id }, data: { isSuspended: true } });
+    await db.extension.update({ where: { id: row.extensionId }, data: { status: "SUSPENDED" } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SUSPENDED", entityType: "PbxExtensionLink", entityId: row.id });
+    return { ok: true };
+  } catch (e: any) {
+    await queuePbxJob({ tenantId: admin.tenantId, pbxInstanceId: link.pbxInstanceId, type: "SUSPEND_EXTENSION", payload: { pbxExtensionId: row.pbxExtensionId, pbxExtensionLinkId: row.id }, lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") });
+    return reply.status(202).send({ queued: true });
+  }
+});
+
+app.post("/pbx/extensions/:id/unsuspend", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.pbxExtensionLink.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!row) return reply.status(404).send({ error: "extension_not_found" });
+  const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  try {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).suspendExtension(row.pbxExtensionId, false);
+    await db.pbxExtensionLink.update({ where: { id: row.id }, data: { isSuspended: false } });
+    await db.extension.update({ where: { id: row.extensionId }, data: { status: "ACTIVE" } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_UNSUSPENDED", entityType: "PbxExtensionLink", entityId: row.id });
+    return { ok: true };
+  } catch {
+    await queuePbxJob({ tenantId: admin.tenantId, pbxInstanceId: link.pbxInstanceId, type: "UNSUSPEND_EXTENSION", payload: { pbxExtensionId: row.pbxExtensionId, pbxExtensionLinkId: row.id } });
+    return reply.status(202).send({ queued: true });
+  }
+});
+
+app.post("/pbx/extensions/:id/reset-sip-password", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.pbxExtensionLink.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!row) return reply.status(404).send({ error: "extension_not_found" });
+  const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
+  return { sipPassword: out.sipPassword };
+});
+
+app.get("/pbx/dids", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.pbxDidLink.findMany({ where: { tenantId: admin.tenantId }, include: { phoneNumber: true }, orderBy: { createdAt: "desc" } });
+});
+
+app.post("/pbx/dids/assign", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({ phoneNumberId: z.string(), routeType: z.enum(["MAIN_IVR", "RING_GROUP", "QUEUE", "EXTENSION", "CUSTOM"]), routeTarget: z.string().min(1) }).parse(req.body || {});
+  const number = await db.phoneNumber.findFirst({ where: { id: input.phoneNumberId, tenantId: admin.tenantId } });
+  if (!number) return reply.status(404).send({ error: "number_not_found" });
+
+  const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  try {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    const created = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).createDidRoute({ pbxTenantId: link.pbxTenantId || undefined, did: number.phoneNumber, routeType: input.routeType, routeTarget: input.routeTarget });
+    const did = await db.pbxDidLink.upsert({
+      where: { tenantId_phoneNumberId: { tenantId: admin.tenantId, phoneNumberId: number.id } },
+      create: { tenantId: admin.tenantId, phoneNumberId: number.id, pbxDidId: created.pbxDidId, routeType: input.routeType, routeTarget: input.routeTarget },
+      update: { pbxDidId: created.pbxDidId, routeType: input.routeType, routeTarget: input.routeTarget }
+    });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_DID_ASSIGNED", entityType: "PbxDidLink", entityId: did.id });
+    return did;
+  } catch (e: any) {
+    await queuePbxJob({ tenantId: admin.tenantId, pbxInstanceId: link.pbxInstanceId, type: "ASSIGN_DID", payload: { phoneNumberId: number.id, routeType: input.routeType, routeTarget: input.routeTarget }, lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") });
+    return reply.status(202).send({ queued: true, error: "PBX_UNAVAILABLE" });
+  }
+});
+
+app.post("/pbx/dids/unassign", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({ phoneNumberId: z.string() }).parse(req.body || {});
+  const row = await db.pbxDidLink.findFirst({ where: { tenantId: admin.tenantId, phoneNumberId: input.phoneNumberId } });
+  if (!row) return { ok: true };
+  await db.pbxDidLink.delete({ where: { id: row.id } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_DID_UNASSIGNED", entityType: "PbxDidLink", entityId: row.id });
+  return { ok: true };
+});
+
+app.get("/voice/calls", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.callRecord.findMany({ where: { tenantId: admin.tenantId }, orderBy: { startedAt: "desc" }, take: 200 });
+});
+
+app.get("/voice/provisioning", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.pbxExtensionLink.findMany({ where: { tenantId: admin.tenantId }, include: { extension: true }, orderBy: { createdAt: "desc" } });
+});
+
+app.get("/voice/pending-jobs", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.pbxJob.findMany({ where: { tenantId: admin.tenantId, status: { in: ["QUEUED", "RUNNING", "FAILED"] } }, orderBy: { createdAt: "desc" }, take: 100 });
+});
+
+app.post("/admin/pbx/instances", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ name: z.string().min(2), baseUrl: z.string().url(), token: z.string().min(4), secret: z.string().optional(), isEnabled: z.boolean().default(true) }).parse(req.body || {});
+  const created = await db.pbxInstance.create({ data: { name: input.name, baseUrl: input.baseUrl, isEnabled: input.isEnabled, apiAuthEncrypted: encryptJson({ token: input.token, secret: input.secret || null }) } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_CREATED", entityType: "PbxInstance", entityId: created.id });
+  return { id: created.id, name: created.name, baseUrl: created.baseUrl, isEnabled: created.isEnabled, createdAt: created.createdAt };
+});
+
+app.get("/admin/pbx/instances", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  return db.pbxInstance.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, name: true, baseUrl: true, isEnabled: true, createdAt: true, updatedAt: true } });
+});
+
+app.patch("/admin/pbx/instances/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const { id } = req.params as { id: string };
+  const input = z.object({ name: z.string().min(2).optional(), baseUrl: z.string().url().optional(), token: z.string().min(4).optional(), secret: z.string().optional(), isEnabled: z.boolean().optional() }).parse(req.body || {});
+  const curr = await db.pbxInstance.findUnique({ where: { id } });
+  if (!curr) return reply.status(404).send({ error: "not_found" });
+
+  let apiAuthEncrypted = curr.apiAuthEncrypted;
+  if (input.token || input.secret) {
+    const existing = decryptJson<{ token: string; secret?: string | null }>(curr.apiAuthEncrypted);
+    apiAuthEncrypted = encryptJson({ token: input.token || existing.token, secret: input.secret !== undefined ? input.secret : existing.secret || null });
+  }
+
+  const updated = await db.pbxInstance.update({ where: { id }, data: { name: input.name, baseUrl: input.baseUrl, isEnabled: input.isEnabled, apiAuthEncrypted } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_UPDATED", entityType: "PbxInstance", entityId: updated.id });
+  return { id: updated.id, name: updated.name, baseUrl: updated.baseUrl, isEnabled: updated.isEnabled, updatedAt: updated.updatedAt };
+});
+
+app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const { id } = req.params as { id: string };
+  const instance = await db.pbxInstance.findUnique({ where: { id } });
+  if (!instance) return reply.status(404).send({ error: "not_found" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+
+  try {
+    await getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).healthCheck();
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_OK", entityType: "PbxInstance", entityId: instance.id });
+    return { ok: true };
+  } catch (e: any) {
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_FAILED", entityType: "PbxInstance", entityId: instance.id });
+    return reply.status(400).send({ error: String(e?.code || "PBX_UNAVAILABLE") });
+  }
 });
 
 app.get("/billing/subscription", async (req, reply) => {
