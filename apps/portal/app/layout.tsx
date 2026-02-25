@@ -15,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/dashboard">Dashboard</Link>
             <Link href="/dashboard/numbers">Numbers</Link>
             <Link href="/dashboard/extensions">Extensions</Link>
+            <Link href="/dashboard/voice/phone">Phone</Link>
             <Link href="/dashboard/sms">SMS</Link>
             <Link href="/dashboard/settings/providers">Provider Settings</Link>
             <Link href="/dashboard/billing">Billing</Link>

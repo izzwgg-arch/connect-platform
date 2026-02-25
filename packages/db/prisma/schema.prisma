@@ -97,6 +97,11 @@ enum PbxJobStatus {
   COMPLETED
 }
 
+enum DtmfMode {
+  RFC2833
+  SIP_INFO
+}
+
 model Tenant {
   id                            String                 @id @default(cuid())
   name                          String
@@ -126,6 +131,12 @@ model Tenant {
   numberPurchaseEnabled         Boolean                @default(true)
   smsSubscriptionRequired       Boolean                @default(true)
   smsBillingEnforced            Boolean                @default(true)
+  webrtcEnabled                 Boolean                @default(false)
+  sipWsUrl                      String?
+  sipDomain                     String?
+  iceServers                    Json?
+  outboundProxy                 String?
+  dtmfMode                      DtmfMode               @default(RFC2833)
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
@@ -165,6 +176,7 @@ model User {
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
+  ownedExtensions            Extension[]          @relation("ExtensionOwner")
 }
 
 model Subscription {
@@ -439,14 +451,17 @@ model Extension {
   tenantId    String
   extNumber   String
   displayName String
+  ownerUserId String?
   status      String            @default("ACTIVE")
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerUser   User?             @relation("ExtensionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   pbxLink     PbxExtensionLink?
 
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])
+  @@index([tenantId, ownerUserId])
 }
 
 model PbxInstance {
@@ -478,17 +493,19 @@ model TenantPbxLink {
 }
 
 model PbxExtensionLink {
-  id             String    @id @default(cuid())
-  tenantId       String
-  extensionId    String    @unique
-  pbxExtensionId String
-  pbxSipUsername String
-  pbxDeviceId    String?
-  isSuspended    Boolean   @default(false)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  extension      Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  id                  String    @id @default(cuid())
+  tenantId            String
+  extensionId         String    @unique
+  pbxExtensionId      String
+  pbxSipUsername      String
+  sipPasswordHash     String?
+  sipPasswordIssuedAt DateTime?
+  pbxDeviceId         String?
+  isSuspended         Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension           Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, extensionId])
   @@index([pbxExtensionId])

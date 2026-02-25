@@ -19,6 +19,7 @@ services:
       PBX_API_SECRET: ${PBX_API_SECRET:-}
       PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
       PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-}
+      VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
     ports:
       - "127.0.0.1:3001:3001"
     networks:
@@ -70,6 +71,7 @@ services:
       PBX_API_SECRET: ${PBX_API_SECRET:-}
       PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
       PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-}
+      VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
     networks:
       - default
       - infra_default

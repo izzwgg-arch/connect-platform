@@ -42,6 +42,7 @@ const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { m
 const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
+const voiceSimulate = (process.env.VOICE_SIMULATE || "false").toLowerCase() === "true";
 if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true") {
   throw new Error("SOLA_CARDKNOX_SIMULATE is not allowed in production");
 }
@@ -136,6 +137,31 @@ async function getTenantPbxLinkOrThrow(tenantId: string) {
     throw err;
   }
   return link;
+}
+
+function resolveWebrtcConfig(tenant: any, link: any) {
+  const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
+  return {
+    webrtcEnabled: !!tenant?.webrtcEnabled,
+    sipWsUrl: tenant?.sipWsUrl || process.env.PBX_WS_ENDPOINT || null,
+    sipDomain: domain,
+    outboundProxy: tenant?.outboundProxy || null,
+    iceServers: Array.isArray(tenant?.iceServers) ? tenant.iceServers : [],
+    dtmfMode: tenant?.dtmfMode || "RFC2833"
+  };
+}
+
+function buildVoiceProvisioningBundle(tenant: any, link: any, sipUsername: string, sipPassword: string | null) {
+  const cfg = resolveWebrtcConfig(tenant, link);
+  return {
+    sipUsername,
+    sipPassword,
+    sipWsUrl: cfg.sipWsUrl,
+    sipDomain: cfg.sipDomain,
+    outboundProxy: cfg.outboundProxy,
+    iceServers: cfg.iceServers,
+    dtmfMode: cfg.dtmfMode
+  };
 }
 
 async function getOrCreateSubscription(tenantId: string) {
@@ -1459,7 +1485,7 @@ app.post("/pbx/extensions", async (req, reply) => {
   const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
-  const ext = await db.extension.create({ data: { tenantId: admin.tenantId, extNumber: input.extensionNumber, displayName: input.displayName } });
+  const ext = await db.extension.create({ data: { tenantId: admin.tenantId, extNumber: input.extensionNumber, displayName: input.displayName, ownerUserId: admin.sub } });
 
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
   const pbx = getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
@@ -1468,34 +1494,21 @@ app.post("/pbx/extensions", async (req, reply) => {
     const created = await pbx.createExtension({ pbxTenantId: link.pbxTenantId || undefined, extensionNumber: input.extensionNumber, displayName: input.displayName });
     const dev = await pbx.createSipDevice({ pbxExtensionId: created.pbxExtensionId, enableWebrtc: input.enableWebrtc, enableMobile: input.enableMobile });
 
+    const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
     const saved = await db.pbxExtensionLink.create({
       data: {
         tenantId: admin.tenantId,
         extensionId: ext.id,
         pbxExtensionId: created.pbxExtensionId,
         pbxSipUsername: dev.sipUsername || created.sipUsername,
+        sipPasswordHash: dev.sipPassword ? await bcrypt.hash(dev.sipPassword, 10) : null,
+        sipPasswordIssuedAt: dev.sipPassword ? new Date() : null,
         pbxDeviceId: dev.pbxDeviceId || null,
         isSuspended: false
       }
     });
 
-    const provisioning = {
-      sipServer: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
-      sipUsername: saved.pbxSipUsername,
-      sipPassword: dev.sipPassword,
-      sipDomain: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
-      outboundProxy: null,
-      stun: null,
-      turn: null,
-      websocketEndpoint: process.env.PBX_WS_ENDPOINT || null,
-      qrPayload: JSON.stringify({
-        type: "voice-provisioning",
-        sipServer: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname,
-        sipUsername: saved.pbxSipUsername,
-        sipPassword: dev.sipPassword,
-        sipDomain: link.pbxDomain || new URL(link.pbxInstance.baseUrl).hostname
-      })
-    };
+    const provisioning = buildVoiceProvisioningBundle(tenantCfg, link, saved.pbxSipUsername, dev.sipPassword || null);
 
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_CREATED", entityType: "PbxExtensionLink", entityId: saved.id });
     return { extension: ext, pbxLink: saved, provisioning };
@@ -1561,10 +1574,19 @@ app.post("/pbx/extensions/:id/reset-sip-password", async (req, reply) => {
   const link = await getTenantPbxLinkOrThrow(admin.tenantId).catch(() => null);
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
-  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-  const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+  let sipPassword = "";
+  if (voiceSimulate) {
+    sipPassword = `sim-webrtc-${Date.now()}`;
+  } else {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+    sipPassword = out.sipPassword;
+  }
+
+  await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() } });
+  const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
-  return { sipPassword: out.sipPassword };
+  return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row.pbxSipUsername, sipPassword) };
 });
 
 app.get("/pbx/dids", async (req, reply) => {
@@ -1608,6 +1630,97 @@ app.post("/pbx/dids/unassign", async (req, reply) => {
   await db.pbxDidLink.delete({ where: { id: row.id } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_DID_UNASSIGNED", entityType: "PbxDidLink", entityId: row.id });
   return { ok: true };
+});
+
+const iceServerSchema = z.object({
+  urls: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
+  username: z.string().optional(),
+  credential: z.string().optional()
+});
+
+app.get("/voice/me/extension", async (req, reply) => {
+  const user = getUser(req);
+  const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
+  if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  const row = await db.pbxExtensionLink.findFirst({
+    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    include: { extension: true },
+    orderBy: { createdAt: "asc" }
+  });
+  if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
+
+  const cfg = resolveWebrtcConfig(tenant, link);
+  return {
+    extensionId: row.extension.id,
+    pbxExtensionLinkId: row.id,
+    extensionNumber: row.extension.extNumber,
+    displayName: row.extension.displayName,
+    sipUsername: row.pbxSipUsername,
+    hasSipPassword: !!row.sipPasswordIssuedAt,
+    webrtcEnabled: cfg.webrtcEnabled,
+    sipWsUrl: cfg.sipWsUrl,
+    sipDomain: cfg.sipDomain,
+    outboundProxy: cfg.outboundProxy,
+    iceServers: cfg.iceServers,
+    dtmfMode: cfg.dtmfMode
+  };
+});
+
+app.post("/voice/me/reset-sip-password", async (req, reply) => {
+  const user = getUser(req);
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  const row = await db.pbxExtensionLink.findFirst({
+    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    include: { extension: true },
+    orderBy: { createdAt: "asc" }
+  });
+  if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
+
+  let sipPassword = "";
+  if (voiceSimulate) {
+    sipPassword = `sim-webrtc-${Date.now()}`;
+  } else {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+    sipPassword = out.sipPassword;
+  }
+
+  await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() } });
+  const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "VOICE_ME_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
+
+  return {
+    sipPassword,
+    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword)
+  };
+});
+
+app.post("/voice/webrtc/test-config", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({
+    sipWsUrl: z.string().url().refine((v) => v.startsWith("wss://") || v.startsWith("ws://"), "sipWsUrl must use ws:// or wss://"),
+    sipDomain: z.string().min(1).regex(/^[a-zA-Z0-9.-]+$/),
+    outboundProxy: z.string().optional(),
+    dtmfMode: z.enum(["RFC2833", "SIP_INFO"]).default("RFC2833"),
+    iceServers: z.array(iceServerSchema).default([])
+  }).safeParse(req.body || {});
+
+  if (!input.success) {
+    return reply.status(400).send({ error: "INVALID_WEBRTC_CONFIG", details: input.error.flatten() });
+  }
+
+  return { ok: true, normalized: input.data };
 });
 
 app.get("/voice/calls", async (req, reply) => {
