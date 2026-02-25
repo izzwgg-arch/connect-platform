@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import bcrypt from "bcryptjs";
+import { createHmac, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
@@ -43,8 +44,16 @@ const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 const voiceSimulate = (process.env.VOICE_SIMULATE || "false").toLowerCase() === "true";
-const mobilePushSimulate = (process.env.MOBILE_PUSH_SIMULATE || "true").toLowerCase() !== "false";
+const mobilePushSimulate = (process.env.MOBILE_PUSH_SIMULATE || "false").toLowerCase() === "true";
 const mobilePushAccessToken = process.env.EXPO_PUSH_ACCESS_TOKEN || "";
+const pbxWebhookVerifyMode = (process.env.PBX_WEBHOOK_VERIFY_MODE || "token").toLowerCase();
+const pbxWebhookToken = process.env.PBX_WEBHOOK_TOKEN || "";
+const pbxWebhookSignatureSecret = process.env.PBX_WEBHOOK_SIGNATURE_SECRET || "";
+const pbxWebhookAllowedIps = (process.env.PBX_WEBHOOK_ALLOWED_IPS || "")
+  .split(",")
+  .map((x) => x.trim())
+  .filter(Boolean);
+
 if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true") {
   throw new Error("SOLA_CARDKNOX_SIMULATE is not allowed in production");
 }
@@ -107,12 +116,21 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
   const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
   const token = config?.token || process.env.PBX_API_TOKEN;
   const secret = config?.secret || process.env.PBX_API_SECRET;
+
   return new WirePbxClient({
     baseUrl,
     apiToken: token,
     apiSecret: secret,
     timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
-    simulate
+    simulate,
+    webhookRegisterPath: process.env.PBX_WEBHOOK_REGISTER_PATH,
+    webhookListPath: process.env.PBX_WEBHOOK_LIST_PATH,
+    webhookDeletePath: process.env.PBX_WEBHOOK_DELETE_PATH,
+    activeCallsPath: process.env.PBX_ACTIVE_CALLS_PATH,
+    supportsWebhooks: process.env.PBX_SUPPORTS_WEBHOOKS ? process.env.PBX_SUPPORTS_WEBHOOKS.toLowerCase() === "true" : undefined,
+    supportsActiveCallPolling: process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING ? process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING.toLowerCase() === "true" : undefined,
+    webhookSignatureMode: (process.env.PBX_WEBHOOK_SIGNATURE_MODE as "HMAC" | "TOKEN" | "NONE" | undefined) || undefined,
+    webhookEventTypes: (process.env.PBX_WEBHOOK_EVENT_TYPES || "").split(",").map((x) => x.trim()).filter(Boolean)
   });
 }
 
@@ -514,6 +532,245 @@ async function sendPushToUserDevices(input: {
   return { queued: messages.length, simulated: false };
 }
 
+type NormalizedPbxEvent = {
+  eventType: string;
+  state: "RINGING" | "ANSWERED" | "HANGUP" | "UNKNOWN";
+  pbxCallId: string;
+  fromNumber: string;
+  toExtension: string;
+  pbxTenantId?: string;
+  pbxExtensionId?: string;
+  startedAt: string;
+};
+
+function getRequestSourceIp(req: any): string {
+  return String((req.headers["x-forwarded-for"] || req.ip || "")).split(",")[0].trim();
+}
+
+function timingSafeEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+function verifyPbxWebhook(req: any, rawBody: string): { ok: boolean; reason?: string } {
+  const mode = pbxWebhookVerifyMode;
+  const sourceIp = getRequestSourceIp(req);
+
+  if (mode === "hmac") {
+    if (!pbxWebhookSignatureSecret) return { ok: false, reason: "PBX_WEBHOOK_SIGNATURE_SECRET_MISSING" };
+    const sigHeader = String(req.headers["x-pbx-signature"] || req.headers["x-wirepbx-signature"] || "").trim();
+    if (!sigHeader) return { ok: false, reason: "MISSING_SIGNATURE" };
+
+    const ts = String(req.headers["x-pbx-timestamp"] || req.headers["x-wirepbx-timestamp"] || "").trim();
+    const signingPayload = ts ? `${ts}.${rawBody}` : rawBody;
+    const expected = createHmac("sha256", pbxWebhookSignatureSecret).update(signingPayload).digest("hex");
+    const candidate = sigHeader.replace(/^sha256=/i, "");
+    return timingSafeEquals(expected, candidate) ? { ok: true } : { ok: false, reason: "INVALID_SIGNATURE" };
+  }
+
+  if (mode === "token") {
+    if (!pbxWebhookToken) return { ok: false, reason: "PBX_WEBHOOK_TOKEN_MISSING" };
+    const fromHeader = String(req.headers["x-pbx-webhook-token"] || req.headers["x-wirepbx-token"] || "").trim();
+    const authHeader = String(req.headers.authorization || "").trim();
+    const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+    const token = fromHeader || bearer;
+    return token && timingSafeEquals(token, pbxWebhookToken) ? { ok: true } : { ok: false, reason: "INVALID_TOKEN" };
+  }
+
+  if (mode === "ip_allowlist") {
+    if (!pbxWebhookAllowedIps.length) return { ok: false, reason: "PBX_WEBHOOK_ALLOWED_IPS_MISSING" };
+    return pbxWebhookAllowedIps.includes(sourceIp) ? { ok: true } : { ok: false, reason: "IP_NOT_ALLOWED" };
+  }
+
+  return { ok: false, reason: "UNKNOWN_VERIFY_MODE" };
+}
+
+function normalizePbxEvent(input: any): NormalizedPbxEvent {
+  const eventType = String(input?.eventType || input?.type || input?.event || input?.name || "unknown").toLowerCase();
+  const stateRaw = String(input?.state || input?.callState || input?.status || eventType).toLowerCase();
+  const state = stateRaw.includes("ring") || eventType.includes("ring")
+    ? "RINGING"
+    : stateRaw.includes("answer") || eventType.includes("answer")
+      ? "ANSWERED"
+      : stateRaw.includes("hang") || stateRaw.includes("end") || stateRaw.includes("term") || eventType.includes("hang")
+        ? "HANGUP"
+        : "UNKNOWN";
+
+  const callId = String(input?.pbxCallId || input?.callId || input?.call?.id || input?.uniqueid || input?.id || "").trim();
+  const toExtension = String(input?.toExtension || input?.calledExtension || input?.extension || input?.to || input?.dst || input?.call?.toExtension || "").trim();
+  const fromNumber = String(input?.from || input?.fromNumber || input?.caller || input?.src || input?.call?.from || "unknown").trim();
+  const pbxTenantId = input?.pbxTenantId || input?.tenantId || input?.tenantHint || input?.call?.tenantId;
+  const pbxExtensionId = input?.pbxExtensionId || input?.extensionId || input?.call?.extensionId;
+  const startedAt = String(input?.startedAt || input?.timestamp || input?.call?.startedAt || new Date().toISOString());
+
+  return {
+    eventType,
+    state,
+    pbxCallId: callId,
+    fromNumber,
+    toExtension,
+    pbxTenantId: pbxTenantId ? String(pbxTenantId) : undefined,
+    pbxExtensionId: pbxExtensionId ? String(pbxExtensionId) : undefined,
+    startedAt
+  };
+}
+
+async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantId: string; userId: string; extensionId: string | null; pbxInstanceId?: string; pbxTenantLinkId?: string } | null> {
+  if (!evt.toExtension && !evt.pbxExtensionId) return null;
+
+  if (evt.pbxTenantId) {
+    const tenantLink = await db.tenantPbxLink.findFirst({
+      where: { pbxTenantId: evt.pbxTenantId, status: "LINKED" },
+      include: { pbxInstance: true }
+    });
+    if (tenantLink) {
+      const extWhere: any = { tenantId: tenantLink.tenantId, extension: { status: "ACTIVE" } };
+      if (evt.pbxExtensionId) extWhere.pbxExtensionId = evt.pbxExtensionId;
+      const extLink = await db.pbxExtensionLink.findFirst({ where: extWhere, include: { extension: true } });
+      let extension = extLink?.extension || null;
+      if (!extension && evt.toExtension) {
+        extension = await db.extension.findFirst({ where: { tenantId: tenantLink.tenantId, extNumber: evt.toExtension, status: "ACTIVE" } });
+      }
+      if (!extension?.ownerUserId) return null;
+      return { tenantId: tenantLink.tenantId, userId: extension.ownerUserId, extensionId: extension.id, pbxInstanceId: tenantLink.pbxInstanceId, pbxTenantLinkId: tenantLink.id };
+    }
+  }
+
+  if (evt.toExtension) {
+    const candidates = await db.extension.findMany({
+      where: { extNumber: evt.toExtension, status: "ACTIVE", ownerUserId: { not: null } },
+      include: {
+        pbxLink: true,
+        tenant: { include: { pbxTenantLink: true } }
+      },
+      take: 20
+    });
+
+    const matched = candidates.find((c: any) => {
+      const tenantLink = c.tenant?.pbxTenantLink;
+      if (!tenantLink || tenantLink.status !== "LINKED") return false;
+      if (evt.pbxTenantId && tenantLink.pbxTenantId !== evt.pbxTenantId) return false;
+      if (evt.pbxExtensionId && c.pbxLink?.pbxExtensionId !== evt.pbxExtensionId) return false;
+      return true;
+    });
+
+    if (matched?.ownerUserId) {
+      return {
+        tenantId: matched.tenantId,
+        userId: matched.ownerUserId,
+        extensionId: matched.id,
+        pbxInstanceId: matched.tenant?.pbxTenantLink?.pbxInstanceId,
+        pbxTenantLinkId: matched.tenant?.pbxTenantLink?.id
+      };
+    }
+  }
+
+  return null;
+}
+
+async function updatePbxWebhookHeartbeat(pbxInstanceId: string | undefined, update: { lastEventAt?: Date; lastError?: string | null; status?: string }) {
+  if (!pbxInstanceId) return;
+  await db.pbxWebhookRegistration.updateMany({
+    where: { pbxInstanceId },
+    data: {
+      ...(update.lastEventAt ? { lastEventAt: update.lastEventAt } : {}),
+      ...(update.lastError !== undefined ? { lastError: update.lastError } : {}),
+      ...(update.status ? { status: update.status } : {})
+    }
+  });
+}
+
+async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOOK" | "POLL") {
+  const target = await resolvePbxEventTarget(evt);
+  if (!target) {
+    app.log.warn({ eventType: evt.eventType, pbxCallId: evt.pbxCallId, toExtension: evt.toExtension }, "pbx event target not found");
+    return { ok: false, reason: "TARGET_NOT_FOUND" };
+  }
+
+  await updatePbxWebhookHeartbeat(target.pbxInstanceId, { lastEventAt: new Date(), lastError: null, status: "REGISTERED" });
+
+  if (evt.state === "RINGING") {
+    if (!evt.pbxCallId) return { ok: false, reason: "MISSING_CALL_ID" };
+
+    const existing = await db.callInvite.findFirst({ where: { tenantId: target.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
+    if (existing && existing.status === "PENDING" && existing.expiresAt > new Date()) {
+      return { ok: true, deduped: true, inviteId: existing.id };
+    }
+
+    const invite = existing
+      ? await db.callInvite.update({
+          where: { id: existing.id },
+          data: {
+            userId: target.userId,
+            extensionId: target.extensionId,
+            fromNumber: evt.fromNumber,
+            toExtension: evt.toExtension,
+            status: "PENDING",
+            expiresAt: new Date(Date.now() + 45_000),
+            acceptedAt: null,
+            declinedAt: null,
+            canceledAt: null
+          }
+        })
+      : await db.callInvite.create({
+          data: {
+            tenantId: target.tenantId,
+            userId: target.userId,
+            extensionId: target.extensionId,
+            pbxCallId: evt.pbxCallId,
+            fromNumber: evt.fromNumber,
+            toExtension: evt.toExtension,
+            status: "PENDING",
+            expiresAt: new Date(Date.now() + 45_000)
+          }
+        });
+
+    const push = await sendPushToUserDevices({
+      tenantId: target.tenantId,
+      userId: target.userId,
+      payload: {
+        type: "INCOMING_CALL",
+        inviteId: invite.id,
+        fromNumber: invite.fromNumber,
+        toExtension: invite.toExtension,
+        tenantId: target.tenantId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+    await audit({ tenantId: target.tenantId, action: `PBX_CALL_INVITE_${source}`, entityType: "CallInvite", entityId: invite.id, actorUserId: target.userId });
+    app.log.info({ eventType: evt.eventType, tenantId: target.tenantId, extensionId: target.extensionId, pbxCallId: evt.pbxCallId, result: "INVITE_CREATED", source }, "pbx event processed");
+    return { ok: true, inviteId: invite.id, push };
+  }
+
+  if (evt.pbxCallId && (evt.state === "ANSWERED" || evt.state === "HANGUP")) {
+    const invite = await db.callInvite.findFirst({ where: { tenantId: target.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
+    if (!invite) return { ok: true, skipped: true };
+
+    if (evt.state === "ANSWERED") {
+      if (invite.status === "PENDING") {
+        await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });
+        await audit({ tenantId: target.tenantId, action: "PBX_CALL_INVITE_ACCEPTED", entityType: "CallInvite", entityId: invite.id });
+      }
+      return { ok: true, inviteId: invite.id };
+    }
+
+    if (evt.state === "HANGUP") {
+      if (invite.status === "PENDING") {
+        const now = new Date();
+        const nextStatus = invite.expiresAt < now ? "EXPIRED" : "CANCELED";
+        await db.callInvite.update({ where: { id: invite.id }, data: { status: nextStatus, canceledAt: nextStatus === "CANCELED" ? now : null } });
+        await audit({ tenantId: target.tenantId, action: `PBX_CALL_INVITE_${nextStatus}`, entityType: "CallInvite", entityId: invite.id });
+      }
+      return { ok: true, inviteId: invite.id };
+    }
+  }
+
+  return { ok: true, skipped: true };
+}
+
 app.get("/health", async () => ({ ok: true }));
 
 const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
@@ -559,7 +816,8 @@ app.post("/auth/login", async (req, reply) => {
 });
 
 app.addHook("preHandler", async (req, reply) => {
-  if (['/health', '/auth/signup', '/auth/login', '/webhooks/twilio/sms-status', '/webhooks/sola-cardknox'].includes(req.url)) return;
+  const path = req.url.split("?")[0];
+  if (path.includes("/webhooks/pbx") || ["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox"].includes(path)) return;
   try {
     await req.jwtVerify();
   } catch {
@@ -1927,6 +2185,145 @@ app.post("/mobile/call-invites/test", async (req, reply) => {
 
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "MOBILE_CALL_INVITE_CREATED", entityType: "CallInvite", entityId: invite.id });
   return { ok: true, inviteId: invite.id, expiresAt: invite.expiresAt, push };
+});
+
+app.post("/webhooks/pbx", async (req, reply) => {
+  const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
+  const verified = verifyPbxWebhook(req, rawBody);
+  if (!verified.ok) {
+    app.log.warn({ reason: verified.reason, sourceIp: getRequestSourceIp(req) }, "pbx webhook verification failed");
+    return reply.status(403).send({ error: "INVALID_PBX_WEBHOOK", reason: verified.reason });
+  }
+
+  const normalized = normalizePbxEvent(req.body || {});
+  if (!normalized.pbxCallId || !normalized.toExtension) {
+    return reply.status(400).send({ error: "INVALID_EVENT_PAYLOAD" });
+  }
+
+  const result = await upsertInviteFromPbxEvent(normalized, "WEBHOOK");
+  return { ok: true, eventType: normalized.eventType, state: normalized.state, result };
+});
+
+app.post("/admin/pbx/events/register", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ pbxInstanceId: z.string().min(1), callbackUrl: z.string().url().optional() }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.pbxInstanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+
+  const proto = String(req.headers["x-forwarded-proto"] || "https");
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "app.connectcomunications.com");
+  const callbackUrl = input.callbackUrl || `${proto}://${host}/webhooks/pbx`;
+
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const caps = client.capabilities();
+  if (!caps.supportsWebhooks) return reply.status(400).send({ error: "PBX_WEBHOOK_NOT_SUPPORTED", capabilities: caps });
+
+  try {
+    const out = await client.registerWebhook(callbackUrl);
+    const reg = await db.pbxWebhookRegistration.upsert({
+      where: { pbxInstanceId: instance.id },
+      create: { pbxInstanceId: instance.id, webhookId: out.webhookId, callbackUrl, status: "REGISTERED" },
+      update: { webhookId: out.webhookId, callbackUrl, status: "REGISTERED", lastError: null }
+    });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_WEBHOOK_REGISTERED", entityType: "PbxWebhookRegistration", entityId: reg.id });
+    return { ok: true, registration: reg, capabilities: caps };
+  } catch (e: any) {
+    await db.pbxWebhookRegistration.upsert({
+      where: { pbxInstanceId: instance.id },
+      create: { pbxInstanceId: instance.id, webhookId: "pending", callbackUrl, status: "ERROR", lastError: String(e?.code || e?.message || "PBX_WEBHOOK_REGISTER_FAILED") },
+      update: { status: "ERROR", lastError: String(e?.code || e?.message || "PBX_WEBHOOK_REGISTER_FAILED") }
+    });
+    return reply.status(400).send({ error: String(e?.code || "PBX_WEBHOOK_REGISTER_FAILED") });
+  }
+});
+
+app.post("/admin/pbx/events/unregister", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ pbxInstanceId: z.string().min(1) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.pbxInstanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+
+  const reg = await db.pbxWebhookRegistration.findUnique({ where: { pbxInstanceId: instance.id } });
+  if (!reg) return { ok: true, removed: false };
+
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  try {
+    if (reg.webhookId && reg.webhookId !== "pending") {
+      await client.deleteWebhook(reg.webhookId);
+    }
+  } catch (e: any) {
+    await db.pbxWebhookRegistration.update({ where: { id: reg.id }, data: { status: "ERROR", lastError: String(e?.code || e?.message || "PBX_WEBHOOK_DELETE_FAILED") } });
+    return reply.status(400).send({ error: String(e?.code || "PBX_WEBHOOK_DELETE_FAILED") });
+  }
+
+  const updated = await db.pbxWebhookRegistration.update({ where: { id: reg.id }, data: { status: "UNREGISTERED", lastError: null } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_WEBHOOK_UNREGISTERED", entityType: "PbxWebhookRegistration", entityId: reg.id });
+  return { ok: true, registration: updated };
+});
+
+app.get("/admin/pbx/events/status", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const rows = await db.pbxInstance.findMany({
+    orderBy: { createdAt: "desc" },
+    include: { webhookRegistration: true }
+  });
+
+  const out = rows.map((r) => {
+    let capabilities: any = { supportsWebhooks: false, supportsActiveCallPolling: false, webhookSignatureMode: "TOKEN" };
+    try {
+      const auth = decryptJson<{ token: string; secret?: string }>(r.apiAuthEncrypted);
+      capabilities = getWirePbxClient({ baseUrl: r.baseUrl, token: auth.token, secret: auth.secret }).capabilities();
+    } catch {
+      // keep fallback capabilities
+    }
+
+    return {
+      pbxInstanceId: r.id,
+      name: r.name,
+      baseUrl: r.baseUrl,
+      isEnabled: r.isEnabled,
+      capabilities,
+      registration: r.webhookRegistration
+        ? {
+            webhookId: r.webhookRegistration.webhookId,
+            callbackUrl: r.webhookRegistration.callbackUrl,
+            status: r.webhookRegistration.status,
+            lastEventAt: r.webhookRegistration.lastEventAt,
+            lastError: r.webhookRegistration.lastError,
+            updatedAt: r.webhookRegistration.updatedAt
+          }
+        : null
+    };
+  });
+
+  return out;
+});
+
+app.post("/admin/pbx/events/parse-test", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({ event: z.record(z.any()) }).parse(req.body || {});
+  const normalized = normalizePbxEvent(input.event);
+  const target = await resolvePbxEventTarget(normalized);
+  return {
+    ok: true,
+    normalized,
+    mapping: target
+      ? { tenantId: target.tenantId, userId: target.userId, extensionId: target.extensionId, pbxInstanceId: target.pbxInstanceId }
+      : null
+  };
 });
 
 app.post("/admin/pbx/instances", async (req, reply) => {

@@ -20,7 +20,12 @@ const smsQueue = new Queue("sms-send", { connection: redis });
 const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number }>();
 const providerCacheTtlMs = 60_000;
 const smsProviderTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
+const mobilePushSimulate = (process.env.MOBILE_PUSH_SIMULATE || "false").toLowerCase() === "true";
+const expoPushAccessToken = process.env.EXPO_PUSH_ACCESS_TOKEN || "";
 const tokenBuckets = new Map<string, { tokens: number; lastRefillMs: number }>();
+const pbxPollCursorByInstance = new Map<string, string>();
+const pbxPollSeenCalls = new Map<string, number>();
+const pbxPollBackoffUntil = new Map<string, number>();
 
 type ProviderName = "TWILIO" | "VOIPMS";
 
@@ -257,8 +262,190 @@ function getPbxClient(input: { baseUrl: string; token: string; secret?: string |
     apiToken: input.token,
     apiSecret: input.secret || undefined,
     timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
-    simulate: (process.env.PBX_SIMULATE || "false").toLowerCase() === "true"
+    simulate: (process.env.PBX_SIMULATE || "false").toLowerCase() === "true",
+    activeCallsPath: process.env.PBX_ACTIVE_CALLS_PATH,
+    supportsWebhooks: process.env.PBX_SUPPORTS_WEBHOOKS ? process.env.PBX_SUPPORTS_WEBHOOKS.toLowerCase() === "true" : undefined,
+    supportsActiveCallPolling: process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING ? process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING.toLowerCase() === "true" : undefined
   });
+}
+
+async function sendPushToUserDevices(input: {
+  tenantId: string;
+  userId: string;
+  payload: { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+}) {
+  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
+  if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
+
+  if (mobilePushSimulate) {
+    await db.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        action: "MOBILE_PUSH_SIMULATED",
+        entityType: "CallInvite",
+        entityId: input.payload.inviteId,
+        actorUserId: input.userId
+      }
+    });
+    return { queued: devices.length, simulated: true };
+  }
+
+  const messages = devices.map((d) => ({
+    to: d.expoPushToken,
+    sound: "default",
+    title: "Incoming call",
+    body: `Call from ${input.payload.fromNumber}`,
+    data: input.payload
+  }));
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (expoPushAccessToken) headers.authorization = `Bearer ${expoPushAccessToken}`;
+
+  await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(messages)
+  });
+
+  await db.auditLog.create({
+    data: {
+      tenantId: input.tenantId,
+      action: "MOBILE_PUSH_SENT",
+      entityType: "CallInvite",
+      entityId: input.payload.inviteId,
+      actorUserId: input.userId
+    }
+  });
+
+  return { queued: messages.length, simulated: false };
+}
+
+function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "UNKNOWN" {
+  const x = String(v || "").toLowerCase();
+  if (x.includes("ring")) return "RINGING";
+  if (x.includes("answer")) return "ANSWERED";
+  if (x.includes("hang") || x.includes("end") || x.includes("term")) return "HANGUP";
+  return "UNKNOWN";
+}
+
+async function processPolledCall(link: any, call: { callId: string; state: string; from: string; toExtension: string; tenantHint?: string; startedAt: string }) {
+  const state = normalizePbxCallState(call.state);
+  if (call.tenantHint && link.pbxTenantId && String(call.tenantHint) !== String(link.pbxTenantId)) return;
+
+  const ext = await db.extension.findFirst({
+    where: { tenantId: link.tenantId, extNumber: String(call.toExtension), status: "ACTIVE", ownerUserId: { not: null } }
+  });
+  if (!ext?.ownerUserId) return;
+
+  const dedupKey = `${link.tenantId}:${call.callId}`;
+  const nowMs = Date.now();
+  for (const [k, ts] of pbxPollSeenCalls) {
+    if (nowMs - ts > 10 * 60 * 1000) pbxPollSeenCalls.delete(k);
+  }
+
+  if (state === "RINGING") {
+    if (pbxPollSeenCalls.has(dedupKey)) return;
+    pbxPollSeenCalls.set(dedupKey, nowMs);
+
+    const existing = await db.callInvite.findFirst({ where: { tenantId: link.tenantId, pbxCallId: call.callId }, orderBy: { createdAt: "desc" } });
+    if (existing && existing.status === "PENDING" && existing.expiresAt > new Date()) return;
+
+    const invite = existing
+      ? await db.callInvite.update({
+          where: { id: existing.id },
+          data: {
+            userId: ext.ownerUserId,
+            extensionId: ext.id,
+            fromNumber: call.from || "unknown",
+            toExtension: String(call.toExtension),
+            status: "PENDING",
+            expiresAt: new Date(Date.now() + 45_000),
+            acceptedAt: null,
+            declinedAt: null,
+            canceledAt: null
+          }
+        })
+      : await db.callInvite.create({
+          data: {
+            tenantId: link.tenantId,
+            userId: ext.ownerUserId,
+            extensionId: ext.id,
+            pbxCallId: call.callId,
+            fromNumber: call.from || "unknown",
+            toExtension: String(call.toExtension),
+            status: "PENDING",
+            expiresAt: new Date(Date.now() + 45_000)
+          }
+        });
+
+    await sendPushToUserDevices({
+      tenantId: link.tenantId,
+      userId: ext.ownerUserId,
+      payload: {
+        type: "INCOMING_CALL",
+        inviteId: invite.id,
+        fromNumber: invite.fromNumber,
+        toExtension: invite.toExtension,
+        tenantId: link.tenantId,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+    await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_CALL_INVITE_POLL", entityType: "CallInvite", entityId: invite.id, actorUserId: ext.ownerUserId } });
+    return;
+  }
+
+  if (state === "ANSWERED" || state === "HANGUP") {
+    const invite = await db.callInvite.findFirst({ where: { tenantId: link.tenantId, pbxCallId: call.callId }, orderBy: { createdAt: "desc" } });
+    if (!invite || invite.status !== "PENDING") return;
+    if (state === "ANSWERED") {
+      await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });
+      await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_CALL_INVITE_ACCEPTED", entityType: "CallInvite", entityId: invite.id } });
+      return;
+    }
+    const now = new Date();
+    const nextStatus = invite.expiresAt < now ? "EXPIRED" : "CANCELED";
+    await db.callInvite.update({ where: { id: invite.id }, data: { status: nextStatus, canceledAt: nextStatus === "CANCELED" ? now : null } });
+    await db.auditLog.create({ data: { tenantId: link.tenantId, action: `PBX_CALL_INVITE_${nextStatus}`, entityType: "CallInvite", entityId: invite.id } });
+  }
+}
+
+async function runPbxActiveCallPollCycle(): Promise<void> {
+  const links: any[] = await db.tenantPbxLink.findMany({
+    where: { status: "LINKED" },
+    include: { pbxInstance: { include: { webhookRegistration: true } } }
+  } as any);
+
+  for (const link of links) {
+    try {
+      if (!link?.pbxInstance?.isEnabled) continue;
+      const reg = link.pbxInstance.webhookRegistration;
+      if (reg && reg.status === "REGISTERED") continue;
+
+      const now = Date.now();
+      const blockedUntil = pbxPollBackoffUntil.get(link.pbxInstanceId) || 0;
+      if (blockedUntil > now) continue;
+
+      const auth = decryptJson<{ token: string; secret?: string | null }>(link.pbxInstance.apiAuthEncrypted);
+      const pbx = getPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret || null });
+      const caps = pbx.capabilities();
+      if (!caps.supportsActiveCallPolling) continue;
+
+      const cursor = pbxPollCursorByInstance.get(link.pbxInstanceId);
+      const calls = await pbx.pollActiveCalls(cursor);
+      for (const call of calls) {
+        await processPolledCall(link, call);
+      }
+      if (calls.length > 0) {
+        pbxPollCursorByInstance.set(link.pbxInstanceId, calls[calls.length - 1].callId);
+      }
+    } catch (e: any) {
+      const curr = pbxPollBackoffUntil.get(link.pbxInstanceId) || Date.now();
+      const next = Math.min(Date.now() + 60_000, curr + 10_000);
+      pbxPollBackoffUntil.set(link.pbxInstanceId, next);
+      await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_ACTIVE_CALL_POLL_FAILED", entityType: "PbxInstance", entityId: link.pbxInstanceId } });
+    }
+  }
 }
 
 async function runPbxJobCycle(): Promise<void> {
@@ -635,7 +822,12 @@ setInterval(() => {
   runCallInviteExpiryCycle().catch((err) => console.error("call invite expiry failed", err?.message || err));
 }, 30 * 1000);
 
+setInterval(() => {
+  runPbxActiveCallPollCycle().catch((err) => console.error("pbx active call poll failed", err?.message || err));
+}, 5 * 1000);
+
 runCallInviteExpiryCycle().catch((err) => console.error("initial call invite expiry failed", err?.message || err));
+runPbxActiveCallPollCycle().catch((err) => console.error("initial pbx active call poll failed", err?.message || err));
 
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));
 runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed", err?.message || err));

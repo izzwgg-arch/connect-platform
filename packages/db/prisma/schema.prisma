@@ -112,6 +112,7 @@ enum CallInviteStatus {
   ACCEPTED
   DECLINED
   EXPIRED
+  CANCELED
 }
 
 model Tenant {
@@ -492,6 +493,24 @@ model PbxInstance {
   tenantLinks      TenantPbxLink[]
   cdrCursors       PbxCdrCursor[]
   pbxJobs          PbxJob[]
+  webhookRegistration PbxWebhookRegistration?
+}
+
+
+
+model PbxWebhookRegistration {
+  id            String      @id @default(cuid())
+  pbxInstanceId String      @unique
+  webhookId     String
+  callbackUrl   String
+  status        String      @default("REGISTERED")
+  lastEventAt   DateTime?
+  lastError     String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  pbxInstance   PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+
+  @@index([status, updatedAt])
 }
 
 model TenantPbxLink {
@@ -615,6 +634,7 @@ model CallInvite {
   tenantId    String
   userId      String
   extensionId String?
+  pbxCallId   String?
   fromNumber  String
   toExtension String
   status      CallInviteStatus @default(PENDING)
@@ -622,10 +642,13 @@ model CallInvite {
   expiresAt   DateTime
   acceptedAt  DateTime?
   declinedAt  DateTime?
+  canceledAt  DateTime?
   tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   extension   Extension?       @relation(fields: [extensionId], references: [id], onDelete: SetNull)
 
+  @@unique([tenantId, pbxCallId])
   @@index([tenantId, createdAt])
+  @@index([tenantId, status, expiresAt])
   @@index([userId, status, expiresAt])
 }

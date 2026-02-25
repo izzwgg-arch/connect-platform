@@ -4,10 +4,45 @@ export type WirePbxConfig = {
   apiSecret?: string;
   timeoutMs?: number;
   simulate?: boolean;
+  webhookRegisterPath?: string;
+  webhookListPath?: string;
+  webhookDeletePath?: string;
+  activeCallsPath?: string;
+  webhookSignatureMode?: "HMAC" | "TOKEN" | "NONE";
+  webhookEventTypes?: string[];
+  supportsWebhooks?: boolean;
+  supportsActiveCallPolling?: boolean;
+};
+
+export type WirePbxCapability = {
+  supportsWebhooks: boolean;
+  supportsActiveCallPolling: boolean;
+  webhookSignatureMode: "HMAC" | "TOKEN" | "NONE";
+  activeCallsEndpointPath?: string;
+  webhookEventTypes?: string[];
+};
+
+export type WirePbxWebhook = {
+  webhookId: string;
+  callbackUrl?: string;
+  eventTypes?: string[];
+  isEnabled?: boolean;
+  raw?: Record<string, unknown>;
+};
+
+export type WirePbxActiveCall = {
+  callId: string;
+  state: string;
+  from: string;
+  toExtension: string;
+  tenantHint?: string;
+  pbxExtensionId?: string;
+  startedAt: string;
 };
 
 export type WirePbxErrorCode =
   | "NOT_CONFIGURED"
+  | "NOT_SUPPORTED"
   | "PBX_AUTH_FAILED"
   | "PBX_UNAVAILABLE"
   | "PBX_VALIDATION_FAILED"
@@ -61,6 +96,19 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseBoolean(v: string | undefined): boolean | undefined {
+  if (v === undefined) return undefined;
+  const x = v.toLowerCase();
+  if (x === "true" || x === "1" || x === "yes") return true;
+  if (x === "false" || x === "0" || x === "no") return false;
+  return undefined;
+}
+
+function ensureLeadingSlash(path: string): string {
+  if (!path) return path;
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
 export class WirePbxClient {
   private cfg: WirePbxConfig;
 
@@ -70,6 +118,41 @@ export class WirePbxClient {
 
   private base(path: string): string {
     return `${String(this.cfg.baseUrl || "").replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  private pathFromConfig(primary?: string, envName?: string): string | undefined {
+    const fromCfg = primary?.trim();
+    if (fromCfg) return ensureLeadingSlash(fromCfg);
+    const fromEnv = envName ? process.env[envName]?.trim() : undefined;
+    if (fromEnv) return ensureLeadingSlash(fromEnv);
+    return undefined;
+  }
+
+  private getCapabilities(): WirePbxCapability {
+    const supportsWebhooks = this.cfg.supportsWebhooks ?? parseBoolean(process.env.PBX_SUPPORTS_WEBHOOKS) ?? !!this.pathFromConfig(this.cfg.webhookRegisterPath, "PBX_WEBHOOK_REGISTER_PATH");
+    const supportsActiveCallPolling = this.cfg.supportsActiveCallPolling ?? parseBoolean(process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING) ?? !!this.pathFromConfig(this.cfg.activeCallsPath, "PBX_ACTIVE_CALLS_PATH");
+    const signatureMode = this.cfg.webhookSignatureMode || (process.env.PBX_WEBHOOK_SIGNATURE_MODE as "HMAC" | "TOKEN" | "NONE" | undefined) || "TOKEN";
+    const activeCallsEndpointPath = this.pathFromConfig(this.cfg.activeCallsPath, "PBX_ACTIVE_CALLS_PATH");
+
+    let webhookEventTypes = this.cfg.webhookEventTypes;
+    if (!webhookEventTypes || webhookEventTypes.length === 0) {
+      const fromEnv = process.env.PBX_WEBHOOK_EVENT_TYPES;
+      webhookEventTypes = fromEnv
+        ? fromEnv.split(",").map((x) => x.trim()).filter(Boolean)
+        : ["call.ringing", "call.answered", "call.hangup"];
+    }
+
+    return {
+      supportsWebhooks,
+      supportsActiveCallPolling,
+      webhookSignatureMode: signatureMode,
+      activeCallsEndpointPath,
+      webhookEventTypes
+    };
+  }
+
+  capabilities(): WirePbxCapability {
+    return this.getCapabilities();
   }
 
   private async request<T = any>(method: string, path: string, body?: Record<string, unknown>, attempt = 0): Promise<T> {
@@ -116,6 +199,79 @@ export class WirePbxClient {
     if (this.cfg.simulate) return { ok: true };
     await this.request("GET", "/health");
     return { ok: true };
+  }
+
+  async registerWebhook(callbackUrl: string): Promise<{ webhookId: string }> {
+    const cap = this.getCapabilities();
+    const registerPath = this.pathFromConfig(this.cfg.webhookRegisterPath, "PBX_WEBHOOK_REGISTER_PATH");
+    if (!cap.supportsWebhooks || !registerPath) throw makeErr("PBX webhook registration not supported", "NOT_SUPPORTED", 501, false);
+
+    if (this.cfg.simulate) {
+      return { webhookId: `sim_webhook_${Date.now()}` };
+    }
+
+    const out = await this.request<any>("POST", registerPath, { callbackUrl, eventTypes: cap.webhookEventTypes });
+    return { webhookId: String(out?.webhookId || out?.id || out?.data?.id || "") };
+  }
+
+  async listWebhooks(): Promise<WirePbxWebhook[]> {
+    const cap = this.getCapabilities();
+    const listPath = this.pathFromConfig(this.cfg.webhookListPath, "PBX_WEBHOOK_LIST_PATH");
+    if (!cap.supportsWebhooks || !listPath) throw makeErr("PBX webhook listing not supported", "NOT_SUPPORTED", 501, false);
+
+    if (this.cfg.simulate) {
+      return [{ webhookId: "sim_webhook_1", callbackUrl: "https://app.connectcomunications.com/webhooks/pbx", eventTypes: cap.webhookEventTypes, isEnabled: true }];
+    }
+
+    const out = await this.request<any>("GET", listPath);
+    const rows = Array.isArray(out?.data) ? out.data : Array.isArray(out) ? out : [];
+    return rows.map((x: any) => ({
+      webhookId: String(x.webhookId || x.id || x.uuid || ""),
+      callbackUrl: x.callbackUrl ? String(x.callbackUrl) : undefined,
+      eventTypes: Array.isArray(x.eventTypes) ? x.eventTypes.map((v: any) => String(v)) : undefined,
+      isEnabled: typeof x.isEnabled === "boolean" ? x.isEnabled : undefined,
+      raw: x
+    }));
+  }
+
+  async deleteWebhook(webhookId: string): Promise<{ ok: true }> {
+    const cap = this.getCapabilities();
+    const deletePath = this.pathFromConfig(this.cfg.webhookDeletePath, "PBX_WEBHOOK_DELETE_PATH");
+    if (!cap.supportsWebhooks || !deletePath) throw makeErr("PBX webhook deletion not supported", "NOT_SUPPORTED", 501, false);
+
+    if (this.cfg.simulate) return { ok: true };
+
+    await this.request("DELETE", `${deletePath.replace(/\/$/, "")}/${encodeURIComponent(webhookId)}`);
+    return { ok: true };
+  }
+
+  async pollActiveCalls(sinceCursor?: string): Promise<WirePbxActiveCall[]> {
+    const cap = this.getCapabilities();
+    const activePath = this.pathFromConfig(this.cfg.activeCallsPath, "PBX_ACTIVE_CALLS_PATH");
+    if (!cap.supportsActiveCallPolling || !activePath) throw makeErr("PBX active call polling not supported", "NOT_SUPPORTED", 501, false);
+
+    if (this.cfg.simulate) {
+      const now = new Date().toISOString();
+      return [{ callId: `sim_call_${Date.now()}`, state: "RINGING", from: "+13055550111", toExtension: "1001", tenantHint: "sim-tenant-1", startedAt: now }];
+    }
+
+    const query = new URLSearchParams();
+    if (sinceCursor) query.set("cursor", sinceCursor);
+    const path = query.toString() ? `${activePath}?${query.toString()}` : activePath;
+    const out = await this.request<any>("GET", path);
+    const rows = Array.isArray(out?.data) ? out.data : Array.isArray(out?.calls) ? out.calls : Array.isArray(out) ? out : [];
+
+    return rows
+      .map((x: any) => ({
+        callId: String(x.callId || x.id || x.uuid || x.uniqueid || ""),
+        state: String(x.state || x.status || x.eventType || "").toUpperCase(),
+        from: String(x.from || x.caller || x.src || ""),
+        toExtension: String(x.toExtension || x.extension || x.dst || ""),
+        tenantHint: x.tenantHint || x.tenantId || x.pbxTenantId ? String(x.tenantHint || x.tenantId || x.pbxTenantId) : undefined,
+        pbxExtensionId: x.pbxExtensionId || x.extensionId ? String(x.pbxExtensionId || x.extensionId) : undefined,
+        startedAt: String(x.startedAt || x.startAt || x.timestamp || new Date().toISOString())
+      }))
+      .filter((x: WirePbxActiveCall) => x.callId && x.state && x.toExtension);
   }
 
   async listTenants(): Promise<Array<{ id: string; name?: string }>> {
