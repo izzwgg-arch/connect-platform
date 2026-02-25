@@ -73,7 +73,7 @@ export default function VoicePhonePage() {
 
     if (callsRes.ok) {
       const rows = await callsRes.json();
-      if (Array.isArray(rows)) setRecentCalls(rows.slice(0, 10));
+      if (Array.isArray(rows)) setRecentCalls(rows.slice(0, 12));
     }
   }
 
@@ -139,16 +139,14 @@ export default function VoicePhonePage() {
         authorizationPassword: oneTimePassword,
         transportOptions: { server: info.sipWsUrl },
         sessionDescriptionHandlerFactoryOptions: {
-          peerConnectionConfiguration: {
-            iceServers: info.iceServers || []
-          }
+          peerConnectionConfiguration: { iceServers: info.iceServers || [] }
         }
       });
 
       ua.delegate = {
         onInvite: (invitation: any) => {
           setIncoming(invitation);
-          setStatus("Incoming call");
+          setStatus("Incoming");
           watchSession(invitation);
         }
       };
@@ -180,7 +178,7 @@ export default function VoicePhonePage() {
       return;
     }
     setOneTimePassword(json.sipPassword);
-    setStatus("One-time SIP password issued for this browser session");
+    setStatus("One-time credential issued");
     if (json?.provisioning) {
       setInfo((prev) => prev ? ({
         ...prev,
@@ -242,10 +240,7 @@ export default function VoicePhonePage() {
     const s = sessionRef.current;
     if (!s) return;
     try {
-      s.info?.({
-        contentType: "application/dtmf-relay",
-        body: `Signal=${digit}\\r\\nDuration=250`
-      });
+      s.info?.({ contentType: "application/dtmf-relay", body: `Signal=${digit}\\r\\nDuration=250` });
     } catch {
       setError("DTMF failed");
     }
@@ -272,71 +267,82 @@ export default function VoicePhonePage() {
     }
   }
 
+  const statusClass = status.toLowerCase().includes("fail") || status.toLowerCase().includes("end")
+    ? "status-chip failed"
+    : status.toLowerCase().includes("register") || status.toLowerCase().includes("connect")
+      ? "status-chip live"
+      : "status-chip pending";
+
   return (
     <>
-      <Script src="https://unpkg.com/sip.js@0.21.2/lib/umd/sip.js" strategy="afterInteractive" onLoad={() => setStatus((s) => (s === "Idle" ? "SIP.js loaded" : s))} />
-      <div className="card">
-        <h1>Softphone</h1>
-        <p>Status: <strong>{status}</strong></p>
-        {error ? <p style={{ color: "#b10000" }}>{error}</p> : null}
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="card" style={{ marginBottom: 0 }}>
-            <h3>Line</h3>
-            <p>Extension: <strong>{info?.extensionNumber || "-"}</strong> ({info?.displayName || "Unassigned"})</p>
-            <p>SIP User: <strong>{info?.sipUsername || "-"}</strong></p>
-            <p>WebRTC Enabled: <strong>{info?.webrtcEnabled ? "Yes" : "No"}</strong></p>
-            <p>SIP WSS: <strong>{info?.sipWsUrl || "Not configured"}</strong></p>
-            <p>Domain: <strong>{info?.sipDomain || "Not configured"}</strong></p>
+      <Script src="https://unpkg.com/sip.js@0.21.2/lib/umd/sip.js" strategy="afterInteractive" />
+      <div className="phone-layout">
+        <div className="phone-main">
+          <div className="card">
+            <div className="page-head">
+              <h1>Switchboard</h1>
+              <span className={statusClass}>{status}</span>
+            </div>
+            {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
+            <p>Ext. <strong>{info?.extensionNumber || "-"}</strong> / {info?.displayName || "Unassigned"} / SIP user {info?.sipUsername || "-"}</p>
+            <p>WSS: {info?.sipWsUrl || "not configured"} / Domain: {info?.sipDomain || "not configured"}</p>
             <button onClick={resetSipPassword}>Reset SIP Password</button>
-            <button onClick={registerPhone} style={{ marginLeft: 8 }} disabled={!oneTimePassword}>Register</button>
-            <p style={{ fontSize: 12, color: "#555" }}>SIP password is shown once on reset and kept in memory only for this browser tab.</p>
+            <button onClick={registerPhone} disabled={!oneTimePassword}>Register SIP</button>
+            <p>SIP secret is shown once and kept in current tab memory only.</p>
           </div>
 
-          <div className="card" style={{ marginBottom: 0 }}>
-            <h3>Dialer</h3>
-            <input value={dial} onChange={(e) => setDial(e.target.value)} placeholder="Enter extension or number" />
-            <button onClick={placeCall} disabled={!sipReady || !dial}>Call</button>
-            <button onClick={hangup} style={{ marginLeft: 8 }}>Hangup</button>
-            <button onClick={toggleMute} style={{ marginLeft: 8 }}>{mute ? "Unmute" : "Mute"}</button>
-            <button onClick={toggleHold} style={{ marginLeft: 8 }}>{hold ? "Resume" : "Hold"}</button>
-
-            <div style={{ marginTop: 10 }}>
-              {"123456789*0#".split("").map((d) => (
-                <button key={d} onClick={() => sendDtmf(d)} style={{ width: 36, margin: 2 }}>{d}</button>
-              ))}
+          {incoming ? (
+            <div className="card">
+              <div className="page-head">
+                <h3>Incoming Call</h3>
+                <span className="status-chip pending">Ringing</span>
+              </div>
+              <button onClick={acceptIncoming}>Accept</button>
+              <button onClick={declineIncoming}>Decline</button>
             </div>
+          ) : null}
+
+          <div className="card">
+            <h3>Recent Calls</h3>
+            <table>
+              <thead><tr><th>Time</th><th>Caller</th><th>Callee</th><th>Direction</th><th>Duration</th><th>Details</th></tr></thead>
+              <tbody>
+                {recentCalls.map((c) => (
+                  <tr key={c.id}>
+                    <td>{new Date(c.startedAt).toLocaleString()}</td>
+                    <td>{c.fromNumber}</td>
+                    <td>{c.toNumber}</td>
+                    <td>{c.direction}</td>
+                    <td>{c.durationSec}s</td>
+                    <td>{c.disposition || "-"}</td>
+                  </tr>
+                ))}
+                {!recentCalls.length ? <tr><td colSpan={6}>No calls yet.</td></tr> : null}
+              </tbody>
+            </table>
+            <audio ref={remoteAudioRef} autoPlay playsInline />
           </div>
         </div>
 
-        {incoming ? (
-          <div className="card" style={{ marginTop: 12, border: "1px solid #e6a100" }}>
-            <h3>Incoming Call</h3>
-            <p>Incoming SIP session detected.</p>
-            <button onClick={acceptIncoming}>Accept</button>
-            <button onClick={declineIncoming} style={{ marginLeft: 8 }}>Decline</button>
+        <aside className="softphone-panel">
+          <div>
+            <h3 style={{ color: "#ecf1f7", marginBottom: 4 }}>Enter number</h3>
+            <input value={dial} onChange={(e) => setDial(e.target.value)} placeholder="Enter name or number" />
           </div>
-        ) : null}
 
-        <audio ref={remoteAudioRef} autoPlay playsInline />
+          <div className="softphone-actions">
+            <button onClick={placeCall} disabled={!sipReady || !dial}>Call</button>
+            <button onClick={hangup}>Hangup</button>
+            <button onClick={toggleMute}>{mute ? "Unmute" : "Mute"}</button>
+            <button onClick={toggleHold}>{hold ? "Resume" : "Hold"}</button>
+          </div>
 
-        <h3 style={{ marginTop: 14 }}>Recent Calls</h3>
-        <table>
-          <thead><tr><th>Time</th><th>Direction</th><th>From</th><th>To</th><th>Duration</th><th>Disposition</th></tr></thead>
-          <tbody>
-            {recentCalls.map((c) => (
-              <tr key={c.id}>
-                <td>{new Date(c.startedAt).toLocaleString()}</td>
-                <td>{c.direction}</td>
-                <td>{c.fromNumber}</td>
-                <td>{c.toNumber}</td>
-                <td>{c.durationSec}s</td>
-                <td>{c.disposition}</td>
-              </tr>
+          <div className="dial-grid">
+            {"123456789*0#".split("").map((d) => (
+              <button key={d} onClick={() => sendDtmf(d)}>{d}</button>
             ))}
-            {!recentCalls.length ? <tr><td colSpan={6}>No recent calls yet.</td></tr> : null}
-          </tbody>
-        </table>
+          </div>
+        </aside>
       </div>
     </>
   );

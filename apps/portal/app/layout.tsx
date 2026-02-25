@@ -1,37 +1,11 @@
 import "./globals.css";
-import Link from "next/link";
+import { PageShell } from "../components/PageShell";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <div className="shell">
-          <aside className="side">
-            <h2>Connect</h2>
-            <Link href="/">Home</Link>
-            <Link href="/pricing">Pricing</Link>
-            <Link href="/login">Login</Link>
-            <Link href="/signup">Sign Up</Link>
-            <Link href="/dashboard">Dashboard</Link>
-            <Link href="/dashboard/numbers">Numbers</Link>
-            <Link href="/dashboard/extensions">Extensions</Link>
-            <Link href="/dashboard/voice/phone">Phone</Link>
-            <Link href="/dashboard/sms">SMS</Link>
-            <Link href="/dashboard/settings/providers">Provider Settings</Link>
-            <Link href="/dashboard/billing">Billing</Link>
-            <Link href="/dashboard/10dlc">10DLC</Link>
-            <Link href="/dashboard/admin/10dlc">Admin 10DLC</Link>
-            <Link href="/dashboard/admin/tenants">Admin Tenants</Link>
-            <Link href="/dashboard/admin/campaigns">Admin Campaigns</Link>
-            <Link href="/dashboard/admin/billing/tenants">Admin Billing</Link>
-            <Link href="/legal/privacy">Privacy</Link>
-            <Link href="/legal/terms">Terms</Link>
-          </aside>
-          <main className="main">
-            <div className="top">Connect Communications Portal</div>
-            {children}
-          </main>
-        </div>
+        <PageShell>{children}</PageShell>
       </body>
     </html>
   );
