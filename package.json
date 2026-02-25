@@ -10,7 +10,9 @@
     "typecheck": "turbo run typecheck",
     "format": "prettier -w .",
     "db:generate": "pnpm --filter @connect/db prisma:generate",
-    "db:migrate": "pnpm --filter @connect/db prisma:migrate"
+    "db:migrate": "pnpm --filter @connect/db prisma:migrate",
+    "smoke:pbx:v1.1.0": "node scripts/smoke-v1.1.0.mjs",
+    "smoke:pbx": "node scripts/smoke-v1.1.0.mjs"
   },
   "devDependencies": {
     "eslint": "^9.36.0",
