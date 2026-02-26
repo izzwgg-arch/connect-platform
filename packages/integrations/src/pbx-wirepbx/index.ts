@@ -67,6 +67,75 @@ export type WirePbxCdrRecord = {
   raw?: Record<string, unknown>;
 };
 
+export type CanonicalPbxCallState = "RINGING" | "ANSWERED" | "HANGUP" | "CANCELED" | "UNKNOWN";
+export type CanonicalPbxCause = "NORMAL_CLEARING" | "BUSY" | "NO_ANSWER" | "REJECTED" | "ERROR";
+
+export type NormalizedWirePbxEvent = {
+  eventType: string;
+  state: CanonicalPbxCallState;
+  pbxCallId: string;
+  toExtension: string;
+  fromNumber: string;
+  fromDisplay?: string;
+  timestamp: string;
+  eventId?: string;
+  pbxTenantId?: string;
+  pbxExtensionId?: string;
+  sipCallTarget?: string;
+  cause?: CanonicalPbxCause;
+};
+
+function normalizeCause(raw: string): CanonicalPbxCause | undefined {
+  const x = String(raw || "").trim().toLowerCase();
+  if (!x) return undefined;
+  if (x.includes("busy")) return "BUSY";
+  if (x.includes("no answer") || x.includes("no_answer") || x.includes("timeout") || x.includes("unanswered")) return "NO_ANSWER";
+  if (x.includes("reject") || x.includes("declin")) return "REJECTED";
+  if (x.includes("clear") || x.includes("normal") || x.includes("complete")) return "NORMAL_CLEARING";
+  if (x.includes("error") || x.includes("fail")) return "ERROR";
+  return undefined;
+}
+
+export function normalizeWirePbxEvent(input: any): NormalizedWirePbxEvent {
+  const eventType = String(input?.eventType || input?.type || input?.event || input?.name || "unknown").toLowerCase();
+  const stateRaw = String(input?.state || input?.callState || input?.status || eventType).toLowerCase();
+  const state: CanonicalPbxCallState = stateRaw.includes("ring") || eventType.includes("ring")
+    ? "RINGING"
+    : stateRaw.includes("answer") || eventType.includes("answer")
+      ? "ANSWERED"
+      : stateRaw.includes("cancel") || stateRaw.includes("abandon") || eventType.includes("cancel")
+        ? "CANCELED"
+        : stateRaw.includes("hang") || stateRaw.includes("end") || stateRaw.includes("term") || eventType.includes("hang")
+          ? "HANGUP"
+          : "UNKNOWN";
+
+  const callId = String(input?.pbxCallId || input?.callId || input?.call?.id || input?.uniqueid || input?.id || "").trim();
+  const toExtension = String(input?.toExtension || input?.calledExtension || input?.extension || input?.to || input?.dst || input?.call?.toExtension || "").trim();
+  const fromNumber = String(input?.from || input?.fromNumber || input?.caller || input?.src || input?.call?.from || "unknown").trim();
+  const fromDisplay = String(input?.fromDisplay || input?.callerName || input?.displayName || input?.call?.fromDisplay || "").trim();
+  const pbxTenantId = input?.pbxTenantId || input?.tenantId || input?.tenantHint || input?.call?.tenantId;
+  const pbxExtensionId = input?.pbxExtensionId || input?.extensionId || input?.call?.extensionId;
+  const sipCallTarget = String(input?.sipCallTarget || input?.targetUri || input?.requestUri || input?.call?.target || "").trim();
+  const eventId = String(input?.eventId || input?.eventUUID || input?.webhookEventId || "").trim();
+  const timestamp = String(input?.timestamp || input?.startedAt || input?.call?.startedAt || new Date().toISOString());
+  const cause = normalizeCause(String(input?.cause || input?.hangupCause || input?.disconnectReason || input?.reason || ""));
+
+  return {
+    eventType,
+    state,
+    pbxCallId: callId,
+    toExtension,
+    fromNumber,
+    fromDisplay: fromDisplay || undefined,
+    timestamp,
+    eventId: eventId || undefined,
+    pbxTenantId: pbxTenantId ? String(pbxTenantId) : undefined,
+    pbxExtensionId: pbxExtensionId ? String(pbxExtensionId) : undefined,
+    sipCallTarget: sipCallTarget || undefined,
+    cause
+  };
+}
+
 function timeoutSignal(ms: number): AbortSignal {
   const c = new AbortController();
   setTimeout(() => c.abort(), ms);

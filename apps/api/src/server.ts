@@ -20,7 +20,9 @@ import {
   VoipMsCredentials,
   VoipMsNumberProvider,
   SolaCardknoxAdapter,
-  WirePbxClient
+  WirePbxClient,
+  normalizeWirePbxEvent,
+  type NormalizedWirePbxEvent
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 
@@ -716,6 +718,7 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
 type MobilePushPayload =
   | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
   | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
+  | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string };
 
 async function sendPushToUserDevices(input: {
@@ -745,12 +748,16 @@ async function sendPushToUserDevices(input: {
     ? "Incoming call"
     : input.payload.type === "INVITE_CLAIMED"
       ? "Call answered on another device"
-      : "Missed call";
+      : input.payload.type === "INVITE_CANCELED"
+        ? "Call ended"
+        : "Missed call";
   const body = input.payload.type === "INCOMING_CALL"
     ? `Call from ${input.payload.fromDisplay || input.payload.fromNumber}`
     : input.payload.type === "INVITE_CLAIMED"
       ? "This call was answered on another device."
-      : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
+      : input.payload.type === "INVITE_CANCELED"
+        ? "This call has ended."
+        : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
   const messages = filtered.map((d) => ({
     to: d.expoPushToken,
@@ -781,20 +788,6 @@ async function sendPushToUserDevices(input: {
 
   return { queued: messages.length, simulated: false };
 }
-
-type NormalizedPbxEvent = {
-  eventType: string;
-  state: "RINGING" | "ANSWERED" | "HANGUP" | "UNKNOWN";
-  pbxCallId: string;
-  fromNumber: string;
-  fromDisplay?: string;
-  toExtension: string;
-  pbxTenantId?: string;
-  pbxExtensionId?: string;
-  sipCallTarget?: string;
-  createdByEventId?: string;
-  startedAt: string;
-};
 
 function getRequestSourceIp(req: any): string {
   return String((req.headers["x-forwarded-for"] || req.ip || "")).split(",")[0].trim();
@@ -840,43 +833,7 @@ function verifyPbxWebhook(req: any, rawBody: string): { ok: boolean; reason?: st
   return { ok: false, reason: "UNKNOWN_VERIFY_MODE" };
 }
 
-function normalizePbxEvent(input: any): NormalizedPbxEvent {
-  const eventType = String(input?.eventType || input?.type || input?.event || input?.name || "unknown").toLowerCase();
-  const stateRaw = String(input?.state || input?.callState || input?.status || eventType).toLowerCase();
-  const state = stateRaw.includes("ring") || eventType.includes("ring")
-    ? "RINGING"
-    : stateRaw.includes("answer") || eventType.includes("answer")
-      ? "ANSWERED"
-      : stateRaw.includes("hang") || stateRaw.includes("end") || stateRaw.includes("term") || eventType.includes("hang")
-        ? "HANGUP"
-        : "UNKNOWN";
-
-  const callId = String(input?.pbxCallId || input?.callId || input?.call?.id || input?.uniqueid || input?.id || "").trim();
-  const toExtension = String(input?.toExtension || input?.calledExtension || input?.extension || input?.to || input?.dst || input?.call?.toExtension || "").trim();
-  const fromNumber = String(input?.from || input?.fromNumber || input?.caller || input?.src || input?.call?.from || "unknown").trim();
-  const fromDisplay = String(input?.fromDisplay || input?.callerName || input?.displayName || input?.call?.fromDisplay || "").trim();
-  const pbxTenantId = input?.pbxTenantId || input?.tenantId || input?.tenantHint || input?.call?.tenantId;
-  const pbxExtensionId = input?.pbxExtensionId || input?.extensionId || input?.call?.extensionId;
-  const sipCallTarget = String(input?.sipCallTarget || input?.targetUri || input?.requestUri || input?.call?.target || "").trim();
-  const createdByEventId = String(input?.eventId || input?.eventUUID || input?.webhookEventId || "").trim();
-  const startedAt = String(input?.startedAt || input?.timestamp || input?.call?.startedAt || new Date().toISOString());
-
-  return {
-    eventType,
-    state,
-    pbxCallId: callId,
-    fromNumber,
-    fromDisplay: fromDisplay || undefined,
-    toExtension,
-    pbxTenantId: pbxTenantId ? String(pbxTenantId) : undefined,
-    pbxExtensionId: pbxExtensionId ? String(pbxExtensionId) : undefined,
-    sipCallTarget: sipCallTarget || undefined,
-    createdByEventId: createdByEventId || undefined,
-    startedAt
-  };
-}
-
-async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantId: string; userId: string; extensionId: string | null; pbxInstanceId?: string; pbxTenantLinkId?: string; pbxSipUsername?: string | null; sipDomain?: string | null } | null> {
+async function resolvePbxEventTarget(evt: NormalizedWirePbxEvent): Promise<{ tenantId: string; userId: string; extensionId: string | null; pbxInstanceId?: string; pbxTenantLinkId?: string; pbxSipUsername?: string | null; sipDomain?: string | null } | null> {
   if (!evt.toExtension && !evt.pbxExtensionId) return null;
 
   if (evt.pbxTenantId) {
@@ -943,17 +900,58 @@ async function updatePbxWebhookHeartbeat(pbxInstanceId: string | undefined, upda
   });
 }
 
-async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOOK" | "POLL") {
-  const target = await resolvePbxEventTarget(evt);
-  if (!target) {
-    app.log.warn({ eventType: evt.eventType, pbxCallId: evt.pbxCallId, toExtension: evt.toExtension }, "pbx event target not found");
-    return { ok: false, reason: "TARGET_NOT_FOUND" };
+async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED" | "CANCELED") {
+  if (!invite?.pbxCallId) return;
+  await db.callRecord.upsert({
+    where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
+    create: {
+      tenantId: invite.tenantId,
+      pbxCallId: invite.pbxCallId,
+      direction: "INBOUND",
+      fromNumber: invite.fromNumber,
+      toNumber: invite.toExtension,
+      startedAt: invite.createdAt || new Date(),
+      durationSec: 0,
+      disposition
+    },
+    update: { disposition }
+  });
+}
+
+async function resolveInviteByPbxEvent(evt: NormalizedWirePbxEvent, target: { tenantId: string } | null) {
+  if (!evt.pbxCallId) return null;
+
+  if (target?.tenantId) {
+    const byTarget = await db.callInvite.findFirst({ where: { tenantId: target.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
+    if (byTarget) return byTarget;
   }
 
-  await updatePbxWebhookHeartbeat(target.pbxInstanceId, { lastEventAt: new Date(), lastError: null, status: "REGISTERED" });
+  if (evt.pbxTenantId) {
+    const tenantLink = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: evt.pbxTenantId, status: "LINKED" } });
+    if (tenantLink) {
+      const byTenantLink = await db.callInvite.findFirst({ where: { tenantId: tenantLink.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
+      if (byTenantLink) return byTenantLink;
+    }
+  }
+
+  const maybe = await db.callInvite.findMany({ where: { pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" }, take: 2 });
+  if (maybe.length === 1) return maybe[0];
+  return null;
+}
+
+async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WEBHOOK" | "POLL") {
+  const target = await resolvePbxEventTarget(evt);
+
+  if (target?.pbxInstanceId) {
+    await updatePbxWebhookHeartbeat(target.pbxInstanceId, { lastEventAt: new Date(), lastError: null, status: "REGISTERED" });
+  }
 
   if (evt.state === "RINGING") {
     if (!evt.pbxCallId) return { ok: false, reason: "MISSING_CALL_ID" };
+    if (!target) {
+      app.log.warn({ eventType: evt.eventType, pbxCallId: evt.pbxCallId, toExtension: evt.toExtension }, "pbx event target not found");
+      return { ok: false, reason: "TARGET_NOT_FOUND" };
+    }
 
     const existing = await db.callInvite.findFirst({ where: { tenantId: target.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
     if (existing && existing.status === "PENDING" && existing.expiresAt > new Date()) {
@@ -971,7 +969,7 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
             toExtension: evt.toExtension,
             pbxSipUsername: target.pbxSipUsername || null,
             sipCallTarget: evt.sipCallTarget || ((target.pbxSipUsername && target.sipDomain) ? `sip:${target.pbxSipUsername}@${target.sipDomain}` : (evt.toExtension && target.sipDomain ? `sip:${evt.toExtension}@${target.sipDomain}` : null)),
-            createdByEventId: evt.createdByEventId || null,
+            createdByEventId: evt.eventId || null,
             status: "PENDING",
             expiresAt: new Date(Date.now() + 45_000),
             acceptedAt: null,
@@ -991,7 +989,7 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
             toExtension: evt.toExtension,
             pbxSipUsername: target.pbxSipUsername || null,
             sipCallTarget: evt.sipCallTarget || ((target.pbxSipUsername && target.sipDomain) ? `sip:${target.pbxSipUsername}@${target.sipDomain}` : (evt.toExtension && target.sipDomain ? `sip:${evt.toExtension}@${target.sipDomain}` : null)),
-            createdByEventId: evt.createdByEventId || null,
+            createdByEventId: evt.eventId || null,
             status: "PENDING",
             expiresAt: new Date(Date.now() + 45_000)
           }
@@ -1019,30 +1017,67 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
     return { ok: true, inviteId: invite.id, push };
   }
 
-  if (evt.pbxCallId && (evt.state === "ANSWERED" || evt.state === "HANGUP")) {
-    const invite = await db.callInvite.findFirst({ where: { tenantId: target.tenantId, pbxCallId: evt.pbxCallId }, orderBy: { createdAt: "desc" } });
-    if (!invite) return { ok: true, skipped: true };
-
-    if (evt.state === "ANSWERED") {
-      if (invite.status === "PENDING") {
-        await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date(), acceptedByDeviceId: null } });
-        await audit({ tenantId: target.tenantId, action: "PBX_CALL_INVITE_ACCEPTED", entityType: "CallInvite", entityId: invite.id });
-      }
-      return { ok: true, inviteId: invite.id };
-    }
-
-    if (evt.state === "HANGUP") {
-      if (invite.status === "PENDING") {
-        const now = new Date();
-        const nextStatus = invite.expiresAt < now ? "EXPIRED" : "CANCELED";
-        await db.callInvite.update({ where: { id: invite.id }, data: { status: nextStatus, canceledAt: nextStatus === "CANCELED" ? now : null } });
-        await audit({ tenantId: target.tenantId, action: `PBX_CALL_INVITE_${nextStatus}`, entityType: "CallInvite", entityId: invite.id });
-      }
-      return { ok: true, inviteId: invite.id };
-    }
+  if (!evt.pbxCallId || (evt.state !== "ANSWERED" && evt.state !== "HANGUP" && evt.state !== "CANCELED")) {
+    return { ok: true, skipped: true };
   }
 
-  return { ok: true, skipped: true };
+  const invite = await resolveInviteByPbxEvent(evt, target);
+  if (!invite) return { ok: true, skipped: true };
+
+  if (evt.state === "ANSWERED") {
+    if (invite.status !== "PENDING") return { ok: true, inviteId: invite.id, status: invite.status, skipped: true };
+
+    const now = new Date();
+    await db.callInvite.update({
+      where: { id: invite.id },
+      data: {
+        status: "ACCEPTED",
+        acceptedAt: invite.acceptedAt || now
+      }
+    });
+    await audit({ tenantId: invite.tenantId, action: "CALL_INVITE_ACCEPTED_BY_PBX", entityType: "CallInvite", entityId: invite.id, actorUserId: invite.userId });
+    return { ok: true, inviteId: invite.id, status: "ACCEPTED" };
+  }
+
+  if (invite.status !== "PENDING") return { ok: true, inviteId: invite.id, status: invite.status, skipped: true };
+
+  const now = new Date();
+  const nextStatus = invite.expiresAt < now ? "EXPIRED" : "CANCELED";
+  await db.callInvite.update({
+    where: { id: invite.id },
+    data: {
+      status: nextStatus,
+      canceledAt: now
+    }
+  });
+
+  if (nextStatus === "EXPIRED") {
+    await createMissedCallRecordForInvite(invite, "MISSED").catch(() => undefined);
+  } else {
+    await createMissedCallRecordForInvite(invite, "CANCELED").catch(() => undefined);
+    await sendPushToUserDevices({
+      tenantId: invite.tenantId,
+      userId: invite.userId,
+      payload: {
+        type: "INVITE_CANCELED",
+        inviteId: invite.id,
+        pbxCallId: invite.pbxCallId,
+        reason: evt.cause || evt.state,
+        tenantId: invite.tenantId,
+        timestamp: new Date().toISOString()
+      }
+    }).catch(() => undefined);
+  }
+
+  await audit({
+    tenantId: invite.tenantId,
+    action: "CALL_INVITE_CANCELED_BY_PBX",
+    entityType: "CallInvite",
+    entityId: invite.id,
+    actorUserId: invite.userId
+  });
+
+  return { ok: true, inviteId: invite.id, status: nextStatus };
 }
 
 app.get("/health", async () => ({ ok: true }));
@@ -3132,8 +3167,8 @@ app.post("/webhooks/pbx", async (req, reply) => {
     return reply.status(403).send({ error: "INVALID_PBX_WEBHOOK", reason: verified.reason });
   }
 
-  const normalized = normalizePbxEvent(req.body || {});
-  if (!normalized.pbxCallId || !normalized.toExtension) {
+  const normalized = normalizeWirePbxEvent(req.body || {});
+  if (!normalized.pbxCallId || (normalized.state === "RINGING" && !normalized.toExtension)) {
     return reply.status(400).send({ error: "INVALID_EVENT_PAYLOAD" });
   }
 
@@ -3254,7 +3289,7 @@ app.post("/admin/pbx/events/parse-test", async (req, reply) => {
   if (!admin) return;
 
   const input = z.object({ event: z.record(z.any()) }).parse(req.body || {});
-  const normalized = normalizePbxEvent(input.event);
+  const normalized = normalizeWirePbxEvent(input.event);
   const target = await resolvePbxEventTarget(normalized);
   return {
     ok: true,

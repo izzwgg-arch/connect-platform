@@ -271,6 +271,7 @@ function getPbxClient(input: { baseUrl: string; token: string; secret?: string |
 
 type WorkerMobilePushPayload =
   | { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string }
+  | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
 
 async function sendPushToUserDevices(input: {
@@ -294,10 +295,16 @@ async function sendPushToUserDevices(input: {
     return { queued: devices.length, simulated: true };
   }
 
-  const title = input.payload.type === "INCOMING_CALL" ? "Incoming call" : "Missed call";
+  const title = input.payload.type === "INCOMING_CALL"
+    ? "Incoming call"
+    : input.payload.type === "INVITE_CANCELED"
+      ? "Call ended"
+      : "Missed call";
   const body = input.payload.type === "INCOMING_CALL"
     ? `Call from ${input.payload.fromNumber}`
-    : `Missed call from ${input.payload.fromNumber}`;
+    : input.payload.type === "INVITE_CANCELED"
+      ? "This call has ended."
+      : `Missed call from ${input.payload.fromNumber}`;
 
   const messages = devices.map((d) => ({
     to: d.expoPushToken,
@@ -329,12 +336,31 @@ async function sendPushToUserDevices(input: {
   return { queued: messages.length, simulated: false };
 }
 
-function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "UNKNOWN" {
+function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "CANCELED" | "UNKNOWN" {
   const x = String(v || "").toLowerCase();
   if (x.includes("ring")) return "RINGING";
   if (x.includes("answer")) return "ANSWERED";
+  if (x.includes("cancel") || x.includes("abandon")) return "CANCELED";
   if (x.includes("hang") || x.includes("end") || x.includes("term")) return "HANGUP";
   return "UNKNOWN";
+}
+
+async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED" | "CANCELED") {
+  if (!invite?.pbxCallId) return;
+  await db.callRecord.upsert({
+    where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
+    create: {
+      tenantId: invite.tenantId,
+      pbxCallId: invite.pbxCallId,
+      direction: "INBOUND",
+      fromNumber: invite.fromNumber,
+      toNumber: invite.toExtension,
+      startedAt: invite.createdAt || new Date(),
+      durationSec: 0,
+      disposition
+    },
+    update: { disposition }
+  });
 }
 
 async function processPolledCall(link: any, call: { callId: string; state: string; from: string; toExtension: string; tenantHint?: string; startedAt: string }) {
@@ -404,18 +430,35 @@ async function processPolledCall(link: any, call: { callId: string; state: strin
     return;
   }
 
-  if (state === "ANSWERED" || state === "HANGUP") {
+  if (state === "ANSWERED" || state === "HANGUP" || state === "CANCELED") {
     const invite = await db.callInvite.findFirst({ where: { tenantId: link.tenantId, pbxCallId: call.callId }, orderBy: { createdAt: "desc" } });
     if (!invite || invite.status !== "PENDING") return;
     if (state === "ANSWERED") {
-      await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });
-      await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_CALL_INVITE_ACCEPTED", entityType: "CallInvite", entityId: invite.id } });
+      await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: invite.acceptedAt || new Date() } });
+      await db.auditLog.create({ data: { tenantId: link.tenantId, action: "CALL_INVITE_ACCEPTED_BY_PBX", entityType: "CallInvite", entityId: invite.id } });
       return;
     }
     const now = new Date();
     const nextStatus = invite.expiresAt < now ? "EXPIRED" : "CANCELED";
-    await db.callInvite.update({ where: { id: invite.id }, data: { status: nextStatus, canceledAt: nextStatus === "CANCELED" ? now : null } });
-    await db.auditLog.create({ data: { tenantId: link.tenantId, action: `PBX_CALL_INVITE_${nextStatus}`, entityType: "CallInvite", entityId: invite.id } });
+    await db.callInvite.update({ where: { id: invite.id }, data: { status: nextStatus, canceledAt: now } });
+    await db.auditLog.create({ data: { tenantId: link.tenantId, action: "CALL_INVITE_CANCELED_BY_PBX", entityType: "CallInvite", entityId: invite.id } });
+    if (nextStatus === "EXPIRED") {
+      await createMissedCallRecordForInvite(invite, "MISSED").catch(() => undefined);
+    } else {
+      await createMissedCallRecordForInvite(invite, "CANCELED").catch(() => undefined);
+      await sendPushToUserDevices({
+        tenantId: invite.tenantId,
+        userId: invite.userId,
+        payload: {
+          type: "INVITE_CANCELED",
+          inviteId: invite.id,
+          pbxCallId: invite.pbxCallId,
+          reason: state,
+          tenantId: invite.tenantId,
+          timestamp: new Date().toISOString()
+        }
+      }).catch(() => undefined);
+    }
   }
 }
 
@@ -545,6 +588,7 @@ async function runCallInviteExpiryCycle(): Promise<void> {
     if (!out.count) continue;
     marked += out.count;
 
+    await createMissedCallRecordForInvite(invite, "MISSED").catch(() => undefined);
     await sendPushToUserDevices({
       tenantId: invite.tenantId,
       userId: invite.userId,

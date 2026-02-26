@@ -56,6 +56,17 @@ function payloadToInvite(data: Extract<MobilePushPayload, { type: "INCOMING_CALL
   };
 }
 
+async function dismissIncomingInvite(sip: ReturnType<typeof useSip>, invite: CallInvite, callIdOverride?: string) {
+  const callId = callIdOverride || invite.id;
+  endNativeCall(callId);
+  await sip.rejectIncomingInvite({
+    fromNumber: invite.fromNumber,
+    toExtension: invite.toExtension,
+    pbxCallId: invite.pbxCallId,
+    sipCallTarget: invite.sipCallTarget
+  }).catch(() => false);
+}
+
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
   const sip = useSip();
@@ -174,10 +185,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         }
         return;
       }
-      if (data?.type === "INVITE_CLAIMED") {
+      if (data?.type === "INVITE_CLAIMED" || data?.type === "INVITE_CANCELED") {
         setIncomingInvite((prev) => {
           if (!prev || prev.id !== data.inviteId) return prev;
-          endNativeCall(prev.id);
+          dismissIncomingInvite(sip, prev).catch(() => undefined);
+          if (data.type === "INVITE_CANCELED") {
+            Alert.alert("Call ended", "Call ended");
+          }
           return null;
         });
       }
@@ -197,7 +211,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         unregisterMobileDevice(token, currentToken).catch(() => undefined);
       }
     };
-  }, [token]);
+  }, [token, sip]);
 
 
   useEffect(() => {

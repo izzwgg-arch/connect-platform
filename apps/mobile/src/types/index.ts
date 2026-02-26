@@ -71,6 +71,15 @@ export type MissedCallPushPayload = {
   timestamp: string;
 };
 
+export type InviteCanceledPushPayload = {
+  type: "INVITE_CANCELED";
+  inviteId: string;
+  pbxCallId?: string | null;
+  reason?: string | null;
+  tenantId: string;
+  timestamp: string;
+};
+
 export type IncomingCallPushPayload = {
   type: "INCOMING_CALL";
   inviteId: string;
@@ -84,7 +93,7 @@ export type IncomingCallPushPayload = {
   timestamp: string;
 };
 
-export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPayload | MissedCallPushPayload;
+export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPayload | InviteCanceledPushPayload | MissedCallPushPayload;
 
 export type SipRegistrationState = "idle" | "registering" | "registered" | "failed";
 export type CallState = "idle" | "dialing" | "ringing" | "connected" | "ended";

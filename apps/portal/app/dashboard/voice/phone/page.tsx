@@ -53,6 +53,7 @@ export default function VoicePhonePage() {
   const sessionRef = useRef<any>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const diagSessionIdRef = useRef<string | null>(null);
+  const incomingPbxCallIdRef = useRef<string | null>(null);
 
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
 
@@ -145,6 +146,13 @@ export default function VoicePhonePage() {
     } catch {}
   }
 
+  function extractInvitePbxCallId(invitation: any): string | null {
+    const fromRequest = String(invitation?.request?.callId || invitation?.request?.headers?.["Call-ID"]?.[0]?.raw || "").trim();
+    if (fromRequest) return fromRequest;
+    const fromSession = String(invitation?.id || invitation?.sessionId || "").trim();
+    return fromSession || null;
+  }
+
   function watchSession(session: any) {
     sessionRef.current = session;
     if (!session?.stateChange?.addListener) return;
@@ -195,10 +203,12 @@ export default function VoicePhonePage() {
 
       ua.delegate = {
         onInvite: (invitation: any) => {
+          const pbxCallId = extractInvitePbxCallId(invitation);
+          incomingPbxCallIdRef.current = pbxCallId;
           setIncoming(invitation);
           setStatus("Incoming");
           watchSession(invitation);
-          diagEvent("INCOMING_INVITE", { source: "sip_delegate" }).catch(() => undefined);
+          diagEvent("INCOMING_INVITE", { source: "sip_delegate", pbxCallId: pbxCallId || undefined }).catch(() => undefined);
         }
       };
 
@@ -269,6 +279,7 @@ export default function VoicePhonePage() {
       try { await s.dispose?.(); } catch {}
     }
     setStatus("Ended");
+    incomingPbxCallIdRef.current = null;
     sessionRef.current = null;
   }
 
@@ -277,6 +288,7 @@ export default function VoicePhonePage() {
     try {
       await incoming.accept();
       setIncoming(null);
+      incomingPbxCallIdRef.current = null;
       setStatus("Connected");
       diagEvent("ANSWER_TAPPED", { action: "ACCEPT" }).catch(() => undefined);
       attachRemoteAudio(incoming);
@@ -289,10 +301,31 @@ export default function VoicePhonePage() {
     if (!incoming) return;
     try { await incoming.reject(); } catch {}
     setIncoming(null);
+    incomingPbxCallIdRef.current = null;
     setStatus("Ended");
     diagEvent("ANSWER_TAPPED", { action: "DECLINE" }).catch(() => undefined);
     diagEvent("CALL_ENDED", { action: "DECLINE" }).catch(() => undefined);
   }
+
+
+  useEffect(() => {
+    if (!token) return;
+    const t = setInterval(async () => {
+      if (!incoming || !incomingPbxCallIdRef.current) return;
+      const pending = await fetch(`${apiBase}/mobile/call-invites/pending`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+      const stillPending = Array.isArray(pending)
+        ? pending.some((x: any) => String(x?.pbxCallId || "") === String(incomingPbxCallIdRef.current || ""))
+        : false;
+      if (stillPending) return;
+      try { await incoming.reject?.(); } catch {}
+      setIncoming(null);
+      incomingPbxCallIdRef.current = null;
+      setStatus("Ended");
+    }, 2000);
+    return () => clearInterval(t);
+  }, [token, incoming]);
 
   function sendDtmf(digit: string) {
     const s = sessionRef.current;
