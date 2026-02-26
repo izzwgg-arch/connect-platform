@@ -52,8 +52,40 @@ export default function VoicePhonePage() {
   const registererRef = useRef<any>(null);
   const sessionRef = useRef<any>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const diagSessionIdRef = useRef<string | null>(null);
 
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
+
+  async function diagStart() {
+    if (!token) return;
+    const hasTurnCfg = (info?.iceServers || []).some((srv) => {
+      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
+      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
+    });
+    const out = await fetch(`${apiBase}/voice/diag/session/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        sessionId: diagSessionIdRef.current || undefined,
+        platform: "WEB",
+        appVersion: "portal-web",
+        sipWsUrl: info?.sipWsUrl || undefined,
+        sipDomain: info?.sipDomain || undefined,
+        iceHasTurn: hasTurnCfg,
+        lastRegState: status
+      })
+    }).then((r) => r.json()).catch(() => null);
+    if (out?.sessionId) diagSessionIdRef.current = String(out.sessionId);
+  }
+
+  async function diagEvent(type: string, payload?: any) {
+    if (!token || !diagSessionIdRef.current) return;
+    await fetch(`${apiBase}/voice/diag/event`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ sessionId: diagSessionIdRef.current, type, payload: payload || {} })
+    }).catch(() => undefined);
+  }
 
   async function loadData() {
     if (!token) return;
@@ -80,10 +112,25 @@ export default function VoicePhonePage() {
   useEffect(() => {
     loadData().catch(() => setError("Unable to load phone data"));
     return () => {
+      diagEvent("SIP_UNREGISTER", { reason: "unmount" }).catch(() => undefined);
+      diagEvent("WS_DISCONNECTED", { reason: "unmount" }).catch(() => undefined);
       try { registererRef.current?.unregister?.(); } catch {}
       try { uaRef.current?.stop?.(); } catch {}
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!info || !token) return;
+    diagStart().catch(() => undefined);
+    const hasTurnCfg = (info.iceServers || []).some((srv) => {
+      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
+      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
+    });
+    const t0 = Date.now();
+    diagEvent("ICE_GATHERING", { hasTurn: hasTurnCfg, iceServerCount: info.iceServers?.length || 0 }).catch(() => undefined);
+    diagEvent("TURN_TEST_RESULT", { ok: hasTurnCfg, hasRelay: hasTurnCfg, durationMs: Date.now() - t0 }).catch(() => undefined);
+  }, [info, token]);
 
   function attachRemoteAudio(session: any) {
     try {
@@ -108,9 +155,12 @@ export default function VoicePhonePage() {
       else if (text.includes("Established")) {
         setStatus("Connected");
         attachRemoteAudio(session);
+        diagEvent("CALL_CONNECTED", { state: text }).catch(() => undefined);
+        diagEvent("ICE_SELECTED_PAIR", { candidateType: hasTurn ? "relay_or_mixed" : "host_or_srflx" }).catch(() => undefined);
       } else if (text.includes("Terminated")) {
         setStatus("Ended");
         sessionRef.current = null;
+        diagEvent("CALL_ENDED", { state: text }).catch(() => undefined);
       }
     });
   }
@@ -148,6 +198,7 @@ export default function VoicePhonePage() {
           setIncoming(invitation);
           setStatus("Incoming");
           watchSession(invitation);
+          diagEvent("INCOMING_INVITE", { source: "sip_delegate" }).catch(() => undefined);
         }
       };
 
@@ -159,9 +210,13 @@ export default function VoicePhonePage() {
       registererRef.current = registerer;
       setSipReady(true);
       setStatus("Registered");
+      diagEvent("SIP_REGISTER", { sipReady: true }).catch(() => undefined);
+      diagEvent("WS_CONNECTED", { sipReady: true }).catch(() => undefined);
     } catch {
       setStatus("Registration failed");
       setError("SIP registration failed. Verify WSS, domain, and one-time password.");
+      diagEvent("ERROR", { code: "WEB_SIP_REGISTER_FAILED" }).catch(() => undefined);
+      diagEvent("WS_DISCONNECTED", { reason: "register_failed" }).catch(() => undefined);
     }
   }
 
@@ -223,6 +278,7 @@ export default function VoicePhonePage() {
       await incoming.accept();
       setIncoming(null);
       setStatus("Connected");
+      diagEvent("ANSWER_TAPPED", { action: "ACCEPT" }).catch(() => undefined);
       attachRemoteAudio(incoming);
     } catch {
       setError("Failed to accept incoming call.");
@@ -234,6 +290,8 @@ export default function VoicePhonePage() {
     try { await incoming.reject(); } catch {}
     setIncoming(null);
     setStatus("Ended");
+    diagEvent("ANSWER_TAPPED", { action: "DECLINE" }).catch(() => undefined);
+    diagEvent("CALL_ENDED", { action: "DECLINE" }).catch(() => undefined);
   }
 
   function sendDtmf(digit: string) {

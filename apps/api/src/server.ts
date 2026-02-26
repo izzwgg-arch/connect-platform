@@ -90,6 +90,8 @@ const providerCredCache = new Map<string, { recordId: string; creds: any; expire
 const providerCredCacheTtlMs = 60_000;
 const testSendLimiter = new Map<string, number[]>();
 const billingRateLimiter = new Map<string, number[]>();
+const voiceDiagHeartbeatLimiter = new Map<string, number>();
+const voiceDiagEventLimiter = new Map<string, number[]>();
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -292,6 +294,79 @@ async function requireSuperAdmin(req: any, reply: any): Promise<JwtUser | null> 
     return null;
   }
   return user;
+}
+
+
+function maskHostOnly(value: unknown): string | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    if (raw.includes("://")) return new URL(raw).host.toLowerCase();
+    const host = raw.split("/")[0].trim().toLowerCase();
+    return host || null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeVoiceRegState(v: unknown): "IDLE" | "REGISTERING" | "REGISTERED" | "FAILED" {
+  const x = String(v || "").toLowerCase();
+  if (x.includes("registering")) return "REGISTERING";
+  if (x.includes("registered")) return "REGISTERED";
+  if (x.includes("fail")) return "FAILED";
+  return "IDLE";
+}
+
+function normalizeVoiceCallState(v: unknown): "IDLE" | "DIALING" | "RINGING" | "CONNECTED" | "ENDED" {
+  const x = String(v || "").toLowerCase();
+  if (x.includes("dial")) return "DIALING";
+  if (x.includes("ring")) return "RINGING";
+  if (x.includes("connect")) return "CONNECTED";
+  if (x.includes("end") || x.includes("term")) return "ENDED";
+  return "IDLE";
+}
+
+function sanitizeDiagPayload(input: any): any {
+  const blocked = new Set(["password", "sipPassword", "authorization", "auth", "token", "secret", "sdp", "headers"]);
+  function walk(v: any): any {
+    if (v === null || v === undefined) return v;
+    if (Array.isArray(v)) return v.slice(0, 50).map((x) => walk(x));
+    if (typeof v === "object") {
+      const out: any = {};
+      for (const [k, val] of Object.entries(v)) {
+        const key = String(k);
+        if (blocked.has(key) || key.toLowerCase().includes("password") || key.toLowerCase().includes("secret")) {
+          out[key] = "[REDACTED]";
+          continue;
+        }
+        out[key] = walk(val);
+      }
+      return out;
+    }
+    if (typeof v === "string") return v.length > 512 ? `${v.slice(0, 512)}...` : v;
+    return v;
+  }
+  return walk(input || {});
+}
+
+function checkVoiceDiagHeartbeatLimit(sessionId: string): boolean {
+  const now = Date.now();
+  const last = voiceDiagHeartbeatLimiter.get(sessionId) || 0;
+  if (now - last < 60_000) return false;
+  voiceDiagHeartbeatLimiter.set(sessionId, now);
+  return true;
+}
+
+function checkVoiceDiagEventLimit(sessionId: string, max = 60, windowMs = 60_000): boolean {
+  const now = Date.now();
+  const arr = (voiceDiagEventLimiter.get(sessionId) || []).filter((ts) => now - ts < windowMs);
+  if (arr.length >= max) {
+    voiceDiagEventLimiter.set(sessionId, arr);
+    return false;
+  }
+  arr.push(now);
+  voiceDiagEventLimiter.set(sessionId, arr);
+  return true;
 }
 
 function ensureCredentialCrypto(reply: any): boolean {
@@ -2115,6 +2190,243 @@ app.get("/voice/pending-jobs", async (req, reply) => {
   return db.pbxJob.findMany({ where: { tenantId: admin.tenantId, status: { in: ["QUEUED", "RUNNING", "FAILED"] } }, orderBy: { createdAt: "desc" }, take: 100 });
 });
 
+
+app.post("/voice/diag/session/start", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    sessionId: z.string().optional(),
+    platform: z.enum(["WEB", "IOS", "ANDROID"]),
+    deviceId: z.string().optional(),
+    appVersion: z.string().max(64).optional(),
+    sipWsUrl: z.string().optional(),
+    sipDomain: z.string().optional(),
+    iceHasTurn: z.boolean().optional(),
+    lastRegState: z.string().optional(),
+    lastCallState: z.string().optional(),
+    lastErrorCode: z.string().max(120).optional()
+  }).parse(req.body || {});
+
+  const device = input.deviceId
+    ? await db.mobileDevice.findFirst({ where: { id: input.deviceId, tenantId: user.tenantId, userId: user.sub } })
+    : null;
+
+  const baseData: any = {
+    platform: input.platform,
+    deviceId: device?.id || null,
+    appVersion: input.appVersion || null,
+    sipWsUrl: maskHostOnly(input.sipWsUrl),
+    sipDomain: maskHostOnly(input.sipDomain),
+    iceHasTurn: !!input.iceHasTurn,
+    lastRegState: normalizeVoiceRegState(input.lastRegState),
+    lastCallState: normalizeVoiceCallState(input.lastCallState),
+    lastSeenAt: new Date(),
+    ...(input.lastErrorCode ? { lastErrorCode: input.lastErrorCode, lastErrorAt: new Date() } : {})
+  };
+
+  let session: any = null;
+  if (input.sessionId) {
+    const updated = await db.voiceClientSession.updateMany({
+      where: { id: input.sessionId, tenantId: user.tenantId, userId: user.sub },
+      data: baseData
+    });
+    if (updated.count > 0) {
+      session = await db.voiceClientSession.findUnique({ where: { id: input.sessionId } });
+    }
+  }
+
+  if (!session) {
+    session = await db.voiceClientSession.create({
+      data: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        startedAt: new Date(),
+        ...baseData
+      }
+    });
+  }
+
+  await db.voiceDiagEvent.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      sessionId: session.id,
+      type: "SESSION_START",
+      payload: sanitizeDiagPayload({ platform: session.platform, appVersion: session.appVersion, iceHasTurn: session.iceHasTurn }) as any
+    }
+  }).catch(() => undefined);
+
+  return { ok: true, sessionId: session.id, startedAt: session.startedAt, lastSeenAt: session.lastSeenAt };
+});
+
+app.post("/voice/diag/session/heartbeat", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    sessionId: z.string(),
+    lastRegState: z.string().optional(),
+    lastCallState: z.string().optional(),
+    lastErrorCode: z.string().max(120).optional(),
+    iceHasTurn: z.boolean().optional(),
+    sipWsUrl: z.string().optional(),
+    sipDomain: z.string().optional()
+  }).parse(req.body || {});
+
+  const session = await db.voiceClientSession.findFirst({ where: { id: input.sessionId, tenantId: user.tenantId, userId: user.sub } });
+  if (!session) return reply.status(404).send({ error: "SESSION_NOT_FOUND" });
+
+  if (!checkVoiceDiagHeartbeatLimit(session.id)) {
+    return { ok: true, throttled: true, sessionId: session.id };
+  }
+
+  const now = new Date();
+  const updated = await db.voiceClientSession.update({
+    where: { id: session.id },
+    data: {
+      lastSeenAt: now,
+      ...(input.lastRegState ? { lastRegState: normalizeVoiceRegState(input.lastRegState) } : {}),
+      ...(input.lastCallState ? { lastCallState: normalizeVoiceCallState(input.lastCallState) } : {}),
+      ...(input.lastErrorCode ? { lastErrorCode: input.lastErrorCode, lastErrorAt: now } : {}),
+      ...(input.iceHasTurn !== undefined ? { iceHasTurn: !!input.iceHasTurn } : {}),
+      ...(input.sipWsUrl ? { sipWsUrl: maskHostOnly(input.sipWsUrl) } : {}),
+      ...(input.sipDomain ? { sipDomain: maskHostOnly(input.sipDomain) } : {})
+    }
+  });
+
+  await db.voiceDiagEvent.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      sessionId: session.id,
+      type: "SESSION_HEARTBEAT",
+      payload: sanitizeDiagPayload({ lastRegState: updated.lastRegState, lastCallState: updated.lastCallState, iceHasTurn: updated.iceHasTurn }) as any
+    }
+  }).catch(() => undefined);
+
+  return { ok: true, sessionId: session.id, lastSeenAt: updated.lastSeenAt };
+});
+
+app.post("/voice/diag/event", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    sessionId: z.string(),
+    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR"]),
+    payload: z.any().optional()
+  }).parse(req.body || {});
+
+  const session = await db.voiceClientSession.findFirst({ where: { id: input.sessionId, tenantId: user.tenantId, userId: user.sub } });
+  if (!session) return reply.status(404).send({ error: "SESSION_NOT_FOUND" });
+
+  if (!checkVoiceDiagEventLimit(session.id, 60, 60_000)) {
+    return reply.status(429).send({ error: "VOICE_DIAG_RATE_LIMITED" });
+  }
+
+  const payload = sanitizeDiagPayload(input.payload || {});
+  const event = await db.voiceDiagEvent.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      sessionId: session.id,
+      type: input.type,
+      payload: payload as any
+    }
+  });
+
+  const now = new Date();
+  const updateData: any = { lastSeenAt: now };
+  if (input.type === "SIP_REGISTER") updateData.lastRegState = "REGISTERED";
+  if (input.type === "SIP_UNREGISTER") updateData.lastRegState = "IDLE";
+  if (input.type === "CALL_CONNECTED") updateData.lastCallState = "CONNECTED";
+  if (input.type === "CALL_ENDED") updateData.lastCallState = "ENDED";
+  if (input.type === "ERROR") {
+    updateData.lastErrorCode = String((payload as any)?.code || "UNKNOWN");
+    updateData.lastErrorAt = now;
+  }
+  await db.voiceClientSession.update({ where: { id: session.id }, data: updateData });
+
+  return { ok: true, eventId: event.id };
+});
+
+app.get("/voice/diag/sessions", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const sessions = await db.voiceClientSession.findMany({
+    where: { tenantId: admin.tenantId },
+    orderBy: { lastSeenAt: "desc" },
+    take: 200,
+    include: { _count: { select: { events: true } } }
+  });
+  return sessions;
+});
+
+app.get("/voice/diag/sessions/:id/events", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const session = await db.voiceClientSession.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!session) return reply.status(404).send({ error: "SESSION_NOT_FOUND" });
+  return db.voiceDiagEvent.findMany({ where: { tenantId: admin.tenantId, sessionId: id }, orderBy: { createdAt: "desc" }, take: 500 });
+});
+
+app.get("/admin/voice/diag/summary", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const since1h = new Date(Date.now() - 60 * 60 * 1000);
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const [sessions24h, wsDisc1h, answered1h, connected1h, sessionsNoTurn24h, events24h] = await Promise.all([
+    db.voiceClientSession.count({ where: { startedAt: { gte: since24h } } }),
+    db.voiceDiagEvent.count({ where: { createdAt: { gte: since1h }, type: "WS_DISCONNECTED" } }),
+    db.voiceDiagEvent.count({ where: { createdAt: { gte: since1h }, type: "ANSWER_TAPPED" } }),
+    db.voiceDiagEvent.count({ where: { createdAt: { gte: since1h }, type: "CALL_CONNECTED" } }),
+    db.voiceClientSession.count({ where: { startedAt: { gte: since24h }, iceHasTurn: false } }),
+    db.voiceDiagEvent.findMany({ where: { createdAt: { gte: since24h }, type: { in: ["INCOMING_INVITE", "CALL_CONNECTED"] } }, orderBy: { createdAt: "asc" }, select: { sessionId: true, type: true, createdAt: true } })
+  ]);
+
+  const inviteAt = new Map<string, number>();
+  const latencies: number[] = [];
+  for (const e of events24h) {
+    if (e.type === "INCOMING_INVITE") inviteAt.set(e.sessionId, new Date(e.createdAt).getTime());
+    if (e.type === "CALL_CONNECTED" && inviteAt.has(e.sessionId)) {
+      latencies.push(new Date(e.createdAt).getTime() - (inviteAt.get(e.sessionId) || 0));
+      inviteAt.delete(e.sessionId);
+    }
+  }
+  latencies.sort((a, b) => a - b);
+  const p95 = latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : null;
+
+  return {
+    window: { oneHourSince: since1h, daySince: since24h },
+    sessions24h,
+    wsDisconnectRatePerSession1h: sessions24h ? Number((wsDisc1h / sessions24h).toFixed(4)) : 0,
+    answerToConnectRatio1h: answered1h ? Number((connected1h / answered1h).toFixed(4)) : 0,
+    percentSessionsWithoutTurn24h: sessions24h ? Number(((sessionsNoTurn24h / sessions24h) * 100).toFixed(2)) : 0,
+    inviteToConnectLatencyP95Ms24h: p95
+  };
+});
+
+app.get("/admin/voice/diag/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const grouped = await db.voiceDiagEvent.groupBy({
+    by: ["tenantId"],
+    where: { createdAt: { gte: since24h }, type: { in: ["ERROR", "WS_DISCONNECTED"] } },
+    _count: { _all: true },
+    orderBy: { _count: { tenantId: "desc" } },
+    take: 20
+  } as any);
+
+  const tenantIds = grouped.map((g: any) => g.tenantId);
+  const tenants = tenantIds.length ? await db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } }) : [];
+  const nameById = new Map(tenants.map((t) => [t.id, t.name]));
+
+  return grouped.map((g: any) => ({
+    tenantId: g.tenantId,
+    tenantName: nameById.get(g.tenantId) || g.tenantId,
+    failureEvents24h: g._count?._all || 0
+  }));
+});
 
 
 app.post("/mobile/devices/register", async (req, reply) => {

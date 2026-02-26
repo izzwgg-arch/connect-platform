@@ -107,6 +107,45 @@ enum MobilePlatform {
   ANDROID
 }
 
+enum VoiceClientPlatform {
+  WEB
+  IOS
+  ANDROID
+}
+
+enum VoiceDiagRegState {
+  IDLE
+  REGISTERING
+  REGISTERED
+  FAILED
+}
+
+enum VoiceDiagCallState {
+  IDLE
+  DIALING
+  RINGING
+  CONNECTED
+  ENDED
+}
+
+enum VoiceDiagEventType {
+  SESSION_START
+  SESSION_HEARTBEAT
+  SIP_REGISTER
+  SIP_UNREGISTER
+  WS_CONNECTED
+  WS_DISCONNECTED
+  WS_RECONNECT
+  ICE_GATHERING
+  ICE_SELECTED_PAIR
+  TURN_TEST_RESULT
+  INCOMING_INVITE
+  ANSWER_TAPPED
+  CALL_CONNECTED
+  CALL_ENDED
+  ERROR
+}
+
 enum CallInviteStatus {
   PENDING
   ACCEPTED
@@ -168,6 +207,8 @@ model Tenant {
   callRecords                   CallRecord[]
   mobileDevices                 MobileDevice[]
   callInvites                   CallInvite[]
+  voiceClientSessions           VoiceClientSession[]
+  voiceDiagEvents               VoiceDiagEvent[]
   pbxTenantLink                 TenantPbxLink?
   pbxExtensionLinks             PbxExtensionLink[]
   pbxDidLinks                   PbxDidLink[]
@@ -194,6 +235,8 @@ model User {
   ownedExtensions            Extension[]          @relation("ExtensionOwner")
   mobileDevices              MobileDevice[]
   callInvites                CallInvite[]
+  voiceClientSessions        VoiceClientSession[]
+  voiceDiagEvents            VoiceDiagEvent[]
 }
 
 model Subscription {
@@ -622,12 +665,57 @@ model MobileDevice {
   lastSeenAt    DateTime       @default(now())
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  acceptedInvites CallInvite[]   @relation("CallInviteAcceptedByDevice")
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptedInvites    CallInvite[]        @relation("CallInviteAcceptedByDevice")
+  voiceClientSessions VoiceClientSession[]
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
+}
+
+
+model VoiceClientSession {
+  id            String             @id @default(cuid())
+  tenantId      String
+  userId        String
+  platform      VoiceClientPlatform
+  deviceId      String?
+  appVersion    String?
+  startedAt     DateTime           @default(now())
+  endedAt       DateTime?
+  lastSeenAt    DateTime           @default(now())
+  sipWsUrl      String?
+  sipDomain     String?
+  iceHasTurn    Boolean            @default(false)
+  lastRegState  VoiceDiagRegState  @default(IDLE)
+  lastCallState VoiceDiagCallState @default(IDLE)
+  lastErrorCode String?
+  lastErrorAt   DateTime?
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device        MobileDevice?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  events        VoiceDiagEvent[]
+
+  @@index([tenantId, startedAt])
+  @@index([userId, lastSeenAt])
+  @@index([deviceId])
+}
+
+model VoiceDiagEvent {
+  id        String            @id @default(cuid())
+  tenantId  String
+  userId    String
+  sessionId String
+  createdAt DateTime          @default(now())
+  type      VoiceDiagEventType
+  payload   Json
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session   VoiceClientSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([sessionId, createdAt])
 }
 
 model CallInvite {

@@ -3,7 +3,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
-import { getPendingInvites, registerMobileDevice, respondInvite, unregisterMobileDevice } from "../api/client";
+import { getPendingInvites, heartbeatVoiceDiagSession, postVoiceDiagEvent, registerMobileDevice, respondInvite, startVoiceDiagSession, unregisterMobileDevice } from "../api/client";
 import { useAuth } from "./AuthContext";
 import { useSip } from "./SipContext";
 import { endNativeCall, setupNativeCalling, showIncomingNativeCall, subscribeNativeCallActions } from "../sip/callkeep";
@@ -62,6 +62,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<CallInvite | null>(null);
   const deviceIdRef = React.useRef<string | null>(null);
+  const diagSessionIdRef = React.useRef<string | null>(null);
+  const lastRegStateRef = React.useRef<string>("idle");
+  const lastCallStateRef = React.useRef<string>("idle");
 
   useEffect(() => {
     setupNativeCalling().catch(() => undefined);
@@ -69,6 +72,8 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const unsubNative = subscribeNativeCallActions({
       onAnswer: async (callId) => {
         if (!token || !incomingInvite) return;
+        const sid = diagSessionIdRef.current;
+        if (sid) await postVoiceDiagEvent(token, { sessionId: sid, type: "ANSWER_TAPPED", payload: { action: "ACCEPT", inviteId: incomingInvite.id } }).catch(() => undefined);
         const resp = await respondInvite(token, incomingInvite.id, "ACCEPT", deviceIdRef.current || undefined).catch(() => null);
         if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
           setIncomingInvite(null);
@@ -94,6 +99,8 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       },
       onEnd: async (callId) => {
         if (!token || !incomingInvite) return;
+        const sid = diagSessionIdRef.current;
+        if (sid) await postVoiceDiagEvent(token, { sessionId: sid, type: "ANSWER_TAPPED", payload: { action: "DECLINE", inviteId: incomingInvite.id } }).catch(() => undefined);
         await respondInvite(token, incomingInvite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
         await sip.rejectIncomingInvite({
           fromNumber: incomingInvite.fromNumber,
@@ -130,11 +137,24 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         if (reg?.id) deviceIdRef.current = String(reg.id);
       }
 
+      const session = await startVoiceDiagSession(token, {
+        sessionId: diagSessionIdRef.current || undefined,
+        platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
+        deviceId: deviceIdRef.current || undefined,
+        appVersion: String(Constants.expoConfig?.version || ""),
+        lastRegState: sip.registrationState,
+        lastCallState: sip.callState
+      }).catch(() => null);
+      if (session?.sessionId) diagSessionIdRef.current = String(session.sessionId);
+
       const pending = await getPendingInvites(token).catch(() => []);
       if (pending.length > 0) {
         const invite = pending[0] as CallInvite;
         setIncomingInvite(invite);
         showIncomingNativeCall(invite.id, invite.fromNumber);
+        if (diagSessionIdRef.current) {
+          await postVoiceDiagEvent(token, { sessionId: diagSessionIdRef.current, type: "INCOMING_INVITE", payload: { inviteId: invite.id, source: "pending" } }).catch(() => undefined);
+        }
       }
     })();
 
@@ -144,6 +164,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         const invite = payloadToInvite(data);
         setIncomingInvite(invite);
         showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+        const sid = diagSessionIdRef.current;
+        if (sid) {
+          postVoiceDiagEvent(token, { sessionId: sid, type: "INCOMING_INVITE", payload: { inviteId: invite.id, fromNumber: invite.fromNumber } }).catch(() => undefined);
+        }
         return;
       }
       if (data?.type === "INVITE_CLAIMED") {
@@ -170,6 +194,48 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       }
     };
   }, [token]);
+
+
+  useEffect(() => {
+    if (!token || !diagSessionIdRef.current) return;
+    const sid = diagSessionIdRef.current;
+    const prevReg = lastRegStateRef.current;
+    const prevCall = lastCallStateRef.current;
+
+    if (prevReg !== sip.registrationState) {
+      if (sip.registrationState === "registered") {
+        postVoiceDiagEvent(token, { sessionId: sid, type: "SIP_REGISTER", payload: { state: sip.registrationState } }).catch(() => undefined);
+        postVoiceDiagEvent(token, { sessionId: sid, type: "WS_CONNECTED", payload: { state: sip.registrationState } }).catch(() => undefined);
+      } else if (prevReg === "registered" && sip.registrationState !== "registered") {
+        postVoiceDiagEvent(token, { sessionId: sid, type: "SIP_UNREGISTER", payload: { state: sip.registrationState } }).catch(() => undefined);
+        postVoiceDiagEvent(token, { sessionId: sid, type: "WS_DISCONNECTED", payload: { state: sip.registrationState } }).catch(() => undefined);
+      } else if (String(sip.registrationState).toLowerCase().includes("fail")) {
+        postVoiceDiagEvent(token, { sessionId: sid, type: "ERROR", payload: { code: "SIP_REGISTER_FAILED", state: sip.registrationState } }).catch(() => undefined);
+        postVoiceDiagEvent(token, { sessionId: sid, type: "WS_RECONNECT", payload: { state: sip.registrationState } }).catch(() => undefined);
+      }
+      lastRegStateRef.current = sip.registrationState;
+    }
+
+    if (prevCall !== sip.callState) {
+      if (sip.callState === "connected") postVoiceDiagEvent(token, { sessionId: sid, type: "CALL_CONNECTED", payload: { callState: sip.callState } }).catch(() => undefined);
+      if (sip.callState === "ended") postVoiceDiagEvent(token, { sessionId: sid, type: "CALL_ENDED", payload: { callState: sip.callState } }).catch(() => undefined);
+      if (sip.callState === "ringing") postVoiceDiagEvent(token, { sessionId: sid, type: "INCOMING_INVITE", payload: { source: "sip_state" } }).catch(() => undefined);
+      lastCallStateRef.current = sip.callState;
+    }
+  }, [token, sip.registrationState, sip.callState]);
+
+  useEffect(() => {
+    if (!token || !diagSessionIdRef.current) return;
+    const sid = diagSessionIdRef.current;
+    const t = setInterval(() => {
+      heartbeatVoiceDiagSession(token, {
+        sessionId: sid,
+        lastRegState: sip.registrationState,
+        lastCallState: sip.callState
+      }).catch(() => undefined);
+    }, 65_000);
+    return () => clearInterval(t);
+  }, [token, sip.registrationState, sip.callState]);
 
   const value = useMemo(
     () => ({

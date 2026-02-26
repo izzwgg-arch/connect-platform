@@ -564,6 +564,108 @@ async function runCallInviteExpiryCycle(): Promise<void> {
   }
 }
 
+
+async function runVoiceDiagAlertCycle(): Promise<void> {
+  const since5m = new Date(Date.now() - 5 * 60 * 1000);
+  const since1h = new Date(Date.now() - 60 * 60 * 1000);
+
+  const [answers, connects, wsDisconnects, recentSessions] = await Promise.all([
+    db.voiceDiagEvent.groupBy({ by: ["tenantId"], where: { createdAt: { gte: since5m }, type: "ANSWER_TAPPED" }, _count: { _all: true } }),
+    db.voiceDiagEvent.groupBy({ by: ["tenantId"], where: { createdAt: { gte: since5m }, type: "CALL_CONNECTED" }, _count: { _all: true } }),
+    db.voiceDiagEvent.groupBy({ by: ["tenantId"], where: { createdAt: { gte: since5m }, type: "WS_DISCONNECTED" }, _count: { _all: true } }),
+    db.voiceClientSession.findMany({ where: { startedAt: { gte: since1h } }, select: { tenantId: true, iceHasTurn: true } })
+  ]);
+
+  const mapCount = (rows: any[]) => {
+    const m = new Map<string, number>();
+    for (const row of rows) m.set(String(row.tenantId), Number(row?._count?._all || 0));
+    return m;
+  };
+
+  const answersByTenant = mapCount(answers as any[]);
+  const connectsByTenant = mapCount(connects as any[]);
+  const wsByTenant = mapCount(wsDisconnects as any[]);
+
+  const sessionStats = new Map<string, { total: number; noTurn: number }>();
+  for (const s of recentSessions) {
+    const curr = sessionStats.get(s.tenantId) || { total: 0, noTurn: 0 };
+    curr.total += 1;
+    if (!s.iceHasTurn) curr.noTurn += 1;
+    sessionStats.set(s.tenantId, curr);
+  }
+
+  const tenantIds = new Set<string>([
+    ...Array.from(answersByTenant.keys()),
+    ...Array.from(connectsByTenant.keys()),
+    ...Array.from(wsByTenant.keys()),
+    ...Array.from(sessionStats.keys())
+  ]);
+
+  for (const tenantId of tenantIds) {
+    const answersCount = answersByTenant.get(tenantId) || 0;
+    const connectsCount = connectsByTenant.get(tenantId) || 0;
+    const wsDiscCount = wsByTenant.get(tenantId) || 0;
+    const sess = sessionStats.get(tenantId) || { total: 0, noTurn: 0 };
+    const connectRatio = answersCount > 0 ? connectsCount / answersCount : 1;
+    const noTurnRatio = sess.total > 0 ? sess.noTurn / sess.total : 0;
+
+    const alerts: Array<{ severity: string; message: string; metadata: any }> = [];
+
+    if (answersCount >= 5 && connectRatio < 0.6) {
+      alerts.push({
+        severity: "HIGH",
+        message: "Low answer-to-connect ratio in last 5m",
+        metadata: { answersCount, connectsCount, connectRatio: Number(connectRatio.toFixed(3)) }
+      });
+    }
+
+    if (wsDiscCount >= 20) {
+      alerts.push({
+        severity: "HIGH",
+        message: "WebSocket disconnect spike detected in last 5m",
+        metadata: { wsDisconnects: wsDiscCount }
+      });
+    }
+
+    if (sess.total >= 5 && noTurnRatio > 0.7 && connectRatio < 0.8) {
+      alerts.push({
+        severity: "MEDIUM",
+        message: "High no-TURN usage correlated with call reliability drop",
+        metadata: { sessionCount: sess.total, noTurnCount: sess.noTurn, noTurnRatio: Number(noTurnRatio.toFixed(3)), connectRatio: Number(connectRatio.toFixed(3)) }
+      });
+    }
+
+    for (const alert of alerts) {
+      const exists = await db.alert.findFirst({
+        where: {
+          tenantId,
+          category: "VOICE_DIAG",
+          message: alert.message,
+          createdAt: { gte: since5m }
+        }
+      });
+      if (exists) continue;
+      await db.alert.create({
+        data: {
+          tenantId,
+          severity: alert.severity,
+          category: "VOICE_DIAG",
+          message: alert.message,
+          metadata: alert.metadata as any
+        }
+      });
+      await db.auditLog.create({
+        data: {
+          tenantId,
+          action: "VOICE_DIAG_ALERT",
+          entityType: "Alert",
+          entityId: tenantId
+        }
+      }).catch(() => undefined);
+    }
+  }
+}
+
 async function runPbxCdrSyncCycle(): Promise<void> {
   const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
   for (const link of links) {
@@ -857,7 +959,12 @@ setInterval(() => {
   runPbxActiveCallPollCycle().catch((err) => console.error("pbx active call poll failed", err?.message || err));
 }, 5 * 1000);
 
+setInterval(() => {
+  runVoiceDiagAlertCycle().catch((err) => console.error("voice diag alert cycle failed", err?.message || err));
+}, 5 * 60 * 1000);
+
 runCallInviteExpiryCycle().catch((err) => console.error("initial call invite expiry failed", err?.message || err));
+runVoiceDiagAlertCycle().catch((err) => console.error("initial voice diag alert cycle failed", err?.message || err));
 runPbxActiveCallPollCycle().catch((err) => console.error("initial pbx active call poll failed", err?.message || err));
 
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));

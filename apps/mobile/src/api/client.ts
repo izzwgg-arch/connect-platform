@@ -99,3 +99,61 @@ export async function respondInvite(token: string, inviteId: string, action: "AC
   if (!res.ok) throw new Error(json?.error || "CALL_INVITE_RESPOND_FAILED");
   return json;
 }
+
+
+export async function startVoiceDiagSession(token: string, input: {
+  sessionId?: string;
+  platform: "WEB" | "IOS" | "ANDROID";
+  deviceId?: string;
+  appVersion?: string;
+  sipWsUrl?: string;
+  sipDomain?: string;
+  iceHasTurn?: boolean;
+  lastRegState?: string;
+  lastCallState?: string;
+  lastErrorCode?: string;
+}) {
+  const res = await fetch(`${API_BASE}/voice/diag/session/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICE_DIAG_SESSION_START_FAILED");
+  return json;
+}
+
+export async function heartbeatVoiceDiagSession(token: string, input: {
+  sessionId: string;
+  lastRegState?: string;
+  lastCallState?: string;
+  lastErrorCode?: string;
+  iceHasTurn?: boolean;
+  sipWsUrl?: string;
+  sipDomain?: string;
+}) {
+  const res = await fetch(`${API_BASE}/voice/diag/session/heartbeat`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICE_DIAG_HEARTBEAT_FAILED");
+  return json;
+}
+
+export async function postVoiceDiagEvent(token: string, input: {
+  sessionId: string;
+  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR";
+  payload?: any;
+}) {
+  const res = await fetch(`${API_BASE}/voice/diag/event`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICE_DIAG_EVENT_FAILED");
+  return json;
+}
+
