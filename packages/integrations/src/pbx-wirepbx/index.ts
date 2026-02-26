@@ -8,6 +8,7 @@ export type WirePbxConfig = {
   webhookListPath?: string;
   webhookDeletePath?: string;
   activeCallsPath?: string;
+  webhookCallbackUrl?: string;
   webhookSignatureMode?: "HMAC" | "TOKEN" | "NONE";
   webhookEventTypes?: string[];
   supportsWebhooks?: boolean;
@@ -201,7 +202,20 @@ export class WirePbxClient {
     return { ok: true };
   }
 
-  async registerWebhook(callbackUrl: string): Promise<{ webhookId: string }> {
+  private resolveWebhookCallbackUrl(callbackUrl?: string): string {
+    const explicit = callbackUrl?.trim();
+    if (explicit) return explicit;
+
+    const configured = this.cfg.webhookCallbackUrl?.trim() || process.env.PBX_WEBHOOK_CALLBACK_URL?.trim();
+    if (configured) return configured;
+
+    const publicApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+    if (publicApiBase) return `${publicApiBase.replace(/\/$/, "")}/webhooks/pbx`;
+
+    return "https://app.connectcomunications.com/api/webhooks/pbx";
+  }
+
+  async registerWebhook(callbackUrl?: string): Promise<{ webhookId: string }> {
     const cap = this.getCapabilities();
     const registerPath = this.pathFromConfig(this.cfg.webhookRegisterPath, "PBX_WEBHOOK_REGISTER_PATH");
     if (!cap.supportsWebhooks || !registerPath) throw makeErr("PBX webhook registration not supported", "NOT_SUPPORTED", 501, false);
@@ -210,7 +224,8 @@ export class WirePbxClient {
       return { webhookId: `sim_webhook_${Date.now()}` };
     }
 
-    const out = await this.request<any>("POST", registerPath, { callbackUrl, eventTypes: cap.webhookEventTypes });
+    const resolvedCallbackUrl = this.resolveWebhookCallbackUrl(callbackUrl);
+    const out = await this.request<any>("POST", registerPath, { callbackUrl: resolvedCallbackUrl, eventTypes: cap.webhookEventTypes });
     return { webhookId: String(out?.webhookId || out?.id || out?.data?.id || "") };
   }
 
@@ -220,7 +235,7 @@ export class WirePbxClient {
     if (!cap.supportsWebhooks || !listPath) throw makeErr("PBX webhook listing not supported", "NOT_SUPPORTED", 501, false);
 
     if (this.cfg.simulate) {
-      return [{ webhookId: "sim_webhook_1", callbackUrl: "https://app.connectcomunications.com/webhooks/pbx", eventTypes: cap.webhookEventTypes, isEnabled: true }];
+      return [{ webhookId: "sim_webhook_1", callbackUrl: this.resolveWebhookCallbackUrl(), eventTypes: cap.webhookEventTypes, isEnabled: true }];
     }
 
     const out = await this.request<any>("GET", listPath);

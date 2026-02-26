@@ -130,7 +130,8 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
     supportsWebhooks: process.env.PBX_SUPPORTS_WEBHOOKS ? process.env.PBX_SUPPORTS_WEBHOOKS.toLowerCase() === "true" : undefined,
     supportsActiveCallPolling: process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING ? process.env.PBX_SUPPORTS_ACTIVE_CALL_POLLING.toLowerCase() === "true" : undefined,
     webhookSignatureMode: (process.env.PBX_WEBHOOK_SIGNATURE_MODE as "HMAC" | "TOKEN" | "NONE" | undefined) || undefined,
-    webhookEventTypes: (process.env.PBX_WEBHOOK_EVENT_TYPES || "").split(",").map((x) => x.trim()).filter(Boolean)
+    webhookEventTypes: (process.env.PBX_WEBHOOK_EVENT_TYPES || "").split(",").map((x) => x.trim()).filter(Boolean),
+    webhookCallbackUrl: process.env.PBX_WEBHOOK_CALLBACK_URL
   });
 }
 
@@ -2213,9 +2214,11 @@ app.post("/admin/pbx/events/register", async (req, reply) => {
   const instance = await db.pbxInstance.findUnique({ where: { id: input.pbxInstanceId } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
 
-  const proto = String(req.headers["x-forwarded-proto"] || "https");
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "app.connectcomunications.com");
-  const callbackUrl = input.callbackUrl || `${proto}://${host}/webhooks/pbx`;
+  const configuredCallbackUrl = (process.env.PBX_WEBHOOK_CALLBACK_URL || "").trim();
+  const publicApiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "").trim();
+  const defaultCallbackUrl = configuredCallbackUrl
+    || (publicApiBaseUrl ? `${publicApiBaseUrl.replace(/\/$/, "")}/webhooks/pbx` : "https://app.connectcomunications.com/api/webhooks/pbx");
+  const callbackUrl = input.callbackUrl || defaultCallbackUrl;
 
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const client = getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });

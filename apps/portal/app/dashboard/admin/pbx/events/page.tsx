@@ -45,6 +45,7 @@ export default function AdminPbxEventsPage() {
   const [testResult, setTestResult] = useState("{}");
 
   const token = useMemo(() => (typeof window !== "undefined" ? window.localStorage.getItem("token") || "" : ""), []);
+  const canonicalWebhookUrl = "https://app.connectcomunications.com/api/webhooks/pbx";
 
   async function load() {
     const res = await fetch(`${apiBase}/admin/pbx/events/status`, { headers: { Authorization: `Bearer ${token}` } });
@@ -111,6 +112,11 @@ export default function AdminPbxEventsPage() {
     <div className="card">
       <h1>PBX Event Setup</h1>
       <p>Configure inbound call event handling from WirePBX/VitalPBX into mobile call invites.</p>
+
+      <div style={{ marginBottom: 12 }}>
+        <strong>Webhook Callback URL:</strong> <code>{canonicalWebhookUrl}</code>{" "}
+        <button onClick={() => navigator.clipboard.writeText(canonicalWebhookUrl)}>Copy Webhook URL</button>
+      </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <select value={selected} onChange={(e) => setSelected(e.target.value)}>

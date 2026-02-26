@@ -26,7 +26,7 @@ Notes:
 Webhook URL:
 
 `
-https://app.connectcomunications.com/webhooks/pbx
+https://app.connectcomunications.com/api/webhooks/pbx
 `
 
 Required API env vars:
@@ -48,7 +48,7 @@ Optional PBX capability/path overrides:
 
 Nginx ops note:
 
-- Route /webhooks/pbx to API (existing HTTPS only).
-- Exclude /webhooks/pbx from auto-ban scoring the same way as other webhook paths.
+- Route /api/webhooks/pbx to API (existing HTTPS only).
+- Exclude /api/webhooks/pbx from auto-ban scoring the same way as other webhook paths.
 - Keep a moderate rate-limit for this endpoint, not auth-level strict limits.
 
