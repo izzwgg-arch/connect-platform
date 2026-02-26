@@ -39,6 +39,8 @@ for _ in $(seq 1 40); do
 done
 curl -fsS "$BASE_URL/health" >/dev/null || fail "api not healthy"
 
+"$REPO_ROOT/scripts/check-migrations.sh" || fail "migration check failed"
+
 signup_payload="$(jq -nc --arg tn "$TENANT_NAME" --arg em "$EMAIL" --arg pw "$PASSWORD" '{tenantName:$tn,email:$em,password:$pw}')"
 signup_json="$(api POST /auth/signup "" "$signup_payload")"
 echo "$signup_json" | jq -e . >/dev/null || fail "invalid signup response"
@@ -49,32 +51,6 @@ PG_CONTAINER="$(docker ps --format '{{.Names}}' | grep -m1 postgres || true)"
 [[ -n "$PG_CONTAINER" ]] || fail "postgres not found"
 
 docker exec -i "$PG_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "UPDATE \"User\" SET role='SUPER_ADMIN' WHERE email='${EMAIL}';" >/dev/null
-
-docker exec -i "$PG_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null <<'SQL'
-ALTER TABLE "CallInvite"
-  ADD COLUMN IF NOT EXISTS "pbxSipUsername" TEXT,
-  ADD COLUMN IF NOT EXISTS "sipCallTarget" TEXT,
-  ADD COLUMN IF NOT EXISTS "fromDisplay" TEXT,
-  ADD COLUMN IF NOT EXISTS "createdByEventId" TEXT,
-  ADD COLUMN IF NOT EXISTS "acceptedByDeviceId" TEXT;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'CallInvite_acceptedByDeviceId_fkey'
-  ) THEN
-    ALTER TABLE "CallInvite"
-      ADD CONSTRAINT "CallInvite_acceptedByDeviceId_fkey"
-      FOREIGN KEY ("acceptedByDeviceId") REFERENCES "MobileDevice"("id")
-      ON DELETE SET NULL ON UPDATE CASCADE;
-  END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS "CallInvite_acceptedByDeviceId_idx"
-  ON "CallInvite"("acceptedByDeviceId");
-SQL
 
 login_payload="$(jq -nc --arg em "$EMAIL" --arg pw "$PASSWORD" '{email:$em,password:$pw}')"
 login_json="$(api POST /auth/login "" "$login_payload")"

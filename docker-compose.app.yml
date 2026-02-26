@@ -33,6 +33,7 @@ services:
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
+    command: sh -lc "pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
     networks:
