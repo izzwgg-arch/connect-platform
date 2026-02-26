@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
-import { Platform } from "react-native";
+import { Alert, Platform } from "react-native";
 import { getPendingInvites, heartbeatVoiceDiagSession, postVoiceDiagEvent, registerMobileDevice, respondInvite, startVoiceDiagSession, unregisterMobileDevice } from "../api/client";
 import { useAuth } from "./AuthContext";
 import { useSip } from "./SipContext";
@@ -76,6 +76,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         if (sid) await postVoiceDiagEvent(token, { sessionId: sid, type: "ANSWER_TAPPED", payload: { action: "ACCEPT", inviteId: incomingInvite.id } }).catch(() => undefined);
         const resp = await respondInvite(token, incomingInvite.id, "ACCEPT", deviceIdRef.current || undefined).catch(() => null);
         if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
+          if (resp?.code === "TURN_REQUIRED_NOT_VERIFIED") {
+            Alert.alert("TURN not verified", "TURN not verified. Ask admin to test TURN in the portal.");
+            await respondInvite(token, incomingInvite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+          }
           setIncomingInvite(null);
           endNativeCall(callId);
           return;

@@ -92,6 +92,7 @@ const testSendLimiter = new Map<string, number[]>();
 const billingRateLimiter = new Map<string, number[]>();
 const voiceDiagHeartbeatLimiter = new Map<string, number>();
 const voiceDiagEventLimiter = new Map<string, number[]>();
+const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -367,6 +368,83 @@ function checkVoiceDiagEventLimit(sessionId: string, max = 60, windowMs = 60_000
   arr.push(now);
   voiceDiagEventLimiter.set(sessionId, arr);
   return true;
+}
+
+
+function maskUsername(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const v = String(value);
+  if (v.length <= 4) return `${v[0] || "*"}***`;
+  return `${v.slice(0, 2)}***${v.slice(-2)}`;
+}
+
+function normalizeTurnUrls(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((x) => String(x || "").trim()).filter((x) => x.length > 0);
+}
+
+function validateTurnUrls(urls: string[]): { ok: boolean; error?: string } {
+  if (!urls.length) return { ok: false, error: "TURN_URLS_REQUIRED" };
+  for (const u of urls) {
+    const x = u.toLowerCase();
+    if (!x.startsWith("turn:") && !x.startsWith("turns:")) return { ok: false, error: "TURN_URL_MUST_USE_TURN_SCHEME" };
+  }
+  return { ok: true };
+}
+
+function buildTurnConfigPublicView(cfg: any) {
+  const urls = normalizeTurnUrls(cfg?.urls || []).map((u) => maskHostOnly(u) || "masked");
+  return {
+    scope: cfg?.scope || "GLOBAL",
+    tenantId: cfg?.tenantId || null,
+    urls,
+    username: maskUsername(cfg?.username || null),
+    hasCredential: !!cfg?.credentialEncrypted,
+    updatedAt: cfg?.updatedAt || null
+  };
+}
+
+function signTurnValidationToken(input: { jobId: string; tokenId: string; tenantId: string; userId: string; expMs: number }): string {
+  const payload = Buffer.from(JSON.stringify(input)).toString("base64url");
+  const sig = createHmac("sha256", turnValidationTokenSecret).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifyTurnValidationToken(token: string): null | { jobId: string; tokenId: string; tenantId: string; userId: string; expMs: number } {
+  const t = String(token || "").trim();
+  const idx = t.lastIndexOf(".");
+  if (idx <= 0) return null;
+  const payload = t.slice(0, idx);
+  const sig = t.slice(idx + 1);
+  const expected = createHmac("sha256", turnValidationTokenSecret).update(payload).digest();
+  const given = Buffer.from(sig, "base64url");
+  if (given.length !== expected.length) return null;
+  if (!timingSafeEqual(expected, given)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed?.jobId || !parsed?.tokenId || !parsed?.tenantId || !parsed?.userId || !parsed?.expMs) return null;
+    if (Number(parsed.expMs) < Date.now()) return null;
+    return {
+      jobId: String(parsed.jobId),
+      tokenId: String(parsed.tokenId),
+      tenantId: String(parsed.tenantId),
+      userId: String(parsed.userId),
+      expMs: Number(parsed.expMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getEffectiveTurnConfig(tenantId: string): Promise<any | null> {
+  const tenantCfg = await db.turnConfig.findFirst({ where: { scope: "TENANT", tenantId } });
+  if (tenantCfg) return tenantCfg;
+  return db.turnConfig.findFirst({ where: { scope: "GLOBAL" } });
+}
+
+function isTurnRecentlyVerified(tenant: any): boolean {
+  if (!tenant || tenant.turnValidationStatus !== "VERIFIED" || !tenant.turnValidatedAt) return false;
+  return new Date(tenant.turnValidatedAt).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000;
 }
 
 function ensureCredentialCrypto(reply: any): boolean {
@@ -2366,6 +2444,289 @@ app.get("/voice/diag/sessions/:id/events", async (req, reply) => {
   return db.voiceDiagEvent.findMany({ where: { tenantId: admin.tenantId, sessionId: id }, orderBy: { createdAt: "desc" }, take: 500 });
 });
 
+
+app.get("/voice/turn", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const [tenant, effective] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: admin.tenantId },
+      select: {
+        turnRequiredForMobile: true,
+        turnValidationStatus: true,
+        turnValidatedAt: true,
+        turnLastErrorCode: true,
+        turnLastErrorAt: true
+      }
+    }),
+    getEffectiveTurnConfig(admin.tenantId)
+  ]);
+
+  return {
+    ok: true,
+    effective: effective ? buildTurnConfigPublicView(effective) : null,
+    turnRequiredForMobile: !!tenant?.turnRequiredForMobile,
+    status: tenant?.turnValidationStatus || "UNKNOWN",
+    validatedAt: tenant?.turnValidatedAt || null,
+    lastErrorCode: tenant?.turnLastErrorCode || null,
+    lastErrorAt: tenant?.turnLastErrorAt || null
+  };
+});
+
+app.put("/voice/turn", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({
+    urls: z.array(z.string().min(1)).optional(),
+    username: z.string().max(200).optional(),
+    credential: z.string().max(2000).optional(),
+    turnRequiredForMobile: z.boolean().optional(),
+    clearOverride: z.boolean().optional()
+  }).parse(req.body || {});
+
+  if (input.clearOverride) {
+    await db.turnConfig.deleteMany({ where: { scope: "TENANT", tenantId: admin.tenantId } });
+  } else if (input.urls || input.username !== undefined || input.credential !== undefined) {
+    const existing = await db.turnConfig.findFirst({ where: { scope: "TENANT", tenantId: admin.tenantId } });
+    const urls = input.urls || normalizeTurnUrls(existing?.urls || []);
+    const val = validateTurnUrls(urls);
+    if (!val.ok) return reply.status(400).send({ error: val.error });
+
+    const nextCredentialEncrypted = input.credential === undefined
+      ? existing?.credentialEncrypted || null
+      : (input.credential ? encryptJson({ credential: input.credential }) : null);
+
+    if (existing) {
+      await db.turnConfig.update({
+        where: { id: existing.id },
+        data: {
+          urls: urls as any,
+          username: input.username !== undefined ? (input.username || null) : existing.username,
+          credentialEncrypted: nextCredentialEncrypted,
+          credentialKeyId: nextCredentialEncrypted ? "v1" : null
+        }
+      });
+    } else {
+      await db.turnConfig.create({
+        data: {
+          scope: "TENANT",
+          tenantId: admin.tenantId,
+          urls: urls as any,
+          username: input.username || null,
+          credentialEncrypted: nextCredentialEncrypted,
+          credentialKeyId: nextCredentialEncrypted ? "v1" : null
+        }
+      });
+    }
+  }
+
+  if (input.turnRequiredForMobile !== undefined) {
+    await db.tenant.update({ where: { id: admin.tenantId }, data: { turnRequiredForMobile: !!input.turnRequiredForMobile } });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "VOICE_TURN_CONFIG_UPDATED", entityType: "Tenant", entityId: admin.tenantId });
+
+  const tenant = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  const effective = await getEffectiveTurnConfig(admin.tenantId);
+  return {
+    ok: true,
+    effective: effective ? buildTurnConfigPublicView(effective) : null,
+    turnRequiredForMobile: !!tenant?.turnRequiredForMobile,
+    status: tenant?.turnValidationStatus || "UNKNOWN",
+    validatedAt: tenant?.turnValidatedAt || null,
+    lastErrorCode: tenant?.turnLastErrorCode || null,
+    lastErrorAt: tenant?.turnLastErrorAt || null
+  };
+});
+
+app.post("/voice/turn/validate", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  if (!checkBillingRateLimit(`voice-turn-validate:${admin.tenantId}`, 20, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const effective = await getEffectiveTurnConfig(admin.tenantId);
+  if (!effective) return reply.status(400).send({ error: "TURN_CONFIG_MISSING" });
+
+  const urls = normalizeTurnUrls(effective.urls || []);
+  const val = validateTurnUrls(urls);
+  if (!val.ok) return reply.status(400).send({ error: val.error });
+
+  const tokenId = createHmac("sha256", turnValidationTokenSecret).update(`${admin.tenantId}:${admin.sub}:${Date.now()}:${Math.random()}`).digest("hex");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const job = await db.turnValidationJob.create({
+    data: {
+      tenantId: admin.tenantId,
+      requestedByUserId: admin.sub,
+      status: "RUNNING",
+      tokenId,
+      expiresAt,
+      startedAt: new Date()
+    }
+  });
+
+  const token = signTurnValidationToken({
+    jobId: job.id,
+    tokenId,
+    tenantId: admin.tenantId,
+    userId: admin.sub,
+    expMs: expiresAt.getTime()
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "VOICE_TURN_VALIDATE_REQUESTED", entityType: "TurnValidationJob", entityId: job.id });
+  return { ok: true, jobId: job.id, token, expiresAt, effective: buildTurnConfigPublicView(effective) };
+});
+
+app.post("/voice/turn/validate/report", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    token: z.string().min(10),
+    hasRelay: z.boolean(),
+    durationMs: z.number().int().min(0).max(120000).optional(),
+    platform: z.enum(["WEB", "IOS", "ANDROID"]).optional(),
+    errorCode: z.string().max(120).optional()
+  }).parse(req.body || {});
+
+  const verified = verifyTurnValidationToken(input.token);
+  if (!verified) return reply.status(400).send({ error: "INVALID_TURN_VALIDATION_TOKEN" });
+  if (verified.tenantId !== user.tenantId) return reply.status(403).send({ error: "forbidden" });
+
+  const job = await db.turnValidationJob.findFirst({ where: { id: verified.jobId, tokenId: verified.tokenId, tenantId: user.tenantId } });
+  if (!job) return reply.status(404).send({ error: "TURN_VALIDATION_JOB_NOT_FOUND" });
+  if (job.finishedAt) return { ok: true, jobId: job.id, status: job.status };
+  if (job.expiresAt.getTime() < Date.now()) {
+    await db.turnValidationJob.update({ where: { id: job.id }, data: { status: "FAILED", finishedAt: new Date(), errorCode: "EXPIRED" } });
+    return reply.status(400).send({ error: "TURN_VALIDATION_JOB_EXPIRED" });
+  }
+
+  const now = new Date();
+  const success = !!input.hasRelay;
+
+  await db.turnValidationJob.update({
+    where: { id: job.id },
+    data: {
+      status: success ? "SUCCEEDED" : "FAILED",
+      finishedAt: now,
+      hasRelay: success,
+      durationMs: input.durationMs || null,
+      platform: input.platform || null,
+      errorCode: success ? null : (input.errorCode || "NO_RELAY_CANDIDATE")
+    }
+  });
+
+  await db.tenant.update({
+    where: { id: user.tenantId },
+    data: success
+      ? { turnValidationStatus: "VERIFIED", turnValidatedAt: now, turnLastErrorCode: null, turnLastErrorAt: null }
+      : { turnValidationStatus: "FAILED", turnLastErrorCode: input.errorCode || "NO_RELAY_CANDIDATE", turnLastErrorAt: now }
+  });
+
+  await db.alert.create({
+    data: {
+      tenantId: user.tenantId,
+      severity: success ? "INFO" : "MEDIUM",
+      category: "VOICE_TURN",
+      message: success ? "TURN validation succeeded" : "TURN validation failed",
+      metadata: { platform: input.platform || null, hasRelay: success, durationMs: input.durationMs || null, errorCode: success ? null : (input.errorCode || "NO_RELAY_CANDIDATE") } as any
+    }
+  }).catch(() => undefined);
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: success ? "VOICE_TURN_VALIDATED" : "VOICE_TURN_VALIDATION_FAILED", entityType: "TurnValidationJob", entityId: job.id });
+
+  return { ok: true, jobId: job.id, status: success ? "VERIFIED" : "FAILED" };
+});
+
+app.get("/admin/voice/turn/global", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const cfg = await db.turnConfig.findFirst({ where: { scope: "GLOBAL" } });
+  return { ok: true, config: cfg ? buildTurnConfigPublicView(cfg) : null };
+});
+
+app.put("/admin/voice/turn/global", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({
+    urls: z.array(z.string().min(1)).min(1),
+    username: z.string().max(200).optional(),
+    credential: z.string().max(2000).optional()
+  }).parse(req.body || {});
+
+  const val = validateTurnUrls(input.urls);
+  if (!val.ok) return reply.status(400).send({ error: val.error });
+
+  const existing = await db.turnConfig.findFirst({ where: { scope: "GLOBAL" } });
+  const credentialEncrypted = input.credential !== undefined
+    ? (input.credential ? encryptJson({ credential: input.credential }) : null)
+    : existing?.credentialEncrypted || null;
+
+  let row: any;
+  if (existing) {
+    row = await db.turnConfig.update({
+      where: { id: existing.id },
+      data: {
+        urls: input.urls as any,
+        username: input.username !== undefined ? (input.username || null) : existing.username,
+        credentialEncrypted,
+        credentialKeyId: credentialEncrypted ? "v1" : null
+      }
+    });
+  } else {
+    row = await db.turnConfig.create({
+      data: {
+        scope: "GLOBAL",
+        urls: input.urls as any,
+        username: input.username || null,
+        credentialEncrypted,
+        credentialKeyId: credentialEncrypted ? "v1" : null
+      }
+    });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "VOICE_TURN_GLOBAL_CONFIG_UPDATED", entityType: "TurnConfig", entityId: row.id });
+  return { ok: true, config: buildTurnConfigPublicView(row) };
+});
+
+app.get("/admin/voice/turn/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({
+    requiredOnly: z.union([z.string(), z.boolean()]).optional(),
+    failedRequiredOnly: z.union([z.string(), z.boolean()]).optional()
+  }).parse(req.query || {});
+  const requiredOnly = String(q.requiredOnly || "").toLowerCase() === "true";
+  const failedRequiredOnly = String(q.failedRequiredOnly || "").toLowerCase() === "true";
+
+  const where: any = {};
+  if (requiredOnly || failedRequiredOnly) where.turnRequiredForMobile = true;
+  if (failedRequiredOnly) where.turnValidationStatus = { in: ["FAILED", "STALE", "UNKNOWN"] };
+
+  const rows = await db.tenant.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      turnRequiredForMobile: true,
+      turnValidationStatus: true,
+      turnValidatedAt: true,
+      turnLastErrorCode: true,
+      turnLastErrorAt: true
+    },
+    orderBy: { createdAt: "desc" },
+    take: 300
+  });
+
+  return rows;
+});
+
 app.get("/admin/voice/diag/summary", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
@@ -2511,6 +2872,20 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   }
 
   if (action === "ACCEPT") {
+    const tenant = await db.tenant.findUnique({
+      where: { id: user.tenantId },
+      select: { turnRequiredForMobile: true, turnValidationStatus: true, turnValidatedAt: true }
+    });
+    if (tenant?.turnRequiredForMobile && !isTurnRecentlyVerified(tenant)) {
+      return {
+        ok: false,
+        code: "TURN_REQUIRED_NOT_VERIFIED",
+        status: existing.status,
+        inviteId: existing.id,
+        turnValidationStatus: tenant.turnValidationStatus,
+        turnValidatedAt: tenant.turnValidatedAt || null
+      };
+    }
     const claimed = await db.$transaction(async (tx) => {
       const updated = await tx.callInvite.updateMany({
         where: { id: existing.id, tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: now } },

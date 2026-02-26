@@ -107,6 +107,25 @@ enum MobilePlatform {
   ANDROID
 }
 
+enum TurnValidationStatus {
+  UNKNOWN
+  VERIFIED
+  FAILED
+  STALE
+}
+
+enum TurnConfigScope {
+  GLOBAL
+  TENANT
+}
+
+enum TurnValidationJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
 enum VoiceClientPlatform {
   WEB
   IOS
@@ -189,6 +208,11 @@ model Tenant {
   iceServers                    Json?
   outboundProxy                 String?
   dtmfMode                      DtmfMode               @default(RFC2833)
+  turnRequiredForMobile         Boolean                @default(false)
+  turnValidationStatus          TurnValidationStatus   @default(UNKNOWN)
+  turnValidatedAt               DateTime?
+  turnLastErrorCode             String?
+  turnLastErrorAt               DateTime?
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
@@ -209,6 +233,8 @@ model Tenant {
   callInvites                   CallInvite[]
   voiceClientSessions           VoiceClientSession[]
   voiceDiagEvents               VoiceDiagEvent[]
+  turnConfigs                   TurnConfig[]
+  turnValidationJobs            TurnValidationJob[]
   pbxTenantLink                 TenantPbxLink?
   pbxExtensionLinks             PbxExtensionLink[]
   pbxDidLinks                   PbxDidLink[]
@@ -237,6 +263,7 @@ model User {
   callInvites                CallInvite[]
   voiceClientSessions        VoiceClientSession[]
   voiceDiagEvents            VoiceDiagEvent[]
+  requestedTurnValidationJobs TurnValidationJob[] @relation("TurnValidationRequestedBy")
 }
 
 model Subscription {
@@ -674,6 +701,43 @@ model MobileDevice {
   @@index([tenantId, platform])
 }
 
+
+
+model TurnConfig {
+  id                  String          @id @default(cuid())
+  scope               TurnConfigScope
+  tenantId            String?         @unique
+  urls                Json
+  username            String?
+  credentialEncrypted String?
+  credentialKeyId     String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  tenant              Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([scope, updatedAt])
+}
+
+model TurnValidationJob {
+  id                String                  @id @default(cuid())
+  tenantId          String
+  requestedByUserId String
+  status            TurnValidationJobStatus @default(QUEUED)
+  tokenId           String                  @unique
+  expiresAt         DateTime
+  requestedAt       DateTime                @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  platform          String?
+  hasRelay          Boolean?
+  durationMs        Int?
+  errorCode         String?
+  tenant            Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedByUser   User                    @relation("TurnValidationRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, requestedAt])
+  @@index([status, expiresAt])
+}
 
 model VoiceClientSession {
   id            String             @id @default(cuid())

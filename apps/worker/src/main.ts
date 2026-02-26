@@ -666,6 +666,47 @@ async function runVoiceDiagAlertCycle(): Promise<void> {
   }
 }
 
+
+async function runTurnValidationMaintenanceCycle(): Promise<void> {
+  const now = new Date();
+  const staleCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const expiredJobs = await db.turnValidationJob.findMany({
+    where: {
+      status: { in: ["QUEUED", "RUNNING"] },
+      expiresAt: { lt: now },
+      finishedAt: null
+    },
+    take: 200
+  });
+
+  for (const job of expiredJobs) {
+    await db.turnValidationJob.updateMany({
+      where: { id: job.id, finishedAt: null },
+      data: { status: "FAILED", finishedAt: now, errorCode: job.errorCode || "EXPIRED" }
+    });
+  }
+
+  const staleTenants = await db.tenant.findMany({
+    where: {
+      turnValidationStatus: "VERIFIED",
+      turnValidatedAt: { lt: staleCutoff }
+    },
+    select: { id: true }
+  });
+
+  for (const tenant of staleTenants) {
+    await db.tenant.update({
+      where: { id: tenant.id },
+      data: { turnValidationStatus: "STALE" }
+    });
+  }
+
+  if (expiredJobs.length > 0 || staleTenants.length > 0) {
+    console.log(`turn validation maintenance: expiredJobs=${expiredJobs.length}, staleTenants=${staleTenants.length}`);
+  }
+}
+
 async function runPbxCdrSyncCycle(): Promise<void> {
   const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
   for (const link of links) {
@@ -963,8 +1004,13 @@ setInterval(() => {
   runVoiceDiagAlertCycle().catch((err) => console.error("voice diag alert cycle failed", err?.message || err));
 }, 5 * 60 * 1000);
 
+setInterval(() => {
+  runTurnValidationMaintenanceCycle().catch((err) => console.error("turn validation maintenance failed", err?.message || err));
+}, 5 * 60 * 1000);
+
 runCallInviteExpiryCycle().catch((err) => console.error("initial call invite expiry failed", err?.message || err));
 runVoiceDiagAlertCycle().catch((err) => console.error("initial voice diag alert cycle failed", err?.message || err));
+runTurnValidationMaintenanceCycle().catch((err) => console.error("initial turn validation maintenance failed", err?.message || err));
 runPbxActiveCallPollCycle().catch((err) => console.error("initial pbx active call poll failed", err?.message || err));
 
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));

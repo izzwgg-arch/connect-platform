@@ -25,11 +25,25 @@ type EventRow = {
   payload: any;
 };
 
+type TurnState = {
+  ok: boolean;
+  effective: null | { urls: string[]; username?: string | null; hasCredential: boolean; scope: string };
+  turnRequiredForMobile: boolean;
+  status: "UNKNOWN" | "VERIFIED" | "FAILED" | "STALE";
+  validatedAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorAt: string | null;
+};
+
 export default function VoiceDiagnosticsPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [events, setEvents] = useState<EventRow[]>([]);
   const [msg, setMsg] = useState<string>("");
+  const [turn, setTurn] = useState<TurnState | null>(null);
+  const [turnUrlsInput, setTurnUrlsInput] = useState<string>("");
+  const [turnUsernameInput, setTurnUsernameInput] = useState<string>("");
+  const [turnCredentialInput, setTurnCredentialInput] = useState<string>("");
 
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
 
@@ -48,28 +62,87 @@ export default function VoiceDiagnosticsPage() {
     setEvents(Array.isArray(json) ? json : []);
   }
 
+  async function loadTurn() {
+    const res = await fetch(`${apiBase}/voice/turn`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json().catch(() => null);
+    if (!json) return;
+    setTurn(json);
+    setTurnUrlsInput((json?.effective?.urls || []).join("\n"));
+    setTurnUsernameInput(json?.effective?.username || "");
+  }
+
+  async function saveTurnConfig() {
+    const urls = turnUrlsInput.split("\n").map((x) => x.replace("\r", "").trim()).filter(Boolean);
+    const body: any = {
+      urls,
+      username: turnUsernameInput || undefined,
+      turnRequiredForMobile: !!turn?.turnRequiredForMobile
+    };
+    if (turnCredentialInput.trim()) body.credential = turnCredentialInput.trim();
+
+    const res = await fetch(`${apiBase}/voice/turn`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    const out = await res.json().catch(() => ({}));
+    setMsg(res.ok ? "TURN config saved." : String(out?.error || "TURN config update failed"));
+    setTurnCredentialInput("");
+    await loadTurn();
+  }
+
+  async function toggleRequireTurn(nextValue: boolean) {
+    const res = await fetch(`${apiBase}/voice/turn`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ turnRequiredForMobile: nextValue })
+    });
+    const out = await res.json().catch(() => ({}));
+    setMsg(res.ok ? `Mobile reliability mode ${nextValue ? "enabled" : "disabled"}.` : String(out?.error || "Failed to update mobile reliability mode"));
+    await loadTurn();
+  }
+
   async function testTurn() {
-    if (!selected) return;
-    setMsg("Running TURN reachability test...");
+    setMsg("Requesting TURN validation token...");
+    const startRes = await fetch(`${apiBase}/voice/turn/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({})
+    });
+    const startJson = await startRes.json().catch(() => ({}));
+    if (!startRes.ok || !startJson?.token) {
+      setMsg(String(startJson?.error || "Unable to start TURN validation"));
+      return;
+    }
+
+    const hasRelay = sessions.some((s) => s.iceHasTurn);
     const t0 = Date.now();
-    const hasTurn = !!sessions.find((s) => s.id === selected)?.iceHasTurn;
-    const res = await fetch(`${apiBase}/voice/diag/event`, {
+    const reportRes = await fetch(`${apiBase}/voice/turn/validate/report`, {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({
-        sessionId: selected,
-        type: "TURN_TEST_RESULT",
-        payload: { ok: hasTurn, hasRelay: hasTurn, durationMs: Date.now() - t0 }
+        token: startJson.token,
+        hasRelay,
+        durationMs: Date.now() - t0,
+        platform: "WEB",
+        ...(hasRelay ? {} : { errorCode: "NO_RELAY_CANDIDATE" })
       })
     });
-    const out = await res.json().catch(() => ({}));
-    setMsg(res.ok ? `TURN test recorded: ${hasTurn ? "relay candidate available" : "no relay candidate observed"}` : String(out?.error || "TURN test failed"));
-    await loadEvents(selected);
+    const report = await reportRes.json().catch(() => ({}));
+    if (!reportRes.ok) {
+      setMsg(String(report?.error || "TURN validation report failed"));
+      return;
+    }
+
+    setMsg(hasRelay ? "TURN validation passed (relay observed)." : "TURN validation failed (no relay observed).");
+    await loadTurn();
+    if (selected) await loadEvents(selected);
   }
 
   useEffect(() => {
     if (!token) return;
     loadSessions().catch(() => undefined);
+    loadTurn().catch(() => undefined);
   }, [token]);
 
   useEffect(() => {
@@ -77,13 +150,38 @@ export default function VoiceDiagnosticsPage() {
     loadEvents(selected).catch(() => undefined);
   }, [selected, token]);
 
+  const statusClass = turn?.status === "VERIFIED" ? "status-chip live" : turn?.status === "FAILED" ? "status-chip failed" : "status-chip pending";
+
   return (
     <div className="card">
       <h1>Voice Diagnostics</h1>
-      <p>Active sessions, recent failures, and event timelines for tenant troubleshooting.</p>
-      <button onClick={() => loadSessions().catch(() => undefined)}>Refresh</button>{" "}
-      <button onClick={testTurn} disabled={!selected}>Test TURN</button>
+      <p>Active sessions, TURN validation, and event timelines for tenant troubleshooting.</p>
+      <button onClick={() => loadSessions().catch(() => undefined)}>Refresh Sessions</button>{" "}
+      <button onClick={() => loadTurn().catch(() => undefined)}>Refresh TURN</button>{" "}
+      <button onClick={testTurn}>Test TURN Now</button>
       {msg ? <p className="status-chip pending" style={{ borderRadius: 2 }}>{msg}</p> : null}
+
+      <h3>TURN</h3>
+      <p>Status: <span className={statusClass}>{turn?.status || "UNKNOWN"}</span> / Last validated: {turn?.validatedAt ? new Date(turn.validatedAt).toLocaleString() : "never"}</p>
+      <p>Effective config: scope={turn?.effective?.scope || "none"}, credential={turn?.effective?.hasCredential ? "set" : "not set"}</p>
+      <p>Masked TURN URLs: {(turn?.effective?.urls || []).join(", ") || "none"}</p>
+      <p>Masked username: {turn?.effective?.username || "-"}</p>
+      <p>Last error: {turn?.lastErrorCode ? `${turn.lastErrorCode} (${turn.lastErrorAt ? new Date(turn.lastErrorAt).toLocaleString() : ""})` : "-"}</p>
+      <label style={{ display: "block", marginBottom: 8 }}>
+        <input type="checkbox" checked={!!turn?.turnRequiredForMobile} onChange={(e) => toggleRequireTurn(e.target.checked).catch(() => undefined)} />{" "}
+        Require TURN for Mobile Reliability
+      </label>
+      {turn?.turnRequiredForMobile ? <p className="status-chip failed" style={{ borderRadius: 2 }}>Warning: this may block mobile answer if TURN is not VERIFIED in last 7 days.</p> : null}
+
+      <details style={{ marginTop: 12 }}>
+        <summary>Override Tenant TURN Config</summary>
+        <textarea rows={4} style={{ width: "100%" }} placeholder="turn:turn.example.com:3478\nturns:turn.example.com:5349" value={turnUrlsInput} onChange={(e) => setTurnUrlsInput(e.target.value)} />
+        <input style={{ width: "100%", marginTop: 8 }} placeholder="TURN username (optional)" value={turnUsernameInput} onChange={(e) => setTurnUsernameInput(e.target.value)} />
+        <input style={{ width: "100%", marginTop: 8 }} placeholder="TURN credential (stored encrypted; never returned)" value={turnCredentialInput} onChange={(e) => setTurnCredentialInput(e.target.value)} />
+        <div style={{ marginTop: 8 }}>
+          <button onClick={() => saveTurnConfig().catch(() => undefined)}>Save TURN Override</button>
+        </div>
+      </details>
 
       <h3>Active Sessions</h3>
       <table>
