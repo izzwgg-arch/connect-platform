@@ -1,4 +1,4 @@
-import type { SipClient, SipEvents } from "./types";
+import type { SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 
 export class JsSipClient implements SipClient {
@@ -6,6 +6,7 @@ export class JsSipClient implements SipClient {
   private bundle: ProvisioningBundle | null = null;
   private ua: any = null;
   private session: any = null;
+  private incomingSessions: any[] = [];
 
   configure(bundle: ProvisioningBundle) {
     this.bundle = bundle;
@@ -35,6 +36,7 @@ export class JsSipClient implements SipClient {
     this.ua.on("newRTCSession", (e: any) => {
       this.session = e.session;
       if (e.originator === "remote") {
+        this.incomingSessions.push(e.session);
         this.events.onIncomingCall?.();
         this.events.onCallState?.("ringing");
       }
@@ -47,8 +49,48 @@ export class JsSipClient implements SipClient {
   private bindSession(session: any) {
     session.on("progress", () => this.events.onCallState?.("ringing"));
     session.on("confirmed", () => this.events.onCallState?.("connected"));
-    session.on("ended", () => this.events.onCallState?.("ended"));
-    session.on("failed", () => this.events.onCallState?.("ended"));
+    session.on("ended", () => {
+      this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
+      if (this.session === session) this.session = null;
+      this.events.onCallState?.("ended");
+    });
+    session.on("failed", () => {
+      this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
+      if (this.session === session) this.session = null;
+      this.events.onCallState?.("ended");
+    });
+  }
+
+  private normalizeNumber(v: string | undefined): string {
+    return String(v || "").replace(/[^0-9+]/g, "");
+  }
+
+  private getSessionFrom(session: any): string {
+    return String(session?.remote_identity?.uri?.user || session?.remote_identity?.display_name || "");
+  }
+
+  private getSessionTo(session: any): string {
+    return String(session?.local_identity?.uri?.user || this.bundle?.sipUsername || "");
+  }
+
+  private matchesIncoming(session: any, match?: SipMatch): boolean {
+    if (!match) return true;
+    const from = this.normalizeNumber(this.getSessionFrom(session));
+    const targetFrom = this.normalizeNumber(match.fromNumber || "");
+    if (targetFrom && from && !from.endsWith(targetFrom) && !targetFrom.endsWith(from)) return false;
+
+    const to = String(this.getSessionTo(session));
+    if (match.toExtension && to && to !== String(match.toExtension)) return false;
+
+    return true;
+  }
+
+  private findIncoming(match?: SipMatch): any | null {
+    for (const s of this.incomingSessions) {
+      if (this.matchesIncoming(s, match)) return s;
+    }
+    if (this.session && this.matchesIncoming(this.session, match)) return this.session;
+    return null;
   }
 
   async unregister() {
@@ -70,6 +112,31 @@ export class JsSipClient implements SipClient {
 
   async answer() {
     this.session?.answer?.({ mediaConstraints: { audio: true, video: false } });
+  }
+
+  async answerIncoming(match?: SipMatch, timeoutMs = 5000): Promise<boolean> {
+    const until = Date.now() + Math.max(500, timeoutMs);
+    while (Date.now() < until) {
+      const session = this.findIncoming(match);
+      if (session) {
+        this.session = session;
+        session.answer?.({ mediaConstraints: { audio: true, video: false } });
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return false;
+  }
+
+  async rejectIncoming(match?: SipMatch): Promise<boolean> {
+    const session = this.findIncoming(match);
+    if (!session) return false;
+    try {
+      session.terminate?.();
+    } catch {}
+    this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
+    if (this.session === session) this.session = null;
+    return true;
   }
 
   async hangup() {

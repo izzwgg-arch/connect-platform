@@ -269,10 +269,14 @@ function getPbxClient(input: { baseUrl: string; token: string; secret?: string |
   });
 }
 
+type WorkerMobilePushPayload =
+  | { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string }
+  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
-  payload: { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+  payload: WorkerMobilePushPayload;
 }) {
   const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
   if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
@@ -290,11 +294,16 @@ async function sendPushToUserDevices(input: {
     return { queued: devices.length, simulated: true };
   }
 
+  const title = input.payload.type === "INCOMING_CALL" ? "Incoming call" : "Missed call";
+  const body = input.payload.type === "INCOMING_CALL"
+    ? `Call from ${input.payload.fromNumber}`
+    : `Missed call from ${input.payload.fromNumber}`;
+
   const messages = devices.map((d) => ({
     to: d.expoPushToken,
     sound: "default",
-    title: "Incoming call",
-    body: `Call from ${input.payload.fromNumber}`,
+    title,
+    body,
     data: input.payload
   }));
 
@@ -524,12 +533,34 @@ async function runPbxJobCycle(): Promise<void> {
 
 
 async function runCallInviteExpiryCycle(): Promise<void> {
-  const expired = await db.callInvite.updateMany({
-    where: { status: "PENDING", expiresAt: { lt: new Date() } },
-    data: { status: "EXPIRED" }
+  const now = new Date();
+  const pendingExpired = await db.callInvite.findMany({
+    where: { status: "PENDING", expiresAt: { lt: now } },
+    take: 200
   });
-  if (expired.count > 0) {
-    console.log(`call invite expiry cycle marked ${expired.count} invites as EXPIRED`);
+
+  let marked = 0;
+  for (const invite of pendingExpired) {
+    const out = await db.callInvite.updateMany({ where: { id: invite.id, status: "PENDING" }, data: { status: "EXPIRED" } });
+    if (!out.count) continue;
+    marked += out.count;
+
+    await sendPushToUserDevices({
+      tenantId: invite.tenantId,
+      userId: invite.userId,
+      payload: {
+        type: "MISSED_CALL",
+        inviteId: invite.id,
+        fromNumber: invite.fromNumber,
+        toExtension: invite.toExtension,
+        tenantId: invite.tenantId,
+        timestamp: new Date().toISOString()
+      }
+    }).catch(() => undefined);
+  }
+
+  if (marked > 0) {
+    console.log(`call invite expiry cycle marked ${marked} invites as EXPIRED`);
   }
 }
 

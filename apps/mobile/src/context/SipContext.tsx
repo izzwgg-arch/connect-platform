@@ -17,6 +17,8 @@ type SipState = {
   unregister: () => Promise<void>;
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;
+  answerIncomingInvite: (match: { fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null }, timeoutMs?: number) => Promise<boolean>;
+  rejectIncomingInvite: (match?: { fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null }) => Promise<boolean>;
   hangup: () => Promise<void>;
   toggleMute: () => void;
   toggleSpeaker: () => void;
@@ -80,6 +82,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
       answer: async () => {
         await clientRef.current.answer();
+      },
+      answerIncomingInvite: async (match, timeoutMs = 5000) => {
+        return clientRef.current.answerIncoming(match, timeoutMs);
+      },
+      rejectIncomingInvite: async (match) => {
+        return clientRef.current.rejectIncoming(match);
       },
       hangup: async () => {
         await clientRef.current.hangup();

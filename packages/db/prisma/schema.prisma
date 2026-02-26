@@ -624,6 +624,7 @@ model MobileDevice {
   updatedAt     DateTime       @updatedAt
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptedInvites CallInvite[]   @relation("CallInviteAcceptedByDevice")
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
@@ -633,22 +634,29 @@ model CallInvite {
   id          String           @id @default(cuid())
   tenantId    String
   userId      String
-  extensionId String?
-  pbxCallId   String?
-  fromNumber  String
-  toExtension String
-  status      CallInviteStatus @default(PENDING)
-  createdAt   DateTime         @default(now())
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  declinedAt  DateTime?
-  canceledAt  DateTime?
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  extension   Extension?       @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  extensionId        String?
+  pbxCallId          String?
+  pbxSipUsername     String?
+  sipCallTarget      String?
+  fromDisplay        String?
+  createdByEventId   String?
+  fromNumber         String
+  toExtension        String
+  status             CallInviteStatus @default(PENDING)
+  createdAt          DateTime         @default(now())
+  expiresAt          DateTime
+  acceptedAt         DateTime?
+  declinedAt         DateTime?
+  canceledAt         DateTime?
+  acceptedByDeviceId String?
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extension          Extension?       @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  acceptedByDevice   MobileDevice?    @relation("CallInviteAcceptedByDevice", fields: [acceptedByDeviceId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, pbxCallId])
   @@index([tenantId, createdAt])
   @@index([tenantId, status, expiresAt])
+  @@index([acceptedByDeviceId])
   @@index([userId, status, expiresAt])
 }

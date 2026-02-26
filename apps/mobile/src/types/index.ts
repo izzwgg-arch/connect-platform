@@ -43,21 +43,48 @@ export type CallInvite = {
   tenantId: string;
   userId: string;
   extensionId?: string | null;
+  pbxCallId?: string | null;
+  pbxSipUsername?: string | null;
+  sipCallTarget?: string | null;
+  fromDisplay?: string | null;
   fromNumber: string;
   toExtension: string;
-  status: "PENDING" | "ACCEPTED" | "DECLINED" | "EXPIRED";
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "EXPIRED" | "CANCELED";
   createdAt: string;
   expiresAt: string;
+};
+
+export type InviteClaimedPushPayload = {
+  type: "INVITE_CLAIMED";
+  inviteId: string;
+  tenantId: string;
+  timestamp: string;
+};
+
+export type MissedCallPushPayload = {
+  type: "MISSED_CALL";
+  inviteId: string;
+  fromNumber: string;
+  fromDisplay?: string | null;
+  toExtension: string;
+  tenantId: string;
+  timestamp: string;
 };
 
 export type IncomingCallPushPayload = {
   type: "INCOMING_CALL";
   inviteId: string;
+  pbxCallId?: string | null;
   fromNumber: string;
+  fromDisplay?: string | null;
   toExtension: string;
+  sipCallTarget?: string | null;
+  pbxSipUsername?: string | null;
   tenantId: string;
   timestamp: string;
 };
+
+export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPayload | MissedCallPushPayload;
 
 export type SipRegistrationState = "idle" | "registering" | "registered" | "failed";
 export type CallState = "idle" | "dialing" | "ringing" | "connected" | "ended";

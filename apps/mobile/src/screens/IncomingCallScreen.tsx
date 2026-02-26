@@ -34,8 +34,18 @@ export function IncomingCallScreen() {
               style={ui.button}
               onPress={async () => {
                 if (!token) return;
-                await respondInvite(token, incomingInvite.id, "ACCEPTED").catch(() => undefined);
+                const resp = await respondInvite(token, incomingInvite.id, "ACCEPT").catch(() => null);
+                if (resp?.code !== "INVITE_CLAIMED_OK") {
+                  clearIncomingInvite();
+                  return;
+                }
                 await sip.register().catch(() => undefined);
+                await sip.answerIncomingInvite({
+                  fromNumber: incomingInvite.fromNumber,
+                  toExtension: incomingInvite.toExtension,
+                  pbxCallId: incomingInvite.pbxCallId,
+                  sipCallTarget: incomingInvite.sipCallTarget
+                }, 5000).catch(() => false);
                 clearIncomingInvite();
               }}
             >
@@ -45,7 +55,13 @@ export function IncomingCallScreen() {
               style={ui.button}
               onPress={async () => {
                 if (!token) return;
-                await respondInvite(token, incomingInvite.id, "DECLINED").catch(() => undefined);
+                await respondInvite(token, incomingInvite.id, "DECLINE").catch(() => undefined);
+                await sip.rejectIncomingInvite({
+                  fromNumber: incomingInvite.fromNumber,
+                  toExtension: incomingInvite.toExtension,
+                  pbxCallId: incomingInvite.pbxCallId,
+                  sipCallTarget: incomingInvite.sipCallTarget
+                }).catch(() => false);
                 clearIncomingInvite();
               }}
             >

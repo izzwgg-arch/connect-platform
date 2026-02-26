@@ -93,6 +93,7 @@ export default function VoiceProvisioningPage() {
       <h1>Voice Provisioning</h1>
       <p>PBX Link Status: <strong>{status?.status || "UNLINKED"}</strong></p>
       <p>Pending PBX jobs: {pending?.length || 0}</p>
+      <p style={{ color: "#b45309" }}>Mobile networks often require TURN for reliable audio.</p>
 
       <h3>Create Extension</h3>
       <input value={form.extensionNumber} onChange={(e) => setForm({ ...form, extensionNumber: e.target.value })} placeholder="Extension" />

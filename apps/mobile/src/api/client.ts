@@ -87,10 +87,12 @@ export async function getPendingInvites(token: string) {
   return Array.isArray(json) ? json : [];
 }
 
-export async function respondInvite(token: string, inviteId: string, action: "ACCEPTED" | "DECLINED") {
+export async function respondInvite(token: string, inviteId: string, action: "ACCEPT" | "DECLINE", deviceId?: string) {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
+  if (deviceId) headers["x-mobile-device-id"] = deviceId;
   const res = await fetch(`${API_BASE}/mobile/call-invites/${inviteId}/respond`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ action })
   });
   const json = await parseJson(res);

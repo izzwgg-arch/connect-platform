@@ -94,6 +94,12 @@ const billingRateLimiter = new Map<string, number[]>();
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
 
+const DEFAULT_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" }
+];
+
 function getSolaAdapter(): SolaCardknoxAdapter {
   return new SolaCardknoxAdapter({
     baseUrl: process.env.SOLA_CARDKNOX_API_BASE_URL,
@@ -162,12 +168,13 @@ async function getTenantPbxLinkOrThrow(tenantId: string) {
 
 function resolveWebrtcConfig(tenant: any, link: any) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
+  const configuredIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
   return {
     webrtcEnabled: !!tenant?.webrtcEnabled,
     sipWsUrl: tenant?.sipWsUrl || process.env.PBX_WS_ENDPOINT || null,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
-    iceServers: Array.isArray(tenant?.iceServers) ? tenant.iceServers : [],
+    iceServers: configuredIce.length ? configuredIce : DEFAULT_ICE_SERVERS,
     dtmfMode: tenant?.dtmfMode || "RFC2833"
   };
 }
@@ -482,13 +489,20 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
 
 
 
+type MobilePushPayload =
+  | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
+  | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
+  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string };
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
-  payload: { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+  payload: MobilePushPayload;
+  excludeDeviceId?: string | null;
 }) {
   const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
-  if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
+  const filtered = input.excludeDeviceId ? devices.filter((d) => d.id !== input.excludeDeviceId) : devices;
+  if (!filtered.length) return { queued: 0, simulated: mobilePushSimulate };
 
   if (mobilePushSimulate) {
     await db.auditLog.create({
@@ -500,14 +514,25 @@ async function sendPushToUserDevices(input: {
         actorUserId: input.userId
       }
     });
-    return { queued: devices.length, simulated: true };
+    return { queued: filtered.length, simulated: true };
   }
 
-  const messages = devices.map((d) => ({
+  const title = input.payload.type === "INCOMING_CALL"
+    ? "Incoming call"
+    : input.payload.type === "INVITE_CLAIMED"
+      ? "Call answered on another device"
+      : "Missed call";
+  const body = input.payload.type === "INCOMING_CALL"
+    ? `Call from ${input.payload.fromDisplay || input.payload.fromNumber}`
+    : input.payload.type === "INVITE_CLAIMED"
+      ? "This call was answered on another device."
+      : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
+
+  const messages = filtered.map((d) => ({
     to: d.expoPushToken,
     sound: "default",
-    title: "Incoming call",
-    body: `Call from ${input.payload.fromNumber}`,
+    title,
+    body,
     data: input.payload
   }));
 
@@ -538,9 +563,12 @@ type NormalizedPbxEvent = {
   state: "RINGING" | "ANSWERED" | "HANGUP" | "UNKNOWN";
   pbxCallId: string;
   fromNumber: string;
+  fromDisplay?: string;
   toExtension: string;
   pbxTenantId?: string;
   pbxExtensionId?: string;
+  sipCallTarget?: string;
+  createdByEventId?: string;
   startedAt: string;
 };
 
@@ -602,8 +630,11 @@ function normalizePbxEvent(input: any): NormalizedPbxEvent {
   const callId = String(input?.pbxCallId || input?.callId || input?.call?.id || input?.uniqueid || input?.id || "").trim();
   const toExtension = String(input?.toExtension || input?.calledExtension || input?.extension || input?.to || input?.dst || input?.call?.toExtension || "").trim();
   const fromNumber = String(input?.from || input?.fromNumber || input?.caller || input?.src || input?.call?.from || "unknown").trim();
+  const fromDisplay = String(input?.fromDisplay || input?.callerName || input?.displayName || input?.call?.fromDisplay || "").trim();
   const pbxTenantId = input?.pbxTenantId || input?.tenantId || input?.tenantHint || input?.call?.tenantId;
   const pbxExtensionId = input?.pbxExtensionId || input?.extensionId || input?.call?.extensionId;
+  const sipCallTarget = String(input?.sipCallTarget || input?.targetUri || input?.requestUri || input?.call?.target || "").trim();
+  const createdByEventId = String(input?.eventId || input?.eventUUID || input?.webhookEventId || "").trim();
   const startedAt = String(input?.startedAt || input?.timestamp || input?.call?.startedAt || new Date().toISOString());
 
   return {
@@ -611,14 +642,17 @@ function normalizePbxEvent(input: any): NormalizedPbxEvent {
     state,
     pbxCallId: callId,
     fromNumber,
+    fromDisplay: fromDisplay || undefined,
     toExtension,
     pbxTenantId: pbxTenantId ? String(pbxTenantId) : undefined,
     pbxExtensionId: pbxExtensionId ? String(pbxExtensionId) : undefined,
+    sipCallTarget: sipCallTarget || undefined,
+    createdByEventId: createdByEventId || undefined,
     startedAt
   };
 }
 
-async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantId: string; userId: string; extensionId: string | null; pbxInstanceId?: string; pbxTenantLinkId?: string } | null> {
+async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantId: string; userId: string; extensionId: string | null; pbxInstanceId?: string; pbxTenantLinkId?: string; pbxSipUsername?: string | null; sipDomain?: string | null } | null> {
   if (!evt.toExtension && !evt.pbxExtensionId) return null;
 
   if (evt.pbxTenantId) {
@@ -635,7 +669,7 @@ async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantI
         extension = await db.extension.findFirst({ where: { tenantId: tenantLink.tenantId, extNumber: evt.toExtension, status: "ACTIVE" } });
       }
       if (!extension?.ownerUserId) return null;
-      return { tenantId: tenantLink.tenantId, userId: extension.ownerUserId, extensionId: extension.id, pbxInstanceId: tenantLink.pbxInstanceId, pbxTenantLinkId: tenantLink.id };
+      return { tenantId: tenantLink.tenantId, userId: extension.ownerUserId, extensionId: extension.id, pbxInstanceId: tenantLink.pbxInstanceId, pbxTenantLinkId: tenantLink.id, pbxSipUsername: extLink?.pbxSipUsername || null, sipDomain: tenantLink.pbxDomain || null };
     }
   }
 
@@ -663,7 +697,9 @@ async function resolvePbxEventTarget(evt: NormalizedPbxEvent): Promise<{ tenantI
         userId: matched.ownerUserId,
         extensionId: matched.id,
         pbxInstanceId: matched.tenant?.pbxTenantLink?.pbxInstanceId,
-        pbxTenantLinkId: matched.tenant?.pbxTenantLink?.id
+        pbxTenantLinkId: matched.tenant?.pbxTenantLink?.id,
+        pbxSipUsername: matched.pbxLink?.pbxSipUsername || null,
+        sipDomain: matched.tenant?.sipDomain || matched.tenant?.pbxTenantLink?.pbxDomain || null
       };
     }
   }
@@ -707,12 +743,17 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
             userId: target.userId,
             extensionId: target.extensionId,
             fromNumber: evt.fromNumber,
+            fromDisplay: evt.fromDisplay || null,
             toExtension: evt.toExtension,
+            pbxSipUsername: target.pbxSipUsername || null,
+            sipCallTarget: evt.sipCallTarget || ((target.pbxSipUsername && target.sipDomain) ? `sip:${target.pbxSipUsername}@${target.sipDomain}` : (evt.toExtension && target.sipDomain ? `sip:${evt.toExtension}@${target.sipDomain}` : null)),
+            createdByEventId: evt.createdByEventId || null,
             status: "PENDING",
             expiresAt: new Date(Date.now() + 45_000),
             acceptedAt: null,
             declinedAt: null,
-            canceledAt: null
+            canceledAt: null,
+            acceptedByDeviceId: null
           }
         })
       : await db.callInvite.create({
@@ -722,7 +763,11 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
             extensionId: target.extensionId,
             pbxCallId: evt.pbxCallId,
             fromNumber: evt.fromNumber,
+            fromDisplay: evt.fromDisplay || null,
             toExtension: evt.toExtension,
+            pbxSipUsername: target.pbxSipUsername || null,
+            sipCallTarget: evt.sipCallTarget || ((target.pbxSipUsername && target.sipDomain) ? `sip:${target.pbxSipUsername}@${target.sipDomain}` : (evt.toExtension && target.sipDomain ? `sip:${evt.toExtension}@${target.sipDomain}` : null)),
+            createdByEventId: evt.createdByEventId || null,
             status: "PENDING",
             expiresAt: new Date(Date.now() + 45_000)
           }
@@ -735,7 +780,11 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
         type: "INCOMING_CALL",
         inviteId: invite.id,
         fromNumber: invite.fromNumber,
+        fromDisplay: invite.fromDisplay,
         toExtension: invite.toExtension,
+        pbxCallId: invite.pbxCallId,
+        sipCallTarget: invite.sipCallTarget,
+        pbxSipUsername: invite.pbxSipUsername,
         tenantId: target.tenantId,
         timestamp: new Date().toISOString()
       }
@@ -752,7 +801,7 @@ async function upsertInviteFromPbxEvent(evt: NormalizedPbxEvent, source: "WEBHOO
 
     if (evt.state === "ANSWERED") {
       if (invite.status === "PENDING") {
-        await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });
+        await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: new Date(), acceptedByDeviceId: null } });
         await audit({ tenantId: target.tenantId, action: "PBX_CALL_INVITE_ACCEPTED", entityType: "CallInvite", entityId: invite.id });
       }
       return { ok: true, inviteId: invite.id };
@@ -2027,11 +2076,22 @@ app.post("/voice/webrtc/test-config", async (req, reply) => {
     sipDomain: z.string().min(1).regex(/^[a-zA-Z0-9.-]+$/),
     outboundProxy: z.string().optional(),
     dtmfMode: z.enum(["RFC2833", "SIP_INFO"]).default("RFC2833"),
+    requireTurn: z.boolean().default(false),
     iceServers: z.array(iceServerSchema).default([])
   }).safeParse(req.body || {});
 
   if (!input.success) {
     return reply.status(400).send({ error: "INVALID_WEBRTC_CONFIG", details: input.error.flatten() });
+  }
+
+  if (input.data.requireTurn) {
+    const hasTurn = input.data.iceServers.some((s) => {
+      const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
+    });
+    if (!hasTurn) {
+      return reply.status(400).send({ error: "TURN_REQUIRED_BUT_NOT_CONFIGURED" });
+    }
   }
 
   return { ok: true, normalized: input.data };
@@ -2115,26 +2175,75 @@ app.get("/mobile/call-invites/pending", async (req, reply) => {
 app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   const user = getUser(req);
   const { id } = req.params as { id: string };
-  const input = z.object({ action: z.enum(["ACCEPTED", "DECLINED"]) }).parse(req.body || {});
+  const input = z.object({ action: z.enum(["ACCEPT", "DECLINE", "ACCEPTED", "DECLINED"]) }).parse(req.body || {});
+  const action = input.action === "ACCEPT" || input.action === "ACCEPTED" ? "ACCEPT" : "DECLINE";
+  const now = new Date();
 
-  const invite = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
-  if (!invite) return reply.status(404).send({ error: "INVITE_NOT_FOUND" });
-  if (invite.status !== "PENDING") return { ok: true, status: invite.status };
-  if (invite.expiresAt < new Date()) {
-    const expired = await db.callInvite.update({ where: { id: invite.id }, data: { status: "EXPIRED" } });
-    return { ok: false, status: expired.status, error: "INVITE_EXPIRED" };
+  const deviceIdHeader = String(req.headers["x-mobile-device-id"] || "").trim();
+  const activeDevice = deviceIdHeader
+    ? await db.mobileDevice.findFirst({ where: { id: deviceIdHeader, tenantId: user.tenantId, userId: user.sub } })
+    : null;
+
+  const existing = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
+  if (!existing) {
+    return { ok: false, code: "INVITE_ALREADY_HANDLED", status: "UNKNOWN" };
   }
 
-  const updated = await db.callInvite.update({
-    where: { id: invite.id },
-    data: {
-      status: input.action,
-      acceptedAt: input.action === "ACCEPTED" ? new Date() : null,
-      declinedAt: input.action === "DECLINED" ? new Date() : null
+  if (existing.status !== "PENDING") {
+    return { ok: false, code: "INVITE_ALREADY_HANDLED", status: existing.status, inviteId: existing.id };
+  }
+
+  if (existing.expiresAt < now) {
+    await db.callInvite.updateMany({ where: { id: existing.id, status: "PENDING" }, data: { status: "EXPIRED" } });
+    return { ok: false, code: "INVITE_EXPIRED", status: "EXPIRED", inviteId: existing.id };
+  }
+
+  if (action === "ACCEPT") {
+    const claimed = await db.$transaction(async (tx) => {
+      const updated = await tx.callInvite.updateMany({
+        where: { id: existing.id, tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: now } },
+        data: { status: "ACCEPTED", acceptedAt: now, acceptedByDeviceId: activeDevice?.id || null }
+      });
+      const latest = await tx.callInvite.findUnique({ where: { id: existing.id } });
+      return { updated: updated.count, latest };
+    });
+
+    if (claimed.updated === 0 || !claimed.latest) {
+      const latestStatus = claimed.latest?.status || "UNKNOWN";
+      const code = latestStatus === "EXPIRED" ? "INVITE_EXPIRED" : "INVITE_ALREADY_HANDLED";
+      return { ok: false, code, status: latestStatus, inviteId: existing.id };
     }
+
+    await sendPushToUserDevices({
+      tenantId: user.tenantId,
+      userId: user.sub,
+      excludeDeviceId: activeDevice?.id || null,
+      payload: {
+        type: "INVITE_CLAIMED",
+        inviteId: existing.id,
+        tenantId: user.tenantId,
+        timestamp: now.toISOString()
+      }
+    }).catch(() => undefined);
+
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_CALL_INVITE_ACCEPT", entityType: "CallInvite", entityId: existing.id });
+    return { ok: true, code: "INVITE_CLAIMED_OK", status: "ACCEPTED", inviteId: existing.id, acceptedByDeviceId: activeDevice?.id || null };
+  }
+
+  const declined = await db.callInvite.updateMany({
+    where: { id: existing.id, tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: now } },
+    data: { status: "DECLINED", declinedAt: now }
   });
-  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: `MOBILE_CALL_INVITE_${input.action}`, entityType: "CallInvite", entityId: invite.id });
-  return { ok: true, status: updated.status };
+
+  if (declined.count === 0) {
+    const latest = await db.callInvite.findUnique({ where: { id: existing.id } });
+    const latestStatus = latest?.status || "UNKNOWN";
+    const code = latestStatus === "EXPIRED" ? "INVITE_EXPIRED" : "INVITE_ALREADY_HANDLED";
+    return { ok: false, code, status: latestStatus, inviteId: existing.id };
+  }
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_CALL_INVITE_DECLINE", entityType: "CallInvite", entityId: existing.id });
+  return { ok: true, code: "INVITE_DECLINED_OK", status: "DECLINED", inviteId: existing.id };
 });
 
 app.post("/mobile/call-invites/test", async (req, reply) => {
@@ -2159,13 +2268,18 @@ app.post("/mobile/call-invites/test", async (req, reply) => {
   if (!target) return reply.status(404).send({ error: "TARGET_USER_NOT_FOUND" });
 
   const ext = await db.extension.findFirst({ where: { tenantId: admin.tenantId, ownerUserId: target.id }, orderBy: { createdAt: "asc" } });
+  const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   const invite = await db.callInvite.create({
     data: {
       tenantId: admin.tenantId,
       userId: target.id,
       extensionId: ext?.id || null,
       fromNumber: input.fromNumber,
+      fromDisplay: "Test Invite",
       toExtension: input.toExtension,
+      pbxSipUsername: ext?.extNumber || null,
+      sipCallTarget: ext?.extNumber && tenantCfg?.sipDomain ? `sip:${ext.extNumber}@${tenantCfg.sipDomain}` : null,
+      createdByEventId: `test-${Date.now()}`,
       expiresAt: new Date(Date.now() + input.expiresSec * 1000),
       status: "PENDING"
     }
@@ -2178,7 +2292,11 @@ app.post("/mobile/call-invites/test", async (req, reply) => {
       type: "INCOMING_CALL",
       inviteId: invite.id,
       fromNumber: invite.fromNumber,
+      fromDisplay: invite.fromDisplay,
       toExtension: invite.toExtension,
+      pbxCallId: invite.pbxCallId,
+      sipCallTarget: invite.sipCallTarget,
+      pbxSipUsername: invite.pbxSipUsername,
       tenantId: admin.tenantId,
       timestamp: new Date().toISOString()
     }

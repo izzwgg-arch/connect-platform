@@ -7,7 +7,7 @@ import { getPendingInvites, registerMobileDevice, respondInvite, unregisterMobil
 import { useAuth } from "./AuthContext";
 import { useSip } from "./SipContext";
 import { endNativeCall, setupNativeCalling, showIncomingNativeCall, subscribeNativeCallActions } from "../sip/callkeep";
-import type { CallInvite, IncomingCallPushPayload } from "../types";
+import type { CallInvite, MobilePushPayload } from "../types";
 
 type NotificationsState = {
   expoPushToken: string | null;
@@ -38,12 +38,16 @@ async function getExpoToken(): Promise<string | null> {
   return token.data || null;
 }
 
-function payloadToInvite(data: IncomingCallPushPayload): CallInvite {
+function payloadToInvite(data: Extract<MobilePushPayload, { type: "INCOMING_CALL" }>): CallInvite {
   return {
     id: data.inviteId,
     tenantId: data.tenantId,
     userId: "",
     extensionId: null,
+    pbxCallId: data.pbxCallId || null,
+    pbxSipUsername: data.pbxSipUsername || null,
+    sipCallTarget: data.sipCallTarget || null,
+    fromDisplay: data.fromDisplay || null,
     fromNumber: data.fromNumber,
     toExtension: data.toExtension,
     status: "PENDING",
@@ -57,6 +61,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const sip = useSip();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<CallInvite | null>(null);
+  const deviceIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     setupNativeCalling().catch(() => undefined);
@@ -64,14 +69,38 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const unsubNative = subscribeNativeCallActions({
       onAnswer: async (callId) => {
         if (!token || !incomingInvite) return;
-        await respondInvite(token, incomingInvite.id, "ACCEPTED").catch(() => undefined);
+        const resp = await respondInvite(token, incomingInvite.id, "ACCEPT", deviceIdRef.current || undefined).catch(() => null);
+        if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
+          setIncomingInvite(null);
+          endNativeCall(callId);
+          return;
+        }
+
         await sip.register().catch(() => undefined);
+        const answered = await sip.answerIncomingInvite({
+          fromNumber: incomingInvite.fromNumber,
+          toExtension: incomingInvite.toExtension,
+          pbxCallId: incomingInvite.pbxCallId,
+          sipCallTarget: incomingInvite.sipCallTarget
+        }, 5000).catch(() => false);
+
+        if (!answered) {
+          setIncomingInvite(null);
+          endNativeCall(callId);
+          return;
+        }
+
         setIncomingInvite(null);
-        endNativeCall(callId);
       },
       onEnd: async (callId) => {
         if (!token || !incomingInvite) return;
-        await respondInvite(token, incomingInvite.id, "DECLINED").catch(() => undefined);
+        await respondInvite(token, incomingInvite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+        await sip.rejectIncomingInvite({
+          fromNumber: incomingInvite.fromNumber,
+          toExtension: incomingInvite.toExtension,
+          pbxCallId: incomingInvite.pbxCallId,
+          sipCallTarget: incomingInvite.sipCallTarget
+        }).catch(() => false);
         setIncomingInvite(null);
         endNativeCall(callId);
       }
@@ -93,11 +122,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       if (!mounted) return;
       setExpoPushToken(currentToken);
       if (currentToken) {
-        await registerMobileDevice(token, {
+        const reg = await registerMobileDevice(token, {
           platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
           expoPushToken: currentToken,
           deviceName: Device.modelName || `${Platform.OS}-device`
-        }).catch(() => undefined);
+        }).catch(() => null);
+        if (reg?.id) deviceIdRef.current = String(reg.id);
       }
 
       const pending = await getPendingInvites(token).catch(() => []);
@@ -109,15 +139,24 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     })();
 
     const pushSub = Notifications.addNotificationReceivedListener((evt) => {
-      const data = evt.request.content.data as IncomingCallPushPayload;
-      if (data?.type !== "INCOMING_CALL") return;
-      const invite = payloadToInvite(data);
-      setIncomingInvite(invite);
-      showIncomingNativeCall(invite.id, invite.fromNumber);
+      const data = evt.request.content.data as MobilePushPayload;
+      if (data?.type === "INCOMING_CALL") {
+        const invite = payloadToInvite(data);
+        setIncomingInvite(invite);
+        showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+        return;
+      }
+      if (data?.type === "INVITE_CLAIMED") {
+        setIncomingInvite((prev) => {
+          if (!prev || prev.id !== data.inviteId) return prev;
+          endNativeCall(prev.id);
+          return null;
+        });
+      }
     });
 
     const responseSub = Notifications.addNotificationResponseReceivedListener((evt) => {
-      const data = evt.notification.request.content.data as IncomingCallPushPayload;
+      const data = evt.notification.request.content.data as MobilePushPayload;
       if (data?.type !== "INCOMING_CALL") return;
       setIncomingInvite((prev) => prev || payloadToInvite(data));
     });

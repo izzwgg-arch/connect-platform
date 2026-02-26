@@ -1,4 +1,4 @@
-import type { SipClient, SipEvents } from "./types";
+import type { SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 
 export class SimulatedSipClient implements SipClient {
@@ -31,6 +31,16 @@ export class SimulatedSipClient implements SipClient {
 
   async answer() {
     this.events.onCallState?.("connected");
+  }
+
+  async answerIncoming(_match?: SipMatch, _timeoutMs = 5000): Promise<boolean> {
+    this.events.onCallState?.("connected");
+    return true;
+  }
+
+  async rejectIncoming(_match?: SipMatch): Promise<boolean> {
+    this.events.onCallState?.("ended");
+    return true;
   }
 
   async hangup() {

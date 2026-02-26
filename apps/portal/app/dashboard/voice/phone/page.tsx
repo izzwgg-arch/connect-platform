@@ -273,6 +273,11 @@ export default function VoicePhonePage() {
       ? "status-chip live"
       : "status-chip pending";
 
+  const hasTurn = (info?.iceServers || []).some((s) => {
+    const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+    return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
+  });
+
   return (
     <>
       <Script src="https://unpkg.com/sip.js@0.21.2/lib/umd/sip.js" strategy="afterInteractive" />
@@ -284,6 +289,7 @@ export default function VoicePhonePage() {
               <span className={statusClass}>{status}</span>
             </div>
             {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
+            {!hasTurn ? <p className="status-chip pending" style={{ borderRadius: 2 }}>Mobile networks often require TURN for reliable audio.</p> : null}
             <p>Ext. <strong>{info?.extensionNumber || "-"}</strong> / {info?.displayName || "Unassigned"} / SIP user {info?.sipUsername || "-"}</p>
             <p>WSS: {info?.sipWsUrl || "not configured"} / Domain: {info?.sipDomain || "not configured"}</p>
             <button onClick={resetSipPassword}>Reset SIP Password</button>
