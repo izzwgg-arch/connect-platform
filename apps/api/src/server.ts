@@ -2,6 +2,10 @@ import Fastify from "fastify";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import bcrypt from "bcryptjs";
+import net from "net";
+import dgram from "dgram";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
@@ -89,6 +93,7 @@ type CampaignDecision = {
 };
 
 const providerCredCache = new Map<string, { recordId: string; creds: any; expiresAt: number }>();
+const execFileAsync = promisify(execFile);
 const providerCredCacheTtlMs = 60_000;
 const testSendLimiter = new Map<string, number[]>();
 const billingRateLimiter = new Map<string, number[]>();
@@ -96,6 +101,15 @@ const voiceDiagHeartbeatLimiter = new Map<string, number>();
 const voiceDiagEventLimiter = new Map<string, number[]>();
 const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
 const mobileProvisioningTokenSecret = process.env.MOBILE_PROVISIONING_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
+const sbcKamailioHost = process.env.SBC_KAMAILIO_HOST || "sbc-kamailio";
+const sbcKamailioSipPort = Number(process.env.SBC_KAMAILIO_SIP_PORT || 5060);
+const sbcKamailioTcpPort = Number(process.env.SBC_KAMAILIO_TCP_PORT || 5061);
+const sbcRtpengineHost = process.env.SBC_RTPENGINE_HOST || "sbc-rtpengine";
+const sbcRtpengineCtrlPort = Number(process.env.SBC_RTPENGINE_CTRL_PORT || 2223);
+const sbcPbxHost = process.env.SBC_PBX_HOST || "pbx";
+const sbcPbxPort = Number(process.env.SBC_PBX_PORT || 5060);
+const sbcKamailioContainer = process.env.SBC_KAMAILIO_CONTAINER || "sbc-kamailio";
+const sbcRtpengineContainer = process.env.SBC_RTPENGINE_CONTAINER || "sbc-rtpengine";
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -1079,6 +1093,151 @@ async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WE
 
   return { ok: true, inviteId: invite.id, status: nextStatus };
 }
+
+async function tcpProbe(host: string, port: number, timeoutMs = 1200): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch {}
+      resolve(ok);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+async function udpProbe(host: string, port: number, timeoutMs = 800): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket("udp4");
+    let settled = false;
+    const payload = Buffer.from("ping");
+
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try { sock.close(); } catch {}
+      resolve(ok);
+    };
+
+    const timer = setTimeout(() => done(true), timeoutMs);
+    sock.once("error", () => {
+      clearTimeout(timer);
+      done(false);
+    });
+    sock.send(payload, port, host, (err) => {
+      if (err) {
+        clearTimeout(timer);
+        done(false);
+      }
+    });
+  });
+}
+
+async function dockerContainerRunning(name: string): Promise<boolean | null> {
+  try {
+    const out = await execFileAsync("docker", ["inspect", "-f", "{{.State.Running}}", name], { timeout: 1500 });
+    const v = String(out.stdout || "").trim().toLowerCase();
+    return v === "true";
+  } catch {
+    return null;
+  }
+}
+
+function buildSipOptionsMessage(input: { targetHost: string; targetPort: number; viaHost: string; viaPort: number }): string {
+  const branch = `z9hG4bK-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const callId = `sbc-status-${Date.now()}-${Math.floor(Math.random() * 100000)}@${input.viaHost}`;
+  return [
+    `OPTIONS sip:health@${input.targetHost}:${input.targetPort} SIP/2.0`,
+    `Via: SIP/2.0/UDP ${input.viaHost}:${input.viaPort};branch=${branch};rport`,
+    "Max-Forwards: 5",
+    `From: <sip:sbc-status@${input.viaHost}>;tag=${Math.floor(Math.random() * 100000)}`,
+    `To: <sip:health@${input.targetHost}:${input.targetPort}>`,
+    `Call-ID: ${callId}`,
+    "CSeq: 1 OPTIONS",
+    `Contact: <sip:sbc-status@${input.viaHost}:${input.viaPort}>`,
+    "Content-Length: 0",
+    "",
+    ""
+  ].join("\r\n");
+}
+
+async function sipOptionsViaKamailio(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket("udp4");
+    let settled = false;
+
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try { sock.close(); } catch {}
+      resolve(ok);
+    };
+
+    const timer = setTimeout(() => done(false), 2000);
+    sock.once("error", () => {
+      clearTimeout(timer);
+      done(false);
+    });
+
+    sock.once("message", (msg) => {
+      clearTimeout(timer);
+      const text = String(msg || "");
+      const m = text.match(/^SIP\/2\.0\s+(\d{3})/m);
+      const status = m ? Number(m[1]) : 0;
+      const ok = status >= 200 && status < 500 && status !== 408;
+      done(ok);
+    });
+
+    const payload = buildSipOptionsMessage({
+      targetHost: sbcPbxHost,
+      targetPort: sbcPbxPort,
+      viaHost: "connect-api",
+      viaPort: 5099
+    });
+
+    sock.send(Buffer.from(payload), sbcKamailioSipPort, sbcKamailioHost, (err) => {
+      if (err) {
+        clearTimeout(timer);
+        done(false);
+      }
+    });
+  });
+}
+
+async function probeSbcStatus(): Promise<{ kamailio: "UP" | "DOWN"; rtpengine: "UP" | "DOWN"; pbx_via_sbc: "OK" | "FAIL" }> {
+  const kamailioByDocker = await dockerContainerRunning(sbcKamailioContainer);
+  const rtpengineByDocker = await dockerContainerRunning(sbcRtpengineContainer);
+
+  const kamailioUp = kamailioByDocker !== null
+    ? kamailioByDocker
+    : await tcpProbe(sbcKamailioHost, sbcKamailioTcpPort);
+
+  const rtpengineUp = rtpengineByDocker !== null
+    ? rtpengineByDocker
+    : await udpProbe(sbcRtpengineHost, sbcRtpengineCtrlPort);
+
+  const pbxViaSbcOk = kamailioUp ? await sipOptionsViaKamailio() : false;
+
+  return {
+    kamailio: kamailioUp ? "UP" : "DOWN",
+    rtpengine: rtpengineUp ? "UP" : "DOWN",
+    pbx_via_sbc: pbxViaSbcOk ? "OK" : "FAIL"
+  };
+}
+
+app.get("/admin/sbc/status", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  return probeSbcStatus();
+});
 
 app.get("/health", async () => ({ ok: true }));
 
