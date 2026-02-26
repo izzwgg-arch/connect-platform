@@ -235,6 +235,7 @@ model Tenant {
   voiceDiagEvents               VoiceDiagEvent[]
   turnConfigs                   TurnConfig[]
   turnValidationJobs            TurnValidationJob[]
+  mobileProvisioningTokens      MobileProvisioningToken[]
   pbxTenantLink                 TenantPbxLink?
   pbxExtensionLinks             PbxExtensionLink[]
   pbxDidLinks                   PbxDidLink[]
@@ -264,6 +265,7 @@ model User {
   voiceClientSessions        VoiceClientSession[]
   voiceDiagEvents            VoiceDiagEvent[]
   requestedTurnValidationJobs TurnValidationJob[] @relation("TurnValidationRequestedBy")
+  mobileProvisioningTokens    MobileProvisioningToken[]
 }
 
 model Subscription {
@@ -702,6 +704,22 @@ model MobileDevice {
 }
 
 
+
+
+model MobileProvisioningToken {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, createdAt])
+  @@index([expiresAt, usedAt])
+}
 
 model TurnConfig {
   id                  String          @id @default(cuid())

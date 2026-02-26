@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import bcrypt from "bcryptjs";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
@@ -93,6 +93,7 @@ const billingRateLimiter = new Map<string, number[]>();
 const voiceDiagHeartbeatLimiter = new Map<string, number>();
 const voiceDiagEventLimiter = new Map<string, number[]>();
 const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
+const mobileProvisioningTokenSecret = process.env.MOBILE_PROVISIONING_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -434,6 +435,76 @@ function verifyTurnValidationToken(token: string): null | { jobId: string; token
   } catch {
     return null;
   }
+}
+
+
+function hashToken(value: string): string {
+  return createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function signMobileProvisioningToken(input: { tokenId: string; tenantId: string; userId: string; expMs: number }): string {
+  const payload = Buffer.from(JSON.stringify(input)).toString("base64url");
+  const sig = createHmac("sha256", mobileProvisioningTokenSecret).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifyMobileProvisioningToken(token: string): null | { tokenId: string; tenantId: string; userId: string; expMs: number } {
+  const t = String(token || "").trim();
+  const idx = t.lastIndexOf(".");
+  if (idx <= 0) return null;
+  const payload = t.slice(0, idx);
+  const sig = t.slice(idx + 1);
+  const expected = createHmac("sha256", mobileProvisioningTokenSecret).update(payload).digest();
+  const given = Buffer.from(sig, "base64url");
+  if (given.length !== expected.length) return null;
+  if (!timingSafeEqual(expected, given)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed?.tokenId || !parsed?.tenantId || !parsed?.userId || !parsed?.expMs) return null;
+    if (Number(parsed.expMs) < Date.now()) return null;
+    return {
+      tokenId: String(parsed.tokenId),
+      tenantId: String(parsed.tenantId),
+      userId: String(parsed.userId),
+      expMs: Number(parsed.expMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPassword: string; provisioning: any; pbxExtensionLinkId: string }> {
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) throw new Error("PBX_NOT_LINKED");
+
+  const row = await db.pbxExtensionLink.findFirst({
+    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    include: { extension: true },
+    orderBy: { createdAt: "asc" }
+  });
+  if (!row) throw new Error("EXTENSION_NOT_ASSIGNED");
+
+  let sipPassword = "";
+  if (voiceSimulate) {
+    sipPassword = `sim-webrtc-${Date.now()}`;
+  } else {
+    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+    sipPassword = out.sipPassword;
+  }
+
+  await db.pbxExtensionLink.update({
+    where: { id: row.id },
+    data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() }
+  });
+
+  const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
+  return {
+    sipPassword,
+    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword),
+    pbxExtensionLinkId: row.id
+  };
 }
 
 async function getEffectiveTurnConfig(tenantId: string): Promise<any | null> {
@@ -2189,35 +2260,95 @@ app.get("/voice/me/extension", async (req, reply) => {
 
 app.post("/voice/me/reset-sip-password", async (req, reply) => {
   const user = getUser(req);
-  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  try {
+    const out = await issueOneTimeProvisioningForUser(user);
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "VOICE_ME_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: out.pbxExtensionLinkId });
+    return { sipPassword: out.sipPassword, provisioning: out.provisioning };
+  } catch (e: any) {
+    const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    if (code === "PBX_NOT_LINKED") return reply.status(400).send({ error: code });
+    if (code === "EXTENSION_NOT_ASSIGNED") return reply.status(404).send({ error: code });
+    return reply.status(400).send({ error: code });
+  }
+});
 
-  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+
+app.post("/voice/mobile-provisioning/token", async (req, reply) => {
+  const user = getUser(req);
+
+  if (!checkBillingRateLimit(`mobile-provisioning-token:${user.sub}`, 20, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  // Ensure user can actually redeem a provisioning bundle before issuing token.
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId } });
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
   const row = await db.pbxExtensionLink.findFirst({
     where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
-    include: { extension: true },
     orderBy: { createdAt: "asc" }
   });
   if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
 
-  let sipPassword = "";
-  if (voiceSimulate) {
-    sipPassword = `sim-webrtc-${Date.now()}`;
-  } else {
-    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-    const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
-    sipPassword = out.sipPassword;
+  const tokenId = randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+  const token = signMobileProvisioningToken({ tokenId, tenantId: user.tenantId, userId: user.sub, expMs: expiresAt.getTime() });
+  const tokenHash = hashToken(token);
+
+  await db.mobileProvisioningToken.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      tokenHash,
+      expiresAt
+    }
+  });
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_PROVISIONING_TOKEN_ISSUED", entityType: "MobileProvisioningToken", entityId: tokenId });
+  return { token, expiresAt };
+});
+
+app.post("/voice/mobile-provisioning/redeem", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({ token: z.string().min(12), deviceInfo: z.any().optional() }).parse(req.body || {});
+
+  if (!checkBillingRateLimit(`mobile-provisioning-redeem:${user.sub}`, 5, 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
   }
 
-  await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() } });
-  const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
-  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "VOICE_ME_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
+  const verified = verifyMobileProvisioningToken(input.token);
+  if (!verified) return reply.status(400).send({ error: "TOKEN_INVALID" });
+  if (verified.tenantId !== user.tenantId || verified.userId !== user.sub) return reply.status(403).send({ error: "forbidden" });
 
-  return {
-    sipPassword,
-    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword)
-  };
+  const tokenHash = hashToken(input.token);
+  const now = new Date();
+
+  const tokenRow = await db.mobileProvisioningToken.findFirst({
+    where: { tokenHash, tenantId: user.tenantId, userId: user.sub }
+  });
+  if (!tokenRow) return reply.status(400).send({ error: "TOKEN_INVALID" });
+  if (tokenRow.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+  if (tokenRow.expiresAt < now) return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+
+  const consume = await db.mobileProvisioningToken.updateMany({
+    where: { id: tokenRow.id, usedAt: null, expiresAt: { gte: now } },
+    data: { usedAt: now }
+  });
+  if (consume.count === 0) {
+    const latest = await db.mobileProvisioningToken.findUnique({ where: { id: tokenRow.id } });
+    if (latest?.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+    return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+  }
+
+  try {
+    const out = await issueOneTimeProvisioningForUser(user);
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_PROVISIONING_TOKEN_REDEEMED", entityType: "MobileProvisioningToken", entityId: tokenRow.id });
+    return { sipPassword: out.sipPassword, provisioning: out.provisioning };
+  } catch (e: any) {
+    const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    return reply.status(code === "EXTENSION_NOT_ASSIGNED" ? 404 : 400).send({ error: code });
+  }
 });
 
 app.post("/voice/webrtc/test-config", async (req, reply) => {

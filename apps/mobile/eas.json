@@ -3,15 +3,27 @@
     "version": ">= 13.0.0"
   },
   "build": {
-    "development": {
+    "dev": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "true",
+        "EXPO_PUBLIC_LOG_LEVEL": "debug"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "false",
+        "EXPO_PUBLIC_LOG_LEVEL": "info"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "false",
+        "EXPO_PUBLIC_LOG_LEVEL": "warn"
+      }
     }
   }
 }

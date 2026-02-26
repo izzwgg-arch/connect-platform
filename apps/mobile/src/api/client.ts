@@ -101,6 +101,19 @@ export async function respondInvite(token: string, inviteId: string, action: "AC
 }
 
 
+
+export async function redeemMobileProvisioningToken(token: string, input: { token: string; deviceInfo?: any; apiBaseUrl?: string }) {
+  const base = (input.apiBaseUrl || API_BASE).replace(/\/$/, "");
+  const res = await fetch(`${base}/voice/mobile-provisioning/redeem`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MOBILE_PROVISIONING_REDEEM_FAILED");
+  return json as { sipPassword: string; provisioning: any };
+}
+
 export async function startVoiceDiagSession(token: string, input: {
   sessionId?: string;
   platform: "WEB" | "IOS" | "ANDROID";

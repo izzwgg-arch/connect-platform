@@ -12,6 +12,7 @@ export default function VoiceProvisioningPage() {
   const [result, setResult] = useState("");
   const [mobileQrPayload, setMobileQrPayload] = useState<string>("");
   const [mobileQrExpiresAt, setMobileQrExpiresAt] = useState<number | null>(null);
+  const [showLegacyNote, setShowLegacyNote] = useState(false);
 
   async function load() {
     const token = localStorage.getItem("token") || "";
@@ -59,12 +60,35 @@ export default function VoiceProvisioningPage() {
 
   async function generateMobileQr() {
     const token = localStorage.getItem("token") || "";
+    const out = await fetch(`${apiBase}/voice/mobile-provisioning/token`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const json = await out.json().catch(() => ({}));
+    if (!out.ok || !json?.token) {
+      setResult(JSON.stringify(json, null, 2));
+      return;
+    }
+
+    const payload = JSON.stringify({
+      type: "MOBILE_PROVISIONING",
+      token: json.token,
+      apiBaseUrl: apiBase
+    });
+    setMobileQrPayload(payload);
+    setMobileQrExpiresAt(Date.now() + 60_000);
+    setShowLegacyNote(false);
+  }
+
+  async function generateLegacyMobileQr() {
+    const token = localStorage.getItem("token") || "";
     const reset = await fetch(`${apiBase}/voice/me/reset-sip-password`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({})
     });
-    const json = await reset.json();
+    const json = await reset.json().catch(() => ({}));
     if (!reset.ok || !json?.sipPassword || !json?.provisioning) {
       setResult(JSON.stringify(json, null, 2));
       return;
@@ -82,6 +106,7 @@ export default function VoiceProvisioningPage() {
     });
     setMobileQrPayload(payload);
     setMobileQrExpiresAt(Date.now() + 60_000);
+    setShowLegacyNote(true);
   }
 
   const qrUrl = mobileQrPayload
@@ -103,8 +128,10 @@ export default function VoiceProvisioningPage() {
       <button onClick={createExtension}>Provision Extension</button>
 
       <h3>Mobile QR Onboarding</h3>
-      <p>Generates a one-time SIP credential payload for the mobile app. QR auto-hides after 60 seconds.</p>
-      <button onClick={generateMobileQr}>Generate One-Time Mobile QR</button>
+      <p>Default flow uses a short-lived single-use provisioning token. QR auto-hides after 60 seconds and contains no SIP password.</p>
+      <button onClick={generateMobileQr}>Generate Tokenized Mobile QR</button>{" "}
+      <button onClick={generateLegacyMobileQr}>Generate Legacy QR (Deprecated)</button>
+      {showLegacyNote ? <p className="status-chip failed" style={{ borderRadius: 2 }}>Legacy QR includes plaintext SIP secret and will be removed after this grace release.</p> : null}
       {mobileQrPayload ? (
         <div className="card" style={{ maxWidth: 280 }}>
           <img src={qrUrl} alt="Mobile provisioning QR" width={240} height={240} />

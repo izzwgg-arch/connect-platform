@@ -1,5 +1,15 @@
 import type { ExpoConfig } from "expo/config";
 
+function resolveProfile(): string {
+  return String(process.env.EAS_BUILD_PROFILE || process.env.EXPO_BUILD_PROFILE || "dev").toLowerCase();
+}
+
+const profile = resolveProfile();
+const isProdProfile = profile === "production";
+const requestedVoiceSimulate = String(process.env.EXPO_PUBLIC_VOICE_SIMULATE || "false").toLowerCase() === "true";
+const voiceSimulate = isProdProfile ? false : requestedVoiceSimulate;
+const logLevel = (process.env.EXPO_PUBLIC_LOG_LEVEL || (isProdProfile ? "warn" : profile === "preview" ? "info" : "debug")).toLowerCase();
+
 const config: ExpoConfig = {
   name: "Connect Communications",
   slug: "connect-mobile",
@@ -21,7 +31,9 @@ const config: ExpoConfig = {
   },
   extra: {
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL,
-    voiceSimulate: process.env.EXPO_PUBLIC_VOICE_SIMULATE,
+    voiceSimulate,
+    logLevel,
+    buildProfile: profile,
     easProjectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID
   },
   plugins: [
