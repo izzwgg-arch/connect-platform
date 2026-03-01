@@ -179,6 +179,11 @@ enum MediaTestRunStatus {
   FAILED
 }
 
+enum MediaPolicy {
+  TURN_ONLY
+  RTPENGINE_PREFERRED
+}
+
 enum CallInviteStatus {
   PENDING
   ACCEPTED
@@ -233,6 +238,7 @@ model Tenant {
   mediaTestedAt                 DateTime?
   mediaLastErrorCode            String?
   mediaLastErrorAt              DateTime?
+  mediaPolicy                  MediaPolicy            @default(TURN_ONLY)
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]

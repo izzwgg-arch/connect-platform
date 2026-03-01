@@ -43,6 +43,18 @@ type MediaState = {
   mediaLastErrorCode: string | null;
   mediaLastErrorAt: string | null;
   recentRun?: any;
+  mediaPolicy?: "TURN_ONLY" | "RTPENGINE_PREFERRED";
+};
+
+type MediaMetrics = {
+  ok: boolean;
+  range: "24h" | "7d";
+  totalMediaTests: number;
+  passed: number;
+  failed: number;
+  relayTrueCount: number;
+  relayFalseCount: number;
+  topErrorCodes: Array<{ code: string; count: number }>;
 };
 
 export default function VoiceDiagnosticsPage() {
@@ -52,6 +64,8 @@ export default function VoiceDiagnosticsPage() {
   const [msg, setMsg] = useState<string>("");
   const [turn, setTurn] = useState<TurnState | null>(null);
   const [media, setMedia] = useState<MediaState | null>(null);
+  const [mediaMetrics, setMediaMetrics] = useState<MediaMetrics | null>(null);
+  const [metricsRange, setMetricsRange] = useState<"24h" | "7d">("24h");
   const [turnUrlsInput, setTurnUrlsInput] = useState<string>("");
   const [turnUsernameInput, setTurnUsernameInput] = useState<string>("");
   const [turnCredentialInput, setTurnCredentialInput] = useState<string>("");
@@ -87,6 +101,13 @@ export default function VoiceDiagnosticsPage() {
     const json = await res.json().catch(() => null);
     if (!json) return;
     setMedia(json);
+  }
+
+  async function loadMediaMetrics(range: "24h" | "7d" = metricsRange) {
+    const res = await fetch(`${apiBase}/voice/media-metrics?range=${range}`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json().catch(() => null);
+    if (!json) return;
+    setMediaMetrics(json);
   }
 
   async function saveTurnConfig() {
@@ -128,6 +149,17 @@ export default function VoiceDiagnosticsPage() {
     });
     const out = await res.json().catch(() => ({}));
     setMsg(res.ok ? `Media reliability gate ${nextValue ? "enabled" : "disabled"}.` : String(out?.error || "Failed to update media gate"));
+    await loadMedia();
+  }
+
+  async function updateMediaPolicy(nextPolicy: "TURN_ONLY" | "RTPENGINE_PREFERRED") {
+    const res = await fetch(`${apiBase}/voice/media-test/status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ mediaPolicy: nextPolicy })
+    });
+    const out = await res.json().catch(() => ({}));
+    setMsg(res.ok ? `Media policy set to ${nextPolicy}.` : String(out?.error || "Failed to update media policy"));
     await loadMedia();
   }
 
@@ -211,12 +243,18 @@ export default function VoiceDiagnosticsPage() {
     loadSessions().catch(() => undefined);
     loadTurn().catch(() => undefined);
     loadMedia().catch(() => undefined);
+    loadMediaMetrics().catch(() => undefined);
   }, [token]);
 
   useEffect(() => {
     if (!selected || !token) return;
     loadEvents(selected).catch(() => undefined);
   }, [selected, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    loadMediaMetrics(metricsRange).catch(() => undefined);
+  }, [metricsRange, token]);
 
   const statusClass = turn?.status === "VERIFIED" ? "status-chip live" : turn?.status === "FAILED" ? "status-chip failed" : "status-chip pending";
   const mediaClass = media?.mediaTestStatus === "PASSED" ? "status-chip live" : media?.mediaTestStatus === "FAILED" ? "status-chip failed" : "status-chip pending";
@@ -228,6 +266,7 @@ export default function VoiceDiagnosticsPage() {
       <button onClick={() => loadSessions().catch(() => undefined)}>Refresh Sessions</button>{" "}
       <button onClick={() => loadTurn().catch(() => undefined)}>Refresh TURN</button>{" "}
       <button onClick={() => loadMedia().catch(() => undefined)}>Refresh Media</button>{" "}
+      <button onClick={() => loadMediaMetrics(metricsRange).catch(() => undefined)}>Refresh Metrics</button>{" "}
       <button onClick={testTurn}>Test TURN Now</button>
       {msg ? <p className="status-chip pending" style={{ borderRadius: 2 }}>{msg}</p> : null}
 
@@ -239,6 +278,34 @@ export default function VoiceDiagnosticsPage() {
         Enable Media Reliability Gate
       </label>
       <button onClick={() => runMediaTest().catch(() => undefined)}>Run Media Test</button>
+      <div style={{ marginTop: 10 }}>
+        <label>Media Policy: </label>{" "}
+        <select value={media?.mediaPolicy || "TURN_ONLY"} onChange={(e) => updateMediaPolicy(e.target.value as "TURN_ONLY" | "RTPENGINE_PREFERRED").catch(() => undefined)}>
+          <option value="TURN_ONLY">TURN_ONLY (default)</option>
+          <option value="RTPENGINE_PREFERRED">RTPENGINE_PREFERRED</option>
+        </select>
+      </div>
+      {media?.mediaPolicy === "RTPENGINE_PREFERRED" ? (
+        <p className="status-chip pending" style={{ borderRadius: 2 }}>Guidance: RTPENGINE preferred may benefit from optional UDP RTP exposure for best reliability; network changes are not automatic.</p>
+      ) : null}
+
+      <h4>Media Metrics ({metricsRange})</h4>
+      <label>
+        <input type="radio" checked={metricsRange === "24h"} onChange={() => setMetricsRange("24h")} /> 24h
+      </label>{" "}
+      <label>
+        <input type="radio" checked={metricsRange === "7d"} onChange={() => setMetricsRange("7d")} /> 7d
+      </label>
+      <table>
+        <tbody>
+          <tr><td>Total Media Tests</td><td>{mediaMetrics?.totalMediaTests ?? 0}</td></tr>
+          <tr><td>Passed</td><td>{mediaMetrics?.passed ?? 0}</td></tr>
+          <tr><td>Failed</td><td>{mediaMetrics?.failed ?? 0}</td></tr>
+          <tr><td>Relay True</td><td>{mediaMetrics?.relayTrueCount ?? 0}</td></tr>
+          <tr><td>Relay False</td><td>{mediaMetrics?.relayFalseCount ?? 0}</td></tr>
+        </tbody>
+      </table>
+      <p>Top error codes: {(mediaMetrics?.topErrorCodes || []).map((e) => `${e.code} (${e.count})`).join(", ") || "none"}</p>
 
       <h3>TURN</h3>
       <p>Status: <span className={statusClass}>{turn?.status || "UNKNOWN"}</span> / Last validated: {turn?.validatedAt ? new Date(turn.validatedAt).toLocaleString() : "never"}</p>

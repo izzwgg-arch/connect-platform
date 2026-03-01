@@ -1,0 +1,7 @@
+DO $$ BEGIN
+  CREATE TYPE "MediaPolicy" AS ENUM ('TURN_ONLY', 'RTPENGINE_PREFERRED');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+ALTER TABLE "Tenant"
+ADD COLUMN IF NOT EXISTS "mediaPolicy" "MediaPolicy" NOT NULL DEFAULT 'TURN_ONLY';

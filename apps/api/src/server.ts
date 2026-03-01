@@ -584,6 +584,57 @@ function isMediaTestRecentlyPassed(tenant: any): boolean {
   return new Date(tenant.mediaTestedAt).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000;
 }
 
+function parseMetricsRange(input: unknown): { label: "24h" | "7d"; since: Date } {
+  const normalized = String(input || "24h").toLowerCase();
+  if (normalized === "7d") return { label: "7d", since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) };
+  return { label: "24h", since: new Date(Date.now() - 24 * 60 * 60 * 1000) };
+}
+
+async function getMediaMetricsForTenant(tenantId: string, since: Date): Promise<any> {
+  const [mediaRuns, turnRuns] = await Promise.all([
+    db.mediaTestRun.findMany({ where: { tenantId, createdAt: { gte: since } }, select: { status: true, details: true, createdAt: true } }),
+    db.turnValidationJob.findMany({ where: { tenantId, requestedAt: { gte: since } }, select: { hasRelay: true, errorCode: true } })
+  ]);
+
+  let passed = 0;
+  let failed = 0;
+  let relayTrueCount = 0;
+  let relayFalseCount = 0;
+  const errorCounts = new Map<string, number>();
+
+  for (const row of mediaRuns as any[]) {
+    if (row.status === "PASSED") passed += 1;
+    if (row.status === "FAILED") failed += 1;
+    const details: any = row.details || {};
+    const hasRelay = details?.hasRelay;
+    if (hasRelay === true) relayTrueCount += 1;
+    if (hasRelay === false) relayFalseCount += 1;
+    const err = String(details?.errorCode || "").trim();
+    if (err) errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+  }
+
+  for (const row of turnRuns as any[]) {
+    if (row.hasRelay === true) relayTrueCount += 1;
+    if (row.hasRelay === false) relayFalseCount += 1;
+    const err = String(row.errorCode || "").trim();
+    if (err) errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+  }
+
+  const topErrorCodes = Array.from(errorCounts.entries())
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  return {
+    totalMediaTests: mediaRuns.length,
+    passed,
+    failed,
+    relayTrueCount,
+    relayFalseCount,
+    topErrorCodes
+  };
+}
+
 function ensureCredentialCrypto(reply: any): boolean {
   if (canUseCredentialCrypto) return true;
   reply.status(503).send({ error: "provider_settings_unavailable", message: "Provider settings are unavailable until credential encryption is configured." });
@@ -2562,7 +2613,8 @@ app.get("/voice/media-test/status", async (req, reply) => {
         mediaTestStatus: true,
         mediaTestedAt: true,
         mediaLastErrorCode: true,
-        mediaLastErrorAt: true
+        mediaLastErrorAt: true,
+        mediaPolicy: true
       }
     }),
     db.mediaTestRun.findFirst({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } })
@@ -2577,6 +2629,7 @@ app.get("/voice/media-test/status", async (req, reply) => {
     mediaTestedAt: tenant.mediaTestedAt || null,
     mediaLastErrorCode: tenant.mediaLastErrorCode || null,
     mediaLastErrorAt: tenant.mediaLastErrorAt || null,
+    mediaPolicy: tenant.mediaPolicy || "TURN_ONLY",
     recentRun: recent ? {
       id: recent.id,
       createdAt: recent.createdAt,
@@ -2592,16 +2645,28 @@ app.put("/voice/media-test/status", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
 
-  const input = z.object({ mediaReliabilityGateEnabled: z.boolean() }).parse(req.body || {});
+  const input = z.object({
+    mediaReliabilityGateEnabled: z.boolean().optional(),
+    mediaPolicy: z.enum(["TURN_ONLY", "RTPENGINE_PREFERRED"]).optional()
+  }).parse(req.body || {});
+  if (input.mediaReliabilityGateEnabled === undefined && !input.mediaPolicy) {
+    return reply.status(400).send({ error: "MEDIA_STATUS_UPDATE_REQUIRED" });
+  }
+
   const updated = await db.tenant.update({
     where: { id: admin.tenantId },
-    data: { mediaReliabilityGateEnabled: !!input.mediaReliabilityGateEnabled }
+    data: {
+      ...(input.mediaReliabilityGateEnabled === undefined ? {} : { mediaReliabilityGateEnabled: !!input.mediaReliabilityGateEnabled }),
+      ...(input.mediaPolicy ? { mediaPolicy: input.mediaPolicy } : {})
+    }
   });
 
   await audit({
     tenantId: admin.tenantId,
     actorUserId: admin.sub,
-    action: input.mediaReliabilityGateEnabled ? "VOICE_MEDIA_GATE_ENABLED" : "VOICE_MEDIA_GATE_DISABLED",
+    action: input.mediaPolicy
+      ? `VOICE_MEDIA_POLICY_${input.mediaPolicy}`
+      : (input.mediaReliabilityGateEnabled ? "VOICE_MEDIA_GATE_ENABLED" : "VOICE_MEDIA_GATE_DISABLED"),
     entityType: "Tenant",
     entityId: admin.tenantId
   });
@@ -2609,6 +2674,7 @@ app.put("/voice/media-test/status", async (req, reply) => {
   return {
     ok: true,
     mediaReliabilityGateEnabled: !!updated.mediaReliabilityGateEnabled,
+    mediaPolicy: updated.mediaPolicy || "TURN_ONLY",
     mediaTestStatus: updated.mediaTestStatus,
     mediaTestedAt: updated.mediaTestedAt,
     mediaLastErrorCode: updated.mediaLastErrorCode,
@@ -3321,6 +3387,122 @@ app.post("/voice/turn/validate/report", async (req, reply) => {
   return { ok: true, jobId: job.id, status: success ? "VERIFIED" : "FAILED" };
 });
 
+app.get("/voice/media-metrics", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({ range: z.enum(["24h", "7d"]).optional() }).parse(req.query || {});
+  const parsed = parseMetricsRange(q.range || "24h");
+  const metrics = await getMediaMetricsForTenant(admin.tenantId, parsed.since);
+
+  return {
+    ok: true,
+    range: parsed.label,
+    since: parsed.since,
+    ...metrics
+  };
+});
+
+app.get("/admin/voice/media-metrics", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({ range: z.enum(["24h", "7d"]).optional() }).parse(req.query || {});
+  const parsed = parseMetricsRange(q.range || "24h");
+
+  const [tenantRows, mediaRuns, turnRuns] = await Promise.all([
+    db.tenant.findMany({ select: { id: true, name: true } }),
+    db.mediaTestRun.findMany({ where: { createdAt: { gte: parsed.since } }, select: { tenantId: true, status: true, details: true } }),
+    db.turnValidationJob.findMany({ where: { requestedAt: { gte: parsed.since } }, select: { tenantId: true, hasRelay: true, errorCode: true } })
+  ]);
+
+  let passed = 0;
+  let failed = 0;
+  let relayTrueCount = 0;
+  let relayFalseCount = 0;
+  const errorCounts = new Map<string, number>();
+  const tenantFailMap = new Map<string, number>();
+
+  for (const row of mediaRuns as any[]) {
+    if (row.status === "PASSED") passed += 1;
+    if (row.status === "FAILED") {
+      failed += 1;
+      tenantFailMap.set(String(row.tenantId), (tenantFailMap.get(String(row.tenantId)) || 0) + 1);
+    }
+    const details: any = row.details || {};
+    if (details?.hasRelay === true) relayTrueCount += 1;
+    if (details?.hasRelay === false) relayFalseCount += 1;
+    const err = String(details?.errorCode || "").trim();
+    if (err) errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+  }
+
+  for (const row of turnRuns as any[]) {
+    if (row.hasRelay === true) relayTrueCount += 1;
+    if (row.hasRelay === false) relayFalseCount += 1;
+    const err = String(row.errorCode || "").trim();
+    if (err) errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+    if (err) tenantFailMap.set(String(row.tenantId), (tenantFailMap.get(String(row.tenantId)) || 0) + 1);
+  }
+
+  const tenantNameById = new Map<string, string>();
+  for (const t of tenantRows as any[]) tenantNameById.set(String(t.id), String(t.name || "tenant"));
+
+  const topErrorCodes = Array.from(errorCounts.entries())
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+
+  const tenantsFailingMost = Array.from(tenantFailMap.entries())
+    .map(([tenantId, failures]) => ({ tenantId, tenantName: tenantNameById.get(tenantId) || "tenant", failures }))
+    .sort((a, b) => b.failures - a.failures)
+    .slice(0, 20);
+
+  return {
+    ok: true,
+    range: parsed.label,
+    since: parsed.since,
+    totalMediaTests: mediaRuns.length,
+    passed,
+    failed,
+    relayTrueCount,
+    relayFalseCount,
+    topErrorCodes,
+    tenantsFailingMost
+  };
+});
+
+app.get("/admin/sbc/ops-plan", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const plan = [
+    "SBC Media Ops Plan (No Execution)",
+    "",
+    "Recommended UDP RTP range:",
+    "- 35000-35199/udp",
+    "",
+    "Suggested UFW commands (do not run automatically):",
+    "- sudo ufw allow 35000:35199/udp",
+    "- sudo ufw status numbered",
+    "",
+    "Optional iptables rate-limit snippet:",
+    "- sudo iptables -A INPUT -p udp --dport 35000:35199 -m hashlimit --hashlimit-above 120/second --hashlimit-burst 240 --hashlimit-mode srcip --hashlimit-name rtp_abuse -j DROP",
+    "",
+    "Validation checklist after opening UDP range:",
+    "1) /dashboard/voice/sbc-test -> Test WS handshake + Test SIP REGISTER + Run Media Test",
+    "2) /dashboard/voice/diagnostics -> verify relay rate and pass rate trends",
+    "3) Place controlled real call (mobile + web), confirm two-way audio + stable call duration",
+    "4) Confirm media test outcomes are PASSED within tenant metrics windows"
+  ].join("\n");
+
+  return {
+    ok: true,
+    generatedAt: new Date(),
+    recommendation: { udpRange: "35000-35199/udp" },
+    plan
+  };
+});
+
 app.get("/admin/voice/turn/global", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
@@ -3402,7 +3584,8 @@ app.get("/admin/voice/turn/tenants", async (req, reply) => {
       mediaReliabilityGateEnabled: true,
       mediaTestStatus: true,
       mediaTestedAt: true,
-      mediaLastErrorCode: true
+      mediaLastErrorCode: true,
+      mediaPolicy: true
     },
     orderBy: { createdAt: "desc" },
     take: 300
@@ -3566,10 +3749,11 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
         mediaTestStatus: true,
         mediaTestedAt: true,
         mediaLastErrorCode: true,
-        mediaLastErrorAt: true
+        mediaLastErrorAt: true,
+        mediaPolicy: true
       }
     });
-    if (tenant?.turnRequiredForMobile && !isTurnRecentlyVerified(tenant)) {
+    if (tenant?.turnRequiredForMobile && (tenant?.mediaPolicy || "TURN_ONLY") === "TURN_ONLY" && !isTurnRecentlyVerified(tenant)) {
       return {
         ok: false,
         code: "TURN_REQUIRED_NOT_VERIFIED",
