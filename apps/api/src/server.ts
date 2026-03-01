@@ -1406,13 +1406,43 @@ async function probeNginxSipProxy(): Promise<boolean> {
   }
 }
 
+
+async function probeRemoteWsEndpoint(host: string, port: number, timeoutMs = 3500): Promise<{ ok: boolean; latencyMs: number | null }> {
+  const startedAt = Date.now();
+  const url = `https://${host}:${port}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": "UmVtb3RlU2JjV3NUZXN0",
+        "Sec-WebSocket-Version": "13",
+        Origin: "https://app.connectcomunications.com"
+      }
+    });
+    clearTimeout(timer);
+    const wsHdr = String(res.headers.get("sec-websocket-version") || "").trim();
+    const ok = !!wsHdr || (res.status >= 100 && res.status < 500 && res.status !== 404);
+    return { ok, latencyMs: Date.now() - startedAt };
+  } catch {
+    clearTimeout(timer);
+    return { ok: false, latencyMs: Date.now() - startedAt };
+  }
+}
+
 async function probeSbcReadiness(configOverride?: any): Promise<any> {
   const sbcConfig = configOverride || await getOrCreateSbcConfig();
   const target = resolveSbcTarget(sbcConfig);
   const nginxSipProxyOk = await probeNginxSipProxy();
+  const lastProbeAt = new Date();
 
   if (target.mode === "REMOTE") {
-    const remoteUpstreamReachable = target.host ? await tcpProbe(target.host, target.port, 1800) : false;
+    const remoteTcpOk = target.host ? await tcpProbe(target.host, target.port, 2000) : false;
+    const remoteWsProbe = target.host ? await probeRemoteWsEndpoint(target.host, target.port, 4000) : { ok: false, latencyMs: null };
     return {
       ok: true,
       mode: target.mode,
@@ -1422,7 +1452,11 @@ async function probeSbcReadiness(configOverride?: any): Promise<any> {
         rtpengineUp: "SKIPPED",
         rtpengineControlReachableFromKamailio: "SKIPPED",
         pbxReachableFromKamailio: "SKIPPED",
-        remoteUpstreamReachable: remoteUpstreamReachable ? "OK" : "FAIL"
+        remoteUpstreamReachable: remoteTcpOk ? "OK" : "FAIL",
+        remoteWsOk: !!remoteWsProbe.ok,
+        remoteTcpOk: !!remoteTcpOk,
+        remoteProbeLatencyMs: remoteWsProbe.latencyMs,
+        lastProbeAt
       },
       targets: {
         activeUpstream: target.proxyUrl,
@@ -1453,7 +1487,11 @@ async function probeSbcReadiness(configOverride?: any): Promise<any> {
       rtpengineUp: status.rtpengine === "UP" ? "OK" : "FAIL",
       rtpengineControlReachableFromKamailio: toState(rtpFromKam),
       pbxReachableFromKamailio: toState(pbxFromKam),
-      remoteUpstreamReachable: "SKIPPED"
+      remoteUpstreamReachable: "SKIPPED",
+      remoteWsOk: null,
+      remoteTcpOk: null,
+      remoteProbeLatencyMs: null,
+      lastProbeAt
     },
     targets: {
       activeUpstream: target.proxyUrl,
@@ -1559,11 +1597,15 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
   const [status, sbcConfig] = await Promise.all([probeSbcStatus(), getOrCreateSbcConfig()]);
   const target = resolveSbcTarget(sbcConfig);
+  const maskedActiveUpstream = target.mode === "REMOTE"
+    ? `https://${maskHostLabel(target.host)}:${target.port}`
+    : target.proxyUrl;
+
   return {
     ok: true,
     route: { publicPath: "/sip", publicSipWsUrl: "wss://app.connectcomunications.com/sip" },
     mode: target.mode,
-    activeUpstream: target.proxyUrl,
+    activeUpstream: maskedActiveUpstream,
     services: {
       kamailio: target.mode === "LOCAL" ? status.kamailio : "SKIPPED",
       rtpengine: target.mode === "LOCAL" ? status.rtpengine : "SKIPPED",
