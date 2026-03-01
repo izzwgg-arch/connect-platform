@@ -184,6 +184,11 @@ enum MediaPolicy {
   RTPENGINE_PREFERRED
 }
 
+enum SbcMode {
+  LOCAL
+  REMOTE
+}
+
 enum CallInviteStatus {
   PENDING
   ACCEPTED
@@ -297,6 +302,7 @@ model User {
   requestedTurnValidationJobs TurnValidationJob[] @relation("TurnValidationRequestedBy")
   requestedMediaTestRuns     MediaTestRun[]      @relation("MediaTestRequestedBy")
   mobileProvisioningTokens    MobileProvisioningToken[]
+  updatedSbcConfigs           SbcConfig[]        @relation("SbcConfigUpdatedBy")
 }
 
 model Subscription {
@@ -750,6 +756,16 @@ model MobileProvisioningToken {
 
   @@index([tenantId, userId, createdAt])
   @@index([expiresAt, usedAt])
+}
+
+model SbcConfig {
+  id                 String   @id @default("default")
+  mode               SbcMode  @default(LOCAL)
+  remoteUpstreamHost String?
+  remoteUpstreamPort Int      @default(7443)
+  updatedAt          DateTime @updatedAt
+  updatedByUserId    String?
+  updatedByUser      User?    @relation("SbcConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 }
 
 model TurnConfig {

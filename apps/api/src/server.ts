@@ -4,6 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import bcrypt from "bcryptjs";
 import net from "net";
 import dgram from "dgram";
+import { promises as fsp } from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -111,6 +112,8 @@ const sbcPbxHost = process.env.SBC_PBX_HOST || "pbx";
 const sbcPbxPort = Number(process.env.SBC_PBX_PORT || 5060);
 const sbcKamailioContainer = process.env.SBC_KAMAILIO_CONTAINER || "sbc-kamailio";
 const sbcRtpengineContainer = process.env.SBC_RTPENGINE_CONTAINER || "sbc-rtpengine";
+const nginxConnectcommsSitePath = process.env.NGINX_CONNECTCOMMS_SITE_PATH || "/etc/nginx/sites-available/connectcomms";
+const sbcUpstreamConfPath = process.env.SBC_UPSTREAM_CONF_PATH || "/etc/nginx/conf.d/sbc_upstream.conf";
 
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
@@ -1263,6 +1266,126 @@ async function dockerExecCheck(container: string, command: string, timeoutMs = 2
   }
 }
 
+async function getOrCreateSbcConfig(): Promise<any> {
+  const existing = await db.sbcConfig.findUnique({ where: { id: "default" } });
+  if (existing) return existing;
+  return db.sbcConfig.create({
+    data: {
+      id: "default",
+      mode: "LOCAL",
+      remoteUpstreamHost: null,
+      remoteUpstreamPort: 7443
+    }
+  });
+}
+
+function isSafeRemoteUpstreamHost(input: string): boolean {
+  if (!input) return false;
+  if (input.includes("://") || input.includes("/") || /\s/.test(input)) return false;
+  return /^[a-zA-Z0-9.-]+$/.test(input);
+}
+
+function resolveSbcTarget(config: any): { mode: "LOCAL" | "REMOTE"; host: string; port: number; proxyUrl: string } {
+  const mode = config?.mode === "REMOTE" ? "REMOTE" : "LOCAL";
+  const port = Number(config?.remoteUpstreamPort || 7443);
+  if (mode === "REMOTE") {
+    const host = String(config?.remoteUpstreamHost || "").trim().toLowerCase();
+    return { mode, host, port, proxyUrl: `https://${host}:${port}` };
+  }
+  return { mode, host: "127.0.0.1", port, proxyUrl: `https://127.0.0.1:${port}` };
+}
+
+function buildSbcUpstreamConf(target: { host: string; port: number }): string {
+  return [
+    "upstream sbc_upstream {",
+    `    server ${target.host}:${target.port};`,
+    "    keepalive 16;",
+    "}",
+    ""
+  ].join("\n");
+}
+
+function ensureSipProxyUsesNamedUpstream(siteContent: string): { content: string; changed: boolean } {
+  const blockMatch = siteContent.match(/location\s+\/sip\s*\{[\s\S]*?\n\s*\}/m);
+  if (!blockMatch) throw new Error("SIP_LOCATION_NOT_FOUND");
+
+  const currentBlock = blockMatch[0];
+  if (currentBlock.includes("proxy_pass https://sbc_upstream;")) {
+    return { content: siteContent, changed: false };
+  }
+
+  const updatedBlock = currentBlock.replace(/proxy_pass\s+https?:\/\/[^\s;]+;/, "proxy_pass https://sbc_upstream;");
+  if (updatedBlock == currentBlock) throw new Error("SIP_PROXY_PASS_NOT_FOUND");
+
+  return {
+    content: siteContent.replace(currentBlock, updatedBlock),
+    changed: true
+  };
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await fsp.readFile(filePath, "utf8");
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  await fsp.writeFile(tempPath, content, { encoding: "utf8" });
+  await fsp.rename(tempPath, filePath);
+}
+
+async function restoreFile(filePath: string, previous: string | null): Promise<void> {
+  if (previous === null) {
+    try {
+      await fsp.unlink(filePath);
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+    return;
+  }
+  await writeFileAtomic(filePath, previous);
+}
+
+async function testNginxConfig(): Promise<void> {
+  await execFileAsync("nginx", ["-t"], { timeout: 5000 });
+}
+
+async function reloadNginx(): Promise<void> {
+  try {
+    await execFileAsync("systemctl", ["reload", "nginx"], { timeout: 5000 });
+    return;
+  } catch {
+    await execFileAsync("nginx", ["-s", "reload"], { timeout: 5000 });
+  }
+}
+
+async function applyNginxSbcTarget(config: any): Promise<{ target: { mode: "LOCAL" | "REMOTE"; host: string; port: number; proxyUrl: string }; sipProxyUpdated: boolean }> {
+  const target = resolveSbcTarget(config);
+  if (!target.host || !Number.isFinite(target.port)) throw new Error("INVALID_SBC_TARGET");
+
+  const previousUpstream = await readOptionalFile(sbcUpstreamConfPath);
+  const previousSite = await fsp.readFile(nginxConnectcommsSitePath, "utf8");
+  const siteResult = ensureSipProxyUsesNamedUpstream(previousSite);
+
+  try {
+    if (siteResult.changed) {
+      await writeFileAtomic(nginxConnectcommsSitePath, siteResult.content);
+    }
+    await writeFileAtomic(sbcUpstreamConfPath, buildSbcUpstreamConf(target));
+    await testNginxConfig();
+    await reloadNginx();
+    return { target, sipProxyUpdated: siteResult.changed };
+  } catch (e) {
+    await restoreFile(sbcUpstreamConfPath, previousUpstream).catch(() => undefined);
+    await writeFileAtomic(nginxConnectcommsSitePath, previousSite).catch(() => undefined);
+    throw e;
+  }
+}
+
 async function probeNginxSipProxy(): Promise<boolean> {
   try {
     const res = await fetch("https://app.connectcomunications.com/sip", {
@@ -1283,10 +1406,33 @@ async function probeNginxSipProxy(): Promise<boolean> {
   }
 }
 
-async function probeSbcReadiness(): Promise<any> {
-  const status = await probeSbcStatus();
+async function probeSbcReadiness(configOverride?: any): Promise<any> {
+  const sbcConfig = configOverride || await getOrCreateSbcConfig();
+  const target = resolveSbcTarget(sbcConfig);
   const nginxSipProxyOk = await probeNginxSipProxy();
 
+  if (target.mode === "REMOTE") {
+    const remoteUpstreamReachable = target.host ? await tcpProbe(target.host, target.port, 1800) : false;
+    return {
+      ok: true,
+      mode: target.mode,
+      probes: {
+        nginxSipProxy: nginxSipProxyOk ? "OK" : "FAIL",
+        kamailioUp: "SKIPPED",
+        rtpengineUp: "SKIPPED",
+        rtpengineControlReachableFromKamailio: "SKIPPED",
+        pbxReachableFromKamailio: "SKIPPED",
+        remoteUpstreamReachable: remoteUpstreamReachable ? "OK" : "FAIL"
+      },
+      targets: {
+        activeUpstream: target.proxyUrl,
+        remoteUpstreamHost: maskHostLabel(target.host || ""),
+        remoteUpstreamPort: target.port
+      }
+    };
+  }
+
+  const status = await probeSbcStatus();
   const rtpFromKam = await dockerExecCheck(
     sbcKamailioContainer,
     `command -v nc >/dev/null 2>&1 && (nc -z -u -w2 ${sbcRtpengineHost} ${sbcRtpengineCtrlPort} >/dev/null 2>&1 || nc -z -w2 ${sbcRtpengineHost} ${sbcRtpengineCtrlPort} >/dev/null 2>&1)`
@@ -1300,14 +1446,17 @@ async function probeSbcReadiness(): Promise<any> {
 
   return {
     ok: true,
+    mode: target.mode,
     probes: {
       nginxSipProxy: nginxSipProxyOk ? "OK" : "FAIL",
       kamailioUp: status.kamailio === "UP" ? "OK" : "FAIL",
       rtpengineUp: status.rtpengine === "UP" ? "OK" : "FAIL",
       rtpengineControlReachableFromKamailio: toState(rtpFromKam),
-      pbxReachableFromKamailio: toState(pbxFromKam)
+      pbxReachableFromKamailio: toState(pbxFromKam),
+      remoteUpstreamReachable: "SKIPPED"
     },
     targets: {
+      activeUpstream: target.proxyUrl,
       kamailioHost: maskHostLabel(sbcKamailioHost),
       rtpengineHost: maskHostLabel(sbcRtpengineHost),
       pbxHost: maskHostLabel(sbcPbxHost),
@@ -1408,20 +1557,25 @@ app.get("/voice/sbc/status", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
 
-  const status = await probeSbcStatus();
+  const [status, sbcConfig] = await Promise.all([probeSbcStatus(), getOrCreateSbcConfig()]);
+  const target = resolveSbcTarget(sbcConfig);
   return {
     ok: true,
     route: { publicPath: "/sip", publicSipWsUrl: "wss://app.connectcomunications.com/sip" },
+    mode: target.mode,
+    activeUpstream: target.proxyUrl,
     services: {
-      kamailio: status.kamailio,
-      rtpengine: status.rtpengine,
-      pbxViaSbc: status.pbx_via_sbc
+      kamailio: target.mode === "LOCAL" ? status.kamailio : "SKIPPED",
+      rtpengine: target.mode === "LOCAL" ? status.rtpengine : "SKIPPED",
+      pbxViaSbc: target.mode === "LOCAL" ? status.pbx_via_sbc : "SKIPPED"
     },
     targets: {
       kamailioHost: maskHostLabel(sbcKamailioHost),
       rtpengineHost: maskHostLabel(sbcRtpengineHost),
       pbxHost: maskHostLabel(sbcPbxHost),
-      pbxPort: sbcPbxPort
+      pbxPort: sbcPbxPort,
+      remoteUpstreamHost: target.mode === "REMOTE" ? maskHostLabel(target.host) : null,
+      remoteUpstreamPort: target.mode === "REMOTE" ? target.port : null
     }
   };
 });
@@ -3548,6 +3702,119 @@ app.get("/admin/voice/media-metrics", async (req, reply) => {
     relayFalseCount,
     topErrorCodes,
     tenantsFailingMost
+  };
+});
+
+app.get("/admin/sbc/config", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const config = await getOrCreateSbcConfig();
+  const target = resolveSbcTarget(config);
+  const readiness = await probeSbcReadiness(config);
+
+  return {
+    ok: true,
+    config: {
+      id: config.id,
+      mode: config.mode,
+      remoteUpstreamHost: config.remoteUpstreamHost,
+      remoteUpstreamPort: config.remoteUpstreamPort,
+      updatedAt: config.updatedAt,
+      updatedByUserId: config.updatedByUserId
+    },
+    activeUpstream: target.proxyUrl,
+    readiness
+  };
+});
+
+app.put("/admin/sbc/config", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const parsed = z.object({
+    mode: z.enum(["LOCAL", "REMOTE"]),
+    remoteUpstreamHost: z.string().trim().min(1).max(255).optional().nullable(),
+    remoteUpstreamPort: z.coerce.number().int().min(1).max(65535).optional()
+  }).safeParse(req.body || {});
+
+  if (!parsed.success) return reply.status(400).send({ error: "BAD_REQUEST", details: parsed.error.flatten() });
+
+  const mode = parsed.data.mode;
+  const remoteUpstreamHost = mode === "REMOTE" ? String(parsed.data.remoteUpstreamHost || "").trim().toLowerCase() : null;
+  const remoteUpstreamPort = Number(parsed.data.remoteUpstreamPort || 7443);
+
+  const current = await getOrCreateSbcConfig();
+  const requestedNoop = current.mode === mode
+    && String(current.remoteUpstreamHost || "") === String(remoteUpstreamHost || "")
+    && Number(current.remoteUpstreamPort || 7443) === remoteUpstreamPort;
+
+  if (mode === "REMOTE") {
+    if (!remoteUpstreamHost || !isSafeRemoteUpstreamHost(remoteUpstreamHost)) {
+      return reply.status(400).send({ error: "SBC_CONFIG_INVALID_REMOTE_HOST" });
+    }
+    const reachable = await tcpProbe(remoteUpstreamHost, remoteUpstreamPort, 1800);
+    if (!reachable) {
+      return reply.status(400).send({ error: "SBC_REMOTE_UPSTREAM_UNREACHABLE" });
+    }
+  }
+
+  if (!requestedNoop) {
+    try {
+      await applyNginxSbcTarget({ mode, remoteUpstreamHost, remoteUpstreamPort });
+    } catch (e: any) {
+      await audit({
+        tenantId: admin.tenantId,
+        action: "SBC_CONFIG_APPLY_FAILED",
+        entityType: "SbcConfig",
+        entityId: "default",
+        actorUserId: admin.sub
+      }).catch(() => undefined);
+      req.log.warn({ err: e?.message || String(e) }, "SBC_CONFIG_APPLY_FAILED");
+      return reply.status(500).send({ error: "SBC_CONFIG_APPLY_FAILED" });
+    }
+  }
+
+  const saved = await db.sbcConfig.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      mode,
+      remoteUpstreamHost,
+      remoteUpstreamPort,
+      updatedByUserId: admin.sub
+    },
+    update: {
+      mode,
+      remoteUpstreamHost,
+      remoteUpstreamPort,
+      updatedByUserId: admin.sub
+    }
+  });
+
+  await audit({
+    tenantId: admin.tenantId,
+    action: "SBC_CONFIG_UPDATED",
+    entityType: "SbcConfig",
+    entityId: "default",
+    actorUserId: admin.sub
+  }).catch(() => undefined);
+
+  const target = resolveSbcTarget(saved);
+  const readiness = await probeSbcReadiness(saved);
+
+  return {
+    ok: true,
+    config: {
+      id: saved.id,
+      mode: saved.mode,
+      remoteUpstreamHost: saved.remoteUpstreamHost,
+      remoteUpstreamPort: saved.remoteUpstreamPort,
+      updatedAt: saved.updatedAt,
+      updatedByUserId: saved.updatedByUserId
+    },
+    activeUpstream: target.proxyUrl,
+    readiness
   };
 });
 
