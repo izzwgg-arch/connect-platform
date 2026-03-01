@@ -21,6 +21,7 @@ const admin: NavItem[] = [
   { href: "/dashboard/admin/campaigns", label: "Admin Campaigns" },
   { href: "/dashboard/admin/billing/tenants", label: "Admin Billing" },
   { href: "/dashboard/admin/pbx/instances", label: "PBX Instances" },
+  { href: "/dashboard/admin/sbc/rollout", label: "SBC Rollout" },
   { href: "/dashboard/voice/provisioning", label: "Voice Provisioning" },
   { href: "/dashboard/voice/sbc-test", label: "Voice SBC Test" },
   { href: "/dashboard/voice/calls", label: "Call Logs" }

@@ -239,6 +239,9 @@ model Tenant {
   mediaLastErrorCode            String?
   mediaLastErrorAt              DateTime?
   mediaPolicy                  MediaPolicy            @default(TURN_ONLY)
+  sbcUdpExposureConfirmed      Boolean                @default(false)
+  sbcUdpExposureConfirmedAt    DateTime?
+  sbcUdpExposureConfirmedByUserId String?
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]

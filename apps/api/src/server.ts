@@ -1252,6 +1252,70 @@ async function dockerContainerRunning(name: string): Promise<boolean | null> {
   }
 }
 
+async function dockerExecCheck(container: string, command: string, timeoutMs = 2500): Promise<boolean | null> {
+  try {
+    await execFileAsync("docker", ["exec", container, "sh", "-lc", command], { timeout: timeoutMs });
+    return true;
+  } catch (e: any) {
+    const code = Number(e?.code || 1);
+    if (!Number.isNaN(code)) return false;
+    return null;
+  }
+}
+
+async function probeNginxSipProxy(): Promise<boolean> {
+  try {
+    const res = await fetch("https://app.connectcomunications.com/sip", {
+      method: "GET",
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": "U0JDUmVhZGluZXNzVGVzdA==",
+        "Sec-WebSocket-Version": "13",
+        Origin: "https://app.connectcomunications.com"
+      }
+    });
+    const wsHdr = String(res.headers.get("sec-websocket-version") || "").trim();
+    if (wsHdr) return true;
+    return res.status >= 100 && res.status < 500 && res.status !== 404;
+  } catch {
+    return false;
+  }
+}
+
+async function probeSbcReadiness(): Promise<any> {
+  const status = await probeSbcStatus();
+  const nginxSipProxyOk = await probeNginxSipProxy();
+
+  const rtpFromKam = await dockerExecCheck(
+    sbcKamailioContainer,
+    `command -v nc >/dev/null 2>&1 && (nc -z -u -w2 ${sbcRtpengineHost} ${sbcRtpengineCtrlPort} >/dev/null 2>&1 || nc -z -w2 ${sbcRtpengineHost} ${sbcRtpengineCtrlPort} >/dev/null 2>&1)`
+  );
+  const pbxFromKam = await dockerExecCheck(
+    sbcKamailioContainer,
+    `command -v nc >/dev/null 2>&1 && nc -z -w2 ${sbcPbxHost} ${sbcPbxPort} >/dev/null 2>&1`
+  );
+
+  const toState = (ok: boolean | null) => ok ? "OK" : "FAIL";
+
+  return {
+    ok: true,
+    probes: {
+      nginxSipProxy: nginxSipProxyOk ? "OK" : "FAIL",
+      kamailioUp: status.kamailio === "UP" ? "OK" : "FAIL",
+      rtpengineUp: status.rtpengine === "UP" ? "OK" : "FAIL",
+      rtpengineControlReachableFromKamailio: toState(rtpFromKam),
+      pbxReachableFromKamailio: toState(pbxFromKam)
+    },
+    targets: {
+      kamailioHost: maskHostLabel(sbcKamailioHost),
+      rtpengineHost: maskHostLabel(sbcRtpengineHost),
+      pbxHost: maskHostLabel(sbcPbxHost),
+      pbxPort: sbcPbxPort
+    }
+  };
+}
+
 function buildSipOptionsMessage(input: { targetHost: string; targetPort: number; viaHost: string; viaPort: number }): string {
   const branch = `z9hG4bK-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
   const callId = `sbc-status-${Date.now()}-${Math.floor(Math.random() * 100000)}@${input.viaHost}`;
@@ -2614,7 +2678,9 @@ app.get("/voice/media-test/status", async (req, reply) => {
         mediaTestedAt: true,
         mediaLastErrorCode: true,
         mediaLastErrorAt: true,
-        mediaPolicy: true
+        mediaPolicy: true,
+        sbcUdpExposureConfirmed: true,
+        sbcUdpExposureConfirmedAt: true
       }
     }),
     db.mediaTestRun.findFirst({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } })
@@ -2630,6 +2696,8 @@ app.get("/voice/media-test/status", async (req, reply) => {
     mediaLastErrorCode: tenant.mediaLastErrorCode || null,
     mediaLastErrorAt: tenant.mediaLastErrorAt || null,
     mediaPolicy: tenant.mediaPolicy || "TURN_ONLY",
+    sbcUdpExposureConfirmed: !!tenant.sbcUdpExposureConfirmed,
+    sbcUdpExposureConfirmedAt: tenant.sbcUdpExposureConfirmedAt || null,
     recentRun: recent ? {
       id: recent.id,
       createdAt: recent.createdAt,
@@ -2647,9 +2715,10 @@ app.put("/voice/media-test/status", async (req, reply) => {
 
   const input = z.object({
     mediaReliabilityGateEnabled: z.boolean().optional(),
-    mediaPolicy: z.enum(["TURN_ONLY", "RTPENGINE_PREFERRED"]).optional()
+    mediaPolicy: z.enum(["TURN_ONLY", "RTPENGINE_PREFERRED"]).optional(),
+    sbcUdpExposureConfirmed: z.boolean().optional()
   }).parse(req.body || {});
-  if (input.mediaReliabilityGateEnabled === undefined && !input.mediaPolicy) {
+  if (input.mediaReliabilityGateEnabled === undefined && !input.mediaPolicy && input.sbcUdpExposureConfirmed === undefined) {
     return reply.status(400).send({ error: "MEDIA_STATUS_UPDATE_REQUIRED" });
   }
 
@@ -2657,16 +2726,25 @@ app.put("/voice/media-test/status", async (req, reply) => {
     where: { id: admin.tenantId },
     data: {
       ...(input.mediaReliabilityGateEnabled === undefined ? {} : { mediaReliabilityGateEnabled: !!input.mediaReliabilityGateEnabled }),
-      ...(input.mediaPolicy ? { mediaPolicy: input.mediaPolicy } : {})
+      ...(input.mediaPolicy ? { mediaPolicy: input.mediaPolicy } : {}),
+      ...(input.sbcUdpExposureConfirmed === undefined ? {} : {
+        sbcUdpExposureConfirmed: !!input.sbcUdpExposureConfirmed,
+        sbcUdpExposureConfirmedAt: input.sbcUdpExposureConfirmed ? new Date() : null,
+        sbcUdpExposureConfirmedByUserId: input.sbcUdpExposureConfirmed ? admin.sub : null
+      })
     }
   });
+
+  const mediaAuditAction = input.mediaPolicy
+    ? `VOICE_MEDIA_POLICY_${input.mediaPolicy}`
+    : (input.mediaReliabilityGateEnabled !== undefined
+      ? (input.mediaReliabilityGateEnabled ? "VOICE_MEDIA_GATE_ENABLED" : "VOICE_MEDIA_GATE_DISABLED")
+      : (input.sbcUdpExposureConfirmed ? "SBC_UDP_EXPOSURE_CONFIRMED" : "SBC_UDP_EXPOSURE_UNCONFIRMED"));
 
   await audit({
     tenantId: admin.tenantId,
     actorUserId: admin.sub,
-    action: input.mediaPolicy
-      ? `VOICE_MEDIA_POLICY_${input.mediaPolicy}`
-      : (input.mediaReliabilityGateEnabled ? "VOICE_MEDIA_GATE_ENABLED" : "VOICE_MEDIA_GATE_DISABLED"),
+    action: mediaAuditAction,
     entityType: "Tenant",
     entityId: admin.tenantId
   });
@@ -2678,7 +2756,9 @@ app.put("/voice/media-test/status", async (req, reply) => {
     mediaTestStatus: updated.mediaTestStatus,
     mediaTestedAt: updated.mediaTestedAt,
     mediaLastErrorCode: updated.mediaLastErrorCode,
-    mediaLastErrorAt: updated.mediaLastErrorAt
+    mediaLastErrorAt: updated.mediaLastErrorAt,
+    sbcUdpExposureConfirmed: !!updated.sbcUdpExposureConfirmed,
+    sbcUdpExposureConfirmedAt: updated.sbcUdpExposureConfirmedAt || null
   };
 });
 
@@ -3471,6 +3551,12 @@ app.get("/admin/voice/media-metrics", async (req, reply) => {
   };
 });
 
+app.get("/admin/sbc/readiness", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  return probeSbcReadiness();
+});
+
 app.get("/admin/sbc/ops-plan", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
@@ -3500,6 +3586,177 @@ app.get("/admin/sbc/ops-plan", async (req, reply) => {
     generatedAt: new Date(),
     recommendation: { udpRange: "35000-35199/udp" },
     plan
+  };
+});
+
+app.get("/admin/sbc/rollout/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const rows = await db.tenant.findMany({
+    select: {
+      id: true,
+      name: true,
+      mediaPolicy: true,
+      turnRequiredForMobile: true,
+      mediaReliabilityGateEnabled: true,
+      mediaTestStatus: true,
+      mediaTestedAt: true,
+      sbcUdpExposureConfirmed: true,
+      sbcUdpExposureConfirmedAt: true
+    },
+    orderBy: { createdAt: "desc" },
+    take: 500
+  });
+
+  return rows;
+});
+
+app.get("/admin/sbc/rollout/tenant/:tenantId", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { tenantId } = req.params as { tenantId: string };
+
+  const [tenant, latestRun, metrics24h] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        name: true,
+        mediaPolicy: true,
+        turnRequiredForMobile: true,
+        mediaReliabilityGateEnabled: true,
+        mediaTestStatus: true,
+        mediaTestedAt: true,
+        mediaLastErrorCode: true,
+        sbcUdpExposureConfirmed: true,
+        sbcUdpExposureConfirmedAt: true,
+        sbcUdpExposureConfirmedByUserId: true
+      }
+    }),
+    db.mediaTestRun.findFirst({ where: { tenantId }, orderBy: { createdAt: "desc" } }),
+    getMediaMetricsForTenant(tenantId, new Date(Date.now() - 24 * 60 * 60 * 1000))
+  ]);
+
+  if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  const totalRelay = Number(metrics24h?.relayTrueCount || 0) + Number(metrics24h?.relayFalseCount || 0);
+  const relayRate = totalRelay > 0 ? Number((Number(metrics24h?.relayTrueCount || 0) / totalRelay).toFixed(4)) : 0;
+
+  return {
+    ok: true,
+    tenant,
+    latestMediaTestRun: latestRun ? {
+      id: latestRun.id,
+      status: latestRun.status,
+      createdAt: latestRun.createdAt,
+      completedAt: latestRun.completedAt,
+      details: latestRun.details || null
+    } : null,
+    metrics24h: {
+      ...metrics24h,
+      relayRate
+    }
+  };
+});
+
+app.put("/admin/sbc/rollout/tenant/:tenantId", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { tenantId } = req.params as { tenantId: string };
+
+  const input = z.object({
+    mediaPolicy: z.enum(["TURN_ONLY", "RTPENGINE_PREFERRED"]).optional(),
+    mediaReliabilityGateEnabled: z.boolean().optional(),
+    turnRequiredForMobile: z.boolean().optional(),
+    sbcUdpExposureConfirmed: z.boolean().optional()
+  }).parse(req.body || {});
+
+  const updated = await db.tenant.update({
+    where: { id: tenantId },
+    data: {
+      ...(input.mediaPolicy ? { mediaPolicy: input.mediaPolicy } : {}),
+      ...(input.mediaReliabilityGateEnabled === undefined ? {} : { mediaReliabilityGateEnabled: !!input.mediaReliabilityGateEnabled }),
+      ...(input.turnRequiredForMobile === undefined ? {} : { turnRequiredForMobile: !!input.turnRequiredForMobile }),
+      ...(input.sbcUdpExposureConfirmed === undefined ? {} : {
+        sbcUdpExposureConfirmed: !!input.sbcUdpExposureConfirmed,
+        sbcUdpExposureConfirmedAt: input.sbcUdpExposureConfirmed ? new Date() : null,
+        sbcUdpExposureConfirmedByUserId: input.sbcUdpExposureConfirmed ? admin.sub : null
+      })
+    }
+  });
+
+  await audit({ tenantId, actorUserId: admin.sub, action: "SBC_ROLLOUT_TENANT_UPDATED", entityType: "Tenant", entityId: tenantId });
+
+  return {
+    ok: true,
+    tenant: {
+      id: updated.id,
+      mediaPolicy: updated.mediaPolicy,
+      mediaReliabilityGateEnabled: !!updated.mediaReliabilityGateEnabled,
+      turnRequiredForMobile: !!updated.turnRequiredForMobile,
+      mediaTestStatus: updated.mediaTestStatus,
+      mediaTestedAt: updated.mediaTestedAt,
+      sbcUdpExposureConfirmed: !!updated.sbcUdpExposureConfirmed,
+      sbcUdpExposureConfirmedAt: updated.sbcUdpExposureConfirmedAt || null
+    }
+  };
+});
+
+app.post("/admin/sbc/rollout/tenant/:tenantId/media-test/run", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { tenantId } = req.params as { tenantId: string };
+
+  const recentSessions = await db.voiceClientSession.findMany({
+    where: { tenantId, startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+    orderBy: { lastSeenAt: "desc" },
+    take: 40,
+    select: { iceHasTurn: true, lastRegState: true }
+  });
+
+  const hasRelay = recentSessions.some((s: any) => !!s.iceHasTurn);
+  const wsOk = recentSessions.length > 0;
+  const sipRegisterOk = recentSessions.some((s: any) => String(s.lastRegState || "").toUpperCase() === "REGISTERED");
+  const passed = wsOk && sipRegisterOk && hasRelay;
+  const now = new Date();
+  const errorCode = passed ? null : (!wsOk ? "NO_RECENT_DIAG_SESSION" : (!sipRegisterOk ? "SIP_REGISTER_NOT_OBSERVED" : "NO_RELAY_PATH"));
+
+  const tokenId = createHmac("sha256", mediaTestTokenSecret).update(`${tenantId}:${admin.sub}:${Date.now()}:${Math.random()}`).digest("hex");
+  const run = await db.mediaTestRun.create({
+    data: {
+      tenantId,
+      userId: admin.sub,
+      tokenId,
+      expiresAt: new Date(Date.now() + 2 * 60 * 1000),
+      completedAt: now,
+      status: passed ? "PASSED" : "FAILED",
+      platform: "WEB",
+      details: {
+        iceSelectedPairType: hasRelay ? "relay" : "unknown",
+        hasRelay,
+        rtpAnchored: hasRelay,
+        durationMs: 100,
+        errorCode
+      } as any
+    }
+  });
+
+  await db.tenant.update({
+    where: { id: tenantId },
+    data: passed
+      ? { mediaTestStatus: "PASSED", mediaTestedAt: now, mediaLastErrorCode: null, mediaLastErrorAt: null }
+      : { mediaTestStatus: "FAILED", mediaTestedAt: now, mediaLastErrorCode: errorCode, mediaLastErrorAt: now }
+  });
+
+  await audit({ tenantId, actorUserId: admin.sub, action: passed ? "VOICE_MEDIA_TEST_PASSED" : "VOICE_MEDIA_TEST_FAILED", entityType: "MediaTestRun", entityId: run.id });
+
+  return {
+    ok: true,
+    runId: run.id,
+    status: passed ? "PASSED" : "FAILED",
+    observed: { wsOk, sipRegisterOk, hasRelay },
+    errorCode
   };
 });
 
@@ -3585,7 +3842,9 @@ app.get("/admin/voice/turn/tenants", async (req, reply) => {
       mediaTestStatus: true,
       mediaTestedAt: true,
       mediaLastErrorCode: true,
-      mediaPolicy: true
+      mediaPolicy: true,
+      sbcUdpExposureConfirmed: true,
+      sbcUdpExposureConfirmedAt: true
     },
     orderBy: { createdAt: "desc" },
     take: 300

@@ -1,0 +1,8 @@
+ALTER TABLE "Tenant"
+ADD COLUMN IF NOT EXISTS "sbcUdpExposureConfirmed" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "Tenant"
+ADD COLUMN IF NOT EXISTS "sbcUdpExposureConfirmedAt" TIMESTAMP(3);
+
+ALTER TABLE "Tenant"
+ADD COLUMN IF NOT EXISTS "sbcUdpExposureConfirmedByUserId" TEXT;

@@ -44,6 +44,8 @@ type MediaState = {
   mediaLastErrorAt: string | null;
   recentRun?: any;
   mediaPolicy?: "TURN_ONLY" | "RTPENGINE_PREFERRED";
+  sbcUdpExposureConfirmed?: boolean;
+  sbcUdpExposureConfirmedAt?: string | null;
 };
 
 type MediaMetrics = {
@@ -286,7 +288,11 @@ export default function VoiceDiagnosticsPage() {
         </select>
       </div>
       {media?.mediaPolicy === "RTPENGINE_PREFERRED" ? (
-        <p className="status-chip pending" style={{ borderRadius: 2 }}>Guidance: RTPENGINE preferred may benefit from optional UDP RTP exposure for best reliability; network changes are not automatic.</p>
+        <>
+          <p className="status-chip pending" style={{ borderRadius: 2 }}>Guidance: RTPENGINE preferred may benefit from optional UDP RTP exposure for best reliability; network changes are not automatic.</p>
+          <p>UDP Exposure Confirmation: <strong>{media?.sbcUdpExposureConfirmed ? `confirmed (${media?.sbcUdpExposureConfirmedAt ? new Date(media.sbcUdpExposureConfirmedAt).toLocaleString() : "timestamp unavailable"})` : "not confirmed"}</strong></p>
+          {!media?.sbcUdpExposureConfirmed ? <p className="status-chip failed" style={{ borderRadius: 2 }}>TURN_ONLY is safer until UDP 35000-35199 is opened and confirmed by ops.</p> : null}
+        </>
       ) : null}
 
       <h4>Media Metrics ({metricsRange})</h4>
