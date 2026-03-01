@@ -23,6 +23,7 @@ const admin: NavItem[] = [
   { href: "/dashboard/admin/pbx/instances", label: "PBX Instances" },
   { href: "/dashboard/admin/sbc/rollout", label: "SBC Rollout" },
   { href: "/dashboard/admin/sbc/config", label: "SBC Config" },
+  { href: "/dashboard/voice/settings", label: "Voice Settings" },
   { href: "/dashboard/voice/provisioning", label: "Voice Provisioning" },
   { href: "/dashboard/voice/sbc-test", label: "Voice SBC Test" },
   { href: "/dashboard/voice/calls", label: "Call Logs" }
@@ -50,7 +51,7 @@ export function SidebarNav() {
   return (
     <>
       <aside className="rail">
-        <div className="brand-mark">3CX</div>
+        <div className="brand-mark">CC</div>
         <div className="rail-list">
           {railGlyphs.map((g) => (
             <button key={g} type="button" className="rail-dot" aria-label={g}>{g}</button>

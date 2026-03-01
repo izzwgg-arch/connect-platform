@@ -209,6 +209,19 @@ function resolveWebrtcConfig(tenant: any, link: any) {
   };
 }
 
+
+function maskIceServersForResponse(input: any[]): any[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((row: any) => {
+    const urls = Array.isArray(row?.urls) ? row.urls.map((u: any) => String(u || "").trim()).filter(Boolean) : String(row?.urls || "").trim();
+    return {
+      urls,
+      username: maskUsername(row?.username || null),
+      hasCredential: !!row?.credential
+    };
+  });
+}
+
 function buildVoiceProvisioningBundle(tenant: any, link: any, sipUsername: string, sipPassword: string | null) {
   const cfg = resolveWebrtcConfig(tenant, link);
   return {
@@ -2813,6 +2826,8 @@ app.get("/voice/webrtc/settings", async (req, reply) => {
         webrtcEnabled: true,
         webrtcRouteViaSbc: true,
         mediaReliabilityGateEnabled: true,
+        mediaPolicy: true,
+        turnRequiredForMobile: true,
         sipWsUrl: true,
         sipDomain: true,
         outboundProxy: true,
@@ -2830,8 +2845,13 @@ app.get("/voice/webrtc/settings", async (req, reply) => {
     ok: true,
     webrtcEnabled: cfg.webrtcEnabled,
     webrtcRouteViaSbc: cfg.webrtcRouteViaSbc,
-    mediaReliabilityGateEnabled: !!tenant?.mediaReliabilityGateEnabled,
+    turnRequiredForMobile: !!tenant.turnRequiredForMobile,
+    mediaPolicy: tenant.mediaPolicy || "TURN_ONLY",
+    mediaReliabilityGateEnabled: !!tenant.mediaReliabilityGateEnabled,
     configuredSipWsUrl: tenant.sipWsUrl || null,
+    configuredSipDomain: tenant.sipDomain || null,
+    configuredOutboundProxy: tenant.outboundProxy || null,
+    configuredIceServers: maskIceServersForResponse(Array.isArray(tenant.iceServers) ? tenant.iceServers as any[] : []),
     effectiveSipWsUrl: cfg.sipWsUrl,
     effectiveSipDomain: cfg.sipDomain,
     outboundProxy: cfg.outboundProxy,
@@ -2840,25 +2860,123 @@ app.get("/voice/webrtc/settings", async (req, reply) => {
   };
 });
 
+app.get("/voice/effective-config", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const [tenant, link] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: admin.tenantId },
+      select: {
+        webrtcEnabled: true,
+        webrtcRouteViaSbc: true,
+        turnRequiredForMobile: true,
+        mediaPolicy: true,
+        mediaReliabilityGateEnabled: true,
+        mediaTestStatus: true,
+        mediaTestedAt: true,
+        sipWsUrl: true,
+        sipDomain: true,
+        outboundProxy: true,
+        iceServers: true,
+        dtmfMode: true
+      }
+    }),
+    db.tenantPbxLink.findUnique({ where: { tenantId: admin.tenantId }, include: { pbxInstance: true } })
+  ]);
+
+  if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  const cfg = resolveWebrtcConfig(tenant, link);
+  const warnings: string[] = [];
+  if (!cfg.sipWsUrl) warnings.push("Set SIP WSS URL or enable 'Route WebRTC via SBC' to use /sip fallback.");
+  if (!cfg.sipDomain) warnings.push("Set SIP domain or ensure PBX domain is linked.");
+  if (!Array.isArray(cfg.iceServers) || cfg.iceServers.length === 0) warnings.push("Configure STUN/TURN ICE servers for reliable media.");
+
+  return {
+    ok: true,
+    resolved: {
+      sipWsUrl: cfg.sipWsUrl,
+      sipDomain: cfg.sipDomain,
+      outboundProxy: cfg.outboundProxy,
+      iceServers: maskIceServersForResponse(Array.isArray(cfg.iceServers) ? cfg.iceServers as any[] : []),
+      webrtcRouteViaSbc: !!tenant.webrtcRouteViaSbc,
+      turnRequiredForMobile: !!tenant.turnRequiredForMobile,
+      mediaPolicy: tenant.mediaPolicy || "TURN_ONLY",
+      mediaReliabilityGateEnabled: !!tenant.mediaReliabilityGateEnabled,
+      mediaTestStatus: tenant.mediaTestStatus || "UNKNOWN",
+      mediaTestedAt: tenant.mediaTestedAt || null,
+      dtmfMode: cfg.dtmfMode
+    },
+    configured: {
+      sipWsUrl: tenant.sipWsUrl || null,
+      sipDomain: tenant.sipDomain || null,
+      outboundProxy: tenant.outboundProxy || null,
+      iceServers: maskIceServersForResponse(Array.isArray(tenant.iceServers) ? tenant.iceServers as any[] : []),
+      linkedPbxDomain: link?.pbxDomain || null
+    },
+    warnings
+  };
+});
+
 app.put("/voice/webrtc/settings", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
 
-  const input = z.object({ webrtcRouteViaSbc: z.boolean() }).parse(req.body || {});
+  const parsed = z.object({
+    webrtcRouteViaSbc: z.boolean().optional(),
+    turnRequiredForMobile: z.boolean().optional(),
+    mediaPolicy: z.enum(["TURN_ONLY", "RTPENGINE_PREFERRED"]).optional(),
+    mediaReliabilityGateEnabled: z.boolean().optional(),
+    sipDomain: z.string().trim().min(1).max(255).regex(/^[a-zA-Z0-9.-]+$/).optional().nullable(),
+    sipWsUrl: z.string().trim().url().refine((v) => v.startsWith("wss://") || v.startsWith("ws://"), "sipWsUrl must use ws:// or wss://").optional().nullable(),
+    outboundProxy: z.string().trim().min(1).max(255).optional().nullable(),
+    iceServers: z.array(iceServerSchema).max(12).optional()
+  }).safeParse(req.body || {});
+
+  if (!parsed.success) return reply.status(400).send({ error: "BAD_REQUEST", details: parsed.error.flatten() });
+  const input = parsed.data;
+
+  if (Object.keys(input).length === 0) {
+    return reply.status(400).send({ error: "BAD_REQUEST", message: "No settings provided" });
+  }
+
+  const data: any = {};
+  if (typeof input.webrtcRouteViaSbc === "boolean") data.webrtcRouteViaSbc = input.webrtcRouteViaSbc;
+  if (typeof input.turnRequiredForMobile === "boolean") data.turnRequiredForMobile = input.turnRequiredForMobile;
+  if (typeof input.mediaReliabilityGateEnabled === "boolean") data.mediaReliabilityGateEnabled = input.mediaReliabilityGateEnabled;
+  if (input.mediaPolicy) data.mediaPolicy = input.mediaPolicy;
+  if (input.sipDomain !== undefined) data.sipDomain = input.sipDomain ? String(input.sipDomain).trim() : null;
+  if (input.sipWsUrl !== undefined) data.sipWsUrl = input.sipWsUrl ? String(input.sipWsUrl).trim() : null;
+  if (input.outboundProxy !== undefined) data.outboundProxy = input.outboundProxy ? String(input.outboundProxy).trim() : null;
+  if (input.iceServers !== undefined) data.iceServers = input.iceServers as any;
+
   const updated = await db.tenant.update({
     where: { id: admin.tenantId },
-    data: { webrtcRouteViaSbc: input.webrtcRouteViaSbc }
+    data
   });
 
   await audit({
     tenantId: admin.tenantId,
     actorUserId: admin.sub,
-    action: input.webrtcRouteViaSbc ? "VOICE_WEBRTC_ROUTE_SBC_ENABLED" : "VOICE_WEBRTC_ROUTE_SBC_DISABLED",
+    action: "VOICE_WEBRTC_SETTINGS_UPDATED",
     entityType: "Tenant",
     entityId: admin.tenantId
   });
 
-  return { ok: true, webrtcRouteViaSbc: !!updated.webrtcRouteViaSbc };
+  return {
+    ok: true,
+    updated: {
+      webrtcRouteViaSbc: !!updated.webrtcRouteViaSbc,
+      turnRequiredForMobile: !!updated.turnRequiredForMobile,
+      mediaPolicy: updated.mediaPolicy || "TURN_ONLY",
+      mediaReliabilityGateEnabled: !!updated.mediaReliabilityGateEnabled,
+      sipDomain: updated.sipDomain || null,
+      sipWsUrl: updated.sipWsUrl || null,
+      outboundProxy: updated.outboundProxy || null,
+      iceServers: maskIceServersForResponse(Array.isArray(updated.iceServers) ? updated.iceServers as any[] : [])
+    }
+  };
 });
 
 app.get("/voice/media-test/status", async (req, reply) => {

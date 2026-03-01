@@ -173,8 +173,8 @@ export default function VoiceProvisioningPage() {
         <button onClick={() => { window.location.href = "/dashboard/voice/sbc-test"; }}>Open SBC Test</button>
       </div>
       <p>
-        Effective WSS: <strong>{webrtc?.effectiveSipWsUrl || "not configured"}</strong>
-        {" "}/ Domain: <strong>{webrtc?.effectiveSipDomain || "not configured"}</strong>
+        Effective WSS: <strong>{webrtc?.effectiveSipWsUrl || "Set in Voice Settings"}</strong>
+        {" "}/ Domain: <strong>{webrtc?.effectiveSipDomain || "Set in Voice Settings"}</strong>
       </p>
 
       <h3>Create Extension</h3>

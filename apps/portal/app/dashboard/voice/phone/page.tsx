@@ -382,7 +382,7 @@ export default function VoicePhonePage() {
             {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
             {!hasTurn ? <p className="status-chip pending" style={{ borderRadius: 2 }}>Mobile networks often require TURN for reliable audio.</p> : null}
             <p>Ext. <strong>{info?.extensionNumber || "-"}</strong> / {info?.displayName || "Unassigned"} / SIP user {info?.sipUsername || "-"}</p>
-            <p>WSS: {info?.sipWsUrl || "not configured"} / Domain: {info?.sipDomain || "not configured"}</p>
+            <p>WSS: {info?.sipWsUrl || "Set in Voice Settings"} / Domain: {info?.sipDomain || "Set in Voice Settings"}</p>
             <button onClick={resetSipPassword}>Reset SIP Password</button>
             <button onClick={registerPhone} disabled={!oneTimePassword}>Register SIP</button>
             <p>SIP secret is shown once and kept in current tab memory only.</p>

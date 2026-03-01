@@ -5,59 +5,35 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
-type ExtensionResponse = {
-  extensionId: string;
-  pbxExtensionLinkId: string;
-  extensionNumber: string;
-  displayName: string;
+type ExtInfo = {
   sipUsername: string;
-  hasSipPassword: boolean;
-  webrtcEnabled: boolean;
-  webrtcRouteViaSbc?: boolean;
   sipWsUrl: string | null;
   sipDomain: string | null;
-  outboundProxy: string | null;
   iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>;
-  dtmfMode: "RFC2833" | "SIP_INFO";
 };
 
-type SbcStatus = {
+type EffectiveCfg = {
   ok: boolean;
-  route: { publicPath: string; publicSipWsUrl: string };
-  services: { kamailio: string; rtpengine: string; pbxViaSbc: string };
-  targets: { kamailioHost: string; rtpengineHost: string; pbxHost: string; pbxPort: number };
-};
-
-type WebrtcSettings = {
-  ok: boolean;
-  webrtcEnabled: boolean;
-  webrtcRouteViaSbc: boolean;
-  configuredSipWsUrl: string | null;
-  effectiveSipWsUrl: string | null;
-  effectiveSipDomain: string | null;
-  outboundProxy: string | null;
-  dtmfMode: "RFC2833" | "SIP_INFO";
-  iceServerCount: number;
+  resolved: {
+    sipWsUrl: string | null;
+    sipDomain: string | null;
+    outboundProxy: string | null;
+    iceServers: Array<{ urls: string | string[]; username?: string | null; hasCredential?: boolean }>;
+    webrtcRouteViaSbc: boolean;
+    turnRequiredForMobile: boolean;
+    mediaPolicy: string;
+    mediaReliabilityGateEnabled: boolean;
+    mediaTestStatus: string;
+  };
+  warnings: string[];
 };
 
 type DiagErr = {
   id: string;
-  sessionId: string;
   type: string;
   createdAt: string;
-  code: string;
-  sipWsUrl: string | null;
-  sipDomain: string | null;
-};
-
-type MediaState = {
-  ok: boolean;
-  mediaReliabilityGateEnabled: boolean;
-  mediaTestStatus: "UNKNOWN" | "PASSED" | "FAILED" | "STALE";
-  mediaTestedAt: string | null;
-  mediaLastErrorCode: string | null;
-  mediaLastErrorAt: string | null;
-  recentRun?: any;
+  code?: string;
+  payload?: any;
 };
 
 declare global {
@@ -68,142 +44,186 @@ declare global {
 
 export default function VoiceSbcTestPage() {
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
-  const [info, setInfo] = useState<ExtensionResponse | null>(null);
-  const [settings, setSettings] = useState<WebrtcSettings | null>(null);
-  const [sbcStatus, setSbcStatus] = useState<SbcStatus | null>(null);
-  const [errors, setErrors] = useState<DiagErr[]>([]);
-  const [media, setMedia] = useState<MediaState | null>(null);
-  const [status, setStatus] = useState("Idle");
-  const [lastMsg, setLastMsg] = useState("");
-  const [loopTarget, setLoopTarget] = useState("");
+
+  const [ext, setExt] = useState<ExtInfo | null>(null);
+  const [cfg, setCfg] = useState<EffectiveCfg | null>(null);
+  const [diag, setDiag] = useState<DiagErr[]>([]);
+
+  const [banner, setBanner] = useState<{ kind: "ok" | "warn" | "fail"; text: string }>({ kind: "warn", text: "Idle" });
+  const [wsLatencyMs, setWsLatencyMs] = useState<number | null>(null);
+  const [wsResult, setWsResult] = useState("Not tested");
+
+  const [sipResult, setSipResult] = useState("Not registered");
+  const [sipError, setSipError] = useState("");
+  const [testExtension, setTestExtension] = useState("1000");
+
+  const [iceTypes, setIceTypes] = useState<string[]>([]);
+  const [hasRelay, setHasRelay] = useState<boolean | null>(null);
 
   const uaRef = useRef<any>(null);
   const registererRef = useRef<any>(null);
-  const sessionRef = useRef<any>(null);
-  const diagSessionIdRef = useRef<string | null>(null);
 
-  async function diagStart() {
-    if (!token || !info) return;
-    const hasTurnCfg = (info.iceServers || []).some((srv) => {
-      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
-      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
-    });
-    const out = await fetch(`${apiBase}/voice/diag/session/start`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        sessionId: diagSessionIdRef.current || undefined,
-        platform: "WEB",
-        appVersion: "portal-sbc-test",
-        sipWsUrl: info.sipWsUrl || undefined,
-        sipDomain: info.sipDomain || undefined,
-        iceHasTurn: hasTurnCfg,
-        lastRegState: status
-      })
-    }).then((r) => r.json()).catch(() => null);
-    if (out?.sessionId) diagSessionIdRef.current = String(out.sessionId);
-  }
-
-  async function diagEvent(type: string, payload?: any) {
-    if (!token || !diagSessionIdRef.current) return;
-    await fetch(`${apiBase}/voice/diag/event`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ sessionId: diagSessionIdRef.current, type, payload: payload || {} })
-    }).catch(() => undefined);
-  }
-
-  async function loadData() {
+  async function loadAll() {
     if (!token) return;
-    const [extRes, webrtcRes, sbcRes, errRes, mediaRes] = await Promise.all([
+    const [extRes, cfgRes, diagRes] = await Promise.all([
       fetch(`${apiBase}/voice/me/extension`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/voice/webrtc/settings`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/voice/sbc/status`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/voice/diag/recent-errors`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/voice/media-test/status`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiBase}/voice/effective-config`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${apiBase}/voice/diag/recent-errors`, { headers: { Authorization: `Bearer ${token}` } })
     ]);
 
     const extJson = await extRes.json().catch(() => null);
-    const wrJson = await webrtcRes.json().catch(() => null);
-    const sbcJson = await sbcRes.json().catch(() => null);
-    const errJson = await errRes.json().catch(() => []);
-    const mediaJson = await mediaRes.json().catch(() => null);
+    const cfgJson = await cfgRes.json().catch(() => null);
+    const diagJson = await diagRes.json().catch(() => []);
 
-    if (extRes.ok) setInfo(extJson);
-    if (webrtcRes.ok) setSettings(wrJson);
-    if (sbcRes.ok) setSbcStatus(sbcJson);
-    if (Array.isArray(errJson)) setErrors(errJson.slice(0, 12));
-    if (mediaRes.ok && mediaJson) setMedia(mediaJson);
+    if (extRes.ok && extJson) setExt(extJson);
+    if (cfgRes.ok && cfgJson?.ok) setCfg(cfgJson);
+    if (Array.isArray(diagJson)) setDiag(diagJson.slice(0, 20));
 
-    if (!extRes.ok) {
-      setLastMsg(String(extJson?.error || "Unable to load extension config"));
+    if (!extRes.ok || !cfgRes.ok) {
+      setBanner({ kind: "fail", text: "Unable to load SBC test prerequisites. Open Voice Settings to complete configuration." });
     }
   }
 
   useEffect(() => {
-    loadData().catch(() => setLastMsg("Failed to load SBC test data"));
+    loadAll().catch(() => setBanner({ kind: "fail", text: "Failed to load SBC test data." }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!info) return;
-    diagStart().catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info]);
+    if (!token) return;
+    const t = setInterval(() => {
+      fetch(`${apiBase}/voice/diag/recent-errors`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => r.json())
+        .then((rows) => { if (Array.isArray(rows)) setDiag(rows.slice(0, 20)); })
+        .catch(() => undefined);
+    }, 10000);
+    return () => clearInterval(t);
+  }, [token]);
 
-  async function testWsHandshake() {
-    try {
-      const publicBase = apiBase.endsWith("/api") ? apiBase.slice(0, -4) : "https://app.connectcomunications.com";
-      const out = await fetch(`${publicBase}/sip`, { method: "GET" });
-      const wsProto = out.headers.get("sec-websocket-protocol");
-      const wsVer = out.headers.get("sec-websocket-version");
-      const msg = `WS probe status=${out.status}${wsProto ? ` protocol=${wsProto}` : ""}${wsVer ? ` version=${wsVer}` : ""}`;
-      setLastMsg(msg);
-      setStatus(out.ok ? "WS Probe OK" : "WS Probe Response");
-      await diagEvent("WS_CONNECTED", { probeStatus: out.status, wsProtocol: wsProto || undefined, wsVersion: wsVer || undefined });
-    } catch (e: any) {
-      const code = String(e?.message || "WEB_WS_PROBE_FAILED").slice(0, 120);
-      setLastMsg(`WS probe failed: ${code}`);
-      setStatus("WS Probe Failed");
-      await diagEvent("WS_DISCONNECTED", { reason: code, sipWsUrl: info?.sipWsUrl || undefined, sipDomain: info?.sipDomain || undefined });
-      await diagEvent("ERROR", { code: "WEB_WS_PROBE_FAILED", reason: code, sipWsUrl: info?.sipWsUrl || undefined, sipDomain: info?.sipDomain || undefined });
+  async function testWsLatency() {
+    const url = cfg?.resolved?.sipWsUrl || ext?.sipWsUrl;
+    if (!url) {
+      setWsResult("Missing SIP WSS URL. Configure it in Voice Settings.");
+      setBanner({ kind: "warn", text: "Set SIP WSS URL or enable SBC routing first." });
+      return;
     }
+
+    setWsResult("Testing...");
+    const started = performance.now();
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (ok: boolean, msg: string) => {
+        if (done) return;
+        done = true;
+        setWsResult(msg);
+        setBanner({ kind: ok ? "ok" : "warn", text: ok ? "WebSocket probe succeeded" : "WebSocket probe responded but not fully open" });
+        resolve();
+      };
+
+      try {
+        const ws = new WebSocket(url);
+        const timer = setTimeout(() => {
+          try { ws.close(); } catch {}
+          finish(false, "Timed out waiting for WS open");
+        }, 7000);
+
+        ws.onopen = () => {
+          clearTimeout(timer);
+          const latency = Math.round(performance.now() - started);
+          setWsLatencyMs(latency);
+          try { ws.close(); } catch {}
+          finish(true, `WS open in ${latency} ms`);
+        };
+        ws.onerror = () => {
+          clearTimeout(timer);
+          finish(false, "WebSocket connect error");
+        };
+      } catch {
+        finish(false, "Browser could not initialize WebSocket probe");
+      }
+    });
+  }
+
+  async function runIceProbe() {
+    const iceServers = (ext?.iceServers || []) as RTCIceServer[];
+    if (!iceServers.length) {
+      setBanner({ kind: "warn", text: "No ICE servers configured. Add STUN/TURN in Voice Settings." });
+      setIceTypes([]);
+      setHasRelay(false);
+      return;
+    }
+
+    const found = new Set<string>();
+    let relay = false;
+
+    await new Promise<void>((resolve) => {
+      const pc = new RTCPeerConnection({ iceServers });
+      const timer = setTimeout(() => {
+        try { pc.close(); } catch {}
+        resolve();
+      }, 4500);
+
+      pc.createDataChannel("probe");
+      pc.onicecandidate = (ev) => {
+        const c = ev.candidate?.candidate || "";
+        const m = c.match(/ typ ([a-zA-Z0-9_]+)/);
+        if (m?.[1]) {
+          const t = m[1].toLowerCase();
+          found.add(t);
+          if (t === "relay") relay = true;
+        }
+      };
+
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer))
+        .catch(() => undefined)
+        .finally(() => {
+          setTimeout(() => {
+            clearTimeout(timer);
+            try { pc.close(); } catch {}
+            resolve();
+          }, 2200);
+        });
+    });
+
+    const list = Array.from(found.values());
+    setIceTypes(list);
+    setHasRelay(relay);
+    setBanner({ kind: relay ? "ok" : "warn", text: relay ? "Relay candidate detected" : "No relay candidate detected" });
   }
 
   async function testSipRegister() {
+    setSipError("");
     if (!window.SIP) {
-      setLastMsg("SIP.js not loaded yet");
+      setSipResult("SIP.js not loaded");
       return;
     }
-    if (!token || !info?.sipWsUrl || !info?.sipDomain) {
-      setLastMsg("Missing SIP config (WSS URL/domain)");
+
+    const sipWsUrl = cfg?.resolved?.sipWsUrl || ext?.sipWsUrl;
+    const sipDomain = cfg?.resolved?.sipDomain || ext?.sipDomain;
+    if (!token || !ext?.sipUsername || !sipWsUrl || !sipDomain) {
+      setSipResult("Missing SIP config. Open Voice Settings.");
+      setBanner({ kind: "warn", text: "Complete SIP domain + WSS settings before register test." });
       return;
     }
 
     try {
-      setStatus("Preparing credentials");
+      setSipResult("Preparing credentials...");
       const credRes = await fetch(`${apiBase}/voice/me/reset-sip-password`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
       const cred = await credRes.json().catch(() => ({}));
-      if (!credRes.ok || !cred?.sipPassword) {
-        throw new Error(String(cred?.error || "SIP_PASSWORD_RESET_FAILED"));
-      }
+      if (!credRes.ok || !cred?.sipPassword) throw new Error(String(cred?.error || "SIP_PASSWORD_RESET_FAILED"));
 
-      setStatus("Registering via /sip");
-      const uri = window.SIP.UserAgent.makeURI(`sip:${info.sipUsername}@${info.sipDomain}`);
+      const uri = window.SIP.UserAgent.makeURI(`sip:${ext.sipUsername}@${sipDomain}`);
       const ua = new window.SIP.UserAgent({
         uri,
-        authorizationUsername: info.sipUsername,
+        authorizationUsername: ext.sipUsername,
         authorizationPassword: cred.sipPassword,
-        transportOptions: {
-          server: info.sipWsUrl,
-          connectionTimeout: 10,
-          traceSip: false
-        },
+        transportOptions: { server: sipWsUrl, connectionTimeout: 10 },
         sessionDescriptionHandlerFactoryOptions: {
-          peerConnectionConfiguration: { iceServers: info.iceServers || [] }
+          peerConnectionConfiguration: { iceServers: (ext.iceServers || []) as any[] }
         }
       });
 
@@ -213,193 +233,90 @@ export default function VoiceSbcTestPage() {
 
       uaRef.current = ua;
       registererRef.current = registerer;
-
-      setStatus("REGISTER OK");
-      setLastMsg(`Registered through ${info.sipWsUrl}`);
-      await diagEvent("SIP_REGISTER", { route: "SBC", sipWsUrl: info.sipWsUrl, sipDomain: info.sipDomain });
+      setSipResult(`REGISTER OK via ${sipWsUrl}`);
+      setBanner({ kind: "ok", text: "SIP register succeeded" });
     } catch (e: any) {
-      const code = String(e?.message || "WEB_SIP_REGISTER_FAILED").slice(0, 120);
-      setStatus("REGISTER FAILED");
-      setLastMsg(`SIP register failed: ${code}`);
-      await diagEvent("ERROR", { code: "WEB_SIP_REGISTER_FAILED", reason: code, sipWsUrl: info?.sipWsUrl || undefined, sipDomain: info?.sipDomain || undefined });
-      await diagEvent("WS_DISCONNECTED", { reason: code, sipWsUrl: info?.sipWsUrl || undefined, sipDomain: info?.sipDomain || undefined });
+      const msg = String(e?.message || "WEB_SIP_REGISTER_FAILED");
+      setSipError(msg);
+      setSipResult("REGISTER FAILED");
+      setBanner({ kind: "fail", text: "SIP register failed. Check WSS/domain/credentials." });
     }
   }
 
-  async function testCallLoop() {
-    if (!uaRef.current || !info?.sipDomain) {
-      setLastMsg("Run Test SIP REGISTER first");
+  async function callTestExtension() {
+    const ua = uaRef.current;
+    const sipDomain = cfg?.resolved?.sipDomain || ext?.sipDomain;
+    if (!ua || !sipDomain || !testExtension.trim()) {
+      setBanner({ kind: "warn", text: "Run SIP REGISTER first and provide a test extension." });
       return;
     }
-    if (!loopTarget.trim()) {
-      setLastMsg("Enter a target extension/number for call loop test");
-      return;
-    }
-
     try {
-      setStatus("Calling loop target");
-      const target = window.SIP.UserAgent.makeURI(`sip:${loopTarget.trim()}@${info.sipDomain}`);
-      const inviter = new window.SIP.Inviter(uaRef.current, target);
-      sessionRef.current = inviter;
+      const target = window.SIP.UserAgent.makeURI(`sip:${testExtension.trim()}@${sipDomain}`);
+      const inviter = new window.SIP.Inviter(ua, target);
       await inviter.invite();
-      await diagEvent("CALL_CONNECTED", { target: loopTarget.trim() });
-      setStatus("CALL INVITED");
-      setLastMsg(`Invite sent to ${loopTarget.trim()}`);
-    } catch (e: any) {
-      const code = String(e?.message || "WEB_CALL_LOOP_FAILED").slice(0, 120);
-      setStatus("CALL LOOP FAILED");
-      setLastMsg(`Call loop failed: ${code}`);
-      await diagEvent("ERROR", { code: "WEB_CALL_LOOP_FAILED", reason: code });
-    }
-  }
-
-  async function runMediaTest() {
-    if (!token || !info?.sipWsUrl || !info?.sipDomain) {
-      setLastMsg("Missing SIP config for media test");
-      return;
-    }
-
-    const startRes = await fetch(`${apiBase}/voice/media-test/start`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ platform: "WEB" })
-    });
-    const startJson = await startRes.json().catch(() => ({}));
-    if (!startRes.ok || !startJson?.token) {
-      setLastMsg(String(startJson?.error || "Unable to start media test"));
-      return;
-    }
-
-    const t0 = Date.now();
-    let wsOk = false;
-    let sipRegisterOk = false;
-    const hasRelay = (info.iceServers || []).some((srv) => {
-      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
-      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
-    });
-
-    try {
-      const publicBase = apiBase.endsWith("/api") ? apiBase.slice(0, -4) : "https://app.connectcomunications.com";
-      const wsResp = await fetch(`${publicBase}/sip`, { method: "GET" });
-      wsOk = wsResp.status > 0;
-    } catch {}
-
-    try {
-      if (!window.SIP) throw new Error("SIPJS_MISSING");
-      const credRes = await fetch(`${apiBase}/voice/me/reset-sip-password`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const cred = await credRes.json().catch(() => ({}));
-      if (!credRes.ok || !cred?.sipPassword) throw new Error(String(cred?.error || "SIP_PASSWORD_RESET_FAILED"));
-
-      const uri = window.SIP.UserAgent.makeURI(`sip:${info.sipUsername}@${info.sipDomain}`);
-      const ua = new window.SIP.UserAgent({
-        uri,
-        authorizationUsername: info.sipUsername,
-        authorizationPassword: cred.sipPassword,
-        transportOptions: { server: info.sipWsUrl, connectionTimeout: 10, traceSip: false },
-        sessionDescriptionHandlerFactoryOptions: {
-          peerConnectionConfiguration: { iceServers: info.iceServers || [] }
-        }
-      });
-      const registerer = new window.SIP.Registerer(ua);
-      await ua.start();
-      await registerer.register();
-      sipRegisterOk = true;
-      try { await registerer.unregister(); } catch {}
-      try { await ua.stop(); } catch {}
+      setBanner({ kind: "ok", text: `INVITE sent to ${testExtension.trim()}` });
     } catch {
-      sipRegisterOk = false;
+      setBanner({ kind: "fail", text: "INVITE failed for test extension." });
     }
-
-    const reportRes = await fetch(`${apiBase}/voice/media-test/report`, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        token: startJson.token,
-        hasRelay,
-        iceSelectedPairType: hasRelay ? "relay" : "unknown",
-        wsOk,
-        sipRegisterOk,
-        rtpCandidatePresent: hasRelay,
-        durationMs: Date.now() - t0,
-        platform: "WEB",
-        ...(wsOk && sipRegisterOk && hasRelay ? {} : { errorCode: !wsOk ? "WS_NOT_OK" : (!sipRegisterOk ? "SIP_REGISTER_FAILED" : "NO_RELAY_PATH") })
-      })
-    });
-    const report = await reportRes.json().catch(() => ({}));
-    setLastMsg(reportRes.ok ? `Media test ${String(report?.status || "done")}` : String(report?.error || "Media test report failed"));
-    await diagEvent("MEDIA_TEST_RUN", { status: report?.status || "UNKNOWN", wsOk, sipRegisterOk, hasRelay });
-    await loadData();
   }
 
-  async function cleanupSip() {
-    try { await registererRef.current?.unregister?.(); } catch {}
-    try { await sessionRef.current?.bye?.(); } catch {}
-    try { await uaRef.current?.stop?.(); } catch {}
-    await diagEvent("SIP_UNREGISTER", { reason: "manual_cleanup" });
-    setStatus("Idle");
-  }
+  useEffect(() => {
+    return () => {
+      try { registererRef.current?.unregister?.(); } catch {}
+      try { uaRef.current?.stop?.(); } catch {}
+    };
+  }, []);
+
+  const bannerClass = banner.kind === "ok" ? "status-chip success" : banner.kind === "fail" ? "status-chip failed" : "status-chip pending";
 
   return (
-    <>
-      <Script src="https://unpkg.com/sip.js@0.21.2/lib/umd/sip.js" strategy="afterInteractive" />
-      <div className="card">
-        <h1>Voice SBC Test</h1>
-        <p className="status-chip pending" style={{ borderRadius: 2 }}>Status: {status}</p>
-        {lastMsg ? <p>{lastMsg}</p> : null}
+    <div className="card">
+      <Script src="https://unpkg.com/sip.js@0.21.2/dist/sip.min.js" strategy="afterInteractive" />
+      <h1>Voice SBC Test</h1>
+      <p>Interactive WebRTC and SBC diagnostics surface with live connection checks.</p>
 
-        <h3>Effective WebRTC Config</h3>
-        <p>WSS: <strong>{settings?.effectiveSipWsUrl || info?.sipWsUrl || "not configured"}</strong></p>
-        <p>Domain: <strong>{settings?.effectiveSipDomain || info?.sipDomain || "not configured"}</strong></p>
-        <p>Outbound Proxy: <strong>{settings?.outboundProxy || info?.outboundProxy || "none"}</strong></p>
-        <p>ICE Servers: <strong>{settings?.iceServerCount ?? info?.iceServers?.length ?? 0}</strong></p>
-        <p>Route via SBC toggle: <strong>{settings?.webrtcRouteViaSbc ? "enabled" : "disabled"}</strong></p>
-        <p>Media Test: <strong>{media?.mediaTestStatus || "UNKNOWN"}</strong> / Last tested: <strong>{media?.mediaTestedAt ? new Date(media.mediaTestedAt).toLocaleString() : "never"}</strong></p>
+      <p className={bannerClass} style={{ borderRadius: 2 }}>{banner.text}</p>
 
-        <h3>SBC Status (Server Probe)</h3>
-        <p>Kamailio: <strong>{sbcStatus?.services?.kamailio || "unknown"}</strong> / RTPengine: <strong>{sbcStatus?.services?.rtpengine || "unknown"}</strong> / PBX via SBC: <strong>{sbcStatus?.services?.pbxViaSbc || "unknown"}</strong></p>
-        <p>Route: <strong>{sbcStatus?.route?.publicSipWsUrl || "wss://app.connectcomunications.com/sip"}</strong></p>
+      <h3>Effective Config Preview</h3>
+      <p>WSS: <strong>{cfg?.resolved?.sipWsUrl || ext?.sipWsUrl || "Set SIP WSS URL in Voice Settings"}</strong></p>
+      <p>Domain: <strong>{cfg?.resolved?.sipDomain || ext?.sipDomain || "Set SIP domain or link PBX domain in Voice Settings"}</strong></p>
+      <p>Policy: <strong>{cfg?.resolved?.mediaPolicy || "TURN_ONLY"}</strong> / TURN required: <strong>{cfg?.resolved?.turnRequiredForMobile ? "yes" : "no"}</strong></p>
+      {(cfg?.warnings || []).length ? <ul>{cfg?.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}
 
-        <h3>Actions</h3>
-        <button onClick={() => testWsHandshake().catch(() => undefined)}>Test WS handshake</button>{" "}
-        <button onClick={() => testSipRegister().catch(() => undefined)}>Test SIP REGISTER</button>{" "}
-        <button onClick={() => runMediaTest().catch(() => undefined)}>Run Media Test</button>{" "}
-        <input value={loopTarget} onChange={(e) => setLoopTarget(e.target.value)} placeholder="Loop target extension" />{" "}
-        <button onClick={() => testCallLoop().catch(() => undefined)}>Test call loop</button>{" "}
-        <button onClick={() => cleanupSip().catch(() => undefined)}>Cleanup SIP</button>{" "}
-        <button onClick={() => loadData().catch(() => undefined)}>Refresh</button>
+      <h3>Live WS Latency</h3>
+      <button onClick={() => testWsLatency().catch(() => setWsResult("WS probe failed"))}>Test WS latency</button>
+      <p>{wsResult}{wsLatencyMs !== null ? ` (${wsLatencyMs} ms)` : ""}</p>
 
-        <h3>Recent VoiceDiag Error Signals</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>Code</th>
-              <th>WSS</th>
-              <th>Domain</th>
+      <h3>SIP REGISTER Result Panel</h3>
+      <button onClick={() => testSipRegister().catch(() => setSipResult("REGISTER FAILED"))}>Test SIP REGISTER</button>
+      <p><strong>{sipResult}</strong></p>
+      {sipError ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{sipError}</p> : null}
+
+      <h3>ICE Candidate + Relay Detection</h3>
+      <button onClick={() => runIceProbe().catch(() => setBanner({ kind: "fail", text: "ICE probe failed" }))}>Run ICE probe</button>
+      <p>Candidate types: <strong>{iceTypes.length ? iceTypes.join(", ") : "none yet"}</strong></p>
+      <p>Relay detected: <strong>{hasRelay === null ? "unknown" : (hasRelay ? "yes" : "no")}</strong></p>
+
+      <h3>Test Extension</h3>
+      <input value={testExtension} onChange={(e) => setTestExtension(e.target.value)} placeholder="1000" />
+      {" "}
+      <button onClick={() => callTestExtension().catch(() => setBanner({ kind: "fail", text: "Extension call test failed" }))}>Send INVITE</button>
+
+      <h3>Recent Diagnostic Events (auto-refresh)</h3>
+      <button onClick={() => loadAll().catch(() => undefined)}>Refresh now</button>
+      <table>
+        <thead><tr><th>Type</th><th>Code</th><th>When</th></tr></thead>
+        <tbody>
+          {diag.map((e) => (
+            <tr key={e.id}>
+              <td>{e.type}</td>
+              <td>{e.code || e?.payload?.code || "-"}</td>
+              <td>{new Date(e.createdAt).toLocaleString()}</td>
             </tr>
-          </thead>
-          <tbody>
-            {errors.map((e) => (
-              <tr key={e.id}>
-                <td>{new Date(e.createdAt).toLocaleString()}</td>
-                <td>{e.type}</td>
-                <td>{e.code}</td>
-                <td>{e.sipWsUrl || "-"}</td>
-                <td>{e.sipDomain || "-"}</td>
-              </tr>
-            ))}
-            {errors.length === 0 ? (
-              <tr>
-                <td colSpan={5}>No recent diagnostics signals.</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </>
+          ))}
+          {!diag.length ? <tr><td colSpan={3}>No diagnostics yet. Run tests to generate events.</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
   );
 }
