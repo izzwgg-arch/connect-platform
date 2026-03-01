@@ -50,6 +50,16 @@ type DiagErr = {
   sipDomain: string | null;
 };
 
+type MediaState = {
+  ok: boolean;
+  mediaReliabilityGateEnabled: boolean;
+  mediaTestStatus: "UNKNOWN" | "PASSED" | "FAILED" | "STALE";
+  mediaTestedAt: string | null;
+  mediaLastErrorCode: string | null;
+  mediaLastErrorAt: string | null;
+  recentRun?: any;
+};
+
 declare global {
   interface Window {
     SIP?: any;
@@ -62,6 +72,7 @@ export default function VoiceSbcTestPage() {
   const [settings, setSettings] = useState<WebrtcSettings | null>(null);
   const [sbcStatus, setSbcStatus] = useState<SbcStatus | null>(null);
   const [errors, setErrors] = useState<DiagErr[]>([]);
+  const [media, setMedia] = useState<MediaState | null>(null);
   const [status, setStatus] = useState("Idle");
   const [lastMsg, setLastMsg] = useState("");
   const [loopTarget, setLoopTarget] = useState("");
@@ -104,22 +115,25 @@ export default function VoiceSbcTestPage() {
 
   async function loadData() {
     if (!token) return;
-    const [extRes, webrtcRes, sbcRes, errRes] = await Promise.all([
+    const [extRes, webrtcRes, sbcRes, errRes, mediaRes] = await Promise.all([
       fetch(`${apiBase}/voice/me/extension`, { headers: { Authorization: `Bearer ${token}` } }),
       fetch(`${apiBase}/voice/webrtc/settings`, { headers: { Authorization: `Bearer ${token}` } }),
       fetch(`${apiBase}/voice/sbc/status`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/voice/diag/recent-errors`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiBase}/voice/diag/recent-errors`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${apiBase}/voice/media-test/status`, { headers: { Authorization: `Bearer ${token}` } })
     ]);
 
     const extJson = await extRes.json().catch(() => null);
     const wrJson = await webrtcRes.json().catch(() => null);
     const sbcJson = await sbcRes.json().catch(() => null);
     const errJson = await errRes.json().catch(() => []);
+    const mediaJson = await mediaRes.json().catch(() => null);
 
     if (extRes.ok) setInfo(extJson);
     if (webrtcRes.ok) setSettings(wrJson);
     if (sbcRes.ok) setSbcStatus(sbcJson);
     if (Array.isArray(errJson)) setErrors(errJson.slice(0, 12));
+    if (mediaRes.ok && mediaJson) setMedia(mediaJson);
 
     if (!extRes.ok) {
       setLastMsg(String(extJson?.error || "Unable to load extension config"));
@@ -239,6 +253,87 @@ export default function VoiceSbcTestPage() {
     }
   }
 
+  async function runMediaTest() {
+    if (!token || !info?.sipWsUrl || !info?.sipDomain) {
+      setLastMsg("Missing SIP config for media test");
+      return;
+    }
+
+    const startRes = await fetch(`${apiBase}/voice/media-test/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ platform: "WEB" })
+    });
+    const startJson = await startRes.json().catch(() => ({}));
+    if (!startRes.ok || !startJson?.token) {
+      setLastMsg(String(startJson?.error || "Unable to start media test"));
+      return;
+    }
+
+    const t0 = Date.now();
+    let wsOk = false;
+    let sipRegisterOk = false;
+    const hasRelay = (info.iceServers || []).some((srv) => {
+      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
+      return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
+    });
+
+    try {
+      const publicBase = apiBase.endsWith("/api") ? apiBase.slice(0, -4) : "https://app.connectcomunications.com";
+      const wsResp = await fetch(`${publicBase}/sip`, { method: "GET" });
+      wsOk = wsResp.status > 0;
+    } catch {}
+
+    try {
+      if (!window.SIP) throw new Error("SIPJS_MISSING");
+      const credRes = await fetch(`${apiBase}/voice/me/reset-sip-password`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const cred = await credRes.json().catch(() => ({}));
+      if (!credRes.ok || !cred?.sipPassword) throw new Error(String(cred?.error || "SIP_PASSWORD_RESET_FAILED"));
+
+      const uri = window.SIP.UserAgent.makeURI(`sip:${info.sipUsername}@${info.sipDomain}`);
+      const ua = new window.SIP.UserAgent({
+        uri,
+        authorizationUsername: info.sipUsername,
+        authorizationPassword: cred.sipPassword,
+        transportOptions: { server: info.sipWsUrl, connectionTimeout: 10, traceSip: false },
+        sessionDescriptionHandlerFactoryOptions: {
+          peerConnectionConfiguration: { iceServers: info.iceServers || [] }
+        }
+      });
+      const registerer = new window.SIP.Registerer(ua);
+      await ua.start();
+      await registerer.register();
+      sipRegisterOk = true;
+      try { await registerer.unregister(); } catch {}
+      try { await ua.stop(); } catch {}
+    } catch {
+      sipRegisterOk = false;
+    }
+
+    const reportRes = await fetch(`${apiBase}/voice/media-test/report`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        token: startJson.token,
+        hasRelay,
+        iceSelectedPairType: hasRelay ? "relay" : "unknown",
+        wsOk,
+        sipRegisterOk,
+        rtpCandidatePresent: hasRelay,
+        durationMs: Date.now() - t0,
+        platform: "WEB",
+        ...(wsOk && sipRegisterOk && hasRelay ? {} : { errorCode: !wsOk ? "WS_NOT_OK" : (!sipRegisterOk ? "SIP_REGISTER_FAILED" : "NO_RELAY_PATH") })
+      })
+    });
+    const report = await reportRes.json().catch(() => ({}));
+    setLastMsg(reportRes.ok ? `Media test ${String(report?.status || "done")}` : String(report?.error || "Media test report failed"));
+    await diagEvent("MEDIA_TEST_RUN", { status: report?.status || "UNKNOWN", wsOk, sipRegisterOk, hasRelay });
+    await loadData();
+  }
+
   async function cleanupSip() {
     try { await registererRef.current?.unregister?.(); } catch {}
     try { await sessionRef.current?.bye?.(); } catch {}
@@ -261,6 +356,7 @@ export default function VoiceSbcTestPage() {
         <p>Outbound Proxy: <strong>{settings?.outboundProxy || info?.outboundProxy || "none"}</strong></p>
         <p>ICE Servers: <strong>{settings?.iceServerCount ?? info?.iceServers?.length ?? 0}</strong></p>
         <p>Route via SBC toggle: <strong>{settings?.webrtcRouteViaSbc ? "enabled" : "disabled"}</strong></p>
+        <p>Media Test: <strong>{media?.mediaTestStatus || "UNKNOWN"}</strong> / Last tested: <strong>{media?.mediaTestedAt ? new Date(media.mediaTestedAt).toLocaleString() : "never"}</strong></p>
 
         <h3>SBC Status (Server Probe)</h3>
         <p>Kamailio: <strong>{sbcStatus?.services?.kamailio || "unknown"}</strong> / RTPengine: <strong>{sbcStatus?.services?.rtpengine || "unknown"}</strong> / PBX via SBC: <strong>{sbcStatus?.services?.pbxViaSbc || "unknown"}</strong></p>
@@ -269,6 +365,7 @@ export default function VoiceSbcTestPage() {
         <h3>Actions</h3>
         <button onClick={() => testWsHandshake().catch(() => undefined)}>Test WS handshake</button>{" "}
         <button onClick={() => testSipRegister().catch(() => undefined)}>Test SIP REGISTER</button>{" "}
+        <button onClick={() => runMediaTest().catch(() => undefined)}>Run Media Test</button>{" "}
         <input value={loopTarget} onChange={(e) => setLoopTarget(e.target.value)} placeholder="Loop target extension" />{" "}
         <button onClick={() => testCallLoop().catch(() => undefined)}>Test call loop</button>{" "}
         <button onClick={() => cleanupSip().catch(() => undefined)}>Cleanup SIP</button>{" "}

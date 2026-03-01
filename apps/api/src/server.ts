@@ -101,6 +101,7 @@ const voiceDiagHeartbeatLimiter = new Map<string, number>();
 const voiceDiagEventLimiter = new Map<string, number[]>();
 const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
 const mobileProvisioningTokenSecret = process.env.MOBILE_PROVISIONING_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
+const mediaTestTokenSecret = process.env.MEDIA_TEST_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
 const sbcKamailioHost = process.env.SBC_KAMAILIO_HOST || "sbc-kamailio";
 const sbcKamailioSipPort = Number(process.env.SBC_KAMAILIO_SIP_PORT || 5060);
 const sbcKamailioTcpPort = Number(process.env.SBC_KAMAILIO_TCP_PORT || 5061);
@@ -465,6 +466,38 @@ function verifyTurnValidationToken(token: string): null | { jobId: string; token
   }
 }
 
+function signMediaTestToken(input: { runId: string; tokenId: string; tenantId: string; userId: string; expMs: number }): string {
+  const payload = Buffer.from(JSON.stringify(input)).toString("base64url");
+  const sig = createHmac("sha256", mediaTestTokenSecret).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifyMediaTestToken(token: string): null | { runId: string; tokenId: string; tenantId: string; userId: string; expMs: number } {
+  const t = String(token || "").trim();
+  const idx = t.lastIndexOf(".");
+  if (idx <= 0) return null;
+  const payload = t.slice(0, idx);
+  const sig = t.slice(idx + 1);
+  const expected = createHmac("sha256", mediaTestTokenSecret).update(payload).digest();
+  const given = Buffer.from(sig, "base64url");
+  if (given.length != expected.length) return null;
+  if (!timingSafeEqual(expected, given)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed?.runId || !parsed?.tokenId || !parsed?.tenantId || !parsed?.userId || !parsed?.expMs) return null;
+    if (Number(parsed.expMs) < Date.now()) return null;
+    return {
+      runId: String(parsed.runId),
+      tokenId: String(parsed.tokenId),
+      tenantId: String(parsed.tenantId),
+      userId: String(parsed.userId),
+      expMs: Number(parsed.expMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
 
 function hashToken(value: string): string {
   return createHash("sha256").update(String(value || "")).digest("hex");
@@ -544,6 +577,11 @@ async function getEffectiveTurnConfig(tenantId: string): Promise<any | null> {
 function isTurnRecentlyVerified(tenant: any): boolean {
   if (!tenant || tenant.turnValidationStatus !== "VERIFIED" || !tenant.turnValidatedAt) return false;
   return new Date(tenant.turnValidatedAt).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000;
+}
+
+function isMediaTestRecentlyPassed(tenant: any): boolean {
+  if (!tenant || tenant.mediaTestStatus !== "PASSED" || !tenant.mediaTestedAt) return false;
+  return new Date(tenant.mediaTestedAt).getTime() >= Date.now() - 7 * 24 * 60 * 60 * 1000;
 }
 
 function ensureCredentialCrypto(reply: any): boolean {
@@ -2463,6 +2501,7 @@ app.get("/voice/webrtc/settings", async (req, reply) => {
       select: {
         webrtcEnabled: true,
         webrtcRouteViaSbc: true,
+        mediaReliabilityGateEnabled: true,
         sipWsUrl: true,
         sipDomain: true,
         outboundProxy: true,
@@ -2480,6 +2519,7 @@ app.get("/voice/webrtc/settings", async (req, reply) => {
     ok: true,
     webrtcEnabled: cfg.webrtcEnabled,
     webrtcRouteViaSbc: cfg.webrtcRouteViaSbc,
+    mediaReliabilityGateEnabled: !!tenant?.mediaReliabilityGateEnabled,
     configuredSipWsUrl: tenant.sipWsUrl || null,
     effectiveSipWsUrl: cfg.sipWsUrl,
     effectiveSipDomain: cfg.sipDomain,
@@ -2508,6 +2548,192 @@ app.put("/voice/webrtc/settings", async (req, reply) => {
   });
 
   return { ok: true, webrtcRouteViaSbc: !!updated.webrtcRouteViaSbc };
+});
+
+app.get("/voice/media-test/status", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const [tenant, recent] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: admin.tenantId },
+      select: {
+        mediaReliabilityGateEnabled: true,
+        mediaTestStatus: true,
+        mediaTestedAt: true,
+        mediaLastErrorCode: true,
+        mediaLastErrorAt: true
+      }
+    }),
+    db.mediaTestRun.findFirst({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } })
+  ]);
+
+  if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  return {
+    ok: true,
+    mediaReliabilityGateEnabled: !!tenant.mediaReliabilityGateEnabled,
+    mediaTestStatus: tenant.mediaTestStatus || "UNKNOWN",
+    mediaTestedAt: tenant.mediaTestedAt || null,
+    mediaLastErrorCode: tenant.mediaLastErrorCode || null,
+    mediaLastErrorAt: tenant.mediaLastErrorAt || null,
+    recentRun: recent ? {
+      id: recent.id,
+      createdAt: recent.createdAt,
+      completedAt: recent.completedAt,
+      status: recent.status,
+      platform: recent.platform,
+      details: recent.details || null
+    } : null
+  };
+});
+
+app.put("/voice/media-test/status", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({ mediaReliabilityGateEnabled: z.boolean() }).parse(req.body || {});
+  const updated = await db.tenant.update({
+    where: { id: admin.tenantId },
+    data: { mediaReliabilityGateEnabled: !!input.mediaReliabilityGateEnabled }
+  });
+
+  await audit({
+    tenantId: admin.tenantId,
+    actorUserId: admin.sub,
+    action: input.mediaReliabilityGateEnabled ? "VOICE_MEDIA_GATE_ENABLED" : "VOICE_MEDIA_GATE_DISABLED",
+    entityType: "Tenant",
+    entityId: admin.tenantId
+  });
+
+  return {
+    ok: true,
+    mediaReliabilityGateEnabled: !!updated.mediaReliabilityGateEnabled,
+    mediaTestStatus: updated.mediaTestStatus,
+    mediaTestedAt: updated.mediaTestedAt,
+    mediaLastErrorCode: updated.mediaLastErrorCode,
+    mediaLastErrorAt: updated.mediaLastErrorAt
+  };
+});
+
+app.post("/voice/media-test/start", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  if (!checkBillingRateLimit(`voice-media-test:${admin.tenantId}`, 30, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({ platform: z.enum(["WEB", "IOS", "ANDROID"]).default("WEB") }).parse(req.body || {});
+
+  const tokenId = createHmac("sha256", mediaTestTokenSecret).update(`${admin.tenantId}:${admin.sub}:${Date.now()}:${Math.random()}`).digest("hex");
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+  const run = await db.mediaTestRun.create({
+    data: {
+      tenantId: admin.tenantId,
+      userId: admin.sub,
+      tokenId,
+      expiresAt,
+      platform: input.platform,
+      status: "QUEUED"
+    }
+  });
+
+  const token = signMediaTestToken({
+    runId: run.id,
+    tokenId,
+    tenantId: admin.tenantId,
+    userId: admin.sub,
+    expMs: expiresAt.getTime()
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "VOICE_MEDIA_TEST_REQUESTED", entityType: "MediaTestRun", entityId: run.id });
+  return { ok: true, runId: run.id, token, expiresAt, platform: run.platform };
+});
+
+app.post("/voice/media-test/report", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({
+    token: z.string().min(10),
+    hasRelay: z.boolean(),
+    iceSelectedPairType: z.enum(["host", "srflx", "relay", "unknown"]).default("unknown"),
+    wsOk: z.boolean(),
+    sipRegisterOk: z.boolean(),
+    rtpCandidatePresent: z.boolean().optional(),
+    durationMs: z.number().int().min(0).max(120000).optional(),
+    platform: z.enum(["WEB", "IOS", "ANDROID"]).optional(),
+    errorCode: z.string().max(120).optional()
+  }).parse(req.body || {});
+
+  const verified = verifyMediaTestToken(input.token);
+  if (!verified) return reply.status(400).send({ error: "INVALID_MEDIA_TEST_TOKEN" });
+  if (verified.tenantId !== user.tenantId) return reply.status(403).send({ error: "forbidden" });
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  if (verified.userId !== user.sub && !isAdmin) return reply.status(403).send({ error: "forbidden" });
+
+  const run = await db.mediaTestRun.findFirst({ where: { id: verified.runId, tokenId: verified.tokenId, tenantId: user.tenantId } });
+  if (!run) return reply.status(404).send({ error: "MEDIA_TEST_RUN_NOT_FOUND" });
+  if (run.completedAt) return { ok: true, runId: run.id, status: run.status };
+  if (run.expiresAt.getTime() < Date.now()) {
+    await db.mediaTestRun.update({ where: { id: run.id }, data: { status: "FAILED", completedAt: new Date(), details: { errorCode: "EXPIRED" } as any } });
+    return reply.status(400).send({ error: "MEDIA_TEST_RUN_EXPIRED" });
+  }
+
+  const now = new Date();
+  const rtpAnchored = !!input.hasRelay || !!input.rtpCandidatePresent;
+  const passed = !!input.wsOk && !!input.sipRegisterOk && rtpAnchored;
+  const errorCode = passed
+    ? null
+    : (input.errorCode || (!input.wsOk ? "WS_NOT_OK" : (!input.sipRegisterOk ? "SIP_REGISTER_FAILED" : "NO_RELAY_PATH")));
+
+  const details = {
+    iceSelectedPairType: input.iceSelectedPairType,
+    hasRelay: !!input.hasRelay,
+    rtpAnchored,
+    durationMs: input.durationMs || null,
+    errorCode
+  };
+
+  await db.mediaTestRun.update({
+    where: { id: run.id },
+    data: {
+      completedAt: now,
+      status: passed ? "PASSED" : "FAILED",
+      platform: input.platform || run.platform,
+      details: details as any
+    }
+  });
+
+  await db.tenant.update({
+    where: { id: user.tenantId },
+    data: passed
+      ? {
+          mediaTestStatus: "PASSED",
+          mediaTestedAt: now,
+          mediaLastErrorCode: null,
+          mediaLastErrorAt: null
+        }
+      : {
+          mediaTestStatus: "FAILED",
+          mediaTestedAt: now,
+          mediaLastErrorCode: errorCode,
+          mediaLastErrorAt: now
+        }
+  });
+
+  await db.alert.create({
+    data: {
+      tenantId: user.tenantId,
+      severity: passed ? "INFO" : "MEDIUM",
+      category: "VOICE_DIAG",
+      message: passed ? "Media reliability test passed" : "Media reliability test failed",
+      metadata: details as any
+    }
+  }).catch(() => undefined);
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: passed ? "VOICE_MEDIA_TEST_PASSED" : "VOICE_MEDIA_TEST_FAILED", entityType: "MediaTestRun", entityId: run.id });
+
+  return { ok: true, runId: run.id, status: passed ? "PASSED" : "FAILED", mediaTestStatus: passed ? "PASSED" : "FAILED", mediaTestedAt: now };
 });
 
 app.get("/voice/me/extension", async (req, reply) => {
@@ -2803,7 +3029,7 @@ app.post("/voice/diag/event", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
     sessionId: z.string(),
-    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR"]),
+    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN"]),
     payload: z.any().optional()
   }).parse(req.body || {});
 
@@ -3172,7 +3398,11 @@ app.get("/admin/voice/turn/tenants", async (req, reply) => {
       turnValidationStatus: true,
       turnValidatedAt: true,
       turnLastErrorCode: true,
-      turnLastErrorAt: true
+      turnLastErrorAt: true,
+      mediaReliabilityGateEnabled: true,
+      mediaTestStatus: true,
+      mediaTestedAt: true,
+      mediaLastErrorCode: true
     },
     orderBy: { createdAt: "desc" },
     take: 300
@@ -3328,7 +3558,16 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   if (action === "ACCEPT") {
     const tenant = await db.tenant.findUnique({
       where: { id: user.tenantId },
-      select: { turnRequiredForMobile: true, turnValidationStatus: true, turnValidatedAt: true }
+      select: {
+        turnRequiredForMobile: true,
+        turnValidationStatus: true,
+        turnValidatedAt: true,
+        mediaReliabilityGateEnabled: true,
+        mediaTestStatus: true,
+        mediaTestedAt: true,
+        mediaLastErrorCode: true,
+        mediaLastErrorAt: true
+      }
     });
     if (tenant?.turnRequiredForMobile && !isTurnRecentlyVerified(tenant)) {
       return {
@@ -3338,6 +3577,18 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
         inviteId: existing.id,
         turnValidationStatus: tenant.turnValidationStatus,
         turnValidatedAt: tenant.turnValidatedAt || null
+      };
+    }
+    if (tenant?.mediaReliabilityGateEnabled && !isMediaTestRecentlyPassed(tenant)) {
+      return {
+        ok: false,
+        code: "MEDIA_TEST_REQUIRED_NOT_PASSED",
+        status: existing.status,
+        inviteId: existing.id,
+        mediaTestStatus: tenant.mediaTestStatus || "UNKNOWN",
+        mediaTestedAt: tenant.mediaTestedAt || null,
+        mediaLastErrorCode: tenant.mediaLastErrorCode || null,
+        mediaLastErrorAt: tenant.mediaLastErrorAt || null
       };
     }
     const claimed = await db.$transaction(async (tx) => {

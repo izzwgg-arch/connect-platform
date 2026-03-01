@@ -35,12 +35,23 @@ type TurnState = {
   lastErrorAt: string | null;
 };
 
+type MediaState = {
+  ok: boolean;
+  mediaReliabilityGateEnabled: boolean;
+  mediaTestStatus: "UNKNOWN" | "PASSED" | "FAILED" | "STALE";
+  mediaTestedAt: string | null;
+  mediaLastErrorCode: string | null;
+  mediaLastErrorAt: string | null;
+  recentRun?: any;
+};
+
 export default function VoiceDiagnosticsPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [events, setEvents] = useState<EventRow[]>([]);
   const [msg, setMsg] = useState<string>("");
   const [turn, setTurn] = useState<TurnState | null>(null);
+  const [media, setMedia] = useState<MediaState | null>(null);
   const [turnUrlsInput, setTurnUrlsInput] = useState<string>("");
   const [turnUsernameInput, setTurnUsernameInput] = useState<string>("");
   const [turnCredentialInput, setTurnCredentialInput] = useState<string>("");
@@ -69,6 +80,13 @@ export default function VoiceDiagnosticsPage() {
     setTurn(json);
     setTurnUrlsInput((json?.effective?.urls || []).join("\n"));
     setTurnUsernameInput(json?.effective?.username || "");
+  }
+
+  async function loadMedia() {
+    const res = await fetch(`${apiBase}/voice/media-test/status`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json().catch(() => null);
+    if (!json) return;
+    setMedia(json);
   }
 
   async function saveTurnConfig() {
@@ -100,6 +118,55 @@ export default function VoiceDiagnosticsPage() {
     const out = await res.json().catch(() => ({}));
     setMsg(res.ok ? `Mobile reliability mode ${nextValue ? "enabled" : "disabled"}.` : String(out?.error || "Failed to update mobile reliability mode"));
     await loadTurn();
+  }
+
+  async function toggleMediaGate(nextValue: boolean) {
+    const res = await fetch(`${apiBase}/voice/media-test/status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ mediaReliabilityGateEnabled: nextValue })
+    });
+    const out = await res.json().catch(() => ({}));
+    setMsg(res.ok ? `Media reliability gate ${nextValue ? "enabled" : "disabled"}.` : String(out?.error || "Failed to update media gate"));
+    await loadMedia();
+  }
+
+  async function runMediaTest() {
+    setMsg("Starting media reliability test...");
+    const startRes = await fetch(`${apiBase}/voice/media-test/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ platform: "WEB" })
+    });
+    const startJson = await startRes.json().catch(() => ({}));
+    if (!startRes.ok || !startJson?.token) {
+      setMsg(String(startJson?.error || "Unable to start media test"));
+      return;
+    }
+
+    const hasRelay = sessions.some((s) => s.iceHasTurn);
+    const wsOk = sessions.some((s) => String(s.lastRegState || "").toUpperCase() === "REGISTERED") || sessions.length > 0;
+    const sipRegisterOk = sessions.some((s) => String(s.lastRegState || "").toUpperCase() === "REGISTERED");
+    const iceSelectedPairType = hasRelay ? "relay" : "unknown";
+
+    const reportRes = await fetch(`${apiBase}/voice/media-test/report`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        token: startJson.token,
+        hasRelay,
+        wsOk,
+        sipRegisterOk,
+        rtpCandidatePresent: hasRelay,
+        iceSelectedPairType,
+        durationMs: 150,
+        platform: "WEB",
+        ...(wsOk && sipRegisterOk && hasRelay ? {} : { errorCode: !wsOk ? "WS_NOT_OK" : (!sipRegisterOk ? "SIP_REGISTER_FAILED" : "NO_RELAY_PATH") })
+      })
+    });
+    const report = await reportRes.json().catch(() => ({}));
+    setMsg(reportRes.ok ? `Media test ${String(report?.status || "done")}` : String(report?.error || "Media test report failed"));
+    await loadMedia();
   }
 
   async function testTurn() {
@@ -143,6 +210,7 @@ export default function VoiceDiagnosticsPage() {
     if (!token) return;
     loadSessions().catch(() => undefined);
     loadTurn().catch(() => undefined);
+    loadMedia().catch(() => undefined);
   }, [token]);
 
   useEffect(() => {
@@ -151,15 +219,26 @@ export default function VoiceDiagnosticsPage() {
   }, [selected, token]);
 
   const statusClass = turn?.status === "VERIFIED" ? "status-chip live" : turn?.status === "FAILED" ? "status-chip failed" : "status-chip pending";
+  const mediaClass = media?.mediaTestStatus === "PASSED" ? "status-chip live" : media?.mediaTestStatus === "FAILED" ? "status-chip failed" : "status-chip pending";
 
   return (
     <div className="card">
       <h1>Voice Diagnostics</h1>
-      <p>Active sessions, TURN validation, and event timelines for tenant troubleshooting.</p>
+      <p>Active sessions, TURN validation, media gate status, and event timelines for tenant troubleshooting.</p>
       <button onClick={() => loadSessions().catch(() => undefined)}>Refresh Sessions</button>{" "}
       <button onClick={() => loadTurn().catch(() => undefined)}>Refresh TURN</button>{" "}
+      <button onClick={() => loadMedia().catch(() => undefined)}>Refresh Media</button>{" "}
       <button onClick={testTurn}>Test TURN Now</button>
       {msg ? <p className="status-chip pending" style={{ borderRadius: 2 }}>{msg}</p> : null}
+
+      <h3>Media Reliability</h3>
+      <p>Status: <span className={mediaClass}>{media?.mediaTestStatus || "UNKNOWN"}</span> / Last tested: {media?.mediaTestedAt ? new Date(media.mediaTestedAt).toLocaleString() : "never"}</p>
+      <p>Last error: {media?.mediaLastErrorCode ? `${media.mediaLastErrorCode} (${media.mediaLastErrorAt ? new Date(media.mediaLastErrorAt).toLocaleString() : ""})` : "-"}</p>
+      <label style={{ display: "block", marginBottom: 8 }}>
+        <input type="checkbox" checked={!!media?.mediaReliabilityGateEnabled} onChange={(e) => toggleMediaGate(e.target.checked).catch(() => undefined)} />{" "}
+        Enable Media Reliability Gate
+      </label>
+      <button onClick={() => runMediaTest().catch(() => undefined)}>Run Media Test</button>
 
       <h3>TURN</h3>
       <p>Status: <span className={statusClass}>{turn?.status || "UNKNOWN"}</span> / Last validated: {turn?.validatedAt ? new Date(turn.validatedAt).toLocaleString() : "never"}</p>

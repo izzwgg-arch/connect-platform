@@ -157,7 +157,7 @@ export async function heartbeatVoiceDiagSession(token: string, input: {
 
 export async function postVoiceDiagEvent(token: string, input: {
   sessionId: string;
-  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR";
+  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR" | "MEDIA_TEST_RUN";
   payload?: any;
 }) {
   const res = await fetch(`${API_BASE}/voice/diag/event`, {
@@ -167,6 +167,48 @@ export async function postVoiceDiagEvent(token: string, input: {
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "VOICE_DIAG_EVENT_FAILED");
+  return json;
+}
+
+
+export async function startMediaTest(token: string, input?: { platform?: "WEB" | "IOS" | "ANDROID" }) {
+  const res = await fetch(`${API_BASE}/voice/media-test/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input || {})
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MEDIA_TEST_START_FAILED");
+  return json as { ok: boolean; runId: string; token: string; expiresAt: string; platform: "WEB" | "IOS" | "ANDROID" };
+}
+
+export async function reportMediaTest(token: string, input: {
+  token: string;
+  hasRelay: boolean;
+  iceSelectedPairType: "host" | "srflx" | "relay" | "unknown";
+  wsOk: boolean;
+  sipRegisterOk: boolean;
+  rtpCandidatePresent?: boolean;
+  durationMs?: number;
+  platform?: "WEB" | "IOS" | "ANDROID";
+  errorCode?: string;
+}) {
+  const res = await fetch(`${API_BASE}/voice/media-test/report`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MEDIA_TEST_REPORT_FAILED");
+  return json;
+}
+
+export async function getMediaTestStatus(token: string) {
+  const res = await fetch(`${API_BASE}/voice/media-test/status`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MEDIA_TEST_STATUS_FAILED");
   return json;
 }
 

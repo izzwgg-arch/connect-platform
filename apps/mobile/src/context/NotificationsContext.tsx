@@ -3,7 +3,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Alert, Platform } from "react-native";
-import { getPendingInvites, heartbeatVoiceDiagSession, postVoiceDiagEvent, registerMobileDevice, respondInvite, startVoiceDiagSession, unregisterMobileDevice } from "../api/client";
+import { getMediaTestStatus, getPendingInvites, heartbeatVoiceDiagSession, postVoiceDiagEvent, registerMobileDevice, reportMediaTest, respondInvite, startMediaTest, startVoiceDiagSession, unregisterMobileDevice } from "../api/client";
 import { useAuth } from "./AuthContext";
 import { useSip } from "./SipContext";
 import { endNativeCall, setupNativeCalling, showIncomingNativeCall, subscribeNativeCallActions } from "../sip/callkeep";
@@ -13,6 +13,7 @@ type NotificationsState = {
   expoPushToken: string | null;
   incomingInvite: CallInvite | null;
   clearIncomingInvite: () => void;
+  runMediaTest: () => Promise<void>;
 };
 
 const NotificationsCtx = createContext<NotificationsState | undefined>(undefined);
@@ -77,6 +78,40 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const lastRegStateRef = React.useRef<string>("idle");
   const lastCallStateRef = React.useRef<string>("idle");
 
+
+  const runMediaTest = React.useCallback(async () => {
+    if (!token) return;
+    const status = await getMediaTestStatus(token).catch(() => null);
+    if (!status?.mediaReliabilityGateEnabled) return;
+
+    const started = await startMediaTest(token, { platform: Platform.OS === "ios" ? "IOS" : "ANDROID" }).catch(() => null);
+    if (!started?.token) return;
+
+    const wsOk = String(sip.registrationState || "").toLowerCase() === "registered";
+    const sipRegisterOk = wsOk;
+    const hasRelay = false;
+
+    await reportMediaTest(token, {
+      token: started.token,
+      hasRelay,
+      iceSelectedPairType: "unknown",
+      wsOk,
+      sipRegisterOk,
+      rtpCandidatePresent: false,
+      durationMs: 120,
+      platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
+      ...(wsOk && sipRegisterOk ? {} : { errorCode: "MOBILE_DIAG_NOT_REGISTERED" })
+    }).catch(() => undefined);
+
+    if (diagSessionIdRef.current) {
+      await postVoiceDiagEvent(token, {
+        sessionId: diagSessionIdRef.current,
+        type: "MEDIA_TEST_RUN",
+        payload: { wsOk, sipRegisterOk, hasRelay, source: "mobile_optional_action" }
+      }).catch(() => undefined);
+    }
+  }, [token, sip.registrationState]);
+
   useEffect(() => {
     setupNativeCalling().catch(() => undefined);
 
@@ -89,6 +124,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
           if (resp?.code === "TURN_REQUIRED_NOT_VERIFIED") {
             Alert.alert("TURN not verified", "TURN not verified. Ask admin to test TURN in the portal.");
+            await respondInvite(token, incomingInvite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+          }
+          if (resp?.code === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
+            Alert.alert("Media test required", "Media reliability gate requires a recent passing media test.");
             await respondInvite(token, incomingInvite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
           }
           setIncomingInvite(null);
@@ -162,6 +201,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       }).catch(() => null);
       if (session?.sessionId) diagSessionIdRef.current = String(session.sessionId);
 
+      // Optional diagnostics action: if tenant gate is enabled, submit lightweight media self-test signal.
+      runMediaTest().catch(() => undefined);
+
       const pending = await getPendingInvites(token).catch(() => []);
       if (pending.length > 0) {
         const invite = pending[0] as CallInvite;
@@ -211,7 +253,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         unregisterMobileDevice(token, currentToken).catch(() => undefined);
       }
     };
-  }, [token, sip]);
+  }, [token, sip, runMediaTest]);
 
 
   useEffect(() => {
@@ -259,9 +301,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     () => ({
       expoPushToken,
       incomingInvite,
-      clearIncomingInvite: () => setIncomingInvite(null)
+      clearIncomingInvite: () => setIncomingInvite(null),
+      runMediaTest
     }),
-    [expoPushToken, incomingInvite]
+    [expoPushToken, incomingInvite, runMediaTest]
   );
 
   return <NotificationsCtx.Provider value={value}>{children}</NotificationsCtx.Provider>;

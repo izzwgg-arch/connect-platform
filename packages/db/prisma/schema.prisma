@@ -163,6 +163,20 @@ enum VoiceDiagEventType {
   CALL_CONNECTED
   CALL_ENDED
   ERROR
+  MEDIA_TEST_RUN
+}
+
+enum MediaTestStatus {
+  UNKNOWN
+  PASSED
+  FAILED
+  STALE
+}
+
+enum MediaTestRunStatus {
+  QUEUED
+  PASSED
+  FAILED
 }
 
 enum CallInviteStatus {
@@ -214,6 +228,11 @@ model Tenant {
   turnValidatedAt               DateTime?
   turnLastErrorCode             String?
   turnLastErrorAt               DateTime?
+  mediaReliabilityGateEnabled   Boolean                @default(false)
+  mediaTestStatus               MediaTestStatus        @default(UNKNOWN)
+  mediaTestedAt                 DateTime?
+  mediaLastErrorCode            String?
+  mediaLastErrorAt              DateTime?
   createdAt                     DateTime               @default(now())
   users                         User[]
   tenDlcSubs                    TenDlcSubmission[]
@@ -234,6 +253,7 @@ model Tenant {
   callInvites                   CallInvite[]
   voiceClientSessions           VoiceClientSession[]
   voiceDiagEvents               VoiceDiagEvent[]
+  mediaTestRuns                 MediaTestRun[]
   turnConfigs                   TurnConfig[]
   turnValidationJobs            TurnValidationJob[]
   mobileProvisioningTokens      MobileProvisioningToken[]
@@ -266,6 +286,7 @@ model User {
   voiceClientSessions        VoiceClientSession[]
   voiceDiagEvents            VoiceDiagEvent[]
   requestedTurnValidationJobs TurnValidationJob[] @relation("TurnValidationRequestedBy")
+  requestedMediaTestRuns     MediaTestRun[]      @relation("MediaTestRequestedBy")
   mobileProvisioningTokens    MobileProvisioningToken[]
 }
 
@@ -756,6 +777,25 @@ model TurnValidationJob {
 
   @@index([tenantId, requestedAt])
   @@index([status, expiresAt])
+}
+
+model MediaTestRun {
+  id              String             @id @default(cuid())
+  tenantId        String
+  userId          String
+  tokenId         String             @unique
+  expiresAt       DateTime
+  createdAt       DateTime           @default(now())
+  completedAt     DateTime?
+  status          MediaTestRunStatus @default(QUEUED)
+  platform        VoiceClientPlatform
+  details         Json?
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedByUser User               @relation("MediaTestRequestedBy", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, platform])
 }
 
 model VoiceClientSession {

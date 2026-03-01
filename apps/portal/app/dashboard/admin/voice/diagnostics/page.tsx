@@ -109,18 +109,20 @@ export default function AdminVoiceDiagnosticsPage() {
         Show FAILED/STALE/UNKNOWN + REQUIRED only
       </label>
       <table>
-        <thead><tr><th>Tenant</th><th>Required</th><th>Status</th><th>Validated</th><th>Last Error</th></tr></thead>
+        <thead><tr><th>Tenant</th><th>TURN Required</th><th>TURN Status</th><th>Media Gate</th><th>Media Status</th><th>Validated/Tested</th><th>Last Error</th></tr></thead>
         <tbody>
           {turnTenants.map((t) => (
             <tr key={t.id}>
               <td>{t.name}</td>
               <td>{t.turnRequiredForMobile ? "yes" : "no"}</td>
               <td>{t.turnValidationStatus}</td>
-              <td>{t.turnValidatedAt ? new Date(t.turnValidatedAt).toLocaleString() : "-"}</td>
-              <td>{t.turnLastErrorCode || "-"}</td>
+              <td>{t.mediaReliabilityGateEnabled ? "yes" : "no"}</td>
+              <td>{t.mediaTestStatus || "UNKNOWN"}</td>
+              <td>{t.turnValidatedAt ? new Date(t.turnValidatedAt).toLocaleString() : "-"} / {t.mediaTestedAt ? new Date(t.mediaTestedAt).toLocaleString() : "-"}</td>
+              <td>{t.mediaLastErrorCode || t.turnLastErrorCode || "-"}</td>
             </tr>
           ))}
-          {!turnTenants.length ? <tr><td colSpan={5}>No tenant TURN rows.</td></tr> : null}
+          {!turnTenants.length ? <tr><td colSpan={7}>No tenant TURN/media rows.</td></tr> : null}
         </tbody>
       </table>
 

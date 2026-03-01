@@ -751,6 +751,79 @@ async function runTurnValidationMaintenanceCycle(): Promise<void> {
   }
 }
 
+
+async function runMediaReliabilityMaintenanceCycle(): Promise<void> {
+  const now = new Date();
+  const staleCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const since5m = new Date(Date.now() - 5 * 60 * 1000);
+
+  const staleCandidates = await db.tenant.findMany({
+    where: {
+      mediaTestStatus: "PASSED",
+      mediaTestedAt: { lt: staleCutoff }
+    },
+    select: { id: true }
+  });
+
+  for (const tenant of staleCandidates) {
+    await db.tenant.update({
+      where: { id: tenant.id },
+      data: { mediaTestStatus: "STALE" }
+    });
+  }
+
+  const gateBlocked = await db.tenant.findMany({
+    where: {
+      mediaReliabilityGateEnabled: true,
+      OR: [
+        { mediaTestStatus: { not: "PASSED" } },
+        { mediaTestedAt: null },
+        { mediaTestedAt: { lt: staleCutoff } }
+      ]
+    },
+    select: { id: true, mediaTestStatus: true, mediaTestedAt: true, mediaLastErrorCode: true }
+  });
+
+  for (const tenant of gateBlocked) {
+    const exists = await db.alert.findFirst({
+      where: {
+        tenantId: tenant.id,
+        category: "VOICE_DIAG",
+        message: "Media reliability gate enabled but tenant is not PASSED",
+        createdAt: { gte: since5m }
+      }
+    });
+    if (exists) continue;
+
+    await db.alert.create({
+      data: {
+        tenantId: tenant.id,
+        severity: "MEDIUM",
+        category: "VOICE_DIAG",
+        message: "Media reliability gate enabled but tenant is not PASSED",
+        metadata: {
+          mediaTestStatus: tenant.mediaTestStatus,
+          mediaTestedAt: tenant.mediaTestedAt,
+          mediaLastErrorCode: tenant.mediaLastErrorCode || null
+        } as any
+      }
+    });
+
+    await db.auditLog.create({
+      data: {
+        tenantId: tenant.id,
+        action: "VOICE_MEDIA_GATE_ALERT",
+        entityType: "Tenant",
+        entityId: tenant.id
+      }
+    }).catch(() => undefined);
+  }
+
+  if (staleCandidates.length > 0 || gateBlocked.length > 0) {
+    console.log(`media reliability maintenance: staleTenants=${staleCandidates.length}, gateBlocked=${gateBlocked.length}`);
+  }
+}
+
 async function runPbxCdrSyncCycle(): Promise<void> {
   const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
   for (const link of links) {
@@ -1052,9 +1125,14 @@ setInterval(() => {
   runTurnValidationMaintenanceCycle().catch((err) => console.error("turn validation maintenance failed", err?.message || err));
 }, 5 * 60 * 1000);
 
+setInterval(() => {
+  runMediaReliabilityMaintenanceCycle().catch((err) => console.error("media reliability maintenance failed", err?.message || err));
+}, 5 * 60 * 1000);
+
 runCallInviteExpiryCycle().catch((err) => console.error("initial call invite expiry failed", err?.message || err));
 runVoiceDiagAlertCycle().catch((err) => console.error("initial voice diag alert cycle failed", err?.message || err));
 runTurnValidationMaintenanceCycle().catch((err) => console.error("initial turn validation maintenance failed", err?.message || err));
+runMediaReliabilityMaintenanceCycle().catch((err) => console.error("initial media reliability maintenance failed", err?.message || err));
 runPbxActiveCallPollCycle().catch((err) => console.error("initial pbx active call poll failed", err?.message || err));
 
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));
