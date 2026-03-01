@@ -22,3 +22,24 @@ node_modules/
 
 # prisma artifacts (keep migrations)
 prisma/dev.db
+
+# workspace/generated artifacts
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+.turbo
+**/.turbo
+coverage
+**/coverage
+.pnpm-store
+**/.pnpm-store
+ops/logs
+**/ops/logs
+ops/snapshots
+**/ops/snapshots
+**/*.log
