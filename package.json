@@ -15,7 +15,9 @@
     "smoke:pbx": "node scripts/smoke-v1.1.0.mjs",
     "mobile:start": "pnpm --filter @connect/mobile start",
     "mobile:android": "pnpm --filter @connect/mobile android",
-    "mobile:ios": "pnpm --filter @connect/mobile ios"
+    "mobile:ios": "pnpm --filter @connect/mobile ios",
+    "build:changed": "bash scripts/build-changed.sh",
+    "smoke:fast": "bash scripts/smoke-fast.sh"
   },
   "devDependencies": {
     "eslint": "^9.36.0",

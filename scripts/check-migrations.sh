@@ -16,7 +16,7 @@ EXPECTED_MIGRATION="$(ls -1 packages/db/prisma/migrations | grep -E '^[0-9]{14}_
 
 log "expected latest migration: ${EXPECTED_MIGRATION}"
 
-if ! docker compose -f "$COMPOSE_FILE" exec -T api sh -lc 'cd /app && pnpm --filter @connect/db exec prisma migrate status --schema prisma/schema.prisma' >/tmp/check-migrations-status.txt 2>/tmp/check-migrations-status.err; then
+if ! /opt/connectcomms/ops/run-heavy.sh "check-migrations:prisma-status" -- docker compose -f "$COMPOSE_FILE" exec -T api sh -lc 'cd /app && pnpm --filter @connect/db exec prisma migrate status --schema prisma/schema.prisma' >/tmp/check-migrations-status.txt 2>/tmp/check-migrations-status.err; then
   cat /tmp/check-migrations-status.err >&2 || true
   fail "Unable to run prisma migrate status inside api container (DB may be unreachable or api not ready)"
 fi

@@ -14,6 +14,16 @@ INFRA_ENV="/opt/connectcomms/infra/.env"
 log(){ echo "[v1.3.8] $*"; }
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 
+run_compose() {
+  local label="$1"
+  local cmd="$2"
+  if [[ "${FORCE_REBUILD:-0}" == "1" ]]; then
+    cmd="${cmd/ up -d / up -d --build }"
+    log "FORCE_REBUILD=1 -> ${label} uses --build"
+  fi
+  /opt/connectcomms/ops/run-heavy.sh "$label" -- bash -lc "$cmd"
+}
+
 api(){
   local method="$1" path="$2" token="${3:-}" body="${4:-}"
   local headers=(-H "content-type: application/json")
@@ -27,7 +37,7 @@ api(){
 
 log "starting mobile provisioning token smoke"
 cd "$REPO_ROOT"
-MOBILE_PUSH_SIMULATE=true PBX_SIMULATE=true VOICE_SIMULATE=true docker compose -f docker-compose.app.yml up -d api worker >/dev/null
+run_compose "smoke-v1.3.8.sh:compose-up" "MOBILE_PUSH_SIMULATE=true PBX_SIMULATE=true VOICE_SIMULATE=true docker compose -f docker-compose.app.yml up -d api worker >/dev/null"
 
 for _ in $(seq 1 40); do
   if curl -fsS "$BASE_URL/health" >/dev/null; then break; fi

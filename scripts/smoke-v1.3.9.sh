@@ -17,6 +17,16 @@ INFRA_ENV="/opt/connectcomms/infra/.env"
 log(){ echo "[v1.3.9] $*"; }
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 
+run_compose() {
+  local label="$1"
+  local cmd="$2"
+  if [[ "${FORCE_REBUILD:-0}" == "1" ]]; then
+    cmd="${cmd/ up -d / up -d --build }"
+    log "FORCE_REBUILD=1 -> ${label} uses --build"
+  fi
+  /opt/connectcomms/ops/run-heavy.sh "$label" -- bash -lc "$cmd"
+}
+
 api(){
   local method="$1" path="$2" token="${3:-}" body="${4:-}" header="${5:-}"
   local headers=(-H "content-type: application/json")
@@ -36,7 +46,7 @@ query_status_by_invite(){
 
 log "starting invite lifecycle smoke"
 cd "$REPO_ROOT"
-PBX_WEBHOOK_VERIFY_MODE=token PBX_WEBHOOK_TOKEN="$WEBHOOK_TOKEN" MOBILE_PUSH_SIMULATE=true PBX_SIMULATE=true VOICE_SIMULATE=true docker compose -f docker-compose.app.yml up -d api worker >/dev/null
+run_compose "smoke-v1.3.9.sh:compose-up" "PBX_WEBHOOK_VERIFY_MODE=token PBX_WEBHOOK_TOKEN=\"$WEBHOOK_TOKEN\" MOBILE_PUSH_SIMULATE=true PBX_SIMULATE=true VOICE_SIMULATE=true docker compose -f docker-compose.app.yml up -d api worker >/dev/null"
 
 for _ in $(seq 1 40); do
   if curl -fsS "$BASE_URL/health" >/dev/null; then break; fi

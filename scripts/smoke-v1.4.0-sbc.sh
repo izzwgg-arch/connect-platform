@@ -7,13 +7,23 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 log(){ echo "[v1.4.0-sbc] $*"; }
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 
+run_compose() {
+  local label="$1"
+  local cmd="$2"
+  if [[ "${FORCE_REBUILD:-0}" == "1" ]]; then
+    cmd="${cmd/ up -d / up -d --build }"
+    log "FORCE_REBUILD=1 -> ${label} uses --build"
+  fi
+  /opt/connectcomms/ops/run-heavy.sh "$label" -- bash -lc "$cmd"
+}
+
 log "starting SBC smoke"
 cd "$REPO_ROOT"
 
-docker compose -f docker-compose.app.yml up -d api >/dev/null
+run_compose "smoke-v1.4.0-sbc.sh:compose-up" "docker compose -f docker-compose.app.yml up -d api >/dev/null"
 PBX_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' app-api-1 2>/dev/null | head -n1 | tr -d '\r')"
 [[ -n "$PBX_IP" ]] || fail "unable to resolve app-api-1 container IP"
-SBC_PBX_HOST="$PBX_IP" docker compose -f docker-compose.sbc.yml up -d >/dev/null
+run_compose "smoke-v1.4.0-sbc.sh:compose-up" "SBC_PBX_HOST=\"$PBX_IP\" docker compose -f docker-compose.sbc.yml up -d >/dev/null"
 
 for _ in $(seq 1 30); do
   k_state="$(docker inspect -f '{{.State.Running}}' sbc-kamailio 2>/dev/null || true)"
