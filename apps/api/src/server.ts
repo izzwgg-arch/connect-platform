@@ -189,9 +189,11 @@ async function getTenantPbxLinkOrThrow(tenantId: string) {
 function resolveWebrtcConfig(tenant: any, link: any) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
   const configuredIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
+  // Default WebRTC SIP signaling path is nginx /sip, which proxies WSS to Kamailio internally.
+  const defaultSipWsUrl = "wss://app.connectcomunications.com/sip";
   return {
     webrtcEnabled: !!tenant?.webrtcEnabled,
-    sipWsUrl: tenant?.sipWsUrl || process.env.PBX_WS_ENDPOINT || null,
+    sipWsUrl: tenant?.sipWsUrl?.trim() || defaultSipWsUrl,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
     iceServers: configuredIce.length ? configuredIce : DEFAULT_ICE_SERVERS,
