@@ -203,6 +203,7 @@ model Tenant {
   smsSubscriptionRequired       Boolean                @default(true)
   smsBillingEnforced            Boolean                @default(true)
   webrtcEnabled                 Boolean                @default(false)
+  webrtcRouteViaSbc             Boolean                @default(false)
   sipWsUrl                      String?
   sipDomain                     String?
   iceServers                    Json?

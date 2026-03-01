@@ -189,11 +189,15 @@ async function getTenantPbxLinkOrThrow(tenantId: string) {
 function resolveWebrtcConfig(tenant: any, link: any) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
   const configuredIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
-  // Default WebRTC SIP signaling path is nginx /sip, which proxies WSS to Kamailio internally.
-  const defaultSipWsUrl = "wss://app.connectcomunications.com/sip";
+  const explicitSipWsUrl = tenant?.sipWsUrl?.trim() || null;
+  // /sip is the public nginx websocket path that proxies internally to Kamailio on the SBC layer.
+  const fallbackSipWsUrl = tenant?.webrtcRouteViaSbc
+    ? "wss://app.connectcomunications.com/sip"
+    : (process.env.PBX_WS_ENDPOINT || null);
   return {
     webrtcEnabled: !!tenant?.webrtcEnabled,
-    sipWsUrl: tenant?.sipWsUrl?.trim() || defaultSipWsUrl,
+    webrtcRouteViaSbc: !!tenant?.webrtcRouteViaSbc,
+    sipWsUrl: explicitSipWsUrl || fallbackSipWsUrl,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
     iceServers: configuredIce.length ? configuredIce : DEFAULT_ICE_SERVERS,
@@ -327,6 +331,12 @@ function maskHostOnly(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function maskHostLabel(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "[unset]";
+  return maskValue(normalized, 2, 2) || "[hidden]";
 }
 
 function normalizeVoiceRegState(v: unknown): "IDLE" | "REGISTERING" | "REGISTERED" | "FAILED" {
@@ -1239,6 +1249,28 @@ app.get("/admin/sbc/status", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   return probeSbcStatus();
+});
+
+app.get("/voice/sbc/status", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const status = await probeSbcStatus();
+  return {
+    ok: true,
+    route: { publicPath: "/sip", publicSipWsUrl: "wss://app.connectcomunications.com/sip" },
+    services: {
+      kamailio: status.kamailio,
+      rtpengine: status.rtpengine,
+      pbxViaSbc: status.pbx_via_sbc
+    },
+    targets: {
+      kamailioHost: maskHostLabel(sbcKamailioHost),
+      rtpengineHost: maskHostLabel(sbcRtpengineHost),
+      pbxHost: maskHostLabel(sbcPbxHost),
+      pbxPort: sbcPbxPort
+    }
+  };
 });
 
 app.get("/health", async () => ({ ok: true }));
@@ -2421,6 +2453,63 @@ const iceServerSchema = z.object({
   credential: z.string().optional()
 });
 
+app.get("/voice/webrtc/settings", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const [tenant, link] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: admin.tenantId },
+      select: {
+        webrtcEnabled: true,
+        webrtcRouteViaSbc: true,
+        sipWsUrl: true,
+        sipDomain: true,
+        outboundProxy: true,
+        iceServers: true,
+        dtmfMode: true
+      }
+    }),
+    db.tenantPbxLink.findUnique({ where: { tenantId: admin.tenantId }, include: { pbxInstance: true } })
+  ]);
+
+  if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  const cfg = resolveWebrtcConfig(tenant, link);
+  return {
+    ok: true,
+    webrtcEnabled: cfg.webrtcEnabled,
+    webrtcRouteViaSbc: cfg.webrtcRouteViaSbc,
+    configuredSipWsUrl: tenant.sipWsUrl || null,
+    effectiveSipWsUrl: cfg.sipWsUrl,
+    effectiveSipDomain: cfg.sipDomain,
+    outboundProxy: cfg.outboundProxy,
+    dtmfMode: cfg.dtmfMode,
+    iceServerCount: Array.isArray(cfg.iceServers) ? cfg.iceServers.length : 0
+  };
+});
+
+app.put("/voice/webrtc/settings", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({ webrtcRouteViaSbc: z.boolean() }).parse(req.body || {});
+  const updated = await db.tenant.update({
+    where: { id: admin.tenantId },
+    data: { webrtcRouteViaSbc: input.webrtcRouteViaSbc }
+  });
+
+  await audit({
+    tenantId: admin.tenantId,
+    actorUserId: admin.sub,
+    action: input.webrtcRouteViaSbc ? "VOICE_WEBRTC_ROUTE_SBC_ENABLED" : "VOICE_WEBRTC_ROUTE_SBC_DISABLED",
+    entityType: "Tenant",
+    entityId: admin.tenantId
+  });
+
+  return { ok: true, webrtcRouteViaSbc: !!updated.webrtcRouteViaSbc };
+});
+
 app.get("/voice/me/extension", async (req, reply) => {
   const user = getUser(req);
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
@@ -2446,6 +2535,7 @@ app.get("/voice/me/extension", async (req, reply) => {
     sipUsername: row.pbxSipUsername,
     hasSipPassword: !!row.sipPasswordIssuedAt,
     webrtcEnabled: cfg.webrtcEnabled,
+    webrtcRouteViaSbc: cfg.webrtcRouteViaSbc,
     sipWsUrl: cfg.sipWsUrl,
     sipDomain: cfg.sipDomain,
     outboundProxy: cfg.outboundProxy,
@@ -2747,6 +2837,19 @@ app.post("/voice/diag/event", async (req, reply) => {
   }
   await db.voiceClientSession.update({ where: { id: session.id }, data: updateData });
 
+  if (input.type === "ERROR" || input.type === "WS_DISCONNECTED" || input.type === "SIP_UNREGISTER") {
+    const p: any = payload || {};
+    app.log.warn({
+      tenantId: user.tenantId,
+      userId: user.sub,
+      sessionId: session.id,
+      type: input.type,
+      code: String(p.code || p.reason || "UNKNOWN").slice(0, 120),
+      sipWsUrl: maskHostOnly(p.sipWsUrl) || session.sipWsUrl || null,
+      sipDomain: maskHostOnly(p.sipDomain) || session.sipDomain || null
+    }, "VOICE_DIAG_SIGNAL");
+  }
+
   return { ok: true, eventId: event.id };
 });
 
@@ -2760,6 +2863,30 @@ app.get("/voice/diag/sessions", async (req, reply) => {
     include: { _count: { select: { events: true } } }
   });
   return sessions;
+});
+
+app.get("/voice/diag/recent-errors", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const events = await db.voiceDiagEvent.findMany({
+    where: { tenantId: admin.tenantId, type: { in: ["ERROR", "WS_DISCONNECTED", "SIP_UNREGISTER"] } },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+
+  return events.map((e: any) => {
+    const payload = (e.payload || {}) as any;
+    return {
+      id: e.id,
+      sessionId: e.sessionId,
+      type: e.type,
+      createdAt: e.createdAt,
+      code: String(payload.code || payload.reason || e.type).slice(0, 120),
+      sipWsUrl: maskHostOnly(payload.sipWsUrl),
+      sipDomain: maskHostOnly(payload.sipDomain)
+    };
+  });
 });
 
 app.get("/voice/diag/sessions/:id/events", async (req, reply) => {
