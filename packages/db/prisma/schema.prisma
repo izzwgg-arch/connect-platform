@@ -59,6 +59,25 @@ enum WhatsAppProviderType {
   WHATSAPP_META
 }
 
+enum EmailProviderType {
+  SENDGRID
+  SMTP
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  VOID
+}
+
+enum EmailJobStatus {
+  QUEUED
+  RUNNING
+  SENT
+  FAILED
+}
+
 enum PhoneNumberStatus {
   ACTIVE
   RELEASING
@@ -271,12 +290,15 @@ model Tenant {
   providerCredentials           ProviderCredential[]
   billingSolaConfig             BillingSolaConfig?
   whatsappProviderConfigs       WhatsAppProviderConfig[]
+  emailProviderConfig           EmailProviderConfig?
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
   subscription                  Subscription?
   paymentEvents                 PaymentEvent[]
   usageLedger                   UsageLedger[]
   receipts                      Receipt[]
+  invoices                      Invoice[]
+  emailJobs                     EmailJob[]
   alerts                        Alert[]
   extensions                    Extension[]
   callRecords                   CallRecord[]
@@ -313,6 +335,8 @@ model User {
   updatedBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigUpdatedBy")
   createdWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigCreatedBy")
   updatedWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigUpdatedBy")
+  createdEmailProviderConfigs    EmailProviderConfig[]    @relation("EmailProviderConfigCreatedBy")
+  updatedEmailProviderConfigs    EmailProviderConfig[]    @relation("EmailProviderConfigUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
   ownedExtensions            Extension[]          @relation("ExtensionOwner")
@@ -598,6 +622,77 @@ model WhatsAppProviderConfig {
 
   @@unique([tenantId, provider])
   @@index([tenantId, isEnabled])
+}
+
+model EmailProviderConfig {
+  id                   String            @id @default(cuid())
+  tenantId             String            @unique
+  provider             EmailProviderType
+  fromName             String?
+  fromEmail            String?
+  replyTo              String?
+  logoUrl              String?
+  footerText           String?
+  settings             Json?
+  credentialsEncrypted String
+  credentialsKeyId     String            @default("v1")
+  isEnabled            Boolean           @default(false)
+  lastTestAt           DateTime?
+  lastTestResult       String?
+  lastTestErrorCode    String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  createdByUserId      String
+  updatedByUserId      String
+  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser        User              @relation("EmailProviderConfigCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUser        User              @relation("EmailProviderConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+}
+
+model Invoice {
+  id                   String       @id @default(cuid())
+  tenantId             String
+  customerEmail        String
+  amountCents          Int
+  currency             String       @default("USD")
+  status               InvoiceStatus @default(DRAFT)
+  dueAt                DateTime?
+  paidAt               DateTime?
+  externalPaymentLink  String?
+  payToken             String?      @unique
+  payTokenExpiresAt    DateTime?
+  providerInvoiceRef   String?
+  lastFailureReason    String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+model EmailJob {
+  id                   String         @id @default(cuid())
+  tenantId             String
+  invoiceId            String?
+  type                 String
+  toEmail              String
+  subject              String
+  htmlBody             String
+  textBody             String
+  status               EmailJobStatus @default(QUEUED)
+  attempts             Int            @default(0)
+  maxAttempts          Int            @default(5)
+  nextRunAt            DateTime       @default(now())
+  sentAt               DateTime?
+  lastErrorCode        String?
+  lastErrorMessage     String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRunAt])
+  @@index([tenantId, createdAt])
 }
 
 model AuditLog {

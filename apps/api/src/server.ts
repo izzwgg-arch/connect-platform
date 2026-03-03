@@ -119,6 +119,15 @@ type WhatsAppMetaCredentialPayload = {
   webhookSecret?: string | null;
 };
 
+type EmailProviderCredentialPayload = {
+  sendgridApiKey?: string | null;
+  smtpHost?: string | null;
+  smtpPort?: number | null;
+  smtpUser?: string | null;
+  smtpPass?: string | null;
+  smtpSecure?: boolean | null;
+};
+
 type CampaignDecision = {
   status: "QUEUED" | "NEEDS_APPROVAL";
   requiresApproval: boolean;
@@ -300,23 +309,173 @@ async function enforceBillingForLive(tenantId: string): Promise<boolean> {
 }
 
 
+async function queueEmailJob(params: {
+  tenantId: string;
+  invoiceId?: string | null;
+  type: string;
+  toEmail: string;
+  subject: string;
+  htmlBody: string;
+  textBody: string;
+}) {
+  return db.emailJob.create({
+    data: {
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId || null,
+      type: params.type,
+      toEmail: params.toEmail,
+      subject: params.subject,
+      htmlBody: params.htmlBody,
+      textBody: params.textBody,
+      status: "QUEUED",
+      attempts: 0,
+      nextRunAt: new Date()
+    }
+  });
+}
+
 async function queueReceiptEmail(params: { tenantId: string; to: string; amountCents: number; periodEnd: Date; receiptId: string }) {
-  const endpoint = process.env.BILLING_RECEIPT_EMAIL_ENDPOINT;
-  if (!endpoint) return;
-  try {
-    await fetch(endpoint, {
+  const dollars = (params.amountCents / 100).toFixed(2);
+  const due = params.periodEnd.toISOString().slice(0, 10);
+  await queueEmailJob({
+    tenantId: params.tenantId,
+    type: "PAYMENT_SUCCEEDED",
+    toEmail: params.to,
+    subject: "Your Connect Communications payment receipt",
+    htmlBody: `<p>Your payment of <strong>$${dollars}</strong> succeeded.</p><p>Next billing date: ${due}</p><p>Receipt ID: ${params.receiptId}</p>`,
+    textBody: `Payment succeeded. Amount: $${dollars}. Next billing date: ${due}. Receipt ID: ${params.receiptId}`
+  });
+}
+
+async function queueInvoiceCreatedEmail(params: { tenantId: string; invoiceId: string; to: string; amountCents: number; payUrl: string }) {
+  const dollars = (params.amountCents / 100).toFixed(2);
+  await queueEmailJob({
+    tenantId: params.tenantId,
+    invoiceId: params.invoiceId,
+    type: "INVOICE_CREATED",
+    toEmail: params.to,
+    subject: "Your Connect Communications invoice",
+    htmlBody: `<p>Invoice amount: <strong>$${dollars}</strong></p><p><a href="${params.payUrl}">Pay now</a></p>`,
+    textBody: `Invoice amount: $${dollars}. Pay now: ${params.payUrl}`
+  });
+}
+
+async function queueInvoiceDeclineEmail(params: { tenantId: string; invoiceId: string; to: string; amountCents: number; retryUrl: string }) {
+  const dollars = (params.amountCents / 100).toFixed(2);
+  await queueEmailJob({
+    tenantId: params.tenantId,
+    invoiceId: params.invoiceId,
+    type: "PAYMENT_FAILED",
+    toEmail: params.to,
+    subject: "Invoice payment failed - retry required",
+    htmlBody: `<p>Payment for invoice amount <strong>$${dollars}</strong> failed.</p><p><a href="${params.retryUrl}">Retry payment</a></p>`,
+    textBody: `Invoice payment failed for $${dollars}. Retry payment: ${params.retryUrl}`
+  });
+}
+
+async function sendEmailJobNow(job: any): Promise<void> {
+  const provider = await db.emailProviderConfig.findUnique({ where: { tenantId: job.tenantId } });
+  if (!provider || !provider.isEnabled) {
+    const err: any = new Error("EMAIL_PROVIDER_NOT_CONFIGURED");
+    err.code = "EMAIL_PROVIDER_NOT_CONFIGURED";
+    throw err;
+  }
+
+  const simulate = (process.env.EMAIL_SIMULATE || "true").toLowerCase() !== "false";
+  if (simulate) return;
+
+  const creds = decryptJson<EmailProviderCredentialPayload>(provider.credentialsEncrypted);
+  if (provider.provider === "SENDGRID") {
+    const key = String(creds.sendgridApiKey || "").trim();
+    if (!key) {
+      const err: any = new Error("SENDGRID_API_KEY_MISSING");
+      err.code = "SENDGRID_API_KEY_MISSING";
+      throw err;
+    }
+    const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
+    const fromName = provider.fromName || "Connect Communications";
+    const payload = {
+      personalizations: [{ to: [{ email: job.toEmail }] }],
+      from: { email: fromEmail, name: fromName },
+      subject: job.subject,
+      content: [
+        { type: "text/plain", value: job.textBody },
+        { type: "text/html", value: job.htmlBody }
+      ]
+    };
+    const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        to: params.to,
-        subject: "Your Connect Communications SMS Subscription Receipt",
-        amountCents: params.amountCents,
-        nextBillingDate: params.periodEnd.toISOString(),
-        receiptId: params.receiptId
-      })
+      headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify(payload)
     });
-  } catch {
-    await db.auditLog.create({ data: { tenantId: params.tenantId, action: "BILLING_RECEIPT_EMAIL_FAILED", entityType: "Receipt", entityId: params.receiptId } });
+    if (!resp.ok) {
+      const err: any = new Error("SENDGRID_SEND_FAILED");
+      err.code = "SENDGRID_SEND_FAILED";
+      throw err;
+    }
+    return;
+  }
+
+  const endpoint = process.env.SMTP_BRIDGE_ENDPOINT;
+  if (!endpoint) {
+    const err: any = new Error("SMTP_BRIDGE_MISSING");
+    err.code = "SMTP_BRIDGE_MISSING";
+    throw err;
+  }
+
+  await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      to: job.toEmail,
+      subject: job.subject,
+      html: job.htmlBody,
+      text: job.textBody,
+      smtpHost: creds.smtpHost || null,
+      smtpPort: creds.smtpPort || null,
+      smtpUser: creds.smtpUser || null,
+      smtpPass: creds.smtpPass || null,
+      smtpSecure: !!creds.smtpSecure,
+      fromName: provider.fromName || null,
+      fromEmail: provider.fromEmail || null,
+      replyTo: provider.replyTo || null
+    })
+  });
+}
+
+let emailJobProcessorRunning = false;
+
+async function processEmailJobsBatch() {
+  if (emailJobProcessorRunning) return;
+  emailJobProcessorRunning = true;
+  try {
+    const jobs = await db.emailJob.findMany({
+      where: { status: { in: ["QUEUED", "FAILED"] }, nextRunAt: { lte: new Date() }, attempts: { lt: 5 } },
+      orderBy: { createdAt: "asc" },
+      take: 10
+    });
+
+    for (const job of jobs) {
+      try {
+        await db.emailJob.update({ where: { id: job.id }, data: { status: "RUNNING", attempts: job.attempts + 1 } });
+        await sendEmailJobNow(job);
+        await db.emailJob.update({ where: { id: job.id }, data: { status: "SENT", sentAt: new Date(), lastErrorCode: null, lastErrorMessage: null } });
+      } catch (e: any) {
+        const attempts = job.attempts + 1;
+        const delayMin = Math.min(60, 2 ** attempts);
+        await db.emailJob.update({
+          where: { id: job.id },
+          data: {
+            status: "FAILED",
+            lastErrorCode: String(e?.code || "EMAIL_SEND_FAILED"),
+            lastErrorMessage: String(e?.message || "email send failed"),
+            nextRunAt: new Date(Date.now() + delayMin * 60 * 1000)
+          }
+        });
+      }
+    }
+  } finally {
+    emailJobProcessorRunning = false;
   }
 }
 
@@ -1888,7 +2047,11 @@ app.post("/auth/login", async (req, reply) => {
 
 app.addHook("preHandler", async (req, reply) => {
   const path = req.url.split("?")[0];
-  if (path.includes("/webhooks/pbx") || ["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox"].includes(path)) return;
+  if (
+    path.includes("/webhooks/pbx")
+    || path.startsWith("/billing/invoices/pay/")
+    || ["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox", "/webhooks/whatsapp/meta", "/webhooks/whatsapp/twilio/status"].includes(path)
+  ) return;
   try {
     await req.jwtVerify();
   } catch {
@@ -5599,6 +5762,290 @@ app.get("/admin/billing/sola/tenant/:id", async (req, reply) => {
   }
 });
 
+app.get("/settings/email", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const row = await db.emailProviderConfig.findUnique({ where: { tenantId: admin.tenantId } });
+  if (!row) return { configured: false, config: null };
+
+  let creds: EmailProviderCredentialPayload = {};
+  try { creds = decryptJson<EmailProviderCredentialPayload>(row.credentialsEncrypted); } catch {}
+
+  return {
+    configured: true,
+    config: {
+      provider: row.provider,
+      isEnabled: row.isEnabled,
+      fromName: row.fromName,
+      fromEmail: row.fromEmail,
+      replyTo: row.replyTo,
+      logoUrl: row.logoUrl,
+      footerText: row.footerText,
+      settings: row.settings || {},
+      masked: {
+        sendgridApiKey: creds.sendgridApiKey ? "********" : null,
+        smtpHost: maskValue(creds.smtpHost || null, 2, 2),
+        smtpPort: creds.smtpPort || null,
+        smtpUser: maskValue(creds.smtpUser || null, 2, 2),
+        smtpPass: creds.smtpPass ? "********" : null,
+        smtpSecure: typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : null
+      },
+      lastTestAt: row.lastTestAt,
+      lastTestResult: row.lastTestResult,
+      lastTestErrorCode: row.lastTestErrorCode,
+      updatedAt: row.updatedAt
+    }
+  };
+});
+
+app.put("/settings/email", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({
+    provider: z.enum(["SENDGRID", "SMTP"]),
+    fromName: z.string().min(1).max(120).optional().nullable(),
+    fromEmail: z.string().email().optional().nullable(),
+    replyTo: z.string().email().optional().nullable(),
+    logoUrl: z.string().url().optional().nullable(),
+    footerText: z.string().max(500).optional().nullable(),
+    sendgridApiKey: z.string().min(6).optional(),
+    smtpHost: z.string().min(1).optional(),
+    smtpPort: z.number().int().min(1).max(65535).optional(),
+    smtpUser: z.string().min(1).optional(),
+    smtpPass: z.string().min(1).optional(),
+    smtpSecure: z.boolean().optional()
+  }).parse(req.body || {});
+
+  const existing = await db.emailProviderConfig.findUnique({ where: { tenantId: admin.tenantId } });
+  let existingCreds: EmailProviderCredentialPayload = {};
+  if (existing) {
+    try { existingCreds = decryptJson<EmailProviderCredentialPayload>(existing.credentialsEncrypted); } catch {}
+  }
+
+  const creds: EmailProviderCredentialPayload = {
+    sendgridApiKey: input.sendgridApiKey || existingCreds.sendgridApiKey || null,
+    smtpHost: input.smtpHost || existingCreds.smtpHost || null,
+    smtpPort: input.smtpPort ?? existingCreds.smtpPort ?? null,
+    smtpUser: input.smtpUser || existingCreds.smtpUser || null,
+    smtpPass: input.smtpPass || existingCreds.smtpPass || null,
+    smtpSecure: input.smtpSecure ?? existingCreds.smtpSecure ?? null
+  };
+
+  if (input.provider === "SENDGRID" && !creds.sendgridApiKey) {
+    return reply.status(400).send({ error: "SENDGRID_API_KEY_REQUIRED" });
+  }
+  if (input.provider === "SMTP" && (!creds.smtpHost || !creds.smtpPort || !creds.smtpUser || !creds.smtpPass)) {
+    return reply.status(400).send({ error: "SMTP_CONFIG_INCOMPLETE" });
+  }
+
+  const row = await db.emailProviderConfig.upsert({
+    where: { tenantId: admin.tenantId },
+    create: {
+      tenantId: admin.tenantId,
+      provider: input.provider,
+      fromName: input.fromName || null,
+      fromEmail: input.fromEmail || null,
+      replyTo: input.replyTo || null,
+      logoUrl: input.logoUrl || null,
+      footerText: input.footerText || null,
+      settings: {},
+      credentialsEncrypted: encryptJson(creds),
+      credentialsKeyId: "v1",
+      isEnabled: false,
+      createdByUserId: admin.sub,
+      updatedByUserId: admin.sub,
+      lastTestAt: null,
+      lastTestResult: null,
+      lastTestErrorCode: null
+    },
+    update: {
+      provider: input.provider,
+      fromName: input.fromName || null,
+      fromEmail: input.fromEmail || null,
+      replyTo: input.replyTo || null,
+      logoUrl: input.logoUrl || null,
+      footerText: input.footerText || null,
+      credentialsEncrypted: encryptJson(creds),
+      credentialsKeyId: "v1",
+      isEnabled: false,
+      updatedByUserId: admin.sub,
+      lastTestAt: null,
+      lastTestResult: null,
+      lastTestErrorCode: null
+    }
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: existing ? "EMAIL_PROVIDER_UPDATED" : "EMAIL_PROVIDER_CREATED", entityType: "EmailProviderConfig", entityId: row.id });
+  return { ok: true, provider: row.provider, isEnabled: row.isEnabled, updatedAt: row.updatedAt };
+});
+
+app.post("/settings/email/test", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const row = await db.emailProviderConfig.findUnique({ where: { tenantId: admin.tenantId } });
+  if (!row) return reply.status(404).send({ error: "EMAIL_NOT_CONFIGURED" });
+
+  try {
+    const target = (row.fromEmail || "billing@connectcomunications.com").trim();
+    await queueEmailJob({
+      tenantId: admin.tenantId,
+      type: "EMAIL_TEST",
+      toEmail: target,
+      subject: "Connect Communications email test",
+      htmlBody: "<p>Email provider test successful.</p>",
+      textBody: "Email provider test successful."
+    });
+    await db.emailProviderConfig.update({ where: { tenantId: admin.tenantId }, data: { isEnabled: true, lastTestAt: new Date(), lastTestResult: "SUCCESS", lastTestErrorCode: null, updatedByUserId: admin.sub } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "EMAIL_PROVIDER_TEST_SUCCESS", entityType: "EmailProviderConfig", entityId: row.id });
+    return { ok: true };
+  } catch (e: any) {
+    await db.emailProviderConfig.update({ where: { tenantId: admin.tenantId }, data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: String(e?.code || "EMAIL_TEST_FAILED"), updatedByUserId: admin.sub } });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "EMAIL_PROVIDER_TEST_FAILED", entityType: "EmailProviderConfig", entityId: row.id });
+    return reply.status(400).send({ error: "EMAIL_TEST_FAILED" });
+  }
+});
+
+app.get("/billing/invoices", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return db.invoice.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
+});
+
+app.get("/billing/invoices/:id", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!row) return reply.status(404).send({ error: "invoice_not_found" });
+  return row;
+});
+
+app.post("/billing/invoices", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({
+    customerEmail: z.string().email(),
+    amountCents: z.number().int().positive(),
+    currency: z.string().min(3).max(3).default("USD"),
+    dueAt: z.string().datetime().optional(),
+    sendEmail: z.boolean().default(true)
+  }).parse(req.body || {});
+
+  const tokenRaw = randomBytes(18).toString("hex");
+  const payToken = `inv_${tokenRaw}`;
+  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+
+  const invoice = await db.invoice.create({
+    data: {
+      tenantId: admin.tenantId,
+      customerEmail: input.customerEmail,
+      amountCents: input.amountCents,
+      currency: input.currency,
+      status: input.sendEmail ? "SENT" : "DRAFT",
+      dueAt: input.dueAt ? new Date(input.dueAt) : null,
+      payToken,
+      payTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      externalPaymentLink: payUrl
+    }
+  });
+
+  if (input.sendEmail) {
+    await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: invoice.id, to: invoice.customerEmail, amountCents: invoice.amountCents, payUrl });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_CREATED", entityType: "Invoice", entityId: invoice.id });
+  return invoice;
+});
+
+app.post("/billing/invoices/:id/send", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+
+  const payToken = invoice.payToken || `inv_${randomBytes(18).toString("hex")}`;
+  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+  const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", payToken, payTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), externalPaymentLink: payUrl } });
+  await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, payUrl });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_SENT", entityType: "Invoice", entityId: updated.id });
+  return updated;
+});
+
+app.get("/billing/invoices/pay/:token", async (req, reply) => {
+  const { token } = req.params as { token: string };
+  const invoice = await db.invoice.findFirst({ where: { payToken: token } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.payTokenExpiresAt && invoice.payTokenExpiresAt.getTime() < Date.now()) return reply.status(410).send({ error: "invoice_token_expired" });
+  return {
+    invoiceId: invoice.id,
+    amountCents: invoice.amountCents,
+    currency: invoice.currency,
+    status: invoice.status,
+    dueAt: invoice.dueAt,
+    payToken: invoice.payToken,
+    externalPaymentLink: invoice.externalPaymentLink || null
+  };
+});
+
+app.post("/billing/invoices/pay/:token/hosted-session", async (req, reply) => {
+  const { token } = req.params as { token: string };
+  const invoice = await db.invoice.findFirst({ where: { payToken: token } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.payTokenExpiresAt && invoice.payTokenExpiresAt.getTime() < Date.now()) return reply.status(410).send({ error: "invoice_token_expired" });
+
+  let tenantSola;
+  try {
+    tenantSola = await getTenantSolaConfig(invoice.tenantId, { requireEnabled: true, allowFallbackEnv: false });
+  } catch (e: any) {
+    return reply.status(400).send({ error: String(e?.code || "NOT_CONFIGURED") });
+  }
+
+  const hosted = await getSolaAdapter(tenantSola.adapterConfig).createHostedSession({
+    tenantId: invoice.tenantId,
+    subscriptionId: invoice.id,
+    planCode: "INVOICE_PAYMENT",
+    amountCents: invoice.amountCents,
+    successUrl: `https://app.connectcomunications.com/pay/invoice/${token}?result=success`,
+    cancelUrl: `https://app.connectcomunications.com/pay/invoice/${token}?result=cancel`
+  });
+
+  await db.invoice.update({ where: { id: invoice.id }, data: { externalPaymentLink: hosted.redirectUrl, providerInvoiceRef: hosted.providerSessionId || invoice.providerInvoiceRef || null } });
+  return { redirectUrl: hosted.redirectUrl };
+});
+
+app.post("/billing/invoices/:id/simulate-webhook", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+  const input = z.object({ status: z.enum(["SUCCEEDED", "FAILED"]) }).parse(req.body || {});
+  const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+
+  if (input.status === "SUCCEEDED") {
+    const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "PAID", paidAt: new Date(), lastFailureReason: null } });
+    await queueReceiptEmail({ tenantId: admin.tenantId, to: updated.customerEmail, amountCents: updated.amountCents, periodEnd: new Date(), receiptId: updated.id });
+    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_PAYMENT_SUCCEEDED", entityType: "Invoice", entityId: updated.id });
+    return { ok: true, invoice: updated };
+  }
+
+  const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
+  const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", lastFailureReason: "SIMULATED_FAILURE" } });
+  await queueInvoiceDeclineEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, retryUrl });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_PAYMENT_FAILED", entityType: "Invoice", entityId: updated.id });
+  return { ok: true, invoice: updated };
+});
+
 app.get("/billing/subscription", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
@@ -5852,6 +6299,55 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
   const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
   if (seen) return { ok: true, deduped: true };
 
+  const invoiceToken = String((event.payload as any)?.invoiceToken || (event.payload as any)?.xInvoiceToken || "").trim();
+  let invoice = invoiceToken ? await db.invoice.findFirst({ where: { payToken: invoiceToken } }) : null;
+  if (!invoice && event.providerSubscriptionId) {
+    invoice = await db.invoice.findFirst({ where: { OR: [{ providerInvoiceRef: event.providerSubscriptionId }, { id: event.providerSubscriptionId }] } });
+  }
+
+  if (invoice) {
+    let verifyAdapter = envAdapter;
+    try {
+      const tenantSola = await getTenantSolaConfig(invoice.tenantId, { requireEnabled: false, allowFallbackEnv: true });
+      verifyAdapter = getSolaAdapter(tenantSola.adapterConfig);
+    } catch {
+      verifyAdapter = envAdapter;
+    }
+
+    const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody);
+    if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
+
+    await db.paymentEvent.create({
+      data: {
+        tenantId: invoice.tenantId,
+        provider: "SOLA_CARDKNOX",
+        providerEventId: event.eventId,
+        type: event.type,
+        status: event.status,
+        amountCents: event.amountCents || null,
+        currency: event.currency || "USD",
+        payload: event.payload as any
+      }
+    });
+
+    if (event.status === "SUCCEEDED") {
+      const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "PAID", paidAt: new Date(), lastFailureReason: null } });
+      await queueReceiptEmail({ tenantId: updated.tenantId, to: updated.customerEmail, amountCents: updated.amountCents, periodEnd: new Date(), receiptId: updated.id });
+      await audit({ tenantId: updated.tenantId, action: "INVOICE_PAYMENT_SUCCEEDED", entityType: "Invoice", entityId: updated.id });
+      return { ok: true, invoiceId: updated.id, invoiceStatus: updated.status };
+    }
+
+    if (event.status === "FAILED") {
+      const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
+      const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", lastFailureReason: event.type || "payment_failed" } });
+      await queueInvoiceDeclineEmail({ tenantId: updated.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, retryUrl });
+      await audit({ tenantId: updated.tenantId, action: "INVOICE_PAYMENT_FAILED", entityType: "Invoice", entityId: updated.id });
+      return { ok: true, invoiceId: updated.id, invoiceStatus: updated.status };
+    }
+
+    return { ok: true, invoiceId: invoice.id, ignoredStatus: event.status };
+  }
+
   const sub = await db.subscription.findFirst({
     where: {
       OR: [
@@ -5940,6 +6436,12 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
 
   return { ok: true };
 });
+
+const emailJobTimer = setInterval(() => {
+  processEmailJobsBatch().catch((e) => app.log.error({ err: e }, "email job processor failed"));
+}, 15_000);
+emailJobTimer.unref();
+
 
 const port = Number(process.env.PORT || 3001);
 app.listen({ host: "0.0.0.0", port }).catch((e) => {

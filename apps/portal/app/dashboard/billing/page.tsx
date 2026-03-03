@@ -77,7 +77,7 @@ export default function BillingPage() {
     <div className="card">
       <h1>Billing</h1>
       <p><strong>Activate SMS Plan - $10/month</strong></p>
-      <p><Link href="/dashboard/billing/settings">Manage SOLA credentials</Link></p>
+      <p><Link href="/dashboard/billing/settings">Manage SOLA credentials</Link> | <Link href="/dashboard/billing/invoices">Manage invoices</Link></p>
       <p>Status: <strong>{subscription?.status || "NONE"}</strong></p>
       <p>Current Period: {subscription?.currentPeriodStart ? new Date(subscription.currentPeriodStart).toLocaleDateString() : "-"} to {subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : "-"}</p>
 
