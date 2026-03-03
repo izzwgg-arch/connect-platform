@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
@@ -261,12 +262,14 @@ export default function ProviderSettingsPage() {
   }
 
   if (role !== "ADMIN" && role !== "SUPER_ADMIN") {
-    return <div className="card"><h1>Provider Settings</h1><p>Insufficient permissions.</p></div>;
+    return <div className="card"><h1>Provider Settings</h1>
+      <p><Link href="/dashboard/settings/providers/whatsapp">Open WhatsApp provider settings</Link></p><p>Insufficient permissions.</p></div>;
   }
 
   return (
     <div className="card">
       <h1>Provider Settings</h1>
+      <p><Link href="/dashboard/settings/providers/whatsapp">Open WhatsApp provider settings</Link></p>
 
       <h2>Twilio</h2>
       <form onSubmit={saveTwilio}>

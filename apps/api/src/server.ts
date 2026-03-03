@@ -101,6 +101,24 @@ type BillingSolaPathOverrides = {
   cancelPath?: string;
 };
 
+type WhatsAppProviderName = "WHATSAPP_TWILIO" | "WHATSAPP_META";
+
+type WhatsAppTwilioCredentialPayload = {
+  accountSid: string;
+  authToken: string;
+  fromWhatsAppNumber?: string;
+  messagingServiceSid?: string;
+};
+
+type WhatsAppMetaCredentialPayload = {
+  phoneNumberId: string;
+  wabaId: string;
+  accessToken: string;
+  verifyToken: string;
+  appSecret?: string | null;
+  webhookSecret?: string | null;
+};
+
 type CampaignDecision = {
   status: "QUEUED" | "NEEDS_APPROVAL";
   requiresApproval: boolean;
@@ -425,6 +443,59 @@ async function getTenantSolaConfig(tenantId: string, opts?: { requireEnabled?: b
     record,
     masked: maskSolaConfigForResponse({ record, secrets, pathOverrides })
   };
+}
+
+
+function maskWhatsAppConfigForResponse(row: any, creds: any) {
+  if (!row) return null;
+  if (row.provider === "WHATSAPP_TWILIO") {
+    const c = creds as WhatsAppTwilioCredentialPayload;
+    return {
+      provider: row.provider,
+      isEnabled: !!row.isEnabled,
+      preview: {
+        accountSid: maskValue(c.accountSid),
+        authToken: c.authToken ? "********" : null,
+        fromWhatsAppNumber: maskValue(c.fromWhatsAppNumber || null, 3, 2),
+        messagingServiceSid: maskValue(c.messagingServiceSid || null)
+      },
+      settings: row.settings || {},
+      updatedAt: row.updatedAt,
+      lastTestAt: row.lastTestAt,
+      lastTestResult: row.lastTestResult || null,
+      lastTestErrorCode: row.lastTestErrorCode || null
+    };
+  }
+
+  const c = creds as WhatsAppMetaCredentialPayload;
+  return {
+    provider: row.provider,
+    isEnabled: !!row.isEnabled,
+    preview: {
+      phoneNumberId: maskValue(c.phoneNumberId),
+      wabaId: maskValue(c.wabaId),
+      accessToken: c.accessToken ? "********" : null,
+      verifyToken: c.verifyToken ? "********" : null,
+      appSecret: c.appSecret ? "********" : null,
+      webhookSecret: c.webhookSecret ? "********" : null
+    },
+    settings: row.settings || {},
+    updatedAt: row.updatedAt,
+    lastTestAt: row.lastTestAt,
+    lastTestResult: row.lastTestResult || null,
+    lastTestErrorCode: row.lastTestErrorCode || null
+  };
+}
+
+async function getEnabledWhatsAppProvider(tenantId: string): Promise<{ row: any; creds: any } | null> {
+  const row = await db.whatsAppProviderConfig.findFirst({ where: { tenantId, isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!row) return null;
+  try {
+    const creds = decryptJson<any>(row.credentialsEncrypted);
+    return { row, creds };
+  } catch {
+    return null;
+  }
 }
 
 function credCacheKey(tenantId: string, provider: ProviderName): string {
@@ -2075,6 +2146,200 @@ app.post("/settings/providers/voipms/disable", async (req, reply) => {
   return { provider: "VOIPMS", isEnabled: false, updatedAt: updated.updatedAt };
 });
 
+app.get("/settings/providers/whatsapp", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const rows = await db.whatsAppProviderConfig.findMany({ where: { tenantId: admin.tenantId }, orderBy: { updatedAt: "desc" } });
+  const items: any[] = [];
+  for (const row of rows) {
+    try {
+      const creds = decryptJson<any>(row.credentialsEncrypted);
+      items.push(maskWhatsAppConfigForResponse(row, creds));
+    } catch {
+      items.push({ provider: row.provider, isEnabled: !!row.isEnabled, preview: {}, settings: row.settings || {}, updatedAt: row.updatedAt, lastTestAt: row.lastTestAt, lastTestResult: row.lastTestResult || null, lastTestErrorCode: row.lastTestErrorCode || "DECRYPT_FAILED" });
+    }
+  }
+
+  const active = items.find((x) => x?.isEnabled) || null;
+  return { providers: items, activeProvider: active?.provider || null };
+});
+
+app.put("/settings/providers/whatsapp/twilio", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({
+    accountSid: z.string().min(6),
+    authToken: z.string().min(6),
+    fromWhatsAppNumber: z.string().min(5).optional(),
+    messagingServiceSid: z.string().min(5).optional(),
+    statusWebhookPath: z.string().min(1).optional()
+  }).parse(req.body || {});
+
+  const provider: WhatsAppProviderName = "WHATSAPP_TWILIO";
+  const creds: WhatsAppTwilioCredentialPayload = {
+    accountSid: input.accountSid,
+    authToken: input.authToken,
+    fromWhatsAppNumber: input.fromWhatsAppNumber,
+    messagingServiceSid: input.messagingServiceSid
+  };
+
+  const encrypted = encryptJson(creds);
+  const existing = await db.whatsAppProviderConfig.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider } } });
+  const saved = await db.whatsAppProviderConfig.upsert({
+    where: { tenantId_provider: { tenantId: admin.tenantId, provider } },
+    create: {
+      tenantId: admin.tenantId,
+      provider,
+      isEnabled: false,
+      settings: { statusWebhookPath: input.statusWebhookPath || "/webhooks/whatsapp/twilio/status" } as any,
+      credentialsEncrypted: encrypted,
+      credentialsKeyId: "v1",
+      createdByUserId: admin.sub,
+      updatedByUserId: admin.sub,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+      lastTestAt: null
+    },
+    update: {
+      isEnabled: false,
+      settings: { statusWebhookPath: input.statusWebhookPath || "/webhooks/whatsapp/twilio/status" } as any,
+      credentialsEncrypted: encrypted,
+      credentialsKeyId: "v1",
+      updatedByUserId: admin.sub,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+      lastTestAt: null
+    }
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: existing ? "WHATSAPP_CREDENTIAL_UPDATED" : "WHATSAPP_CREDENTIAL_CREATED", entityType: "WhatsAppProviderConfig", entityId: saved.id });
+  return { ok: true, provider: "WHATSAPP_TWILIO", isEnabled: saved.isEnabled };
+});
+
+app.put("/settings/providers/whatsapp/meta", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({
+    phoneNumberId: z.string().min(3),
+    wabaId: z.string().min(3),
+    accessToken: z.string().min(8),
+    verifyToken: z.string().min(4),
+    appSecret: z.string().min(4).optional(),
+    webhookSecret: z.string().min(4).optional(),
+    webhookPath: z.string().min(1).optional()
+  }).parse(req.body || {});
+
+  const provider: WhatsAppProviderName = "WHATSAPP_META";
+  const creds: WhatsAppMetaCredentialPayload = {
+    phoneNumberId: input.phoneNumberId,
+    wabaId: input.wabaId,
+    accessToken: input.accessToken,
+    verifyToken: input.verifyToken,
+    appSecret: input.appSecret || null,
+    webhookSecret: input.webhookSecret || null
+  };
+
+  const encrypted = encryptJson(creds);
+  const existing = await db.whatsAppProviderConfig.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider } } });
+  const saved = await db.whatsAppProviderConfig.upsert({
+    where: { tenantId_provider: { tenantId: admin.tenantId, provider } },
+    create: {
+      tenantId: admin.tenantId,
+      provider,
+      isEnabled: false,
+      settings: { webhookPath: input.webhookPath || "/webhooks/whatsapp/meta" } as any,
+      credentialsEncrypted: encrypted,
+      credentialsKeyId: "v1",
+      createdByUserId: admin.sub,
+      updatedByUserId: admin.sub,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+      lastTestAt: null
+    },
+    update: {
+      isEnabled: false,
+      settings: { webhookPath: input.webhookPath || "/webhooks/whatsapp/meta" } as any,
+      credentialsEncrypted: encrypted,
+      credentialsKeyId: "v1",
+      updatedByUserId: admin.sub,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+      lastTestAt: null
+    }
+  });
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: existing ? "WHATSAPP_CREDENTIAL_UPDATED" : "WHATSAPP_CREDENTIAL_CREATED", entityType: "WhatsAppProviderConfig", entityId: saved.id });
+  return { ok: true, provider: "WHATSAPP_META", isEnabled: saved.isEnabled };
+});
+
+app.post("/settings/providers/whatsapp/enable", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ provider: z.enum(["WHATSAPP_TWILIO", "WHATSAPP_META"]) }).parse(req.body || {});
+  const row = await db.whatsAppProviderConfig.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider: input.provider } } });
+  if (!row) return reply.status(404).send({ error: "provider_not_configured" });
+
+  await db.whatsAppProviderConfig.updateMany({ where: { tenantId: admin.tenantId }, data: { isEnabled: false, updatedByUserId: admin.sub } });
+  const updated = await db.whatsAppProviderConfig.update({ where: { id: row.id }, data: { isEnabled: true, updatedByUserId: admin.sub } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "WHATSAPP_CREDENTIAL_ENABLED", entityType: "WhatsAppProviderConfig", entityId: updated.id });
+  return { ok: true, provider: updated.provider, isEnabled: true };
+});
+
+app.post("/settings/providers/whatsapp/disable", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ provider: z.enum(["WHATSAPP_TWILIO", "WHATSAPP_META"]) }).parse(req.body || {});
+  const row = await db.whatsAppProviderConfig.findUnique({ where: { tenantId_provider: { tenantId: admin.tenantId, provider: input.provider } } });
+  if (!row) return reply.status(404).send({ error: "provider_not_configured" });
+
+  const updated = await db.whatsAppProviderConfig.update({ where: { id: row.id }, data: { isEnabled: false, updatedByUserId: admin.sub } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "WHATSAPP_CREDENTIAL_DISABLED", entityType: "WhatsAppProviderConfig", entityId: updated.id });
+  return { ok: true, provider: updated.provider, isEnabled: false };
+});
+
+app.post("/whatsapp/test-send", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const input = z.object({ to: z.string().min(8), message: z.string().min(1).max(512) }).parse(req.body || {});
+  const active = await getEnabledWhatsAppProvider(admin.tenantId);
+  if (!active) return reply.status(400).send({ error: "WHATSAPP_NOT_CONFIGURED" });
+
+  const simulate = (process.env.WHATSAPP_SIMULATE || "true").toLowerCase() !== "false";
+  const provider = active.row.provider;
+  if (simulate) {
+    await db.auditLog.create({ data: { tenantId: admin.tenantId, actorUserId: admin.sub, action: "WHATSAPP_TEST_SEND_SIMULATED", entityType: "Tenant", entityId: admin.tenantId } });
+    return { ok: true, provider, simulated: true, to: maskValue(input.to, 2, 2), messageLength: input.message.length };
+  }
+
+  await db.auditLog.create({ data: { tenantId: admin.tenantId, actorUserId: admin.sub, action: "WHATSAPP_TEST_SEND_DISPATCHED", entityType: "Tenant", entityId: admin.tenantId } });
+  return { ok: true, provider, simulated: false, queued: true };
+});
+
+app.get("/settings/whatsapp-routing", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const rows = await db.whatsAppProviderConfig.findMany({ where: { tenantId: admin.tenantId }, select: { provider: true, isEnabled: true, updatedAt: true } });
+  return {
+    providers: rows,
+    activeProvider: rows.find((r) => r.isEnabled)?.provider || null,
+    mode: "single_provider_active"
+  };
+});
+
 app.get("/settings/sms-routing", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
@@ -2550,7 +2815,8 @@ app.post("/sms/campaigns", async (req, reply) => {
     fromNumberId: z.string().optional(),
     message: z.string().min(3).max(320),
     audienceType: z.string().default("manual"),
-    recipients: z.array(z.string().min(8)).min(1)
+    recipients: z.array(z.string().min(8)).min(1),
+    autoSend: z.boolean().default(false)
   }).parse(req.body);
 
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
@@ -2590,8 +2856,9 @@ app.post("/sms/campaigns", async (req, reply) => {
   const decision = await decideCampaignPolicy({ tenant, tenantId: user.tenantId, actorUserId: user.sub, message: input.message, recipientsCount: input.recipients.length });
   if ("reject" in decision) return reply.status(400).send({ error: decision.reject });
 
-  const campaignStatus = forcedNeedsApproval ? "NEEDS_APPROVAL" : decision.status;
-  const holdReason = forcedNeedsApproval ? "SENDER_PROVIDER_MISMATCH" : decision.holdReason;
+  const shouldAutoSend = !!input.autoSend;
+  const campaignStatus = shouldAutoSend ? (forcedNeedsApproval ? "NEEDS_APPROVAL" : decision.status) : "DRAFT";
+  const holdReason = shouldAutoSend ? (forcedNeedsApproval ? "SENDER_PROVIDER_MISMATCH" : decision.holdReason) : null;
 
   const campaign = await db.smsCampaign.create({
     data: {
@@ -2614,11 +2881,107 @@ app.post("/sms/campaigns", async (req, reply) => {
   if (campaign.status === "QUEUED") {
     await enqueueCampaignMessages(campaign.id, user.tenantId);
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_QUEUED", entityType: "SmsCampaign", entityId: campaign.id });
-  } else {
+  } else if (campaign.status === "NEEDS_APPROVAL") {
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_HELD_FOR_APPROVAL", entityType: "SmsCampaign", entityId: campaign.id });
+  } else {
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_DRAFT_CREATED", entityType: "SmsCampaign", entityId: campaign.id });
   }
 
   return { campaign, queuedMessages: campaign.status === "QUEUED" ? createdMessages.length : 0, holdReason: campaign.holdReason };
+});
+
+app.put("/sms/campaigns/:id", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    name: z.string().min(2).optional(),
+    message: z.string().min(3).max(320).optional(),
+    recipients: z.array(z.string().min(8)).optional()
+  }).parse(req.body || {});
+
+  const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true, tenant: true } });
+  if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
+  if (!["DRAFT", "NEEDS_APPROVAL", "FAILED", "PAUSED"].includes(campaign.status)) {
+    return reply.status(400).send({ error: "CAMPAIGN_NOT_EDITABLE" });
+  }
+
+  let nextMessage = campaign.message;
+  if (input.message) {
+    const normalized = normalizeSmsWithStop(input.message);
+    if (!normalized.ok) return reply.status(400).send({ error: "MESSAGE_TOO_LONG_AFTER_STOP_APPEND" });
+    nextMessage = normalized.message;
+    if (normalized.appendedStop) {
+      await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_STOP_INSTRUCTION_APPENDED", entityType: "SmsCampaign", entityId: id });
+    }
+  }
+
+  const updateCampaign = await db.smsCampaign.update({ where: { id }, data: { name: input.name || campaign.name, message: nextMessage } });
+
+  if (input.recipients) {
+    await db.smsMessage.deleteMany({ where: { campaignId: id } });
+    await Promise.all(input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: id, toNumber: to, fromNumber: campaign.fromNumber, fromNumberId: campaign.messages[0]?.fromNumberId || null, body: nextMessage, status: "QUEUED" } })));
+  } else if (input.message) {
+    await db.smsMessage.updateMany({ where: { campaignId: id }, data: { body: nextMessage } });
+  }
+
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_UPDATED", entityType: "SmsCampaign", entityId: id });
+  return updateCampaign;
+});
+
+app.post("/sms/campaigns/:id/preview", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+
+  const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true, tenant: true } });
+  if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
+
+  const recipientCount = campaign.messages.length;
+  const warnings: string[] = [];
+  if (recipientCount > campaign.tenant.maxCampaignSize) warnings.push("RECIPIENT_COUNT_EXCEEDS_MAX_CAMPAIGN_SIZE");
+  if (!campaign.tenant.defaultSmsFromNumberId && campaign.tenant.smsSendMode === "LIVE") warnings.push("DEFAULT_SMS_FROM_NUMBER_REQUIRED");
+  if (campaign.tenant.smsSuspended) warnings.push("TENANT_SMS_SUSPENDED");
+
+  const sampleRecipients = campaign.messages.slice(0, 10).map((m) => maskValue(m.toNumber, 2, 2));
+  return {
+    campaignId: campaign.id,
+    status: campaign.status,
+    recipientCount,
+    sampleRecipients,
+    messageLength: campaign.message.length,
+    warnings,
+    canSend: warnings.length === 0
+  };
+});
+
+app.post("/sms/campaigns/:id/send", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+
+  const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true, tenant: true } });
+  if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
+  if (!["DRAFT", "PAUSED", "FAILED", "NEEDS_APPROVAL"].includes(campaign.status)) {
+    return reply.status(400).send({ error: "CAMPAIGN_NOT_SENDABLE" });
+  }
+
+  const decision = await decideCampaignPolicy({ tenant: campaign.tenant, tenantId: user.tenantId, actorUserId: user.sub, message: campaign.message, recipientsCount: campaign.messages.length });
+  if ("reject" in decision) return reply.status(400).send({ error: decision.reject });
+
+  if (campaign.tenant.smsSendMode === "LIVE" && !campaign.tenant.defaultSmsFromNumberId) {
+    return reply.status(400).send({ error: "NO_SENDER_NUMBER", message: "Set a tenant default sender number before sending in LIVE mode." });
+  }
+
+  const nextStatus = decision.status === "NEEDS_APPROVAL" ? "NEEDS_APPROVAL" : "QUEUED";
+  const updated = await db.smsCampaign.update({ where: { id }, data: { status: nextStatus, requiresApproval: nextStatus === "NEEDS_APPROVAL", holdReason: decision.holdReason, riskScore: decision.riskScore, message: decision.normalizedMessage } });
+  await db.smsMessage.updateMany({ where: { campaignId: id }, data: { body: decision.normalizedMessage, status: "QUEUED", error: null } });
+
+  if (nextStatus === "QUEUED") {
+    await enqueueCampaignMessages(id, user.tenantId);
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_SEND_ENQUEUED", entityType: "SmsCampaign", entityId: id });
+  } else {
+    await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_SEND_HELD", entityType: "SmsCampaign", entityId: id });
+  }
+
+  return { ok: true, campaign: updated, queuedMessages: nextStatus === "QUEUED" ? campaign.messages.length : 0 };
 });
 
 app.get("/sms/campaigns", async (req) => {
@@ -2626,10 +2989,22 @@ app.get("/sms/campaigns", async (req) => {
   return db.smsCampaign.findMany({ where: { tenantId: user.tenantId }, orderBy: { createdAt: "desc" } });
 });
 
-app.get("/sms/campaigns/:id", async (req) => {
+app.get("/sms/campaigns/:id", async (req, reply) => {
   const user = getUser(req);
   const { id } = req.params as { id: string };
-  return db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true } });
+  const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true } });
+  if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
+
+  const metrics = {
+    total: campaign.messages.length,
+    queued: campaign.messages.filter((m) => m.status === "QUEUED").length,
+    sending: campaign.messages.filter((m) => m.status === "SENDING").length,
+    sent: campaign.messages.filter((m) => m.status === "SENT").length,
+    delivered: campaign.messages.filter((m) => m.status === "DELIVERED").length,
+    failed: campaign.messages.filter((m) => m.status === "FAILED").length
+  };
+
+  return { ...campaign, metrics };
 });
 
 app.get("/sms/messages", async (req) => {
@@ -5374,6 +5749,87 @@ app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
   });
   await audit({ tenantId: id, actorUserId: admin.sub, action: "BILLING_OVERRIDE_STATUS", entityType: "Subscription", entityId: updated.id });
   return { success: true };
+});
+
+app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
+  const payload = (req.body || {}) as Record<string, any>;
+  const accountSid = String(payload.AccountSid || payload.accountSid || "").trim();
+  const from = String(payload.From || payload.from || "").trim();
+  const to = String(payload.To || payload.to || "").trim();
+
+  let tenantId: string | null = null;
+  if (accountSid) {
+    const rows = await db.whatsAppProviderConfig.findMany({ where: { provider: "WHATSAPP_TWILIO" } });
+    for (const row of rows) {
+      try {
+        const creds = decryptJson<WhatsAppTwilioCredentialPayload>(row.credentialsEncrypted);
+        if (creds.accountSid === accountSid) {
+          tenantId = row.tenantId;
+          break;
+        }
+      } catch {
+        // skip broken credential rows
+      }
+    }
+  }
+
+  if (tenantId) {
+    await audit({ tenantId, action: "WHATSAPP_TWILIO_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
+  }
+  return { ok: true, provider: "WHATSAPP_TWILIO", tenantMatched: !!tenantId, to: maskValue(to, 2, 2), from: maskValue(from, 2, 2) };
+});
+
+app.get("/webhooks/whatsapp/meta", async (req, reply) => {
+  const q = z.object({ "hub.mode": z.string().optional(), "hub.verify_token": z.string().optional(), "hub.challenge": z.string().optional() }).parse(req.query || {});
+  if (String(q["hub.mode"] || "") !== "subscribe") return reply.status(400).send({ error: "INVALID_MODE" });
+
+  const verifyToken = String(q["hub.verify_token"] || "");
+  if (!verifyToken) return reply.status(403).send({ error: "INVALID_VERIFY_TOKEN" });
+
+  const rows = await db.whatsAppProviderConfig.findMany({ where: { provider: "WHATSAPP_META", isEnabled: true } });
+  for (const row of rows) {
+    try {
+      const creds = decryptJson<WhatsAppMetaCredentialPayload>(row.credentialsEncrypted);
+      if (creds.verifyToken === verifyToken) {
+        return reply.send(String(q["hub.challenge"] || ""));
+      }
+    } catch {
+      // skip broken credential rows
+    }
+  }
+
+  return reply.status(403).send({ error: "INVALID_VERIFY_TOKEN" });
+});
+
+app.post("/webhooks/whatsapp/meta", async (req, reply) => {
+  const body = req.body as any;
+  const entry = Array.isArray(body?.entry) ? body.entry[0] : null;
+  const changes = Array.isArray(entry?.changes) ? entry.changes[0] : null;
+  const value = changes?.value || {};
+  const metadata = value?.metadata || {};
+  const phoneNumberId = String(metadata?.phone_number_id || "").trim();
+
+  let tenantId: string | null = null;
+  if (phoneNumberId) {
+    const rows = await db.whatsAppProviderConfig.findMany({ where: { provider: "WHATSAPP_META" } });
+    for (const row of rows) {
+      try {
+        const creds = decryptJson<WhatsAppMetaCredentialPayload>(row.credentialsEncrypted);
+        if (creds.phoneNumberId === phoneNumberId) {
+          tenantId = row.tenantId;
+          break;
+        }
+      } catch {
+        // skip broken credential rows
+      }
+    }
+  }
+
+  if (tenantId) {
+    await audit({ tenantId, action: "WHATSAPP_META_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
+  }
+
+  return { ok: true, provider: "WHATSAPP_META", tenantMatched: !!tenantId };
 });
 
 app.post("/webhooks/sola-cardknox", async (req, reply) => {

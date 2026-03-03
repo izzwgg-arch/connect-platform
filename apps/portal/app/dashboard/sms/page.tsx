@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
@@ -55,6 +56,7 @@ export default function SmsPage() {
   return (
     <div className="card">
       <h1>SMS Campaigns</h1>
+      <p><Link href="/dashboard/sms/campaigns">Open full Campaign Manager</Link></p>
       <form onSubmit={onSubmit}>
         <input placeholder="Campaign Name" value={name} onChange={(e) => setName(e.target.value)} />
         <input placeholder="From Number" value={fromNumber} onChange={(e) => setFromNumber(e.target.value)} />

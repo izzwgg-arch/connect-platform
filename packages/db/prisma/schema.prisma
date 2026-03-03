@@ -54,6 +54,11 @@ enum PhoneNumberProvider {
   VOIPMS
 }
 
+enum WhatsAppProviderType {
+  WHATSAPP_TWILIO
+  WHATSAPP_META
+}
+
 enum PhoneNumberStatus {
   ACTIVE
   RELEASING
@@ -265,6 +270,7 @@ model Tenant {
   audits                        AuditLog[]
   providerCredentials           ProviderCredential[]
   billingSolaConfig             BillingSolaConfig?
+  whatsappProviderConfigs       WhatsAppProviderConfig[]
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
   subscription                  Subscription?
@@ -305,6 +311,8 @@ model User {
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
   createdBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigCreatedBy")
   updatedBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigUpdatedBy")
+  createdWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigCreatedBy")
+  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
   ownedExtensions            Extension[]          @relation("ExtensionOwner")
@@ -567,6 +575,29 @@ model BillingSolaConfig {
   updatedByUser        User           @relation("BillingSolaConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
 
   @@index([isEnabled, updatedAt])
+}
+
+model WhatsAppProviderConfig {
+  id                   String               @id @default(cuid())
+  tenantId             String
+  provider             WhatsAppProviderType
+  isEnabled            Boolean              @default(false)
+  settings             Json?
+  credentialsEncrypted String
+  credentialsKeyId     String               @default("v1")
+  lastTestAt           DateTime?
+  lastTestResult       String?
+  lastTestErrorCode    String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  createdByUserId      String
+  updatedByUserId      String
+  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser        User                 @relation("WhatsAppProviderConfigCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUser        User                 @relation("WhatsAppProviderConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId, isEnabled])
 }
 
 model AuditLog {
