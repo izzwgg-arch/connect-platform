@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
+export type SolaCardknoxAuthMode = "xkey_body" | "authorization_header";
+
 export type SolaCardknoxConfig = {
   baseUrl?: string;
   apiKey?: string;
@@ -7,6 +9,11 @@ export type SolaCardknoxConfig = {
   webhookSecret?: string;
   mode?: "sandbox" | "prod";
   simulate?: boolean;
+  authMode?: SolaCardknoxAuthMode;
+  authHeaderName?: string;
+  customerPath?: string;
+  subscriptionPath?: string;
+  transactionPath?: string;
   hostedSessionPath?: string;
   chargePath?: string;
   cancelPath?: string;
@@ -94,10 +101,19 @@ async function postJson(config: SolaCardknoxConfig, path: string, body: Record<s
 
   ensureConfigured(config);
 
+  const authMode = config.authMode || "xkey_body";
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (config.apiSecret) headers.Authorization = `${config.apiKey}:${config.apiSecret}`;
+  const reqBody: Record<string, any> = { ...body };
 
-  const reqBody = { ...body, xKey: config.apiKey };
+  if (authMode === "authorization_header") {
+    const authHeaderName = String(config.authHeaderName || "authorization").trim();
+    const token = config.apiSecret ? `${config.apiKey}:${config.apiSecret}` : String(config.apiKey);
+    headers[authHeaderName] = token;
+  } else {
+    reqBody.xKey = config.apiKey;
+    if (config.apiSecret) reqBody.xSecret = config.apiSecret;
+  }
+
   const res = await fetch(`${String(config.baseUrl).replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`, {
     method: "POST",
     headers,
@@ -124,6 +140,21 @@ export class SolaCardknoxAdapter {
 
   constructor(config: SolaCardknoxConfig) {
     this.config = config;
+  }
+
+  async testConnection(): Promise<{ ok: boolean; simulated: boolean }> {
+    if (this.config.simulate) return { ok: true, simulated: true };
+
+    const path = this.config.transactionPath || this.config.subscriptionPath || this.config.customerPath || this.config.hostedSessionPath || "/hosted-checkout/sessions";
+    await postJson(this.config, path, {
+      validateOnly: true,
+      action: "ping",
+      xAmount: "0.00",
+      amountCents: 0,
+      successUrl: "https://app.connectcomunications.com/dashboard/billing?validate=success",
+      cancelUrl: "https://app.connectcomunications.com/dashboard/billing?validate=cancel"
+    });
+    return { ok: true, simulated: false };
   }
 
   async createHostedSession(input: HostedCheckoutInput): Promise<{ redirectUrl: string; providerSessionId?: string }> {

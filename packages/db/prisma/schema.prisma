@@ -70,6 +70,16 @@ enum SubscriptionStatus {
   CANCELED
 }
 
+enum SolaConfigMode {
+  SANDBOX
+  PROD
+}
+
+enum SolaAuthMode {
+  XKEY_BODY
+  AUTHORIZATION_HEADER
+}
+
 enum PaymentStatus {
   PENDING
   SUCCEEDED
@@ -254,6 +264,7 @@ model Tenant {
   numbers                       PhoneNumber[]          @relation("TenantOwnedNumbers")
   audits                        AuditLog[]
   providerCredentials           ProviderCredential[]
+  billingSolaConfig             BillingSolaConfig?
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
   subscription                  Subscription?
@@ -292,6 +303,8 @@ model User {
   auditEvents                AuditLog[]           @relation("AuditActor")
   createdProviderCredentials ProviderCredential[] @relation("ProviderCredentialCreatedBy")
   updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
+  createdBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigCreatedBy")
+  updatedBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigUpdatedBy")
   smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
   smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
   ownedExtensions            Extension[]          @relation("ExtensionOwner")
@@ -528,6 +541,32 @@ model ProviderCredential {
   updatedByUser        User                @relation("ProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
 
   @@unique([tenantId, provider])
+}
+
+model BillingSolaConfig {
+  id                   String         @id @default(cuid())
+  tenantId             String         @unique
+  isEnabled            Boolean        @default(false)
+  apiBaseUrl           String
+  mode                 SolaConfigMode @default(SANDBOX)
+  simulate             Boolean        @default(false)
+  authMode             SolaAuthMode   @default(XKEY_BODY)
+  authHeaderName       String?
+  pathOverrides        Json?
+  credentialsEncrypted String
+  credentialsKeyId     String         @default("v1")
+  lastTestAt           DateTime?
+  lastTestResult       String?
+  lastTestErrorCode    String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  createdByUserId      String
+  updatedByUserId      String
+  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser        User           @relation("BillingSolaConfigCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUser        User           @relation("BillingSolaConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([isEnabled, updatedAt])
 }
 
 model AuditLog {
