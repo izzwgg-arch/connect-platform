@@ -423,6 +423,10 @@ async function sendEmailJobNow(job: any): Promise<void> {
     throw err;
   }
 
+  const smtpHost = provider.provider === "GOOGLE_WORKSPACE" ? (creds.smtpHost || "smtp-relay.gmail.com") : (creds.smtpHost || null);
+  const smtpPort = provider.provider === "GOOGLE_WORKSPACE" ? (creds.smtpPort || 587) : (creds.smtpPort || null);
+  const smtpSecure = provider.provider === "GOOGLE_WORKSPACE" ? (typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : false) : !!creds.smtpSecure;
+
   await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -431,11 +435,11 @@ async function sendEmailJobNow(job: any): Promise<void> {
       subject: job.subject,
       html: job.htmlBody,
       text: job.textBody,
-      smtpHost: creds.smtpHost || null,
-      smtpPort: creds.smtpPort || null,
+      smtpHost,
+      smtpPort,
       smtpUser: creds.smtpUser || null,
       smtpPass: creds.smtpPass || null,
-      smtpSecure: !!creds.smtpSecure,
+      smtpSecure,
       fromName: provider.fromName || null,
       fromEmail: provider.fromEmail || null,
       replyTo: provider.replyTo || null
@@ -5806,7 +5810,7 @@ app.put("/settings/email", async (req, reply) => {
   if (!ensureCredentialCrypto(reply)) return;
 
   const input = z.object({
-    provider: z.enum(["SENDGRID", "SMTP"]),
+    provider: z.enum(["SENDGRID", "SMTP", "GOOGLE_WORKSPACE"]),
     fromName: z.string().min(1).max(120).optional().nullable(),
     fromEmail: z.string().email().optional().nullable(),
     replyTo: z.string().email().optional().nullable(),
@@ -5838,7 +5842,12 @@ app.put("/settings/email", async (req, reply) => {
   if (input.provider === "SENDGRID" && !creds.sendgridApiKey) {
     return reply.status(400).send({ error: "SENDGRID_API_KEY_REQUIRED" });
   }
-  if (input.provider === "SMTP" && (!creds.smtpHost || !creds.smtpPort || !creds.smtpUser || !creds.smtpPass)) {
+  if (input.provider === "GOOGLE_WORKSPACE") {
+    creds.smtpHost = creds.smtpHost || "smtp-relay.gmail.com";
+    creds.smtpPort = creds.smtpPort || 587;
+    if (creds.smtpSecure === null || creds.smtpSecure === undefined) creds.smtpSecure = false;
+  }
+  if ((input.provider === "SMTP" || input.provider === "GOOGLE_WORKSPACE") && (!creds.smtpHost || !creds.smtpPort || !creds.smtpUser || !creds.smtpPass)) {
     return reply.status(400).send({ error: "SMTP_CONFIG_INCOMPLETE" });
   }
 

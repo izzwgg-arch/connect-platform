@@ -62,6 +62,7 @@ enum WhatsAppProviderType {
 enum EmailProviderType {
   SENDGRID
   SMTP
+  GOOGLE_WORKSPACE
 }
 
 enum InvoiceStatus {

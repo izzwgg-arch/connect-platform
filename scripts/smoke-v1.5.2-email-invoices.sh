@@ -50,9 +50,9 @@ login_json="$(api POST /auth/login "" "$login_payload")"
 TOKEN="$(echo "$login_json" | jq -r '.token // empty')"
 [[ -n "$TOKEN" ]] || fail "login token missing"
 
-email_put_payload="$(jq -nc '{provider:"SENDGRID",fromName:"Connect Communications",fromEmail:"billing@connectcomunications.com",replyTo:"support@connectcomunications.com",sendgridApiKey:"sg-smoke-key"}')"
+email_put_payload="$(jq -nc '{provider:"GOOGLE_WORKSPACE",fromName:"Connect Communications",fromEmail:"billing@connectcomunications.com",replyTo:"support@connectcomunications.com",smtpHost:"smtp-relay.gmail.com",smtpPort:587,smtpUser:"workspace-user",smtpPass:"workspace-pass",smtpSecure:false}')"
 email_put_json="$(api PUT /settings/email "$TOKEN" "$email_put_payload")"
-echo "$email_put_json" | jq -e '.ok == true and .provider == "SENDGRID"' >/dev/null || fail "email settings save failed"
+echo "$email_put_json" | jq -e '.ok == true and .provider == "GOOGLE_WORKSPACE"' >/dev/null || fail "email settings save failed"
 
 email_test_json="$(api POST /settings/email/test "$TOKEN")"
 echo "$email_test_json" | jq -e '.ok == true' >/dev/null || fail "email provider test failed"

@@ -6,7 +6,7 @@ const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunicat
 
 export default function EmailSettingsPage() {
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
-  const [provider, setProvider] = useState<"SENDGRID" | "SMTP">("SENDGRID");
+  const [provider, setProvider] = useState<"SENDGRID" | "SMTP" | "GOOGLE_WORKSPACE">("GOOGLE_WORKSPACE");
   const [fromName, setFromName] = useState("Connect Communications");
   const [fromEmail, setFromEmail] = useState("billing@connectcomunications.com");
   const [replyTo, setReplyTo] = useState("support@connectcomunications.com");
@@ -29,7 +29,7 @@ export default function EmailSettingsPage() {
     if (!json?.configured || !json?.config) return;
 
     const c = json.config;
-    setProvider(c.provider || "SENDGRID");
+    setProvider((c.provider as "SENDGRID" | "SMTP" | "GOOGLE_WORKSPACE") || "GOOGLE_WORKSPACE");
     setFromName(c.fromName || "Connect Communications");
     setFromEmail(c.fromEmail || "billing@connectcomunications.com");
     setReplyTo(c.replyTo || "support@connectcomunications.com");
@@ -43,6 +43,13 @@ export default function EmailSettingsPage() {
     load().catch(() => setResult("Failed to load email settings"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
+  useEffect(() => {
+    if (provider !== "GOOGLE_WORKSPACE") return;
+    if (!smtpHost) setSmtpHost("smtp-relay.gmail.com");
+    if (!smtpPort) setSmtpPort(587);
+  }, [provider, smtpHost, smtpPort]);
 
   async function save() {
     const body: any = { provider, fromName, fromEmail, replyTo, logoUrl: logoUrl || null, footerText: footerText || null };
@@ -80,9 +87,10 @@ export default function EmailSettingsPage() {
       <p>Configure email provider and sender profile for receipts, invoices, and decline notices.</p>
 
       <label>Provider </label>
-      <select value={provider} onChange={(e) => setProvider(e.target.value === "SMTP" ? "SMTP" : "SENDGRID") }>
+      <select value={provider} onChange={(e) => setProvider(e.target.value === "SMTP" ? "SMTP" : e.target.value === "GOOGLE_WORKSPACE" ? "GOOGLE_WORKSPACE" : "SENDGRID") }>
         <option value="SENDGRID">SENDGRID</option>
         <option value="SMTP">SMTP</option>
+        <option value="GOOGLE_WORKSPACE">GOOGLE_WORKSPACE</option>
       </select>
 
       <h3>Sender Profile</h3>
@@ -99,8 +107,9 @@ export default function EmailSettingsPage() {
         </>
       ) : (
         <>
-          <h3>SMTP</h3>
-          <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="SMTP host" />
+          <h3>{provider === "GOOGLE_WORKSPACE" ? "Google Workspace SMTP" : "SMTP"}</h3>
+          {provider === "GOOGLE_WORKSPACE" ? <p>Use your Google Workspace SMTP relay/app credentials.</p> : null}
+          <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder={provider === "GOOGLE_WORKSPACE" ? "smtp-relay.gmail.com" : "SMTP host"} />
           <input type="number" value={smtpPort} onChange={(e) => setSmtpPort(Number(e.target.value || 587))} placeholder="SMTP port" />
           <input value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} placeholder="SMTP username" />
           <input type="password" value={smtpPass} onChange={(e) => setSmtpPass(e.target.value)} placeholder="SMTP password" />
