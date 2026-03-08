@@ -44,7 +44,11 @@ async function apiRequest<T>(method: "GET" | "POST" | "PATCH", path: string, bod
       signal: controller.signal
     });
     if (!res.ok) {
-      throw new ApiError(`Request failed (${res.status})`, res.status);
+      const errPayload = (await res.json().catch(() => null)) as any;
+      const errCode = String(errPayload?.error || "").trim();
+      const errMessage = String(errPayload?.message || "").trim();
+      const detail = [errCode, errMessage].filter(Boolean).join(": ");
+      throw new ApiError(detail || `Request failed (${res.status})`, res.status);
     }
     return (await res.json()) as T;
   } finally {
