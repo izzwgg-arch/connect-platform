@@ -717,6 +717,128 @@ async function getEnabledWhatsAppProvider(tenantId: string): Promise<{ row: any;
   }
 }
 
+function normalizeWhatsAppNumber(input: string): string {
+  return String(input || "").trim();
+}
+
+function sanitizeMetadata(input: unknown): Record<string, any> {
+  const src = (input && typeof input === "object") ? (input as Record<string, any>) : {};
+  const out: Record<string, any> = {};
+  const blocked = new Set(["authorization", "auth", "token", "secret", "password"]);
+  for (const [k, v] of Object.entries(src)) {
+    const key = String(k || "").toLowerCase();
+    if (blocked.has(key) || key.includes("token") || key.includes("secret") || key.includes("password")) continue;
+    if (typeof v === "string" && v.length > 400) {
+      out[k] = `${v.slice(0, 400)}...`;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+async function upsertWhatsAppThread(params: {
+  tenantId: string;
+  providerType: WhatsAppProviderName;
+  contactNumber: string;
+  contactName?: string | null;
+  lastDirection?: string | null;
+  lastStatus?: string | null;
+  lastMessagePreview?: string | null;
+}) {
+  const number = normalizeWhatsAppNumber(params.contactNumber);
+  const existing = await db.whatsAppThread.findFirst({
+    where: { tenantId: params.tenantId, providerType: params.providerType, contactNumber: number }
+  });
+  if (existing) {
+    return db.whatsAppThread.update({
+      where: { id: existing.id },
+      data: {
+        contactName: params.contactName || existing.contactName || null,
+        lastMessageAt: new Date(),
+        lastDirection: params.lastDirection || existing.lastDirection || null,
+        lastStatus: params.lastStatus || existing.lastStatus || null,
+        lastMessagePreview: params.lastMessagePreview || existing.lastMessagePreview || null
+      }
+    });
+  }
+  return db.whatsAppThread.create({
+    data: {
+      tenantId: params.tenantId,
+      providerType: params.providerType,
+      contactNumber: number,
+      contactName: params.contactName || null,
+      lastMessageAt: new Date(),
+      lastDirection: params.lastDirection || null,
+      lastStatus: params.lastStatus || null,
+      lastMessagePreview: params.lastMessagePreview || null
+    }
+  });
+}
+
+async function createWhatsAppMessage(params: {
+  tenantId: string;
+  threadId: string;
+  providerType: WhatsAppProviderName;
+  direction: "INBOUND" | "OUTBOUND";
+  fromNumber: string;
+  toNumber: string;
+  body: string;
+  externalMessageId?: string | null;
+  status: string;
+  errorCode?: string | null;
+  metadata?: Record<string, any>;
+  deliveredAt?: Date | null;
+}) {
+  return db.whatsAppMessage.create({
+    data: {
+      tenantId: params.tenantId,
+      threadId: params.threadId,
+      providerType: params.providerType,
+      direction: params.direction,
+      fromNumber: normalizeWhatsAppNumber(params.fromNumber),
+      toNumber: normalizeWhatsAppNumber(params.toNumber),
+      body: params.body,
+      externalMessageId: params.externalMessageId || null,
+      status: params.status,
+      errorCode: params.errorCode || null,
+      metadata: sanitizeMetadata(params.metadata || {}),
+      deliveredAt: params.deliveredAt || null
+    }
+  });
+}
+
+async function updateWhatsAppMessageStatus(params: {
+  providerType: WhatsAppProviderName;
+  externalMessageId: string;
+  status: string;
+  errorCode?: string | null;
+  metadata?: Record<string, any>;
+  deliveredAt?: Date | null;
+}) {
+  const row = await db.whatsAppMessage.findFirst({
+    where: { providerType: params.providerType, externalMessageId: params.externalMessageId },
+    orderBy: { createdAt: "desc" }
+  });
+  if (!row) return null;
+
+  const updated = await db.whatsAppMessage.update({
+    where: { id: row.id },
+    data: {
+      status: params.status,
+      errorCode: params.errorCode || null,
+      metadata: sanitizeMetadata({ ...(row.metadata as any || {}), ...(params.metadata || {}) }),
+      deliveredAt: params.deliveredAt || row.deliveredAt || null
+    }
+  });
+
+  await db.whatsAppThread.update({
+    where: { id: row.threadId },
+    data: { lastStatus: params.status, lastMessageAt: new Date() }
+  }).catch(() => undefined);
+  return updated;
+}
+
 function credCacheKey(tenantId: string, provider: ProviderName): string {
   return `${tenantId}:${provider}`;
 }
@@ -2561,6 +2683,182 @@ app.get("/settings/whatsapp-routing", async (req, reply) => {
     activeProvider: rows.find((r) => r.isEnabled)?.provider || null,
     mode: "single_provider_active"
   };
+});
+
+app.get("/whatsapp/status", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const [routing, active, lastInbound, failures] = await Promise.all([
+    db.whatsAppProviderConfig.findMany({ where: { tenantId: admin.tenantId }, select: { provider: true, isEnabled: true, updatedAt: true, lastTestAt: true, lastTestResult: true, lastTestErrorCode: true } }),
+    getEnabledWhatsAppProvider(admin.tenantId),
+    db.whatsAppMessage.findFirst({ where: { tenantId: admin.tenantId, direction: "INBOUND" }, orderBy: { createdAt: "desc" } }),
+    db.whatsAppMessage.findMany({ where: { tenantId: admin.tenantId, status: "FAILED" }, orderBy: { createdAt: "desc" }, take: 10 })
+  ]);
+
+  return {
+    enabled: !!active,
+    activeProvider: active?.row?.provider || null,
+    providers: routing,
+    webhookLastSeenAt: lastInbound?.createdAt || null,
+    recentFailures: failures.map((f) => ({
+      id: f.id,
+      threadId: f.threadId,
+      status: f.status,
+      errorCode: f.errorCode || null,
+      createdAt: f.createdAt
+    })),
+    mode: "single_provider_active"
+  };
+});
+
+app.get("/whatsapp/messages/recent", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({
+    limit: z.coerce.number().int().positive().max(200).optional(),
+    status: z.string().optional(),
+    direction: z.enum(["INBOUND", "OUTBOUND"]).optional()
+  }).parse(req.query || {});
+  const rows = await db.whatsAppMessage.findMany({
+    where: {
+      tenantId: admin.tenantId,
+      status: query.status || undefined,
+      direction: query.direction || undefined
+    },
+    orderBy: { createdAt: "desc" },
+    take: query.limit || 50
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    threadId: r.threadId,
+    providerType: r.providerType,
+    direction: r.direction,
+    fromNumber: maskValue(r.fromNumber, 2, 2),
+    toNumber: maskValue(r.toNumber, 2, 2),
+    bodyPreview: (r.body || "").slice(0, 140),
+    status: r.status,
+    errorCode: r.errorCode || null,
+    createdAt: r.createdAt,
+    deliveredAt: r.deliveredAt || null
+  }));
+});
+
+app.get("/whatsapp/threads", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({
+    q: z.string().optional(),
+    status: z.string().optional(),
+    provider: z.enum(["WHATSAPP_TWILIO", "WHATSAPP_META"]).optional(),
+    limit: z.coerce.number().int().positive().max(200).optional()
+  }).parse(req.query || {});
+
+  const rows = await db.whatsAppThread.findMany({
+    where: {
+      tenantId: admin.tenantId,
+      providerType: query.provider || undefined,
+      contactNumber: query.q ? { contains: query.q } : undefined,
+      lastStatus: query.status || undefined
+    },
+    include: {
+      _count: { select: { messages: true } },
+      messages: { orderBy: { createdAt: "desc" }, take: 1 }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: query.limit || 100
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    providerType: r.providerType,
+    contactNumberMasked: maskValue(r.contactNumber, 3, 2),
+    contactNumberRaw: r.contactNumber,
+    contactName: r.contactName || null,
+    lastMessageAt: r.lastMessageAt,
+    lastDirection: r.lastDirection || null,
+    lastStatus: r.lastStatus || null,
+    lastMessagePreview: r.lastMessagePreview || r.messages[0]?.body?.slice(0, 140) || "",
+    messageCount: r._count.messages
+  }));
+});
+
+app.get("/whatsapp/threads/:id", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const thread = await db.whatsAppThread.findFirst({
+    where: { id, tenantId: admin.tenantId },
+    include: { messages: { orderBy: { createdAt: "asc" }, take: 300 } }
+  });
+  if (!thread) return reply.status(404).send({ error: "thread_not_found" });
+  return {
+    id: thread.id,
+    providerType: thread.providerType,
+    contactNumberRaw: thread.contactNumber,
+    contactNumberMasked: maskValue(thread.contactNumber, 3, 2),
+    contactName: thread.contactName || null,
+    lastMessageAt: thread.lastMessageAt,
+    lastStatus: thread.lastStatus || null,
+    messages: thread.messages.map((m) => ({
+      id: m.id,
+      direction: m.direction,
+      status: m.status,
+      body: m.body,
+      fromNumberMasked: maskValue(m.fromNumber, 3, 2),
+      toNumberMasked: maskValue(m.toNumber, 3, 2),
+      createdAt: m.createdAt,
+      deliveredAt: m.deliveredAt || null,
+      errorCode: m.errorCode || null
+    }))
+  };
+});
+
+app.post("/whatsapp/threads/:id/send", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ message: z.string().min(1).max(2048) }).parse(req.body || {});
+
+  const thread = await db.whatsAppThread.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!thread) return reply.status(404).send({ error: "thread_not_found" });
+  const active = await getEnabledWhatsAppProvider(admin.tenantId);
+  if (!active) return reply.status(400).send({ error: "WHATSAPP_NOT_CONFIGURED" });
+
+  const providerType = active.row.provider as WhatsAppProviderName;
+  const simulate = (process.env.WHATSAPP_SIMULATE || "true").toLowerCase() !== "false";
+  const externalMessageId = simulate ? `wa_sim_${randomBytes(6).toString("hex")}` : `wa_out_${randomBytes(6).toString("hex")}`;
+  const senderId = providerType === "WHATSAPP_TWILIO"
+    ? String((active.creds as WhatsAppTwilioCredentialPayload).fromWhatsAppNumber || (active.creds as WhatsAppTwilioCredentialPayload).messagingServiceSid || "whatsapp:sender")
+    : `meta:${String((active.creds as WhatsAppMetaCredentialPayload).phoneNumberId || "unknown")}`;
+  const status = simulate ? "SENT" : "QUEUED";
+
+  const msg = await createWhatsAppMessage({
+    tenantId: admin.tenantId,
+    threadId: thread.id,
+    providerType,
+    direction: "OUTBOUND",
+    fromNumber: senderId,
+    toNumber: thread.contactNumber,
+    body: input.message,
+    externalMessageId,
+    status,
+    metadata: { simulated: simulate }
+  });
+  await db.whatsAppThread.update({
+    where: { id: thread.id },
+    data: {
+      providerType,
+      lastDirection: "OUTBOUND",
+      lastStatus: status,
+      lastMessageAt: new Date(),
+      lastMessagePreview: input.message.slice(0, 160)
+    }
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "WHATSAPP_REPLY_SENT", entityType: "WhatsAppThread", entityId: thread.id });
+  return { ok: true, simulated: simulate, threadId: thread.id, messageId: msg.id, status: msg.status };
 });
 
 app.get("/settings/sms-routing", async (req, reply) => {
@@ -6445,6 +6743,9 @@ app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
 app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
   const payload = (req.body || {}) as Record<string, any>;
   const accountSid = String(payload.AccountSid || payload.accountSid || "").trim();
+  const messageSid = String(payload.MessageSid || payload.SmsSid || payload.messageSid || "").trim();
+  const statusRaw = String(payload.MessageStatus || payload.SmsStatus || payload.status || "").trim().toLowerCase();
+  const body = String(payload.Body || payload.body || "").trim();
   const from = String(payload.From || payload.from || "").trim();
   const to = String(payload.To || payload.to || "").trim();
 
@@ -6465,6 +6766,65 @@ app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
   }
 
   if (tenantId) {
+    const direction = statusRaw === "received" || (body && !statusRaw) ? "INBOUND" : "OUTBOUND";
+    const contactNumber = direction === "INBOUND" ? from : to;
+    const thread = await upsertWhatsAppThread({
+      tenantId,
+      providerType: "WHATSAPP_TWILIO",
+      contactNumber,
+      lastDirection: direction,
+      lastStatus: statusRaw || (direction === "INBOUND" ? "INBOUND" : "QUEUED"),
+      lastMessagePreview: body ? body.slice(0, 160) : null
+    });
+
+    if (messageSid) {
+      const mappedStatus = statusRaw === "failed" || statusRaw === "undelivered"
+        ? "FAILED"
+        : statusRaw === "delivered"
+          ? "DELIVERED"
+          : statusRaw === "sent" || statusRaw === "accepted"
+            ? "SENT"
+            : direction === "INBOUND"
+              ? "INBOUND"
+              : "QUEUED";
+
+      const updated = await updateWhatsAppMessageStatus({
+        providerType: "WHATSAPP_TWILIO",
+        externalMessageId: messageSid,
+        status: mappedStatus,
+        errorCode: mappedStatus === "FAILED" ? String(payload.ErrorCode || payload.error_code || "DELIVERY_FAILED") : null,
+        metadata: payload,
+        deliveredAt: mappedStatus === "DELIVERED" ? new Date() : null
+      });
+      if (!updated && (direction === "INBOUND" || body)) {
+        await createWhatsAppMessage({
+          tenantId,
+          threadId: thread.id,
+          providerType: "WHATSAPP_TWILIO",
+          direction: direction as "INBOUND" | "OUTBOUND",
+          fromNumber: from,
+          toNumber: to,
+          body: body || `[status:${mappedStatus}]`,
+          externalMessageId: messageSid,
+          status: mappedStatus,
+          errorCode: mappedStatus === "FAILED" ? String(payload.ErrorCode || payload.error_code || "DELIVERY_FAILED") : null,
+          metadata: payload,
+          deliveredAt: mappedStatus === "DELIVERED" ? new Date() : null
+        });
+      }
+    } else if (direction === "INBOUND" && body) {
+      await createWhatsAppMessage({
+        tenantId,
+        threadId: thread.id,
+        providerType: "WHATSAPP_TWILIO",
+        direction: "INBOUND",
+        fromNumber: from,
+        toNumber: to,
+        body,
+        status: "INBOUND",
+        metadata: payload
+      });
+    }
     await audit({ tenantId, action: "WHATSAPP_TWILIO_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
   }
   return { ok: true, provider: "WHATSAPP_TWILIO", tenantMatched: !!tenantId, to: maskValue(to, 2, 2), from: maskValue(from, 2, 2) };
@@ -6517,6 +6877,56 @@ app.post("/webhooks/whatsapp/meta", async (req, reply) => {
   }
 
   if (tenantId) {
+    const messages = Array.isArray(value?.messages) ? value.messages : [];
+    const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+    const displayNumber = String(metadata?.display_phone_number || "").trim();
+
+    for (const m of messages) {
+      const from = String(m?.from || "").trim();
+      const textBody = String(m?.text?.body || m?.button?.text || "").trim();
+      const extId = String(m?.id || "").trim();
+      const thread = await upsertWhatsAppThread({
+        tenantId,
+        providerType: "WHATSAPP_META",
+        contactNumber: from,
+        lastDirection: "INBOUND",
+        lastStatus: "INBOUND",
+        lastMessagePreview: textBody.slice(0, 160)
+      });
+      await createWhatsAppMessage({
+        tenantId,
+        threadId: thread.id,
+        providerType: "WHATSAPP_META",
+        direction: "INBOUND",
+        fromNumber: from,
+        toNumber: displayNumber || `meta:${phoneNumberId}`,
+        body: textBody || "[non-text message]",
+        externalMessageId: extId || null,
+        status: "INBOUND",
+        metadata: m
+      });
+    }
+
+    for (const s of statuses) {
+      const extId = String(s?.id || "").trim();
+      if (!extId) continue;
+      const mappedStatus = String(s?.status || "").toLowerCase() === "failed"
+        ? "FAILED"
+        : String(s?.status || "").toLowerCase() === "delivered"
+          ? "DELIVERED"
+          : String(s?.status || "").toLowerCase() === "sent"
+            ? "SENT"
+            : "QUEUED";
+      await updateWhatsAppMessageStatus({
+        providerType: "WHATSAPP_META",
+        externalMessageId: extId,
+        status: mappedStatus,
+        errorCode: mappedStatus === "FAILED" ? String(s?.errors?.[0]?.code || "DELIVERY_FAILED") : null,
+        metadata: s,
+        deliveredAt: mappedStatus === "DELIVERED" ? new Date() : null
+      });
+    }
+
     await audit({ tenantId, action: "WHATSAPP_META_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
   }
 

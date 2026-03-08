@@ -291,6 +291,8 @@ model Tenant {
   providerCredentials           ProviderCredential[]
   billingSolaConfig             BillingSolaConfig?
   whatsappProviderConfigs       WhatsAppProviderConfig[]
+  whatsAppThreads               WhatsAppThread[]
+  whatsAppMessages              WhatsAppMessage[]
   emailProviderConfig           EmailProviderConfig?
   webhookEvents                 SmsWebhookEvent[]
   providerHealth                ProviderHealth[]
@@ -623,6 +625,49 @@ model WhatsAppProviderConfig {
 
   @@unique([tenantId, provider])
   @@index([tenantId, isEnabled])
+}
+
+model WhatsAppThread {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  providerType       WhatsAppProviderType
+  contactNumber      String
+  contactName        String?
+  lastMessageAt      DateTime             @default(now())
+  lastMessagePreview String?
+  lastDirection      String?
+  lastStatus         String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messages           WhatsAppMessage[]
+
+  @@unique([tenantId, providerType, contactNumber])
+  @@index([tenantId, updatedAt])
+}
+
+model WhatsAppMessage {
+  id                String               @id @default(cuid())
+  tenantId          String
+  threadId          String
+  providerType      WhatsAppProviderType
+  direction         String
+  fromNumber        String
+  toNumber          String
+  body              String
+  externalMessageId String?
+  status            String
+  errorCode         String?
+  metadata          Json?
+  deliveredAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  thread            WhatsAppThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([threadId, createdAt])
+  @@index([externalMessageId])
 }
 
 model EmailProviderConfig {
