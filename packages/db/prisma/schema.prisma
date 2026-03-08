@@ -331,7 +331,7 @@ model User {
   tenantId                   String
   email                      String               @unique
   passwordHash               String
-  role                       String               @default("USER")
+  role                       UserRole             @default(USER)
   createdAt                  DateTime             @default(now())
   tenant                     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   auditEvents                AuditLog[]           @relation("AuditActor")
@@ -354,6 +354,16 @@ model User {
   requestedMediaTestRuns     MediaTestRun[]      @relation("MediaTestRequestedBy")
   mobileProvisioningTokens    MobileProvisioningToken[]
   updatedSbcConfigs           SbcConfig[]        @relation("SbcConfigUpdatedBy")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  BILLING
+  MESSAGING
+  SUPPORT
+  READ_ONLY
+  USER
 }
 
 model Subscription {

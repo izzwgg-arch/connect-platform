@@ -2,10 +2,12 @@
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { normalizeRecipientsFromText, parseRecipientsFromCsvText } from "../utils";
+import { canManageMessaging, readRoleFromToken } from "../../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
 export default function SmsCampaignNewPage() {
+  const [role, setRole] = useState("");
   const [name, setName] = useState("New campaign");
   const [message, setMessage] = useState("Hello from Connect Communications");
   const [recipientsRaw, setRecipientsRaw] = useState("+15555550101\n+15555550102");
@@ -29,6 +31,7 @@ export default function SmsCampaignNewPage() {
   }, [summary.validCount, tenantLimits, tenantMode, senderNumberId]);
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     const token = localStorage.getItem("token") || "";
     Promise.all([
       fetch(`${apiBase}/numbers`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -47,6 +50,10 @@ export default function SmsCampaignNewPage() {
       })
       .catch(() => undefined);
   }, []);
+
+  if (role && !canManageMessaging(role)) {
+    return <div className="card"><h1>New SMS Campaign</h1><p>Access denied.</p></div>;
+  }
 
   function onCsvUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];

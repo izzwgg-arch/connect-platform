@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { canAccessAdminBilling, canAccessAdminSbc, canManageBilling, canManageMessaging, canManageProviders, canViewCustomers, readRoleFromToken } from "../lib/roles";
 
 type NavItem = { href: string; label: string };
 
@@ -53,6 +55,31 @@ function NavGroup({ items, pathname }: { items: NavItem[]; pathname: string }) {
 
 export function SidebarNav() {
   const pathname = usePathname();
+  const [role, setRole] = useState("");
+  useEffect(() => {
+    setRole(readRoleFromToken());
+  }, []);
+
+  const filteredPrimary = primary.filter((item) => {
+    if (item.href === "/dashboard") return true;
+    if (item.href === "/dashboard/customers") return canViewCustomers(role);
+    if (item.href.startsWith("/dashboard/billing")) return canManageBilling(role);
+    if (item.href === "/dashboard/settings/email") return canManageBilling(role);
+    if (item.href.startsWith("/dashboard/sms")) return canManageMessaging(role);
+    if (item.href.startsWith("/dashboard/whatsapp")) return canManageMessaging(role) || canViewCustomers(role);
+    if (item.href.startsWith("/dashboard/settings/providers")) return canManageProviders(role);
+    if (item.href === "/dashboard/10dlc") return canManageMessaging(role) || canManageProviders(role);
+    if (item.href === "/dashboard/extensions" || item.href === "/dashboard/voice/phone" || item.href === "/dashboard/numbers") {
+      return !["READ_ONLY"].includes(role || "");
+    }
+    return true;
+  });
+  const filteredAdmin = admin.filter((item) => {
+    if (item.href.startsWith("/dashboard/admin/sbc")) return canAccessAdminSbc(role);
+    if (item.href.startsWith("/dashboard/admin/billing")) return canAccessAdminBilling(role);
+    return canAccessAdminSbc(role);
+  });
+
   return (
     <>
       <aside className="rail">
@@ -66,9 +93,9 @@ export function SidebarNav() {
       </aside>
       <aside className="side-panel">
         <div className="side-head">Admin Console</div>
-        <NavGroup items={primary} pathname={pathname} />
+        <NavGroup items={filteredPrimary} pathname={pathname} />
         <div className="side-divider" />
-        <NavGroup items={admin} pathname={pathname} />
+        <NavGroup items={filteredAdmin} pathname={pathname} />
       </aside>
     </>
   );

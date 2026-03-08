@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { canManageBilling, readRoleFromToken } from "../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
@@ -32,6 +33,7 @@ type SolaConfigResponse = {
 };
 
 export default function BillingSolaSettingsPage() {
+  const [role, setRole] = useState("");
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -129,9 +131,14 @@ export default function BillingSolaSettingsPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     loadConfig().catch(() => setError("Failed to load SOLA settings"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (role && !canManageBilling(role)) {
+    return <div className="card"><h1>Billing SOLA Settings</h1><p>Access denied.</p></div>;
+  }
 
   async function saveConfig() {
     if (!token) return;

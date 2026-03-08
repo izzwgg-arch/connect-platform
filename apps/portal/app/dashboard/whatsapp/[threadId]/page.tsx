@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { canManageMessaging, readRoleFromToken } from "../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
@@ -16,6 +17,7 @@ function badgeClass(status: string) {
 export default function WhatsAppThreadPage() {
   const params = useParams<{ threadId: string }>();
   const threadId = params?.threadId;
+  const [role, setRole] = useState("");
   const [thread, setThread] = useState<any>(null);
   const [status, setStatus] = useState<any>(null);
   const [message, setMessage] = useState("");
@@ -38,6 +40,7 @@ export default function WhatsAppThreadPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setError("Failed to load thread."));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
@@ -70,6 +73,7 @@ export default function WhatsAppThreadPage() {
   }
 
   const providerEnabled = !!status?.enabled;
+  const messagingAllowed = canManageMessaging(role);
 
   return (
     <div className="card">
@@ -111,9 +115,10 @@ export default function WhatsAppThreadPage() {
 
       <h2>Reply</h2>
       <textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type reply message..." />
-      <button onClick={sendReply} disabled={loading || !providerEnabled || !thread}>
+      <button onClick={sendReply} disabled={loading || !providerEnabled || !thread || !messagingAllowed}>
         {loading ? "Sending..." : "Send Reply"}
       </button>
+      {!messagingAllowed ? <p>Access denied for reply action.</p> : null}
     </div>
   );
 }

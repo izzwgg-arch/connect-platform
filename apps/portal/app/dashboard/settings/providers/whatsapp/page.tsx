@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { canManageMessaging, readRoleFromToken } from "../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
@@ -16,6 +17,7 @@ type WhatsAppRow = {
 };
 
 export default function WhatsAppProviderSettingsPage() {
+  const [role, setRole] = useState("");
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
   const [rows, setRows] = useState<WhatsAppRow[]>([]);
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
@@ -45,9 +47,14 @@ export default function WhatsAppProviderSettingsPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setResult("Failed to load WhatsApp provider settings"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (role && !canManageMessaging(role)) {
+    return <div className="card"><h1>WhatsApp Provider Settings</h1><p>Access denied.</p></div>;
+  }
 
   async function saveTwilio() {
     const res = await fetch(`${apiBase}/settings/providers/whatsapp/twilio`, {

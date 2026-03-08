@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { canManageBilling, readRoleFromToken } from "../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
 export default function EmailSettingsPage() {
+  const [role, setRole] = useState("");
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
   const [provider, setProvider] = useState<"SENDGRID" | "SMTP" | "GOOGLE_WORKSPACE">("GOOGLE_WORKSPACE");
   const [fromName, setFromName] = useState("Connect Communications");
@@ -40,9 +42,14 @@ export default function EmailSettingsPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setResult("Failed to load email settings"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (role && !canManageBilling(role)) {
+    return <div className="card"><h1>Email Settings</h1><p>Access denied.</p></div>;
+  }
 
 
   useEffect(() => {

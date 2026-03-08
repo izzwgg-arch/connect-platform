@@ -2,19 +2,9 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { canManageProviders, readRoleFromToken } from "../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
-
-function readJwtRole(): string {
-  const token = localStorage.getItem("token");
-  if (!token) return "";
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.role || "";
-  } catch {
-    return "";
-  }
-}
 
 type ProviderRow = {
   provider: "TWILIO" | "VOIPMS";
@@ -55,7 +45,7 @@ type RoutingPayload = {
 };
 
 export default function ProviderSettingsPage() {
-  const role = useMemo(() => (typeof window !== "undefined" ? readJwtRole() : ""), []);
+  const role = useMemo(() => (typeof window !== "undefined" ? readRoleFromToken() : ""), []);
 
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [smsLimits, setSmsLimits] = useState<SmsLimitsPayload | null>(null);
@@ -264,6 +254,10 @@ export default function ProviderSettingsPage() {
   if (role !== "ADMIN" && role !== "SUPER_ADMIN") {
     return <div className="card"><h1>Provider Settings</h1>
       <p><Link href="/dashboard/settings/providers/whatsapp">Open WhatsApp provider settings</Link> | <Link href="/dashboard/settings/email">Open Email settings</Link></p><p>Insufficient permissions.</p></div>;
+  }
+
+  if (role && !canManageProviders(role)) {
+    return <div className="card"><h1>Provider Settings</h1><p>Access denied.</p></div>;
   }
 
   return (

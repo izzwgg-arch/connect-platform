@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { canViewCustomers, readRoleFromToken } from "../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [role, setRole] = useState("");
   const [summary, setSummary] = useState<any>(null);
   const [edit, setEdit] = useState<any>(null);
   const [status, setStatus] = useState("");
@@ -32,8 +34,13 @@ export default function CustomerDetailPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setStatus("Failed to load customer summary"));
   }, [id]);
+
+  if (role && !canViewCustomers(role)) {
+    return <div className="card"><h1>Customer Detail</h1><p>Access denied.</p></div>;
+  }
 
   async function save() {
     if (!id || !edit) return;
@@ -75,7 +82,7 @@ export default function CustomerDetailPage() {
             <input value={edit?.primaryPhone || ""} onChange={(e) => setEdit((v: any) => ({ ...v, primaryPhone: e.target.value }))} placeholder="Phone" />
             <input value={edit?.whatsappNumber || ""} onChange={(e) => setEdit((v: any) => ({ ...v, whatsappNumber: e.target.value }))} placeholder="WhatsApp number" />
             <textarea value={edit?.notes || ""} onChange={(e) => setEdit((v: any) => ({ ...v, notes: e.target.value }))} placeholder="Notes" />
-            <button onClick={save} disabled={loading}>Save</button>
+            <button onClick={save} disabled={loading || role === "READ_ONLY"}>Save</button>
           </div>
 
           <div className="card">

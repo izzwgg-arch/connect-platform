@@ -997,22 +997,55 @@ function getUser(req: any): JwtUser {
   return req.user as JwtUser;
 }
 
-async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
+type StaffRole = "SUPER_ADMIN" | "ADMIN" | "BILLING" | "MESSAGING" | "SUPPORT" | "READ_ONLY" | "USER";
+
+function isRole(user: JwtUser, allowed: StaffRole[]): boolean {
+  return allowed.includes((user.role || "USER") as StaffRole);
+}
+
+function canManageBilling(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN", "BILLING"]);
+}
+
+function canManageMessaging(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
+}
+
+function canViewCustomers(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN", "BILLING", "MESSAGING", "SUPPORT", "READ_ONLY", "USER"]);
+}
+
+function canManageProviders(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+function canAccessAdminSbc(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN"]);
+}
+
+function canAccessAdminBilling(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN"]);
+}
+
+function canAccessCampaignSend(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
+}
+
+async function requirePermission(req: any, reply: any, checker: (user: JwtUser) => boolean): Promise<JwtUser | null> {
   const user = getUser(req);
-  if (user.role !== "ADMIN" && user.role !== "SUPER_ADMIN") {
+  if (!checker(user)) {
     reply.status(403).send({ error: "forbidden" });
     return null;
   }
   return user;
 }
 
+async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
+  return requirePermission(req, reply, (user) => isRole(user, ["ADMIN", "SUPER_ADMIN"]));
+}
+
 async function requireSuperAdmin(req: any, reply: any): Promise<JwtUser | null> {
-  const user = getUser(req);
-  if (user.role !== "SUPER_ADMIN") {
-    reply.status(403).send({ error: "forbidden" });
-    return null;
-  }
-  return user;
+  return requirePermission(req, reply, canAccessAdminSbc);
 }
 
 
@@ -2376,6 +2409,33 @@ app.get("/me", async (req) => {
   return { id: user.sub, tenantId: user.tenantId, email: user.email, role: user.role };
 });
 
+app.get("/admin/users", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (user) => isRole(user, ["SUPER_ADMIN", "ADMIN"]));
+  if (!admin) return;
+  return db.user.findMany({
+    where: { tenantId: admin.tenantId },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, email: true, role: true, createdAt: true }
+  });
+});
+
+app.post("/admin/users/:id/role", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (user) => isRole(user, ["SUPER_ADMIN", "ADMIN"]));
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    role: z.enum(["SUPER_ADMIN", "ADMIN", "BILLING", "MESSAGING", "SUPPORT", "READ_ONLY", "USER"])
+  }).parse(req.body || {});
+  const target = await db.user.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  if (admin.role !== "SUPER_ADMIN" && input.role === "SUPER_ADMIN") {
+    return reply.status(403).send({ error: "forbidden" });
+  }
+  const updated = await db.user.update({ where: { id: target.id }, data: { role: input.role } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "USER_ROLE_UPDATED", entityType: "User", entityId: updated.id });
+  return { ok: true, user: { id: updated.id, email: updated.email, role: updated.role } };
+});
+
 app.get("/settings/sms-limits", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
@@ -2622,7 +2682,7 @@ app.post("/settings/providers/voipms/disable", async (req, reply) => {
 });
 
 app.get("/settings/providers/whatsapp", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2642,7 +2702,7 @@ app.get("/settings/providers/whatsapp", async (req, reply) => {
 });
 
 app.put("/settings/providers/whatsapp/twilio", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2696,7 +2756,7 @@ app.put("/settings/providers/whatsapp/twilio", async (req, reply) => {
 });
 
 app.put("/settings/providers/whatsapp/meta", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2754,7 +2814,7 @@ app.put("/settings/providers/whatsapp/meta", async (req, reply) => {
 });
 
 app.post("/settings/providers/whatsapp/enable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2769,7 +2829,7 @@ app.post("/settings/providers/whatsapp/enable", async (req, reply) => {
 });
 
 app.post("/settings/providers/whatsapp/disable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2783,7 +2843,7 @@ app.post("/settings/providers/whatsapp/disable", async (req, reply) => {
 });
 
 app.post("/whatsapp/test-send", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -2950,7 +3010,7 @@ app.get("/whatsapp/threads/:id", async (req, reply) => {
 });
 
 app.post("/whatsapp/threads/:id/send", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageMessaging);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
   const { id } = req.params as { id: string };
@@ -3464,6 +3524,7 @@ app.get("/admin/sms/provider-health", async (req, reply) => {
 
 app.post("/sms/campaigns", async (req, reply) => {
   const user = getUser(req);
+  if (!canManageMessaging(user)) return reply.status(403).send({ error: "forbidden" });
   const input = z.object({
     name: z.string().min(2),
     fromNumber: z.string().min(7).optional(),
@@ -3721,6 +3782,7 @@ app.post("/sms/campaigns/:id/preview", async (req, reply) => {
 
 app.post("/sms/campaigns/:id/send", async (req, reply) => {
   const user = getUser(req);
+  if (!canAccessCampaignSend(user)) return reply.status(403).send({ error: "forbidden" });
   const { id } = req.params as { id: string };
 
   const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true, tenant: true } });
@@ -6182,7 +6244,7 @@ app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
 });
 
 app.get("/billing/sola/config", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6226,7 +6288,7 @@ app.get("/billing/sola/config", async (req, reply) => {
 });
 
 app.put("/billing/sola/config", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6326,7 +6388,7 @@ app.put("/billing/sola/config", async (req, reply) => {
 });
 
 app.post("/billing/sola/config/test", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6358,7 +6420,7 @@ app.post("/billing/sola/config/test", async (req, reply) => {
 });
 
 app.post("/billing/sola/config/enable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6374,7 +6436,7 @@ app.post("/billing/sola/config/enable", async (req, reply) => {
 });
 
 app.post("/billing/sola/config/disable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6387,7 +6449,7 @@ app.post("/billing/sola/config/disable", async (req, reply) => {
 });
 
 app.get("/admin/billing/sola/tenants", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canAccessAdminBilling);
   if (!admin) return;
 
   const rows = await db.tenant.findMany({
@@ -6414,7 +6476,7 @@ app.get("/admin/billing/sola/tenants", async (req, reply) => {
 });
 
 app.get("/admin/billing/sola/tenant/:id", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canAccessAdminBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6434,7 +6496,7 @@ app.get("/admin/billing/sola/tenant/:id", async (req, reply) => {
 });
 
 app.get("/settings/email", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6472,7 +6534,7 @@ app.get("/settings/email", async (req, reply) => {
 });
 
 app.put("/settings/email", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6560,7 +6622,7 @@ app.put("/settings/email", async (req, reply) => {
 });
 
 app.post("/settings/email/test", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6588,7 +6650,7 @@ app.post("/settings/email/test", async (req, reply) => {
 });
 
 app.get("/customers", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
   const query = z.object({
     q: z.string().optional(),
@@ -6656,7 +6718,7 @@ app.get("/customers", async (req, reply) => {
 });
 
 app.post("/customers", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, (user) => canViewCustomers(user) && !isRole(user, ["READ_ONLY"]));
   if (!admin) return;
   const input = z.object({
     displayName: z.string().min(1).max(160),
@@ -6692,7 +6754,7 @@ app.post("/customers", async (req, reply) => {
 });
 
 app.get("/customers/:id", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const row = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -6701,7 +6763,7 @@ app.get("/customers/:id", async (req, reply) => {
 });
 
 app.put("/customers/:id", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, (user) => canViewCustomers(user) && !isRole(user, ["READ_ONLY"]));
   if (!admin) return;
   const { id } = req.params as { id: string };
   const existing = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -6748,7 +6810,7 @@ app.put("/customers/:id", async (req, reply) => {
 });
 
 app.get("/customers/:id/summary", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -6884,7 +6946,7 @@ app.get("/customers/:id/summary", async (req, reply) => {
 });
 
 app.get("/dashboard/summary", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
   const query = z.object({ range: z.enum(["24h", "7d", "30d"]).optional() }).parse(req.query || {});
   const { key: range, since } = resolveDashboardRange(query.range);
@@ -7020,7 +7082,7 @@ app.get("/dashboard/summary", async (req, reply) => {
 });
 
 app.get("/dashboard/activity", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
   const query = z.object({ range: z.enum(["24h", "7d", "30d"]).optional() }).parse(req.query || {});
   const { key: range, since } = resolveDashboardRange(query.range);
@@ -7098,7 +7160,7 @@ app.get("/dashboard/activity", async (req, reply) => {
 });
 
 app.get("/billing/invoices", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const rows = await db.invoice.findMany({
     where: { tenantId: admin.tenantId },
@@ -7112,7 +7174,7 @@ app.get("/billing/invoices", async (req, reply) => {
 });
 
 app.get("/billing/invoices/summary", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const rows = await db.invoice.findMany({ where: { tenantId: admin.tenantId } });
   const byStatus: Record<string, number> = { DRAFT: 0, SENT: 0, OVERDUE: 0, PAID: 0, VOID: 0 };
@@ -7133,14 +7195,14 @@ app.get("/billing/invoices/summary", async (req, reply) => {
 });
 
 app.post("/billing/invoices/overdue/run", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   await processInvoiceOverdueBatch();
   return { ok: true };
 });
 
 app.get("/billing/invoices/:id", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const row = await db.invoice.findFirst({
@@ -7161,7 +7223,7 @@ app.get("/billing/invoices/:id", async (req, reply) => {
 });
 
 app.get("/billing/invoices/:id/events", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const row = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -7170,7 +7232,7 @@ app.get("/billing/invoices/:id/events", async (req, reply) => {
 });
 
 app.post("/billing/invoices", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
 
   const input = z.object({
@@ -7230,7 +7292,7 @@ app.post("/billing/invoices", async (req, reply) => {
 });
 
 app.post("/billing/invoices/:id/send", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -7248,7 +7310,7 @@ app.post("/billing/invoices/:id/send", async (req, reply) => {
 });
 
 app.post("/billing/invoices/:id/void", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const input = z.object({ reason: z.string().min(2).optional() }).parse(req.body || {});
@@ -7267,7 +7329,7 @@ app.post("/billing/invoices/:id/void", async (req, reply) => {
 });
 
 app.post("/billing/invoices/:id/remind", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -7490,7 +7552,7 @@ app.post("/billing/subscription/cancel", async (req, reply) => {
 });
 
 app.get("/admin/billing/tenants", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canAccessAdminBilling);
   if (!admin) return;
 
   const rows = await db.tenant.findMany({ include: { subscription: true }, orderBy: { createdAt: "desc" } });
@@ -7515,7 +7577,7 @@ app.get("/admin/billing/tenants", async (req, reply) => {
 });
 
 app.get("/admin/billing/tenants/:id", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canAccessAdminBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
 
@@ -7527,7 +7589,7 @@ app.get("/admin/billing/tenants/:id", async (req, reply) => {
 });
 
 app.post("/admin/billing/tenants/:id/override-status", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
+  const admin = await requirePermission(req, reply, canAccessAdminBilling);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const input = z.object({ status: z.enum(["NONE", "PENDING", "TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]), reason: z.string().min(3) }).parse(req.body);

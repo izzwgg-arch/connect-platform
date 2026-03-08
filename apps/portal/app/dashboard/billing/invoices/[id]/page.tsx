@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { canManageBilling, readRoleFromToken } from "../../../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [role, setRole] = useState("");
   const [invoice, setInvoice] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [status, setStatus] = useState("");
@@ -25,8 +27,13 @@ export default function InvoiceDetailPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setStatus("Failed to load invoice details"));
   }, [id]);
+
+  if (role && !canManageBilling(role)) {
+    return <div className="card"><h1>Invoice Detail</h1><p>Access denied.</p></div>;
+  }
 
   async function runAction(action: "send" | "remind" | "void") {
     if (!id) return;

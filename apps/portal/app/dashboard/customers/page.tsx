@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { canViewCustomers, readRoleFromToken } from "../../../lib/roles";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api";
 
 export default function CustomersPage() {
+  const [role, setRole] = useState("");
   const [rows, setRows] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [result, setResult] = useState("");
@@ -21,8 +23,13 @@ export default function CustomersPage() {
   }
 
   useEffect(() => {
+    setRole(readRoleFromToken());
     load().catch(() => setResult("Failed to load customers"));
   }, []);
+
+  if (role && !canViewCustomers(role)) {
+    return <div className="card"><h1>Customer Hub</h1><p>Access denied.</p></div>;
+  }
 
   async function createCustomer() {
     if (!newCustomer.displayName.trim()) {
@@ -85,7 +92,7 @@ export default function CustomersPage() {
         <input value={newCustomer.primaryEmail} onChange={(e) => setNewCustomer((v) => ({ ...v, primaryEmail: e.target.value }))} placeholder="Primary email (optional)" />
         <input value={newCustomer.primaryPhone} onChange={(e) => setNewCustomer((v) => ({ ...v, primaryPhone: e.target.value }))} placeholder="Primary phone (optional)" />
         <input value={newCustomer.whatsappNumber} onChange={(e) => setNewCustomer((v) => ({ ...v, whatsappNumber: e.target.value }))} placeholder="WhatsApp number (optional)" />
-        <button disabled={loading} onClick={createCustomer}>Create Customer</button>
+        <button disabled={loading || role === "READ_ONLY"} onClick={createCustomer}>Create Customer</button>
       </div>
 
       {filtered.length === 0 ? <p>No customers found. Create one to start linking activity.</p> : (
