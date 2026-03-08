@@ -1103,7 +1103,7 @@ const VITALPBX_ROLE_PERMISSIONS: Record<StaffRole, Set<VitalPbxPermission>> = {
   ]),
   MESSAGING: new Set<VitalPbxPermission>([
     "vitalpbx.extensions.view", "vitalpbx.extensions.viewRegistration",
-    "vitalpbx.queues.view", "vitalpbx.queues.agentControl",
+    "vitalpbx.queues.view", "vitalpbx.queues.create", "vitalpbx.queues.update", "vitalpbx.queues.agentControl",
     "vitalpbx.cdr.view",
     "vitalpbx.voicemail.view",
     "vitalpbx.customerCodes.view",
