@@ -25,6 +25,10 @@ export default function PublicInvoicePayPage() {
 
   async function payNow() {
     if (!token) return;
+    if (!invoice?.canPay) {
+      setStatus("This invoice cannot be paid in its current state.");
+      return;
+    }
     setStatus("Starting hosted checkout...");
     const res = await fetch(`${apiBase}/billing/invoices/pay/${token}/hosted-session`, { method: "POST" });
     const json = await res.json().catch(() => ({}));
@@ -44,8 +48,16 @@ export default function PublicInvoicePayPage() {
       {!invoice ? <p>Loading invoice...</p> : (
         <>
           <p>Status: <strong>{invoice.status}</strong></p>
+          <p>
+            {invoice.state === "paid" ? "This invoice is already paid."
+              : invoice.state === "void" ? "This invoice has been voided."
+                : invoice.state === "overdue" ? "This invoice is overdue. Please pay as soon as possible."
+                  : "This invoice is unpaid."}
+          </p>
           <p>Amount due: <strong>${(Number(invoice.amountCents || 0) / 100).toFixed(2)} {invoice.currency || "USD"}</strong></p>
-          <button onClick={payNow} disabled={invoice.status === "PAID"}>{invoice.status === "PAID" ? "Paid" : "Pay Now"}</button>
+          {invoice.state === "overdue" ? <p className="status-chip pending" style={{ borderRadius: 2 }}>Overdue</p> : null}
+          <button onClick={payNow} disabled={!invoice.canPay}>{invoice.canPay ? "Pay Now" : "Payment Disabled"}</button>
+          {!invoice.canPay ? <p>If you think this is a mistake, contact billing support.</p> : null}
         </>
       )}
 

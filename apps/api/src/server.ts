@@ -373,6 +373,47 @@ async function queueInvoiceDeclineEmail(params: { tenantId: string; invoiceId: s
   });
 }
 
+async function queueInvoiceReminderEmail(params: { tenantId: string; invoiceId: string; to: string; amountCents: number; payUrl: string; overdue?: boolean }) {
+  const dollars = (params.amountCents / 100).toFixed(2);
+  const subject = params.overdue ? "Invoice overdue - payment reminder" : "Invoice reminder";
+  const intro = params.overdue
+    ? `Your invoice for <strong>$${dollars}</strong> is overdue.`
+    : `This is a reminder for your invoice amount of <strong>$${dollars}</strong>.`;
+  await queueEmailJob({
+    tenantId: params.tenantId,
+    invoiceId: params.invoiceId,
+    type: params.overdue ? "INVOICE_OVERDUE" : "INVOICE_REMINDER",
+    toEmail: params.to,
+    subject,
+    htmlBody: `<p>${intro}</p><p><a href="${params.payUrl}">Pay invoice</a></p>`,
+    textBody: `${params.overdue ? "Invoice overdue." : "Invoice reminder."} Amount: $${dollars}. Pay invoice: ${params.payUrl}`
+  });
+}
+
+function sanitizeEventPayload(input: unknown): Record<string, any> {
+  const src = (input && typeof input === "object") ? (input as Record<string, any>) : {};
+  const out: Record<string, any> = {};
+  const blocked = new Set(["authorization", "auth", "token", "secret", "password"]);
+  for (const [k, v] of Object.entries(src)) {
+    const key = String(k || "").toLowerCase();
+    if (blocked.has(key) || key.includes("token") || key.includes("secret") || key.includes("password")) continue;
+    if (typeof v === "string" && v.length > 500) out[k] = `${v.slice(0, 500)}...`;
+    else out[k] = v;
+  }
+  return out;
+}
+
+async function logInvoiceEvent(params: { tenantId: string; invoiceId: string; type: string; payload?: Record<string, any> }) {
+  await db.invoiceEvent.create({
+    data: {
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      type: params.type,
+      payload: sanitizeEventPayload(params.payload || {}) as any
+    }
+  });
+}
+
 async function sendEmailJobNow(job: any): Promise<void> {
   const provider = await db.emailProviderConfig.findUnique({ where: { tenantId: job.tenantId } });
   if (!provider || !provider.isEnabled) {
@@ -480,6 +521,64 @@ async function processEmailJobsBatch() {
     }
   } finally {
     emailJobProcessorRunning = false;
+  }
+}
+
+let invoiceOverdueProcessorRunning = false;
+
+async function processInvoiceOverdueBatch() {
+  if (invoiceOverdueProcessorRunning) return;
+  invoiceOverdueProcessorRunning = true;
+  try {
+    const now = new Date();
+    const candidates = await db.invoice.findMany({
+      where: {
+        status: "SENT",
+        dueAt: { lt: now }
+      },
+      orderBy: { dueAt: "asc" },
+      take: 50
+    });
+
+    for (const invoice of candidates) {
+      const overdue = await db.invoice.update({
+        where: { id: invoice.id },
+        data: { status: "OVERDUE", lastFailureReason: invoice.lastFailureReason || "OVERDUE" }
+      });
+      await logInvoiceEvent({
+        tenantId: overdue.tenantId,
+        invoiceId: overdue.id,
+        type: "OVERDUE",
+        payload: { dueAt: overdue.dueAt?.toISOString() || null }
+      });
+      await audit({ tenantId: overdue.tenantId, action: "INVOICE_OVERDUE", entityType: "Invoice", entityId: overdue.id });
+
+      const nowMs = Date.now();
+      const recentReminder = await db.invoiceEvent.findFirst({
+        where: {
+          invoiceId: overdue.id,
+          type: { in: ["REMINDER_SENT", "OVERDUE_REMINDER_SENT"] },
+          createdAt: { gte: new Date(nowMs - 24 * 60 * 60 * 1000) }
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      if (!recentReminder) {
+        const payUrl = overdue.externalPaymentLink || (overdue.payToken ? `https://app.connectcomunications.com/pay/invoice/${overdue.payToken}` : null);
+        if (payUrl) {
+          await queueInvoiceReminderEmail({
+            tenantId: overdue.tenantId,
+            invoiceId: overdue.id,
+            to: overdue.customerEmail,
+            amountCents: overdue.amountCents,
+            payUrl,
+            overdue: true
+          });
+          await logInvoiceEvent({ tenantId: overdue.tenantId, invoiceId: overdue.id, type: "OVERDUE_REMINDER_SENT", payload: { payUrl } });
+        }
+      }
+    }
+  } finally {
+    invoiceOverdueProcessorRunning = false;
   }
 }
 
@@ -6459,13 +6558,61 @@ app.get("/billing/invoices", async (req, reply) => {
   return db.invoice.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
 });
 
+app.get("/billing/invoices/summary", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const rows = await db.invoice.findMany({ where: { tenantId: admin.tenantId } });
+  const byStatus: Record<string, number> = { DRAFT: 0, SENT: 0, OVERDUE: 0, PAID: 0, VOID: 0 };
+  let totalCents = 0;
+  let paidCents = 0;
+  let outstandingCents = 0;
+  for (const r of rows) {
+    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+    totalCents += r.amountCents || 0;
+    if (r.status === "PAID") paidCents += r.amountCents || 0;
+    if (r.status === "SENT" || r.status === "OVERDUE") outstandingCents += r.amountCents || 0;
+  }
+  return {
+    totalInvoices: rows.length,
+    byStatus,
+    totals: { totalCents, paidCents, outstandingCents }
+  };
+});
+
+app.post("/billing/invoices/overdue/run", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  await processInvoiceOverdueBatch();
+  return { ok: true };
+});
+
 app.get("/billing/invoices/:id", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.invoice.findFirst({
+    where: { id, tenantId: admin.tenantId },
+    include: {
+      events: { orderBy: { createdAt: "asc" }, take: 200 }
+    }
+  });
+  if (!row) return reply.status(404).send({ error: "invoice_not_found" });
+  const paymentAttempts = await db.paymentEvent.findMany({
+    where: { tenantId: admin.tenantId, subscriptionId: id },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: { id: true, type: true, status: true, providerEventId: true, amountCents: true, currency: true, createdAt: true }
+  });
+  return { ...row, paymentAttempts };
+});
+
+app.get("/billing/invoices/:id/events", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const row = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
   if (!row) return reply.status(404).send({ error: "invoice_not_found" });
-  return row;
+  return db.invoiceEvent.findMany({ where: { invoiceId: id, tenantId: admin.tenantId }, orderBy: { createdAt: "asc" } });
 });
 
 app.post("/billing/invoices", async (req, reply) => {
@@ -6498,10 +6645,16 @@ app.post("/billing/invoices", async (req, reply) => {
     }
   });
 
+  await logInvoiceEvent({
+    tenantId: admin.tenantId,
+    invoiceId: invoice.id,
+    type: "CREATED",
+    payload: { amountCents: invoice.amountCents, currency: invoice.currency, dueAt: invoice.dueAt?.toISOString() || null, sendEmail: input.sendEmail }
+  });
   if (input.sendEmail) {
     await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: invoice.id, to: invoice.customerEmail, amountCents: invoice.amountCents, payUrl });
+    await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: invoice.id, type: "SENT", payload: { payUrl } });
   }
-
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_CREATED", entityType: "Invoice", entityId: invoice.id });
   return invoice;
 });
@@ -6513,13 +6666,73 @@ app.post("/billing/invoices/:id/send", async (req, reply) => {
   const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
   if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
   if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
 
   const payToken = invoice.payToken || `inv_${randomBytes(18).toString("hex")}`;
   const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
   const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", payToken, payTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), externalPaymentLink: payUrl } });
   await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, payUrl });
+  await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "SENT", payload: { payUrl } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_SENT", entityType: "Invoice", entityId: updated.id });
   return updated;
+});
+
+app.post("/billing/invoices/:id/void", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ reason: z.string().min(2).optional() }).parse(req.body || {});
+  const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.status === "VOID") return { ok: true, invoice };
+
+  const updated = await db.invoice.update({
+    where: { id: invoice.id },
+    data: { status: "VOID", lastFailureReason: input.reason || "VOIDED_BY_ADMIN" }
+  });
+  await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "VOIDED", payload: { reason: input.reason || null } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_VOIDED", entityType: "Invoice", entityId: updated.id });
+  return { ok: true, invoice: updated };
+});
+
+app.post("/billing/invoices/:id/remind", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const invoice = await db.invoice.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
+  const now = Date.now();
+  const recentReminder = await db.invoiceEvent.findFirst({
+    where: {
+      invoiceId: invoice.id,
+      type: { in: ["REMINDER_SENT", "OVERDUE_REMINDER_SENT"] },
+      createdAt: { gte: new Date(now - 24 * 60 * 60 * 1000) }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+  if (recentReminder) return reply.status(429).send({ error: "REMINDER_THROTTLED", nextAllowedAt: new Date(recentReminder.createdAt.getTime() + 24 * 60 * 60 * 1000) });
+
+  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}` : null);
+  if (!payUrl) return reply.status(400).send({ error: "PAY_LINK_MISSING" });
+  await queueInvoiceReminderEmail({
+    tenantId: admin.tenantId,
+    invoiceId: invoice.id,
+    to: invoice.customerEmail,
+    amountCents: invoice.amountCents,
+    payUrl,
+    overdue: invoice.status === "OVERDUE"
+  });
+  await logInvoiceEvent({
+    tenantId: admin.tenantId,
+    invoiceId: invoice.id,
+    type: invoice.status === "OVERDUE" ? "OVERDUE_REMINDER_SENT" : "REMINDER_SENT",
+    payload: { payUrl }
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_REMINDER_SENT", entityType: "Invoice", entityId: invoice.id });
+  return { ok: true };
 });
 
 app.get("/billing/invoices/pay/:token", async (req, reply) => {
@@ -6527,11 +6740,21 @@ app.get("/billing/invoices/pay/:token", async (req, reply) => {
   const invoice = await db.invoice.findFirst({ where: { payToken: token } });
   if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
   if (invoice.payTokenExpiresAt && invoice.payTokenExpiresAt.getTime() < Date.now()) return reply.status(410).send({ error: "invoice_token_expired" });
+  const canPay = invoice.status !== "PAID" && invoice.status !== "VOID";
+  const state = invoice.status === "PAID"
+    ? "paid"
+    : invoice.status === "VOID"
+      ? "void"
+      : invoice.status === "OVERDUE"
+        ? "overdue"
+        : "unpaid";
   return {
     invoiceId: invoice.id,
     amountCents: invoice.amountCents,
     currency: invoice.currency,
     status: invoice.status,
+    state,
+    canPay,
     dueAt: invoice.dueAt,
     payToken: invoice.payToken,
     externalPaymentLink: invoice.externalPaymentLink || null
@@ -6543,6 +6766,7 @@ app.post("/billing/invoices/pay/:token/hosted-session", async (req, reply) => {
   const invoice = await db.invoice.findFirst({ where: { payToken: token } });
   if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
   if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
   if (invoice.payTokenExpiresAt && invoice.payTokenExpiresAt.getTime() < Date.now()) return reply.status(410).send({ error: "invoice_token_expired" });
 
   let tenantSola;
@@ -6562,6 +6786,12 @@ app.post("/billing/invoices/pay/:token/hosted-session", async (req, reply) => {
   });
 
   await db.invoice.update({ where: { id: invoice.id }, data: { externalPaymentLink: hosted.redirectUrl, providerInvoiceRef: hosted.providerSessionId || invoice.providerInvoiceRef || null } });
+  await logInvoiceEvent({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    type: "PAYMENT_STARTED",
+    payload: { providerInvoiceRef: hosted.providerSessionId || null }
+  });
   return { redirectUrl: hosted.redirectUrl };
 });
 
@@ -6577,13 +6807,15 @@ app.post("/billing/invoices/:id/simulate-webhook", async (req, reply) => {
   if (input.status === "SUCCEEDED") {
     const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "PAID", paidAt: new Date(), lastFailureReason: null } });
     await queueReceiptEmail({ tenantId: admin.tenantId, to: updated.customerEmail, amountCents: updated.amountCents, periodEnd: new Date(), receiptId: updated.id });
+    await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "PAID", payload: { simulated: true } });
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_PAYMENT_SUCCEEDED", entityType: "Invoice", entityId: updated.id });
     return { ok: true, invoice: updated };
   }
 
   const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
-  const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", lastFailureReason: "SIMULATED_FAILURE" } });
+  const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: invoice.status === "OVERDUE" ? "OVERDUE" : "SENT", lastFailureReason: "SIMULATED_FAILURE" } });
   await queueInvoiceDeclineEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, retryUrl });
+  await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "DECLINED", payload: { simulated: true } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "INVOICE_PAYMENT_FAILED", entityType: "Invoice", entityId: updated.id });
   return { ok: true, invoice: updated };
 });
@@ -6987,14 +7219,22 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
     if (event.status === "SUCCEEDED") {
       const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "PAID", paidAt: new Date(), lastFailureReason: null } });
       await queueReceiptEmail({ tenantId: updated.tenantId, to: updated.customerEmail, amountCents: updated.amountCents, periodEnd: new Date(), receiptId: updated.id });
+      await logInvoiceEvent({ tenantId: updated.tenantId, invoiceId: updated.id, type: "PAID", payload: { providerEventId: event.eventId } });
       await audit({ tenantId: updated.tenantId, action: "INVOICE_PAYMENT_SUCCEEDED", entityType: "Invoice", entityId: updated.id });
       return { ok: true, invoiceId: updated.id, invoiceStatus: updated.status };
     }
 
     if (event.status === "FAILED") {
       const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
-      const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", lastFailureReason: event.type || "payment_failed" } });
+      const updated = await db.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: invoice.status === "OVERDUE" ? "OVERDUE" : "SENT",
+          lastFailureReason: event.type || "payment_failed"
+        }
+      });
       await queueInvoiceDeclineEmail({ tenantId: updated.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, retryUrl });
+      await logInvoiceEvent({ tenantId: updated.tenantId, invoiceId: updated.id, type: "DECLINED", payload: { providerEventId: event.eventId } });
       await audit({ tenantId: updated.tenantId, action: "INVOICE_PAYMENT_FAILED", entityType: "Invoice", entityId: updated.id });
       return { ok: true, invoiceId: updated.id, invoiceStatus: updated.status };
     }
@@ -7095,6 +7335,11 @@ const emailJobTimer = setInterval(() => {
   processEmailJobsBatch().catch((e) => app.log.error({ err: e }, "email job processor failed"));
 }, 15_000);
 emailJobTimer.unref();
+
+const invoiceOverdueTimer = setInterval(() => {
+  processInvoiceOverdueBatch().catch((e) => app.log.error({ err: e }, "invoice overdue processor failed"));
+}, 60_000);
+invoiceOverdueTimer.unref();
 
 
 const port = Number(process.env.PORT || 3001);

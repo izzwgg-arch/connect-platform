@@ -68,6 +68,7 @@ enum EmailProviderType {
 enum InvoiceStatus {
   DRAFT
   SENT
+  OVERDUE
   PAID
   VOID
 }
@@ -301,6 +302,7 @@ model Tenant {
   usageLedger                   UsageLedger[]
   receipts                      Receipt[]
   invoices                      Invoice[]
+  invoiceEvents                 InvoiceEvent[]
   emailJobs                     EmailJob[]
   alerts                        Alert[]
   extensions                    Extension[]
@@ -712,9 +714,24 @@ model Invoice {
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  events               InvoiceEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+}
+
+model InvoiceEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  invoiceId String
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([invoiceId, createdAt])
 }
 
 model EmailJob {
