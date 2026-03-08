@@ -19,8 +19,13 @@ export function ProfileMenu() {
 
   return (
     <div className="menu-wrap">
-      <button className="btn ghost" onClick={() => setOpen((v) => !v)}>
-        {user.name}
+      <button className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={user.name}>
+        {user.name
+          .split(" ")
+          .map((part) => part[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase()}
       </button>
       {open ? (
         <div className="dropdown-panel">

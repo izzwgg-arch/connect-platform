@@ -2,8 +2,7 @@
 
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { AppSidebar } from "../components/AppSidebar";
-import { HeaderBar } from "../components/HeaderBar";
+import { PageShell } from "../components/PageShell";
 import { SupportBanner } from "../components/SupportBanner";
 import { TenantContextBanner } from "../components/TenantContextBanner";
 
@@ -16,14 +15,18 @@ function titleFromPath(pathname: string): string {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   return (
-    <div className="shell">
-      <AppSidebar />
-      <div className="workspace">
-        <HeaderBar title={titleFromPath(pathname)} />
-        <TenantContextBanner />
-        <SupportBanner />
-        <main className="content">{children}</main>
+    <PageShell
+      banners={
+        <>
+          <TenantContextBanner />
+          <SupportBanner />
+        </>
+      }
+    >
+      <div className="stack compact-stack">
+        <div className="page-kicker">{titleFromPath(pathname)}</div>
+        {children}
       </div>
-    </div>
+    </PageShell>
   );
 }

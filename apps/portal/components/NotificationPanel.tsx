@@ -12,8 +12,8 @@ export function NotificationPanel() {
   const [open, setOpen] = useState(false);
   return (
     <div className="menu-wrap">
-      <button className="btn ghost" onClick={() => setOpen((v) => !v)}>
-        Notifications
+      <button className="icon-btn" onClick={() => setOpen((v) => !v)} title="Notifications">
+        NT
       </button>
       {open ? (
         <div className="dropdown-panel">

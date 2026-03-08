@@ -1,13 +1,13 @@
 import { redirect } from "next/navigation";
 
 const topMap: Record<string, string> = {
-  voice: "/calls",
+  voice: "/dashboard/voice/phone",
   sms: "/sms",
   whatsapp: "/sms",
   customers: "/contacts",
   billing: "/reports",
   settings: "/settings",
-  admin: "/admin",
+  admin: "/dashboard/admin/pbx/instances",
   search: "/dashboard",
   automation: "/admin",
   numbers: "/contacts",

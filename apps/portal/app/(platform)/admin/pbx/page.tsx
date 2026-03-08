@@ -16,6 +16,13 @@ type PbxInstance = {
   updatedAt?: string;
 };
 
+type PbxTestResult = {
+  ok?: boolean;
+  provider?: string;
+  tenantCount?: number;
+  capabilities?: unknown;
+};
+
 export default function AdminPbxPage() {
   const [form, setForm] = useState({ name: "", baseUrl: "", token: "", secret: "" });
   const [saving, setSaving] = useState(false);
@@ -81,8 +88,13 @@ export default function AdminPbxPage() {
     setError("");
     setMessage("");
     try {
-      await apiPost(`/admin/pbx/instances/${id}/test`);
-      setMessage("Connection test passed.");
+      const res = await apiPost<PbxTestResult>(`/admin/pbx/instances/${id}/test`);
+      if (res?.ok) {
+        const tenantInfo = typeof res.tenantCount === "number" ? ` (${res.tenantCount} tenants detected)` : "";
+        setMessage(`Connection test passed${tenantInfo}.`);
+      } else {
+        setError("Connection test returned an unexpected response.");
+      }
     } catch (e: any) {
       setError(e?.message || "Connection test failed.");
     }
@@ -106,6 +118,7 @@ export default function AdminPbxPage() {
 
       <section className="panel stack">
         <h3>Add / Update Connection</h3>
+        <div className="chip info">Secrets are encrypted after save and are never returned in plaintext.</div>
         <div className="grid two">
           <label className="stack">
             <span className="muted">Name</span>
@@ -155,31 +168,33 @@ export default function AdminPbxPage() {
         {instances.status === "error" ? <ErrorState message={instances.error} /> : null}
         {instances.status === "success" ? (
           rows.length ? (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Base URL</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.name}</td>
-                    <td>{row.baseUrl}</td>
-                    <td><span className={`chip ${row.isEnabled ? "success" : "warning"}`}>{row.isEnabled ? "Enabled" : "Disabled"}</span></td>
-                    <td>
-                      <div className="row-actions">
-                        <button className="btn ghost" onClick={() => testInstance(row.id)}>Test</button>
-                        <button className="btn ghost" onClick={() => toggleEnabled(row)}>{row.isEnabled ? "Disable" : "Enable"}</button>
-                      </div>
-                    </td>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Base URL</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>{row.baseUrl}</td>
+                      <td><span className={`chip ${row.isEnabled ? "success" : "warning"}`}>{row.isEnabled ? "Enabled" : "Disabled"}</span></td>
+                      <td>
+                        <div className="row-actions">
+                          <button className="btn ghost" onClick={() => testInstance(row.id)}>Test</button>
+                          <button className="btn ghost" onClick={() => toggleEnabled(row)}>{row.isEnabled ? "Disable" : "Enable"}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div className="state-box">No VitalPBX instance configured yet.</div>
           )
