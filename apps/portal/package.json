@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
+    "start": "next start -p 3000",
     "lint": "echo lint-portal",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

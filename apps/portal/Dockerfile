@@ -2,4 +2,4 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 RUN corepack enable
 COPY . .
-CMD ["sh", "-c", "pnpm --filter @connect/portal dev"]
+CMD ["sh", "-c", "pnpm --filter @connect/portal build && pnpm --filter @connect/portal start"]
