@@ -96,7 +96,7 @@ GATEWAY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}
 create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://${GATEWAY_IP}:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
 created="$(api POST /admin/pbx/instances "$ADMIN_TOKEN" "$create_payload")"
 INSTANCE_ID="$(echo "$created" | jq -r '.id // empty')"
-[[ -n "$INSTANCE_ID" ]] || fail "instance create failed"
+[[ -n "$INSTANCE_ID" ]] || fail "instance create failed: $created"
 
 test_resp="$(api POST "/admin/pbx/instances/${INSTANCE_ID}/test" "$ADMIN_TOKEN")"
 echo "$test_resp" | jq -e '.ok == true' >/dev/null || fail "test endpoint failed: $test_resp"
