@@ -53,7 +53,7 @@ const headersFile = process.env.HEADERS_FILE;
 const port = Number(process.env.PORT || '18081');
 fs.writeFileSync(headersFile, '');
 http.createServer((req, res) => {
-  const lines = Object.entries(req.headers).map(([k, v]) => `${String(k).toLowerCase()}: ${String(v)}\\n`).join('');
+  const lines = Object.entries(req.headers).map(([k, v]) => String(k).toLowerCase() + ': ' + String(v) + '\\n').join('');
   fs.appendFileSync(headersFile, lines);
   if (req.url && req.url.startsWith('/api/v2/tenants')) {
     const body = JSON.stringify({ status: 'success', data: [{ id: 1, name: 'Tenant' }] });
