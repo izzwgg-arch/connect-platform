@@ -155,8 +155,7 @@ export function SidebarNav() {
     })).filter((g) => g.items.length > 0)
   })).filter((s) => s.groups.length > 0);
 
-  const activeSection = availableSections.find((s) => pathname === s.matchPrefix || pathname.startsWith(`${s.matchPrefix}/`))
-    || availableSections[0];
+  const activeSection = availableSections.find((s) => pathname === s.matchPrefix || pathname.startsWith(`${s.matchPrefix}/`)) ?? availableSections[0];
 
   return (
     <>
