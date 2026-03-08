@@ -96,7 +96,7 @@ INSTANCE_ID="$(echo "$created" | jq -r '.id // empty')"
 [[ -n "$INSTANCE_ID" ]] || fail "instance create failed"
 
 test_resp="$(api POST "/admin/pbx/instances/${INSTANCE_ID}/test" "$ADMIN_TOKEN")"
-echo "$test_resp" | jq -e '.ok == true' >/dev/null || fail "test endpoint failed"
+echo "$test_resp" | jq -e '.ok == true' >/dev/null || fail "test endpoint failed: $test_resp"
 
 [[ -s "$HEADERS_FILE" ]] || fail "no headers captured"
 grep -qi '^app-key: '"$PBX_TOKEN"'$' "$HEADERS_FILE" || fail "app-key header not sent"
