@@ -43,6 +43,7 @@ declare global {
 }
 
 export default function VoiceSbcTestPage() {
+  const simulateMode = (process.env.NEXT_PUBLIC_VOICE_SIMULATE || "false").toLowerCase() === "true";
   const token = useMemo(() => (typeof window === "undefined" ? "" : localStorage.getItem("token") || ""), []);
 
   const [ext, setExt] = useState<ExtInfo | null>(null);
@@ -59,6 +60,7 @@ export default function VoiceSbcTestPage() {
 
   const [iceTypes, setIceTypes] = useState<string[]>([]);
   const [hasRelay, setHasRelay] = useState<boolean | null>(null);
+  const [mediaTestStatus, setMediaTestStatus] = useState("Not run");
 
   const uaRef = useRef<any>(null);
   const registererRef = useRef<any>(null);
@@ -194,6 +196,11 @@ export default function VoiceSbcTestPage() {
 
   async function testSipRegister() {
     setSipError("");
+    if (!simulateMode) {
+      setSipResult("Not run yet - PBX live register tests are disabled.");
+      setBanner({ kind: "warn", text: "Enable simulation mode to run register test from UI." });
+      return;
+    }
     if (!window.SIP) {
       setSipResult("SIP.js not loaded");
       return;
@@ -243,6 +250,50 @@ export default function VoiceSbcTestPage() {
     }
   }
 
+  async function runMediaTest() {
+    if (!token) return;
+    setMediaTestStatus("Starting...");
+    const start = await fetch(`${apiBase}/voice/media-test/start`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    }).then((r) => r.json()).catch(() => null);
+    if (!start?.runId) {
+      setMediaTestStatus("Unable to start media test");
+      return;
+    }
+    if (!simulateMode) {
+      setMediaTestStatus("Token issued. Live media checks pending enablement.");
+      return;
+    }
+    const report = await fetch(`${apiBase}/voice/media-test/report`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        runId: start.runId,
+        hasRelay: hasRelay === true,
+        iceSelectedPairType: hasRelay ? "relay" : (iceTypes[0] || "host"),
+        wsOk: wsResult.toLowerCase().includes("open"),
+        sipRegisterOk: sipResult.toUpperCase().includes("OK")
+      })
+    }).then((r) => r.json()).catch(() => null);
+    setMediaTestStatus(report?.ok ? "PASSED (simulated)" : "FAILED (simulated)");
+  }
+
+  async function copyDiagnosticsBundle() {
+    const payload = {
+      simulation: simulateMode,
+      wsLatencyMs,
+      wsResult,
+      sipResult,
+      hasRelay,
+      iceTypes,
+      resolvedConfig: cfg?.resolved || null,
+      recentErrors: diag.slice(0, 10).map((r) => ({ type: r.type, code: r.code || r.payload?.code || null, createdAt: r.createdAt }))
+    };
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    setBanner({ kind: "ok", text: "Diagnostics bundle copied." });
+  }
+
   async function callTestExtension() {
     const ua = uaRef.current;
     const sipDomain = cfg?.resolved?.sipDomain || ext?.sipDomain;
@@ -274,6 +325,9 @@ export default function VoiceSbcTestPage() {
       <Script src="https://unpkg.com/sip.js@0.21.2/dist/sip.min.js" strategy="afterInteractive" />
       <h1>Voice SBC Test</h1>
       <p>Interactive WebRTC and SBC diagnostics surface with live connection checks.</p>
+      <p className={`status-chip ${simulateMode ? "pending" : "failed"}`} style={{ borderRadius: 2 }}>
+        {simulateMode ? "SIMULATION MODE ENABLED" : "LIVE TESTS LIMITED - simulation disabled"}
+      </p>
 
       <p className={bannerClass} style={{ borderRadius: 2 }}>{banner.text}</p>
 
@@ -284,11 +338,11 @@ export default function VoiceSbcTestPage() {
       {(cfg?.warnings || []).length ? <ul>{cfg?.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}
 
       <h3>Live WS Latency</h3>
-      <button onClick={() => testWsLatency().catch(() => setWsResult("WS probe failed"))}>Test WS latency</button>
+      <button onClick={() => testWsLatency().catch(() => setWsResult("WS probe failed"))}>Test WS handshake</button>
       <p>{wsResult}{wsLatencyMs !== null ? ` (${wsLatencyMs} ms)` : ""}</p>
 
       <h3>SIP REGISTER Result Panel</h3>
-      <button onClick={() => testSipRegister().catch(() => setSipResult("REGISTER FAILED"))}>Test SIP REGISTER</button>
+      <button onClick={() => testSipRegister().catch(() => setSipResult("REGISTER FAILED"))} disabled={!simulateMode}>Test SIP REGISTER</button>
       <p><strong>{sipResult}</strong></p>
       {sipError ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{sipError}</p> : null}
 
@@ -300,7 +354,13 @@ export default function VoiceSbcTestPage() {
       <h3>Test Extension</h3>
       <input value={testExtension} onChange={(e) => setTestExtension(e.target.value)} placeholder="1000" />
       {" "}
-      <button onClick={() => callTestExtension().catch(() => setBanner({ kind: "fail", text: "Extension call test failed" }))}>Send INVITE</button>
+      <button onClick={() => callTestExtension().catch(() => setBanner({ kind: "fail", text: "Extension call test failed" }))} disabled={!simulateMode}>Send INVITE</button>
+
+      <h3>Media Test</h3>
+      <button onClick={() => runMediaTest().catch(() => setMediaTestStatus("FAILED"))}>Run Media Test</button>
+      <p><strong>{mediaTestStatus}</strong></p>
+
+      <button onClick={() => copyDiagnosticsBundle().catch(() => setBanner({ kind: "fail", text: "Copy diagnostics failed" }))}>Copy diagnostics bundle</button>
 
       <h3>Recent Diagnostic Events (auto-refresh)</h3>
       <button onClick={() => loadAll().catch(() => undefined)}>Refresh now</button>

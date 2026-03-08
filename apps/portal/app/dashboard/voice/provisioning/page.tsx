@@ -187,7 +187,8 @@ export default function VoiceProvisioningPage() {
       <h3>Mobile QR Onboarding</h3>
       <p>Default flow uses a short-lived single-use provisioning token. QR auto-hides after 60 seconds and contains no SIP password.</p>
       <button onClick={generateMobileQr}>Generate Tokenized Mobile QR</button>{" "}
-      <button onClick={generateLegacyMobileQr}>Generate Legacy QR (Deprecated)</button>
+      <button type="button" onClick={() => setShowLegacyNote((v) => !v)}>{showLegacyNote ? "Hide Legacy" : "Show Legacy"}</button>
+      {showLegacyNote ? <button onClick={generateLegacyMobileQr}>Generate Legacy QR (Deprecated)</button> : null}
       {showLegacyNote ? <p className="status-chip failed" style={{ borderRadius: 2 }}>Legacy QR includes plaintext SIP secret and will be removed after this grace release.</p> : null}
       {mobileQrPayload ? (
         <div className="card" style={{ maxWidth: 280 }}>

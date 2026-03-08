@@ -368,19 +368,31 @@ export default function VoicePhonePage() {
     const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
     return urls.some((u) => String(u).toLowerCase().startsWith("turn:"));
   });
+  const configIncomplete = !info?.sipWsUrl || !info?.sipDomain;
 
   return (
     <>
       <Script src="https://unpkg.com/sip.js@0.21.2/lib/umd/sip.js" strategy="afterInteractive" />
       <div className="phone-layout">
         <div className="phone-main">
+          {configIncomplete ? (
+            <div className="card">
+              <div className="page-head">
+                <h3>Voice Configuration Required</h3>
+                <span className="status-chip failed">Blocked</span>
+              </div>
+              <p>SIP domain or WSS URL is missing. Complete Voice Settings before using the operator console.</p>
+              <button type="button" onClick={() => { window.location.href = "/dashboard/voice/settings"; }}>Go to Voice Settings</button>
+            </div>
+          ) : null}
+
           <div className="card">
             <div className="page-head">
-              <h1>Switchboard</h1>
+              <h1>Operator Console</h1>
               <span className={statusClass}>{status}</span>
             </div>
             {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
-            {!hasTurn ? <p className="status-chip pending" style={{ borderRadius: 2 }}>Mobile networks often require TURN for reliable audio.</p> : null}
+            {!hasTurn ? <p className="status-chip pending" style={{ borderRadius: 2 }}>TURN relay not detected in ICE settings. Mobile call reliability may degrade.</p> : null}
             <p>Ext. <strong>{info?.extensionNumber || "-"}</strong> / {info?.displayName || "Unassigned"} / SIP user {info?.sipUsername || "-"}</p>
             <p>WSS: {info?.sipWsUrl || "Set in Voice Settings"} / Domain: {info?.sipDomain || "Set in Voice Settings"}</p>
             <button onClick={resetSipPassword}>Reset SIP Password</button>
@@ -423,9 +435,10 @@ export default function VoicePhonePage() {
 
         <aside className="softphone-panel">
           <div>
-            <h3 style={{ color: "#ecf1f7", marginBottom: 4 }}>Enter number</h3>
+            <h3>Dial Target</h3>
             <input value={dial} onChange={(e) => setDial(e.target.value)} placeholder="Enter name or number" />
           </div>
+          <p>Console controls are enabled only after successful SIP register.</p>
 
           <div className="softphone-actions">
             <button onClick={placeCall} disabled={!sipReady || !dial}>Call</button>

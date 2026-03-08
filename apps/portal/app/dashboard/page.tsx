@@ -54,35 +54,34 @@ export default function Dashboard() {
   ]), [range, summary]);
 
   return (
-    <div className="card">
-      <h1>Operations Dashboard</h1>
-      <p>Cross-channel operational status for billing, messaging, WhatsApp, email, and customer attention.</p>
-
-      <div className="row">
-        <label>Range</label>
-        <select value={range} onChange={(e) => setRange(e.target.value as RangeKey)} disabled={loading}>
-          <option value="24h">24h</option>
-          <option value="7d">7d</option>
-          <option value="30d">30d</option>
-        </select>
-      </div>
-
-      {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
-      {loading ? <p>Loading dashboard...</p> : null}
-
+    <>
       <div className="card">
-        <h2>Summary Cards</h2>
-        <table>
-          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-          <tbody>
-            {cards.map((card) => (
-              <tr key={card.label}>
-                <td>{card.label}</td>
-                <td>{card.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="page-head">
+          <div>
+            <h1>Operations Dashboard</h1>
+            <p>Compact cross-channel operations cockpit for billing, messaging, customer engagement, and voice readiness.</p>
+          </div>
+          <div className="row">
+            <label>Range</label>
+            <select value={range} onChange={(e) => setRange(e.target.value as RangeKey)} disabled={loading}>
+              <option value="24h">24h</option>
+              <option value="7d">7d</option>
+              <option value="30d">30d</option>
+            </select>
+          </div>
+        </div>
+
+        {error ? <p className="status-chip failed" style={{ borderRadius: 2 }}>{error}</p> : null}
+        {loading ? <p>Loading dashboard...</p> : null}
+
+        <div className="metric-grid">
+          {cards.map((card) => (
+            <div key={card.label} className="metric-card">
+              <h4>{card.label}</h4>
+              <strong>{card.value}</strong>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card">
@@ -155,6 +154,16 @@ export default function Dashboard() {
       </div>
 
       <div className="card">
+        <h2>Quick Actions</h2>
+        <div className="row">
+          <button type="button" onClick={() => { window.location.href = "/dashboard/voice/extensions"; }}>Create Extension</button>
+          <button type="button" onClick={() => { window.location.href = "/dashboard/sms/campaigns/new"; }}>Create Campaign</button>
+          <button type="button" onClick={() => { window.location.href = "/dashboard/billing/invoices"; }}>Create Invoice</button>
+          <button type="button" onClick={() => { window.location.href = "/dashboard/customers"; }}>Add Customer</button>
+        </div>
+      </div>
+
+      <div className="card">
         <h2>Recent Activity</h2>
         {activity.length === 0 ? <p>No recent activity in this range.</p> : (
           <table>
@@ -172,6 +181,6 @@ export default function Dashboard() {
           </table>
         )}
       </div>
-    </div>
+    </>
   );
 }
