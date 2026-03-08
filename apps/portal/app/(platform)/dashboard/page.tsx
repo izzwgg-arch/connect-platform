@@ -18,6 +18,7 @@ import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { getTenantTelephonyState } from "../../../services/asteriskService";
+import { dashboardMetrics } from "../../../services/mockData";
 import { loadDashboardData } from "../../../services/platformData";
 
 export default function DashboardPage() {
@@ -29,21 +30,27 @@ export default function DashboardPage() {
     [adminScope]
   );
 
-  if (state.status === "loading") return <LoadingSkeleton rows={10} />;
-  if (state.status === "error") return <ErrorState message={state.error} />;
+  const fallbackData = {
+    scopeLabel: adminScope as "GLOBAL" | "TENANT",
+    metrics: dashboardMetrics,
+    activity: [{ type: "DASHBOARD", label: "Loading live metrics. Fallback snapshot shown." }]
+  };
 
-  const metrics = state.data.metrics;
-  const activity = state.data.activity;
+  const data = state.status === "success" ? state.data : fallbackData;
+  const metrics = data.metrics;
+  const activity = data.activity;
 
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
       <div className="stack">
       <PageHeader
         title="Operations Dashboard"
-        subtitle={`Telecom-native command center for calls, messaging, users, and health (${state.data.scopeLabel.toLowerCase()} scope).`}
-        badges={<ScopeBadge scope={state.data.scopeLabel} />}
+        subtitle={`Telecom-native command center for calls, messaging, users, and health (${data.scopeLabel.toLowerCase()} scope).`}
+        badges={<ScopeBadge scope={data.scopeLabel} />}
         actions={<QRPairingModal />}
       />
+      {state.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
+      {state.status === "error" ? <ErrorState message={`Live metrics unavailable: ${state.error}`} /> : null}
       {isGlobal ? <GlobalScopeNotice /> : null}
 
       <section className="metric-grid">
