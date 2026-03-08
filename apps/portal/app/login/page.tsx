@@ -1,13 +1,12 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiPost } from "../../services/apiClient";
 import { writeAuthToken } from "../../services/session";
 
 export default function LoginPage() {
   const router = useRouter();
-  const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +24,7 @@ export default function LoginPage() {
         return;
       }
       writeAuthToken(token);
-      const next = params.get("next");
+      const next = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("next") : null;
       router.replace(next ? decodeURIComponent(next) : "/dashboard");
     } catch (e: any) {
       setError(e?.message || "Login failed");
