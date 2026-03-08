@@ -15,7 +15,7 @@ if [[ "${_QUIET_WRAPPED:-0}" != "1" ]]; then
   exec "$RUN_QUIET_SH" "$SCRIPT_BASENAME" -- env _QUIET_WRAPPED=1 LOG_FILE="$LOG_FILE" bash "$0" "$@"
 fi
 
-BASE_URL="${BASE_URL:-https://app.connectcomunications.com/api}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:3001}"
 PASSWORD="${PASSWORD:-Passw0rd!234}"
 NOW="$(date +%s)"
 EMAIL="vpbx-perm-${NOW}@connectcomunications.com"
