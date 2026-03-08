@@ -24,10 +24,12 @@ PBX_TOKEN="APPKEY_SMOKE_${NOW}"
 PORT="${VITALPBX_SMOKE_PORT:-18081}"
 TMP_DIR="$(mktemp -d)"
 HEADERS_FILE="${TMP_DIR}/headers.txt"
+CONTAINER_HEADERS_FILE="/tmp/vpbx-smoke-headers.txt"
+CONTAINER_PID_FILE="/tmp/vpbx-smoke.pid"
 
 fail(){ echo "[v2.0.5-vitalpbx-app-key] FAIL: $*" >&2; exit 1; }
 cleanup() {
-  [[ -n "${SERVER_PID:-}" ]] && kill "$SERVER_PID" >/dev/null 2>&1 || true
+  docker exec app-api-1 sh -lc "if [ -f '${CONTAINER_PID_FILE}' ]; then kill \$(cat '${CONTAINER_PID_FILE}') >/dev/null 2>&1 || true; rm -f '${CONTAINER_PID_FILE}'; fi; rm -f '${CONTAINER_HEADERS_FILE}'" >/dev/null 2>&1 || true
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -44,39 +46,27 @@ api() {
   fi
 }
 
-python3 - "$PORT" "$HEADERS_FILE" <<'PY' &
-import json
-import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-port = int(sys.argv[1])
-headers_file = sys.argv[2]
-
-class H(BaseHTTPRequestHandler):
-    def _log_headers(self):
-        with open(headers_file, "a", encoding="utf-8") as fh:
-            for k, v in self.headers.items():
-                fh.write(f"{k.lower()}: {v}\n")
-
-    def do_GET(self):
-        self._log_headers()
-        if self.path.startswith("/api/v2/tenants"):
-            body = json.dumps({"status": "success", "data": [{"id": 1, "name": "Tenant"}]}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.send_response(404)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        return
-
-HTTPServer(("0.0.0.0", port), H).serve_forever()
-PY
-SERVER_PID=$!
+docker exec app-api-1 sh -lc "cat > /tmp/vpbx-smoke-server.js <<'JS'
+const fs = require('fs');
+const http = require('http');
+const headersFile = process.env.HEADERS_FILE;
+const port = Number(process.env.PORT || '18081');
+fs.writeFileSync(headersFile, '');
+http.createServer((req, res) => {
+  const lines = Object.entries(req.headers).map(([k, v]) => `${String(k).toLowerCase()}: ${String(v)}\\n`).join('');
+  fs.appendFileSync(headersFile, lines);
+  if (req.url && req.url.startsWith('/api/v2/tenants')) {
+    const body = JSON.stringify({ status: 'success', data: [{ id: 1, name: 'Tenant' }] });
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) });
+    res.end(body);
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+}).listen(port, '127.0.0.1');
+setInterval(() => {}, 1 << 30);
+JS
+HEADERS_FILE='${CONTAINER_HEADERS_FILE}' PORT='${PORT}' node /tmp/vpbx-smoke-server.js >/tmp/vpbx-smoke-server.log 2>&1 & echo \$! > '${CONTAINER_PID_FILE}'"
 sleep 1
 
 signup_payload="$(jq -nc --arg tn "$TENANT_NAME" --arg em "$EMAIL" --arg pw "$PASSWORD" '{tenantName:$tn,email:$em,password:$pw}')"
@@ -90,10 +80,7 @@ login_json="$(api POST /auth/login "" "$login_payload")"
 ADMIN_TOKEN="$(echo "$login_json" | jq -r '.token // empty')"
 [[ -n "$ADMIN_TOKEN" ]] || fail "admin login failed"
 
-GATEWAY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' app-api-1 | awk '{print $1}')"
-[[ -n "$GATEWAY_IP" ]] || fail "could not resolve API container gateway IP"
-
-create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://${GATEWAY_IP}:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
+create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://127.0.0.1:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
 created="$(api POST /admin/pbx/instances "$ADMIN_TOKEN" "$create_payload")"
 INSTANCE_ID="$(echo "$created" | jq -r '.id // empty')"
 [[ -n "$INSTANCE_ID" ]] || fail "instance create failed: $created"
@@ -101,6 +88,7 @@ INSTANCE_ID="$(echo "$created" | jq -r '.id // empty')"
 test_resp="$(api POST "/admin/pbx/instances/${INSTANCE_ID}/test" "$ADMIN_TOKEN")"
 echo "$test_resp" | jq -e '.ok == true' >/dev/null || fail "test endpoint failed: $test_resp"
 
+docker exec app-api-1 sh -lc "cat '${CONTAINER_HEADERS_FILE}'" > "$HEADERS_FILE"
 [[ -s "$HEADERS_FILE" ]] || fail "no headers captured"
 grep -qi '^app-key: '"$PBX_TOKEN"'$' "$HEADERS_FILE" || fail "app-key header not sent"
 if grep -qi '^authorization:' "$HEADERS_FILE"; then
