@@ -13,7 +13,12 @@ function baseUrl(): string {
 
 function browserToken(): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem("token") || "";
+  return (
+    localStorage.getItem("token") ||
+    localStorage.getItem("cc-token") ||
+    localStorage.getItem("authToken") ||
+    ""
+  );
 }
 
 function browserTenantContext(): string {

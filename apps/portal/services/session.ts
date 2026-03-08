@@ -17,7 +17,12 @@ function decodeBase64Url(input: string): string {
 
 export function readAuthToken(): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem("token") || "";
+  return (
+    localStorage.getItem("token") ||
+    localStorage.getItem("cc-token") ||
+    localStorage.getItem("authToken") ||
+    ""
+  );
 }
 
 export function readTenantContext(): string {

@@ -21,10 +21,26 @@ export default function AdminPbxPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [tokenInput, setTokenInput] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
 
   const instances = useAsyncResource(() => apiGet<PbxInstance[]>("/admin/pbx/instances"), [reloadKey]);
   const rows = useMemo(() => (instances.status === "success" ? instances.data : []), [instances]);
+  const isAuthError =
+    instances.status === "error" &&
+    (instances.error.includes("401") || instances.error.toLowerCase().includes("unauthorized"));
+
+  function saveTokenAndRetry() {
+    const raw = tokenInput.trim();
+    if (!raw) {
+      setError("Paste a valid JWT token first.");
+      return;
+    }
+    localStorage.setItem("token", raw);
+    setMessage("Session token updated. Reloading PBX instances...");
+    setError("");
+    setReloadKey((k) => k + 1);
+  }
 
   async function createInstance() {
     setError("");
@@ -109,6 +125,23 @@ export default function AdminPbxPage() {
 
       <section className="panel stack">
         <h3>Configured Instances</h3>
+        {isAuthError ? (
+          <div className="stack">
+            <div className="chip warning">Your session token is missing or expired. Please sign in again or paste a fresh JWT token.</div>
+            <label className="stack">
+              <span className="muted">JWT Token</span>
+              <input
+                className="input"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder="eyJhbGciOi..."
+              />
+            </label>
+            <div className="row-actions">
+              <button className="btn" onClick={saveTokenAndRetry}>Save Token & Retry</button>
+            </div>
+          </div>
+        ) : null}
         {instances.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {instances.status === "error" ? <ErrorState message={instances.error} /> : null}
         {instances.status === "success" ? (
