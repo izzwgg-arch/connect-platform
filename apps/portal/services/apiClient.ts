@@ -35,7 +35,7 @@ async function apiRequest<T>(method: "GET" | "POST" | "PATCH", path: string, bod
     const res = await fetch(`${baseUrl()}${path}`, {
       method,
       headers: {
-        ...(method !== "GET" ? { "content-type": "application/json" } : {}),
+        ...(body ? { "content-type": "application/json" } : {}),
         ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
         ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {})
       },
