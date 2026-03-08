@@ -826,6 +826,13 @@ function normalizeContactNumber(input: string | null | undefined): string | null
   return raw.replace(/\s+/g, "");
 }
 
+function resolveDashboardRange(input: unknown): { key: "24h" | "7d" | "30d"; since: Date } {
+  const range = String(input || "30d").toLowerCase();
+  if (range === "24h") return { key: "24h", since: new Date(Date.now() - 24 * 60 * 60 * 1000) };
+  if (range === "7d") return { key: "7d", since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) };
+  return { key: "30d", since: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+}
+
 async function findCustomerByContactNumber(tenantId: string, number: string | null | undefined) {
   const normalized = normalizeContactNumber(number);
   if (!normalized) return null;
@@ -6872,6 +6879,220 @@ app.get("/customers/:id/summary", async (req, reply) => {
       createdAt: j.createdAt,
       sentAt: j.sentAt || null,
       lastErrorCode: j.lastErrorCode || null
+    }))
+  };
+});
+
+app.get("/dashboard/summary", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({ range: z.enum(["24h", "7d", "30d"]).optional() }).parse(req.query || {});
+  const { key: range, since } = resolveDashboardRange(query.range);
+
+  const [
+    invoicesAll,
+    invoicesPaidInRange,
+    paymentFailures,
+    smsCampaignsSent,
+    whatsAppInbound,
+    whatsAppOutbound,
+    emailFailed,
+    emailQueued,
+    overdueByCustomer,
+    blockedCampaigns,
+    failedEmailJobs,
+    inboundFollowupThreads
+  ] = await Promise.all([
+    db.invoice.findMany({ where: { tenantId: admin.tenantId }, select: { id: true, status: true, customerId: true, amountCents: true } }),
+    db.invoice.count({ where: { tenantId: admin.tenantId, status: "PAID", paidAt: { gte: since } } }),
+    db.paymentEvent.findMany({
+      where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { id: true, type: true, createdAt: true, amountCents: true, currency: true }
+    }),
+    db.smsCampaign.count({ where: { tenantId: admin.tenantId, status: "SENT", createdAt: { gte: since } } }),
+    db.whatsAppMessage.count({ where: { tenantId: admin.tenantId, direction: "INBOUND", createdAt: { gte: since } } }),
+    db.whatsAppMessage.count({ where: { tenantId: admin.tenantId, direction: "OUTBOUND", createdAt: { gte: since } } }),
+    db.emailJob.count({ where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } } }),
+    db.emailJob.count({ where: { tenantId: admin.tenantId, status: "QUEUED", createdAt: { gte: since } } }),
+    db.invoice.groupBy({
+      by: ["customerId"],
+      where: { tenantId: admin.tenantId, status: "OVERDUE", customerId: { not: null } },
+      _count: { _all: true },
+      _sum: { amountCents: true }
+    }),
+    db.smsCampaign.findMany({
+      where: { tenantId: admin.tenantId, OR: [{ status: "PAUSED" }, { status: "FAILED" }, { status: "NEEDS_APPROVAL" }, { holdReason: { not: null } }] },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, name: true, status: true, holdReason: true, createdAt: true }
+    }),
+    db.emailJob.findMany({
+      where: { tenantId: admin.tenantId, status: "FAILED" },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, type: true, toEmail: true, lastErrorCode: true, createdAt: true }
+    }),
+    db.whatsAppThread.findMany({
+      where: { tenantId: admin.tenantId, lastDirection: "INBOUND", lastMessageAt: { gte: since } },
+      orderBy: { lastMessageAt: "desc" },
+      take: 10,
+      select: { id: true, customerId: true, contactName: true, contactNumber: true, lastMessageAt: true, lastStatus: true }
+    })
+  ]);
+
+  const unpaidInvoicesCount = invoicesAll.filter((r) => r.status === "DRAFT" || r.status === "SENT" || r.status === "OVERDUE").length;
+  const overdueInvoicesCount = invoicesAll.filter((r) => r.status === "OVERDUE").length;
+  const customerIds = overdueByCustomer.map((r) => r.customerId).filter(Boolean) as string[];
+  const overdueCustomers = customerIds.length
+    ? await db.customer.findMany({ where: { tenantId: admin.tenantId, id: { in: customerIds } }, select: { id: true, displayName: true, primaryEmail: true } })
+    : [];
+  const overdueCustomerMap = new Map(overdueCustomers.map((c) => [c.id, c]));
+
+  return {
+    range,
+    invoiceSummary: {
+      unpaidCount: unpaidInvoicesCount,
+      overdueCount: overdueInvoicesCount,
+      paidInRangeCount: invoicesPaidInRange
+    },
+    paymentSummary: {
+      recentFailureCount: paymentFailures.length,
+      recentFailures: paymentFailures.map((f) => ({
+        id: f.id,
+        type: f.type,
+        amountCents: f.amountCents,
+        currency: f.currency,
+        createdAt: f.createdAt
+      }))
+    },
+    messagingSummary: {
+      smsCampaignsSentInRange: smsCampaignsSent,
+      blockedOrSuspendedCampaigns: blockedCampaigns.length
+    },
+    whatsappSummary: {
+      inboundCount: whatsAppInbound,
+      outboundCount: whatsAppOutbound
+    },
+    emailSummary: {
+      failedCount: emailFailed,
+      queuedCount: emailQueued
+    },
+    customerAttentionSummary: {
+      overdueCustomerCount: overdueByCustomer.length
+    },
+    attention: {
+      overdueCustomers: overdueByCustomer.map((row) => {
+        const customer = overdueCustomerMap.get(row.customerId || "");
+        return {
+          customerId: row.customerId,
+          displayName: customer?.displayName || "Unknown customer",
+          primaryEmail: customer?.primaryEmail || null,
+          overdueInvoiceCount: row._count._all,
+          overdueAmountCents: row._sum.amountCents || 0
+        };
+      }),
+      failedEmailJobs: failedEmailJobs.map((e) => ({
+        id: e.id,
+        type: e.type,
+        toEmailMasked: maskValue(e.toEmail, 2, 8),
+        lastErrorCode: e.lastErrorCode || null,
+        createdAt: e.createdAt
+      })),
+      blockedCampaigns: blockedCampaigns.map((c) => ({
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        holdReason: c.holdReason || null,
+        createdAt: c.createdAt
+      })),
+      whatsappInboundNeedsFollowup: inboundFollowupThreads.map((t) => ({
+        threadId: t.id,
+        customerId: t.customerId || null,
+        contactName: t.contactName || null,
+        contactNumberMasked: maskValue(t.contactNumber, 3, 2),
+        lastStatus: t.lastStatus || null,
+        lastMessageAt: t.lastMessageAt
+      }))
+    }
+  };
+});
+
+app.get("/dashboard/activity", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({ range: z.enum(["24h", "7d", "30d"]).optional() }).parse(req.query || {});
+  const { key: range, since } = resolveDashboardRange(query.range);
+
+  const [invoiceEvents, paymentFailures, smsCampaigns, waInbound, emailFailures, customers] = await Promise.all([
+    db.invoiceEvent.findMany({
+      where: { tenantId: admin.tenantId, createdAt: { gte: since }, type: { in: ["CREATED", "PAID"] } },
+      orderBy: { createdAt: "desc" },
+      take: 60,
+      select: { invoiceId: true, type: true, createdAt: true }
+    }),
+    db.paymentEvent.findMany({
+      where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: { id: true, createdAt: true, amountCents: true, currency: true, subscriptionId: true }
+    }),
+    db.smsCampaign.findMany({
+      where: { tenantId: admin.tenantId, status: "SENT", createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: { id: true, name: true, createdAt: true }
+    }),
+    db.whatsAppMessage.findMany({
+      where: { tenantId: admin.tenantId, direction: "INBOUND", createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: { id: true, threadId: true, createdAt: true }
+    }),
+    db.emailJob.findMany({
+      where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: { id: true, type: true, createdAt: true }
+    }),
+    db.customer.findMany({
+      where: { tenantId: admin.tenantId, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: { id: true, displayName: true, createdAt: true }
+    })
+  ]);
+
+  const items: Array<{ type: string; timestamp: Date; label: string; link: string }> = [];
+  for (const e of invoiceEvents) {
+    if (e.type === "CREATED") {
+      items.push({ type: "INVOICE_CREATED", timestamp: e.createdAt, label: `Invoice created`, link: `/dashboard/billing/invoices/${e.invoiceId}` });
+    } else if (e.type === "PAID") {
+      items.push({ type: "INVOICE_PAID", timestamp: e.createdAt, label: `Invoice paid`, link: `/dashboard/billing/invoices/${e.invoiceId}` });
+    }
+  }
+  for (const e of paymentFailures) {
+    items.push({
+      type: "PAYMENT_FAILED",
+      timestamp: e.createdAt,
+      label: `Payment failed${e.amountCents ? ` ($${(Number(e.amountCents) / 100).toFixed(2)})` : ""}`,
+      link: e.subscriptionId ? `/dashboard/billing/invoices/${e.subscriptionId}` : "/dashboard/billing/invoices"
+    });
+  }
+  for (const s of smsCampaigns) items.push({ type: "SMS_CAMPAIGN_SENT", timestamp: s.createdAt, label: `SMS campaign sent: ${s.name}`, link: `/dashboard/sms/campaigns/${s.id}` });
+  for (const w of waInbound) items.push({ type: "WHATSAPP_INBOUND", timestamp: w.createdAt, label: "WhatsApp inbound message", link: `/dashboard/whatsapp/${w.threadId}` });
+  for (const e of emailFailures) items.push({ type: "EMAIL_FAILED", timestamp: e.createdAt, label: `Email failed: ${e.type}`, link: "/dashboard/settings/email" });
+  for (const c of customers) items.push({ type: "CUSTOMER_CREATED", timestamp: c.createdAt, label: `Customer created: ${c.displayName}`, link: `/dashboard/customers/${c.id}` });
+
+  items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  return {
+    range,
+    items: items.slice(0, 120).map((i) => ({
+      type: i.type,
+      timestamp: i.timestamp,
+      label: i.label,
+      link: i.link
     }))
   };
 });
