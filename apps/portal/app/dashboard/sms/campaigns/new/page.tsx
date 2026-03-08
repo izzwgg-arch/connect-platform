@@ -16,6 +16,7 @@ export default function SmsCampaignNewPage() {
   const [tenantLimits, setTenantLimits] = useState<any>(null);
   const [tenantMode, setTenantMode] = useState<any>(null);
   const [mode, setMode] = useState<"paste" | "textarea" | "csv">("textarea");
+  const [segment, setSegment] = useState<"" | "overdue" | "unpaid" | "whatsapp">("");
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -88,6 +89,26 @@ export default function SmsCampaignNewPage() {
     setLoading(false);
   }
 
+  async function importFromSegment(nextSegment: "overdue" | "unpaid" | "whatsapp") {
+    setLoading(true);
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/customers/segments/targeting?segment=${nextSegment}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setResult(String(json?.error || "Failed to import segment recipients."));
+      setLoading(false);
+      return;
+    }
+    const merged = `${recipientsRaw}\n${Array.isArray(json.recipients) ? json.recipients.join("\n") : ""}`.trim();
+    setRecipientsRaw(merged);
+    setSegment(nextSegment);
+    setMode("textarea");
+    setResult(`Imported ${Array.isArray(json.recipients) ? json.recipients.length : 0} recipients from ${nextSegment} segment.`);
+    setLoading(false);
+  }
+
   return (
     <div className="card">
       <h1>New SMS Campaign</h1>
@@ -110,6 +131,12 @@ export default function SmsCampaignNewPage() {
         <button onClick={() => setMode("paste")} disabled={mode === "paste"}>Paste numbers</button>
         <button onClick={() => setMode("textarea")} disabled={mode === "textarea"}>Textarea import</button>
         <button onClick={() => setMode("csv")} disabled={mode === "csv"}>CSV upload</button>
+      </div>
+      <div style={{ marginTop: 8, marginBottom: 8 }}>
+        <button onClick={() => importFromSegment("overdue")} disabled={loading}>Import overdue customers</button>
+        <button onClick={() => importFromSegment("unpaid")} disabled={loading}>Import unpaid invoice customers</button>
+        <button onClick={() => importFromSegment("whatsapp")} disabled={loading}>Import customers with WhatsApp</button>
+        {segment ? <span> Segment: {segment}</span> : null}
       </div>
 
       {mode === "csv" ? <input type="file" accept=".csv,text/csv" onChange={onCsvUpload} /> : null}

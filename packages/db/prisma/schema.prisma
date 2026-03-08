@@ -303,6 +303,7 @@ model Tenant {
   receipts                      Receipt[]
   invoices                      Invoice[]
   customers                     Customer[]
+  customerNotes                 CustomerNote[]
   invoiceEvents                 InvoiceEvent[]
   emailJobs                     EmailJob[]
   alerts                        Alert[]
@@ -354,6 +355,7 @@ model User {
   requestedMediaTestRuns     MediaTestRun[]      @relation("MediaTestRequestedBy")
   mobileProvisioningTokens    MobileProvisioningToken[]
   updatedSbcConfigs           SbcConfig[]        @relation("SbcConfigUpdatedBy")
+  customerNotes               CustomerNote[]
 }
 
 enum UserRole {
@@ -364,6 +366,12 @@ enum UserRole {
   SUPPORT
   READ_ONLY
   USER
+}
+
+enum CustomerStatus {
+  ACTIVE
+  PAST_DUE
+  INACTIVE
 }
 
 model Subscription {
@@ -747,16 +755,37 @@ model Customer {
   primaryPhone   String?
   whatsappNumber String?
   notes          String?
+  tags           Json?
+  status         CustomerStatus  @default(ACTIVE)
+  lastContactAt  DateTime?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoices       Invoice[]
   whatsAppThreads WhatsAppThread[]
+  customerNotes  CustomerNote[]
 
   @@index([tenantId, displayName])
   @@index([tenantId, primaryEmail])
   @@index([tenantId, primaryPhone])
   @@index([tenantId, whatsappNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, lastContactAt])
+}
+
+model CustomerNote {
+  id              String   @id @default(cuid())
+  tenantId        String
+  customerId      String
+  body            String
+  createdAt       DateTime @default(now())
+  createdByUserId String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdByUser   User     @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([customerId, createdAt])
 }
 
 model InvoiceEvent {

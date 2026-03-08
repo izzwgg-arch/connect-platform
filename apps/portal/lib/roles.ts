@@ -39,3 +39,11 @@ export function canAccessAdminSbc(role: string): boolean {
 export function canAccessAdminBilling(role: string): boolean {
   return isRole(role, ["SUPER_ADMIN"]);
 }
+
+export function canManageCustomerWorkflow(role: string): boolean {
+  return isRole(role, ["SUPER_ADMIN", "ADMIN", "BILLING", "SUPPORT"]);
+}
+
+export function canUseCustomerTargeting(role: string): boolean {
+  return canManageMessaging(role) || canManageBilling(role);
+}

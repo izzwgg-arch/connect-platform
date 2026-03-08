@@ -1031,6 +1031,14 @@ function canAccessCampaignSend(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
 }
 
+function canManageCustomerWorkflow(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN", "BILLING", "SUPPORT"]);
+}
+
+function canUseCustomerTargeting(user: JwtUser): boolean {
+  return canManageMessaging(user) || canManageBilling(user);
+}
+
 async function requirePermission(req: any, reply: any, checker: (user: JwtUser) => boolean): Promise<JwtUser | null> {
   const user = getUser(req);
   if (!checker(user)) {
@@ -6654,12 +6662,15 @@ app.get("/customers", async (req, reply) => {
   if (!admin) return;
   const query = z.object({
     q: z.string().optional(),
+    filter: z.enum(["overdue", "unpaid", "whatsapp", "email_only", "inactive"]).optional(),
     limit: z.coerce.number().int().positive().max(200).optional()
   }).parse(req.query || {});
   const q = (query.q || "").trim();
   const rows = await db.customer.findMany({
     where: {
       tenantId: admin.tenantId,
+      status: query.filter === "inactive" ? "INACTIVE" : undefined,
+      whatsappNumber: query.filter === "whatsapp" ? { not: null } : undefined,
       OR: q ? [
         { displayName: { contains: q, mode: "insensitive" } },
         { companyName: { contains: q, mode: "insensitive" } },
@@ -6678,12 +6689,27 @@ app.get("/customers", async (req, reply) => {
       customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null,
       customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null
     ].filter(Boolean) as any[];
-    const [unpaidInvoiceCount, latestInvoice, latestThread, latestEmail] = await Promise.all([
+    const [unpaidInvoiceCount, unpaidBalance, overdueCount, latestInvoice, latestThread, latestEmail] = await Promise.all([
       db.invoice.count({
         where: {
           tenantId: admin.tenantId,
           customerId: customer.id,
           status: { in: ["DRAFT", "SENT", "OVERDUE"] }
+        }
+      }),
+      db.invoice.aggregate({
+        where: {
+          tenantId: admin.tenantId,
+          customerId: customer.id,
+          status: { in: ["DRAFT", "SENT", "OVERDUE"] }
+        },
+        _sum: { amountCents: true }
+      }),
+      db.invoice.count({
+        where: {
+          tenantId: admin.tenantId,
+          customerId: customer.id,
+          status: "OVERDUE"
         }
       }),
       db.invoice.findFirst({ where: { tenantId: admin.tenantId, customerId: customer.id }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
@@ -6710,15 +6736,108 @@ app.get("/customers", async (req, reply) => {
       primaryEmail: customer.primaryEmail || null,
       primaryPhone: customer.primaryPhone || null,
       whatsappNumber: customer.whatsappNumber || null,
+      tags: Array.isArray(customer.tags) ? customer.tags : [],
+      status: customer.status,
+      lastContactAt: customer.lastContactAt || null,
       unpaidInvoiceCount,
+      overdueInvoiceCount: overdueCount,
+      unpaidBalanceCents: unpaidBalance._sum.amountCents || 0,
       latestActivityAt
     };
   }));
-  return out;
+  const filtered = out.filter((row) => {
+    if (query.filter === "overdue") return row.overdueInvoiceCount > 0;
+    if (query.filter === "unpaid") return row.unpaidInvoiceCount > 0;
+    if (query.filter === "email_only") return !!row.primaryEmail && !row.primaryPhone && !row.whatsappNumber;
+    return true;
+  });
+  return filtered;
+});
+
+app.get("/customers/segments/summary", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canViewCustomers);
+  if (!admin) return;
+  const now = Date.now();
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+  const [customers, overdueCustomerRows, unpaidCustomerRows] = await Promise.all([
+    db.customer.findMany({
+      where: { tenantId: admin.tenantId },
+      select: { id: true, primaryEmail: true, primaryPhone: true, whatsappNumber: true, lastContactAt: true, status: true }
+    }),
+    db.invoice.groupBy({
+      by: ["customerId"],
+      where: { tenantId: admin.tenantId, status: "OVERDUE", customerId: { not: null } },
+      _count: { _all: true }
+    }),
+    db.invoice.groupBy({
+      by: ["customerId"],
+      where: { tenantId: admin.tenantId, status: { in: ["DRAFT", "SENT", "OVERDUE"] }, customerId: { not: null } },
+      _count: { _all: true }
+    })
+  ]);
+
+  const overdueCustomerIds = new Set(overdueCustomerRows.map((r) => r.customerId).filter(Boolean));
+  const unpaidCustomerIds = new Set(unpaidCustomerRows.map((r) => r.customerId).filter(Boolean));
+  const noRecentContactCount = customers.filter((c) => !c.lastContactAt || c.lastContactAt < thirtyDaysAgo).length;
+  const whatsappCount = customers.filter((c) => !!c.whatsappNumber).length;
+  const emailOnlyCount = customers.filter((c) => !!c.primaryEmail && !c.primaryPhone && !c.whatsappNumber).length;
+  const inactiveCount = customers.filter((c) => c.status === "INACTIVE").length;
+
+  return {
+    totals: {
+      customers: customers.length,
+      overdueCustomers: overdueCustomerIds.size,
+      unpaidCustomers: unpaidCustomerIds.size,
+      noRecentContact: noRecentContactCount,
+      withWhatsApp: whatsappCount,
+      emailOnly: emailOnlyCount,
+      inactive: inactiveCount
+    }
+  };
+});
+
+app.get("/customers/segments/targeting", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canUseCustomerTargeting);
+  if (!admin) return;
+  const query = z.object({
+    segment: z.enum(["overdue", "unpaid", "whatsapp"])
+  }).parse(req.query || {});
+
+  let customerIds: string[] = [];
+  if (query.segment === "whatsapp") {
+    const customers = await db.customer.findMany({
+      where: { tenantId: admin.tenantId, whatsappNumber: { not: null } },
+      select: { id: true }
+    });
+    customerIds = customers.map((c) => c.id);
+  } else {
+    const grouped = await db.invoice.groupBy({
+      by: ["customerId"],
+      where: {
+        tenantId: admin.tenantId,
+        customerId: { not: null },
+        status: query.segment === "overdue" ? "OVERDUE" : { in: ["DRAFT", "SENT", "OVERDUE"] }
+      },
+      _count: { _all: true }
+    });
+    customerIds = grouped.map((g) => g.customerId).filter(Boolean) as string[];
+  }
+
+  if (customerIds.length === 0) {
+    return { segment: query.segment, customers: [], recipients: [] };
+  }
+
+  const customers = await db.customer.findMany({
+    where: { tenantId: admin.tenantId, id: { in: customerIds } },
+    select: { id: true, displayName: true, primaryPhone: true, whatsappNumber: true }
+  });
+  const recipients = Array.from(new Set(customers.map((c) => c.primaryPhone || c.whatsappNumber).filter(Boolean))) as string[];
+  return { segment: query.segment, customers, recipients };
 });
 
 app.post("/customers", async (req, reply) => {
-  const admin = await requirePermission(req, reply, (user) => canViewCustomers(user) && !isRole(user, ["READ_ONLY"]));
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
   if (!admin) return;
   const input = z.object({
     displayName: z.string().min(1).max(160),
@@ -6726,7 +6845,10 @@ app.post("/customers", async (req, reply) => {
     primaryEmail: z.string().email().optional().nullable(),
     primaryPhone: z.string().min(5).max(40).optional().nullable(),
     whatsappNumber: z.string().min(5).max(40).optional().nullable(),
-    notes: z.string().max(2000).optional().nullable()
+    notes: z.string().max(2000).optional().nullable(),
+    tags: z.array(z.string().min(1).max(60)).max(20).optional(),
+    status: z.enum(["ACTIVE", "PAST_DUE", "INACTIVE"]).optional(),
+    lastContactAt: z.string().datetime().optional().nullable()
   }).parse(req.body || {});
   const created = await db.customer.create({
     data: {
@@ -6736,7 +6858,10 @@ app.post("/customers", async (req, reply) => {
       primaryEmail: input.primaryEmail || null,
       primaryPhone: normalizeContactNumber(input.primaryPhone) || null,
       whatsappNumber: normalizeContactNumber(input.whatsappNumber) || null,
-      notes: input.notes || null
+      notes: input.notes || null,
+      tags: (input.tags || []) as any,
+      status: input.status || "ACTIVE",
+      lastContactAt: input.lastContactAt ? new Date(input.lastContactAt) : null
     }
   });
   const threadOr = [
@@ -6763,7 +6888,7 @@ app.get("/customers/:id", async (req, reply) => {
 });
 
 app.put("/customers/:id", async (req, reply) => {
-  const admin = await requirePermission(req, reply, (user) => canViewCustomers(user) && !isRole(user, ["READ_ONLY"]));
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const existing = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
@@ -6774,7 +6899,10 @@ app.put("/customers/:id", async (req, reply) => {
     primaryEmail: z.string().email().optional().nullable(),
     primaryPhone: z.string().min(5).max(40).optional().nullable(),
     whatsappNumber: z.string().min(5).max(40).optional().nullable(),
-    notes: z.string().max(2000).optional().nullable()
+    notes: z.string().max(2000).optional().nullable(),
+    tags: z.array(z.string().min(1).max(60)).max(20).optional(),
+    status: z.enum(["ACTIVE", "PAST_DUE", "INACTIVE"]).optional(),
+    lastContactAt: z.string().datetime().optional().nullable()
   }).parse(req.body || {});
   const updated = await db.customer.update({
     where: { id },
@@ -6784,7 +6912,10 @@ app.put("/customers/:id", async (req, reply) => {
       primaryEmail: input.primaryEmail !== undefined ? (input.primaryEmail || null) : undefined,
       primaryPhone: input.primaryPhone !== undefined ? (normalizeContactNumber(input.primaryPhone) || null) : undefined,
       whatsappNumber: input.whatsappNumber !== undefined ? (normalizeContactNumber(input.whatsappNumber) || null) : undefined,
-      notes: input.notes !== undefined ? (input.notes || null) : undefined
+      notes: input.notes !== undefined ? (input.notes || null) : undefined,
+      tags: input.tags !== undefined ? (input.tags as any) : undefined,
+      status: input.status !== undefined ? input.status : undefined,
+      lastContactAt: input.lastContactAt !== undefined ? (input.lastContactAt ? new Date(input.lastContactAt) : null) : undefined
     }
   });
 
@@ -6809,6 +6940,185 @@ app.put("/customers/:id", async (req, reply) => {
   return updated;
 });
 
+app.get("/customers/:id/notes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canViewCustomers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId }, select: { id: true } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const rows = await db.customerNote.findMany({
+    where: { tenantId: admin.tenantId, customerId: id },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    include: { createdByUser: { select: { id: true, email: true, role: true } } }
+  });
+  return rows.map((n) => ({
+    id: n.id,
+    body: n.body,
+    createdAt: n.createdAt,
+    createdByUser: n.createdByUser
+  }));
+});
+
+app.post("/customers/:id/notes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ body: z.string().min(1).max(5000) }).parse(req.body || {});
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const note = await db.customerNote.create({
+    data: {
+      tenantId: admin.tenantId,
+      customerId: id,
+      body: input.body.trim(),
+      createdByUserId: admin.sub
+    }
+  });
+  await db.customer.update({ where: { id: customer.id }, data: { lastContactAt: new Date() } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_NOTE_CREATED", entityType: "Customer", entityId: id });
+  return note;
+});
+
+app.put("/customers/:id/tags", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    tags: z.array(z.string().min(1).max(60)).max(20),
+    status: z.enum(["ACTIVE", "PAST_DUE", "INACTIVE"]).optional()
+  }).parse(req.body || {});
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const updated = await db.customer.update({
+    where: { id: customer.id },
+    data: { tags: input.tags as any, status: input.status || customer.status }
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_TAGS_UPDATED", entityType: "Customer", entityId: id });
+  return updated;
+});
+
+app.post("/customers/:id/send-reminder", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const invoice = await db.invoice.findFirst({
+    where: { tenantId: admin.tenantId, customerId: id, status: { in: ["DRAFT", "SENT", "OVERDUE"] } },
+    orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }]
+  });
+  if (!invoice) return reply.status(404).send({ error: "unpaid_invoice_not_found" });
+
+  const now = Date.now();
+  const recentReminder = await db.invoiceEvent.findFirst({
+    where: {
+      invoiceId: invoice.id,
+      type: { in: ["REMINDER_SENT", "OVERDUE_REMINDER_SENT"] },
+      createdAt: { gte: new Date(now - 24 * 60 * 60 * 1000) }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+  if (recentReminder) return reply.status(429).send({ error: "REMINDER_THROTTLED" });
+
+  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}` : null);
+  if (!payUrl) return reply.status(400).send({ error: "PAY_LINK_MISSING" });
+  await queueInvoiceReminderEmail({
+    tenantId: admin.tenantId,
+    invoiceId: invoice.id,
+    to: invoice.customerEmail,
+    amountCents: invoice.amountCents,
+    payUrl,
+    overdue: invoice.status === "OVERDUE"
+  });
+  await logInvoiceEvent({
+    tenantId: admin.tenantId,
+    invoiceId: invoice.id,
+    type: invoice.status === "OVERDUE" ? "OVERDUE_REMINDER_SENT" : "REMINDER_SENT",
+    payload: { source: "CUSTOMER_WORKFLOW", customerId: id }
+  });
+  await db.customer.update({ where: { id }, data: { lastContactAt: new Date() } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_REMINDER_SENT", entityType: "Customer", entityId: id });
+  return { ok: true, invoiceId: invoice.id };
+});
+
+app.post("/customers/:id/send-invoice", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ invoiceId: z.string().optional() }).parse(req.body || {});
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const invoice = input.invoiceId
+    ? await db.invoice.findFirst({ where: { id: input.invoiceId, tenantId: admin.tenantId, customerId: id } })
+    : await db.invoice.findFirst({
+        where: { tenantId: admin.tenantId, customerId: id, status: { in: ["DRAFT", "SENT", "OVERDUE"] } },
+        orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }]
+      });
+  if (!invoice) return reply.status(404).send({ error: "invoice_not_found" });
+  if (invoice.status === "PAID") return reply.status(400).send({ error: "INVOICE_ALREADY_PAID" });
+  if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
+
+  const payToken = invoice.payToken || `inv_${randomBytes(18).toString("hex")}`;
+  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+  const updated = await db.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      status: invoice.status === "OVERDUE" ? "OVERDUE" : "SENT",
+      payToken,
+      payTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      externalPaymentLink: payUrl
+    }
+  });
+  await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, payUrl });
+  await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "SENT", payload: { source: "CUSTOMER_WORKFLOW" } });
+  await db.customer.update({ where: { id }, data: { lastContactAt: new Date() } });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_INVOICE_SENT", entityType: "Customer", entityId: id });
+  return { ok: true, invoice: updated };
+});
+
+app.get("/customers/:id/activity", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canViewCustomers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+
+  const invoiceIds = (await db.invoice.findMany({ where: { tenantId: admin.tenantId, customerId: id }, select: { id: true } })).map((r) => r.id);
+  const smsOr = [customer.primaryPhone ? { toNumber: customer.primaryPhone } : null, customer.whatsappNumber ? { toNumber: customer.whatsappNumber } : null].filter(Boolean) as any[];
+  const waOr = [{ customerId: id }, customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null, customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null].filter(Boolean) as any[];
+  const emailOr = [customer.primaryEmail ? { toEmail: customer.primaryEmail } : null, invoiceIds.length ? { invoiceId: { in: invoiceIds } } : null].filter(Boolean) as any[];
+
+  const [invoiceEvents, paymentEvents, emailEvents, whatsappEvents, smsEvents, notes] = await Promise.all([
+    invoiceIds.length ? db.invoiceEvent.findMany({ where: { tenantId: admin.tenantId, invoiceId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
+    invoiceIds.length ? db.paymentEvent.findMany({ where: { tenantId: admin.tenantId, subscriptionId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
+    emailOr.length ? db.emailJob.findMany({ where: { tenantId: admin.tenantId, OR: emailOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
+    db.whatsAppMessage.findMany({ where: { tenantId: admin.tenantId, thread: { is: { OR: waOr } } }, orderBy: { createdAt: "desc" }, take: 100 }),
+    smsOr.length ? db.smsMessage.findMany({ where: { campaign: { tenantId: admin.tenantId }, OR: smsOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
+    db.customerNote.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: { createdAt: "desc" }, take: 100, include: { createdByUser: { select: { email: true } } } })
+  ]);
+
+  const timeline: Array<{ type: string; createdAt: Date; label: string; meta?: any }> = [];
+  for (const e of invoiceEvents) timeline.push({ type: `INVOICE_${e.type}`, createdAt: e.createdAt, label: `Invoice ${e.type.toLowerCase()}`, meta: { invoiceId: e.invoiceId } });
+  for (const e of paymentEvents) timeline.push({ type: "PAYMENT_EVENT", createdAt: e.createdAt, label: `Payment ${String(e.status || "").toLowerCase()}`, meta: { amountCents: e.amountCents, currency: e.currency } });
+  for (const e of emailEvents) timeline.push({ type: "EMAIL_EVENT", createdAt: e.createdAt, label: `Email ${String(e.status || "").toLowerCase()} (${e.type})` });
+  for (const e of whatsappEvents) timeline.push({ type: "WHATSAPP_EVENT", createdAt: e.createdAt, label: `WhatsApp ${String(e.direction || "").toLowerCase()} ${String(e.status || "").toLowerCase()}` });
+  for (const e of smsEvents) timeline.push({ type: "SMS_EVENT", createdAt: e.createdAt, label: `SMS ${String(e.status || "").toLowerCase()}` });
+  for (const n of notes) timeline.push({ type: "NOTE", createdAt: n.createdAt, label: `Note added by ${n.createdByUser?.email || "staff"}`, meta: { body: n.body } });
+  timeline.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+  return {
+    customer: {
+      id: customer.id,
+      displayName: customer.displayName,
+      status: customer.status,
+      tags: Array.isArray(customer.tags) ? customer.tags : [],
+      lastContactAt: customer.lastContactAt || null
+    },
+    timeline: timeline.slice(0, 250)
+  };
+});
+
 app.get("/customers/:id/summary", async (req, reply) => {
   const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
@@ -6830,11 +7140,15 @@ app.get("/customers/:id/summary", async (req, reply) => {
     customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null,
     customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null
   ].filter(Boolean) as any[];
-  const [invoiceCounts, recentInvoices, recentInvoiceEvents, recentPaymentEvents, recentSms, whatsappThreads, latestEmailJobs] = await Promise.all([
+  const [invoiceCounts, invoiceUnpaidSum, recentInvoices, recentInvoiceEvents, recentPaymentEvents, recentSms, whatsappThreads, latestEmailJobs] = await Promise.all([
     db.invoice.groupBy({
       by: ["status"],
       where: { tenantId: admin.tenantId, customerId: customer.id },
       _count: { _all: true }
+    }),
+    db.invoice.aggregate({
+      where: { tenantId: admin.tenantId, customerId: customer.id, status: { in: ["DRAFT", "SENT", "OVERDUE"] } },
+      _sum: { amountCents: true }
     }),
     db.invoice.findMany({
       where: { tenantId: admin.tenantId, customerId: customer.id },
@@ -6898,6 +7212,7 @@ app.get("/customers/:id/summary", async (req, reply) => {
     invoices: {
       count: totalInvoiceCount,
       unpaidCount,
+      unpaidBalanceCents: invoiceUnpaidSum._sum.amountCents || 0,
       byStatus,
       recent: recentInvoices
     },
