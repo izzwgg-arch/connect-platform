@@ -74,7 +74,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-HTTPServer(("127.0.0.1", port), H).serve_forever()
+HTTPServer(("0.0.0.0", port), H).serve_forever()
 PY
 SERVER_PID=$!
 sleep 1
@@ -90,7 +90,10 @@ login_json="$(api POST /auth/login "" "$login_payload")"
 ADMIN_TOKEN="$(echo "$login_json" | jq -r '.token // empty')"
 [[ -n "$ADMIN_TOKEN" ]] || fail "admin login failed"
 
-create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://127.0.0.1:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
+GATEWAY_IP="$(docker exec app-api-1 sh -lc "ip route | awk '/default/ {print \\$3; exit}'")"
+[[ -n "$GATEWAY_IP" ]] || fail "could not resolve API container gateway IP"
+
+create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://${GATEWAY_IP}:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
 created="$(api POST /admin/pbx/instances "$ADMIN_TOKEN" "$create_payload")"
 INSTANCE_ID="$(echo "$created" | jq -r '.id // empty')"
 [[ -n "$INSTANCE_ID" ]] || fail "instance create failed"
