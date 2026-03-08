@@ -229,7 +229,21 @@ function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?:
     apiToken: token,
     apiSecret: secret,
     timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
-    simulate
+    simulate,
+    logger: (entry) => {
+      const payload = {
+        direction: entry.direction,
+        method: entry.method,
+        path: entry.path,
+        status: entry.status,
+        correlationId: entry.correlationId,
+        elapsedMs: entry.elapsedMs,
+        errorCode: entry.errorCode,
+        message: entry.message
+      };
+      if (entry.direction === "error") app.log.warn({ vitalpbx: payload }, "vitalpbx_error");
+      else app.log.info({ vitalpbx: payload }, "vitalpbx_debug");
+    }
   });
 }
 
@@ -6426,15 +6440,19 @@ app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
 
   try {
-    // Primary test path for VitalPBX integrations.
+    // Primary test path for VitalPBX integrations: GET /api/v2/tenants.
     const vital = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-    const health = await vital.healthCheck();
+    const tenants = await vital.listTenants();
+    const healthy = Array.isArray(tenants) && tenants.every((row) => row && typeof row === "object");
+    if (!healthy) {
+      return reply.status(400).send({ error: "PBX_PARSE_ERROR", message: "VitalPBX tenants payload is invalid." });
+    }
     const capabilities = await vital.detectCapabilities().catch(() => null);
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_OK", entityType: "PbxInstance", entityId: instance.id });
     return {
       ok: true,
       provider: "VITALPBX",
-      version: health.version || null,
+      tenantCount: tenants.length,
       capabilities
     };
   } catch (e: any) {

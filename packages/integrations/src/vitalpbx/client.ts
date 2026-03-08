@@ -85,13 +85,10 @@ export class VitalPbxClient {
     }
     const out: Record<string, string> = {
       "content-type": "application/json",
-      accept: "application/json",
-      "user-agent": this.cfg.userAgent
+      accept: "application/json"
     };
     if (appKey) out["app-key"] = String(appKey);
-    // Backward compatibility with previous integration wiring.
-    if (this.cfg.apiToken) out.authorization = `Bearer ${String(this.cfg.apiToken)}`;
-    if (this.cfg.apiSecret) out["x-api-secret"] = String(this.cfg.apiSecret);
+    // VitalPBX auth format is app-key header only.
     return out;
   }
 
@@ -131,7 +128,7 @@ export class VitalPbxClient {
     const query = { ...(params.query || {}) };
     const url = `${this.base(path)}${toQueryString(query)}`;
 
-    this.emit({ direction: "request", method, path: url, correlationId });
+    this.emit({ direction: "request", method, path: url, correlationId, message: "vitalpbx_request" });
     try {
       const res = await fetch(url, {
         method,
@@ -152,7 +149,12 @@ export class VitalPbxClient {
         path: url,
         status: res.status,
         correlationId,
-        elapsedMs: Date.now() - startedAt
+        elapsedMs: Date.now() - startedAt,
+        message: JSON.stringify({
+          status: payload?.status ?? null,
+          message: payload?.message ?? null,
+          hasData: payload?.data !== undefined
+        })
       });
 
       if (res.ok) return payload as T;
@@ -170,10 +172,18 @@ export class VitalPbxClient {
           await sleep(200 * 2 ** attempt);
           return this.request<T>(method, path, params, attempt + 1);
         }
-        throw makeVitalPbxError("VitalPBX request timed out", "PBX_TIMEOUT", 408, true);
+        throw makeVitalPbxError("VitalPBX request timed out", "PBX_UNREACHABLE", 408, true);
       }
       if (err?.code) throw err;
-      throw makeVitalPbxError("VitalPBX unavailable", "PBX_UNAVAILABLE", 503, true, { cause: String(err?.message || err) });
+      this.emit({
+        direction: "error",
+        method,
+        path: url,
+        correlationId,
+        errorCode: String(err?.code || "PBX_UNREACHABLE"),
+        message: String(err?.message || err)
+      });
+      throw makeVitalPbxError("VitalPBX unreachable", "PBX_UNREACHABLE", 503, true, { cause: String(err?.message || err) });
     }
   }
 
@@ -203,9 +213,10 @@ export class VitalPbxClient {
   }
 
   async healthCheck(): Promise<{ ok: boolean; version?: string | null }> {
-    const plan = await this.callEndpoint<any>("core.currentPlan");
-    const version = String(unwrapData<any>(plan)?.version || unwrapData<any>(plan)?.pbx_version || "").trim() || null;
-    return { ok: true, version };
+    const tenants = await this.listTenants();
+    const healthy = Array.isArray(tenants) && tenants.every((t) => t && typeof t === "object");
+    if (!healthy) throw makeVitalPbxError("VitalPBX tenants response invalid", "PBX_PARSE_ERROR", 502, false);
+    return { ok: true, version: null };
   }
 
   async detectCapabilities(): Promise<VitalPbxCapabilityMatrix> {

@@ -17,10 +17,11 @@ export function makeVitalPbxError(
 
 export function normalizeVitalPbxError(status?: number, message?: string): { code: VitalPbxErrorCode; retryable: boolean } {
   const msg = String(message || "").toLowerCase();
-  if (status === 401 || status === 403) return { code: "PBX_AUTH_FAILED", retryable: false };
+  if (status === 401) return { code: "INVALID_API_KEY", retryable: false };
+  if (status === 403) return { code: "PERMISSION_DENIED", retryable: false };
   if (status === 400 || status === 422) return { code: "PBX_VALIDATION_FAILED", retryable: false };
   if (status === 404) return { code: "PBX_VALIDATION_FAILED", retryable: false };
-  if (status === 408) return { code: "PBX_TIMEOUT", retryable: true };
+  if (status === 408) return { code: "PBX_UNREACHABLE", retryable: true };
   if (status === 409) return { code: "PBX_VALIDATION_FAILED", retryable: false };
   if (status === 429) return { code: "PBX_RATE_LIMIT", retryable: true };
   if (msg.includes("tenant")) return { code: "PBX_TENANT_CONTEXT_ERROR", retryable: false };
