@@ -6426,12 +6426,36 @@ app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
 
   try {
-    await getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).healthCheck();
+    // Primary test path for VitalPBX integrations.
+    const vital = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+    const health = await vital.healthCheck();
+    const capabilities = await vital.detectCapabilities().catch(() => null);
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_OK", entityType: "PbxInstance", entityId: instance.id });
-    return { ok: true };
+    return {
+      ok: true,
+      provider: "VITALPBX",
+      version: health.version || null,
+      capabilities
+    };
   } catch (e: any) {
-    await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_FAILED", entityType: "PbxInstance", entityId: instance.id });
-    return reply.status(400).send({ error: String(e?.code || "PBX_UNAVAILABLE") });
+    // Backward-compatible fallback for existing WirePBX-style instances.
+    try {
+      await getWirePbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).healthCheck();
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_OK", entityType: "PbxInstance", entityId: instance.id });
+      return {
+        ok: true,
+        provider: "WIRE_PBX_COMPAT",
+        warning: "VitalPBX test failed but WirePBX compatibility health endpoint passed.",
+        vitalError: String(e?.code || e?.message || "PBX_UNAVAILABLE")
+      };
+    } catch (wireErr: any) {
+      await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_FAILED", entityType: "PbxInstance", entityId: instance.id });
+      return reply.status(400).send({
+        error: String(e?.code || "PBX_UNAVAILABLE"),
+        message: String(e?.message || "VitalPBX connection test failed"),
+        fallbackError: String(wireErr?.code || wireErr?.message || "PBX_UNAVAILABLE")
+      });
+    }
   }
 });
 
