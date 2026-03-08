@@ -18,7 +18,6 @@ import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { getTenantTelephonyState } from "../../../services/asteriskService";
-import { dashboardMetrics } from "../../../services/mockData";
 import { loadDashboardData } from "../../../services/platformData";
 
 export default function DashboardPage() {
@@ -30,32 +29,18 @@ export default function DashboardPage() {
     [adminScope]
   );
 
-  const fallbackData = {
-    scopeLabel: adminScope as "GLOBAL" | "TENANT",
-    metrics: dashboardMetrics,
-    activity: [{ type: "DASHBOARD", label: "Loading live metrics. Fallback snapshot shown." }]
-  };
-
-  const data = state.status === "success" ? state.data : fallbackData;
-  const metrics = data.metrics;
-  const activity = data.activity;
-  const topMetrics = [
-    { label: "Active Calls", value: "18", meta: "4 queues engaged" },
-    { label: "Calls Today", value: "412", meta: "+7% vs yesterday" },
-    { label: "Missed Calls", value: "23", meta: "Needs follow-up" },
-    { label: "SMS Sent", value: "1,284", meta: "97.8% delivered" },
-    { label: "WhatsApp", value: "342", meta: "28 unread inbound" },
-    { label: "Unpaid Invoices", value: "19", meta: "$14,220 open" },
-    { label: "Collections", value: "$28.4k", meta: "Last 30 days" }
-  ];
+  const data = state.status === "success" ? state.data : null;
+  const metrics = data?.metrics || [];
+  const activity = data?.activity || [];
+  const scopeLabel = data?.scopeLabel || (adminScope as "GLOBAL" | "TENANT");
 
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
       <div className="stack">
       <PageHeader
         title="Operations Dashboard"
-        subtitle={`Telecom-native command center for calls, messaging, users, and health (${data.scopeLabel.toLowerCase()} scope).`}
-        badges={<ScopeBadge scope={data.scopeLabel} />}
+        subtitle={`Telecom-native command center for calls, messaging, users, and health (${scopeLabel.toLowerCase()} scope).`}
+        badges={<ScopeBadge scope={scopeLabel} />}
         actions={<QRPairingModal />}
       />
       {state.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
@@ -63,12 +48,12 @@ export default function DashboardPage() {
       {isGlobal ? <GlobalScopeNotice /> : null}
 
       <section className="metric-grid">
-        {topMetrics.map((metric) => (
-          <MetricCard key={metric.label} label={metric.label} value={metric.value} meta={metric.meta} />
+        {metrics.map((metric) => (
+          <MetricCard key={metric.label} label={metric.label} value={metric.value} meta={metric.delta} />
         ))}
       </section>
 
-      <section className="grid three">
+      <section className="grid two">
         <DetailCard title="Operator Status">
           <div className="row-wrap">
             <RegistrationBadge registered={true} />
@@ -81,27 +66,6 @@ export default function DashboardPage() {
             <ScopedActionButton className="btn ghost">Call Forwarding</ScopedActionButton>
           </div>
         </DetailCard>
-        <DetailCard title="System Health">
-          <ul className="list">
-            <li>PBX Connectivity: Healthy</li>
-            <li>SBC Readiness: Stable</li>
-            <li>Messaging Providers: 1 degraded</li>
-            <li>Email Queue: 3 delayed jobs</li>
-            <li>Webhook Sync: Last seen 18s ago</li>
-          </ul>
-        </DetailCard>
-        <DetailCard title="Attention Needed">
-          <ul className="list">
-            <li>4 overdue invoices older than 14 days</li>
-            <li>2 failed campaign sends pending review</li>
-            <li>3 payment declines need follow-up</li>
-            <li>5 inbound WhatsApp messages unassigned</li>
-            <li>1 tenant warning for SMS daily cap</li>
-          </ul>
-        </DetailCard>
-      </section>
-
-      <section className="grid two">
         <DetailCard title="Quick Actions">
           <div className="row-actions">
             <ScopedActionButton className="btn ghost">Create Extension</ScopedActionButton>
@@ -109,14 +73,6 @@ export default function DashboardPage() {
             <ScopedActionButton className="btn ghost" allowInGlobal>Create Invoice</ScopedActionButton>
             <ScopedActionButton className="btn ghost">Add Customer</ScopedActionButton>
           </div>
-        </DetailCard>
-        <DetailCard title="Live Tenant Overview">
-          <ul className="list">
-            <li>Queues with callers waiting: 2</li>
-            <li>Ring group coverage alerts: 1</li>
-            <li>Agents on active calls: 12</li>
-            <li>Failed registrations in last 15m: 3</li>
-          </ul>
         </DetailCard>
       </section>
 
@@ -138,39 +94,14 @@ export default function DashboardPage() {
         )}
       </DetailCard>
 
-      <section className="grid two">
-        <DetailCard title="Recent Activity Feed">
-          {activity.length === 0 ? (
-            <EmptyState title="No activity yet" message="As events flow from billing, messaging, and PBX, activity appears here." />
-          ) : (
-            <ul className="list">
-              {activity.map((item, idx) => (
-                <li key={`${item.type}-${idx}`}>
-                  <strong>{item.type}</strong>: {item.label}
-                </li>
-              ))}
-            </ul>
-          )}
-        </DetailCard>
-        <DetailCard title="Queue and Campaign Snapshot">
-          <ul className="list">
-            <li>Support queue ASA: 00:42</li>
-            <li>Sales queue abandon rate: 3.1%</li>
-            <li>Campaigns sent today: 7</li>
-            <li>Campaign delivery failures: 13</li>
-            <li>Pending reminders: 9 invoices</li>
-          </ul>
-        </DetailCard>
-      </section>
-
-      <DetailCard title="Platform Metrics Feed">
+      <DetailCard title="Recent Activity Feed">
         {activity.length === 0 ? (
-          <EmptyState title="No telemetry yet" message="Metric snapshots appear here once collectors complete." />
+          <EmptyState title="No activity yet" message="As events flow from billing, messaging, and PBX, activity appears here." />
         ) : (
           <ul className="list">
-            {metrics.map((item, idx) => (
-              <li key={`${item.label}-${idx}`}>
-                <strong>{item.label}</strong>: {item.value} ({item.delta})
+            {activity.map((item, idx) => (
+              <li key={`${item.type}-${idx}`}>
+                <strong>{item.type}</strong>: {item.label}
               </li>
             ))}
           </ul>
@@ -181,16 +112,16 @@ export default function DashboardPage() {
         <section className="grid two">
           <DetailCard title="Tenant Admin Signals">
             <ul className="list">
-              <li>Users online: 42</li>
-              <li>Registration health: 94%</li>
-              <li>Provisioning jobs pending: 3</li>
+              <li>Tenant scoped metrics are shown from live dashboard APIs.</li>
+              <li>Use PBX section for call-routing and provisioning operations.</li>
+              <li>Use Billing section for invoice and payment lifecycle controls.</li>
             </ul>
           </DetailCard>
           <DetailCard title="Super Admin Snapshot">
             <ul className="list">
-              <li>Tenant count: 38</li>
-              <li>Suspended tenants: 2</li>
-              <li>Global integration incidents: 1</li>
+              <li>Switch to Global mode from tenant switcher to audit all tenants.</li>
+              <li>Use Admin section for PBX instances and tenant synchronization.</li>
+              <li>Use Reports for CDR and platform health analysis.</li>
             </ul>
           </DetailCard>
         </section>

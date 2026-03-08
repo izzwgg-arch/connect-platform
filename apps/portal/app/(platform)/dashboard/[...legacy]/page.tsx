@@ -1,17 +1,17 @@
 import { redirect } from "next/navigation";
 
 const topMap: Record<string, string> = {
-  voice: "/dashboard/voice/phone",
-  sms: "/sms",
-  whatsapp: "/sms",
-  customers: "/contacts",
-  billing: "/reports",
+  voice: "/pbx",
+  sms: "/apps/sms-campaigns",
+  whatsapp: "/apps/whatsapp",
+  customers: "/apps/customers",
+  billing: "/billing",
   settings: "/settings",
-  admin: "/dashboard/admin/pbx/instances",
+  admin: "/admin/pbx",
   search: "/dashboard",
-  automation: "/admin",
-  numbers: "/contacts",
-  extensions: "/team"
+  automation: "/apps",
+  numbers: "/apps/customers",
+  extensions: "/pbx/extensions"
 };
 
 export default function LegacyDashboardRedirect({ params }: { params: { legacy?: string[] } }) {

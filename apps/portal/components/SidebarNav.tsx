@@ -11,17 +11,17 @@ type SidebarNavProps = {
 };
 
 function activeSection(pathname: string, items: NavItem[]): NavItem["section"] {
-  const exact = items.find((item) => item.href === pathname);
-  if (exact) return exact.section;
-  const prefix = items.find((item) => pathname.startsWith(item.href) && item.href !== "/");
-  return prefix?.section || "operations";
+  const match = [...items]
+    .sort((a, b) => b.href.length - a.href.length)
+    .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  return match?.section || "dashboard";
 }
 
 export function SidebarNav({ items, mobileOpen, onCloseMobile }: SidebarNavProps) {
   const pathname = usePathname();
   const currentSection = activeSection(pathname, items);
   const sectionItems = items.filter((item) => item.section === currentSection);
-  const sectionOrder: NavItem["section"][] = ["operations", "communications", "crm", "platform"];
+  const sectionOrder: NavItem["section"][] = ["dashboard", "pbx", "reports", "settings", "admin", "billing", "apps"];
 
   return (
     <aside className={`console-nav ${mobileOpen ? "open" : ""}`}>
@@ -53,7 +53,7 @@ export function SidebarNav({ items, mobileOpen, onCloseMobile }: SidebarNavProps
         <div className="secondary-title">{navSectionMeta[currentSection].label}</div>
         <nav className="secondary-list" aria-label="Section">
           {sectionItems.map((item) => {
-            const active = pathname === item.href;
+            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

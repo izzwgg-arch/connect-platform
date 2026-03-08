@@ -1,6 +1,7 @@
 "use client";
 
 import { DetailCard } from "../../../components/DetailCard";
+import Link from "next/link";
 import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../components/MetricCard";
@@ -33,10 +34,24 @@ export default function ReportsPage() {
       </section>
       <section className="grid two">
         <DetailCard title="Call Activity">
-          <div className="chart-placeholder">Chart area</div>
+          <ul className="list">
+            <li>Use CDR report for direction/disposition filters.</li>
+            <li>Use PBX call reports for per-extension performance.</li>
+            <li>Trend windows: 24h / 7d / 30d from report routes.</li>
+          </ul>
+          <div className="row-actions">
+            <Link className="btn ghost" href="/reports/cdr">Open CDR</Link>
+          </div>
         </DetailCard>
         <DetailCard title="Registration Health">
-          <div className="chart-placeholder">Chart area</div>
+          <ul className="list">
+            <li>Review registered extension totals on Dashboard.</li>
+            <li>Use PBX Extensions for registration-specific fields.</li>
+            <li>Use SBC connectivity for transport diagnostics.</li>
+          </ul>
+          <div className="row-actions">
+            <Link className="btn ghost" href="/pbx/extensions">Open Extensions</Link>
+          </div>
         </DetailCard>
       </section>
       </div>

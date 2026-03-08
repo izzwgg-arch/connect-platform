@@ -59,18 +59,40 @@ export async function loadDashboardData(scope: AdminScope): Promise<DashboardDat
   }
 
   try {
-    const [summary, activity] = await Promise.all([
+    const [summary, activity, callsReport, extensionRows, trunkRows] = await Promise.all([
       apiGet<any>("/dashboard/summary?range=24h"),
-      apiGet<any>("/dashboard/activity?range=24h")
+      apiGet<any>("/dashboard/activity?range=24h"),
+      apiGet<any>("/voice/pbx/call-reports"),
+      apiGet<any>("/voice/pbx/resources/extensions"),
+      apiGet<any>("/voice/pbx/resources/trunks")
     ]);
 
+    const reportItems = Array.isArray(callsReport?.report?.items)
+      ? callsReport.report.items
+      : Array.isArray(callsReport?.items)
+        ? callsReport.items
+        : [];
+    const answeredCount = reportItems.filter((item: any) => String(item?.disposition || "").toLowerCase() === "answered").length;
+    const missedCount = reportItems.filter((item: any) => String(item?.disposition || "").toLowerCase().includes("miss")).length;
+    const callsToday = reportItems.length;
+    const extensions = Array.isArray(extensionRows?.rows) ? extensionRows.rows : [];
+    const registeredExtensions = extensions.filter((row: any) => {
+      const value = String(row?.status || row?.registration || row?.registered || "").toLowerCase();
+      return value.includes("reg") || value.includes("online") || value === "true";
+    }).length;
+    const trunks = Array.isArray(trunkRows?.rows) ? trunkRows.rows : [];
+    const onlineTrunks = trunks.filter((row: any) => {
+      const value = String(row?.status || row?.state || row?.registration || "").toLowerCase();
+      return value.includes("online") || value.includes("up") || value.includes("ok");
+    }).length;
+
     const metrics: Metric[] = [
-      { label: "Active Calls", value: String(summary?.attention?.whatsappInboundNeedsFollowup?.length ?? 0), delta: "Live signal" },
-      { label: "Missed Today", value: String(summary?.paymentSummary?.recentFailureCount ?? 0), delta: "Failures watch" },
-      { label: "Unread Voicemails", value: String(summary?.emailSummary?.queuedCount ?? 0), delta: "Queued actions" },
-      { label: "SMS Unread", value: String(summary?.messagingSummary?.smsCampaignsSentInRange ?? 0), delta: "Sent in range" },
-      { label: "Registered Extensions", value: `${Math.max(0, 90 - (summary?.invoiceSummary?.overdueCount ?? 0))}%`, delta: "Derived health" },
-      { label: "Trunk Health", value: summary?.invoiceSummary?.overdueCount ? "Degraded" : "Healthy", delta: "SBC/PBX" }
+      { label: "Calls Today", value: String(callsToday), delta: `${answeredCount} answered / ${missedCount} missed` },
+      { label: "Registered Extensions", value: String(registeredExtensions), delta: `${extensions.length} total extensions` },
+      { label: "Trunks Online", value: String(onlineTrunks), delta: `${trunks.length} total trunks` },
+      { label: "Overdue Invoices", value: String(summary?.invoiceSummary?.overdueCount ?? 0), delta: "Billing attention" },
+      { label: "SMS Activity", value: String(summary?.messagingSummary?.smsCampaignsSentInRange ?? 0), delta: "Campaigns sent 24h" },
+      { label: "WhatsApp Inbound", value: String(summary?.whatsappSummary?.inboundCount ?? 0), delta: "Needs follow-up queue" }
     ];
 
     return {

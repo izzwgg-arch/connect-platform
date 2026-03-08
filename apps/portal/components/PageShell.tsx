@@ -9,7 +9,9 @@ import { SidebarNav } from "./SidebarNav";
 import { Topbar } from "./Topbar";
 
 function titleFromPath(pathname: string): string {
-  const match = navItems.find((item) => item.href === pathname);
+  const match = [...navItems]
+    .sort((a, b) => b.href.length - a.href.length)
+    .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   if (match) return match.label;
   const fallback = pathname.split("/").filter(Boolean).pop() || "Dashboard";
   return fallback.charAt(0).toUpperCase() + fallback.slice(1).replace(/-/g, " ");

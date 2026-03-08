@@ -28,7 +28,7 @@ function browserTenantContext(): string {
   return localStorage.getItem("cc-tenant-id") || "";
 }
 
-async function apiRequest<T>(method: "GET" | "POST" | "PATCH", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -66,4 +66,8 @@ export async function apiPost<T>(path: string, body?: Record<string, unknown>, t
 
 export async function apiPatch<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   return apiRequest<T>("PATCH", path, body, token);
+}
+
+export async function apiDelete<T>(path: string, token?: string): Promise<T> {
+  return apiRequest<T>("DELETE", path, undefined, token);
 }

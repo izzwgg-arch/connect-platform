@@ -2,6 +2,7 @@ import { AppDownloadCard } from "../../../components/AppDownloadCard";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { QRPairingModal } from "../../../components/QRPairingModal";
+import Link from "next/link";
 
 export default function AppsPage() {
   return (
@@ -11,6 +12,14 @@ export default function AppsPage() {
       <section className="grid two">
         <AppDownloadCard title="ConnectComms Mobile" description="Android APK and iOS App Store access for extension login and on-the-go calling." />
         <AppDownloadCard title="ConnectComms Desktop" description="Desktop softphone rollout channel for Windows and macOS users." />
+      </section>
+      <section className="panel">
+        <h3>Operations Apps</h3>
+        <div className="row-actions">
+          <Link className="btn ghost" href="/apps/sms-campaigns">SMS Campaigns</Link>
+          <Link className="btn ghost" href="/apps/whatsapp">WhatsApp Inbox</Link>
+          <Link className="btn ghost" href="/apps/customers">Customer Hub</Link>
+        </div>
       </section>
       <section className="panel">
         <h3>Pairing Instructions</h3>

@@ -11,6 +11,7 @@ import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { loadAdminSignals } from "../../../services/platformData";
+import Link from "next/link";
 
 export default function AdminPage() {
   const { adminScope } = useAppContext();
@@ -60,6 +61,15 @@ export default function AdminPage() {
           <IntegrationCard name="VitalPBX Connection" status="Configured" configureHref="/admin/pbx" auditHref="/admin/pbx" />
           <IntegrationCard name="VoIPDNS / Provider Routing" status="Requires review" />
           <IntegrationCard name="QuickBooks & PaymentHub" status="Not connected" />
+        </section>
+        <section className="panel">
+          <h3>Admin Shortcuts</h3>
+          <div className="row-actions">
+            <Link className="btn ghost" href="/admin/tenants">Tenants</Link>
+            <Link className="btn ghost" href="/admin/pbx">PBX Instances</Link>
+            <Link className="btn ghost" href="/admin/pbx/events">PBX Events</Link>
+            <Link className="btn ghost" href="/admin/billing">Admin Billing</Link>
+          </div>
         </section>
       </div>
     </PermissionGate>

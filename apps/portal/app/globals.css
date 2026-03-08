@@ -370,6 +370,16 @@ p {
   gap: 8px;
 }
 
+.tenant-switcher-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tenant-search {
+  width: 140px;
+}
+
 .scope-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
