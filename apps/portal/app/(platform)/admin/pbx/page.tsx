@@ -25,7 +25,16 @@ export default function AdminPbxPage() {
   const [reloadKey, setReloadKey] = useState(0);
 
   const instances = useAsyncResource(() => apiGet<PbxInstance[]>("/admin/pbx/instances"), [reloadKey]);
-  const rows = useMemo(() => (instances.status === "success" ? instances.data : []), [instances]);
+  const rows = useMemo(() => {
+    if (instances.status !== "success") return [];
+    return instances.data
+      .filter((row) => row.isEnabled)
+      .sort((a, b) => {
+        const ad = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const bd = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return bd - ad;
+      });
+  }, [instances]);
   const isAuthError =
     instances.status === "error" &&
     (instances.error.includes("401") || instances.error.toLowerCase().includes("unauthorized"));
