@@ -27,6 +27,7 @@ import {
   SolaCardknoxAdapter,
   type SolaCardknoxConfig,
   VitalPbxClient,
+  type VitalPbxPermission,
   WirePbxClient,
   normalizeWirePbxEvent,
   type NormalizedWirePbxEvent
@@ -1052,6 +1053,155 @@ function canManageCustomerWorkflow(user: JwtUser): boolean {
 
 function canUseCustomerTargeting(user: JwtUser): boolean {
   return canManageMessaging(user) || canManageBilling(user);
+}
+
+const VITALPBX_ROLE_PERMISSIONS: Record<StaffRole, Set<VitalPbxPermission>> = {
+  SUPER_ADMIN: new Set<VitalPbxPermission>([
+    "vitalpbx.connection.view", "vitalpbx.connection.edit", "vitalpbx.connection.test",
+    "vitalpbx.tenants.view", "vitalpbx.tenants.create", "vitalpbx.tenants.update", "vitalpbx.tenants.delete", "vitalpbx.tenants.switchContext",
+    "vitalpbx.extensions.view", "vitalpbx.extensions.create", "vitalpbx.extensions.update", "vitalpbx.extensions.delete", "vitalpbx.extensions.viewRegistration", "vitalpbx.extensions.viewAccountCodes",
+    "vitalpbx.inboundRoutes.view", "vitalpbx.inboundRoutes.create", "vitalpbx.inboundRoutes.update", "vitalpbx.inboundRoutes.delete",
+    "vitalpbx.outboundRoutes.view", "vitalpbx.outboundRoutes.create", "vitalpbx.outboundRoutes.update", "vitalpbx.outboundRoutes.delete",
+    "vitalpbx.ivr.view", "vitalpbx.ivr.create", "vitalpbx.ivr.update", "vitalpbx.ivr.delete",
+    "vitalpbx.ringGroups.view", "vitalpbx.ringGroups.create", "vitalpbx.ringGroups.update", "vitalpbx.ringGroups.delete",
+    "vitalpbx.queues.view", "vitalpbx.queues.create", "vitalpbx.queues.update", "vitalpbx.queues.delete", "vitalpbx.queues.agentControl",
+    "vitalpbx.cdr.view", "vitalpbx.cdr.export", "vitalpbx.cdr.sync", "vitalpbx.cdr.viewRaw",
+    "vitalpbx.recordings.view", "vitalpbx.recordings.download", "vitalpbx.recordings.delete",
+    "vitalpbx.voicemail.view", "vitalpbx.voicemail.download", "vitalpbx.voicemail.delete", "vitalpbx.voicemail.updateSettings",
+    "vitalpbx.accountCodes.view",
+    "vitalpbx.authorizationCodes.view", "vitalpbx.authorizationCodes.create", "vitalpbx.authorizationCodes.update", "vitalpbx.authorizationCodes.delete",
+    "vitalpbx.customerCodes.view", "vitalpbx.customerCodes.create", "vitalpbx.customerCodes.update", "vitalpbx.customerCodes.delete",
+    "vitalpbx.aiApiKeys.view", "vitalpbx.aiApiKeys.create", "vitalpbx.aiApiKeys.update", "vitalpbx.aiApiKeys.delete",
+    "vitalpbx.sync.run", "vitalpbx.sync.viewHealth", "vitalpbx.logs.view", "vitalpbx.featureFlags.view"
+  ]),
+  ADMIN: new Set<VitalPbxPermission>([
+    "vitalpbx.connection.view", "vitalpbx.connection.test",
+    "vitalpbx.tenants.view", "vitalpbx.tenants.switchContext",
+    "vitalpbx.extensions.view", "vitalpbx.extensions.create", "vitalpbx.extensions.update", "vitalpbx.extensions.delete", "vitalpbx.extensions.viewRegistration", "vitalpbx.extensions.viewAccountCodes",
+    "vitalpbx.inboundRoutes.view", "vitalpbx.inboundRoutes.create", "vitalpbx.inboundRoutes.update",
+    "vitalpbx.outboundRoutes.view", "vitalpbx.outboundRoutes.create", "vitalpbx.outboundRoutes.update",
+    "vitalpbx.ivr.view", "vitalpbx.ivr.create", "vitalpbx.ivr.update",
+    "vitalpbx.ringGroups.view", "vitalpbx.ringGroups.create", "vitalpbx.ringGroups.update",
+    "vitalpbx.queues.view", "vitalpbx.queues.create", "vitalpbx.queues.update", "vitalpbx.queues.delete", "vitalpbx.queues.agentControl",
+    "vitalpbx.cdr.view", "vitalpbx.cdr.export", "vitalpbx.cdr.sync",
+    "vitalpbx.recordings.view", "vitalpbx.recordings.download",
+    "vitalpbx.voicemail.view", "vitalpbx.voicemail.download", "vitalpbx.voicemail.updateSettings",
+    "vitalpbx.accountCodes.view",
+    "vitalpbx.authorizationCodes.view", "vitalpbx.authorizationCodes.create", "vitalpbx.authorizationCodes.update",
+    "vitalpbx.customerCodes.view", "vitalpbx.customerCodes.create", "vitalpbx.customerCodes.update",
+    "vitalpbx.aiApiKeys.view", "vitalpbx.aiApiKeys.create", "vitalpbx.aiApiKeys.update",
+    "vitalpbx.sync.run", "vitalpbx.sync.viewHealth", "vitalpbx.featureFlags.view"
+  ]),
+  BILLING: new Set<VitalPbxPermission>([
+    "vitalpbx.tenants.view", "vitalpbx.tenants.switchContext",
+    "vitalpbx.extensions.view", "vitalpbx.extensions.viewAccountCodes",
+    "vitalpbx.cdr.view", "vitalpbx.cdr.export",
+    "vitalpbx.accountCodes.view",
+    "vitalpbx.authorizationCodes.view",
+    "vitalpbx.customerCodes.view",
+    "vitalpbx.featureFlags.view"
+  ]),
+  MESSAGING: new Set<VitalPbxPermission>([
+    "vitalpbx.extensions.view", "vitalpbx.extensions.viewRegistration",
+    "vitalpbx.queues.view", "vitalpbx.queues.agentControl",
+    "vitalpbx.cdr.view",
+    "vitalpbx.voicemail.view",
+    "vitalpbx.customerCodes.view",
+    "vitalpbx.sync.viewHealth"
+  ]),
+  SUPPORT: new Set<VitalPbxPermission>([
+    "vitalpbx.extensions.view", "vitalpbx.extensions.viewRegistration",
+    "vitalpbx.queues.view", "vitalpbx.cdr.view",
+    "vitalpbx.recordings.view", "vitalpbx.voicemail.view",
+    "vitalpbx.sync.viewHealth"
+  ]),
+  READ_ONLY: new Set<VitalPbxPermission>([
+    "vitalpbx.connection.view",
+    "vitalpbx.tenants.view",
+    "vitalpbx.extensions.view",
+    "vitalpbx.inboundRoutes.view",
+    "vitalpbx.outboundRoutes.view",
+    "vitalpbx.ivr.view",
+    "vitalpbx.ringGroups.view",
+    "vitalpbx.queues.view",
+    "vitalpbx.cdr.view",
+    "vitalpbx.recordings.view",
+    "vitalpbx.voicemail.view",
+    "vitalpbx.accountCodes.view",
+    "vitalpbx.authorizationCodes.view",
+    "vitalpbx.customerCodes.view",
+    "vitalpbx.aiApiKeys.view",
+    "vitalpbx.sync.viewHealth",
+    "vitalpbx.logs.view",
+    "vitalpbx.featureFlags.view"
+  ]),
+  USER: new Set<VitalPbxPermission>([
+    "vitalpbx.extensions.view", "vitalpbx.cdr.view", "vitalpbx.voicemail.view"
+  ])
+};
+
+function hasVitalPbxPermission(user: JwtUser, permission: VitalPbxPermission): boolean {
+  const role = (user.role || "USER") as StaffRole;
+  const set = VITALPBX_ROLE_PERMISSIONS[role] || VITALPBX_ROLE_PERMISSIONS.USER;
+  return set.has(permission);
+}
+
+type VitalResourceAction = "view" | "create" | "update" | "delete";
+type VitalResourcePermissionName =
+  | "extensions"
+  | "trunks"
+  | "ring-groups"
+  | "queues"
+  | "ivr"
+  | "routes"
+  | "tenants"
+  | "users"
+  | "roles"
+  | "cdr"
+  | "devices"
+  | "device-profiles"
+  | "destinations"
+  | "classes-of-services"
+  | "conferences"
+  | "phonebooks"
+  | "route-selections"
+  | "account-codes"
+  | "authorization-codes"
+  | "customer-codes"
+  | "ai-api-keys"
+  | "sms"
+  | "whatsapp"
+  | "virtual-faxes"
+  | "voicemail"
+  | "parking-lots";
+
+function canAccessVitalResourceAction(user: JwtUser, resource: VitalResourcePermissionName, action: VitalResourceAction): boolean {
+  const permissionFor = (r: VitalResourcePermissionName, a: VitalResourceAction): VitalPbxPermission | null => {
+    if (r === "extensions") {
+      if (a === "view") return "vitalpbx.extensions.view";
+      if (a === "create") return "vitalpbx.extensions.create";
+      if (a === "update") return "vitalpbx.extensions.update";
+      return "vitalpbx.extensions.delete";
+    }
+    if (r === "routes") return a === "view" ? "vitalpbx.outboundRoutes.view" : a === "create" ? "vitalpbx.outboundRoutes.create" : a === "update" ? "vitalpbx.outboundRoutes.update" : "vitalpbx.outboundRoutes.delete";
+    if (r === "ivr") return a === "view" ? "vitalpbx.ivr.view" : a === "create" ? "vitalpbx.ivr.create" : a === "update" ? "vitalpbx.ivr.update" : "vitalpbx.ivr.delete";
+    if (r === "ring-groups") return a === "view" ? "vitalpbx.ringGroups.view" : a === "create" ? "vitalpbx.ringGroups.create" : a === "update" ? "vitalpbx.ringGroups.update" : "vitalpbx.ringGroups.delete";
+    if (r === "queues") return a === "view" ? "vitalpbx.queues.view" : a === "create" ? "vitalpbx.queues.create" : a === "update" ? "vitalpbx.queues.update" : "vitalpbx.queues.delete";
+    if (r === "cdr") return a === "view" ? "vitalpbx.cdr.view" : null;
+    if (r === "voicemail") return a === "view" ? "vitalpbx.voicemail.view" : a === "delete" ? "vitalpbx.voicemail.delete" : "vitalpbx.voicemail.updateSettings";
+    if (r === "account-codes") return a === "view" ? "vitalpbx.accountCodes.view" : null;
+    if (r === "authorization-codes") return a === "view" ? "vitalpbx.authorizationCodes.view" : a === "create" ? "vitalpbx.authorizationCodes.create" : a === "update" ? "vitalpbx.authorizationCodes.update" : "vitalpbx.authorizationCodes.delete";
+    if (r === "customer-codes") return a === "view" ? "vitalpbx.customerCodes.view" : a === "create" ? "vitalpbx.customerCodes.create" : a === "update" ? "vitalpbx.customerCodes.update" : "vitalpbx.customerCodes.delete";
+    if (r === "ai-api-keys") return a === "view" ? "vitalpbx.aiApiKeys.view" : a === "create" ? "vitalpbx.aiApiKeys.create" : a === "update" ? "vitalpbx.aiApiKeys.update" : "vitalpbx.aiApiKeys.delete";
+    if (r === "tenants") return a === "view" ? "vitalpbx.tenants.view" : a === "create" ? "vitalpbx.tenants.create" : a === "update" ? "vitalpbx.tenants.update" : "vitalpbx.tenants.delete";
+    if (r === "trunks" || r === "users" || r === "roles" || r === "devices" || r === "device-profiles" || r === "destinations" || r === "classes-of-services" || r === "conferences" || r === "phonebooks" || r === "route-selections" || r === "parking-lots" || r === "virtual-faxes" || r === "sms" || r === "whatsapp") {
+      return a === "view" ? "vitalpbx.extensions.view" : "vitalpbx.extensions.update";
+    }
+    return null;
+  };
+  const p = permissionFor(resource, action);
+  if (!p) return false;
+  return hasVitalPbxPermission(user, p);
 }
 
 async function requirePermission(req: any, reply: any, checker: (user: JwtUser) => boolean): Promise<JwtUser | null> {
@@ -6285,47 +6435,134 @@ app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
   }
 });
 
-function isVitalResourceName(input: string): input is "extensions" | "trunks" | "ring-groups" | "queues" | "ivr" | "routes" {
-  return ["extensions", "trunks", "ring-groups", "queues", "ivr", "routes"].includes(input);
+type VitalResourceName =
+  | "extensions"
+  | "trunks"
+  | "ring-groups"
+  | "queues"
+  | "ivr"
+  | "routes"
+  | "tenants"
+  | "users"
+  | "roles"
+  | "cdr"
+  | "devices"
+  | "device-profiles"
+  | "destinations"
+  | "classes-of-services"
+  | "conferences"
+  | "phonebooks"
+  | "route-selections"
+  | "account-codes"
+  | "authorization-codes"
+  | "customer-codes"
+  | "ai-api-keys"
+  | "sms"
+  | "whatsapp"
+  | "virtual-faxes"
+  | "voicemail"
+  | "parking-lots";
+
+function isVitalResourceName(input: string): input is VitalResourceName {
+  return [
+    "extensions",
+    "trunks",
+    "ring-groups",
+    "queues",
+    "ivr",
+    "routes",
+    "tenants",
+    "users",
+    "roles",
+    "cdr",
+    "devices",
+    "device-profiles",
+    "destinations",
+    "classes-of-services",
+    "conferences",
+    "phonebooks",
+    "route-selections",
+    "account-codes",
+    "authorization-codes",
+    "customer-codes",
+    "ai-api-keys",
+    "sms",
+    "whatsapp",
+    "virtual-faxes",
+    "voicemail",
+    "parking-lots"
+  ].includes(input);
 }
 
-async function vitalListByResource(client: VitalPbxClient, resource: string, tenantId?: string) {
+async function vitalListByResource(client: VitalPbxClient, resource: VitalResourceName, tenantId?: string) {
   if (resource === "extensions") return client.listExtensions(tenantId);
   if (resource === "trunks") return client.listTrunks(tenantId);
   if (resource === "ring-groups") return client.listRingGroups(tenantId);
   if (resource === "queues") return client.listQueues(tenantId);
   if (resource === "ivr") return client.listIvr(tenantId);
   if (resource === "routes") return client.listRoutes(tenantId);
+  if (resource === "tenants") return client.listTenants();
+  if (resource === "users") return (await client.callEndpoint<any[]>("users.list", { tenant: tenantId })).data || [];
+  if (resource === "roles") return (await client.callEndpoint<any[]>("roles.list", { tenant: tenantId })).data || [];
+  if (resource === "cdr") return (await client.callEndpoint<any[]>("cdr.list", { tenant: tenantId })).data || [];
+  if (resource === "devices") return (await client.callEndpoint<any[]>("devices.list", { tenant: tenantId })).data || [];
+  if (resource === "device-profiles") return (await client.callEndpoint<any[]>("deviceProfiles.list", { tenant: tenantId })).data || [];
+  if (resource === "destinations") return (await client.callEndpoint<any[]>("destinations.list", { tenant: tenantId })).data || [];
+  if (resource === "classes-of-services") return (await client.callEndpoint<any[]>("classesOfServices.list", { tenant: tenantId })).data || [];
+  if (resource === "conferences") return (await client.callEndpoint<any[]>("conferences.list", { tenant: tenantId })).data || [];
+  if (resource === "phonebooks") return (await client.callEndpoint<any[]>("phonebooks.list", { tenant: tenantId })).data || [];
+  if (resource === "route-selections") return (await client.callEndpoint<any[]>("routeSelections.list", { tenant: tenantId })).data || [];
+  if (resource === "account-codes") return client.listAccountCodes(tenantId);
+  if (resource === "authorization-codes") return client.listAuthorizationCodes(tenantId);
+  if (resource === "customer-codes") return client.listCustomerCodes(tenantId);
+  if (resource === "ai-api-keys") return client.listAiApiKeys(tenantId);
+  if (resource === "sms") return (await client.callEndpoint<any[]>("sms.phoneNumbers", { tenant: tenantId })).data || [];
+  if (resource === "whatsapp") return (await client.callEndpoint<any[]>("whatsapp.numbers", { tenant: tenantId })).data || [];
+  if (resource === "virtual-faxes") return (await client.callEndpoint<any[]>("virtualFaxes.list", { tenant: tenantId })).data || [];
+  if (resource === "parking-lots") return (await client.callEndpoint<any[]>("parkingLots.list", { tenant: tenantId })).data || [];
+  if (resource === "voicemail") throw new Error("resource_requires_item_path");
   throw new Error("resource_not_supported");
 }
 
-async function vitalCreateByResource(client: VitalPbxClient, resource: string, payload: Record<string, unknown>) {
+async function vitalCreateByResource(client: VitalPbxClient, resource: VitalResourceName, payload: Record<string, unknown>, tenantId?: string) {
   if (resource === "extensions") return client.createExtension(payload);
   if (resource === "trunks") return client.createTrunk(payload);
   if (resource === "ring-groups") return client.createRingGroup(payload);
-  if (resource === "queues") return client.createQueue(payload);
+  if (resource === "queues") return client.createQueue(payload, tenantId);
   if (resource === "ivr") return client.createIvr(payload);
   if (resource === "routes") return client.createRoute(payload);
+  if (resource === "tenants") return client.createTenant(payload);
+  if (resource === "authorization-codes") return client.createAuthorizationCode(payload, tenantId);
+  if (resource === "customer-codes") return client.createCustomerCode(payload, tenantId);
+  if (resource === "ai-api-keys") return client.createAiApiKey(payload, tenantId);
   throw new Error("resource_not_supported");
 }
 
-async function vitalUpdateByResource(client: VitalPbxClient, resource: string, id: string, payload: Record<string, unknown>) {
+async function vitalUpdateByResource(client: VitalPbxClient, resource: VitalResourceName, id: string, payload: Record<string, unknown>, tenantId?: string) {
   if (resource === "extensions") return client.updateExtension(id, payload);
   if (resource === "trunks") return client.updateTrunk(id, payload);
   if (resource === "ring-groups") return client.updateRingGroup(id, payload);
-  if (resource === "queues") return client.updateQueue(id, payload);
+  if (resource === "queues") return client.updateQueue(id, payload, tenantId);
   if (resource === "ivr") return client.updateIvr(id, payload);
   if (resource === "routes") return client.updateRoute(id, payload);
+  if (resource === "tenants") return client.updateTenant(id, payload);
+  if (resource === "authorization-codes") return client.updateAuthorizationCode(id, payload, tenantId);
+  if (resource === "customer-codes") return client.updateCustomerCode(id, payload, tenantId);
+  if (resource === "ai-api-keys") return client.updateAiApiKey(id, payload, tenantId);
   throw new Error("resource_not_supported");
 }
 
-async function vitalDeleteByResource(client: VitalPbxClient, resource: string, id: string) {
+async function vitalDeleteByResource(client: VitalPbxClient, resource: VitalResourceName, id: string, tenantId?: string) {
   if (resource === "extensions") return client.deleteExtension(id);
   if (resource === "trunks") return client.deleteTrunk(id);
   if (resource === "ring-groups") return client.deleteRingGroup(id);
-  if (resource === "queues") return client.deleteQueue(id);
+  if (resource === "queues") return client.deleteQueue(id, tenantId);
   if (resource === "ivr") return client.deleteIvr(id);
   if (resource === "routes") return client.deleteRoute(id);
+  if (resource === "tenants") return client.deleteTenant(id);
+  if (resource === "authorization-codes") return client.deleteAuthorizationCode(id, tenantId);
+  if (resource === "customer-codes") return client.deleteCustomerCode(id, tenantId);
+  if (resource === "ai-api-keys") return client.deleteAiApiKey(id, tenantId);
   throw new Error("resource_not_supported");
 }
 
@@ -6443,7 +6680,7 @@ app.post("/admin/pbx/resources/:resource", async (req, reply) => {
   const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, input.payload);
+  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, input.payload, undefined);
   return { ok: true, resource, out };
 });
 
@@ -6456,7 +6693,7 @@ app.patch("/admin/pbx/resources/:resource/:id", async (req, reply) => {
   const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload);
+  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload, undefined);
   return { ok: true, resource, out };
 });
 
@@ -6469,15 +6706,16 @@ app.delete("/admin/pbx/resources/:resource/:id", async (req, reply) => {
   const instance = await db.pbxInstance.findUnique({ where: { id: query.instanceId } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id);
+  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, undefined);
   return { ok: true, resource };
 });
 
 app.get("/voice/pbx/resources/:resource", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMessaging);
+  const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const { resource } = req.params as { resource: string };
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  if (!canAccessVitalResourceAction(user, resource, "view")) return reply.status(403).send({ error: "forbidden" });
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
@@ -6486,41 +6724,44 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
 });
 
 app.post("/voice/pbx/resources/:resource", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMessaging);
+  const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const { resource } = req.params as { resource: string };
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  if (!canAccessVitalResourceAction(user, resource, "create")) return reply.status(403).send({ error: "forbidden" });
   const input = z.object({ payload: z.record(z.any()) }).parse(req.body || {});
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
   const payload = { ...input.payload, pbxTenantId: link.pbxTenantId || input.payload.pbxTenantId };
-  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, payload);
+  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, payload, link.pbxTenantId || undefined);
   return { ok: true, resource, out };
 });
 
 app.patch("/voice/pbx/resources/:resource/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMessaging);
+  const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const { resource, id } = req.params as { resource: string; id: string };
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  if (!canAccessVitalResourceAction(user, resource, "update")) return reply.status(403).send({ error: "forbidden" });
   const input = z.object({ payload: z.record(z.any()) }).parse(req.body || {});
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload);
+  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload, link.pbxTenantId || undefined);
   return { ok: true, resource, out };
 });
 
 app.delete("/voice/pbx/resources/:resource/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMessaging);
+  const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const { resource, id } = req.params as { resource: string; id: string };
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  if (!canAccessVitalResourceAction(user, resource, "delete")) return reply.status(403).send({ error: "forbidden" });
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id);
+  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, link.pbxTenantId || undefined);
   return { ok: true, resource };
 });
 
