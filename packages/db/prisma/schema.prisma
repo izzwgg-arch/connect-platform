@@ -302,6 +302,7 @@ model Tenant {
   usageLedger                   UsageLedger[]
   receipts                      Receipt[]
   invoices                      Invoice[]
+  customers                     Customer[]
   invoiceEvents                 InvoiceEvent[]
   emailJobs                     EmailJob[]
   alerts                        Alert[]
@@ -632,6 +633,7 @@ model WhatsAppProviderConfig {
 model WhatsAppThread {
   id                 String               @id @default(cuid())
   tenantId           String
+  customerId         String?
   providerType       WhatsAppProviderType
   contactNumber      String
   contactName        String?
@@ -642,10 +644,12 @@ model WhatsAppThread {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
   tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
   messages           WhatsAppMessage[]
 
   @@unique([tenantId, providerType, contactNumber])
   @@index([tenantId, updatedAt])
+  @@index([tenantId, customerId])
 }
 
 model WhatsAppMessage {
@@ -700,7 +704,9 @@ model EmailProviderConfig {
 model Invoice {
   id                   String       @id @default(cuid())
   tenantId             String
+  customerId           String?
   customerEmail        String
+  customerPhone        String?
   amountCents          Int
   currency             String       @default("USD")
   status               InvoiceStatus @default(DRAFT)
@@ -714,10 +720,33 @@ model Invoice {
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer             Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
   events               InvoiceEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+  @@index([tenantId, customerId])
+}
+
+model Customer {
+  id             String          @id @default(cuid())
+  tenantId       String
+  displayName    String
+  companyName    String?
+  primaryEmail   String?
+  primaryPhone   String?
+  whatsappNumber String?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices       Invoice[]
+  whatsAppThreads WhatsAppThread[]
+
+  @@index([tenantId, displayName])
+  @@index([tenantId, primaryEmail])
+  @@index([tenantId, primaryPhone])
+  @@index([tenantId, whatsappNumber])
 }
 
 model InvoiceEvent {

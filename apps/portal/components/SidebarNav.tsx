@@ -12,6 +12,7 @@ const primary: NavItem[] = [
   { href: "/dashboard/numbers", label: "Phones" },
   { href: "/dashboard/sms", label: "Calls" },
   { href: "/dashboard/whatsapp", label: "WhatsApp Ops" },
+  { href: "/dashboard/customers", label: "Customers" },
   { href: "/dashboard/billing", label: "Billing" },
   { href: "/dashboard/billing/settings", label: "Billing Settings" },
   { href: "/dashboard/billing/invoices", label: "Invoices" },

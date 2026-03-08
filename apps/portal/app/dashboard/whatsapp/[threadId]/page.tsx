@@ -78,6 +78,7 @@ export default function WhatsAppThreadPage() {
       <p>
         Contact: <strong>{thread?.contactName || thread?.contactNumberMasked || "-"}</strong> | Provider: <strong>{thread?.providerType || status?.activeProvider || "-"}</strong>
       </p>
+      {thread?.customer ? <p>Customer: <Link href={`/dashboard/customers/${thread.customer.id}`}>{thread.customer.displayName}</Link></p> : null}
       <p>
         Current status: <span className={`status-chip ${badgeClass(thread?.lastStatus || "")}`} style={{ borderRadius: 2 }}>{thread?.lastStatus || "UNKNOWN"}</span>
       </p>

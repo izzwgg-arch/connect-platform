@@ -55,6 +55,8 @@ export default function InvoiceDetailPage() {
             <p><strong>ID:</strong> {invoice.id}</p>
             <p><strong>Status:</strong> {invoice.status}</p>
             <p><strong>Email:</strong> {invoice.customerEmail}</p>
+            <p><strong>Customer:</strong> {invoice.customer ? <Link href={`/dashboard/customers/${invoice.customer.id}`}>{invoice.customer.displayName}</Link> : "n/a"}</p>
+            <p><strong>Phone:</strong> {invoice.customerPhone || "n/a"}</p>
             <p><strong>Amount:</strong> ${(Number(invoice.amountCents || 0) / 100).toFixed(2)} {invoice.currency}</p>
             <p><strong>Due:</strong> {invoice.dueAt ? new Date(invoice.dueAt).toLocaleString() : "n/a"}</p>
             <p><strong>Paid At:</strong> {invoice.paidAt ? new Date(invoice.paidAt).toLocaleString() : "n/a"}</p>

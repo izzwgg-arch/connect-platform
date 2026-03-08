@@ -820,6 +820,27 @@ function normalizeWhatsAppNumber(input: string): string {
   return String(input || "").trim();
 }
 
+function normalizeContactNumber(input: string | null | undefined): string | null {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  return raw.replace(/\s+/g, "");
+}
+
+async function findCustomerByContactNumber(tenantId: string, number: string | null | undefined) {
+  const normalized = normalizeContactNumber(number);
+  if (!normalized) return null;
+  return db.customer.findFirst({
+    where: {
+      tenantId,
+      OR: [
+        { whatsappNumber: normalized },
+        { primaryPhone: normalized }
+      ]
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+}
+
 function sanitizeMetadata(input: unknown): Record<string, any> {
   const src = (input && typeof input === "object") ? (input as Record<string, any>) : {};
   const out: Record<string, any> = {};
@@ -846,6 +867,7 @@ async function upsertWhatsAppThread(params: {
   lastMessagePreview?: string | null;
 }) {
   const number = normalizeWhatsAppNumber(params.contactNumber);
+  const customer = await findCustomerByContactNumber(params.tenantId, number);
   const existing = await db.whatsAppThread.findFirst({
     where: { tenantId: params.tenantId, providerType: params.providerType, contactNumber: number }
   });
@@ -853,6 +875,7 @@ async function upsertWhatsAppThread(params: {
     return db.whatsAppThread.update({
       where: { id: existing.id },
       data: {
+        customerId: existing.customerId || customer?.id || null,
         contactName: params.contactName || existing.contactName || null,
         lastMessageAt: new Date(),
         lastDirection: params.lastDirection || existing.lastDirection || null,
@@ -864,6 +887,7 @@ async function upsertWhatsAppThread(params: {
   return db.whatsAppThread.create({
     data: {
       tenantId: params.tenantId,
+      customerId: customer?.id || null,
       providerType: params.providerType,
       contactNumber: number,
       contactName: params.contactName || null,
@@ -2862,6 +2886,7 @@ app.get("/whatsapp/threads", async (req, reply) => {
       lastStatus: query.status || undefined
     },
     include: {
+      customer: { select: { id: true, displayName: true } },
       _count: { select: { messages: true } },
       messages: { orderBy: { createdAt: "desc" }, take: 1 }
     },
@@ -2875,6 +2900,8 @@ app.get("/whatsapp/threads", async (req, reply) => {
     contactNumberMasked: maskValue(r.contactNumber, 3, 2),
     contactNumberRaw: r.contactNumber,
     contactName: r.contactName || null,
+    customerId: r.customerId || null,
+    customerName: r.customer?.displayName || null,
     lastMessageAt: r.lastMessageAt,
     lastDirection: r.lastDirection || null,
     lastStatus: r.lastStatus || null,
@@ -2889,7 +2916,7 @@ app.get("/whatsapp/threads/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   const thread = await db.whatsAppThread.findFirst({
     where: { id, tenantId: admin.tenantId },
-    include: { messages: { orderBy: { createdAt: "asc" }, take: 300 } }
+    include: { customer: { select: { id: true, displayName: true } }, messages: { orderBy: { createdAt: "asc" }, take: 300 } }
   });
   if (!thread) return reply.status(404).send({ error: "thread_not_found" });
   return {
@@ -2898,6 +2925,7 @@ app.get("/whatsapp/threads/:id", async (req, reply) => {
     contactNumberRaw: thread.contactNumber,
     contactNumberMasked: maskValue(thread.contactNumber, 3, 2),
     contactName: thread.contactName || null,
+    customer: thread.customer ? { id: thread.customer.id, displayName: thread.customer.displayName } : null,
     lastMessageAt: thread.lastMessageAt,
     lastStatus: thread.lastStatus || null,
     messages: thread.messages.map((m) => ({
@@ -6552,10 +6580,314 @@ app.post("/settings/email/test", async (req, reply) => {
   }
 });
 
+app.get("/customers", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({
+    q: z.string().optional(),
+    limit: z.coerce.number().int().positive().max(200).optional()
+  }).parse(req.query || {});
+  const q = (query.q || "").trim();
+  const rows = await db.customer.findMany({
+    where: {
+      tenantId: admin.tenantId,
+      OR: q ? [
+        { displayName: { contains: q, mode: "insensitive" } },
+        { companyName: { contains: q, mode: "insensitive" } },
+        { primaryEmail: { contains: q, mode: "insensitive" } },
+        { primaryPhone: { contains: q } },
+        { whatsappNumber: { contains: q } }
+      ] : undefined
+    },
+    orderBy: { updatedAt: "desc" },
+    take: query.limit || 100
+  });
+
+  const out = await Promise.all(rows.map(async (customer) => {
+    const threadOr = [
+      { customerId: customer.id },
+      customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null,
+      customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null
+    ].filter(Boolean) as any[];
+    const [unpaidInvoiceCount, latestInvoice, latestThread, latestEmail] = await Promise.all([
+      db.invoice.count({
+        where: {
+          tenantId: admin.tenantId,
+          customerId: customer.id,
+          status: { in: ["DRAFT", "SENT", "OVERDUE"] }
+        }
+      }),
+      db.invoice.findFirst({ where: { tenantId: admin.tenantId, customerId: customer.id }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
+      db.whatsAppThread.findFirst({
+        where: {
+          tenantId: admin.tenantId,
+          OR: threadOr
+        },
+        orderBy: { updatedAt: "desc" },
+        select: { updatedAt: true }
+      }),
+      customer.primaryEmail
+        ? db.emailJob.findFirst({ where: { tenantId: admin.tenantId, toEmail: customer.primaryEmail }, orderBy: { createdAt: "desc" }, select: { createdAt: true } })
+        : Promise.resolve(null)
+    ]);
+    const latestActivityAt = [latestInvoice?.updatedAt, latestThread?.updatedAt, latestEmail?.createdAt]
+      .filter(Boolean)
+      .sort((a: any, b: any) => (new Date(b).getTime() - new Date(a).getTime()))[0] || customer.updatedAt;
+
+    return {
+      id: customer.id,
+      displayName: customer.displayName,
+      companyName: customer.companyName || null,
+      primaryEmail: customer.primaryEmail || null,
+      primaryPhone: customer.primaryPhone || null,
+      whatsappNumber: customer.whatsappNumber || null,
+      unpaidInvoiceCount,
+      latestActivityAt
+    };
+  }));
+  return out;
+});
+
+app.post("/customers", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({
+    displayName: z.string().min(1).max(160),
+    companyName: z.string().max(160).optional().nullable(),
+    primaryEmail: z.string().email().optional().nullable(),
+    primaryPhone: z.string().min(5).max(40).optional().nullable(),
+    whatsappNumber: z.string().min(5).max(40).optional().nullable(),
+    notes: z.string().max(2000).optional().nullable()
+  }).parse(req.body || {});
+  const created = await db.customer.create({
+    data: {
+      tenantId: admin.tenantId,
+      displayName: input.displayName.trim(),
+      companyName: input.companyName || null,
+      primaryEmail: input.primaryEmail || null,
+      primaryPhone: normalizeContactNumber(input.primaryPhone) || null,
+      whatsappNumber: normalizeContactNumber(input.whatsappNumber) || null,
+      notes: input.notes || null
+    }
+  });
+  const threadOr = [
+    created.whatsappNumber ? { contactNumber: created.whatsappNumber } : null,
+    created.primaryPhone ? { contactNumber: created.primaryPhone } : null
+  ].filter(Boolean) as any[];
+  if (threadOr.length > 0) {
+    await db.whatsAppThread.updateMany({
+      where: { tenantId: admin.tenantId, OR: threadOr },
+      data: { customerId: created.id }
+    });
+  }
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_CREATED", entityType: "Customer", entityId: created.id });
+  return created;
+});
+
+app.get("/customers/:id", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!row) return reply.status(404).send({ error: "customer_not_found" });
+  return row;
+});
+
+app.put("/customers/:id", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const existing = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!existing) return reply.status(404).send({ error: "customer_not_found" });
+  const input = z.object({
+    displayName: z.string().min(1).max(160).optional(),
+    companyName: z.string().max(160).optional().nullable(),
+    primaryEmail: z.string().email().optional().nullable(),
+    primaryPhone: z.string().min(5).max(40).optional().nullable(),
+    whatsappNumber: z.string().min(5).max(40).optional().nullable(),
+    notes: z.string().max(2000).optional().nullable()
+  }).parse(req.body || {});
+  const updated = await db.customer.update({
+    where: { id },
+    data: {
+      displayName: input.displayName?.trim(),
+      companyName: input.companyName !== undefined ? (input.companyName || null) : undefined,
+      primaryEmail: input.primaryEmail !== undefined ? (input.primaryEmail || null) : undefined,
+      primaryPhone: input.primaryPhone !== undefined ? (normalizeContactNumber(input.primaryPhone) || null) : undefined,
+      whatsappNumber: input.whatsappNumber !== undefined ? (normalizeContactNumber(input.whatsappNumber) || null) : undefined,
+      notes: input.notes !== undefined ? (input.notes || null) : undefined
+    }
+  });
+
+  const threadOr = [
+    input.whatsappNumber ? { contactNumber: normalizeContactNumber(input.whatsappNumber) || "" } : null,
+    input.primaryPhone ? { contactNumber: normalizeContactNumber(input.primaryPhone) || "" } : null
+  ].filter(Boolean) as any[];
+  const linkedThreadIds = threadOr.length > 0
+    ? await db.whatsAppThread.findMany({
+        where: { tenantId: admin.tenantId, OR: threadOr },
+        select: { id: true }
+      })
+    : [];
+  if (linkedThreadIds.length > 0) {
+    await db.whatsAppThread.updateMany({
+      where: { id: { in: linkedThreadIds.map((t) => t.id) } },
+      data: { customerId: updated.id }
+    });
+  }
+
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "CUSTOMER_UPDATED", entityType: "Customer", entityId: updated.id });
+  return updated;
+});
+
+app.get("/customers/:id/summary", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+
+  const customerInvoiceIds = (await db.invoice.findMany({
+    where: { tenantId: admin.tenantId, customerId: customer.id },
+    select: { id: true }
+  })).map((r) => r.id);
+
+  const smsOr = [
+    customer.primaryPhone ? { toNumber: customer.primaryPhone } : null,
+    customer.whatsappNumber ? { toNumber: customer.whatsappNumber } : null
+  ].filter(Boolean) as any[];
+  const waOr = [
+    { customerId: customer.id },
+    customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null,
+    customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null
+  ].filter(Boolean) as any[];
+  const [invoiceCounts, recentInvoices, recentInvoiceEvents, recentPaymentEvents, recentSms, whatsappThreads, latestEmailJobs] = await Promise.all([
+    db.invoice.groupBy({
+      by: ["status"],
+      where: { tenantId: admin.tenantId, customerId: customer.id },
+      _count: { _all: true }
+    }),
+    db.invoice.findMany({
+      where: { tenantId: admin.tenantId, customerId: customer.id },
+      orderBy: { createdAt: "desc" },
+      take: 10
+    }),
+    customerInvoiceIds.length
+      ? db.invoiceEvent.findMany({
+          where: { tenantId: admin.tenantId, invoiceId: { in: customerInvoiceIds } },
+          orderBy: { createdAt: "desc" },
+          take: 20
+        })
+      : Promise.resolve([]),
+    customerInvoiceIds.length
+      ? db.paymentEvent.findMany({
+          where: { tenantId: admin.tenantId, subscriptionId: { in: customerInvoiceIds } },
+          orderBy: { createdAt: "desc" },
+          take: 20
+        })
+      : Promise.resolve([]),
+    smsOr.length > 0
+      ? db.smsMessage.findMany({
+          where: { campaign: { tenantId: admin.tenantId }, OR: smsOr },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          include: { campaign: { select: { id: true, name: true } } }
+        })
+      : Promise.resolve([]),
+    db.whatsAppThread.findMany({
+      where: {
+        tenantId: admin.tenantId,
+        OR: waOr
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 20
+    }),
+    (() => {
+      const emailOr = [
+        customer.primaryEmail ? { toEmail: customer.primaryEmail } : null,
+        customerInvoiceIds.length ? { invoiceId: { in: customerInvoiceIds } } : null
+      ].filter(Boolean) as any[];
+      if (emailOr.length === 0) return Promise.resolve([]);
+      return db.emailJob.findMany({
+        where: { tenantId: admin.tenantId, OR: emailOr },
+        orderBy: { createdAt: "desc" },
+        take: 20
+      });
+    })()
+  ]);
+
+  const byStatus: Record<string, number> = { DRAFT: 0, SENT: 0, OVERDUE: 0, PAID: 0, VOID: 0 };
+  let totalInvoiceCount = 0;
+  for (const row of invoiceCounts) {
+    byStatus[row.status] = row._count._all;
+    totalInvoiceCount += row._count._all;
+  }
+  const unpaidCount = (byStatus.DRAFT || 0) + (byStatus.SENT || 0) + (byStatus.OVERDUE || 0);
+
+  return {
+    customer,
+    invoices: {
+      count: totalInvoiceCount,
+      unpaidCount,
+      byStatus,
+      recent: recentInvoices
+    },
+    recentInvoiceEvents,
+    recentPaymentEvents: recentPaymentEvents.map((e) => ({
+      id: e.id,
+      type: e.type,
+      status: e.status,
+      amountCents: e.amountCents,
+      currency: e.currency,
+      createdAt: e.createdAt
+    })),
+    smsActivity: {
+      totalRecent: recentSms.length,
+      latestAt: recentSms[0]?.createdAt || null,
+      recent: recentSms.map((m) => ({
+        id: m.id,
+        campaignId: m.campaignId,
+        campaignName: m.campaign?.name || null,
+        toNumber: maskValue(m.toNumber, 3, 2),
+        status: m.status,
+        createdAt: m.createdAt
+      }))
+    },
+    whatsappActivity: {
+      threadCount: whatsappThreads.length,
+      latestThread: whatsappThreads[0]
+        ? {
+            id: whatsappThreads[0].id,
+            contactNumberMasked: maskValue(whatsappThreads[0].contactNumber, 3, 2),
+            lastMessageAt: whatsappThreads[0].lastMessageAt,
+            lastStatus: whatsappThreads[0].lastStatus || null
+          }
+        : null
+    },
+    emailActivity: latestEmailJobs.map((j) => ({
+      id: j.id,
+      type: j.type,
+      toEmail: maskValue(j.toEmail, 2, 8),
+      status: j.status,
+      createdAt: j.createdAt,
+      sentAt: j.sentAt || null,
+      lastErrorCode: j.lastErrorCode || null
+    }))
+  };
+});
+
 app.get("/billing/invoices", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
-  return db.invoice.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
+  const rows = await db.invoice.findMany({
+    where: { tenantId: admin.tenantId },
+    include: { customer: { select: { id: true, displayName: true } } },
+    orderBy: { createdAt: "desc" }
+  });
+  return rows.map((r) => ({
+    ...r,
+    customer: r.customer ? { id: r.customer.id, displayName: r.customer.displayName } : null
+  }));
 });
 
 app.get("/billing/invoices/summary", async (req, reply) => {
@@ -6593,7 +6925,8 @@ app.get("/billing/invoices/:id", async (req, reply) => {
   const row = await db.invoice.findFirst({
     where: { id, tenantId: admin.tenantId },
     include: {
-      events: { orderBy: { createdAt: "asc" }, take: 200 }
+      events: { orderBy: { createdAt: "asc" }, take: 200 },
+      customer: true
     }
   });
   if (!row) return reply.status(404).send({ error: "invoice_not_found" });
@@ -6620,12 +6953,26 @@ app.post("/billing/invoices", async (req, reply) => {
   if (!admin) return;
 
   const input = z.object({
-    customerEmail: z.string().email(),
+    customerId: z.string().optional(),
+    customerEmail: z.string().email().optional(),
+    customerPhone: z.string().min(5).max(40).optional().nullable(),
     amountCents: z.number().int().positive(),
     currency: z.string().min(3).max(3).default("USD"),
     dueAt: z.string().datetime().optional(),
     sendEmail: z.boolean().default(true)
   }).parse(req.body || {});
+
+  const selectedCustomer = input.customerId
+    ? await db.customer.findFirst({ where: { id: input.customerId, tenantId: admin.tenantId } })
+    : null;
+  if (input.customerId && !selectedCustomer) {
+    return reply.status(404).send({ error: "CUSTOMER_NOT_FOUND" });
+  }
+  const resolvedEmail = input.customerEmail || selectedCustomer?.primaryEmail || null;
+  if (!resolvedEmail) {
+    return reply.status(400).send({ error: "CUSTOMER_EMAIL_REQUIRED" });
+  }
+  const resolvedPhone = normalizeContactNumber(input.customerPhone) || selectedCustomer?.primaryPhone || selectedCustomer?.whatsappNumber || null;
 
   const tokenRaw = randomBytes(18).toString("hex");
   const payToken = `inv_${tokenRaw}`;
@@ -6634,7 +6981,9 @@ app.post("/billing/invoices", async (req, reply) => {
   const invoice = await db.invoice.create({
     data: {
       tenantId: admin.tenantId,
-      customerEmail: input.customerEmail,
+      customerId: selectedCustomer?.id || null,
+      customerEmail: resolvedEmail,
+      customerPhone: resolvedPhone,
       amountCents: input.amountCents,
       currency: input.currency,
       status: input.sendEmail ? "SENT" : "DRAFT",

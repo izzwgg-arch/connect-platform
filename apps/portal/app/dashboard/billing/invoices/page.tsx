@@ -8,6 +8,10 @@ const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunicat
 export default function BillingInvoicesPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [quickCustomerName, setQuickCustomerName] = useState("");
+  const [quickCustomerPhone, setQuickCustomerPhone] = useState("");
   const [email, setEmail] = useState("customer@example.com");
   const [amountCents, setAmountCents] = useState(2500);
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -16,14 +20,17 @@ export default function BillingInvoicesPage() {
 
   async function load() {
     const token = localStorage.getItem("token") || "";
-    const [listRes, summaryRes] = await Promise.all([
+    const [listRes, summaryRes, customersRes] = await Promise.all([
       fetch(`${apiBase}/billing/invoices`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/billing/invoices/summary`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiBase}/billing/invoices/summary`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${apiBase}/customers`, { headers: { Authorization: `Bearer ${token}` } })
     ]);
     const listJson = await listRes.json().catch(() => []);
     const summaryJson = await summaryRes.json().catch(() => null);
+    const customersJson = await customersRes.json().catch(() => []);
     setRows(Array.isArray(listJson) ? listJson : []);
     setSummary(summaryJson || null);
+    setCustomers(Array.isArray(customersJson) ? customersJson : []);
   }
 
   useEffect(() => {
@@ -33,10 +40,37 @@ export default function BillingInvoicesPage() {
   async function createInvoice(sendEmail: boolean) {
     setLoading(true);
     const token = localStorage.getItem("token") || "";
+    let customerId = selectedCustomerId || null;
+    if (!customerId && quickCustomerName.trim()) {
+      const createCustomerRes = await fetch(`${apiBase}/customers`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          displayName: quickCustomerName.trim(),
+          primaryEmail: email || null,
+          primaryPhone: quickCustomerPhone || null
+        })
+      });
+      const created = await createCustomerRes.json().catch(() => ({}));
+      if (createCustomerRes.ok && created?.id) {
+        customerId = created.id;
+      } else {
+        setResult(String(created?.error || "Failed to create quick customer"));
+        setLoading(false);
+        return;
+      }
+    }
     const res = await fetch(`${apiBase}/billing/invoices`, {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ customerEmail: email, amountCents: Number(amountCents), currency: "USD", sendEmail })
+      body: JSON.stringify({
+        customerId,
+        customerEmail: email || undefined,
+        customerPhone: quickCustomerPhone || undefined,
+        amountCents: Number(amountCents),
+        currency: "USD",
+        sendEmail
+      })
     });
     setResult(JSON.stringify(await res.json(), null, 2));
     await load();
@@ -109,17 +143,36 @@ export default function BillingInvoicesPage() {
         <option value="PAID">Paid</option>
         <option value="VOID">Void</option>
       </select>
+      <label>Customer</label>
+      <select
+        value={selectedCustomerId}
+        onChange={(e) => {
+          const id = e.target.value;
+          setSelectedCustomerId(id);
+          const selected = customers.find((c) => c.id === id);
+          if (selected?.primaryEmail) setEmail(selected.primaryEmail);
+          if (selected?.primaryPhone) setQuickCustomerPhone(selected.primaryPhone);
+        }}
+      >
+        <option value="">-- none selected --</option>
+        {customers.map((c) => (
+          <option key={c.id} value={c.id}>{c.displayName}{c.primaryEmail ? ` (${c.primaryEmail})` : ""}</option>
+        ))}
+      </select>
       <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Customer email" />
+      <input value={quickCustomerName} onChange={(e) => setQuickCustomerName(e.target.value)} placeholder="Quick customer name (optional)" />
+      <input value={quickCustomerPhone} onChange={(e) => setQuickCustomerPhone(e.target.value)} placeholder="Customer phone (optional)" />
       <input type="number" value={amountCents} onChange={(e) => setAmountCents(Number(e.target.value || 0))} placeholder="Amount cents" />
       <button onClick={() => createInvoice(true)} disabled={loading}>Create + Send Invoice</button>
       <button onClick={() => createInvoice(false)} disabled={loading}>Create Draft Invoice</button>
 
       <table>
-        <thead><tr><th>ID</th><th>Email</th><th>Amount</th><th>Status</th><th>Created</th><th>Pay Link</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>Customer</th><th>Email</th><th>Amount</th><th>Status</th><th>Created</th><th>Pay Link</th><th>Actions</th></tr></thead>
         <tbody>
           {filteredRows.map((r) => (
             <tr key={r.id}>
               <td><Link href={`/dashboard/billing/invoices/${r.id}`}>{r.id.slice(0, 10)}...</Link></td>
+              <td>{r.customer?.displayName || "-"}</td>
               <td>{r.customerEmail}</td>
               <td>${(Number(r.amountCents || 0) / 100).toFixed(2)}</td>
               <td>{statusBadge(r.status)}</td>

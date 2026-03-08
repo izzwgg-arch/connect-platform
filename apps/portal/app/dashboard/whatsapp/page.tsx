@@ -95,12 +95,13 @@ export default function WhatsAppOpsPage() {
       <h2>Threads</h2>
       <table>
         <thead>
-          <tr><th>Contact</th><th>Provider</th><th>Status</th><th>Last message</th><th>Updated</th><th /></tr>
+          <tr><th>Contact</th><th>Customer</th><th>Provider</th><th>Status</th><th>Last message</th><th>Updated</th><th /></tr>
         </thead>
         <tbody>
           {threads.map((t) => (
             <tr key={t.id}>
               <td>{t.contactName || t.contactNumberMasked || "-"}</td>
+              <td>{t.customerId ? <Link href={`/dashboard/customers/${t.customerId}`}>{t.customerName || "Open"}</Link> : "-"}</td>
               <td>{t.providerType}</td>
               <td><span className={`status-chip ${badgeClass(t.lastStatus)}`} style={{ borderRadius: 2 }}>{t.lastStatus || "UNKNOWN"}</span></td>
               <td>{t.lastMessagePreview || "-"}</td>
