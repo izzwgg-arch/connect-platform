@@ -11,6 +11,16 @@ const primary: NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/extensions", label: "Users" },
   { href: "/dashboard/voice/phone", label: "Voice & Chat" },
+  { href: "/dashboard/voice/extensions", label: "Voice Extensions" },
+  { href: "/dashboard/voice/ring-groups", label: "Ring Groups" },
+  { href: "/dashboard/voice/queues", label: "Queues" },
+  { href: "/dashboard/voice/ivr", label: "IVR" },
+  { href: "/dashboard/voice/ivr/schedules", label: "IVR Schedules" },
+  { href: "/dashboard/voice/trunks", label: "Trunks" },
+  { href: "/dashboard/voice/routes", label: "Routes" },
+  { href: "/dashboard/voice/recordings", label: "Recordings" },
+  { href: "/dashboard/voice/call-recordings", label: "Call Recordings" },
+  { href: "/dashboard/voice/call-reports", label: "Call Reports" },
   { href: "/dashboard/numbers", label: "Phones" },
   { href: "/dashboard/sms", label: "Calls" },
   { href: "/dashboard/whatsapp", label: "WhatsApp Ops" },
@@ -20,7 +30,9 @@ const primary: NavItem[] = [
   { href: "/dashboard/billing/invoices", label: "Invoices" },
   { href: "/dashboard/settings/email", label: "Email Settings" },
   { href: "/dashboard/10dlc", label: "Compliance" },
-  { href: "/dashboard/settings/providers", label: "Integrations" }
+  { href: "/dashboard/settings/providers", label: "Integrations" },
+  { href: "/dashboard/automation", label: "Automation" },
+  { href: "/dashboard/search", label: "Search" }
 ];
 
 const admin: NavItem[] = [
@@ -28,6 +40,9 @@ const admin: NavItem[] = [
   { href: "/dashboard/admin/campaigns", label: "Admin Campaigns" },
   { href: "/dashboard/admin/billing/tenants", label: "Admin Billing" },
   { href: "/dashboard/admin/pbx/instances", label: "PBX Instances" },
+  { href: "/dashboard/admin/pbx", label: "Admin PBX" },
+  { href: "/dashboard/admin/pbx/tenants", label: "PBX Tenants" },
+  { href: "/dashboard/admin/pbx/resources", label: "PBX Resources" },
   { href: "/dashboard/admin/sbc/rollout", label: "SBC Rollout" },
   { href: "/dashboard/admin/sbc/config", label: "SBC Config" },
   { href: "/dashboard/voice/settings", label: "Voice Settings" },
@@ -69,7 +84,8 @@ export function SidebarNav() {
     if (item.href.startsWith("/dashboard/whatsapp")) return canManageMessaging(role) || canViewCustomers(role);
     if (item.href.startsWith("/dashboard/settings/providers")) return canManageProviders(role);
     if (item.href === "/dashboard/10dlc") return canManageMessaging(role) || canManageProviders(role);
-    if (item.href === "/dashboard/extensions" || item.href === "/dashboard/voice/phone" || item.href === "/dashboard/numbers") {
+    if (item.href === "/dashboard/automation") return !["READ_ONLY"].includes(role || "");
+    if (item.href === "/dashboard/extensions" || item.href.startsWith("/dashboard/voice/") || item.href === "/dashboard/numbers") {
       return !["READ_ONLY"].includes(role || "");
     }
     return true;

@@ -13,6 +13,8 @@ export default function CustomerDetailPage() {
   const [summary, setSummary] = useState<any>(null);
   const [activity, setActivity] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [taskTitle, setTaskTitle] = useState("");
   const [edit, setEdit] = useState<any>(null);
   const [tagsRaw, setTagsRaw] = useState("");
   const [noteInput, setNoteInput] = useState("");
@@ -22,17 +24,20 @@ export default function CustomerDetailPage() {
   async function load() {
     if (!id) return;
     const token = localStorage.getItem("token") || "";
-    const [summaryRes, activityRes, notesRes] = await Promise.all([
+    const [summaryRes, activityRes, notesRes, tasksRes] = await Promise.all([
       fetch(`${apiBase}/customers/${id}/summary`, { headers: { Authorization: `Bearer ${token}` } }),
       fetch(`${apiBase}/customers/${id}/activity`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${apiBase}/customers/${id}/notes`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiBase}/customers/${id}/notes`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${apiBase}/customers/${id}/tasks`, { headers: { Authorization: `Bearer ${token}` } })
     ]);
     const summaryJson = await summaryRes.json().catch(() => null);
     const activityJson = await activityRes.json().catch(() => ({ timeline: [] }));
     const notesJson = await notesRes.json().catch(() => []);
+    const tasksJson = await tasksRes.json().catch(() => ({ rows: [] }));
     setSummary(summaryJson);
     setActivity(Array.isArray(activityJson?.timeline) ? activityJson.timeline : []);
     setNotes(Array.isArray(notesJson) ? notesJson : []);
+    setTasks(Array.isArray(tasksJson?.rows) ? tasksJson.rows : []);
     if (summaryJson?.customer) {
       setEdit({
         displayName: summaryJson.customer.displayName || "",
@@ -132,6 +137,22 @@ export default function CustomerDetailPage() {
     setLoading(false);
   }
 
+  async function addTask() {
+    if (!id || !taskTitle.trim()) return;
+    setLoading(true);
+    const token = localStorage.getItem("token") || "";
+    const res = await fetch(`${apiBase}/customers/${id}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ title: taskTitle.trim(), priority: "MEDIUM" })
+    });
+    const json = await res.json().catch(() => ({}));
+    setStatus(res.ok ? "Task added." : String(json?.error || "Failed to add task"));
+    if (res.ok) setTaskTitle("");
+    await load();
+    setLoading(false);
+  }
+
   const customer = summary?.customer;
 
   return (
@@ -190,6 +211,29 @@ export default function CustomerDetailPage() {
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Tasks</h2>
+            <div className="row">
+              <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Add follow-up task..." />
+              <button onClick={addTask} disabled={loading || !canManageCustomerWorkflow(role)}>Add Task</button>
+            </div>
+            {tasks.length === 0 ? <p>No tasks yet.</p> : (
+              <table>
+                <thead><tr><th>Title</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead>
+                <tbody>
+                  {tasks.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.title}</td>
+                      <td>{t.status}</td>
+                      <td>{t.priority}</td>
+                      <td>{new Date(t.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
 

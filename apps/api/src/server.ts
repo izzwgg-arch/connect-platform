@@ -26,6 +26,7 @@ import {
   VoipMsNumberProvider,
   SolaCardknoxAdapter,
   type SolaCardknoxConfig,
+  VitalPbxClient,
   WirePbxClient,
   normalizeWirePbxEvent,
   type NormalizedWirePbxEvent
@@ -214,6 +215,20 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
     webhookSignatureMode: (process.env.PBX_WEBHOOK_SIGNATURE_MODE as "HMAC" | "TOKEN" | "NONE" | undefined) || undefined,
     webhookEventTypes: (process.env.PBX_WEBHOOK_EVENT_TYPES || "").split(",").map((x) => x.trim()).filter(Boolean),
     webhookCallbackUrl: process.env.PBX_WEBHOOK_CALLBACK_URL
+  });
+}
+
+function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?: string }): VitalPbxClient {
+  const simulate = (process.env.PBX_SIMULATE || "false").toLowerCase() === "true";
+  const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
+  const token = config?.token || process.env.PBX_API_TOKEN;
+  const secret = config?.secret || process.env.PBX_API_SECRET;
+  return new VitalPbxClient({
+    baseUrl,
+    apiToken: token,
+    apiSecret: secret,
+    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+    simulate
   });
 }
 
@@ -6066,6 +6081,25 @@ app.post("/webhooks/pbx", async (req, reply) => {
   }
 
   const result = await upsertInviteFromPbxEvent(normalized, "WEBHOOK");
+  if (result?.tenantId) {
+    const normalizedFrom = normalizeContactNumber(normalized.fromNumber);
+    const normalizedTo = normalizeContactNumber(normalized.toExtension);
+    const customer = await findCustomerByContactNumber(result.tenantId, normalizedFrom || normalizedTo || null);
+    await db.pbxCallEvent.create({
+      data: {
+        tenantId: result.tenantId,
+        customerId: customer?.id || null,
+        pbxTenantId: normalized.pbxTenantId || null,
+        eventType: normalized.eventType,
+        callId: normalized.pbxCallId || null,
+        fromNumber: normalized.fromNumber || null,
+        toNumber: normalized.toExtension || null,
+        extension: normalized.pbxExtensionId || null,
+        status: normalized.state || null,
+        payload: normalized as any
+      }
+    });
+  }
   return { ok: true, eventType: normalized.eventType, state: normalized.state, result };
 });
 
@@ -6249,6 +6283,282 @@ app.post("/admin/pbx/instances/:id/test", async (req, reply) => {
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_INSTANCE_TEST_FAILED", entityType: "PbxInstance", entityId: instance.id });
     return reply.status(400).send({ error: String(e?.code || "PBX_UNAVAILABLE") });
   }
+});
+
+function isVitalResourceName(input: string): input is "extensions" | "trunks" | "ring-groups" | "queues" | "ivr" | "routes" {
+  return ["extensions", "trunks", "ring-groups", "queues", "ivr", "routes"].includes(input);
+}
+
+async function vitalListByResource(client: VitalPbxClient, resource: string, tenantId?: string) {
+  if (resource === "extensions") return client.listExtensions(tenantId);
+  if (resource === "trunks") return client.listTrunks(tenantId);
+  if (resource === "ring-groups") return client.listRingGroups(tenantId);
+  if (resource === "queues") return client.listQueues(tenantId);
+  if (resource === "ivr") return client.listIvr(tenantId);
+  if (resource === "routes") return client.listRoutes(tenantId);
+  throw new Error("resource_not_supported");
+}
+
+async function vitalCreateByResource(client: VitalPbxClient, resource: string, payload: Record<string, unknown>) {
+  if (resource === "extensions") return client.createExtension(payload);
+  if (resource === "trunks") return client.createTrunk(payload);
+  if (resource === "ring-groups") return client.createRingGroup(payload);
+  if (resource === "queues") return client.createQueue(payload);
+  if (resource === "ivr") return client.createIvr(payload);
+  if (resource === "routes") return client.createRoute(payload);
+  throw new Error("resource_not_supported");
+}
+
+async function vitalUpdateByResource(client: VitalPbxClient, resource: string, id: string, payload: Record<string, unknown>) {
+  if (resource === "extensions") return client.updateExtension(id, payload);
+  if (resource === "trunks") return client.updateTrunk(id, payload);
+  if (resource === "ring-groups") return client.updateRingGroup(id, payload);
+  if (resource === "queues") return client.updateQueue(id, payload);
+  if (resource === "ivr") return client.updateIvr(id, payload);
+  if (resource === "routes") return client.updateRoute(id, payload);
+  throw new Error("resource_not_supported");
+}
+
+async function vitalDeleteByResource(client: VitalPbxClient, resource: string, id: string) {
+  if (resource === "extensions") return client.deleteExtension(id);
+  if (resource === "trunks") return client.deleteTrunk(id);
+  if (resource === "ring-groups") return client.deleteRingGroup(id);
+  if (resource === "queues") return client.deleteQueue(id);
+  if (resource === "ivr") return client.deleteIvr(id);
+  if (resource === "routes") return client.deleteRoute(id);
+  throw new Error("resource_not_supported");
+}
+
+app.get("/admin/pbx/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({ instanceId: z.string().optional() }).parse(req.query || {});
+  const instance = query.instanceId
+    ? await db.pbxInstance.findUnique({ where: { id: query.instanceId } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const tenants = await client.listTenants();
+  return { instanceId: instance.id, tenants };
+});
+
+app.post("/admin/pbx/tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const input = z.object({
+    instanceId: z.string().min(1),
+    name: z.string().min(2),
+    externalId: z.string().optional(),
+    sipDomain: z.string().optional(),
+    extensionRangeStart: z.number().int().optional(),
+    extensionRangeEnd: z.number().int().optional(),
+    voicemailEnabled: z.boolean().default(true),
+    recordingDirectory: z.string().optional()
+  }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const created = await client.createTenant({
+    name: input.name,
+    externalId: input.externalId || undefined,
+    sipDomain: input.sipDomain || undefined,
+    extensionRangeStart: input.extensionRangeStart || undefined,
+    extensionRangeEnd: input.extensionRangeEnd || undefined,
+    voicemailEnabled: input.voicemailEnabled,
+    recordingDirectory: input.recordingDirectory || undefined
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_TENANT_CREATED", entityType: "PbxInstance", entityId: instance.id });
+  return { ok: true, tenant: created };
+});
+
+app.post("/admin/pbx/tenants/:id/suspend", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ instanceId: z.string().min(1) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  await getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).suspendTenant(id);
+  return { ok: true };
+});
+
+app.post("/admin/pbx/tenants/:id/unsuspend", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ instanceId: z.string().min(1) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  await getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).unsuspendTenant(id);
+  return { ok: true };
+});
+
+app.delete("/admin/pbx/tenants/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ instanceId: z.string().min(1) }).parse(req.query || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  await getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).deleteTenant(id);
+  return { ok: true };
+});
+
+app.post("/admin/pbx/tenants/:id/sync", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ instanceId: z.string().min(1) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const out = await getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }).syncTenant(id);
+  return { ok: true, out };
+});
+
+app.get("/admin/pbx/resources/:resource", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { resource } = req.params as { resource: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const query = z.object({ instanceId: z.string().min(1), pbxTenantId: z.string().optional() }).parse(req.query || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: query.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const out = await vitalListByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, query.pbxTenantId);
+  return { resource, rows: out };
+});
+
+app.post("/admin/pbx/resources/:resource", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { resource } = req.params as { resource: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const input = z.object({ instanceId: z.string().min(1), payload: z.record(z.any()) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, input.payload);
+  return { ok: true, resource, out };
+});
+
+app.patch("/admin/pbx/resources/:resource/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { resource, id } = req.params as { resource: string; id: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const input = z.object({ instanceId: z.string().min(1), payload: z.record(z.any()) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: input.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload);
+  return { ok: true, resource, out };
+});
+
+app.delete("/admin/pbx/resources/:resource/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { resource, id } = req.params as { resource: string; id: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const query = z.object({ instanceId: z.string().min(1) }).parse(req.query || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id: query.instanceId } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret }), resource, id);
+  return { ok: true, resource };
+});
+
+app.get("/voice/pbx/resources/:resource", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const { resource } = req.params as { resource: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const out = await vitalListByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, link.pbxTenantId || undefined);
+  return { resource, rows: out };
+});
+
+app.post("/voice/pbx/resources/:resource", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const { resource } = req.params as { resource: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const input = z.object({ payload: z.record(z.any()) }).parse(req.body || {});
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const payload = { ...input.payload, pbxTenantId: link.pbxTenantId || input.payload.pbxTenantId };
+  const out = await vitalCreateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, payload);
+  return { ok: true, resource, out };
+});
+
+app.patch("/voice/pbx/resources/:resource/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const { resource, id } = req.params as { resource: string; id: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const input = z.object({ payload: z.record(z.any()) }).parse(req.body || {});
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload);
+  return { ok: true, resource, out };
+});
+
+app.delete("/voice/pbx/resources/:resource/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const { resource, id } = req.params as { resource: string; id: string };
+  if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  await vitalDeleteByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id);
+  return { ok: true, resource };
+});
+
+app.get("/voice/pbx/call-recordings", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const query = z.object({
+    extension: z.string().optional(),
+    dateFrom: z.string().optional(),
+    dateTo: z.string().optional(),
+    q: z.string().optional()
+  }).parse(req.query || {});
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const rows = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).listCallRecordings({
+    tenantId: link.pbxTenantId || undefined,
+    extension: query.extension,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo,
+    q: query.q
+  });
+  return { rows };
+});
+
+app.get("/voice/pbx/call-reports", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const query = z.object({ dateFrom: z.string().optional(), dateTo: z.string().optional() }).parse(req.query || {});
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const report = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).getCallReports({
+    tenantId: link.pbxTenantId || undefined,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo
+  });
+  return { report };
 });
 
 app.get("/billing/sola/config", async (req, reply) => {
@@ -7089,13 +7399,15 @@ app.get("/customers/:id/activity", async (req, reply) => {
   const waOr = [{ customerId: id }, customer.whatsappNumber ? { contactNumber: customer.whatsappNumber } : null, customer.primaryPhone ? { contactNumber: customer.primaryPhone } : null].filter(Boolean) as any[];
   const emailOr = [customer.primaryEmail ? { toEmail: customer.primaryEmail } : null, invoiceIds.length ? { invoiceId: { in: invoiceIds } } : null].filter(Boolean) as any[];
 
-  const [invoiceEvents, paymentEvents, emailEvents, whatsappEvents, smsEvents, notes] = await Promise.all([
+  const [invoiceEvents, paymentEvents, emailEvents, whatsappEvents, smsEvents, notes, tasks, pbxEvents] = await Promise.all([
     invoiceIds.length ? db.invoiceEvent.findMany({ where: { tenantId: admin.tenantId, invoiceId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
     invoiceIds.length ? db.paymentEvent.findMany({ where: { tenantId: admin.tenantId, subscriptionId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
     emailOr.length ? db.emailJob.findMany({ where: { tenantId: admin.tenantId, OR: emailOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
     db.whatsAppMessage.findMany({ where: { tenantId: admin.tenantId, thread: { is: { OR: waOr } } }, orderBy: { createdAt: "desc" }, take: 100 }),
     smsOr.length ? db.smsMessage.findMany({ where: { campaign: { tenantId: admin.tenantId }, OR: smsOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
-    db.customerNote.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: { createdAt: "desc" }, take: 100, include: { createdByUser: { select: { email: true } } } })
+    db.customerNote.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: { createdAt: "desc" }, take: 100, include: { createdByUser: { select: { email: true } } } }),
+    db.customerTask.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: { createdAt: "desc" }, take: 100 }),
+    db.pbxCallEvent.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: { createdAt: "desc" }, take: 100 })
   ]);
 
   const timeline: Array<{ type: string; createdAt: Date; label: string; meta?: any }> = [];
@@ -7105,6 +7417,8 @@ app.get("/customers/:id/activity", async (req, reply) => {
   for (const e of whatsappEvents) timeline.push({ type: "WHATSAPP_EVENT", createdAt: e.createdAt, label: `WhatsApp ${String(e.direction || "").toLowerCase()} ${String(e.status || "").toLowerCase()}` });
   for (const e of smsEvents) timeline.push({ type: "SMS_EVENT", createdAt: e.createdAt, label: `SMS ${String(e.status || "").toLowerCase()}` });
   for (const n of notes) timeline.push({ type: "NOTE", createdAt: n.createdAt, label: `Note added by ${n.createdByUser?.email || "staff"}`, meta: { body: n.body } });
+  for (const t of tasks) timeline.push({ type: "TASK", createdAt: t.createdAt, label: `Task ${String(t.status || "").toLowerCase()}: ${t.title}` });
+  for (const p of pbxEvents) timeline.push({ type: "CALL_EVENT", createdAt: p.createdAt, label: `Call ${String(p.status || "").toLowerCase()} (${p.eventType})` });
   timeline.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   return {
@@ -7117,6 +7431,179 @@ app.get("/customers/:id/activity", async (req, reply) => {
     },
     timeline: timeline.slice(0, 250)
   };
+});
+
+app.get("/customers/:id/tasks", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canViewCustomers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const rows = await db.customerTask.findMany({ where: { tenantId: admin.tenantId, customerId: id }, orderBy: [{ status: "asc" }, { createdAt: "desc" }] });
+  return { rows };
+});
+
+app.post("/customers/:id/tasks", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    title: z.string().min(2),
+    body: z.string().optional(),
+    priority: z.enum(["LOW", "MEDIUM", "HIGH"]).default("MEDIUM"),
+    dueAt: z.string().optional()
+  }).parse(req.body || {});
+  const customer = await db.customer.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!customer) return reply.status(404).send({ error: "customer_not_found" });
+  const created = await db.customerTask.create({
+    data: {
+      tenantId: admin.tenantId,
+      customerId: customer.id,
+      title: input.title.trim(),
+      body: input.body?.trim() || null,
+      priority: input.priority,
+      dueAt: input.dueAt ? new Date(input.dueAt) : null,
+      createdByUserId: admin.sub
+    }
+  });
+  return { ok: true, task: created };
+});
+
+app.patch("/customers/:id/tasks/:taskId", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const { id, taskId } = req.params as { id: string; taskId: string };
+  const input = z.object({
+    title: z.string().min(2).optional(),
+    body: z.string().optional().nullable(),
+    status: z.enum(["OPEN", "DONE"]).optional(),
+    priority: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+    dueAt: z.string().optional().nullable()
+  }).parse(req.body || {});
+  const curr = await db.customerTask.findFirst({ where: { id: taskId, customerId: id, tenantId: admin.tenantId } });
+  if (!curr) return reply.status(404).send({ error: "task_not_found" });
+  const updated = await db.customerTask.update({
+    where: { id: curr.id },
+    data: {
+      title: input.title?.trim(),
+      body: input.body === undefined ? undefined : (input.body?.trim() || null),
+      status: input.status,
+      priority: input.priority,
+      dueAt: input.dueAt === undefined ? undefined : (input.dueAt ? new Date(input.dueAt) : null),
+      completedAt: input.status === "DONE" ? new Date() : input.status === "OPEN" ? null : undefined,
+      completedByUserId: input.status === "DONE" ? admin.sub : input.status === "OPEN" ? null : undefined
+    }
+  });
+  return { ok: true, task: updated };
+});
+
+app.get("/automation/rules", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const rows = await db.automationRule.findMany({ where: { tenantId: admin.tenantId }, orderBy: { createdAt: "desc" } });
+  return { rows };
+});
+
+app.post("/automation/rules", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const input = z.object({
+    name: z.string().min(2),
+    triggerType: z.enum(["INVOICE_OVERDUE", "PAYMENT_FAILED", "NEW_CUSTOMER", "WHATSAPP_INBOUND"]),
+    actionType: z.enum(["SEND_SMS", "SEND_EMAIL", "TAG_CUSTOMER", "CREATE_TASK"]),
+    actionPayload: z.record(z.any()).optional(),
+    isEnabled: z.boolean().default(true)
+  }).parse(req.body || {});
+  const created = await db.automationRule.create({
+    data: {
+      tenantId: admin.tenantId,
+      name: input.name.trim(),
+      triggerType: input.triggerType,
+      actionType: input.actionType,
+      actionPayload: (input.actionPayload || {}) as any,
+      isEnabled: input.isEnabled,
+      createdByUserId: admin.sub
+    }
+  });
+  return { ok: true, rule: created };
+});
+
+app.patch("/automation/rules/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    name: z.string().min(2).optional(),
+    actionPayload: z.record(z.any()).optional(),
+    isEnabled: z.boolean().optional()
+  }).parse(req.body || {});
+  const curr = await db.automationRule.findFirst({ where: { id, tenantId: admin.tenantId } });
+  if (!curr) return reply.status(404).send({ error: "rule_not_found" });
+  const updated = await db.automationRule.update({
+    where: { id },
+    data: {
+      name: input.name?.trim(),
+      actionPayload: input.actionPayload ? (input.actionPayload as any) : undefined,
+      isEnabled: input.isEnabled
+    }
+  });
+  return { ok: true, rule: updated };
+});
+
+app.get("/voice/ivr/schedules", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const rows = await db.ivrSchedule.findMany({ where: { tenantId: user.tenantId }, orderBy: { createdAt: "desc" } });
+  return { rows };
+});
+
+app.post("/voice/ivr/schedules", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const input = z.object({
+    ivrId: z.string().min(1),
+    recordingId: z.string().min(1),
+    startTime: z.string().min(1),
+    endTime: z.string().min(1),
+    timezone: z.string().default("UTC"),
+    enabled: z.boolean().default(true)
+  }).parse(req.body || {});
+  const created = await db.ivrSchedule.create({
+    data: {
+      tenantId: user.tenantId,
+      ivrId: input.ivrId,
+      recordingId: input.recordingId,
+      startTime: new Date(input.startTime),
+      endTime: new Date(input.endTime),
+      timezone: input.timezone,
+      enabled: input.enabled
+    }
+  });
+  return { ok: true, schedule: created };
+});
+
+app.patch("/voice/ivr/schedules/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({
+    recordingId: z.string().min(1).optional(),
+    startTime: z.string().optional(),
+    endTime: z.string().optional(),
+    timezone: z.string().optional(),
+    enabled: z.boolean().optional()
+  }).parse(req.body || {});
+  const curr = await db.ivrSchedule.findFirst({ where: { id, tenantId: user.tenantId } });
+  if (!curr) return reply.status(404).send({ error: "schedule_not_found" });
+  const updated = await db.ivrSchedule.update({
+    where: { id },
+    data: {
+      recordingId: input.recordingId,
+      startTime: input.startTime ? new Date(input.startTime) : undefined,
+      endTime: input.endTime ? new Date(input.endTime) : undefined,
+      timezone: input.timezone,
+      enabled: input.enabled
+    }
+  });
+  return { ok: true, schedule: updated };
 });
 
 app.get("/customers/:id/summary", async (req, reply) => {
@@ -7471,6 +7958,67 @@ app.get("/dashboard/activity", async (req, reply) => {
       label: i.label,
       link: i.link
     }))
+  };
+});
+
+app.get("/search/global", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const query = z.object({ q: z.string().min(2) }).parse(req.query || {});
+  const q = query.q.trim();
+
+  const [customers, invoices, extensions, numbers] = await Promise.all([
+    db.customer.findMany({
+      where: {
+        tenantId: user.tenantId,
+        OR: [
+          { displayName: { contains: q, mode: "insensitive" } },
+          { primaryEmail: { contains: q, mode: "insensitive" } },
+          { primaryPhone: { contains: q, mode: "insensitive" } },
+          { whatsappNumber: { contains: q, mode: "insensitive" } }
+        ]
+      },
+      take: 20
+    }),
+    db.invoice.findMany({
+      where: {
+        tenantId: user.tenantId,
+        OR: [
+          { id: { contains: q, mode: "insensitive" } },
+          { customerEmail: { contains: q, mode: "insensitive" } },
+          { customerPhone: { contains: q, mode: "insensitive" } }
+        ]
+      },
+      take: 20
+    }),
+    db.extension.findMany({
+      where: {
+        tenantId: user.tenantId,
+        OR: [
+          { ext: { contains: q, mode: "insensitive" } },
+          { label: { contains: q, mode: "insensitive" } }
+        ]
+      },
+      take: 20
+    }),
+    db.phoneNumber.findMany({
+      where: {
+        tenantId: user.tenantId,
+        OR: [
+          { phoneNumber: { contains: q, mode: "insensitive" } },
+          { label: { contains: q, mode: "insensitive" } }
+        ]
+      },
+      take: 20
+    })
+  ]);
+
+  return {
+    q,
+    customers: customers.map((r) => ({ id: r.id, displayName: r.displayName, primaryPhone: maskValue(r.primaryPhone, 3, 2), link: `/dashboard/customers/${r.id}` })),
+    invoices: invoices.map((r) => ({ id: r.id, status: r.status, amountCents: r.amountCents, link: `/dashboard/billing/invoices/${r.id}` })),
+    extensions: extensions.map((r) => ({ id: r.id, ext: r.ext, label: r.label, link: `/dashboard/extensions` })),
+    numbers: numbers.map((r) => ({ id: r.id, phoneNumber: maskValue(r.phoneNumber, 3, 2), link: `/dashboard/numbers` }))
   };
 });
 
@@ -8287,6 +8835,68 @@ const invoiceOverdueTimer = setInterval(() => {
   processInvoiceOverdueBatch().catch((e) => app.log.error({ err: e }, "invoice overdue processor failed"));
 }, 60_000);
 invoiceOverdueTimer.unref();
+
+async function processIvrScheduleBatch(): Promise<void> {
+  const now = new Date();
+  const rows = await db.ivrSchedule.findMany({
+    where: {
+      enabled: true,
+      startTime: { lte: new Date(now.getTime() + 60_000) },
+      endTime: { gte: new Date(now.getTime() - 60_000) }
+    },
+    take: 100
+  });
+  for (const row of rows) {
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId: row.tenantId }, include: { pbxInstance: true } });
+    if (!link) continue;
+    await queuePbxJob({
+      tenantId: row.tenantId,
+      pbxInstanceId: link.pbxInstanceId,
+      type: "IVR_RECORDING_SWITCH",
+      payload: { ivrId: row.ivrId, recordingId: row.recordingId, scheduleId: row.id },
+      lastError: null
+    });
+  }
+}
+
+async function processAutomationRulesBatch(): Promise<void> {
+  const rules = await db.automationRule.findMany({ where: { isEnabled: true }, take: 200 });
+  if (rules.length === 0) return;
+  const since = new Date(Date.now() - 90_000);
+  for (const rule of rules) {
+    if (rule.triggerType === "NEW_CUSTOMER") {
+      const customers = await db.customer.findMany({ where: { tenantId: rule.tenantId, createdAt: { gte: since } }, take: 10 });
+      for (const customer of customers) {
+        if (rule.actionType === "TAG_CUSTOMER") {
+          const payload = (rule.actionPayload || {}) as any;
+          const nextTags = Array.isArray(customer.tags) ? [...customer.tags] : [];
+          if (payload?.tag && !nextTags.includes(payload.tag)) nextTags.push(payload.tag);
+          await db.customer.update({ where: { id: customer.id }, data: { tags: nextTags as any } });
+        } else if (rule.actionType === "CREATE_TASK") {
+          await db.customerTask.create({
+            data: {
+              tenantId: customer.tenantId,
+              customerId: customer.id,
+              title: String(((rule.actionPayload || {}) as any).title || "Follow up new customer"),
+              body: String(((rule.actionPayload || {}) as any).body || ""),
+              createdByUserId: rule.createdByUserId
+            }
+          });
+        }
+      }
+    }
+  }
+}
+
+const ivrScheduleTimer = setInterval(() => {
+  processIvrScheduleBatch().catch((e) => app.log.error({ err: e }, "ivr schedule processor failed"));
+}, 60_000);
+ivrScheduleTimer.unref();
+
+const automationRuleTimer = setInterval(() => {
+  processAutomationRulesBatch().catch((e) => app.log.error({ err: e }, "automation rule processor failed"));
+}, 60_000);
+automationRuleTimer.unref();
 
 
 const port = Number(process.env.PORT || 3001);

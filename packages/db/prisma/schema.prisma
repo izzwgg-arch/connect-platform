@@ -304,6 +304,8 @@ model Tenant {
   invoices                      Invoice[]
   customers                     Customer[]
   customerNotes                 CustomerNote[]
+  customerTasks                 CustomerTask[]
+  automationRules               AutomationRule[]
   invoiceEvents                 InvoiceEvent[]
   emailJobs                     EmailJob[]
   alerts                        Alert[]
@@ -322,6 +324,8 @@ model Tenant {
   pbxDidLinks                   PbxDidLink[]
   pbxCdrCursor                  PbxCdrCursor?
   pbxJobs                       PbxJob[]
+  ivrSchedules                  IvrSchedule[]
+  pbxCallEvents                 PbxCallEvent[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
   defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
@@ -356,6 +360,9 @@ model User {
   mobileProvisioningTokens    MobileProvisioningToken[]
   updatedSbcConfigs           SbcConfig[]        @relation("SbcConfigUpdatedBy")
   customerNotes               CustomerNote[]
+  createdCustomerTasks        CustomerTask[]     @relation("CustomerTaskCreatedBy")
+  completedCustomerTasks      CustomerTask[]     @relation("CustomerTaskCompletedBy")
+  createdAutomationRules      AutomationRule[]   @relation("AutomationRuleCreatedBy")
 }
 
 enum UserRole {
@@ -372,6 +379,17 @@ enum CustomerStatus {
   ACTIVE
   PAST_DUE
   INACTIVE
+}
+
+enum CustomerTaskStatus {
+  OPEN
+  DONE
+}
+
+enum CustomerTaskPriority {
+  LOW
+  MEDIUM
+  HIGH
 }
 
 model Subscription {
@@ -764,6 +782,8 @@ model Customer {
   invoices       Invoice[]
   whatsAppThreads WhatsAppThread[]
   customerNotes  CustomerNote[]
+  customerTasks  CustomerTask[]
+  pbxCallEvents  PbxCallEvent[]
 
   @@index([tenantId, displayName])
   @@index([tenantId, primaryEmail])
@@ -771,6 +791,82 @@ model Customer {
   @@index([tenantId, whatsappNumber])
   @@index([tenantId, status])
   @@index([tenantId, lastContactAt])
+}
+
+model CustomerTask {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  customerId         String
+  title              String
+  body               String?
+  status             CustomerTaskStatus   @default(OPEN)
+  priority           CustomerTaskPriority @default(MEDIUM)
+  dueAt              DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  completedAt        DateTime?
+  createdByUserId    String
+  completedByUserId  String?
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdByUser      User                 @relation("CustomerTaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  completedByUser    User?                @relation("CustomerTaskCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, updatedAt])
+  @@index([customerId, createdAt])
+}
+
+model AutomationRule {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  triggerType     String
+  actionType      String
+  actionPayload   Json?
+  isEnabled       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdByUserId String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdByUser   User     @relation("AutomationRuleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, triggerType])
+}
+
+model IvrSchedule {
+  id          String   @id @default(cuid())
+  tenantId    String
+  ivrId       String
+  recordingId String
+  startTime   DateTime
+  endTime     DateTime
+  timezone    String   @default("UTC")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, enabled, startTime, endTime])
+}
+
+model PbxCallEvent {
+  id           String   @id @default(cuid())
+  tenantId     String
+  customerId   String?
+  pbxTenantId  String?
+  eventType    String
+  callId       String?
+  fromNumber   String?
+  toNumber     String?
+  extension    String?
+  status       String?
+  payload      Json?
+  createdAt    DateTime @default(now())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([customerId, createdAt])
 }
 
 model CustomerNote {
