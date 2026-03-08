@@ -491,6 +491,62 @@ function isE164(phone: string): boolean {
   return /^\+[1-9]\d{7,14}$/.test(phone);
 }
 
+type RecipientNormalizationSummary = {
+  totalInput: number;
+  validCount: number;
+  invalidCount: number;
+  duplicateCount: number;
+  invalidRecipients: string[];
+};
+
+function normalizeRecipientArray(rawRecipients: string[]): { normalizedRecipients: string[]; summary: RecipientNormalizationSummary } {
+  const expanded: string[] = [];
+  for (const row of rawRecipients) {
+    for (const piece of String(row || "").split(/[\s,;]+/g)) {
+      const trimmed = piece.trim();
+      if (trimmed) expanded.push(trimmed);
+    }
+  }
+
+  const seen = new Set<string>();
+  const invalidRecipients: string[] = [];
+  const normalizedRecipients: string[] = [];
+  let duplicateCount = 0;
+
+  for (const token of expanded) {
+    if (!isE164(token)) {
+      invalidRecipients.push(token);
+      continue;
+    }
+    if (seen.has(token)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(token);
+    normalizedRecipients.push(token);
+  }
+
+  return {
+    normalizedRecipients,
+    summary: {
+      totalInput: expanded.length,
+      validCount: normalizedRecipients.length,
+      invalidCount: invalidRecipients.length,
+      duplicateCount,
+      invalidRecipients: invalidRecipients.slice(0, 50)
+    }
+  };
+}
+
+function toCampaignUiStatus(status: string): "DRAFT" | "READY" | "SENDING" | "SENT" | "FAILED" | "BLOCKED" {
+  if (status === "NEEDS_APPROVAL" || status === "PAUSED") return "BLOCKED";
+  if (status === "QUEUED") return "READY";
+  if (status === "SENDING") return "SENDING";
+  if (status === "SENT") return "SENT";
+  if (status === "FAILED") return "FAILED";
+  return "DRAFT";
+}
+
 function maskValue(value: string | undefined | null, start = 6, end = 4): string | null {
   if (!value) return null;
   if (value.length <= start + end) return "*".repeat(Math.max(4, value.length));
@@ -2989,6 +3045,35 @@ app.post("/sms/campaigns", async (req, reply) => {
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
 
+  const normalized = normalizeRecipientArray(input.recipients);
+  if (normalized.summary.validCount === 0 || normalized.summary.invalidCount > 0) {
+    return reply.status(400).send({
+      error: {
+        code: "INVALID_RECIPIENTS",
+        message: "Campaign recipients include invalid phone numbers.",
+        details: normalized.summary
+      }
+    });
+  }
+  if (normalized.summary.validCount > tenant.maxCampaignSize) {
+    return reply.status(400).send({
+      error: {
+        code: "CAMPAIGN_TOO_LARGE",
+        message: "Campaign exceeds tenant max campaign size.",
+        details: { recipientCount: normalized.summary.validCount, maxCampaignSize: tenant.maxCampaignSize }
+      }
+    });
+  }
+  if (tenant.smsSuspended) {
+    return reply.status(400).send({
+      error: {
+        code: "TENANT_SUSPENDED",
+        message: "Tenant SMS sending is suspended.",
+        details: { reason: tenant.smsSuspendedReason || null }
+      }
+    });
+  }
+
   let selectedNumber = null as any;
   if (input.fromNumberId) {
     selectedNumber = await db.phoneNumber.findFirst({ where: { id: input.fromNumberId, tenantId: user.tenantId } });
@@ -2999,8 +3084,22 @@ app.post("/sms/campaigns", async (req, reply) => {
   }
 
   if (tenant.smsSendMode === "LIVE") {
-    if (!selectedNumber) return reply.status(400).send({ error: "NO_SENDER_NUMBER", message: "You must purchase/assign a sending number before sending in LIVE mode." });
-    if (selectedNumber.status !== "ACTIVE") return reply.status(400).send({ error: "SENDER_NUMBER_NOT_ACTIVE" });
+    if (!selectedNumber) {
+      return reply.status(400).send({
+        error: { code: "NO_SENDER_NUMBER", message: "You must select an ACTIVE sender number before sending in LIVE mode." }
+      });
+    }
+    if (selectedNumber.status !== "ACTIVE") {
+      return reply.status(400).send({
+        error: { code: "NO_SENDER_NUMBER", message: "Selected sender number is not ACTIVE." }
+      });
+    }
+    const canSendLive = await enforceBillingForLive(user.tenantId);
+    if (!canSendLive) {
+      return reply.status(400).send({
+        error: { code: "LIVE_MODE_BLOCKED", message: "LIVE mode sending is blocked until billing requirements are met." }
+      });
+    }
   }
 
   const effectiveFrom = selectedNumber?.phoneNumber || input.fromNumber || "+15550000000";
@@ -3020,7 +3119,13 @@ app.post("/sms/campaigns", async (req, reply) => {
     forcedNeedsApproval = true;
   }
 
-  const decision = await decideCampaignPolicy({ tenant, tenantId: user.tenantId, actorUserId: user.sub, message: input.message, recipientsCount: input.recipients.length });
+  const decision = await decideCampaignPolicy({
+    tenant,
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    message: input.message,
+    recipientsCount: normalized.summary.validCount
+  });
   if ("reject" in decision) return reply.status(400).send({ error: decision.reject });
 
   const shouldAutoSend = !!input.autoSend;
@@ -3042,7 +3147,7 @@ app.post("/sms/campaigns", async (req, reply) => {
   });
 
   const createdMessages = await Promise.all(
-    input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: campaign.id, toNumber: to, fromNumber: effectiveFrom, fromNumberId: selectedNumber?.id || null, body: decision.normalizedMessage, status: "QUEUED" } }))
+    normalized.normalizedRecipients.map((to) => db.smsMessage.create({ data: { campaignId: campaign.id, toNumber: to, fromNumber: effectiveFrom, fromNumberId: selectedNumber?.id || null, body: decision.normalizedMessage, status: "QUEUED" } }))
   );
 
   if (campaign.status === "QUEUED") {
@@ -3054,7 +3159,13 @@ app.post("/sms/campaigns", async (req, reply) => {
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_DRAFT_CREATED", entityType: "SmsCampaign", entityId: campaign.id });
   }
 
-  return { campaign, queuedMessages: campaign.status === "QUEUED" ? createdMessages.length : 0, holdReason: campaign.holdReason };
+  return {
+    campaign: { ...campaign, uiStatus: toCampaignUiStatus(campaign.status) },
+    sender: selectedNumber ? { id: selectedNumber.id, phoneNumber: selectedNumber.phoneNumber, provider: selectedNumber.provider, isDefault: tenant.defaultSmsFromNumberId === selectedNumber.id } : null,
+    recipientSummary: normalized.summary,
+    queuedMessages: campaign.status === "QUEUED" ? createdMessages.length : 0,
+    holdReason: campaign.holdReason
+  };
 });
 
 app.put("/sms/campaigns/:id", async (req, reply) => {
@@ -3063,7 +3174,9 @@ app.put("/sms/campaigns/:id", async (req, reply) => {
   const input = z.object({
     name: z.string().min(2).optional(),
     message: z.string().min(3).max(320).optional(),
-    recipients: z.array(z.string().min(8)).optional()
+    recipients: z.array(z.string().min(8)).optional(),
+    fromNumber: z.string().min(7).optional(),
+    fromNumberId: z.string().optional()
   }).parse(req.body || {});
 
   const campaign = await db.smsCampaign.findFirst({ where: { id, tenantId: user.tenantId }, include: { messages: true, tenant: true } });
@@ -3082,17 +3195,55 @@ app.put("/sms/campaigns/:id", async (req, reply) => {
     }
   }
 
-  const updateCampaign = await db.smsCampaign.update({ where: { id }, data: { name: input.name || campaign.name, message: nextMessage } });
+  let selectedNumber = null as any;
+  if (input.fromNumberId) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { id: input.fromNumberId, tenantId: user.tenantId } });
+  } else if (input.fromNumber) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { phoneNumber: input.fromNumber, tenantId: user.tenantId } });
+  } else if (campaign.tenant.defaultSmsFromNumberId) {
+    selectedNumber = await db.phoneNumber.findFirst({ where: { id: campaign.tenant.defaultSmsFromNumberId, tenantId: user.tenantId } });
+  }
+  const effectiveFrom = selectedNumber?.phoneNumber || input.fromNumber || campaign.fromNumber || "+15550000000";
+
+  const updateCampaign = await db.smsCampaign.update({
+    where: { id },
+    data: { name: input.name || campaign.name, message: nextMessage, fromNumber: effectiveFrom }
+  });
+
+  let recipientSummary: RecipientNormalizationSummary | null = null;
 
   if (input.recipients) {
+    const normalizedRecipients = normalizeRecipientArray(input.recipients);
+    recipientSummary = normalizedRecipients.summary;
+    if (recipientSummary.validCount === 0 || recipientSummary.invalidCount > 0) {
+      return reply.status(400).send({
+        error: {
+          code: "INVALID_RECIPIENTS",
+          message: "Campaign recipients include invalid phone numbers.",
+          details: recipientSummary
+        }
+      });
+    }
+    if (recipientSummary.validCount > campaign.tenant.maxCampaignSize) {
+      return reply.status(400).send({
+        error: {
+          code: "CAMPAIGN_TOO_LARGE",
+          message: "Campaign exceeds tenant max campaign size.",
+          details: { recipientCount: recipientSummary.validCount, maxCampaignSize: campaign.tenant.maxCampaignSize }
+        }
+      });
+    }
     await db.smsMessage.deleteMany({ where: { campaignId: id } });
-    await Promise.all(input.recipients.map((to) => db.smsMessage.create({ data: { campaignId: id, toNumber: to, fromNumber: campaign.fromNumber, fromNumberId: campaign.messages[0]?.fromNumberId || null, body: nextMessage, status: "QUEUED" } })));
+    await Promise.all(normalizedRecipients.normalizedRecipients.map((to) => db.smsMessage.create({ data: { campaignId: id, toNumber: to, fromNumber: effectiveFrom, fromNumberId: selectedNumber?.id || campaign.messages[0]?.fromNumberId || null, body: nextMessage, status: "QUEUED" } })));
   } else if (input.message) {
     await db.smsMessage.updateMany({ where: { campaignId: id }, data: { body: nextMessage } });
   }
+  if (!input.recipients && (input.fromNumber || input.fromNumberId)) {
+    await db.smsMessage.updateMany({ where: { campaignId: id }, data: { fromNumber: effectiveFrom, fromNumberId: selectedNumber?.id || null } });
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_UPDATED", entityType: "SmsCampaign", entityId: id });
-  return updateCampaign;
+  return { campaign: { ...updateCampaign, uiStatus: toCampaignUiStatus(updateCampaign.status) }, recipientSummary };
 });
 
 app.post("/sms/campaigns/:id/preview", async (req, reply) => {
@@ -3103,16 +3254,32 @@ app.post("/sms/campaigns/:id/preview", async (req, reply) => {
   if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
 
   const recipientCount = campaign.messages.length;
-  const warnings: string[] = [];
-  if (recipientCount > campaign.tenant.maxCampaignSize) warnings.push("RECIPIENT_COUNT_EXCEEDS_MAX_CAMPAIGN_SIZE");
-  if (!campaign.tenant.defaultSmsFromNumberId && campaign.tenant.smsSendMode === "LIVE") warnings.push("DEFAULT_SMS_FROM_NUMBER_REQUIRED");
-  if (campaign.tenant.smsSuspended) warnings.push("TENANT_SMS_SUSPENDED");
+  const invalidRecipients = campaign.messages.filter((m) => !isE164(m.toNumber)).map((m) => m.toNumber);
+  const senderNumberId = campaign.messages[0]?.fromNumberId || campaign.tenant.defaultSmsFromNumberId || null;
+  const sender = senderNumberId ? await db.phoneNumber.findFirst({ where: { id: senderNumberId, tenantId: user.tenantId } }) : null;
+  const canSendLive = campaign.tenant.smsSendMode !== "LIVE" ? true : await enforceBillingForLive(user.tenantId);
+
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (recipientCount > campaign.tenant.maxCampaignSize) warnings.push({ code: "CAMPAIGN_TOO_LARGE", message: "Recipient count exceeds tenant max campaign size." });
+  if (invalidRecipients.length > 0) warnings.push({ code: "INVALID_RECIPIENTS", message: "Campaign contains invalid recipients." });
+  if (!sender && campaign.tenant.smsSendMode === "LIVE") warnings.push({ code: "NO_SENDER_NUMBER", message: "Set an ACTIVE sender number before LIVE send." });
+  if (campaign.tenant.smsSuspended) warnings.push({ code: "TENANT_SUSPENDED", message: "Tenant SMS sending is suspended." });
+  if (!canSendLive) warnings.push({ code: "LIVE_MODE_BLOCKED", message: "LIVE mode blocked until billing requirements are met." });
 
   const sampleRecipients = campaign.messages.slice(0, 10).map((m) => maskValue(m.toNumber, 2, 2));
   return {
     campaignId: campaign.id,
     status: campaign.status,
+    uiStatus: toCampaignUiStatus(campaign.status),
     recipientCount,
+    recipientSummary: {
+      totalInput: recipientCount,
+      validCount: recipientCount - invalidRecipients.length,
+      invalidCount: invalidRecipients.length,
+      duplicateCount: 0,
+      invalidRecipients: invalidRecipients.slice(0, 50)
+    },
+    sender: sender ? { id: sender.id, phoneNumber: sender.phoneNumber, status: sender.status, provider: sender.provider, isDefault: campaign.tenant.defaultSmsFromNumberId === sender.id } : null,
     sampleRecipients,
     messageLength: campaign.message.length,
     warnings,
@@ -3128,6 +3295,47 @@ app.post("/sms/campaigns/:id/send", async (req, reply) => {
   if (!campaign) return reply.status(404).send({ error: "campaign_not_found" });
   if (!["DRAFT", "PAUSED", "FAILED", "NEEDS_APPROVAL"].includes(campaign.status)) {
     return reply.status(400).send({ error: "CAMPAIGN_NOT_SENDABLE" });
+  }
+
+  if (campaign.tenant.smsSuspended) {
+    return reply.status(400).send({ error: { code: "TENANT_SUSPENDED", message: "Tenant SMS sending is suspended." } });
+  }
+  if (campaign.messages.length > campaign.tenant.maxCampaignSize) {
+    return reply.status(400).send({
+      error: {
+        code: "CAMPAIGN_TOO_LARGE",
+        message: "Campaign exceeds tenant max campaign size.",
+        details: { recipientCount: campaign.messages.length, maxCampaignSize: campaign.tenant.maxCampaignSize }
+      }
+    });
+  }
+  const invalidRecipients = campaign.messages.filter((m) => !isE164(m.toNumber)).map((m) => m.toNumber);
+  if (invalidRecipients.length > 0) {
+    return reply.status(400).send({
+      error: {
+        code: "INVALID_RECIPIENTS",
+        message: "Campaign contains invalid recipients.",
+        details: {
+          totalInput: campaign.messages.length,
+          validCount: campaign.messages.length - invalidRecipients.length,
+          invalidCount: invalidRecipients.length,
+          duplicateCount: 0,
+          invalidRecipients: invalidRecipients.slice(0, 50)
+        }
+      }
+    });
+  }
+
+  const selectedSenderNumberId = campaign.messages[0]?.fromNumberId || campaign.tenant.defaultSmsFromNumberId || null;
+  const selectedSender = selectedSenderNumberId ? await db.phoneNumber.findFirst({ where: { id: selectedSenderNumberId, tenantId: user.tenantId } }) : null;
+  if (campaign.tenant.smsSendMode === "LIVE" && (!selectedSender || selectedSender.status !== "ACTIVE")) {
+    return reply.status(400).send({ error: { code: "NO_SENDER_NUMBER", message: "Set an ACTIVE sender number before sending in LIVE mode." } });
+  }
+  if (campaign.tenant.smsSendMode === "LIVE") {
+    const canSendLive = await enforceBillingForLive(user.tenantId);
+    if (!canSendLive) {
+      return reply.status(400).send({ error: { code: "LIVE_MODE_BLOCKED", message: "LIVE mode sending is blocked until billing requirements are met." } });
+    }
   }
 
   const decision = await decideCampaignPolicy({ tenant: campaign.tenant, tenantId: user.tenantId, actorUserId: user.sub, message: campaign.message, recipientsCount: campaign.messages.length });
@@ -3148,12 +3356,32 @@ app.post("/sms/campaigns/:id/send", async (req, reply) => {
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CAMPAIGN_SEND_HELD", entityType: "SmsCampaign", entityId: id });
   }
 
-  return { ok: true, campaign: updated, queuedMessages: nextStatus === "QUEUED" ? campaign.messages.length : 0 };
+  return {
+    ok: true,
+    campaign: { ...updated, uiStatus: toCampaignUiStatus(updated.status) },
+    queuedMessages: nextStatus === "QUEUED" ? campaign.messages.length : 0
+  };
 });
 
 app.get("/sms/campaigns", async (req) => {
   const user = getUser(req);
-  return db.smsCampaign.findMany({ where: { tenantId: user.tenantId }, orderBy: { createdAt: "desc" } });
+  const rows = await db.smsCampaign.findMany({ where: { tenantId: user.tenantId }, include: { messages: { select: { status: true } } }, orderBy: { createdAt: "desc" } });
+  return rows.map((row) => {
+    const sentCount = row.messages.filter((m) => m.status === "SENT" || m.status === "DELIVERED").length;
+    const failedCount = row.messages.filter((m) => m.status === "FAILED").length;
+    return {
+      id: row.id,
+      name: row.name,
+      fromNumber: row.fromNumber,
+      status: row.status,
+      uiStatus: toCampaignUiStatus(row.status),
+      holdReason: row.holdReason,
+      createdAt: row.createdAt,
+      totalRecipients: row.messages.length,
+      sentCount,
+      failedCount
+    };
+  });
 });
 
 app.get("/sms/campaigns/:id", async (req, reply) => {
@@ -3171,7 +3399,14 @@ app.get("/sms/campaigns/:id", async (req, reply) => {
     failed: campaign.messages.filter((m) => m.status === "FAILED").length
   };
 
-  return { ...campaign, metrics };
+  const senderNumberId = campaign.messages[0]?.fromNumberId || null;
+  const sender = senderNumberId ? await db.phoneNumber.findFirst({ where: { id: senderNumberId, tenantId: user.tenantId } }) : null;
+  return {
+    ...campaign,
+    uiStatus: toCampaignUiStatus(campaign.status),
+    sender: sender ? { id: sender.id, phoneNumber: sender.phoneNumber, status: sender.status, provider: sender.provider } : null,
+    metrics
+  };
 });
 
 app.get("/sms/messages", async (req) => {
