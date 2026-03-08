@@ -90,7 +90,7 @@ login_json="$(api POST /auth/login "" "$login_payload")"
 ADMIN_TOKEN="$(echo "$login_json" | jq -r '.token // empty')"
 [[ -n "$ADMIN_TOKEN" ]] || fail "admin login failed"
 
-GATEWAY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' app-api-1)"
+GATEWAY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' app-api-1 | awk '{print $1}')"
 [[ -n "$GATEWAY_IP" ]] || fail "could not resolve API container gateway IP"
 
 create_payload="$(jq -nc --arg name "Header Smoke ${NOW}" --arg url "http://${GATEWAY_IP}:${PORT}" --arg token "$PBX_TOKEN" '{name:$name,baseUrl:$url,token:$token,isEnabled:true}')"
