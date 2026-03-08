@@ -1,13 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
+import { clearAuthSession } from "../services/session";
 import { ScopedActionButton } from "./ScopedActionButton";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function ProfileMenu() {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
   const { user, tenant, role, setRole } = useAppContext();
+
+  function logout() {
+    clearAuthSession();
+    router.replace("/login");
+  }
 
   return (
     <div className="menu-wrap">
@@ -29,7 +37,7 @@ export function ProfileMenu() {
             </select>
             <ScopedActionButton className="btn">Set DND</ScopedActionButton>
             <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
-            <button className="btn danger">Logout</button>
+            <button className="btn danger" onClick={logout}>Logout</button>
           </div>
         </div>
       ) : null}

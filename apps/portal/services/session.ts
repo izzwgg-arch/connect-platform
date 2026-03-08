@@ -25,6 +25,20 @@ export function readAuthToken(): string {
   );
 }
 
+export function writeAuthToken(token: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("token", token);
+  localStorage.setItem("cc-token", token);
+  localStorage.setItem("authToken", token);
+}
+
+export function clearAuthSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("token");
+  localStorage.removeItem("cc-token");
+  localStorage.removeItem("authToken");
+}
+
 export function readTenantContext(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("cc-tenant-id") || "";
