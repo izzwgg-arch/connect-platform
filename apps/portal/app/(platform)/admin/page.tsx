@@ -57,7 +57,7 @@ export default function AdminPage() {
         </RoleGate>
 
         <section className="grid three">
-          <IntegrationCard name="VitalPBX Connection" status="Configured" />
+          <IntegrationCard name="VitalPBX Connection" status="Configured" configureHref="/admin/pbx" auditHref="/admin/pbx" />
           <IntegrationCard name="VoIPDNS / Provider Routing" status="Requires review" />
           <IntegrationCard name="QuickBooks & PaymentHub" status="Not connected" />
         </section>

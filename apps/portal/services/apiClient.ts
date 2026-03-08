@@ -23,16 +23,18 @@ function browserTenantContext(): string {
   return localStorage.getItem("cc-tenant-id") || "";
 }
 
-export async function apiGet<T>(path: string, token?: string): Promise<T> {
+async function apiRequest<T>(method: "GET" | "POST" | "PATCH", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch(`${baseUrl()}${path}`, {
-      method: "GET",
+      method,
       headers: {
+        ...(method !== "GET" ? { "content-type": "application/json" } : {}),
         ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
         ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {})
       },
+      body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
       signal: controller.signal
     });
@@ -43,4 +45,16 @@ export async function apiGet<T>(path: string, token?: string): Promise<T> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function apiGet<T>(path: string, token?: string): Promise<T> {
+  return apiRequest<T>("GET", path, undefined, token);
+}
+
+export async function apiPost<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+  return apiRequest<T>("POST", path, body, token);
+}
+
+export async function apiPatch<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+  return apiRequest<T>("PATCH", path, body, token);
 }
