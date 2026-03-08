@@ -1,1 +1,5 @@
-export default function Home(){return <div className="card"><h1>Business Communications Platform</h1><p>Reliable voice and messaging operations for modern teams.</p></div>}
+import { redirect } from "next/navigation";
+
+export default function HomePage() {
+  redirect("/dashboard");
+}

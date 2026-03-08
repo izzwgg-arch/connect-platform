@@ -1,0 +1,46 @@
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status = 500) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function baseUrl(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_API_URL || "";
+  return fromEnv.replace(/\/$/, "");
+}
+
+function browserToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token") || "";
+}
+
+function browserTenantContext(): string {
+  if (typeof window === "undefined") return "";
+  const scope = localStorage.getItem("cc-admin-scope") || "TENANT";
+  if (scope === "GLOBAL") return "";
+  return localStorage.getItem("cc-tenant-id") || "";
+}
+
+export async function apiGet<T>(path: string, token?: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${baseUrl()}${path}`, {
+      method: "GET",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {})
+      },
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      throw new ApiError(`Request failed (${res.status})`, res.status);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

@@ -1,11 +1,12 @@
 import "./globals.css";
-import { PageShell } from "../components/PageShell";
+import type { ReactNode } from "react";
+import { Providers } from "./providers";
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <PageShell>{children}</PageShell>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

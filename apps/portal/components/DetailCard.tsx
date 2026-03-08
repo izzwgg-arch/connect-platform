@@ -1,0 +1,13 @@
+import type { ReactNode } from "react";
+
+export function DetailCard({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h3>{title}</h3>
+        {actions}
+      </div>
+      {children}
+    </section>
+  );
+}
