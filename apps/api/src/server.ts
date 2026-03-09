@@ -8103,8 +8103,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   let linkSourceRows = 0;
   let enabledSourceRows = 0;
   const cdrQueryWindow = {
-    start_date: new Date(sinceMs).toISOString(),
-    end_date: new Date(nowMs).toISOString(),
+    start_date: Math.floor(sinceMs / 1000),
+    end_date: Math.floor(nowMs / 1000),
     limit: 500,
     sort_by: "date",
     sort_order: "desc"
