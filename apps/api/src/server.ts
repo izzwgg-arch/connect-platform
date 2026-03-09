@@ -8185,7 +8185,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
               source: "enabledInstance",
               instanceId: instance.id,
               baseUrl: instance.baseUrl,
-              error: String(e?.code || e?.message || "UNKNOWN")
+              error: String(e?.code || e?.message || "UNKNOWN"),
+              cause: String(e?.details?.cause || e?.cause?.message || "")
             },
             "dashboard_call_traffic_instance_fetch_error"
           );

@@ -181,7 +181,7 @@ export class VitalPbxClient {
         path: url,
         correlationId,
         errorCode: String(err?.code || "PBX_UNREACHABLE"),
-        message: String(err?.message || err)
+        message: String(err?.cause?.message || err?.message || err)
       });
       throw makeVitalPbxError("VitalPBX unreachable", "PBX_UNREACHABLE", 503, true, { cause: String(err?.message || err) });
     }
