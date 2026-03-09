@@ -8102,6 +8102,13 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   let dbSourceRows = 0;
   let linkSourceRows = 0;
   let enabledSourceRows = 0;
+  const cdrQueryWindow = {
+    start_date: new Date(sinceMs).toISOString(),
+    end_date: new Date(nowMs).toISOString(),
+    limit: 500,
+    sort_by: "date",
+    sort_order: "desc"
+  } as const;
   const dbCallRows = await db.callRecord.findMany({
     where: scope === "GLOBAL" && isSuperAdmin
       ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
@@ -8131,7 +8138,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
         const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
         const cdr = await client.callEndpoint<any>("cdr.list", {
           tenant: link.pbxTenantId || undefined,
-          query: { limit: 2000, sort_by: "date", sort_order: "desc" }
+          query: cdrQueryWindow
         });
         const items = extractReportItems(cdr?.data || cdr);
         for (const row of items) {
@@ -8161,22 +8168,29 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
             // Fallback to env token/secret if instance credentials are unreadable.
             client = getVitalPbxClient({ baseUrl: instance.baseUrl });
           }
-          const tenants = await client.listTenants().catch(() => []);
-          const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
-            ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean)
-            : [undefined];
-
-          for (const tenantId of tenantCandidates) {
-            const cdr = await client.callEndpoint<any>("cdr.list", {
-              tenant: tenantId,
-              query: { limit: 3000, sort_by: "date", sort_order: "desc" }
-            });
-            const items = extractReportItems(cdr?.data || cdr);
-            for (const row of items) {
-              const ts = extractCallTimestampMs(row);
-              if (!ts || ts < sinceMs || ts > nowMs) continue;
-              normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+          // Try direct instance CDR query first (faster and avoids tenant fan-out timeouts).
+          const direct = await client.callEndpoint<any>("cdr.list", { query: cdrQueryWindow }).catch(() => null);
+          let items = extractReportItems(direct?.data || direct);
+          if (items.length === 0) {
+            const tenants = await client.listTenants().catch(() => []);
+            const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
+              ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean).slice(0, 10)
+              : [];
+            for (const tenantId of tenantCandidates) {
+              const cdr = await client.callEndpoint<any>("cdr.list", {
+                tenant: tenantId,
+                query: cdrQueryWindow
+              }).catch(() => null);
+              const scopedItems = extractReportItems(cdr?.data || cdr);
+              if (scopedItems.length > 0) {
+                items = items.concat(scopedItems);
+              }
             }
+          }
+          for (const row of items) {
+            const ts = extractCallTimestampMs(row);
+            if (!ts || ts < sinceMs || ts > nowMs) continue;
+            normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
           }
           enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
         } catch (e: any) {
