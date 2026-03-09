@@ -8066,9 +8066,16 @@ function extractCallTimestampMs(input: any): number | null {
 
 function extractReportItems(report: any): any[] {
   if (Array.isArray(report)) return report;
-  if (Array.isArray(report?.items)) return report.items;
-  if (Array.isArray(report?.data)) return report.data;
-  if (Array.isArray(report?.report?.items)) return report.report.items;
+  const containers = [report, report?.data, report?.result, report?.report].filter(Boolean);
+  for (const box of containers) {
+    if (Array.isArray(box)) return box;
+    if (Array.isArray(box?.items)) return box.items;
+    if (Array.isArray(box?.rows)) return box.rows;
+    if (Array.isArray(box?.records)) return box.records;
+    if (Array.isArray(box?.cdr)) return box.cdr;
+    if (Array.isArray(box?.cdrs)) return box.cdrs;
+    if (Array.isArray(box?.calls)) return box.calls;
+  }
   return [];
 }
 
