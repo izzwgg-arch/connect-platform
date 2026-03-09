@@ -8164,6 +8164,33 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     }
   }
 
+  // Super-admin safety net: if tenant-scoped query returns no rows, retry global aggregation
+  // so the dashboard does not stay blank when system calls are active.
+  if (scope === "TENANT" && isSuperAdmin && normalizedRows.length === 0) {
+    const links = await db.tenantPbxLink.findMany({
+      include: { pbxInstance: true },
+      take: 200
+    });
+    for (const link of links) {
+      try {
+        const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+        const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+        const cdr = await client.callEndpoint<any>("cdr.list", {
+          tenant: link.pbxTenantId || undefined,
+          query: { limit: 2000, sort_by: "date", sort_order: "desc" }
+        });
+        const items = extractReportItems(cdr?.data || cdr);
+        for (const row of items) {
+          const ts = extractCallTimestampMs(row);
+          if (!ts || ts < sinceMs || ts > nowMs) continue;
+          normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+        }
+      } catch {
+        // Continue best-effort aggregation.
+      }
+    }
+  }
+
   const points = Array.from({ length: bucketCount }).map((_, idx) => {
     const bucketTs = new Date(sinceMs + idx * bucketMinutes * 60 * 1000);
     return {
@@ -8201,6 +8228,16 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     points,
     updatedAt: new Date(nowMs).toISOString()
   };
+  app.log.info(
+    {
+      scope,
+      role: user.role,
+      tenantId: user.tenantId,
+      rowCount: normalizedRows.length,
+      totals: payload.totals
+    },
+    "dashboard_call_traffic"
+  );
   DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs, payload });
   return payload;
 });
