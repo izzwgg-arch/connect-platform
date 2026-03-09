@@ -8033,9 +8033,14 @@ app.get("/customers/:id/summary", async (req, reply) => {
 const DASHBOARD_CALL_TRAFFIC_CACHE = new Map<string, { at: number; payload: any }>();
 
 function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal" {
+  const numericType = Number(input?.calltype ?? input?.callType ?? input?.type_code ?? input?.direction_code);
+  if (numericType === 1) return "internal";
+  if (numericType === 2) return "incoming";
+  if (numericType === 3) return "outgoing";
   const raw = String(
     input?.direction
       || input?.callDirection
+      || input?.disposition
       || input?.call_type
       || input?.type
       || input?.dir
@@ -8048,8 +8053,13 @@ function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal
 }
 
 function extractCallTimestampMs(input: any): number | null {
-  const raw = input?.startedAt || input?.start || input?.calldate || input?.createdAt || input?.date || input?.timestamp;
+  const raw = input?.startedAt || input?.start || input?.calldate || input?.createdAt || input?.date || input?.timestamp || input?.end || input?.answeredAt;
   if (!raw) return null;
+  if (typeof raw === "number") return raw > 1_000_000_000_000 ? raw : raw * 1000;
+  if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+    const parsed = Number(raw.trim());
+    if (Number.isFinite(parsed)) return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
+  }
   const ts = new Date(String(raw)).getTime();
   return Number.isFinite(ts) ? ts : null;
 }
@@ -8091,12 +8101,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     for (const link of links) {
       try {
         const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-        const cdr = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).fetchCdrs({
-          tenantId: link.pbxTenantId || undefined,
-          lastSeenTimestamp: new Date(sinceMs).toISOString(),
-          limit: 1000
+        const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+        const cdr = await client.callEndpoint<any>("cdr.list", {
+          tenant: link.pbxTenantId || undefined,
+          query: { limit: 2000, sort_by: "date", sort_order: "desc" }
         });
-        const items = Array.isArray(cdr?.records) ? cdr.records : extractReportItems(cdr);
+        const items = extractReportItems(cdr?.data || cdr);
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
           if (!ts || ts < sinceMs || ts > nowMs) continue;
@@ -8131,12 +8141,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     }
     try {
       const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-      const cdr = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).fetchCdrs({
-        tenantId: link.pbxTenantId || undefined,
-        lastSeenTimestamp: new Date(sinceMs).toISOString(),
-        limit: 1000
+      const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const cdr = await client.callEndpoint<any>("cdr.list", {
+        tenant: link.pbxTenantId || undefined,
+        query: { limit: 2000, sort_by: "date", sort_order: "desc" }
       });
-      const items = Array.isArray(cdr?.records) ? cdr.records : extractReportItems(cdr);
+      const items = extractReportItems(cdr?.data || cdr);
       for (const row of items) {
         const ts = extractCallTimestampMs(row);
         if (!ts || ts < sinceMs || ts > nowMs) continue;
