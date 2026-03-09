@@ -557,6 +557,51 @@ p {
   color: var(--console-muted);
 }
 
+.live-traffic-graph {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+  min-height: 96px;
+  padding: 10px 0 2px;
+}
+
+.live-traffic-col {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+.live-traffic-bars {
+  display: inline-flex;
+  align-items: end;
+  gap: 2px;
+  height: 72px;
+}
+
+.live-bar {
+  width: 5px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.live-bar.incoming {
+  background: #58cc7a;
+}
+
+.live-bar.outgoing {
+  background: #35a8ff;
+}
+
+.live-bar.internal {
+  background: #f2b24b;
+}
+
+.live-traffic-time {
+  font-size: 10px;
+  color: var(--console-muted);
+}
+
 .scope-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -1360,6 +1405,10 @@ body {
 
   .traffic-bar-row {
     grid-template-columns: 86px 1fr 30px;
+  }
+
+  .live-traffic-graph {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .chat-layout,
