@@ -67,11 +67,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadTenantOptions()
       .then((rows) => {
         if (!active) return;
-        setTenants(rows.length > 0 ? rows : mockTenants);
+        setTenants(rows);
       })
       .catch(() => {
         if (!active) return;
-        setTenants(mockTenants);
+        setTenants([]);
       });
     return () => {
       active = false;
@@ -79,7 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [role]);
 
   useEffect(() => {
-    if (!tenants.some((entry) => entry.id === tenantId)) {
+    if (tenants.length > 0 && !tenants.some((entry) => entry.id === tenantId)) {
       setTenantId(tenants[0]?.id || mockTenants[0].id);
     }
   }, [tenantId, tenants]);
