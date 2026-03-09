@@ -370,6 +370,86 @@ p {
   gap: 8px;
 }
 
+.tenant-picker {
+  position: relative;
+}
+
+.tenant-picker-trigger {
+  min-width: 210px;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid var(--console-border);
+  background: var(--console-panel-soft);
+  color: var(--console-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding: 0 9px;
+  cursor: pointer;
+}
+
+.tenant-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-picker-chevron {
+  font-size: 10px;
+  color: var(--console-muted);
+}
+
+.tenant-picker-panel {
+  width: 260px;
+}
+
+.tenant-picker-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.tenant-picker-list {
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+}
+
+.tenant-picker-item {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--console-text);
+  text-align: left;
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tenant-picker-item:hover {
+  background: var(--console-panel-soft);
+}
+
+.tenant-picker-item.active {
+  border-color: color-mix(in srgb, var(--console-accent) 45%, var(--console-border));
+  background: color-mix(in srgb, var(--console-accent) 18%, transparent);
+}
+
+.tenant-picker-empty {
+  font-size: 12px;
+  color: var(--console-muted);
+  padding: 6px 8px;
+}
+
+.tenant-picker-empty-inline {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--console-muted);
+}
+
 .tenant-switcher-box {
   display: inline-flex;
   align-items: center;
