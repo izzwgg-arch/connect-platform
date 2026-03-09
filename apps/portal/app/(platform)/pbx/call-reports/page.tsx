@@ -12,19 +12,29 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { loadCallReports } from "../../../../services/pbxData";
 
+type CallReportRow = {
+  id: string;
+  startedAt: string;
+  extension: string;
+  direction: string;
+  number: string;
+  disposition: string;
+  duration: string;
+};
+
 export default function PbxCallReportsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const state = useAsyncResource(() => loadCallReports({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }), [dateFrom, dateTo]);
 
-  const rows = useMemo(() => {
+  const rows = useMemo<CallReportRow[]>(() => {
     if (state.status !== "success") return [];
     const source = Array.isArray(state.data.report?.items)
       ? state.data.report.items
       : Array.isArray(state.data.report)
         ? state.data.report
         : [];
-    return source.map((row: any, idx: number) => ({
+    return source.map((row: any, idx: number): CallReportRow => ({
       id: String(row.id || row.callId || idx),
       startedAt: String(row.startedAt || row.createdAt || "-"),
       extension: String(row.extension || row.toExtension || "-"),
