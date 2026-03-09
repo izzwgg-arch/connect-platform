@@ -8121,6 +8121,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
 
   if (normalizedRows.length === 0 && scope === "GLOBAL") {
     const links = await db.tenantPbxLink.findMany({
+      where: { pbxInstance: { isEnabled: true } },
       include: { pbxInstance: true },
       take: 200
     });
@@ -8152,8 +8153,14 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       });
       for (const instance of enabledInstances) {
         try {
-          const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-          const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+          let client: VitalPbxClient;
+          try {
+            const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+            client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+          } catch {
+            // Fallback to env token/secret if instance credentials are unreadable.
+            client = getVitalPbxClient({ baseUrl: instance.baseUrl });
+          }
           const tenants = await client.listTenants().catch(() => []);
           const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
             ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean)
@@ -8172,7 +8179,16 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
             }
           }
           enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
-        } catch {
+        } catch (e: any) {
+          app.log.warn(
+            {
+              source: "enabledInstance",
+              instanceId: instance.id,
+              baseUrl: instance.baseUrl,
+              error: String(e?.code || e?.message || "UNKNOWN")
+            },
+            "dashboard_call_traffic_instance_fetch_error"
+          );
           // Continue best-effort over remaining enabled instances.
         }
       }
@@ -8222,6 +8238,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   // so the dashboard does not stay blank when system calls are active.
   if (scope === "TENANT" && isSuperAdmin && normalizedRows.length === 0) {
     const links = await db.tenantPbxLink.findMany({
+      where: { pbxInstance: { isEnabled: true } },
       include: { pbxInstance: true },
       take: 200
     });
