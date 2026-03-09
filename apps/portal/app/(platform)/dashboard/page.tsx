@@ -115,7 +115,7 @@ export default function DashboardPage() {
   }, []);
 
   const liveCallsState = useAsyncResource<DashboardCallTraffic>(
-    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=60`),
+    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
     [adminScope, liveTick]
   );
 

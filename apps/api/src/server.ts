@@ -8089,8 +8089,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   const scope = query.scope === "GLOBAL" && isSuperAdmin ? "GLOBAL" : "TENANT";
-  const windowMinutes = query.windowMinutes || 60;
-  const bucketMinutes = 5;
+  const windowMinutes = query.windowMinutes || 1440;
+  const bucketMinutes = windowMinutes >= 720 ? 30 : windowMinutes >= 180 ? 15 : 5;
   const bucketCount = Math.max(1, Math.ceil(windowMinutes / bucketMinutes));
   const nowMs = Date.now();
   const sinceMs = nowMs - windowMinutes * 60 * 1000;
