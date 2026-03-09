@@ -8091,12 +8091,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     for (const link of links) {
       try {
         const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-        const report = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).getCallReports({
+        const cdr = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).fetchCdrs({
           tenantId: link.pbxTenantId || undefined,
-          dateFrom: new Date(sinceMs).toISOString(),
-          dateTo: new Date(nowMs).toISOString()
+          lastSeenTimestamp: new Date(sinceMs).toISOString(),
+          limit: 1000
         });
-        const items = extractReportItems(report);
+        const items = Array.isArray(cdr?.records) ? cdr.records : extractReportItems(cdr);
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
           if (!ts || ts < sinceMs || ts > nowMs) continue;
@@ -8131,12 +8131,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     }
     try {
       const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-      const report = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).getCallReports({
+      const cdr = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).fetchCdrs({
         tenantId: link.pbxTenantId || undefined,
-        dateFrom: new Date(sinceMs).toISOString(),
-        dateTo: new Date(nowMs).toISOString()
+        lastSeenTimestamp: new Date(sinceMs).toISOString(),
+        limit: 1000
       });
-      const items = extractReportItems(report);
+      const items = Array.isArray(cdr?.records) ? cdr.records : extractReportItems(cdr);
       for (const row of items) {
         const ts = extractCallTimestampMs(row);
         if (!ts || ts < sinceMs || ts > nowMs) continue;
@@ -8175,7 +8175,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     windowMinutes,
     bucketMinutes,
     totals: {
-      made: outgoing + internal,
+      made: incoming + outgoing + internal,
       incoming,
       outgoing,
       internal,
