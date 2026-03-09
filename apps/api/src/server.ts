@@ -8099,6 +8099,9 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   if (cached && nowMs - cached.at < 15000) return cached.payload;
 
   const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
+  let dbSourceRows = 0;
+  let linkSourceRows = 0;
+  let enabledSourceRows = 0;
   const dbCallRows = await db.callRecord.findMany({
     where: scope === "GLOBAL" && isSuperAdmin
       ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
@@ -8114,6 +8117,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       direction: normalizeCallDirection({ direction: row.direction })
     });
   }
+  dbSourceRows = normalizedRows.length;
 
   if (normalizedRows.length === 0 && scope === "GLOBAL") {
     const links = await db.tenantPbxLink.findMany({
@@ -8134,6 +8138,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
           if (!ts || ts < sinceMs || ts > nowMs) continue;
           normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
         }
+        linkSourceRows = normalizedRows.length - dbSourceRows;
       } catch {
         // Keep aggregating remaining tenant links.
       }
@@ -8149,15 +8154,24 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
         try {
           const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
           const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-          const cdr = await client.callEndpoint<any>("cdr.list", {
-            query: { limit: 3000, sort_by: "date", sort_order: "desc" }
-          });
-          const items = extractReportItems(cdr?.data || cdr);
-          for (const row of items) {
-            const ts = extractCallTimestampMs(row);
-            if (!ts || ts < sinceMs || ts > nowMs) continue;
-            normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+          const tenants = await client.listTenants().catch(() => []);
+          const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
+            ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean)
+            : [undefined];
+
+          for (const tenantId of tenantCandidates) {
+            const cdr = await client.callEndpoint<any>("cdr.list", {
+              tenant: tenantId,
+              query: { limit: 3000, sort_by: "date", sort_order: "desc" }
+            });
+            const items = extractReportItems(cdr?.data || cdr);
+            for (const row of items) {
+              const ts = extractCallTimestampMs(row);
+              if (!ts || ts < sinceMs || ts > nowMs) continue;
+              normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+            }
           }
+          enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
         } catch {
           // Continue best-effort over remaining enabled instances.
         }
@@ -8273,6 +8287,9 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       scope,
       role: user.role,
       tenantId: user.tenantId,
+      dbSourceRows,
+      linkSourceRows,
+      enabledSourceRows,
       rowCount: normalizedRows.length,
       totals: payload.totals
     },
