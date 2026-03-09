@@ -380,6 +380,103 @@ p {
   width: 140px;
 }
 
+.dashboard-tabs-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dashboard-tab {
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--console-border);
+  color: var(--console-muted);
+  background: var(--console-panel);
+}
+
+.dashboard-tab.active {
+  color: var(--console-text);
+  border-color: color-mix(in srgb, var(--console-accent) 45%, var(--console-border));
+  background: color-mix(in srgb, var(--console-accent) 18%, transparent);
+}
+
+.dashboard-top-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dashboard-main-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.dashboard-side-stack {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.dashboard-side-card {
+  border: 1px solid var(--console-border);
+  border-radius: 10px;
+  background: var(--console-panel);
+  padding: 9px 10px;
+}
+
+.dashboard-side-title {
+  font-size: 11px;
+  color: var(--console-muted);
+  text-transform: uppercase;
+}
+
+.dashboard-side-value {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.traffic-bars {
+  display: grid;
+  gap: 6px;
+}
+
+.traffic-bar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 30px;
+  align-items: center;
+  gap: 8px;
+}
+
+.traffic-label {
+  font-size: 11px;
+  color: var(--console-muted);
+}
+
+.traffic-track {
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--console-border);
+  background: var(--console-panel-soft);
+  overflow: hidden;
+}
+
+.traffic-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--console-accent), #5ad36e);
+}
+
+.traffic-value {
+  text-align: right;
+  font-size: 11px;
+  color: var(--console-muted);
+}
+
 .scope-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -1174,6 +1271,15 @@ body {
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-top-tiles,
+  .dashboard-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-bar-row {
+    grid-template-columns: 86px 1fr 30px;
   }
 
   .chat-layout,

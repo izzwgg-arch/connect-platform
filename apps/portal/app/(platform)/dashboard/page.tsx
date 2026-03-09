@@ -1,5 +1,8 @@
  "use client";
 
+import Link from "next/link";
+import { useMemo } from "react";
+import { apiGet } from "../../../services/apiClient";
 import { DetailCard } from "../../../components/DetailCard";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
@@ -20,6 +23,16 @@ import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { getTenantTelephonyState } from "../../../services/asteriskService";
 import { loadDashboardData } from "../../../services/platformData";
 
+type PbxDashboardKpi = {
+  extensions: number | null;
+  trunks: number | null;
+  queues: number | null;
+  ivr: number | null;
+  conferences: number | null;
+  parkingLots: number | null;
+  activeCalls: number | null;
+};
+
 export default function DashboardPage() {
   const { adminScope } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
@@ -28,104 +41,207 @@ export default function DashboardPage() {
     () => (adminScope === "TENANT" ? getTenantTelephonyState("current") : Promise.resolve(null)),
     [adminScope]
   );
+  const pbxKpis = useAsyncResource<PbxDashboardKpi>(
+    async () => {
+      if (adminScope === "GLOBAL") {
+        return { activeCalls: null, extensions: null, trunks: null, queues: null, ivr: null, conferences: null, parkingLots: null };
+      }
+      const safeCount = async (resource: string): Promise<number | null> => {
+        try {
+          const res = await apiGet<{ rows?: unknown[] }>(`/voice/pbx/resources/${resource}`);
+          return Array.isArray(res?.rows) ? res.rows.length : 0;
+        } catch {
+          return null;
+        }
+      };
+      const [calls, extensions, trunks, queues, ivr, conferences, parkingLots] = await Promise.all([
+        apiGet<any>("/voice/pbx/call-reports").catch(() => null),
+        safeCount("extensions"),
+        safeCount("trunks"),
+        safeCount("queues"),
+        safeCount("ivr"),
+        safeCount("conferences"),
+        safeCount("parking-lots")
+      ]);
+      const reportRows = Array.isArray(calls?.report?.items) ? calls.report.items : Array.isArray(calls?.report) ? calls.report : [];
+      return {
+        activeCalls: reportRows.slice(0, 20).filter((row: any) => String(row?.disposition || "").toLowerCase() === "answered").length,
+        extensions,
+        trunks,
+        queues,
+        ivr,
+        conferences,
+        parkingLots
+      };
+    },
+    [adminScope]
+  );
 
   const data = state.status === "success" ? state.data : null;
   const metrics = data?.metrics || [];
   const activity = data?.activity || [];
   const scopeLabel = data?.scopeLabel || (adminScope as "GLOBAL" | "TENANT");
+  const metricMap = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const item of metrics) out.set(item.label, item.value);
+    return out;
+  }, [metrics]);
+  const topTiles = [
+    { label: "PJSIP Contacts", value: metricMap.get("Calls Today") || "--", meta: "Live call signals" },
+    { label: "SIP Devices", value: metricMap.get("Registered Extensions") || "--", meta: "Registered endpoints" },
+    { label: "IAX Devices", value: metricMap.get("Trunks Online") || "--", meta: "Online trunk paths" }
+  ];
+  const activityBars = useMemo(() => {
+    if (activity.length === 0) return [];
+    const grouped = new Map<string, number>();
+    for (const item of activity) {
+      grouped.set(item.type, (grouped.get(item.type) || 0) + 1);
+    }
+    const rows = Array.from(grouped.entries()).map(([type, count]) => ({ type, count }));
+    const max = rows.reduce((acc, row) => Math.max(acc, row.count), 1);
+    return rows.map((row) => ({ ...row, widthPct: Math.max(8, Math.round((row.count / max) * 100)) }));
+  }, [activity]);
+  const sideCards = [
+    { label: "Active Calls", value: pbxKpis.status === "success" ? pbxKpis.data.activeCalls : null },
+    { label: "Extensions", value: pbxKpis.status === "success" ? pbxKpis.data.extensions : null },
+    { label: "Trunks", value: pbxKpis.status === "success" ? pbxKpis.data.trunks : null },
+    { label: "Queues", value: pbxKpis.status === "success" ? pbxKpis.data.queues : null },
+    { label: "IVRs", value: pbxKpis.status === "success" ? pbxKpis.data.ivr : null },
+    { label: "Conferences", value: pbxKpis.status === "success" ? pbxKpis.data.conferences : null },
+    { label: "Parking Lots", value: pbxKpis.status === "success" ? pbxKpis.data.parkingLots : null }
+  ];
 
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
-      <div className="stack">
-      <PageHeader
-        title="Operations Dashboard"
-        subtitle={`Telecom-native command center for calls, messaging, users, and health (${scopeLabel.toLowerCase()} scope).`}
-        badges={<ScopeBadge scope={scopeLabel} />}
-        actions={<QRPairingModal />}
-      />
-      {state.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
-      {state.status === "error" ? <ErrorState message={`Live metrics unavailable: ${state.error}`} /> : null}
-      {isGlobal ? <GlobalScopeNotice /> : null}
+      <div className="stack compact-stack">
+        <PageHeader
+          title="Operations Dashboard"
+          subtitle={`Telecom-native command center for calls, messaging, users, and health (${scopeLabel.toLowerCase()} scope).`}
+          badges={<ScopeBadge scope={scopeLabel} />}
+          actions={<QRPairingModal />}
+        />
+        <div className="dashboard-tabs-row">
+          <Link href="/pbx/ring-groups" className="dashboard-tab">Ring Groups</Link>
+          <Link href="/pbx/ivr" className="dashboard-tab">IVR</Link>
+          <Link href="/dashboard" className="dashboard-tab active">Dashboard</Link>
+        </div>
+        {state.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
+        {state.status === "error" ? <ErrorState message={`Live metrics unavailable: ${state.error}`} /> : null}
+        {isGlobal ? <GlobalScopeNotice /> : null}
 
-      <section className="metric-grid">
-        {metrics.map((metric) => (
-          <MetricCard key={metric.label} label={metric.label} value={metric.value} meta={metric.delta} />
-        ))}
-      </section>
+        <section className="dashboard-top-tiles">
+          {topTiles.map((metric) => (
+            <MetricCard key={metric.label} label={metric.label} value={metric.value} meta={metric.meta} />
+          ))}
+        </section>
 
-      <section className="grid two">
-        <DetailCard title="Operator Status">
-          <div className="row-wrap">
-            <RegistrationBadge registered={true} />
-            <PresenceBadge presence="AVAILABLE" />
-            <LiveCallBadge active={false} />
-          </div>
-          <div className="row-actions">
-            <ScopedActionButton className="btn">DND Toggle</ScopedActionButton>
-            <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
-            <ScopedActionButton className="btn ghost">Call Forwarding</ScopedActionButton>
-          </div>
-        </DetailCard>
-        <DetailCard title="Quick Actions">
-          <div className="row-actions">
-            <ScopedActionButton className="btn ghost">Create Extension</ScopedActionButton>
-            <ScopedActionButton className="btn ghost">Create Campaign</ScopedActionButton>
-            <ScopedActionButton className="btn ghost" allowInGlobal>Create Invoice</ScopedActionButton>
-            <ScopedActionButton className="btn ghost">Add Customer</ScopedActionButton>
-          </div>
-        </DetailCard>
-      </section>
-
-      <DetailCard title="Asterisk Discovery-First State">
-        {adminScope === "GLOBAL" ? (
-          <div className="muted">Discovery checks are tenant-scoped. Switch to Tenant mode to inspect Asterisk object existence.</div>
-        ) : telephonyState.status === "loading" ? (
-          <div className="muted">Checking existing PBX objects...</div>
-        ) : telephonyState.status === "error" ? (
-          <div className="muted">Could not verify telephony state; using safe read-only mode.</div>
-        ) : (
-          <div className="row-wrap">
-            {telephonyState.data?.discovered.map((item) => (
-              <span key={item.kind} className={`chip ${item.exists ? "success" : "neutral"}`}>
-                {item.kind}: {item.exists ? "found" : "missing"}
-              </span>
-            ))}
-          </div>
-        )}
-      </DetailCard>
-
-      <DetailCard title="Recent Activity Feed">
-        {activity.length === 0 ? (
-          <EmptyState title="No activity yet" message="As events flow from billing, messaging, and PBX, activity appears here." />
-        ) : (
-          <ul className="list">
-            {activity.map((item, idx) => (
-              <li key={`${item.type}-${idx}`}>
-                <strong>{item.type}</strong>: {item.label}
-              </li>
-            ))}
-          </ul>
-        )}
-      </DetailCard>
-
-      <RoleGate allow={["TENANT_ADMIN", "SUPER_ADMIN"]}>
-        <section className="grid two">
-          <DetailCard title="Tenant Admin Signals">
-            <ul className="list">
-              <li>Tenant scoped metrics are shown from live dashboard APIs.</li>
-              <li>Use PBX section for call-routing and provisioning operations.</li>
-              <li>Use Billing section for invoice and payment lifecycle controls.</li>
-            </ul>
+        <section className="dashboard-main-grid">
+          <DetailCard title="Calls Traffic Today">
+            {activityBars.length === 0 ? (
+              <EmptyState title="No live call traffic yet" message="Traffic bars appear when dashboard activity events are available." />
+            ) : (
+              <div className="traffic-bars">
+                {activityBars.map((row) => (
+                  <div key={row.type} className="traffic-bar-row">
+                    <span className="traffic-label">{row.type}</span>
+                    <div className="traffic-track">
+                      <span className="traffic-fill" style={{ width: `${row.widthPct}%` }} />
+                    </div>
+                    <span className="traffic-value">{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="row-wrap">
+              <span className="chip info">SMS: {metricMap.get("SMS Activity") || "--"}</span>
+              <span className="chip warning">Overdue: {metricMap.get("Overdue Invoices") || "--"}</span>
+              <span className="chip success">WhatsApp: {metricMap.get("WhatsApp Inbound") || "--"}</span>
+            </div>
           </DetailCard>
-          <DetailCard title="Super Admin Snapshot">
-            <ul className="list">
-              <li>Switch to Global mode from tenant switcher to audit all tenants.</li>
-              <li>Use Admin section for PBX instances and tenant synchronization.</li>
-              <li>Use Reports for CDR and platform health analysis.</li>
-            </ul>
+
+          <div className="dashboard-side-stack">
+            {sideCards.map((item) => (
+              <article key={item.label} className="dashboard-side-card">
+                <div className="dashboard-side-title">{item.label}</div>
+                <div className="dashboard-side-value">{item.value === null ? "N/A" : String(item.value)}</div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid two">
+          <DetailCard title="Operator Status">
+            <div className="row-wrap">
+              <RegistrationBadge registered={true} />
+              <PresenceBadge presence="AVAILABLE" />
+              <LiveCallBadge active={false} />
+            </div>
+            <div className="row-actions">
+              <ScopedActionButton className="btn">DND Toggle</ScopedActionButton>
+              <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
+              <ScopedActionButton className="btn ghost">Call Forwarding</ScopedActionButton>
+            </div>
+          </DetailCard>
+          <DetailCard title="Quick Actions">
+            <div className="row-actions">
+              <ScopedActionButton className="btn ghost">Create Extension</ScopedActionButton>
+              <ScopedActionButton className="btn ghost">Create Campaign</ScopedActionButton>
+              <ScopedActionButton className="btn ghost" allowInGlobal>Create Invoice</ScopedActionButton>
+              <ScopedActionButton className="btn ghost">Add Customer</ScopedActionButton>
+            </div>
           </DetailCard>
         </section>
-      </RoleGate>
+
+        <DetailCard title="Asterisk Discovery-First State">
+          {adminScope === "GLOBAL" ? (
+            <div className="muted">Discovery checks are tenant-scoped. Switch to Tenant mode to inspect Asterisk object existence.</div>
+          ) : telephonyState.status === "loading" ? (
+            <div className="muted">Checking existing PBX objects...</div>
+          ) : telephonyState.status === "error" ? (
+            <div className="muted">Could not verify telephony state; using safe read-only mode.</div>
+          ) : (
+            <div className="row-wrap">
+              {telephonyState.data?.discovered.map((item) => (
+                <span key={item.kind} className={`chip ${item.exists ? "success" : "neutral"}`}>
+                  {item.kind}: {item.exists ? "found" : "missing"}
+                </span>
+              ))}
+            </div>
+          )}
+        </DetailCard>
+
+        <DetailCard title="Recent Activity Feed">
+          {activity.length === 0 ? (
+            <EmptyState title="No activity yet" message="As events flow from billing, messaging, and PBX, activity appears here." />
+          ) : (
+            <ul className="list">
+              {activity.map((item, idx) => (
+                <li key={`${item.type}-${idx}`}>
+                  <strong>{item.type}</strong>: {item.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailCard>
+
+        <RoleGate allow={["TENANT_ADMIN", "SUPER_ADMIN"]}>
+          <section className="grid two">
+            <DetailCard title="Tenant Admin Signals">
+              <ul className="list">
+                <li>Tenant scoped metrics are shown from live dashboard APIs.</li>
+                <li>Use PBX section for call-routing and provisioning operations.</li>
+                <li>Use Billing section for invoice and payment lifecycle controls.</li>
+              </ul>
+            </DetailCard>
+            <DetailCard title="Super Admin Snapshot">
+              <ul className="list">
+                <li>Switch to Global mode from tenant switcher to audit all tenants.</li>
+                <li>Use Admin section for PBX instances and tenant synchronization.</li>
+                <li>Use Reports for CDR and platform health analysis.</li>
+              </ul>
+            </DetailCard>
+          </section>
+        </RoleGate>
       </div>
     </PermissionGate>
   );
