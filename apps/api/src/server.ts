@@ -8138,6 +8138,31 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
         // Keep aggregating remaining tenant links.
       }
     }
+    // If tenant links are stale/missing, fall back to enabled PBX instances directly.
+    if (normalizedRows.length === 0) {
+      const enabledInstances = await db.pbxInstance.findMany({
+        where: { isEnabled: true },
+        orderBy: { updatedAt: "desc" },
+        take: 10
+      });
+      for (const instance of enabledInstances) {
+        try {
+          const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+          const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+          const cdr = await client.callEndpoint<any>("cdr.list", {
+            query: { limit: 3000, sort_by: "date", sort_order: "desc" }
+          });
+          const items = extractReportItems(cdr?.data || cdr);
+          for (const row of items) {
+            const ts = extractCallTimestampMs(row);
+            if (!ts || ts < sinceMs || ts > nowMs) continue;
+            normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+          }
+        } catch {
+          // Continue best-effort over remaining enabled instances.
+        }
+      }
+    }
   } else if (normalizedRows.length === 0) {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
     if (!link) {
