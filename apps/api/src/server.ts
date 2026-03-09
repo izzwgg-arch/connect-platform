@@ -8099,8 +8099,23 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   if (cached && nowMs - cached.at < 15000) return cached.payload;
 
   const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
+  const dbCallRows = await db.callRecord.findMany({
+    where: scope === "GLOBAL" && isSuperAdmin
+      ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
+      : { tenantId: user.tenantId, startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } },
+    orderBy: { startedAt: "desc" },
+    take: 5000
+  });
+  for (const row of dbCallRows) {
+    const ts = row.startedAt.getTime();
+    if (!Number.isFinite(ts)) continue;
+    normalizedRows.push({
+      ts,
+      direction: normalizeCallDirection({ direction: row.direction })
+    });
+  }
 
-  if (scope === "GLOBAL") {
+  if (normalizedRows.length === 0 && scope === "GLOBAL") {
     const links = await db.tenantPbxLink.findMany({
       include: { pbxInstance: true },
       take: 200
@@ -8123,7 +8138,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
         // Keep aggregating remaining tenant links.
       }
     }
-  } else {
+  } else if (normalizedRows.length === 0) {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
     if (!link) {
       const emptyPoints = Array.from({ length: bucketCount }).map((_, idx) => {
