@@ -8060,7 +8060,20 @@ function extractCallTimestampMs(input: any): number | null {
     const parsed = Number(raw.trim());
     if (Number.isFinite(parsed)) return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
   }
-  const ts = new Date(String(raw)).getTime();
+  const text = String(raw).trim();
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (slashMatch) {
+    const [, dd, mm, yyyy, hh, min, ss] = slashMatch;
+    const ts = Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss || "0"));
+    return Number.isFinite(ts) ? ts : null;
+  }
+  const dashMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (dashMatch) {
+    const [, yyyy, mm, dd, hh, min, ss] = dashMatch;
+    const ts = Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss || "0"));
+    return Number.isFinite(ts) ? ts : null;
+  }
+  const ts = new Date(text).getTime();
   return Number.isFinite(ts) ? ts : null;
 }
 
@@ -8102,6 +8115,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   let dbSourceRows = 0;
   let linkSourceRows = 0;
   let enabledSourceRows = 0;
+  let rawRowsSeen = 0;
+  let parsedRowsSeen = 0;
   const cdrQueryWindow = {
     start_date: Math.floor(sinceMs / 1000),
     end_date: Math.floor(nowMs / 1000),
@@ -8141,10 +8156,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
           query: cdrQueryWindow
         });
         const items = extractReportItems(cdr?.data || cdr);
+        rawRowsSeen += items.length;
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
           if (!ts || ts < sinceMs || ts > nowMs) continue;
           normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+          parsedRowsSeen += 1;
         }
         linkSourceRows = normalizedRows.length - dbSourceRows;
       } catch {
@@ -8187,10 +8204,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
               }
             }
           }
+          rawRowsSeen += items.length;
           for (const row of items) {
             const ts = extractCallTimestampMs(row);
             if (!ts || ts < sinceMs || ts > nowMs) continue;
             normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+            parsedRowsSeen += 1;
           }
           enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
         } catch (e: any) {
@@ -8239,10 +8258,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
         query: { limit: 2000, sort_by: "date", sort_order: "desc" }
       });
       const items = extractReportItems(cdr?.data || cdr);
+      rawRowsSeen += items.length;
       for (const row of items) {
         const ts = extractCallTimestampMs(row);
         if (!ts || ts < sinceMs || ts > nowMs) continue;
         normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+        parsedRowsSeen += 1;
       }
     } catch {
       // Return empty aggregate if PBX is temporarily unreachable.
@@ -8266,10 +8287,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
           query: { limit: 2000, sort_by: "date", sort_order: "desc" }
         });
         const items = extractReportItems(cdr?.data || cdr);
+        rawRowsSeen += items.length;
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
           if (!ts || ts < sinceMs || ts > nowMs) continue;
           normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+          parsedRowsSeen += 1;
         }
       } catch {
         // Continue best-effort aggregation.
@@ -8322,6 +8345,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       dbSourceRows,
       linkSourceRows,
       enabledSourceRows,
+      rawRowsSeen,
+      parsedRowsSeen,
       rowCount: normalizedRows.length,
       totals: payload.totals
     },
