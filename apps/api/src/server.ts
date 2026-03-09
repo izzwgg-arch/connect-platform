@@ -8030,6 +8030,164 @@ app.get("/customers/:id/summary", async (req, reply) => {
   };
 });
 
+const DASHBOARD_CALL_TRAFFIC_CACHE = new Map<string, { at: number; payload: any }>();
+
+function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal" {
+  const raw = String(
+    input?.direction
+      || input?.callDirection
+      || input?.call_type
+      || input?.type
+      || input?.dir
+      || ""
+  ).toLowerCase();
+  if (raw.includes("internal")) return "internal";
+  if (raw.includes("in")) return "incoming";
+  if (raw.includes("out")) return "outgoing";
+  return "outgoing";
+}
+
+function extractCallTimestampMs(input: any): number | null {
+  const raw = input?.startedAt || input?.start || input?.calldate || input?.createdAt || input?.date || input?.timestamp;
+  if (!raw) return null;
+  const ts = new Date(String(raw)).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function extractReportItems(report: any): any[] {
+  if (Array.isArray(report)) return report;
+  if (Array.isArray(report?.items)) return report.items;
+  if (Array.isArray(report?.data)) return report.data;
+  if (Array.isArray(report?.report?.items)) return report.report.items;
+  return [];
+}
+
+app.get("/dashboard/call-traffic", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const query = z.object({
+    scope: z.enum(["GLOBAL", "TENANT"]).optional(),
+    windowMinutes: z.coerce.number().int().min(15).max(1440).optional()
+  }).parse(req.query || {});
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const scope = query.scope === "GLOBAL" && isSuperAdmin ? "GLOBAL" : "TENANT";
+  const windowMinutes = query.windowMinutes || 60;
+  const bucketMinutes = 5;
+  const bucketCount = Math.max(1, Math.ceil(windowMinutes / bucketMinutes));
+  const nowMs = Date.now();
+  const sinceMs = nowMs - windowMinutes * 60 * 1000;
+  const cacheKey = `${scope}:${scope === "TENANT" ? user.tenantId : "all"}:${windowMinutes}`;
+  const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
+  if (cached && nowMs - cached.at < 15000) return cached.payload;
+
+  const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
+
+  if (scope === "GLOBAL") {
+    const links = await db.tenantPbxLink.findMany({
+      include: { pbxInstance: true },
+      take: 200
+    });
+    for (const link of links) {
+      try {
+        const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+        const report = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).getCallReports({
+          tenantId: link.pbxTenantId || undefined,
+          dateFrom: new Date(sinceMs).toISOString(),
+          dateTo: new Date(nowMs).toISOString()
+        });
+        const items = extractReportItems(report);
+        for (const row of items) {
+          const ts = extractCallTimestampMs(row);
+          if (!ts || ts < sinceMs || ts > nowMs) continue;
+          normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+        }
+      } catch {
+        // Keep aggregating remaining tenant links.
+      }
+    }
+  } else {
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+    if (!link) {
+      const emptyPoints = Array.from({ length: bucketCount }).map((_, idx) => {
+        const bucketTs = new Date(sinceMs + idx * bucketMinutes * 60 * 1000);
+        return {
+          label: `${String(bucketTs.getHours()).padStart(2, "0")}:${String(bucketTs.getMinutes()).padStart(2, "0")}`,
+          incoming: 0,
+          outgoing: 0,
+          internal: 0
+        };
+      });
+      const payload = {
+        scope,
+        windowMinutes,
+        bucketMinutes,
+        totals: { made: 0, incoming: 0, outgoing: 0, internal: 0, activeNow: 0 },
+        points: emptyPoints,
+        updatedAt: new Date(nowMs).toISOString()
+      };
+      DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs, payload });
+      return payload;
+    }
+    try {
+      const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+      const report = await getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).getCallReports({
+        tenantId: link.pbxTenantId || undefined,
+        dateFrom: new Date(sinceMs).toISOString(),
+        dateTo: new Date(nowMs).toISOString()
+      });
+      const items = extractReportItems(report);
+      for (const row of items) {
+        const ts = extractCallTimestampMs(row);
+        if (!ts || ts < sinceMs || ts > nowMs) continue;
+        normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
+      }
+    } catch {
+      // Return empty aggregate if PBX is temporarily unreachable.
+    }
+  }
+
+  const points = Array.from({ length: bucketCount }).map((_, idx) => {
+    const bucketTs = new Date(sinceMs + idx * bucketMinutes * 60 * 1000);
+    return {
+      label: `${String(bucketTs.getHours()).padStart(2, "0")}:${String(bucketTs.getMinutes()).padStart(2, "0")}`,
+      incoming: 0,
+      outgoing: 0,
+      internal: 0
+    };
+  });
+
+  let incoming = 0;
+  let outgoing = 0;
+  let internal = 0;
+  for (const row of normalizedRows) {
+    if (row.direction === "incoming") incoming += 1;
+    if (row.direction === "outgoing") outgoing += 1;
+    if (row.direction === "internal") internal += 1;
+    const bucketIndex = Math.floor((row.ts - sinceMs) / (bucketMinutes * 60 * 1000));
+    if (bucketIndex >= 0 && bucketIndex < points.length) {
+      points[bucketIndex][row.direction] += 1;
+    }
+  }
+
+  const payload = {
+    scope,
+    windowMinutes,
+    bucketMinutes,
+    totals: {
+      made: outgoing + internal,
+      incoming,
+      outgoing,
+      internal,
+      activeNow: normalizedRows.filter((row) => row.ts >= nowMs - 5 * 60 * 1000).length
+    },
+    points,
+    updatedAt: new Date(nowMs).toISOString()
+  };
+  DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs, payload });
+  return payload;
+});
+
 app.get("/dashboard/summary", async (req, reply) => {
   const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;

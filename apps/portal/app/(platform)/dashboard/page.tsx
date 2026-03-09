@@ -33,9 +33,20 @@ type PbxDashboardKpi = {
   activeCalls: number | null;
 };
 
-type NormalizedCall = {
-  startedAt: Date;
-  direction: "incoming" | "outgoing" | "internal";
+type DashboardCallTraffic = {
+  totals: {
+    made: number;
+    incoming: number;
+    outgoing: number;
+    internal: number;
+    activeNow: number;
+  };
+  points: Array<{
+    label: string;
+    incoming: number;
+    outgoing: number;
+    internal: number;
+  }>;
 };
 
 export default function DashboardPage() {
@@ -103,83 +114,26 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const liveCallsState = useAsyncResource<{ rows: NormalizedCall[]; activeNow: number }>(
-    async () => {
-      const parseDirection = (row: any): "incoming" | "outgoing" | "internal" => {
-        const raw = String(row?.direction || row?.callDirection || row?.type || "").toLowerCase();
-        if (raw.includes("in")) return "incoming";
-        if (raw.includes("out")) return "outgoing";
-        if (raw.includes("internal")) return "internal";
-        return "outgoing";
-      };
-
-      if (adminScope === "GLOBAL") {
-        const instances = await apiGet<any[]>("/admin/pbx/instances").catch(() => []);
-        const enabled = (Array.isArray(instances) ? instances : []).filter((i) => i?.isEnabled).map((i) => String(i.id));
-        const pick = enabled.length > 0 ? enabled.slice(0, 3) : (Array.isArray(instances) ? instances.slice(0, 1).map((i) => String(i.id)) : []);
-        const allRows: NormalizedCall[] = [];
-        for (const instanceId of pick) {
-          const res = await apiGet<{ rows?: any[] }>(`/admin/pbx/resources/cdr?instanceId=${encodeURIComponent(instanceId)}`).catch(() => null);
-          const rows = Array.isArray(res?.rows) ? res.rows : [];
-          for (const row of rows.slice(0, 300)) {
-            const tsRaw = row?.startedAt || row?.createdAt || row?.date || row?.timestamp;
-            const ts = tsRaw ? new Date(String(tsRaw)) : new Date();
-            if (!Number.isFinite(ts.getTime())) continue;
-            allRows.push({ startedAt: ts, direction: parseDirection(row) });
-          }
-        }
-        const cutoff = Date.now() - 5 * 60 * 1000;
-        const activeNow = allRows.filter((row) => row.startedAt.getTime() >= cutoff).length;
-        return { rows: allRows, activeNow };
-      }
-
-      const liveRows = await apiGet<any[]>("/voice/calls").catch(() => []);
-      const report = await apiGet<any>("/voice/pbx/call-reports").catch(() => null);
-      const normalized: NormalizedCall[] = [];
-      if (Array.isArray(liveRows) && liveRows.length > 0) {
-        for (const row of liveRows) {
-          normalized.push({ startedAt: new Date(), direction: parseDirection(row) });
-        }
-        return { rows: normalized, activeNow: liveRows.length };
-      }
-
-      const reportRows = Array.isArray(report?.report?.items) ? report.report.items : Array.isArray(report?.report) ? report.report : [];
-      for (const row of reportRows.slice(0, 300)) {
-        const tsRaw = row?.startedAt || row?.createdAt || row?.date || row?.timestamp;
-        const ts = tsRaw ? new Date(String(tsRaw)) : new Date();
-        if (!Number.isFinite(ts.getTime())) continue;
-        normalized.push({ startedAt: ts, direction: parseDirection(row) });
-      }
-      const cutoff = Date.now() - 5 * 60 * 1000;
-      const activeNow = normalized.filter((row) => row.startedAt.getTime() >= cutoff).length;
-      return { rows: normalized, activeNow };
-    },
+  const liveCallsState = useAsyncResource<DashboardCallTraffic>(
+    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=60`),
     [adminScope, liveTick]
   );
 
   const liveTraffic = useMemo(() => {
-    const rows = liveCallsState.status === "success" ? liveCallsState.data.rows : [];
-    const now = new Date();
-    const buckets: Array<{ label: string; incoming: number; outgoing: number; internal: number }> = [];
-    for (let i = 11; i >= 0; i -= 1) {
-      const bucketTs = new Date(now.getTime() - i * 5 * 60 * 1000);
-      const label = `${String(bucketTs.getHours()).padStart(2, "0")}:${String(bucketTs.getMinutes()).padStart(2, "0")}`;
-      buckets.push({ label, incoming: 0, outgoing: 0, internal: 0 });
-    }
-    for (const row of rows) {
-      const diff = now.getTime() - row.startedAt.getTime();
-      if (diff < 0 || diff > 60 * 60 * 1000) continue;
-      const idxFromEnd = Math.floor(diff / (5 * 60 * 1000));
-      const idx = buckets.length - 1 - idxFromEnd;
-      if (idx < 0 || idx >= buckets.length) continue;
-      buckets[idx][row.direction] += 1;
-    }
-    const incoming = rows.filter((row) => row.direction === "incoming").length;
-    const outgoing = rows.filter((row) => row.direction === "outgoing").length;
-    const internal = rows.filter((row) => row.direction === "internal").length;
-    const made = outgoing + internal;
-    const peak = Math.max(1, ...buckets.map((b) => Math.max(b.incoming, b.outgoing, b.internal)));
-    return { buckets, incoming, outgoing, internal, made, peak, activeNow: liveCallsState.status === "success" ? liveCallsState.data.activeNow : 0 };
+    const points = liveCallsState.status === "success" ? liveCallsState.data.points : [];
+    const totals = liveCallsState.status === "success"
+      ? liveCallsState.data.totals
+      : { made: 0, incoming: 0, outgoing: 0, internal: 0, activeNow: 0 };
+    const peak = Math.max(1, ...points.map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
+    return {
+      buckets: points,
+      incoming: totals.incoming,
+      outgoing: totals.outgoing,
+      internal: totals.internal,
+      made: totals.made,
+      peak,
+      activeNow: totals.activeNow
+    };
   }, [liveCallsState]);
   const sideCards = [
     { label: "Active Calls", value: liveCallsState.status === "success" ? liveTraffic.activeNow : pbxKpis.status === "success" ? pbxKpis.data.activeCalls : null },
