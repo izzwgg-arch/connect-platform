@@ -8120,7 +8120,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   const sinceMs = nowMs - windowMinutes * 60 * 1000;
   const cacheKey = `${scope}:${scope === "TENANT" ? user.tenantId : "all"}:${windowMinutes}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
-  if (cached && nowMs - cached.at < 15000) return cached.payload;
+  if (cached && nowMs - cached.at < 120_000) return cached.payload;
 
   const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
   let dbSourceRows = 0;
@@ -8153,20 +8153,19 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   dbSourceRows = normalizedRows.length;
 
   if (normalizedRows.length === 0 && scope === "GLOBAL") {
-    const links = await db.tenantPbxLink.findMany({
-      where: { pbxInstance: { isEnabled: true } },
-      include: { pbxInstance: true },
-      take: 200
+    // Query each unique PBX *instance* once — NOT each tenant.
+    // All 147 tenants share the same CDR feed so one call per instance is enough.
+    const enabledInstances = await db.pbxInstance.findMany({
+      where: { isEnabled: true },
+      orderBy: { updatedAt: "desc" },
+      take: 10
     });
-    for (const link of links) {
+    for (const instance of enabledInstances) {
       try {
-        const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-        const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
-        const cdr = await client.callEndpoint<any>("cdr.list", {
-          tenant: link.pbxTenantId || undefined,
-          query: cdrQueryWindow
-        });
-        const items = extractReportItems(cdr?.data || cdr);
+        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+        const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+        const direct = await client.callEndpoint<any>("cdr.list", { query: cdrQueryWindow }).catch(() => null);
+        const items = extractReportItems(direct?.data || direct);
         rawRowsSeen += items.length;
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
@@ -8174,68 +8173,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
           normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
           parsedRowsSeen += 1;
         }
-        linkSourceRows = normalizedRows.length - dbSourceRows;
-      } catch {
-        // Keep aggregating remaining tenant links.
-      }
-    }
-    // If tenant links are stale/missing, fall back to enabled PBX instances directly.
-    if (normalizedRows.length === 0) {
-      const enabledInstances = await db.pbxInstance.findMany({
-        where: { isEnabled: true },
-        orderBy: { updatedAt: "desc" },
-        take: 10
-      });
-      for (const instance of enabledInstances) {
-        try {
-          let client: VitalPbxClient;
-          try {
-            const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-            client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-          } catch {
-            // Fallback to env token/secret if instance credentials are unreadable.
-            client = getVitalPbxClient({ baseUrl: instance.baseUrl });
-          }
-          // Try direct instance CDR query first (faster and avoids tenant fan-out timeouts).
-          const direct = await client.callEndpoint<any>("cdr.list", { query: cdrQueryWindow }).catch(() => null);
-          let items = extractReportItems(direct?.data || direct);
-          if (items.length === 0) {
-            const tenants = await client.listTenants().catch(() => []);
-            const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
-              ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean).slice(0, 10)
-              : [];
-            for (const tenantId of tenantCandidates) {
-              const cdr = await client.callEndpoint<any>("cdr.list", {
-                tenant: tenantId,
-                query: cdrQueryWindow
-              }).catch(() => null);
-              const scopedItems = extractReportItems(cdr?.data || cdr);
-              if (scopedItems.length > 0) {
-                items = items.concat(scopedItems);
-              }
-            }
-          }
-          rawRowsSeen += items.length;
-          for (const row of items) {
-            const ts = extractCallTimestampMs(row);
-            if (!ts || ts < sinceMs || ts > nowMs) continue;
-            normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
-            parsedRowsSeen += 1;
-          }
-          enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
-        } catch (e: any) {
-          app.log.warn(
-            {
-              source: "enabledInstance",
-              instanceId: instance.id,
-              baseUrl: instance.baseUrl,
-              error: String(e?.code || e?.message || "UNKNOWN"),
-              cause: String(e?.details?.cause || e?.cause?.message || "")
-            },
-            "dashboard_call_traffic_instance_fetch_error"
-          );
-          // Continue best-effort over remaining enabled instances.
-        }
+        enabledSourceRows = normalizedRows.length - dbSourceRows;
+      } catch (e: any) {
+        app.log.warn(
+          { source: "enabledInstance", instanceId: instance.id, error: String(e?.message || "UNKNOWN") },
+          "dashboard_call_traffic_instance_fetch_error"
+        );
       }
     }
   } else if (normalizedRows.length === 0) {
@@ -9697,48 +9640,42 @@ async function getAdminPbxLiveCombined(): Promise<{
   if (inflight) return inflight;
 
   const promise = (async () => {
+    // Deduplicate by PBX instance — all tenants sharing a PBX instance use the same CDR feed.
+    // Make ONE CDR+ARI call per unique PBX instance, not per tenant.
     const links = await db.tenantPbxLink.findMany({
       where: { status: "LINKED", pbxInstance: { isEnabled: true } },
       include: { pbxInstance: true },
       take: 200
     });
 
-    let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
-    let totalAnswered = 0, totalMissed = 0, totalActive = 0;
-    type TenantSummaryEntry = { tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string };
-    const tenantSummaries: TenantSummaryEntry[] = [];
-    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
-
-    // Process tenants in batches of 3 to avoid hammering VitalPBX CDR with parallel requests.
-    // With 147 tenants and concurrency=3, this serializes the load into ~49 sequential micro-batches.
-    const CONCURRENCY = 3;
-    for (let i = 0; i < links.length; i += CONCURRENCY) {
-      await Promise.all(links.slice(i, i + CONCURRENCY).map(async (link) => {
-        try {
-          const s = await getPbxLiveCombined(link, link.tenantId);
-          totalCallsToday += s.callsToday;
-          totalIncoming   += s.incomingToday;
-          totalOutgoing   += s.outgoingToday;
-          totalInternal   += s.internalToday;
-          totalAnswered   += s.answeredToday;
-          totalMissed     += s.missedToday;
-          totalActive     += s.activeCalls;
-          allActiveCalls.push(...s.activeCallsList);
-          tenantSummaries.push({
-            tenantId: link.tenantId,
-            callsToday: s.callsToday,
-            incomingToday: s.incomingToday,
-            outgoingToday: s.outgoingToday,
-            internalToday: s.internalToday,
-            activeCalls: s.activeCalls,
-            activeCallsSource: s.activeCallsSource
-          });
-        } catch {
-          // best-effort per tenant
-        }
-      }));
+    const instanceMap = new Map<string, typeof links[0]>();
+    for (const link of links) {
+      if (!instanceMap.has(link.pbxInstance.id)) {
+        instanceMap.set(link.pbxInstance.id, link);
+      }
     }
 
+    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
+    let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
+    let totalAnswered = 0, totalMissed = 0, totalActive = 0;
+
+    for (const [, link] of instanceMap) {
+      try {
+        const s = await fetchPbxLiveSummaryForLink(link, link.tenantId);
+        totalCallsToday += s.callsToday;
+        totalIncoming   += s.incomingToday;
+        totalOutgoing   += s.outgoingToday;
+        totalInternal   += s.internalToday;
+        totalAnswered   += s.answeredToday;
+        totalMissed     += s.missedToday;
+        totalActive     += s.activeCalls;
+        allActiveCalls.push(...s.activeCallsList);
+      } catch {
+        // best-effort per instance
+      }
+    }
+
+    const tenantCount = links.length;
     const result = {
       totalCallsToday,
       incomingToday: totalIncoming,
@@ -9747,8 +9684,8 @@ async function getAdminPbxLiveCombined(): Promise<{
       answeredToday: totalAnswered,
       missedToday: totalMissed,
       totalActiveCalls: totalActive,
-      activeTenantsCount: tenantSummaries.filter((t) => t.callsToday > 0).length,
-      topTenants: [...tenantSummaries].sort((a, b) => b.callsToday - a.callsToday).slice(0, 10),
+      activeTenantsCount: tenantCount,
+      topTenants: [] as Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }>,
       allActiveCalls,
       lastUpdatedAt: new Date().toISOString()
     };
