@@ -9537,8 +9537,8 @@ automationRuleTimer.unref();
 
 const PBX_LIVE_CACHE = new Map<string, { at: number; payload: any }>();
 const PBX_LIVE_INFLIGHT = new Map<string, Promise<any>>();
-const PBX_LIVE_TTL_COMBINED = 10_000;   // 10 s  per-tenant combined fetch
-const PBX_LIVE_TTL_ADMIN    = 30_000;   // 30 s  admin all-tenant aggregation
+const PBX_LIVE_TTL_COMBINED  = 120_000;  // 2 min  per-tenant combined fetch (CDR is expensive)
+const PBX_LIVE_TTL_ADMIN     = 300_000;  // 5 min  admin all-tenant aggregation
 const PBX_LIVE_TTL_RESOURCES = 120_000; // 120 s extension/trunk/queue lists
 
 function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
@@ -9709,31 +9709,35 @@ async function getAdminPbxLiveCombined(): Promise<{
     const tenantSummaries: TenantSummaryEntry[] = [];
     const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
 
-    await Promise.all(links.map(async (link) => {
-      try {
-        // Reuse per-tenant cache — no duplicate CDR/ARI fetch if tenant was recently polled.
-        const s = await getPbxLiveCombined(link, link.tenantId);
-        totalCallsToday += s.callsToday;
-        totalIncoming   += s.incomingToday;
-        totalOutgoing   += s.outgoingToday;
-        totalInternal   += s.internalToday;
-        totalAnswered   += s.answeredToday;
-        totalMissed     += s.missedToday;
-        totalActive     += s.activeCalls;
-        allActiveCalls.push(...s.activeCallsList);
-        tenantSummaries.push({
-          tenantId: link.tenantId,
-          callsToday: s.callsToday,
-          incomingToday: s.incomingToday,
-          outgoingToday: s.outgoingToday,
-          internalToday: s.internalToday,
-          activeCalls: s.activeCalls,
-          activeCallsSource: s.activeCallsSource
-        });
-      } catch {
-        // best-effort
-      }
-    }));
+    // Process tenants in batches of 3 to avoid hammering VitalPBX CDR with parallel requests.
+    // With 147 tenants and concurrency=3, this serializes the load into ~49 sequential micro-batches.
+    const CONCURRENCY = 3;
+    for (let i = 0; i < links.length; i += CONCURRENCY) {
+      await Promise.all(links.slice(i, i + CONCURRENCY).map(async (link) => {
+        try {
+          const s = await getPbxLiveCombined(link, link.tenantId);
+          totalCallsToday += s.callsToday;
+          totalIncoming   += s.incomingToday;
+          totalOutgoing   += s.outgoingToday;
+          totalInternal   += s.internalToday;
+          totalAnswered   += s.answeredToday;
+          totalMissed     += s.missedToday;
+          totalActive     += s.activeCalls;
+          allActiveCalls.push(...s.activeCallsList);
+          tenantSummaries.push({
+            tenantId: link.tenantId,
+            callsToday: s.callsToday,
+            incomingToday: s.incomingToday,
+            outgoingToday: s.outgoingToday,
+            internalToday: s.internalToday,
+            activeCalls: s.activeCalls,
+            activeCallsSource: s.activeCallsSource
+          });
+        } catch {
+          // best-effort per tenant
+        }
+      }));
+    }
 
     const result = {
       totalCallsToday,

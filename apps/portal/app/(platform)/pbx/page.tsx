@@ -25,7 +25,7 @@ export default function PbxOverviewPage() {
   // Single combined tick — one HTTP call per interval, server-cached 10 s.
   const [combinedTick, setCombinedTick] = useState(0);
   useEffect(() => {
-    const timer = window.setInterval(() => setCombinedTick((v) => v + 1), 10_000);
+    const timer = window.setInterval(() => setCombinedTick((v) => v + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -62,7 +62,7 @@ export default function PbxOverviewPage() {
       <div className="stack compact-stack">
         <PageHeader
           title="PBX Operations"
-          subtitle="Live call activity, today's metrics, and registered endpoint status. Updates every 10 seconds."
+          subtitle="Live call activity, today's metrics, and registered endpoint status. Refreshes every 60 seconds."
         />
 
         {combinedState.status === "loading" ? <LoadingSkeleton rows={1} /> : null}

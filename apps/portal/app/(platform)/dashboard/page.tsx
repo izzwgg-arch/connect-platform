@@ -40,20 +40,25 @@ export default function DashboardPage() {
   const { adminScope } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
 
-  // Staggered ticks — avoid one big spike on every interval.
-  // combinedTick  10 s : PBX live data (CDR + ARI) — one combined HTTP call
-  // trafficTick   60 s : CDR traffic chart (already 15 s server cache, but UI needs less often)
-  // resourcesTick 120 s: extension/trunk/queue counts (rarely change)
+  // Staggered ticks — scope-aware cadence to protect VitalPBX CDR from overload.
+  // GLOBAL (admin) scope aggregates 100+ tenants — poll far less frequently.
+  // TENANT scope fetches one CDR query — can afford slightly more frequent refresh.
+  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : PBX live data
+  // trafficTick   300 s (GLOBAL) / 120 s (TENANT) : CDR traffic chart
+  // resourcesTick 300 s : extension/trunk/queue counts (rarely change)
   const [combinedTick, setCombinedTick]   = useState(0);
   const [trafficTick,  setTrafficTick]    = useState(0);
   const [resourcesTick, setResourcesTick] = useState(0);
 
   useEffect(() => {
-    const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  10_000);
-    const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  60_000);
-    const t3 = window.setInterval(() => setResourcesTick((v) => v + 1), 120_000);
+    const combinedMs  = isGlobal ? 120_000 : 60_000;
+    const trafficMs   = isGlobal ? 300_000 : 120_000;
+    const resourcesMs = 300_000;
+    const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  combinedMs);
+    const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  trafficMs);
+    const t3 = window.setInterval(() => setResourcesTick((v) => v + 1), resourcesMs);
     return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
-  }, []);
+  }, [isGlobal]);
 
   // Platform billing/activity — fetched once per scope change, no tick.
   const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
@@ -127,7 +132,7 @@ export default function DashboardPage() {
       <div className="stack compact-stack">
         <PageHeader
           title="Operations Dashboard"
-          subtitle={`Live PBX call metrics and platform health (${scopeLabel.toLowerCase()} scope). Live data refreshes every 10 seconds.`}
+          subtitle={`Live PBX call metrics and platform health (${scopeLabel.toLowerCase()} scope). Refreshes every ${isGlobal ? "2 min" : "60 s"}.`}
           badges={<ScopeBadge scope={scopeLabel} />}
           actions={<QRPairingModal />}
         />
