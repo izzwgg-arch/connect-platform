@@ -19,7 +19,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
       id: String(row.id || ""),
       name: String(row.name || "Tenant"),
       plan: "Business" as const,
-      status: row.isApproved === false ? "SUSPENDED" : "ACTIVE"
+      status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED"
     })).filter((t) => t.id);
   } catch {
     return [];
