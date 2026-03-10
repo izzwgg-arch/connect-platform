@@ -9859,14 +9859,6 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
 
 // ─── Admin endpoints ──────────────────────────────────────────────────────────
 
-function requireSuperAdmin(user: any, reply: any): boolean {
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") {
-    reply.status(403).send({ error: "forbidden" });
-    return false;
-  }
-  return true;
-}
-
 // GET /admin/pbx/live/combined — single request for admin dashboard (preferred)
 app.get("/admin/pbx/live/combined", async (req, reply) => {
   const user = await requireSuperAdmin(req, reply);
