@@ -1,5 +1,4 @@
 import { apiGet } from "./apiClient";
-import { dashboardMetrics, mockUsers } from "./mockData";
 import type { AdminScope } from "../types/app";
 
 type Metric = { label: string; value: string; delta?: string };
@@ -58,46 +57,23 @@ export async function loadDashboardData(scope: AdminScope): Promise<DashboardDat
     }
   }
 
+  // PBX live data (callsToday, activeCalls, etc.) is fetched directly by the
+  // dashboard page via /pbx/live/combined — NOT duplicated here.
+  // loadDashboardData only fetches billing summary + activity feed.
   try {
-    const [summary, activity, callsReport, extensionRows, trunkRows] = await Promise.all([
-      apiGet<any>("/dashboard/summary?range=24h"),
-      apiGet<any>("/dashboard/activity?range=24h"),
-      apiGet<any>("/voice/pbx/call-reports"),
-      apiGet<any>("/voice/pbx/resources/extensions"),
-      apiGet<any>("/voice/pbx/resources/trunks")
+    const [summary, activity] = await Promise.all([
+      apiGet<any>("/dashboard/summary?range=24h").catch(() => null),
+      apiGet<any>("/dashboard/activity?range=24h").catch(() => null)
     ]);
-
-    const reportItems = Array.isArray(callsReport?.report?.items)
-      ? callsReport.report.items
-      : Array.isArray(callsReport?.items)
-        ? callsReport.items
-        : [];
-    const answeredCount = reportItems.filter((item: any) => String(item?.disposition || "").toLowerCase() === "answered").length;
-    const missedCount = reportItems.filter((item: any) => String(item?.disposition || "").toLowerCase().includes("miss")).length;
-    const callsToday = reportItems.length;
-    const extensions = Array.isArray(extensionRows?.rows) ? extensionRows.rows : [];
-    const registeredExtensions = extensions.filter((row: any) => {
-      const value = String(row?.status || row?.registration || row?.registered || "").toLowerCase();
-      return value.includes("reg") || value.includes("online") || value === "true";
-    }).length;
-    const trunks = Array.isArray(trunkRows?.rows) ? trunkRows.rows : [];
-    const onlineTrunks = trunks.filter((row: any) => {
-      const value = String(row?.status || row?.state || row?.registration || "").toLowerCase();
-      return value.includes("online") || value.includes("up") || value.includes("ok");
-    }).length;
-
-    const metrics: Metric[] = [
-      { label: "Calls Today", value: String(callsToday), delta: `${answeredCount} answered / ${missedCount} missed` },
-      { label: "Registered Extensions", value: String(registeredExtensions), delta: `${extensions.length} total extensions` },
-      { label: "Trunks Online", value: String(onlineTrunks), delta: `${trunks.length} total trunks` },
-      { label: "Overdue Invoices", value: String(summary?.invoiceSummary?.overdueCount ?? 0), delta: "Billing attention" },
-      { label: "SMS Activity", value: String(summary?.messagingSummary?.smsCampaignsSentInRange ?? 0), delta: "Campaigns sent 24h" },
-      { label: "WhatsApp Inbound", value: String(summary?.whatsappSummary?.inboundCount ?? 0), delta: "Needs follow-up queue" }
-    ];
 
     return {
       scopeLabel: "TENANT",
-      metrics,
+      metrics: [
+        { label: "Overdue Invoices", value: String(summary?.invoiceSummary?.overdueCount ?? "--"), delta: "Billing attention" },
+        { label: "Unpaid Invoices", value: String(summary?.invoiceSummary?.unpaidCount ?? "--"), delta: "Pending payment" },
+        { label: "SMS Campaigns", value: String(summary?.messagingSummary?.smsCampaignsSentInRange ?? "--"), delta: "Sent in 24h" },
+        { label: "WhatsApp Inbound", value: String(summary?.whatsappSummary?.inboundCount ?? "--"), delta: "Needs follow-up" }
+      ],
       activity: Array.isArray(activity?.items)
         ? activity.items.slice(0, 8).map((it: any) => ({
             type: String(it.type || "EVENT"),
@@ -109,11 +85,8 @@ export async function loadDashboardData(scope: AdminScope): Promise<DashboardDat
   } catch {
     return {
       scopeLabel: "TENANT",
-      metrics: dashboardMetrics,
-      activity: [
-        { type: "SMS_CAMPAIGN_SENT", label: "Fallback mode: campaign metrics unavailable from API." },
-        { type: "PBX_HEALTH", label: "Using local mock dashboard data due to API auth or connectivity." }
-      ]
+      metrics: [],
+      activity: []
     };
   }
 }
@@ -168,20 +141,7 @@ export async function loadTeamMembers(scope: AdminScope): Promise<{ rows: TeamMe
       voicemail: true
     })), scopeLabel: "TENANT" };
   } catch {
-    return {
-      scopeLabel: "TENANT",
-      rows: mockUsers.map((u, idx) => ({
-        id: u.id,
-        name: u.name,
-        extension: u.extension,
-        email: u.email,
-        role: u.role,
-        presence: u.presence,
-        registered: idx !== 2,
-        forwarding: idx === 1,
-        voicemail: true
-      }))
-    };
+    return { scopeLabel: "TENANT", rows: [] };
   }
 }
 
@@ -312,24 +272,45 @@ export async function loadReportsData(scope: AdminScope): Promise<ReportsData> {
     }
   }
   try {
-    const summary = await apiGet<any>("/dashboard/summary?range=7d");
+    const [pbxLive, callReport] = await Promise.all([
+      apiGet<{ callsToday: number; answeredToday: number; missedToday: number; incomingToday: number; outgoingToday: number; internalToday: number }>("/pbx/live/summary").catch(() => null),
+      apiGet<any>("/voice/pbx/call-reports").catch(() => null)
+    ]);
+    const callsToday = pbxLive?.callsToday ?? 0;
+    const answered = pbxLive?.answeredToday ?? 0;
+    const missed = pbxLive?.missedToday ?? 0;
+    const answerRate = callsToday > 0 ? Math.round((answered / callsToday) * 100) : null;
+    const reportRows = Array.isArray(callReport?.report?.items)
+      ? callReport.report.items
+      : Array.isArray(callReport?.report) ? callReport.report : [];
+    const avgDuration = reportRows.length > 0
+      ? Math.round(reportRows.reduce((acc: number, r: any) => acc + Number(r?.duration || r?.billsec || 0), 0) / reportRows.length)
+      : null;
     return {
       scopeLabel: "TENANT",
       metrics: [
-        { label: "Answer Rate", value: `${Math.max(0, 90 - Number(summary?.invoiceSummary?.overdueCount || 0))}%`, delta: "7d range" },
-        { label: "Queue SLA", value: "82%", delta: "Target 85%" },
-        { label: "SMS Delivery", value: `${Math.max(70, 100 - Number(summary?.emailSummary?.failedCount || 0))}%`, delta: "24h" },
-        { label: "Voicemail Callback", value: "61%", delta: "30d" }
+        { label: "Calls Today", value: String(callsToday), delta: "CDR — completed calls" },
+        { label: "Answered", value: String(answered), delta: "Answered today" },
+        { label: "Missed", value: String(missed), delta: "No answer / busy" },
+        { label: "Answer Rate", value: answerRate !== null ? `${answerRate}%` : "--", delta: "Today" },
+        { label: "Incoming", value: String(pbxLive?.incomingToday ?? 0), delta: "Inbound today" },
+        { label: "Outgoing", value: String(pbxLive?.outgoingToday ?? 0), delta: "Outbound today" },
+        { label: "Internal", value: String(pbxLive?.internalToday ?? 0), delta: "Extension-to-extension" },
+        { label: "Avg Duration", value: avgDuration !== null ? `${avgDuration}s` : "--", delta: "Completed calls" }
       ]
     };
   } catch {
     return {
       scopeLabel: "TENANT",
       metrics: [
-        { label: "Answer Rate", value: "89%", delta: "7d range" },
-        { label: "Queue SLA", value: "82%", delta: "Target 85%" },
-        { label: "SMS Delivery", value: "97%", delta: "24h" },
-        { label: "Voicemail Callback", value: "61%", delta: "30d" }
+        { label: "Calls Today", value: "--", delta: "PBX data unavailable" },
+        { label: "Answered", value: "--", delta: "PBX data unavailable" },
+        { label: "Missed", value: "--", delta: "PBX data unavailable" },
+        { label: "Answer Rate", value: "--", delta: "PBX data unavailable" },
+        { label: "Incoming", value: "--", delta: "PBX data unavailable" },
+        { label: "Outgoing", value: "--", delta: "PBX data unavailable" },
+        { label: "Internal", value: "--", delta: "PBX data unavailable" },
+        { label: "Avg Duration", value: "--", delta: "PBX data unavailable" }
       ]
     };
   }

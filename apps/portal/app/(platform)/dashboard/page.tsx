@@ -1,148 +1,125 @@
- "use client";
+"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiGet } from "../../../services/apiClient";
 import { DetailCard } from "../../../components/DetailCard";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
 import { GlobalScopeNotice } from "../../../components/GlobalScopeNotice";
-import { LiveCallBadge } from "../../../components/LiveCallBadge";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../components/MetricCard";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
-import { PresenceBadge } from "../../../components/PresenceBadge";
 import { QRPairingModal } from "../../../components/QRPairingModal";
-import { RegistrationBadge } from "../../../components/RegistrationBadge";
 import { RoleGate } from "../../../components/RoleGate";
 import { ScopedActionButton } from "../../../components/ScopedActionButton";
 import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import { getTenantTelephonyState } from "../../../services/asteriskService";
+import {
+  loadPbxLiveCombined,
+  loadAdminPbxLiveCombined,
+  formatDurationSec,
+  directionLabel,
+  directionClass,
+  type PbxLiveSummary,
+  type AdminPbxLiveSummary,
+  type PbxActiveCallsResponse,
+  type PbxLiveCombined,
+  type AdminPbxLiveCombined
+} from "../../../services/pbxLive";
 import { loadDashboardData } from "../../../services/platformData";
 
-type PbxDashboardKpi = {
-  extensions: number | null;
-  trunks: number | null;
-  queues: number | null;
-  ivr: number | null;
-  conferences: number | null;
-  parkingLots: number | null;
-  activeCalls: number | null;
-};
-
 type DashboardCallTraffic = {
-  totals: {
-    made: number;
-    incoming: number;
-    outgoing: number;
-    internal: number;
-    activeNow: number;
-  };
-  points: Array<{
-    label: string;
-    incoming: number;
-    outgoing: number;
-    internal: number;
-  }>;
+  totals: { made: number; incoming: number; outgoing: number; internal: number };
+  points: Array<{ label: string; incoming: number; outgoing: number; internal: number }>;
 };
 
 export default function DashboardPage() {
   const { adminScope } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
+
+  // Staggered ticks — avoid one big spike on every interval.
+  // combinedTick  10 s : PBX live data (CDR + ARI) — one combined HTTP call
+  // trafficTick   60 s : CDR traffic chart (already 15 s server cache, but UI needs less often)
+  // resourcesTick 120 s: extension/trunk/queue counts (rarely change)
+  const [combinedTick, setCombinedTick]   = useState(0);
+  const [trafficTick,  setTrafficTick]    = useState(0);
+  const [resourcesTick, setResourcesTick] = useState(0);
+
+  useEffect(() => {
+    const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  10_000);
+    const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  60_000);
+    const t3 = window.setInterval(() => setResourcesTick((v) => v + 1), 120_000);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
+  }, []);
+
+  // Platform billing/activity — fetched once per scope change, no tick.
   const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
-  const telephonyState = useAsyncResource(
-    () => (adminScope === "TENANT" ? getTenantTelephonyState("current") : Promise.resolve(null)),
-    [adminScope]
+
+  // ONE combined PBX call returns both summary + active calls.
+  const pbxCombinedState = useAsyncResource<PbxLiveCombined | AdminPbxLiveCombined>(
+    () => isGlobal ? loadAdminPbxLiveCombined() : loadPbxLiveCombined(),
+    [adminScope, combinedTick]
   );
-  const pbxKpis = useAsyncResource<PbxDashboardKpi>(
+
+  // Call traffic chart — slower cadence, already server-cached.
+  const trafficState = useAsyncResource<DashboardCallTraffic>(
+    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
+    [adminScope, trafficTick]
+  );
+
+  // Resource counts — slowest cadence; server-cached 120 s anyway.
+  const pbxCountsState = useAsyncResource(
     async () => {
-      if (adminScope === "GLOBAL") {
-        return { activeCalls: null, extensions: null, trunks: null, queues: null, ivr: null, conferences: null, parkingLots: null };
-      }
-      const safeCount = async (resource: string): Promise<number | null> => {
+      if (isGlobal) return null;
+      const safeCount = async (resource: string) => {
         try {
           const res = await apiGet<{ rows?: unknown[] }>(`/voice/pbx/resources/${resource}`);
           return Array.isArray(res?.rows) ? res.rows.length : 0;
-        } catch {
-          return null;
-        }
+        } catch { return null; }
       };
-      const [calls, extensions, trunks, queues, ivr, conferences, parkingLots] = await Promise.all([
-        apiGet<any>("/voice/pbx/call-reports").catch(() => null),
+      const [extensions, trunks, queues] = await Promise.all([
         safeCount("extensions"),
         safeCount("trunks"),
-        safeCount("queues"),
-        safeCount("ivr"),
-        safeCount("conferences"),
-        safeCount("parking-lots")
+        safeCount("queues")
       ]);
-      const reportRows = Array.isArray(calls?.report?.items) ? calls.report.items : Array.isArray(calls?.report) ? calls.report : [];
-      return {
-        activeCalls: reportRows.slice(0, 20).filter((row: any) => String(row?.disposition || "").toLowerCase() === "answered").length,
-        extensions,
-        trunks,
-        queues,
-        ivr,
-        conferences,
-        parkingLots
-      };
+      return { extensions, trunks, queues };
     },
-    [adminScope]
+    [adminScope, resourcesTick]
   );
 
-  const data = state.status === "success" ? state.data : null;
-  const metrics = data?.metrics || [];
-  const activity = data?.activity || [];
-  const scopeLabel = data?.scopeLabel || (adminScope as "GLOBAL" | "TENANT");
-  const metricMap = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const item of metrics) out.set(item.label, item.value);
-    return out;
-  }, [metrics]);
-  const topTiles = [
-    { label: "PJSIP Contacts", value: metricMap.get("Calls Today") || "--", meta: "Live call signals" },
-    { label: "SIP Devices", value: metricMap.get("Registered Extensions") || "--", meta: "Registered endpoints" },
-    { label: "IAX Devices", value: metricMap.get("Trunks Online") || "--", meta: "Online trunk paths" }
-  ];
-  const [liveTick, setLiveTick] = useState(0);
+  const data        = state.status === "success" ? state.data : null;
+  const activity    = data?.activity || [];
+  const scopeLabel  = data?.scopeLabel || (adminScope as "GLOBAL" | "TENANT");
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setLiveTick((v) => v + 1), 15000);
-    return () => window.clearInterval(timer);
-  }, []);
+  const combined   = pbxCombinedState.status === "success" ? pbxCombinedState.data : null;
+  const pbxLive    = combined?.summary ?? null;
+  const activeCalls = combined?.activeCalls ?? null;
+  const traffic    = trafficState.status === "success" ? trafficState.data : null;
+  const pbxCounts  = pbxCountsState.status === "success" ? pbxCountsState.data : null;
 
-  const liveCallsState = useAsyncResource<DashboardCallTraffic>(
-    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
-    [adminScope, liveTick]
-  );
+  const isAdminSummary = (s: PbxLiveSummary | AdminPbxLiveSummary | null): s is AdminPbxLiveSummary =>
+    s !== null && "totalCallsToday" in s;
 
-  const liveTraffic = useMemo(() => {
-    const points = liveCallsState.status === "success" ? liveCallsState.data.points : [];
-    const totals = liveCallsState.status === "success"
-      ? liveCallsState.data.totals
-      : { made: 0, incoming: 0, outgoing: 0, internal: 0, activeNow: 0 };
-    const peak = Math.max(1, ...points.map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
-    return {
-      buckets: points,
-      incoming: totals.incoming,
-      outgoing: totals.outgoing,
-      internal: totals.internal,
-      made: totals.made,
-      peak,
-      activeNow: totals.activeNow
-    };
-  }, [liveCallsState]);
-  const sideCards = [
-    { label: "Active Calls", value: liveCallsState.status === "success" ? liveTraffic.activeNow : pbxKpis.status === "success" ? pbxKpis.data.activeCalls : null },
-    { label: "Extensions", value: pbxKpis.status === "success" ? pbxKpis.data.extensions : null },
-    { label: "Trunks", value: pbxKpis.status === "success" ? pbxKpis.data.trunks : null },
-    { label: "Queues", value: pbxKpis.status === "success" ? pbxKpis.data.queues : null },
-    { label: "IVRs", value: pbxKpis.status === "success" ? pbxKpis.data.ivr : null },
-    { label: "Conferences", value: pbxKpis.status === "success" ? pbxKpis.data.conferences : null },
-    { label: "Parking Lots", value: pbxKpis.status === "success" ? pbxKpis.data.parkingLots : null }
+  const callsToday = isAdminSummary(pbxLive) ? pbxLive.totalCallsToday : pbxLive?.callsToday ?? null;
+  const incomingToday = isAdminSummary(pbxLive) ? pbxLive.incomingToday : pbxLive?.incomingToday ?? null;
+  const outgoingToday = isAdminSummary(pbxLive) ? pbxLive.outgoingToday : pbxLive?.outgoingToday ?? null;
+  const internalToday = isAdminSummary(pbxLive) ? pbxLive.internalToday : pbxLive?.internalToday ?? null;
+  const answeredToday = isAdminSummary(pbxLive) ? pbxLive.answeredToday : pbxLive?.answeredToday ?? null;
+  const activeCallCount = isAdminSummary(pbxLive) ? pbxLive.totalActiveCalls : pbxLive?.activeCalls ?? null;
+  const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
+
+  const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
+
+  const kpiTiles = [
+    { label: "Calls Today", value: callsToday !== null ? String(callsToday) : "--", meta: answeredToday !== null ? `${answeredToday} answered` : "CDR data" },
+    { label: "Incoming", value: incomingToday !== null ? String(incomingToday) : "--", meta: "Inbound today" },
+    { label: "Outgoing", value: outgoingToday !== null ? String(outgoingToday) : "--", meta: "Outbound today" },
+    { label: "Internal", value: internalToday !== null ? String(internalToday) : "--", meta: "Extension-to-extension" },
+    { label: "Active Calls", value: activeCallCount !== null ? String(activeCallCount) : "--", meta: activeCallsSource === "ari" ? "Live via ARI" : "ARI not configured" },
+    ...(isGlobal && isAdminSummary(pbxLive) ? [{ label: "Active Tenants", value: String(pbxLive.activeTenantsCount), meta: "With calls today" }] : [])
   ];
 
   return (
@@ -150,39 +127,37 @@ export default function DashboardPage() {
       <div className="stack compact-stack">
         <PageHeader
           title="Operations Dashboard"
-          subtitle={`Telecom-native command center for calls, messaging, users, and health (${scopeLabel.toLowerCase()} scope).`}
+          subtitle={`Live PBX call metrics and platform health (${scopeLabel.toLowerCase()} scope). Live data refreshes every 10 seconds.`}
           badges={<ScopeBadge scope={scopeLabel} />}
           actions={<QRPairingModal />}
         />
-        <div className="dashboard-tabs-row">
-          <Link href="/pbx/ring-groups" className="dashboard-tab">Ring Groups</Link>
-          <Link href="/pbx/ivr" className="dashboard-tab">IVR</Link>
-          <Link href="/dashboard" className="dashboard-tab active">Dashboard</Link>
-        </div>
-        {state.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
-        {state.status === "error" ? <ErrorState message={`Live metrics unavailable: ${state.error}`} /> : null}
+
         {isGlobal ? <GlobalScopeNotice /> : null}
+        {pbxCombinedState.status === "loading" ? <LoadingSkeleton rows={1} /> : null}
+        {pbxCombinedState.status === "error" ? (
+          <ErrorState message="PBX live metrics unavailable — check PBX link configuration." />
+        ) : null}
 
         <section className="dashboard-top-tiles">
-          {topTiles.map((metric) => (
-            <MetricCard key={metric.label} label={metric.label} value={metric.value} meta={metric.meta} />
+          {kpiTiles.map((tile) => (
+            <MetricCard key={tile.label} label={tile.label} value={tile.value} meta={tile.meta} />
           ))}
         </section>
 
         <section className="dashboard-main-grid">
-          <DetailCard title="Calls Traffic Today">
-            {liveCallsState.status === "error" ? (
-              <ErrorState message={liveCallsState.error} />
-            ) : liveTraffic.buckets.length === 0 ? (
-              <EmptyState title="No live call traffic yet" message="Waiting for live call records from PBX." />
+          <DetailCard title="Call Traffic Today (24h)">
+            {trafficState.status === "error" ? (
+              <ErrorState message="Call traffic data unavailable." />
+            ) : !traffic || traffic.points.length === 0 ? (
+              <EmptyState title="No call traffic yet today" message="As calls complete, they appear here from the PBX CDR." />
             ) : (
               <div className="live-traffic-graph">
-                {liveTraffic.buckets.map((bucket) => (
+                {traffic.points.map((bucket) => (
                   <div key={bucket.label} className="live-traffic-col">
                     <div className="live-traffic-bars">
-                      <span className="live-bar incoming" style={{ height: `${Math.max(2, (bucket.incoming / liveTraffic.peak) * 68)}px` }} />
-                      <span className="live-bar outgoing" style={{ height: `${Math.max(2, (bucket.outgoing / liveTraffic.peak) * 68)}px` }} />
-                      <span className="live-bar internal" style={{ height: `${Math.max(2, (bucket.internal / liveTraffic.peak) * 68)}px` }} />
+                      <span className="live-bar incoming" style={{ height: `${Math.max(2, (bucket.incoming / peak) * 68)}px` }} title={`Incoming: ${bucket.incoming}`} />
+                      <span className="live-bar outgoing" style={{ height: `${Math.max(2, (bucket.outgoing / peak) * 68)}px` }} title={`Outgoing: ${bucket.outgoing}`} />
+                      <span className="live-bar internal" style={{ height: `${Math.max(2, (bucket.internal / peak) * 68)}px` }} title={`Internal: ${bucket.internal}`} />
                     </div>
                     <span className="live-traffic-time">{bucket.label}</span>
                   </div>
@@ -190,68 +165,95 @@ export default function DashboardPage() {
               </div>
             )}
             <div className="row-wrap">
-              <span className="chip info">Made: {liveTraffic.made}</span>
-              <span className="chip success">Incoming: {liveTraffic.incoming}</span>
-              <span className="chip warning">Outgoing: {liveTraffic.outgoing}</span>
-              <span className="chip">Internal: {liveTraffic.internal}</span>
-              <span className="chip info">Updated: {liveCallsState.status === "success" ? "Live (15s)" : "--"}</span>
+              <span className="chip success">Incoming: {traffic?.totals?.incoming ?? "--"}</span>
+              <span className="chip warning">Outgoing: {traffic?.totals?.outgoing ?? "--"}</span>
+              <span className="chip info">Internal: {traffic?.totals?.internal ?? "--"}</span>
+              <span className="chip neutral">Updated: {trafficState.status === "success" ? "Live (15s)" : "--"}</span>
             </div>
           </DetailCard>
 
           <div className="dashboard-side-stack">
-            {sideCards.map((item) => (
+            {[
+              { label: "Extensions", value: pbxCounts?.extensions ?? null },
+              { label: "Trunks", value: pbxCounts?.trunks ?? null },
+              { label: "Queues", value: pbxCounts?.queues ?? null }
+            ].map((item) => (
               <article key={item.label} className="dashboard-side-card">
                 <div className="dashboard-side-title">{item.label}</div>
-                <div className="dashboard-side-value">{item.value === null ? "N/A" : String(item.value)}</div>
+                <div className="dashboard-side-value">{item.value === null ? "--" : String(item.value)}</div>
               </article>
             ))}
           </div>
         </section>
 
-        <section className="grid two">
-          <DetailCard title="Operator Status">
-            <div className="row-wrap">
-              <RegistrationBadge registered={true} />
-              <PresenceBadge presence="AVAILABLE" />
-              <LiveCallBadge active={false} />
-            </div>
-            <div className="row-actions">
-              <ScopedActionButton className="btn">DND Toggle</ScopedActionButton>
-              <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
-              <ScopedActionButton className="btn ghost">Call Forwarding</ScopedActionButton>
-            </div>
-          </DetailCard>
-          <DetailCard title="Quick Actions">
-            <div className="row-actions">
-              <ScopedActionButton className="btn ghost">Create Extension</ScopedActionButton>
-              <ScopedActionButton className="btn ghost">Create Campaign</ScopedActionButton>
-              <ScopedActionButton className="btn ghost" allowInGlobal>Create Invoice</ScopedActionButton>
-              <ScopedActionButton className="btn ghost">Add Customer</ScopedActionButton>
-            </div>
-          </DetailCard>
-        </section>
-
-        <DetailCard title="Asterisk Discovery-First State">
-          {adminScope === "GLOBAL" ? (
-            <div className="muted">Discovery checks are tenant-scoped. Switch to Tenant mode to inspect Asterisk object existence.</div>
-          ) : telephonyState.status === "loading" ? (
-            <div className="muted">Checking existing PBX objects...</div>
-          ) : telephonyState.status === "error" ? (
-            <div className="muted">Could not verify telephony state; using safe read-only mode.</div>
+        <DetailCard title={`Active Calls Now${activeCallCount !== null ? ` (${activeCallCount})` : ""}`}>
+          {pbxCombinedState.status === "loading" ? (
+            <LoadingSkeleton rows={1} />
+          ) : activeCalls?.calls && activeCalls.calls.length > 0 ? (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Direction</th>
+                  <th>Caller</th>
+                  <th>Callee</th>
+                  <th>Duration</th>
+                  <th>State</th>
+                  {isGlobal ? <th>Tenant</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {activeCalls.calls.map((call) => (
+                  <tr key={call.channelId}>
+                    <td><span className={`chip ${directionClass(call.direction)}`}>{directionLabel(call.direction)}</span></td>
+                    <td className="mono">{call.caller || "—"}</td>
+                    <td className="mono">{call.callee || "—"}</td>
+                    <td className="mono">{formatDurationSec(call.durationSeconds)}</td>
+                    <td><span className="chip info">{call.state}</span></td>
+                    {isGlobal ? <td className="muted">{call.tenantId || "—"}</td> : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : activeCalls?.source === "unavailable" ? (
+            <EmptyState
+              title="Active calls not available"
+              message="Real-time active calls require Asterisk ARI. Set PBX_ARI_USER and PBX_ARI_PASS to enable. CDR metrics above are always real."
+            />
           ) : (
-            <div className="row-wrap">
-              {telephonyState.data?.discovered.map((item) => (
-                <span key={item.kind} className={`chip ${item.exists ? "success" : "neutral"}`}>
-                  {item.kind}: {item.exists ? "found" : "missing"}
-                </span>
-              ))}
-            </div>
+            <EmptyState title="No active calls right now" message="All channels are idle." />
           )}
         </DetailCard>
 
-        <DetailCard title="Recent Activity Feed">
+        {isGlobal && isAdminSummary(pbxLive) && pbxLive.topTenants.length > 0 ? (
+          <DetailCard title="Top Tenants by Call Volume Today">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Tenant ID</th>
+                  <th>Calls Today</th>
+                  <th>Incoming</th>
+                  <th>Outgoing</th>
+                  <th>Active Now</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pbxLive.topTenants.map((t) => (
+                  <tr key={t.tenantId}>
+                    <td className="mono">{t.tenantId}</td>
+                    <td>{t.callsToday}</td>
+                    <td>{t.incomingToday}</td>
+                    <td>{t.outgoingToday}</td>
+                    <td>{t.activeCalls}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DetailCard>
+        ) : null}
+
+        <DetailCard title="Recent Activity">
           {activity.length === 0 ? (
-            <EmptyState title="No activity yet" message="As events flow from billing, messaging, and PBX, activity appears here." />
+            <EmptyState title="No activity yet" message="Platform events from billing, messaging, and PBX appear here." />
           ) : (
             <ul className="list">
               {activity.map((item, idx) => (
@@ -265,19 +267,21 @@ export default function DashboardPage() {
 
         <RoleGate allow={["TENANT_ADMIN", "SUPER_ADMIN"]}>
           <section className="grid two">
-            <DetailCard title="Tenant Admin Signals">
-              <ul className="list">
-                <li>Tenant scoped metrics are shown from live dashboard APIs.</li>
-                <li>Use PBX section for call-routing and provisioning operations.</li>
-                <li>Use Billing section for invoice and payment lifecycle controls.</li>
-              </ul>
+            <DetailCard title="Quick Actions">
+              <div className="row-actions">
+                <ScopedActionButton className="btn ghost">Create Extension</ScopedActionButton>
+                <ScopedActionButton className="btn ghost">Create Campaign</ScopedActionButton>
+                <ScopedActionButton className="btn ghost" allowInGlobal>Create Invoice</ScopedActionButton>
+                <ScopedActionButton className="btn ghost">Add Customer</ScopedActionButton>
+              </div>
             </DetailCard>
-            <DetailCard title="Super Admin Snapshot">
-              <ul className="list">
-                <li>Switch to Global mode from tenant switcher to audit all tenants.</li>
-                <li>Use Admin section for PBX instances and tenant synchronization.</li>
-                <li>Use Reports for CDR and platform health analysis.</li>
-              </ul>
+            <DetailCard title="PBX Navigation">
+              <div className="row-actions">
+                <Link className="btn ghost" href="/pbx">PBX Overview</Link>
+                <Link className="btn ghost" href="/pbx/extensions">Extensions</Link>
+                <Link className="btn ghost" href="/pbx/call-reports">Call Reports</Link>
+                <Link className="btn ghost" href="/reports">Reports</Link>
+              </div>
             </DetailCard>
           </section>
         </RoleGate>

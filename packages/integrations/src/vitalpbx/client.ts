@@ -468,6 +468,130 @@ export class VitalPbxClient {
     return { ok: true };
   }
 
+  // ---- Live / real-time helpers ----
+
+  /**
+   * Returns CDR rows for today (midnight UTC to now) with direction classification.
+   * VitalPBX /api/v2/cdr only contains completed calls (written on hangup).
+   * calltype: 1=internal, 2=incoming, 3=outgoing.
+   */
+  async getCdrToday(tenantId?: string): Promise<{
+    rows: any[];
+    incoming: number;
+    outgoing: number;
+    internal: number;
+    answered: number;
+    missed: number;
+    total: number;
+  }> {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const query: Record<string, string | number | boolean> = {
+      limit: 1000,
+      sort_by: "date",
+      sort_order: "asc",
+      start_date: todayStart.toISOString()
+    };
+    let rows: any[] = [];
+    try {
+      const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
+      const data = unwrapData<any>(envelope);
+      const raw = Array.isArray(data?.items) ? data.items
+        : Array.isArray(data?.rows) ? data.rows
+        : Array.isArray(data) ? data
+        : [];
+      const seen = new Map<string, any>();
+      for (const r of raw) {
+        const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
+        seen.set(id, r);
+      }
+      rows = [...seen.values()];
+    } catch {
+      rows = [];
+    }
+    let incoming = 0, outgoing = 0, internal = 0, answered = 0, missed = 0;
+    for (const r of rows) {
+      const ct = Number(r?.calltype ?? r?.callType ?? 0);
+      if (ct === 2) incoming++;
+      else if (ct === 3) outgoing++;
+      else if (ct === 1) internal++;
+      else {
+        const dir = String(r?.direction || r?.call_type || "").toLowerCase();
+        if (dir.includes("in")) incoming++;
+        else if (dir.includes("internal")) internal++;
+        else outgoing++;
+      }
+      if (String(r?.disposition || "").toUpperCase() === "ANSWERED") answered++;
+      else missed++;
+    }
+    return { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
+  }
+
+  /**
+   * Attempts to fetch active channels from Asterisk ARI.
+   * VitalPBX REST API v2 does not expose active calls; ARI is the proper interface.
+   * Returns null if ARI is not configured or unreachable.
+   */
+  async getAriChannels(ariUser?: string, ariPassword?: string): Promise<any[] | null> {
+    if (!ariUser || !ariPassword) return null;
+    const baseUrl = String(this.cfg.baseUrl || "").replace(/\/$/, "");
+    const url = `${baseUrl}/ari/channels`;
+    const credentials = Buffer.from(`${ariUser}:${ariPassword}`).toString("base64");
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          authorization: `Basic ${credentials}`,
+          accept: "application/json"
+        },
+        signal: timeoutSignal(Math.min(this.cfg.timeoutMs, 5000))
+      });
+      if (!res.ok) return null;
+      const payload = await res.json().catch(() => null);
+      return Array.isArray(payload) ? payload : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch SIP peer registration counts from Asterisk ARI /ari/endpoints.
+   * Returns { registered, unregistered, total } or null if ARI is not configured.
+   * "registered" endpoints have state "online" or "registered" in the ARI response.
+   */
+  async getAriEndpointCounts(ariUser?: string, ariPassword?: string): Promise<{ registered: number; unregistered: number; total: number } | null> {
+    if (!ariUser || !ariPassword) return null;
+    const baseUrl = String(this.cfg.baseUrl || "").replace(/\/$/, "");
+    const url = `${baseUrl}/ari/endpoints`;
+    const credentials = Buffer.from(`${ariUser}:${ariPassword}`).toString("base64");
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          authorization: `Basic ${credentials}`,
+          accept: "application/json"
+        },
+        signal: timeoutSignal(Math.min(this.cfg.timeoutMs, 5000))
+      });
+      if (!res.ok) return null;
+      const payload = await res.json().catch(() => null);
+      if (!Array.isArray(payload)) return null;
+      let registered = 0;
+      let unregistered = 0;
+      for (const ep of payload) {
+        const state = String(ep.state || ep.status || "").toLowerCase();
+        if (state === "online" || state === "registered") {
+          registered++;
+        } else {
+          unregistered++;
+        }
+      }
+      return { registered, unregistered, total: payload.length };
+    } catch {
+      return null;
+    }
+  }
+
   async listAiApiKeys(tenantId?: string): Promise<any[]> {
     const out = await this.callEndpoint<any[]>("aiApiKeys.list", { tenant: tenantId });
     return Array.isArray(out.data) ? out.data : [];

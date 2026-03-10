@@ -6752,16 +6752,27 @@ app.delete("/admin/pbx/resources/:resource/:id", async (req, reply) => {
   return { ok: true, resource };
 });
 
+// Resource list cache: 120 s TTL — extensions/trunks/queues change rarely.
+const PBX_RESOURCE_CACHE = new Map<string, { at: number; rows: any[] }>();
+
 app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const { resource } = req.params as { resource: string };
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
   if (!canAccessVitalResourceAction(user, resource, "view")) return reply.status(403).send({ error: "forbidden" });
+
+  const cacheKey = `${user.tenantId}:${resource}`;
+  const cached = PBX_RESOURCE_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_RESOURCES) {
+    return { resource, rows: cached.rows };
+  }
+
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
   const out = await vitalListByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, link.pbxTenantId || undefined);
+  PBX_RESOURCE_CACHE.set(cacheKey, { at: Date.now(), rows: out });
   return { resource, rows: out };
 });
 
@@ -9507,6 +9518,433 @@ const automationRuleTimer = setInterval(() => {
 }, 60_000);
 automationRuleTimer.unref();
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PBX LIVE METRICS ENDPOINTS
+// VitalPBX REST API v2 /api/v2/cdr = completed calls (written on hangup).
+// Active calls require Asterisk ARI; set PBX_ARI_USER + PBX_ARI_PASS.
+//
+// CACHING STRATEGY
+//   live-combined:<tenantId>  TTL 10 s   per-tenant CDR + ARI fetch result
+//   admin-live-combined       TTL 30 s   all-tenant aggregation
+//   resources:<tenantId>:<r>  TTL 120 s  extension/trunk/queue list proxies
+//
+// INFLIGHT DEDUPLICATION
+//   PBX_LIVE_INFLIGHT prevents parallel requests from triggering duplicate
+//   VitalPBX API calls.  All concurrent requests for the same key wait on the
+//   same Promise and share the result.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PBX_LIVE_CACHE = new Map<string, { at: number; payload: any }>();
+const PBX_LIVE_INFLIGHT = new Map<string, Promise<any>>();
+const PBX_LIVE_TTL_COMBINED = 10_000;   // 10 s  per-tenant combined fetch
+const PBX_LIVE_TTL_ADMIN    = 30_000;   // 30 s  admin all-tenant aggregation
+const PBX_LIVE_TTL_RESOURCES = 120_000; // 120 s extension/trunk/queue lists
+
+function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
+  channelId: string;
+  tenantId: string | null;
+  direction: "incoming" | "outgoing" | "internal";
+  caller: string;
+  callee: string;
+  extension: string | null;
+  startedAt: string | null;
+  durationSeconds: number;
+  state: string;
+  queue: string | null;
+} {
+  const state = String(raw?.state || raw?.channelstate_text || raw?.status || "Up").toLowerCase();
+  const caller = String(raw?.caller?.number || raw?.callerid_num || raw?.src || raw?.from || "");
+  const callee = String(raw?.connected?.number || raw?.exten || raw?.dst || raw?.to || "");
+  const creationTime = raw?.creationtime || raw?.start || raw?.calldate || null;
+  const durationSec = raw?.duration != null ? Number(raw.duration) : raw?.creationtime
+    ? Math.floor((Date.now() - new Date(raw.creationtime).getTime()) / 1000)
+    : 0;
+  let direction: "incoming" | "outgoing" | "internal" = "incoming";
+  const dialplan = String(raw?.dialplan?.context || raw?.context || "").toLowerCase();
+  if (dialplan.includes("internal") || dialplan.includes("local")) direction = "internal";
+  else if (dialplan.includes("out") || dialplan.includes("trunk") || dialplan.includes("external")) direction = "outgoing";
+  return {
+    channelId: String(raw?.id || raw?.channel || raw?.uniqueid || `ch-${Math.random().toString(36).slice(2)}`),
+    tenantId: tenantId || null,
+    direction,
+    caller,
+    callee,
+    extension: callee || caller || null,
+    startedAt: creationTime ? new Date(creationTime).toISOString() : null,
+    durationSeconds: Math.max(0, durationSec),
+    state,
+    queue: raw?.queue || null
+  };
+}
+
+// ─── Per-tenant fetch with inflight dedup ────────────────────────────────────
+// All concurrent requests for the same tenant key share one Promise.
+// Both /pbx/live/combined and /pbx/live/summary / /pbx/live/active-calls
+// read from the SAME cache entry so only ONE VitalPBX call is made per TTL.
+
+type PbxLiveResult = {
+  callsToday: number;
+  incomingToday: number;
+  outgoingToday: number;
+  internalToday: number;
+  answeredToday: number;
+  missedToday: number;
+  activeCalls: number;
+  activeCallsSource: "ari" | "unavailable";
+  activeCallsList: ReturnType<typeof normalizePbxActiveCall>[];
+  registeredEndpoints: number | null;
+  unregisteredEndpoints: number | null;
+  tenantId: string;
+  lastUpdatedAt: string;
+};
+
+async function fetchPbxLiveSummaryForLink(
+  link: { pbxInstance: { baseUrl: string; apiAuthEncrypted: string }; pbxTenantId?: string | null },
+  tenantId: string
+): Promise<PbxLiveResult> {
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+  const pbxTenantId = link.pbxTenantId || undefined;
+
+  const cdrToday = await client.getCdrToday(pbxTenantId).catch(() => ({
+    rows: [], incoming: 0, outgoing: 0, internal: 0, answered: 0, missed: 0, total: 0
+  }));
+
+  const ariUser = process.env.PBX_ARI_USER || "";
+  const ariPass = process.env.PBX_ARI_PASS || "";
+  let activeCallsList: ReturnType<typeof normalizePbxActiveCall>[] = [];
+  let activeCallsSource: "ari" | "unavailable" = "unavailable";
+  let registeredEndpoints: number | null = null;
+  let unregisteredEndpoints: number | null = null;
+
+  if (ariUser && ariPass) {
+    const [ariChannels, endpointCounts] = await Promise.all([
+      client.getAriChannels(ariUser, ariPass).catch(() => null),
+      client.getAriEndpointCounts(ariUser, ariPass).catch(() => null)
+    ]);
+    if (Array.isArray(ariChannels)) {
+      activeCallsList = ariChannels.map((ch) => normalizePbxActiveCall(ch, tenantId));
+      activeCallsSource = "ari";
+    }
+    if (endpointCounts) {
+      registeredEndpoints = endpointCounts.registered;
+      unregisteredEndpoints = endpointCounts.unregistered;
+    }
+  }
+
+  return {
+    callsToday: cdrToday.total,
+    incomingToday: cdrToday.incoming,
+    outgoingToday: cdrToday.outgoing,
+    internalToday: cdrToday.internal,
+    answeredToday: cdrToday.answered,
+    missedToday: cdrToday.missed,
+    activeCalls: activeCallsList.length,
+    activeCallsSource,
+    activeCallsList,
+    registeredEndpoints,
+    unregisteredEndpoints,
+    tenantId,
+    lastUpdatedAt: new Date().toISOString()
+  };
+}
+
+// Returns the cached per-tenant result, or fires exactly one fetch (inflight-deduped).
+async function getPbxLiveCombined(
+  link: { pbxInstance: { baseUrl: string; apiAuthEncrypted: string }; pbxTenantId?: string | null },
+  tenantId: string
+): Promise<PbxLiveResult> {
+  const key = `live-combined:${tenantId}`;
+  const cached = PBX_LIVE_CACHE.get(key);
+  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_COMBINED) return cached.payload as PbxLiveResult;
+
+  // Inflight dedup: if a fetch is already running for this tenant, wait for it.
+  const inflight = PBX_LIVE_INFLIGHT.get(key);
+  if (inflight) return inflight;
+
+  const promise = fetchPbxLiveSummaryForLink(link, tenantId).then((result) => {
+    PBX_LIVE_CACHE.set(key, { at: Date.now(), payload: result });
+    PBX_LIVE_INFLIGHT.delete(key);
+    return result;
+  }).catch((err) => {
+    PBX_LIVE_INFLIGHT.delete(key);
+    throw err;
+  });
+  PBX_LIVE_INFLIGHT.set(key, promise);
+  return promise;
+}
+
+// Admin-level aggregation across all tenant links — one Promise per cycle.
+async function getAdminPbxLiveCombined(): Promise<{
+  totalCallsToday: number;
+  incomingToday: number;
+  outgoingToday: number;
+  internalToday: number;
+  answeredToday: number;
+  missedToday: number;
+  totalActiveCalls: number;
+  activeTenantsCount: number;
+  topTenants: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }>;
+  allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[];
+  lastUpdatedAt: string;
+}> {
+  const key = "admin-live-combined";
+  const cached = PBX_LIVE_CACHE.get(key);
+  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_ADMIN) return cached.payload;
+
+  const inflight = PBX_LIVE_INFLIGHT.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const links = await db.tenantPbxLink.findMany({
+      where: { status: "LINKED", pbxInstance: { isEnabled: true } },
+      include: { pbxInstance: true },
+      take: 200
+    });
+
+    let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
+    let totalAnswered = 0, totalMissed = 0, totalActive = 0;
+    type TenantSummaryEntry = { tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string };
+    const tenantSummaries: TenantSummaryEntry[] = [];
+    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
+
+    await Promise.all(links.map(async (link) => {
+      try {
+        // Reuse per-tenant cache — no duplicate CDR/ARI fetch if tenant was recently polled.
+        const s = await getPbxLiveCombined(link, link.tenantId);
+        totalCallsToday += s.callsToday;
+        totalIncoming   += s.incomingToday;
+        totalOutgoing   += s.outgoingToday;
+        totalInternal   += s.internalToday;
+        totalAnswered   += s.answeredToday;
+        totalMissed     += s.missedToday;
+        totalActive     += s.activeCalls;
+        allActiveCalls.push(...s.activeCallsList);
+        tenantSummaries.push({
+          tenantId: link.tenantId,
+          callsToday: s.callsToday,
+          incomingToday: s.incomingToday,
+          outgoingToday: s.outgoingToday,
+          internalToday: s.internalToday,
+          activeCalls: s.activeCalls,
+          activeCallsSource: s.activeCallsSource
+        });
+      } catch {
+        // best-effort
+      }
+    }));
+
+    const result = {
+      totalCallsToday,
+      incomingToday: totalIncoming,
+      outgoingToday: totalOutgoing,
+      internalToday: totalInternal,
+      answeredToday: totalAnswered,
+      missedToday: totalMissed,
+      totalActiveCalls: totalActive,
+      activeTenantsCount: tenantSummaries.filter((t) => t.callsToday > 0).length,
+      topTenants: [...tenantSummaries].sort((a, b) => b.callsToday - a.callsToday).slice(0, 10),
+      allActiveCalls,
+      lastUpdatedAt: new Date().toISOString()
+    };
+    PBX_LIVE_CACHE.set(key, { at: Date.now(), payload: result });
+    PBX_LIVE_INFLIGHT.delete(key);
+    return result;
+  })().catch((err) => { PBX_LIVE_INFLIGHT.delete(key); throw err; });
+
+  PBX_LIVE_INFLIGHT.set(key, promise);
+  return promise;
+}
+
+// ─── Tenant endpoints ─────────────────────────────────────────────────────────
+
+function requirePbxLink(reply: any) {
+  return reply.status(404).send({ error: "PBX_NOT_LINKED", message: "No active PBX link for this tenant." });
+}
+
+// GET /pbx/live/combined — single call returns both summary + active calls (preferred)
+app.get("/pbx/live/combined", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: user.tenantId },
+    include: { pbxInstance: true }
+  });
+  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
+
+  try {
+    const r = await getPbxLiveCombined(link, user.tenantId);
+    return {
+      summary: {
+        tenantId: user.tenantId,
+        callsToday: r.callsToday,
+        incomingToday: r.incomingToday,
+        outgoingToday: r.outgoingToday,
+        internalToday: r.internalToday,
+        answeredToday: r.answeredToday,
+        missedToday: r.missedToday,
+        activeCalls: r.activeCalls,
+        activeCallsSource: r.activeCallsSource,
+        registeredEndpoints: r.registeredEndpoints,
+        unregisteredEndpoints: r.unregisteredEndpoints,
+        lastUpdatedAt: r.lastUpdatedAt
+      },
+      activeCalls: {
+        calls: r.activeCallsList,
+        source: r.activeCallsSource,
+        lastUpdatedAt: r.lastUpdatedAt
+      }
+    };
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message || err), code: err?.code }, "pbx_live_combined_error");
+    return reply.status(502).send({ error: err?.code || "PBX_UNAVAILABLE", message: String(err?.message || "PBX data unavailable") });
+  }
+});
+
+// GET /pbx/live/summary — kept for compatibility; reads from shared cache
+app.get("/pbx/live/summary", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: user.tenantId },
+    include: { pbxInstance: true }
+  });
+  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
+
+  try {
+    const r = await getPbxLiveCombined(link, user.tenantId);
+    return {
+      tenantId: user.tenantId,
+      callsToday: r.callsToday,
+      incomingToday: r.incomingToday,
+      outgoingToday: r.outgoingToday,
+      internalToday: r.internalToday,
+      answeredToday: r.answeredToday,
+      missedToday: r.missedToday,
+      activeCalls: r.activeCalls,
+      activeCallsSource: r.activeCallsSource,
+      lastUpdatedAt: r.lastUpdatedAt
+    };
+  } catch (err: any) {
+    return reply.status(502).send({ error: err?.code || "PBX_UNAVAILABLE", message: String(err?.message || "PBX data unavailable") });
+  }
+});
+
+// GET /pbx/live/active-calls — kept for compatibility; reads from shared cache
+app.get("/pbx/live/active-calls", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: user.tenantId },
+    include: { pbxInstance: true }
+  });
+  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) {
+    return { calls: [], source: "unavailable", message: "No active PBX link." };
+  }
+
+  try {
+    const r = await getPbxLiveCombined(link, user.tenantId);
+    return { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt };
+  } catch {
+    return { calls: [], source: "unavailable", lastUpdatedAt: new Date().toISOString() };
+  }
+});
+
+// ─── Admin endpoints ──────────────────────────────────────────────────────────
+
+function requireSuperAdmin(user: any, reply: any): boolean {
+  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") {
+    reply.status(403).send({ error: "forbidden" });
+    return false;
+  }
+  return true;
+}
+
+// GET /admin/pbx/live/combined — single request for admin dashboard (preferred)
+app.get("/admin/pbx/live/combined", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  try {
+    const r = await getAdminPbxLiveCombined();
+    return {
+      summary: {
+        totalCallsToday: r.totalCallsToday,
+        incomingToday: r.incomingToday,
+        outgoingToday: r.outgoingToday,
+        internalToday: r.internalToday,
+        answeredToday: r.answeredToday,
+        missedToday: r.missedToday,
+        totalActiveCalls: r.totalActiveCalls,
+        activeTenantsCount: r.activeTenantsCount,
+        topTenants: r.topTenants,
+        lastUpdatedAt: r.lastUpdatedAt
+      },
+      activeCalls: {
+        calls: r.allActiveCalls,
+        source: r.allActiveCalls.length > 0 ? "ari" : "unavailable",
+        lastUpdatedAt: r.lastUpdatedAt
+      }
+    };
+  } catch (err: any) {
+    return reply.status(502).send({ error: "PBX_UNAVAILABLE", message: String(err?.message || "Aggregation failed") });
+  }
+});
+
+// GET /admin/pbx/live/summary — reads from shared admin aggregation cache
+app.get("/admin/pbx/live/summary", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  try {
+    const r = await getAdminPbxLiveCombined();
+    return {
+      totalCallsToday: r.totalCallsToday,
+      incomingToday: r.incomingToday,
+      outgoingToday: r.outgoingToday,
+      internalToday: r.internalToday,
+      answeredToday: r.answeredToday,
+      missedToday: r.missedToday,
+      totalActiveCalls: r.totalActiveCalls,
+      activeTenantsCount: r.activeTenantsCount,
+      topTenants: r.topTenants,
+      lastUpdatedAt: r.lastUpdatedAt
+    };
+  } catch (err: any) {
+    return reply.status(502).send({ error: "PBX_UNAVAILABLE", message: String(err?.message || "Aggregation failed") });
+  }
+});
+
+// GET /admin/pbx/live/active-calls — reads from shared admin aggregation cache
+app.get("/admin/pbx/live/active-calls", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  try {
+    const r = await getAdminPbxLiveCombined();
+    return {
+      calls: r.allActiveCalls,
+      source: r.allActiveCalls.length > 0 ? "ari" : "unavailable",
+      lastUpdatedAt: r.lastUpdatedAt
+    };
+  } catch {
+    return { calls: [], source: "unavailable", lastUpdatedAt: new Date().toISOString() };
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// END PBX LIVE METRICS
+// ─────────────────────────────────────────────────────────────────────────────
 
 const port = Number(process.env.PORT || 3001);
 app.listen({ host: "0.0.0.0", port }).catch((e) => {
