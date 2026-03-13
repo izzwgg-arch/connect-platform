@@ -2582,7 +2582,7 @@ app.addHook("preHandler", async (req, reply) => {
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
-    || ["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox", "/webhooks/whatsapp/meta", "/webhooks/whatsapp/twilio/status"].includes(path)
+    || ["/health", "/auth/signup", "/auth/login", "/auth/mobile-qr-exchange", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox", "/webhooks/whatsapp/meta", "/webhooks/whatsapp/twilio/status"].includes(path)
   ) return;
   try {
     await req.jwtVerify();
@@ -4979,7 +4979,90 @@ app.post("/voice/mobile-provisioning/redeem", async (req, reply) => {
   try {
     const out = await issueOneTimeProvisioningForUser(user);
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_PROVISIONING_TOKEN_REDEEMED", entityType: "MobileProvisioningToken", entityId: tokenRow.id });
+
+    // Upsert MobileDevice record if deviceInfo provided
+    const di = input.deviceInfo as { platform?: string; deviceName?: string; expoPushToken?: string } | null | undefined;
+    if (di?.platform) {
+      const platformUpper = String(di.platform).toUpperCase() as "IOS" | "ANDROID";
+      if (platformUpper === "IOS" || platformUpper === "ANDROID") {
+        await db.mobileDevice.upsert({
+          where: { userId_platform: { userId: user.sub, platform: platformUpper } },
+          create: { userId: user.sub, tenantId: user.tenantId, platform: platformUpper, deviceName: di.deviceName || null, expoPushToken: di.expoPushToken || null },
+          update: { deviceName: di.deviceName || null, expoPushToken: di.expoPushToken || null, updatedAt: new Date() }
+        }).catch(() => null);
+      }
+    }
+
     return { sipPassword: out.sipPassword, provisioning: out.provisioning };
+  } catch (e: any) {
+    const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    return reply.status(code === "EXTENSION_NOT_ASSIGNED" ? 404 : 400).send({ error: code });
+  }
+});
+
+// Unauthenticated QR-to-login exchange — mobile app opens this without a JWT.
+// The QR token embeds the signed provisioning token issued by the portal; this endpoint
+// validates the HMAC, marks it used, issues a session JWT, and returns SIP credentials.
+app.post("/auth/mobile-qr-exchange", async (req, reply) => {
+  const input = z.object({
+    token: z.string().min(12),
+    deviceInfo: z.object({
+      platform: z.string().optional(),
+      deviceName: z.string().optional(),
+      expoPushToken: z.string().optional()
+    }).optional()
+  }).parse(req.body || {});
+
+  const verified = verifyMobileProvisioningToken(input.token);
+  if (!verified) return reply.status(400).send({ error: "TOKEN_INVALID" });
+
+  const tokenHash = hashToken(input.token);
+  const now = new Date();
+
+  const tokenRow = await db.mobileProvisioningToken.findFirst({
+    where: { tokenHash, tenantId: verified.tenantId, userId: verified.userId }
+  });
+  if (!tokenRow) return reply.status(400).send({ error: "TOKEN_INVALID" });
+  if (tokenRow.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+  if (tokenRow.expiresAt < now) return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+
+  const consume = await db.mobileProvisioningToken.updateMany({
+    where: { id: tokenRow.id, usedAt: null, expiresAt: { gte: now } },
+    data: { usedAt: now }
+  });
+  if (consume.count === 0) {
+    const latest = await db.mobileProvisioningToken.findUnique({ where: { id: tokenRow.id } });
+    if (latest?.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+    return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+  }
+
+  const dbUser = await db.user.findUnique({ where: { id: verified.userId } });
+  if (!dbUser) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+
+  const jwtUser: JwtUser = { sub: dbUser.id, tenantId: dbUser.tenantId, email: dbUser.email, role: dbUser.role };
+
+  try {
+    const out = await issueOneTimeProvisioningForUser(jwtUser);
+    const sessionToken = await reply.jwtSign({ sub: dbUser.id, tenantId: dbUser.tenantId, email: dbUser.email, role: dbUser.role });
+
+    // Upsert MobileDevice
+    const di = input.deviceInfo;
+    if (di?.platform) {
+      const platformUpper = String(di.platform).toUpperCase() as "IOS" | "ANDROID";
+      if (platformUpper === "IOS" || platformUpper === "ANDROID") {
+        const device = await db.mobileDevice.upsert({
+          where: { userId_platform: { userId: dbUser.id, platform: platformUpper } },
+          create: { userId: dbUser.id, tenantId: dbUser.tenantId, platform: platformUpper, deviceName: di.deviceName || null, expoPushToken: di.expoPushToken || null },
+          update: { deviceName: di.deviceName || null, expoPushToken: di.expoPushToken || null, updatedAt: new Date() }
+        }).catch(() => null);
+
+        await audit({ tenantId: dbUser.tenantId, actorUserId: dbUser.id, action: "MOBILE_QR_EXCHANGE", entityType: "MobileDevice", entityId: device?.id || dbUser.id });
+        return { sessionToken, sipPassword: out.sipPassword, provisioning: out.provisioning, deviceId: device?.id || null };
+      }
+    }
+
+    await audit({ tenantId: dbUser.tenantId, actorUserId: dbUser.id, action: "MOBILE_QR_EXCHANGE", entityType: "MobileProvisioningToken", entityId: tokenRow.id });
+    return { sessionToken, sipPassword: out.sipPassword, provisioning: out.provisioning, deviceId: null };
   } catch (e: any) {
     const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
     return reply.status(code === "EXTENSION_NOT_ASSIGNED" ? 404 : 400).send({ error: code });

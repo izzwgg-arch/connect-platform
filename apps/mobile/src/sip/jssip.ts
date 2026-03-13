@@ -23,13 +23,21 @@ export class JsSipClient implements SipClient {
     const JsSIP = (await import("jssip")).default as any;
     const socket = new JsSIP.WebSocketInterface(this.bundle.sipWsUrl);
 
-    this.ua = new JsSIP.UA({
+    const uaCfg: any = {
       sockets: [socket],
       uri: `sip:${this.bundle.sipUsername}@${this.bundle.sipDomain}`,
       password: this.bundle.sipPassword,
       register: true,
-      session_timers: false
-    });
+      session_timers: false,
+      pcConfig: {
+        iceServers: this.bundle.iceServers?.length
+          ? this.bundle.iceServers
+          : [{ urls: "stun:stun.l.google.com:19302" }]
+      }
+    };
+    if (this.bundle.outboundProxy) uaCfg.outbound_proxy_set = this.bundle.outboundProxy;
+
+    this.ua = new JsSIP.UA(uaCfg);
 
     this.ua.on("registered", () => this.events.onRegistrationState?.("registered"));
     this.ua.on("registrationFailed", () => this.events.onRegistrationState?.("failed"));
@@ -105,7 +113,12 @@ export class JsSipClient implements SipClient {
     if (!this.ua || !this.bundle) throw new Error("SIP UA not registered");
     this.events.onCallState?.("dialing");
     this.session = this.ua.call(`sip:${target}@${this.bundle.sipDomain}`, {
-      mediaConstraints: { audio: true, video: false }
+      mediaConstraints: { audio: true, video: false },
+      pcConfig: {
+        iceServers: this.bundle.iceServers?.length
+          ? this.bundle.iceServers
+          : [{ urls: "stun:stun.l.google.com:19302" }]
+      }
     });
     this.bindSession(this.session);
   }

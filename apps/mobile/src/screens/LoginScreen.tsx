@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { HeaderBar } from "../components/HeaderBar";
+import { QrProvisionScreen } from "./QrProvisionScreen";
 import { ui } from "../theme";
 
 export function LoginScreen() {
@@ -9,6 +10,11 @@ export function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [showQr, setShowQr] = useState(false);
+
+  if (showQr) {
+    return <QrProvisionScreen />;
+  }
 
   const submit = async () => {
     setError("");
@@ -29,6 +35,12 @@ export function LoginScreen() {
           <TextInput style={ui.input} value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry />
           {error ? <Text style={ui.text}>{error}</Text> : null}
           <TouchableOpacity style={ui.button} onPress={submit}><Text style={ui.buttonText}>Sign In</Text></TouchableOpacity>
+          <TouchableOpacity
+            style={[ui.button, { marginTop: 8, backgroundColor: "transparent", borderWidth: 1, borderColor: "#4a90d9" }]}
+            onPress={() => setShowQr(true)}
+          >
+            <Text style={[ui.buttonText, { color: "#4a90d9" }]}>Scan QR Code to Link Phone</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </View>

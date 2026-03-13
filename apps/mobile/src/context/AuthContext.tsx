@@ -9,6 +9,8 @@ type AuthState = {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Store a session token obtained via QR exchange (no password needed). */
+  setTokenFromQr: (sessionToken: string) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -38,6 +40,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(null);
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync("cc_mobile_provision");
+      },
+      setTokenFromQr: async (sessionToken: string) => {
+        setToken(sessionToken);
+        await SecureStore.setItemAsync(TOKEN_KEY, sessionToken);
       }
     }),
     [token, isLoading]
