@@ -114,6 +114,27 @@ export async function redeemMobileProvisioningToken(token: string, input: { toke
   return json as { sipPassword: string; provisioning: any };
 }
 
+/**
+ * Unauthenticated QR exchange — call POST /auth/mobile-qr-exchange without a JWT.
+ * Used when the user has no session yet (first-time app open, scans portal QR).
+ * Returns a session token + SIP credentials in one call.
+ */
+export async function exchangeQrToken(
+  payload: { token: string; apiBaseUrl?: string },
+  deviceInfo?: { platform?: string; deviceName?: string; expoPushToken?: string }
+): Promise<{ sessionToken: string; sipPassword: string; provisioning: any; deviceId: string | null }> {
+  const base = (payload.apiBaseUrl || API_BASE).replace(/\/$/, "");
+  const res = await fetch(`${base}/auth/mobile-qr-exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: payload.token, deviceInfo })
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "QR_EXCHANGE_FAILED");
+  if (!json?.sessionToken) throw new Error("QR_EXCHANGE_NO_SESSION");
+  return json as { sessionToken: string; sipPassword: string; provisioning: any; deviceId: string | null };
+}
+
 export async function startVoiceDiagSession(token: string, input: {
   sessionId?: string;
   platform: "WEB" | "IOS" | "ANDROID";

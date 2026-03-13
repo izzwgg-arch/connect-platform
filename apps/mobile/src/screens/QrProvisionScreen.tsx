@@ -5,7 +5,7 @@ import * as Device from "expo-device";
 import { HeaderBar } from "../components/HeaderBar";
 import { useSip } from "../context/SipContext";
 import { useAuth } from "../context/AuthContext";
-import { redeemMobileProvisioningToken } from "../api/client";
+import { exchangeQrToken, redeemMobileProvisioningToken } from "../api/client";
 import type { ProvisioningBundle } from "../types";
 import { ui } from "../theme";
 
@@ -47,7 +47,7 @@ function parseProvisionPayload(raw: string): ParsedProvisionPayload {
 }
 
 export function QrProvisionScreen() {
-  const { token } = useAuth();
+  const { token, setTokenFromQr } = useAuth();
   const sip = useSip();
   const [permission, requestPermission] = useCameraPermissions();
   const [error, setError] = useState("");
@@ -89,23 +89,38 @@ export function QrProvisionScreen() {
                   setError("");
                   const parsed = parseProvisionPayload(data);
                   if (parsed.kind === "TOKEN") {
-                    if (!token) throw new Error("You must be logged in to redeem provisioning token.");
-                    const redeemed = await redeemMobileProvisioningToken(token, {
-                      token: parsed.token,
-                      apiBaseUrl: parsed.apiBaseUrl,
-                      deviceInfo: {
-                        platform: Device.osName || "unknown",
-                        model: Device.modelName || "unknown"
-                      }
-                    });
+                    const deviceInfo = {
+                      platform: Device.osName || "unknown",
+                      deviceName: Device.modelName || "unknown"
+                    };
+
+                    let provisioningData: { sipPassword: string; provisioning: any };
+
+                    if (token) {
+                      // User already has a session — use authenticated redeem
+                      provisioningData = await redeemMobileProvisioningToken(token, {
+                        token: parsed.token,
+                        apiBaseUrl: parsed.apiBaseUrl,
+                        deviceInfo
+                      });
+                    } else {
+                      // No session yet — use unauthenticated QR exchange (logs in + provisions)
+                      const exchanged = await exchangeQrToken(
+                        { token: parsed.token, apiBaseUrl: parsed.apiBaseUrl },
+                        deviceInfo
+                      );
+                      await setTokenFromQr(exchanged.sessionToken);
+                      provisioningData = { sipPassword: exchanged.sipPassword, provisioning: exchanged.provisioning };
+                    }
+
                     const bundle = parseLegacyBundle({
-                      sipUsername: redeemed?.provisioning?.sipUsername,
-                      sipPassword: redeemed?.sipPassword,
-                      sipWsUrl: redeemed?.provisioning?.sipWsUrl,
-                      sipDomain: redeemed?.provisioning?.sipDomain,
-                      outboundProxy: redeemed?.provisioning?.outboundProxy,
-                      iceServers: redeemed?.provisioning?.iceServers,
-                      dtmfMode: redeemed?.provisioning?.dtmfMode
+                      sipUsername: provisioningData.provisioning?.sipUsername,
+                      sipPassword: provisioningData.sipPassword,
+                      sipWsUrl: provisioningData.provisioning?.sipWsUrl,
+                      sipDomain: provisioningData.provisioning?.sipDomain,
+                      outboundProxy: provisioningData.provisioning?.outboundProxy,
+                      iceServers: provisioningData.provisioning?.iceServers,
+                      dtmfMode: provisioningData.provisioning?.dtmfMode
                     });
                     await sip.saveProvisioning(bundle);
                     setLegacyWarning("");
