@@ -10,6 +10,7 @@
     "pbx:enable-instances": "tsx scripts/enable-pbx-instances.ts",
     "pbx:diagnose-by-name": "tsx scripts/pbx-diagnose-by-tenant-name.ts",
     "pbx:link-tenant": "tsx scripts/link-tenant-to-pbx.ts",
+    "pbx:link-all-tenants": "tsx scripts/link-all-tenants-to-pbx.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "echo lint-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",
