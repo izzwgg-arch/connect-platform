@@ -9867,7 +9867,19 @@ async function fetchPbxLiveSummaryForLink(
   link: { pbxInstance: { baseUrl: string; apiAuthEncrypted: string }; pbxTenantId?: string | null },
   tenantId: string
 ): Promise<PbxLiveResult> {
-  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  let auth: { token: string; secret?: string };
+  try {
+    auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  } catch (err: any) {
+    const e = new Error(err?.message || "Failed to decrypt PBX credentials") as Error & { code?: string };
+    e.code = "PBX_DECRYPT_FAILED";
+    throw e;
+  }
+  if (!auth?.token?.trim()) {
+    const e = new Error("PBX API token is missing") as Error & { code?: string };
+    e.code = "PBX_MISSING_TOKEN";
+    throw e;
+  }
   const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
   const pbxTenantId = link.pbxTenantId || undefined;
 
@@ -10039,6 +10051,119 @@ async function getAdminPbxLiveCombined(): Promise<{
 function requirePbxLink(reply: any) {
   return reply.status(404).send({ error: "PBX_NOT_LINKED", message: "No active PBX link for this tenant." });
 }
+
+// GET /pbx/live/diagnostics — pinpoint why PBX summary fails (link, decrypt, reach, CDR)
+app.get("/pbx/live/diagnostics", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: user.tenantId },
+    include: { pbxInstance: true }
+  });
+
+  if (!link) {
+    return reply.send({
+      step: "link",
+      ok: false,
+      message: "No PBX link configured for this tenant.",
+      hasLink: false,
+      isEnabled: false,
+      baseUrlHost: null,
+      code: "PBX_NOT_LINKED"
+    });
+  }
+  if (!link.pbxInstance.isEnabled) {
+    return reply.send({
+      step: "link",
+      ok: false,
+      message: "PBX instance is disabled.",
+      hasLink: true,
+      isEnabled: false,
+      baseUrlHost: (() => {
+        try { return new URL(link.pbxInstance.baseUrl).hostname; } catch { return null; }
+      })(),
+      code: "PBX_INSTANCE_DISABLED"
+    });
+  }
+
+  let baseUrlHost: string | null = null;
+  try {
+    baseUrlHost = new URL(link.pbxInstance.baseUrl).hostname;
+  } catch {
+    return reply.send({
+      step: "link",
+      ok: false,
+      message: "Invalid PBX base URL format.",
+      hasLink: true,
+      isEnabled: true,
+      baseUrlHost: null,
+      code: "PBX_INVALID_BASE_URL"
+    });
+  }
+
+  let auth: { token: string; secret?: string };
+  try {
+    auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message || err), tenantId: user.tenantId }, "pbx_diagnostics_decrypt_failed");
+    return reply.send({
+      step: "decrypt",
+      ok: false,
+      message: err?.message || "Failed to decrypt PBX credentials (wrong key or corrupted data).",
+      baseUrlHost,
+      code: "PBX_DECRYPT_FAILED"
+    });
+  }
+  if (!auth?.token?.trim()) {
+    return reply.send({
+      step: "decrypt",
+      ok: false,
+      message: "PBX API token is missing after decrypt.",
+      baseUrlHost,
+      code: "PBX_MISSING_TOKEN"
+    });
+  }
+
+  const pbxTenantId = link.pbxTenantId || undefined;
+  const pbxTimezone = process.env.PBX_TIMEZONE?.trim() || undefined;
+  try {
+    const client = getVitalPbxClient({
+      baseUrl: link.pbxInstance.baseUrl,
+      token: auth.token,
+      secret: auth.secret
+    });
+    const cdrToday = await client.getCdrToday(pbxTenantId, { timezone: pbxTimezone });
+    return reply.send({
+      step: "ok",
+      ok: true,
+      message: "PBX reachable; today KPIs from CDR.",
+      baseUrlHost,
+      pbxTenantId: link.pbxTenantId ?? null,
+      timezone: pbxTimezone ?? "UTC",
+      incomingToday: cdrToday.incoming,
+      outgoingToday: cdrToday.outgoing,
+      internalToday: cdrToday.internal,
+      missedToday: cdrToday.missed,
+      answeredToday: cdrToday.answered,
+      callsToday: cdrToday.total,
+      code: "OK"
+    });
+  } catch (err: any) {
+    const code = err?.code || "PBX_UNAVAILABLE";
+    const message = err?.message ? String(err.message) : "VitalPBX request failed.";
+    app.log.warn({ err: message, code, baseUrlHost, tenantId: user.tenantId }, "pbx_diagnostics_reach_failed");
+    return reply.send({
+      step: "reach",
+      ok: false,
+      message,
+      baseUrlHost,
+      pbxTenantId: link.pbxTenantId ?? null,
+      code
+    });
+  }
+});
 
 // GET /pbx/live/combined — single call returns both summary + active calls (preferred)
 app.get("/pbx/live/combined", async (req, reply) => {

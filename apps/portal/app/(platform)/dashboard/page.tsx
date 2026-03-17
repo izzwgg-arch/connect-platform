@@ -21,6 +21,7 @@ import { useTelephony } from "../../../contexts/TelephonyContext";
 import {
   loadPbxLiveCombined,
   loadAdminPbxLiveCombined,
+  loadPbxLiveDiagnostics,
   formatDurationSec,
   directionLabel,
   directionClass,
@@ -28,7 +29,8 @@ import {
   type AdminPbxLiveSummary,
   type PbxActiveCallsResponse,
   type PbxLiveCombined,
-  type AdminPbxLiveCombined
+  type AdminPbxLiveCombined,
+  type PbxLiveDiagnostics
 } from "../../../services/pbxLive";
 import { loadDashboardData } from "../../../services/platformData";
 
@@ -46,6 +48,49 @@ type DashboardCallTraffic = {
   totals: { made: number; incoming: number; outgoing: number; internal: number };
   points: Array<{ label: string; incoming: number; outgoing: number; internal: number }>;
 };
+
+function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: string; isGlobal: boolean }) {
+  const [diagnostics, setDiagnostics] = useState<PbxLiveDiagnostics | null>(null);
+  const [loading, setLoading] = useState(false);
+  const runDiagnostics = async () => {
+    if (isGlobal) return;
+    setLoading(true);
+    setDiagnostics(null);
+    try {
+      const d = await loadPbxLiveDiagnostics();
+      setDiagnostics(d);
+    } catch {
+      setDiagnostics({ step: "reach", ok: false, message: "Failed to load diagnostics.", code: "REQUEST_FAILED" });
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <>
+      <ErrorState message={errorMessage} />
+      {!isGlobal ? (
+        <div className="mt-3">
+          <button type="button" onClick={runDiagnostics} disabled={loading} className="btn btn-secondary btn-sm">
+            {loading ? "Running…" : "Run diagnostics"}
+          </button>
+          {diagnostics ? (
+            <div className="mt-2 p-2 rounded bg-black/10 text-sm font-mono">
+              <div><strong>Step:</strong> {diagnostics.step} {diagnostics.ok ? "✓" : "✗"}</div>
+              <div><strong>Message:</strong> {diagnostics.message}</div>
+              {diagnostics.code ? <div><strong>Code:</strong> {diagnostics.code}</div> : null}
+              {diagnostics.baseUrlHost != null ? <div><strong>PBX host:</strong> {diagnostics.baseUrlHost}</div> : null}
+              {diagnostics.hasLink != null ? <div><strong>Has link:</strong> {String(diagnostics.hasLink)}</div> : null}
+              {diagnostics.isEnabled != null ? <div><strong>Instance enabled:</strong> {String(diagnostics.isEnabled)}</div> : null}
+              {diagnostics.step === "ok" && diagnostics.incomingToday != null ? (
+                <div><strong>Today KPIs:</strong> In {diagnostics.incomingToday} / Out {diagnostics.outgoingToday} / Int {diagnostics.internalToday} / Missed {diagnostics.missedToday}</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 export default function DashboardPage() {
   const { adminScope } = useAppContext();
@@ -165,7 +210,10 @@ export default function DashboardPage() {
         {isGlobal ? <GlobalScopeNotice /> : null}
         {pbxCombinedState.status === "loading" ? <LoadingSkeleton rows={1} /> : null}
         {pbxCombinedState.status === "error" ? (
-          <ErrorState message="PBX live metrics unavailable — check PBX link configuration." />
+          <PbxErrorWithDiagnostics
+            errorMessage={pbxCombinedState.error || "PBX live metrics unavailable — check PBX link configuration."}
+            isGlobal={isGlobal}
+          />
         ) : null}
 
         {/* SECTION A — KPI CARDS */}

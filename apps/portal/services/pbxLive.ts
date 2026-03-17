@@ -68,6 +68,28 @@ export type AdminPbxLiveSummary = {
 export type PbxLiveCombined = { summary: PbxLiveSummary; activeCalls: PbxActiveCallsResponse };
 export type AdminPbxLiveCombined = { summary: AdminPbxLiveSummary; activeCalls: PbxActiveCallsResponse };
 
+export type PbxLiveDiagnostics = {
+  step: "link" | "decrypt" | "reach" | "ok";
+  ok: boolean;
+  message: string;
+  code?: string;
+  hasLink?: boolean;
+  isEnabled?: boolean;
+  baseUrlHost?: string | null;
+  pbxTenantId?: string | null;
+  timezone?: string;
+  incomingToday?: number;
+  outgoingToday?: number;
+  internalToday?: number;
+  missedToday?: number;
+  answeredToday?: number;
+  callsToday?: number;
+};
+
+export async function loadPbxLiveDiagnostics(): Promise<PbxLiveDiagnostics> {
+  return apiGet<PbxLiveDiagnostics>("/pbx/live/diagnostics");
+}
+
 export async function loadPbxLiveCombined(): Promise<PbxLiveCombined> {
   return apiGet<PbxLiveCombined>("/pbx/live/combined");
 }
