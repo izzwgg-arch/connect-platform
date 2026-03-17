@@ -8637,6 +8637,7 @@ app.get("/dashboard/summary", async (req, reply) => {
   const query = z.object({ range: z.enum(["24h", "7d", "30d"]).optional() }).parse(req.query || {});
   const { key: range, since } = resolveDashboardRange(query.range);
 
+  try {
   const [
     invoicesAll,
     invoicesPaidInRange,
@@ -8765,6 +8766,19 @@ app.get("/dashboard/summary", async (req, reply) => {
       }))
     }
   };
+  } catch (err: any) {
+    app.log.warn({ err: err?.message || err, tenantId: admin.tenantId }, "dashboard/summary failed");
+    return reply.status(200).send({
+      range: "24h",
+      invoiceSummary: { unpaidCount: 0, overdueCount: 0, paidInRangeCount: 0 },
+      paymentSummary: { recentFailureCount: 0, recentFailures: [] },
+      messagingSummary: { smsCampaignsSentInRange: 0, blockedOrSuspendedCampaigns: 0 },
+      whatsappSummary: { inboundCount: 0, outboundCount: 0 },
+      emailSummary: { failedCount: 0, queuedCount: 0 },
+      customerAttentionSummary: { overdueCustomerCount: 0 },
+      attention: { overdueCustomers: [], failedEmailJobs: [], blockedCampaigns: [], whatsappInboundNeedsFollowup: [] }
+    });
+  }
 });
 
 app.get("/dashboard/activity", async (req, reply) => {
@@ -9987,43 +10001,52 @@ async function getAdminPbxLiveCombined(): Promise<{
       take: 200
     });
 
-    const instanceMap = new Map<string, typeof links[0]>();
-    for (const link of links) {
-      if (!instanceMap.has(link.pbxInstance.id)) {
-        instanceMap.set(link.pbxInstance.id, link);
-      }
-    }
-    for (const inst of enabledInstances) {
-      if (!instanceMap.has(inst.id)) {
-        instanceMap.set(inst.id, {
-          pbxInstance: inst,
-          tenantId: "global",
-          pbxTenantId: null
-        } as any);
-      }
-    }
-
     const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
     let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
     let totalAnswered = 0, totalMissed = 0, totalActive = 0;
+    const perTenant: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }> = [];
 
-    for (const [, link] of instanceMap) {
-      try {
-        const s = await fetchPbxLiveSummaryForLink(link, link.tenantId);
+    // Fetch per-tenant summary for every link (not one per instance) so global KPIs aggregate all tenants.
+    const CONCURRENCY = 8;
+    for (let i = 0; i < links.length; i += CONCURRENCY) {
+      const chunk = links.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map(async (link) => {
+          try {
+            const s = await fetchPbxLiveSummaryForLink(link, link.tenantId);
+            return { link, s };
+          } catch {
+            return { link, s: null };
+          }
+        })
+      );
+      for (const { link, s } of results) {
+        if (!s) continue;
         totalCallsToday += s.callsToday;
-        totalIncoming   += s.incomingToday;
-        totalOutgoing   += s.outgoingToday;
-        totalInternal   += s.internalToday;
-        totalAnswered   += s.answeredToday;
-        totalMissed     += s.missedToday;
-        totalActive     += s.activeCalls;
+        totalIncoming += s.incomingToday;
+        totalOutgoing += s.outgoingToday;
+        totalInternal += s.internalToday;
+        totalAnswered += s.answeredToday;
+        totalMissed += s.missedToday;
+        totalActive += s.activeCalls;
         allActiveCalls.push(...s.activeCallsList);
-      } catch {
-        // best-effort per instance
+        perTenant.push({
+          tenantId: link.tenantId,
+          callsToday: s.callsToday,
+          incomingToday: s.incomingToday,
+          outgoingToday: s.outgoingToday,
+          internalToday: s.internalToday,
+          activeCalls: s.activeCalls,
+          activeCallsSource: s.activeCallsSource
+        });
       }
     }
 
-    const tenantCount = links.length;
+    const tenantsWithCallsToday = perTenant.filter((t) => t.callsToday > 0 || t.activeCalls > 0).length;
+    const topTenants = [...perTenant]
+      .sort((a, b) => b.callsToday - a.callsToday)
+      .slice(0, 10);
+
     const result = {
       totalCallsToday,
       incomingToday: totalIncoming,
@@ -10032,8 +10055,8 @@ async function getAdminPbxLiveCombined(): Promise<{
       answeredToday: totalAnswered,
       missedToday: totalMissed,
       totalActiveCalls: totalActive,
-      activeTenantsCount: tenantCount,
-      topTenants: [] as Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }>,
+      activeTenantsCount: tenantsWithCallsToday,
+      topTenants,
       allActiveCalls,
       lastUpdatedAt: new Date().toISOString()
     };
