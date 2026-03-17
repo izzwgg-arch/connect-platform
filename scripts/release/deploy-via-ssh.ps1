@@ -22,7 +22,7 @@ if ($status) {
 }
 
 # 2) Tag (if not exists)
-git rev-parse "refs/tags/$tag" 2>$null
+$null = git rev-parse "refs/tags/$tag" 2>&1
 if ($LASTEXITCODE -ne 0) {
   git tag $tag
   Write-Host "[deploy-via-ssh] tagged $tag"
