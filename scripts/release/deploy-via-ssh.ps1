@@ -36,7 +36,7 @@ git push origin $tag
 Write-Host "[deploy-via-ssh] pushed"
 
 # 4) Run deploy on server
-$remoteCmd = "cd /opt/connectcomms/app && git fetch --tags && git checkout --detach refs/tags/$tag && git reset --hard HEAD && bash scripts/release/deploy-tag.sh $tag"
+$remoteCmd = "cd /opt/connectcomms/app && git fetch --tags && git reset --hard refs/tags/$tag && git clean -fd && git checkout --detach refs/tags/$tag && bash scripts/release/deploy-tag.sh $tag"
 Write-Host "[deploy-via-ssh] running on $sshTarget : $remoteCmd"
 $sshArgs = @("-o", "ConnectTimeout=15", "-o", "BatchMode=yes")
 if (Test-Path -LiteralPath $sshKey) { $sshArgs += @("-i", $sshKey) }
