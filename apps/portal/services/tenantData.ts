@@ -27,14 +27,22 @@ type VitalTenantRaw = {
   [key: string]: unknown;
 };
 
-/** Names that identify internal/helper/smoke PBX tenants — not real customers. */
-const JUNK_NAME_EXACT = new Set(["smoke", "test", "default", "helper", "billing", "system", "admin", "demo", "trial", "internal", "local"]);
+/** Words that mark a name as an internal/test/helper PBX tenant — not a real customer. */
+const JUNK_WORDS = ["smoke", "test", "default", "helper", "billing", "system", "demo", "trial", "internal", "local", "switch smoke", "bc switch", "bg ", "staging", "sandbox"];
+/** Names that are exactly a junk token. */
+const JUNK_NAME_EXACT = new Set(["admin", "smoke", "test", "default", "helper", "billing", "system", "demo", "trial", "internal", "local", "bg"]);
 
 function isJunkTenantName(name: string): boolean {
   const lower = name.toLowerCase().trim();
   if (JUNK_NAME_EXACT.has(lower)) return true;
   // Purely numeric IDs (e.g., "1773006287") — VitalPBX internal domain IDs, not real names
   if (/^\d{6,}$/.test(lower)) return true;
+  // Name contains a junk keyword (e.g., "BC Switch Smoke 1772387612")
+  for (const word of JUNK_WORDS) {
+    if (lower.includes(word)) return true;
+  }
+  // Name ends with a long numeric suffix (e.g., "SomeName 1772387612") — PBX-auto-generated
+  if (/\s\d{7,}$/.test(lower)) return true;
   return false;
 }
 
