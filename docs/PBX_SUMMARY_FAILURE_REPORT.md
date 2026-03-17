@@ -8,6 +8,7 @@
    - **Message** and **Code**
    - **PBX host** (when available), **Has link**, **Instance enabled**
    - If step is `ok`, **Today KPIs** from CDR (proof of real numbers).
+   - **CDR request:** when step is `ok`, the date range sent to the PBX and **PBX returned N row(s)**. If N is 0, the PBX has no CDR for that range (no completed calls today in that timezone, or multi-tenant PBX may need `pbxTenantId` on the link).
 3. **Direct API:** `GET /pbx/live/diagnostics` (same auth as dashboard) returns the same structured payload.
 
 ## Answers to the 7 verification points
@@ -34,6 +35,7 @@
 | Invalid/expired API key | `INVALID_API_KEY`, step `reach` | Update the VitalPBX app-key (token) in the PBX instance and re-save. |
 | Network/timeout | `PBX_UNREACHABLE` / `PBX_UNAVAILABLE`, step `reach` | Ensure the API server can reach the PBX base URL (firewall, DNS, TLS). |
 | Timezone mismatch | N/A (totals zero but PBX has calls) | Set `PBX_TIMEZONE` on the API server to the PBX/business IANA timezone. |
+| Today counts 0, step `ok` | Diagnostics shows `rawRowCountFromApi: 0` | Either no completed calls today in the configured timezone, or multi-tenant VitalPBX needs the Connect tenant’s `pbxTenantId` (VitalPBX tenant id) set on the link so the CDR API returns that tenant’s rows. Use **CDR request** in diagnostics to confirm the range sent. |
 
 ## Files changed
 

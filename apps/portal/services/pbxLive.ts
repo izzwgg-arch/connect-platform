@@ -84,6 +84,8 @@ export type PbxLiveDiagnostics = {
   missedToday?: number;
   answeredToday?: number;
   callsToday?: number;
+  /** When step is ok: date range sent to PBX and raw row count from CDR API (before client-side filter). */
+  cdrDebug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number };
 };
 
 export async function loadPbxLiveDiagnostics(): Promise<PbxLiveDiagnostics> {

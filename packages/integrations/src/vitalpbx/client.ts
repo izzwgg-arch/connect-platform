@@ -502,7 +502,7 @@ export class VitalPbxClient {
    */
   async getCdrToday(
     tenantId?: string,
-    options?: { timezone?: string }
+    options?: { timezone?: string; debug?: boolean }
   ): Promise<{
     rows: any[];
     incoming: number;
@@ -511,6 +511,7 @@ export class VitalPbxClient {
     answered: number;
     missed: number;
     total: number;
+    debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number };
   }> {
     const now = new Date();
     let startDate: Date;
@@ -531,6 +532,7 @@ export class VitalPbxClient {
       end_date: endDate.toISOString()
     };
     let rows: any[] = [];
+    let rawRowCountFromApi = 0;
     try {
       const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
       const data = unwrapData<any>(envelope);
@@ -540,6 +542,7 @@ export class VitalPbxClient {
         : Array.isArray(data) ? data
         : Array.isArray((envelope as any)?.result) ? (envelope as any).result
         : [];
+      rawRowCountFromApi = raw.length;
       const seen = new Map<string, any>();
       for (const r of raw) {
         const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
@@ -574,7 +577,24 @@ export class VitalPbxClient {
       if (disposition === "ANSWERED") answered++;
       else if (isIncoming) missed++;
     }
-    return { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
+    const result: {
+      rows: any[];
+      incoming: number;
+      outgoing: number;
+      internal: number;
+      answered: number;
+      missed: number;
+      total: number;
+      debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number };
+    } = { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
+    if (options?.debug) {
+      result.debug = {
+        requestStartIso: startDate.toISOString(),
+        requestEndIso: endDate.toISOString(),
+        rawRowCountFromApi
+      };
+    }
+    return result;
   }
 
   /**

@@ -10134,8 +10134,8 @@ app.get("/pbx/live/diagnostics", async (req, reply) => {
       token: auth.token,
       secret: auth.secret
     });
-    const cdrToday = await client.getCdrToday(pbxTenantId, { timezone: pbxTimezone });
-    return reply.send({
+    const cdrToday = await client.getCdrToday(pbxTenantId, { timezone: pbxTimezone, debug: true });
+    const payload: Record<string, unknown> = {
       step: "ok",
       ok: true,
       message: "PBX reachable; today KPIs from CDR.",
@@ -10149,7 +10149,15 @@ app.get("/pbx/live/diagnostics", async (req, reply) => {
       answeredToday: cdrToday.answered,
       callsToday: cdrToday.total,
       code: "OK"
-    });
+    };
+    if (cdrToday.debug) {
+      payload.cdrDebug = {
+        requestStartIso: cdrToday.debug.requestStartIso,
+        requestEndIso: cdrToday.debug.requestEndIso,
+        rawRowCountFromApi: cdrToday.debug.rawRowCountFromApi
+      };
+    }
+    return reply.send(payload);
   } catch (err: any) {
     const code = err?.code || "PBX_UNAVAILABLE";
     const message = err?.message ? String(err.message) : "VitalPBX request failed.";
