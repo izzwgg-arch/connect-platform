@@ -10001,23 +10001,51 @@ async function getAdminPbxLiveCombined(): Promise<{
       take: 200
     });
 
-    // Cap links so admin combined finishes within typical nginx proxy timeout (60s).
-    // Per-fetch timeout 6s, concurrency 8 → 80 links = 80/8*6 = 60s max.
-    const MAX_LINKS = 80;
     const PER_FETCH_MS = 6000;
-    const CONCURRENCY = 8;
-    const linksToFetch = links.slice(0, MAX_LINKS);
-
-    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
-    let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
-    let totalAnswered = 0, totalMissed = 0, totalActive = 0;
-    const perTenant: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }> = [];
 
     const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
       Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
 
-    for (let i = 0; i < linksToFetch.length; i += CONCURRENCY) {
-      const chunk = linksToFetch.slice(i, i + CONCURRENCY);
+    // GLOBAL view: deduplicate by PBX instance and call CDR ONCE per instance (no tenant filter).
+    // Calling CDR per-link would invoke the same query N times (all links share one PBX with
+    // pbxTenantId=null) and sum the same data N times — producing inflated or incorrect totals.
+    // One call per unique PBX instance (no filter) = accurate total across all tenants on that PBX.
+    const uniqueInstances = new Map<string, typeof links[0]>();
+    for (const link of links) {
+      if (!uniqueInstances.has(link.pbxInstance.id)) {
+        uniqueInstances.set(link.pbxInstance.id, link);
+      }
+    }
+
+    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
+    let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
+    let totalAnswered = 0, totalMissed = 0, totalActive = 0;
+
+    for (const [, repLink] of uniqueInstances) {
+      // Use a synthetic link with no pbxTenantId → CDR query returns all tenants on this PBX
+      const globalLink = { ...repLink, pbxTenantId: null };
+      try {
+        const s = await withTimeout(fetchPbxLiveSummaryForLink(globalLink as typeof repLink, "global"), PER_FETCH_MS);
+        totalCallsToday += s.callsToday;
+        totalIncoming += s.incomingToday;
+        totalOutgoing += s.outgoingToday;
+        totalInternal += s.internalToday;
+        totalAnswered += s.answeredToday;
+        totalMissed += s.missedToday;
+        totalActive += s.activeCalls;
+        allActiveCalls.push(...s.activeCallsList);
+      } catch {
+        // best-effort per instance
+      }
+    }
+
+    // topTenants: build from per-VitalPBX-tenant CDR where vpbx tenant links have a pbxTenantId set.
+    // This is optional enrichment — only tenants with an explicit pbxTenantId get a per-tenant row.
+    const tenantLinks = links.filter((l) => l.pbxTenantId);
+    const perTenant: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }> = [];
+    const CONCURRENCY = 8;
+    for (let i = 0; i < Math.min(tenantLinks.length, 40); i += CONCURRENCY) {
+      const chunk = tenantLinks.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         chunk.map(async (link) => {
           try {
@@ -10030,27 +10058,11 @@ async function getAdminPbxLiveCombined(): Promise<{
       );
       for (const { link, s } of results) {
         if (!s) continue;
-        totalCallsToday += s.callsToday;
-        totalIncoming += s.incomingToday;
-        totalOutgoing += s.outgoingToday;
-        totalInternal += s.internalToday;
-        totalAnswered += s.answeredToday;
-        totalMissed += s.missedToday;
-        totalActive += s.activeCalls;
-        allActiveCalls.push(...s.activeCallsList);
-        perTenant.push({
-          tenantId: link.tenantId,
-          callsToday: s.callsToday,
-          incomingToday: s.incomingToday,
-          outgoingToday: s.outgoingToday,
-          internalToday: s.internalToday,
-          activeCalls: s.activeCalls,
-          activeCallsSource: s.activeCallsSource
-        });
+        perTenant.push({ tenantId: link.tenantId, callsToday: s.callsToday, incomingToday: s.incomingToday, outgoingToday: s.outgoingToday, internalToday: s.internalToday, activeCalls: s.activeCalls, activeCallsSource: s.activeCallsSource });
       }
     }
 
-    const tenantsWithCallsToday = perTenant.filter((t) => t.callsToday > 0 || t.activeCalls > 0).length;
+    const tenantsWithCallsToday = links.length; // total linked tenants (active count from active calls)
     const topTenants = [...perTenant]
       .sort((a, b) => b.callsToday - a.callsToday)
       .slice(0, 10);
@@ -10183,6 +10195,7 @@ app.get("/pbx/live/diagnostics", async (req, reply) => {
     };
     if (cdrToday.debug) {
       payload.cdrDebug = {
+        todayStr: cdrToday.debug.todayStr,
         requestStartIso: cdrToday.debug.requestStartIso,
         requestEndIso: cdrToday.debug.requestEndIso,
         rawRowCountFromApi: cdrToday.debug.rawRowCountFromApi

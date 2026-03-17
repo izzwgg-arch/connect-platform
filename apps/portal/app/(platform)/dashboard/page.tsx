@@ -85,7 +85,7 @@ function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: str
                 <div><strong>Today KPIs:</strong> In {diagnostics.incomingToday} / Out {diagnostics.outgoingToday} / Int {diagnostics.internalToday} / Missed {diagnostics.missedToday}</div>
               ) : null}
               {diagnostics.cdrDebug ? (
-                <div><strong>CDR request:</strong> {diagnostics.cdrDebug.requestStartIso} → {diagnostics.cdrDebug.requestEndIso}; PBX returned {diagnostics.cdrDebug.rawRowCountFromApi} row(s)</div>
+                <div><strong>CDR request:</strong> date={diagnostics.cdrDebug.todayStr ?? "?"} ({diagnostics.cdrDebug.requestStartIso} → {diagnostics.cdrDebug.requestEndIso}); PBX returned {diagnostics.cdrDebug.rawRowCountFromApi} row(s)</div>
               ) : null}
             </div>
           ) : null}

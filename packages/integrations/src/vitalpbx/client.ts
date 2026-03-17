@@ -511,26 +511,32 @@ export class VitalPbxClient {
     answered: number;
     missed: number;
     total: number;
-    debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number };
+    debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string };
   }> {
     const now = new Date();
+    // VitalPBX CDR API expects "YYYY-MM-DD" date strings in the PBX server's local timezone.
+    // Using date-only format is safest: VitalPBX interprets it as the full calendar day.
+    let todayStr: string;
     let startDate: Date;
     let endDate: Date = now;
     if (options?.timezone && options.timezone.trim()) {
       const tz = options.timezone.trim();
+      // Get today's date in the business timezone as "YYYY-MM-DD"
+      todayStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // → "2026-03-17"
       const { start, end } = getTodayBoundsInTimezone(tz);
       startDate = start;
       endDate = end;
     } else {
+      todayStr = now.toLocaleDateString("en-CA"); // UTC date
       startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     }
-    // VitalPBX /api/v2/cdr expects start_date and end_date as Unix timestamps (seconds).
+    // Send "YYYY-MM-DD" strings — VitalPBX MySQL datetime filter accepts this format.
     const query: Record<string, string | number | boolean> = {
       limit: 1000,
       sort_by: "date",
       sort_order: "asc",
-      start_date: Math.floor(startDate.getTime() / 1000),
-      end_date: Math.floor(endDate.getTime() / 1000)
+      start_date: todayStr,
+      end_date: todayStr
     };
     let rows: any[] = [];
     let rawRowCountFromApi = 0;
@@ -553,13 +559,14 @@ export class VitalPbxClient {
     } catch {
       rows = [];
     }
-    const startMs = startDate.getTime();
-    const endMs = endDate.getTime();
+    // Light sanity check: VitalPBX filters server-side, so trust the response.
+    // Only drop rows that clearly belong to a different date (loose check to handle timezone edge-cases).
+    const todayPrefix = todayStr; // "2026-03-17"
     rows = rows.filter((r) => {
       const dateStr = String(r?.date ?? r?.calldate ?? "").trim();
-      if (!dateStr) return true;
-      const t = new Date(dateStr).getTime();
-      return !Number.isNaN(t) && t >= startMs && t <= endMs;
+      if (!dateStr) return true; // keep rows with no date field
+      // Accept if the date string starts with today (handles "2026-03-17 14:30:00" format)
+      return dateStr.startsWith(todayPrefix);
     });
     let incoming = 0, outgoing = 0, internal = 0, answered = 0, missed = 0;
     for (const r of rows) {
@@ -586,13 +593,14 @@ export class VitalPbxClient {
       answered: number;
       missed: number;
       total: number;
-      debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number };
+      debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string };
     } = { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
     if (options?.debug) {
       result.debug = {
         requestStartIso: startDate.toISOString(),
         requestEndIso: endDate.toISOString(),
-        rawRowCountFromApi
+        rawRowCountFromApi,
+        todayStr
       };
     }
     return result;
