@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "pbx:diagnose": "tsx scripts/run-pbx-diagnostics.ts",
     "pbx:enable-instances": "tsx scripts/enable-pbx-instances.ts",
+    "pbx:diagnose-by-name": "tsx scripts/pbx-diagnose-by-tenant-name.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "echo lint-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",
