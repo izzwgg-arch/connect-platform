@@ -1,15 +1,15 @@
 # Full deploy: commit, tag, push, then run deploy-tag.sh on server via SSH.
-# Uses DEPLOY_SSH_TARGET (default: 45.14.194.179 from docs). SSH key from agent or default.
-# Run from repo root. Requires: GitHub SSH key for push; server key for SSH.
+# DEPLOY_SSH_TARGET default: root@45.14.194.179. DEPLOY_SSH_KEY default: $env:USERPROFILE\.ssh\connect_ed25519
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/release/deploy-via-ssh.ps1 [tag]
 $ErrorActionPreference = "Stop"
 $tag = $args[0]
 if (-not $tag) { $tag = "v2.0.7" }
-$sshTarget = if ($env:DEPLOY_SSH_TARGET) { $env:DEPLOY_SSH_TARGET } else { "45.14.194.179" }
+$sshTarget = if ($env:DEPLOY_SSH_TARGET) { $env:DEPLOY_SSH_TARGET } else { "root@45.14.194.179" }
+$sshKey = if ($env:DEPLOY_SSH_KEY) { $env:DEPLOY_SSH_KEY } else { Join-Path $env:USERPROFILE ".ssh\connect_ed25519" }
 $root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Push-Location $root
 
-Write-Host "[deploy-via-ssh] tag=$tag sshTarget=$sshTarget"
+Write-Host "[deploy-via-ssh] tag=$tag sshTarget=$sshTarget key=$sshKey"
 
 # 1) Commit if there are changes
 $status = git status --porcelain
@@ -38,7 +38,9 @@ Write-Host "[deploy-via-ssh] pushed"
 # 4) Run deploy on server
 $remoteCmd = "cd /opt/connectcomms/app && git fetch --tags && bash scripts/release/deploy-tag.sh $tag"
 Write-Host "[deploy-via-ssh] running on $sshTarget : $remoteCmd"
-ssh -o ConnectTimeout=15 -o BatchMode=yes $sshTarget $remoteCmd
+$sshArgs = @("-o", "ConnectTimeout=15", "-o", "BatchMode=yes")
+if (Test-Path -LiteralPath $sshKey) { $sshArgs += @("-i", $sshKey) }
+& ssh @sshArgs $sshTarget $remoteCmd
 
 Pop-Location
 Write-Host "[deploy-via-ssh] done"
