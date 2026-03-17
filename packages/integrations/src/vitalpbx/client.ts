@@ -398,7 +398,7 @@ export class VitalPbxClient {
     if (input.lastSeenTimestamp) {
       const d = new Date(input.lastSeenTimestamp);
       if (!Number.isNaN(d.getTime())) {
-        query.start_date = new Date(d.getTime() - overlapSeconds * 1000).toISOString();
+        query.start_date = Math.floor((d.getTime() - overlapSeconds * 1000) / 1000);
       }
     }
     const envelope = await this.callEndpoint<any>("cdr.list", { tenant, query });
@@ -524,12 +524,13 @@ export class VitalPbxClient {
     } else {
       startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     }
+    // VitalPBX /api/v2/cdr expects start_date and end_date as Unix timestamps (seconds).
     const query: Record<string, string | number | boolean> = {
       limit: 1000,
       sort_by: "date",
       sort_order: "asc",
-      start_date: startDate.toISOString(),
-      end_date: endDate.toISOString()
+      start_date: Math.floor(startDate.getTime() / 1000),
+      end_date: Math.floor(endDate.getTime() / 1000)
     };
     let rows: any[] = [];
     let rawRowCountFromApi = 0;

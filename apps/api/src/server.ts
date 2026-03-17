@@ -10001,19 +10001,27 @@ async function getAdminPbxLiveCombined(): Promise<{
       take: 200
     });
 
+    // Cap links so admin combined finishes within typical nginx proxy timeout (60s).
+    // Per-fetch timeout 6s, concurrency 8 → 80 links = 80/8*6 = 60s max.
+    const MAX_LINKS = 80;
+    const PER_FETCH_MS = 6000;
+    const CONCURRENCY = 8;
+    const linksToFetch = links.slice(0, MAX_LINKS);
+
     const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
     let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
     let totalAnswered = 0, totalMissed = 0, totalActive = 0;
     const perTenant: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }> = [];
 
-    // Fetch per-tenant summary for every link (not one per instance) so global KPIs aggregate all tenants.
-    const CONCURRENCY = 8;
-    for (let i = 0; i < links.length; i += CONCURRENCY) {
-      const chunk = links.slice(i, i + CONCURRENCY);
+    const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+
+    for (let i = 0; i < linksToFetch.length; i += CONCURRENCY) {
+      const chunk = linksToFetch.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         chunk.map(async (link) => {
           try {
-            const s = await fetchPbxLiveSummaryForLink(link, link.tenantId);
+            const s = await withTimeout(fetchPbxLiveSummaryForLink(link, link.tenantId), PER_FETCH_MS);
             return { link, s };
           } catch {
             return { link, s: null };
