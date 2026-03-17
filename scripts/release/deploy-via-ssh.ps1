@@ -1,6 +1,7 @@
 # Full deploy: commit, tag, push, then run deploy-tag.sh on server via SSH.
-# Uses DEPLOY_SSH_TARGET (default: 45.14.194.179 from docs). SSH key used from agent or default.
-# Run from repo root.
+# Uses DEPLOY_SSH_TARGET (default: 45.14.194.179 from docs). SSH key from agent or default.
+# Run from repo root. Requires: GitHub SSH key for push; server key for SSH.
+# Usage: powershell -ExecutionPolicy Bypass -File scripts/release/deploy-via-ssh.ps1 [tag]
 $ErrorActionPreference = "Stop"
 $tag = $args[0]
 if (-not $tag) { $tag = "v2.0.7" }
@@ -21,8 +22,8 @@ if ($status) {
 }
 
 # 2) Tag (if not exists)
-$tagExists = git rev-parse "refs/tags/$tag" 2>$null
-if (-not $tagExists) {
+git rev-parse "refs/tags/$tag" 2>$null
+if ($LASTEXITCODE -ne 0) {
   git tag $tag
   Write-Host "[deploy-via-ssh] tagged $tag"
 } else {
