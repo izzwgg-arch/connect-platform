@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { hasPermission } from "../permissions/permissionMap";
-import { mockTenants, mockUsers } from "../services/mockData";
 import { mapBackendRole, readJwtPayload } from "../services/session";
 import { loadTenantOptions } from "../services/tenantData";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
@@ -24,13 +23,15 @@ type AppContextType = {
   setAdminScope: (scope: AdminScope) => void;
 };
 
+const FALLBACK_TENANT: Tenant = { id: "local", name: "My Workspace", plan: "Business", status: "ACTIVE" };
+
 const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>("dark");
   const [role, setRole] = useState<Role>("SUPER_ADMIN");
-  const [tenantId, setTenantId] = useState<string>(mockTenants[0].id);
-  const [tenants, setTenants] = useState<Tenant[]>(mockTenants);
+  const [tenantId, setTenantId] = useState<string>("local");
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
 
   useEffect(() => {
@@ -38,9 +39,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (stored === "dark" || stored === "light") setThemeState(stored);
     const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
     if (storedScope === "GLOBAL" || storedScope === "TENANT") setAdminScopeState(storedScope);
+    const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
     const jwt = readJwtPayload();
     if (jwt?.role) setRole(mapBackendRole(jwt.role));
-    if (jwt?.tenantId) setTenantId(jwt.tenantId);
+    const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
+    setTenantId(resolvedTenantId);
   }, []);
 
   useEffect(() => {
@@ -61,7 +64,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     if (!hasPermission(role, "can_switch_tenants")) {
-      setTenants(mockTenants);
+      // Non-super-admins only see their own tenant
+      setTenants([]);
       return;
     }
     loadTenantOptions()
@@ -79,18 +83,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [role]);
 
   useEffect(() => {
-    if (tenants.length > 0 && !tenants.some((entry) => entry.id === tenantId)) {
-      setTenantId(tenants[0]?.id || mockTenants[0].id);
+    if (tenants.length > 0 && !tenants.some((entry: Tenant) => entry.id === tenantId)) {
+      setTenantId(tenants[0]?.id || tenantId);
     }
   }, [tenantId, tenants]);
 
-  const user = useMemo(() => {
-    const match = mockUsers.find((entry) => entry.role === role);
-    return match || mockUsers[0];
-  }, [role]);
+  const user = useMemo<User>(() => {
+    const jwt = readJwtPayload();
+    return {
+      id: jwt?.sub || "local-user",
+      name: jwt?.name || jwt?.email || "User",
+      email: jwt?.email || "",
+      extension: "",
+      role,
+      tenantId,
+      presence: "AVAILABLE",
+    };
+  }, [role, tenantId]);
 
-  const tenant = useMemo(() => {
-    return tenants.find((entry) => entry.id === tenantId) || tenants[0] || mockTenants[0];
+  const tenant = useMemo<Tenant>(() => {
+    return tenants.find((entry: Tenant) => entry.id === tenantId) || tenants[0] || FALLBACK_TENANT;
   }, [tenantId, tenants]);
 
   const ctx = useMemo<AppContextType>(

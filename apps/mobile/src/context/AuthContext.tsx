@@ -9,6 +9,8 @@ type AuthState = {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Store a token that was obtained via QR-code exchange (no email/password required). */
+  setTokenFromQr: (token: string) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -38,7 +40,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(null);
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync("cc_mobile_provision");
-      }
+      },
+      setTokenFromQr: async (qrToken: string) => {
+        setToken(qrToken);
+        await SecureStore.setItemAsync(TOKEN_KEY, qrToken);
+      },
     }),
     [token, isLoading]
   );

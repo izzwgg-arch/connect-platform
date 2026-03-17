@@ -488,6 +488,103 @@ p {
   gap: 8px;
 }
 
+.dash-section { margin-bottom: 8px; }
+.dash-section-title { font-size: 13px; font-weight: 600; color: var(--console-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px; }
+
+/* Dashboard 2026 — KPI row */
+.dash-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+}
+.dash-kpi-card {
+  background: var(--dash-card);
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  padding: 16px;
+  box-shadow: var(--dash-shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.dash-kpi-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+}
+.dash-kpi-card.active-calls {
+  border-left: 4px solid var(--console-accent);
+  animation: dash-pulse-subtle 2.5s ease-in-out infinite;
+}
+@keyframes dash-pulse-subtle {
+  0%, 100% { box-shadow: var(--dash-shadow); }
+  50% { box-shadow: 0 0 0 1px rgba(43, 165, 255, 0.25), var(--dash-shadow); }
+}
+.dash-kpi-card.incoming { border-left: 4px solid var(--dash-incoming); }
+.dash-kpi-card.outgoing { border-left: 4px solid var(--dash-outgoing); }
+.dash-kpi-card.internal { border-left: 4px solid var(--dash-internal); }
+.dash-kpi-card.missed { border-left: 4px solid var(--dash-missed); }
+.dash-kpi-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--console-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dash-kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  margin-top: 6px;
+  letter-spacing: -0.02em;
+}
+.dash-kpi-meta {
+  font-size: 11px;
+  color: var(--console-muted);
+  margin-top: 6px;
+}
+/* Live calls panel */
+.dash-live-panel {
+  background: var(--dash-card);
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  padding: 20px;
+  box-shadow: var(--dash-shadow);
+}
+.dash-live-panel h3 { margin: 0 0 16px 0; font-size: 15px; font-weight: 600; }
+.dash-section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--console-text); }
+/* System summary cards */
+.dash-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.dash-summary-card {
+  background: var(--dash-card);
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  padding: 16px;
+  box-shadow: var(--dash-shadow);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dash-summary-card .dash-summary-icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; color: #fff; }
+.dash-summary-card .dash-summary-value { font-size: 22px; font-weight: 700; }
+.dash-summary-card .dash-summary-label { font-size: 12px; color: var(--console-muted); }
+.dashboard-side-stack .dash-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Quick health */
+.dash-health-panel {
+  background: var(--dash-card);
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  padding: 16px;
+  box-shadow: var(--dash-shadow);
+}
+.dash-health-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+.dash-health-row:last-child { margin-bottom: 0; }
+/* Call volume line chart container */
+.dash-chart-wrap { min-height: 200px; padding: 16px 0; }
+.dash-chart-legend { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; font-size: 12px; color: var(--console-muted); }
+.dash-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dash-chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+
 .dashboard-main-grid {
   display: grid;
   gap: 10px;
@@ -910,7 +1007,7 @@ p {
   }
 }
 
-/* Console redesign */
+/* Console redesign — 2026 SaaS dashboard */
 :root,
 :root[data-theme="dark"] {
   --console-bg: #0b1016;
@@ -924,6 +1021,16 @@ p {
   --console-success: #33bf7a;
   --console-warning: #f0b34c;
   --console-danger: #e85b6b;
+  /* Dashboard 2026 */
+  --dash-bg: #0e141d;
+  --dash-card: #131b26;
+  --dash-card-border: #253446;
+  --dash-radius: 14px;
+  --dash-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  --dash-incoming: #33bf7a;
+  --dash-outgoing: #2ba5ff;
+  --dash-internal: #a78bfa;
+  --dash-missed: #e85b6b;
 }
 
 :root[data-theme="light"] {
@@ -938,6 +1045,16 @@ p {
   --console-success: #1f9a5b;
   --console-warning: #c7831e;
   --console-danger: #cf4455;
+  /* Dashboard 2026 — soft medical/fintech */
+  --dash-bg: #F4F7F4;
+  --dash-card: #ffffff;
+  --dash-card-border: #e2e8e2;
+  --dash-radius: 14px;
+  --dash-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --dash-incoming: #1f9a5b;
+  --dash-outgoing: #1f7fd8;
+  --dash-internal: #7c3aed;
+  --dash-missed: #cf4455;
 }
 
 body {
@@ -945,6 +1062,7 @@ body {
   color: var(--console-text);
 }
 
+/* Dashboard 2026 — main content uses soft background */
 .console-shell {
   min-height: 100vh;
   display: grid;
@@ -1018,11 +1136,52 @@ body {
 
 .secondary-rail {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   min-height: 0;
   padding: 10px;
   gap: 10px;
 }
+.sidebar-footer {
+  border-top: 1px solid var(--console-border);
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, var(--console-accent), #4568f0);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.sidebar-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sidebar-user-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--console-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-user-status {
+  font-size: 10px;
+  color: var(--console-muted);
+}
+.sidebar-user-status.connected { color: var(--console-success); }
+.sidebar-user-status.disconnected { color: var(--console-danger); }
 
 .secondary-title {
   font-size: 11px;
@@ -1112,6 +1271,47 @@ body {
   letter-spacing: 0.01em;
 }
 
+/* Top bar 2026 — tenant + status + time */
+.topbar-2026 .topbar-tenant-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.topbar-2026 .topbar-tenant-block .tenant-picker {
+  min-width: 220px;
+}
+.topbar-2026 .tenant-picker-trigger {
+  min-width: 220px;
+  font-weight: 600;
+  padding: 8px 12px;
+  height: auto;
+}
+.topbar-viewing {
+  font-size: 11px;
+  color: var(--console-muted);
+}
+.topbar-viewing strong {
+  color: var(--console-text);
+  font-weight: 600;
+}
+.topbar-status-time {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar-live-badge {
+  font-size: 12px;
+  font-weight: 500;
+}
+.topbar-live-badge.connected { color: var(--console-success); }
+.topbar-live-badge.disconnected { color: var(--console-danger); }
+.topbar-time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--console-muted);
+}
+
 .topbar-center .global-search .input {
   width: min(540px, 100%);
 }
@@ -1147,7 +1347,11 @@ body {
 }
 
 .console-content {
-  padding: 12px 14px 16px;
+  padding: 20px 24px 24px;
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+  background: var(--dash-bg);
 }
 
 .page-kicker {
@@ -1354,6 +1558,116 @@ body {
   border-color: var(--console-border);
 }
 
+/* ── Presence Grid animation ─────────────────────────────────────── */
+@keyframes presence-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(1.35); }
+}
+
+/* ── Floating dialer dialpad key hover ───────────────────────────── */
+.dialpad-key:hover {
+  background: var(--panel) !important;
+}
+
+/* ── Form label ──────────────────────────────────────────────────── */
+.label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+  letter-spacing: 0.3px;
+}
+
+/* ── Inline link style ───────────────────────────────────────────── */
+.link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Danger ghost button ─────────────────────────────────────────── */
+.btn.ghost.danger {
+  color: var(--danger);
+}
+.btn.ghost.danger:hover {
+  background: rgba(234,96,104,0.10);
+  color: var(--danger);
+}
+
+/* ── Table row base ──────────────────────────────────────────────── */
+table tr:hover {
+  background: rgba(255,255,255,0.015);
+}
+
+/* ── Stack gap helpers ───────────────────────────────────────────── */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.compact-stack {
+  gap: 10px;
+}
+
+/* ── Form layout ─────────────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field input[type="password"],
+.form-field input[type="number"],
+.form-field input[type="email"],
+.form-field input[type="time"] {
+  font-family: var(--font-mono, monospace);
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Active button state ──────────────────────────────────────────── */
+.btn.ghost.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .nav-backdrop {
   display: none;
 }
@@ -1390,6 +1704,16 @@ body {
     gap: 8px;
   }
 
+  .topbar-2026 .topbar-left {
+    flex-wrap: wrap;
+  }
+  .topbar-2026 .topbar-status-time {
+    flex-wrap: wrap;
+  }
+  .topbar-2026 .topbar-tenant-block .tenant-picker {
+    min-width: 100%;
+  }
+
   .topbar-center .global-search .input {
     width: 100%;
   }
@@ -1401,6 +1725,12 @@ body {
   .dashboard-top-tiles,
   .dashboard-main-grid {
     grid-template-columns: 1fr;
+  }
+  .dash-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dash-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .traffic-bar-row {

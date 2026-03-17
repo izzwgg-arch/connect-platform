@@ -18,7 +18,16 @@ services:
       PBX_API_TOKEN: ${PBX_API_TOKEN:-}
       PBX_API_SECRET: ${PBX_API_SECRET:-}
       PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
-      PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-}
+      # Confirmed WSS endpoint on this PBX build. Override in .env.platform if different.
+      PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-wss://209.145.60.79:8089/ws}
+      # STUN server — used as fallback ICE when tenant has no custom ICE servers
+      STUN_SERVER: ${STUN_SERVER:-stun:stun.l.google.com:19302}
+      # TURN server — set in .env.platform for production audio behind strict NAT
+      TURN_SERVER: ${TURN_SERVER:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+      # Internal URL for /voice/webrtc/health to fetch AMI/ARI status from telephony service
+      TELEPHONY_INTERNAL_URL: ${TELEPHONY_INTERNAL_URL:-http://telephony:3003}
       PBX_WEBHOOK_VERIFY_MODE: ${PBX_WEBHOOK_VERIFY_MODE:-token}
       PBX_WEBHOOK_TOKEN: ${PBX_WEBHOOK_TOKEN:-}
       PBX_WEBHOOK_SIGNATURE_SECRET: ${PBX_WEBHOOK_SIGNATURE_SECRET:-}
@@ -46,6 +55,9 @@ services:
       dockerfile: apps/portal/Dockerfile
     environment:
       NEXT_PUBLIC_API_URL: https://app.connectcomunications.com/api
+      # Live AMI event stream for call/extension/queue state in the portal dashboard.
+      # Must be wss:// in production (nginx proxies wss: → ws: internally).
+      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
     ports:
       - "127.0.0.1:3000:3000"
     networks:
@@ -61,6 +73,35 @@ services:
       - "127.0.0.1:3002:3002"
     networks:
       - default
+
+  telephony:
+    build:
+      context: .
+      dockerfile: apps/telephony/Dockerfile
+    env_file:
+      - /opt/connectcomms/env/.env.platform
+    environment:
+      # Non-secret defaults only. Secrets (JWT_SECRET, AMI_PASSWORD, ARI_PASSWORD)
+      # are read directly from env_file — do NOT override them here or the
+      # empty shell-substitution will win over the file value.
+      PORT: ${TELEPHONY_PORT:-3003}
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PBX_HOST: ${PBX_HOST:-209.145.60.79}
+      AMI_PORT: ${AMI_PORT:-5038}
+      AMI_USERNAME: ${AMI_USERNAME:-connectcommsgefenu}
+      ARI_BASE_URL: ${ARI_BASE_URL:-http://209.145.60.79:8088}
+      ARI_USERNAME: ${ARI_USERNAME:-connectcomms}
+      ARI_APP_NAME: ${ARI_APP_NAME:-connectcomms}
+      TELEPHONY_WS_PATH: ${TELEPHONY_WS_PATH:-/ws/telephony}
+      TELEPHONY_SNAPSHOT_INTERVAL_MS: ${TELEPHONY_SNAPSHOT_INTERVAL_MS:-5000}
+      TELEPHONY_EVENT_DEBOUNCE_MS: ${TELEPHONY_EVENT_DEBOUNCE_MS:-100}
+      ENABLE_TELEPHONY_DEBUG: ${ENABLE_TELEPHONY_DEBUG:-false}
+    ports:
+      - "127.0.0.1:3003:3003"
+    networks:
+      - default
+      - infra_default
 
   worker:
     build:
@@ -84,7 +125,11 @@ services:
       PBX_API_TOKEN: ${PBX_API_TOKEN:-}
       PBX_API_SECRET: ${PBX_API_SECRET:-}
       PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
-      PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-}
+      PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-wss://209.145.60.79:8089/ws}
+      STUN_SERVER: ${STUN_SERVER:-stun:stun.l.google.com:19302}
+      TURN_SERVER: ${TURN_SERVER:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
       PBX_WEBHOOK_VERIFY_MODE: ${PBX_WEBHOOK_VERIFY_MODE:-token}
       PBX_WEBHOOK_TOKEN: ${PBX_WEBHOOK_TOKEN:-}
       PBX_WEBHOOK_SIGNATURE_SECRET: ${PBX_WEBHOOK_SIGNATURE_SECRET:-}

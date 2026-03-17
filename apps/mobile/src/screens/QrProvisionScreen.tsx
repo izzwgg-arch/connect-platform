@@ -5,7 +5,7 @@ import * as Device from "expo-device";
 import { HeaderBar } from "../components/HeaderBar";
 import { useSip } from "../context/SipContext";
 import { useAuth } from "../context/AuthContext";
-import { redeemMobileProvisioningToken } from "../api/client";
+import { exchangeQrToken, redeemMobileProvisioningToken } from "../api/client";
 import type { ProvisioningBundle } from "../types";
 import { ui } from "../theme";
 
@@ -32,7 +32,7 @@ function parseLegacyBundle(parsed: any): ProvisioningBundle {
     sipDomain,
     outboundProxy: parsed.outboundProxy || parsed.provisioning?.outboundProxy || null,
     iceServers,
-    dtmfMode
+    dtmfMode,
   };
 }
 
@@ -41,21 +41,42 @@ function parseProvisionPayload(raw: string): ParsedProvisionPayload {
   const kind = String(parsed?.type || "").toUpperCase();
   if (kind === "MOBILE_PROVISIONING") {
     if (!parsed?.token) throw new Error("Invalid tokenized provisioning QR payload");
-    return { kind: "TOKEN", token: String(parsed.token), apiBaseUrl: parsed.apiBaseUrl ? String(parsed.apiBaseUrl) : undefined };
+    return {
+      kind: "TOKEN",
+      token: String(parsed.token),
+      apiBaseUrl: parsed.apiBaseUrl ? String(parsed.apiBaseUrl) : undefined,
+    };
   }
   return { kind: "LEGACY", bundle: parseLegacyBundle(parsed) };
 }
 
+function buildDeviceInfo() {
+  return {
+    platform: (Device.osName === "iOS" ? "IOS" : "ANDROID") as "IOS" | "ANDROID",
+    deviceName: Device.modelName ?? undefined,
+  };
+}
+
 export function QrProvisionScreen() {
-  const { token } = useAuth();
+  const { token, setTokenFromQr } = useAuth();
   const sip = useSip();
   const [permission, requestPermission] = useCameraPermissions();
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [legacyWarning, setLegacyWarning] = useState("");
+  const [scanning, setScanning] = useState(false);
 
   if (!permission) {
-    return <View style={ui.screen}><HeaderBar title="QR Provisioning" /><View style={ui.content}><View style={ui.card}><Text style={ui.text}>Requesting camera permission...</Text></View></View></View>;
+    return (
+      <View style={ui.screen}>
+        <HeaderBar title="QR Provisioning" />
+        <View style={ui.content}>
+          <View style={ui.card}>
+            <Text style={ui.text}>Requesting camera permission…</Text>
+          </View>
+        </View>
+      </View>
+    );
   }
 
   if (!permission.granted) {
@@ -64,8 +85,12 @@ export function QrProvisionScreen() {
         <HeaderBar title="QR Provisioning" />
         <View style={ui.content}>
           <View style={ui.card}>
-            <Text style={ui.text}>Camera access is required to scan provisioning QR codes.</Text>
-            <TouchableOpacity style={ui.button} onPress={requestPermission}><Text style={ui.buttonText}>Enable Camera</Text></TouchableOpacity>
+            <Text style={ui.text}>
+              Camera access is required to scan provisioning QR codes.
+            </Text>
+            <TouchableOpacity style={ui.button} onPress={requestPermission}>
+              <Text style={ui.buttonText}>Enable Camera</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -76,59 +101,96 @@ export function QrProvisionScreen() {
     <View style={ui.screen}>
       <HeaderBar title="QR Provisioning" />
       <View style={ui.content}>
-        <View style={[ui.card, { height: 420, overflow: "hidden" }]}> 
+        <View style={[ui.card, { height: 480, overflow: "hidden" }]}>
           <Text style={ui.sectionTitle}>Scan portal provisioning QR</Text>
-          <Text style={ui.text}>Tokenized flow redeems a short-lived one-time token and stores credentials in SecureStore.</Text>
+          <Text style={ui.text}>
+            {token
+              ? "Scan the QR code from the portal provisioning page."
+              : "Scan the QR code to log in and provision this device."}
+          </Text>
+
           {!done ? (
             <CameraView
               style={{ flex: 1, borderRadius: 2 }}
               barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
               onBarcodeScanned={async ({ data }) => {
-                if (done) return;
+                if (done || scanning) return;
+                setScanning(true);
+                setError("");
                 try {
-                  setError("");
                   const parsed = parseProvisionPayload(data);
+
                   if (parsed.kind === "TOKEN") {
-                    if (!token) throw new Error("You must be logged in to redeem provisioning token.");
-                    const redeemed = await redeemMobileProvisioningToken(token, {
-                      token: parsed.token,
-                      apiBaseUrl: parsed.apiBaseUrl,
-                      deviceInfo: {
-                        platform: Device.osName || "unknown",
-                        model: Device.modelName || "unknown"
-                      }
-                    });
-                    const bundle = parseLegacyBundle({
-                      sipUsername: redeemed?.provisioning?.sipUsername,
-                      sipPassword: redeemed?.sipPassword,
-                      sipWsUrl: redeemed?.provisioning?.sipWsUrl,
-                      sipDomain: redeemed?.provisioning?.sipDomain,
-                      outboundProxy: redeemed?.provisioning?.outboundProxy,
-                      iceServers: redeemed?.provisioning?.iceServers,
-                      dtmfMode: redeemed?.provisioning?.dtmfMode
-                    });
-                    await sip.saveProvisioning(bundle);
+                    if (token) {
+                      // Authenticated flow: redeem via existing session
+                      const redeemed = await redeemMobileProvisioningToken(token, {
+                        token: parsed.token,
+                        apiBaseUrl: parsed.apiBaseUrl,
+                        deviceInfo: buildDeviceInfo(),
+                      });
+                      const bundle = parseLegacyBundle({
+                        sipUsername: redeemed?.provisioning?.sipUsername,
+                        sipPassword: redeemed?.sipPassword,
+                        sipWsUrl: redeemed?.provisioning?.sipWsUrl,
+                        sipDomain: redeemed?.provisioning?.sipDomain,
+                        outboundProxy: redeemed?.provisioning?.outboundProxy,
+                        iceServers: redeemed?.provisioning?.iceServers,
+                        dtmfMode: redeemed?.provisioning?.dtmfMode,
+                      });
+                      await sip.saveProvisioning(bundle);
+                    } else {
+                      // Unauthenticated flow: exchange token for session + provisioning
+                      const exchanged = await exchangeQrToken(
+                        parsed.token,
+                        buildDeviceInfo(),
+                        parsed.apiBaseUrl
+                      );
+                      // Store the session JWT first so the app transitions to authenticated state
+                      await setTokenFromQr(exchanged.sessionToken);
+                      const bundle = parseLegacyBundle({
+                        sipUsername: exchanged.provisioning?.sipUsername,
+                        sipPassword: exchanged.sipPassword,
+                        sipWsUrl: exchanged.provisioning?.sipWsUrl,
+                        sipDomain: exchanged.provisioning?.sipDomain,
+                        outboundProxy: exchanged.provisioning?.outboundProxy,
+                        iceServers: exchanged.provisioning?.iceServers,
+                        dtmfMode: exchanged.provisioning?.dtmfMode,
+                      });
+                      await sip.saveProvisioning(bundle);
+                    }
                     setLegacyWarning("");
                     setDone(true);
                     return;
                   }
 
+                  // Legacy format (raw credentials in QR — not recommended)
                   await sip.saveProvisioning(parsed.bundle);
-                  setLegacyWarning("Legacy QR format detected. Please switch to tokenized provisioning QR in the portal.");
+                  setLegacyWarning(
+                    "Legacy QR format detected. Please switch to tokenized provisioning QR in the portal."
+                  );
                   setDone(true);
                 } catch (e: any) {
                   setError(e?.message || "Unable to parse or redeem provisioning QR payload");
+                } finally {
+                  setScanning(false);
                 }
               }}
             />
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
               <Text style={ui.text}>Provisioning saved securely.</Text>
-              <TouchableOpacity style={ui.button} onPress={() => sip.register()}><Text style={ui.buttonText}>Register Now</Text></TouchableOpacity>
+              <TouchableOpacity style={ui.button} onPress={() => sip.register()}>
+                <Text style={ui.buttonText}>Register Now</Text>
+              </TouchableOpacity>
             </View>
           )}
-          {legacyWarning ? <Text style={ui.text}>{legacyWarning}</Text> : null}
-          {error ? <Text style={ui.text}>{error}</Text> : null}
+
+          {legacyWarning ? (
+            <Text style={[ui.text, { color: "#f59e0b" }]}>{legacyWarning}</Text>
+          ) : null}
+          {error ? (
+            <Text style={[ui.text, { color: "#ef4444" }]}>{error}</Text>
+          ) : null}
         </View>
       </View>
     </View>

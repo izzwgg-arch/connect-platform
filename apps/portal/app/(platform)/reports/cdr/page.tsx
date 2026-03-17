@@ -140,8 +140,8 @@ export default function ReportsCdrPage() {
                   key: "direction",
                   label: "Direction",
                   render: (r) => (
-                    <span className={`badge ${directionClass(r.direction)}`}>
-                      {directionLabel(r.direction)}
+                    <span className={`badge ${directionClass(r.direction as any)}`}>
+                      {directionLabel(r.direction as any)}
                     </span>
                   ),
                 },

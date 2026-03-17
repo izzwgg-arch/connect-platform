@@ -490,13 +490,14 @@ export class VitalPbxClient {
       limit: 1000,
       sort_by: "date",
       sort_order: "asc",
-      start_date: todayStart.toISOString()
+      start_date: Math.floor(todayStart.getTime() / 1000)
     };
     let rows: any[] = [];
     try {
       const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
       const data = unwrapData<any>(envelope);
-      const raw = Array.isArray(data?.items) ? data.items
+      const raw = Array.isArray(data?.result) ? data.result
+        : Array.isArray(data?.items) ? data.items
         : Array.isArray(data?.rows) ? data.rows
         : Array.isArray(data) ? data
         : [];
@@ -534,8 +535,9 @@ export class VitalPbxClient {
    */
   async getAriChannels(ariUser?: string, ariPassword?: string): Promise<any[] | null> {
     if (!ariUser || !ariPassword) return null;
-    const baseUrl = String(this.cfg.baseUrl || "").replace(/\/$/, "");
-    const url = `${baseUrl}/ari/channels`;
+    const ariBase = String(this.cfg.ariBaseUrl || this.cfg.baseUrl || "").replace(/\/$/, "");
+    if (!ariBase) return null;
+    const url = `${ariBase}/ari/channels`;
     const credentials = Buffer.from(`${ariUser}:${ariPassword}`).toString("base64");
     try {
       const res = await fetch(url, {
@@ -561,8 +563,9 @@ export class VitalPbxClient {
    */
   async getAriEndpointCounts(ariUser?: string, ariPassword?: string): Promise<{ registered: number; unregistered: number; total: number } | null> {
     if (!ariUser || !ariPassword) return null;
-    const baseUrl = String(this.cfg.baseUrl || "").replace(/\/$/, "");
-    const url = `${baseUrl}/ari/endpoints`;
+    const ariBase = String(this.cfg.ariBaseUrl || this.cfg.baseUrl || "").replace(/\/$/, "");
+    if (!ariBase) return null;
+    const url = `${ariBase}/ari/endpoints`;
     const credentials = Buffer.from(`${ariUser}:${ariPassword}`).toString("base64");
     try {
       const res = await fetch(url, {

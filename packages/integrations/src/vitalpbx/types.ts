@@ -2,6 +2,8 @@ export type VitalPbxHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type VitalPbxConfig = {
   baseUrl?: string;
+  /** Optional. Base URL for Asterisk ARI (e.g. http://pbxhost:8088). If not set, ARI uses baseUrl. */
+  ariBaseUrl?: string;
   appKey?: string;
   apiToken?: string;
   apiSecret?: string;

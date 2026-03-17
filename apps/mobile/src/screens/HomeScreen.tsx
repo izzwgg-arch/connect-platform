@@ -65,6 +65,7 @@ export function HomeScreen() {
             <TouchableOpacity style={ui.button} onPress={() => nav.navigate("Dialpad")}><Text style={ui.buttonText}>Dialpad</Text></TouchableOpacity>
             <TouchableOpacity style={ui.button} onPress={() => nav.navigate("IncomingCall")}><Text style={ui.buttonText}>Incoming</Text></TouchableOpacity>
             <TouchableOpacity style={ui.button} onPress={() => nav.navigate("CallHistory")}><Text style={ui.buttonText}>Call History</Text></TouchableOpacity>
+            <TouchableOpacity style={ui.button} onPress={() => nav.navigate("Diagnostics")}><Text style={ui.buttonText}>Diagnostics</Text></TouchableOpacity>
             <TouchableOpacity style={ui.button} onPress={async () => { await sip.unregister(); await logout(); }}><Text style={ui.buttonText}>Logout</Text></TouchableOpacity>
           </View>
         </View>

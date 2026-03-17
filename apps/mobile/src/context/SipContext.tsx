@@ -12,6 +12,7 @@ type SipState = {
   muted: boolean;
   speakerOn: boolean;
   hasProvisioning: boolean;
+  lastError: string | null;
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: () => Promise<void>;
   unregister: () => Promise<void>;
@@ -34,12 +35,14 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
   const [hasProvisioning, setHasProvisioning] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
     clientRef.current.setEvents({
       onRegistrationState: setRegistrationState,
       onCallState: setCallState,
-      onIncomingCall: () => setCallState("ringing")
+      onIncomingCall: () => setCallState("ringing"),
+      onError: setLastError,
     });
 
     (async () => {
@@ -66,6 +69,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       muted,
       speakerOn,
       hasProvisioning,
+      lastError,
       saveProvisioning: async (bundle) => {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
         clientRef.current.configure(bundle);
@@ -106,7 +110,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         clientRef.current.sendDtmf(digit);
       }
     }),
-    [registrationState, callState, muted, speakerOn, hasProvisioning]
+    [registrationState, callState, muted, speakerOn, hasProvisioning, lastError]
   );
 
   return <SipContext.Provider value={state}>{children}</SipContext.Provider>;

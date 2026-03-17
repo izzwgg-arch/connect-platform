@@ -2,7 +2,12 @@
 
 import type { ReactNode } from "react";
 import { AppProvider } from "../hooks/useAppContext";
+import { TelephonyProvider } from "../contexts/TelephonyContext";
 
 export function Providers({ children }: { children: ReactNode }) {
-  return <AppProvider>{children}</AppProvider>;
+  return (
+    <AppProvider>
+      <TelephonyProvider>{children}</TelephonyProvider>
+    </AppProvider>
+  );
 }

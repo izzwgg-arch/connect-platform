@@ -114,6 +114,26 @@ export async function redeemMobileProvisioningToken(token: string, input: { toke
   return json as { sipPassword: string; provisioning: any };
 }
 
+/** Unauthenticated — exchanges a QR-code token for a session JWT + SIP provisioning bundle.
+ *  Used by the mobile app on first launch (no existing auth token).
+ */
+export async function exchangeQrToken(
+  qrToken: string,
+  deviceInfo?: { platform?: "IOS" | "ANDROID"; deviceName?: string; expoPushToken?: string; voipPushToken?: string },
+  apiBaseUrl?: string
+): Promise<{ sessionToken: string; sipPassword: string; provisioning: any; deviceId: string | null; user: { id: string; email: string; role: string } }> {
+  const base = (apiBaseUrl || API_BASE).replace(/\/$/, "");
+  const res = await fetch(`${base}/auth/mobile-qr-exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: qrToken, deviceInfo })
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "QR_EXCHANGE_FAILED");
+  if (!json?.sessionToken) throw new Error("QR_EXCHANGE_NO_TOKEN");
+  return json;
+}
+
 export async function startVoiceDiagSession(token: string, input: {
   sessionId?: string;
   platform: "WEB" | "IOS" | "ANDROID";

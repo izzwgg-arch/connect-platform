@@ -12,6 +12,7 @@ import { QrProvisionScreen } from "./src/screens/QrProvisionScreen";
 import { DialpadScreen } from "./src/screens/DialpadScreen";
 import { CallHistoryScreen } from "./src/screens/CallHistoryScreen";
 import { IncomingCallScreen } from "./src/screens/IncomingCallScreen";
+import { DiagnosticsScreen } from "./src/screens/DiagnosticsScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -30,7 +31,11 @@ function RootNavigator() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!token ? (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            {/* QrProvision accessible before login so new users can link by QR */}
+            <Stack.Screen name="QrProvision" component={QrProvisionScreen} />
+          </>
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
@@ -38,6 +43,7 @@ function RootNavigator() {
             <Stack.Screen name="QrProvision" component={QrProvisionScreen} />
             <Stack.Screen name="Dialpad" component={DialpadScreen} />
             <Stack.Screen name="CallHistory" component={CallHistoryScreen} />
+            <Stack.Screen name="Diagnostics" component={DiagnosticsScreen} />
           </>
         )}
       </Stack.Navigator>

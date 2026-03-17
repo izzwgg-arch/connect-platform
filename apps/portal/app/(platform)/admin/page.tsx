@@ -38,22 +38,22 @@ export default function AdminPage() {
         ) : null}
 
         <section className="grid three">
-          <AdminModuleCard title="Users & Extensions" summary="Manage users, extension assignment, role templates, and onboarding." />
-          <AdminModuleCard title="PBX Routing" summary="Ring groups, queues, IVRs, office hours, routes, and greetings." />
-          <AdminModuleCard title="Provisioning" summary="Devices, templates, BLF defaults, and policy enforcement." />
+          <AdminModuleCard title="Users & Extensions" summary="Manage users, extension assignment, role templates, and onboarding." href="/pbx/extensions" />
+          <AdminModuleCard title="PBX Routing" summary="Ring groups, queues, IVRs, office hours, routes, and greetings." href="/pbx" />
+          <AdminModuleCard title="Provisioning" summary="Devices, templates, BLF defaults, and policy enforcement." href="/admin/pbx" />
         </section>
 
         <section className="grid three">
-          <AdminModuleCard title="Audit Logs" summary="Security and telecom operation logs with tenant context." />
-          <AdminModuleCard title="Module Visibility" summary="Enable or disable modules by tenant plan and role template." />
-          <AdminModuleCard title="Billing & Plan" summary="Tenant billing visibility, license controls, and plan modules." />
+          <AdminModuleCard title="Audit Logs" summary="Security and telecom operation logs with tenant context." href="/admin/pbx/events" />
+          <AdminModuleCard title="Permissions" summary="Role-based feature access controls for all platform capabilities." href="/admin/permissions" />
+          <AdminModuleCard title="Billing & Plan" summary="Tenant billing visibility, license controls, and plan modules." href="/admin/billing" />
         </section>
 
         <RoleGate allow={["SUPER_ADMIN"]}>
           <section className="grid three">
-            <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." />
-            <AdminModuleCard title="Global Policies" summary="Permission templates, security baselines, and default telephony policies." />
-            <AdminModuleCard title="Platform Health" summary="Provider health, trunk registration, and incident boards." />
+            <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." href="/admin/tenants" />
+            <AdminModuleCard title="Global Policies" summary="Permission templates, security baselines, and default telephony policies." href="/admin/permissions" />
+            <AdminModuleCard title="Platform Health" summary="Provider health, trunk registration, and incident boards." href="/admin/pbx" />
           </section>
         </RoleGate>
 

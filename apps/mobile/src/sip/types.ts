@@ -4,6 +4,7 @@ export type SipEvents = {
   onRegistrationState?: (state: SipRegistrationState) => void;
   onIncomingCall?: () => void;
   onCallState?: (state: CallState) => void;
+  onError?: (message: string) => void;
 };
 
 export type SipMatch = {

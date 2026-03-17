@@ -69,6 +69,25 @@ if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE
 }
 if (!canUseCredentialCrypto) app.log.warn("Provider credential endpoints disabled: CREDENTIALS_MASTER_KEY missing or invalid");
 
+// ── Telephony / WebRTC startup validation ─────────────────────────────────────
+// Runs at module load — uses process.env directly (module-level consts declared below).
+(function validateTelephonyEnv() {
+  const ws = process.env.PBX_WS_ENDPOINT?.trim();
+  if (!ws) {
+    app.log.warn({ context: "telephony-env" }, "PBX_WS_ENDPOINT is not set — browser/mobile WebRTC provisioning will return sipWsUrl: null");
+  } else if (!ws.startsWith("wss://") && !ws.startsWith("ws://")) {
+    app.log.warn({ context: "telephony-env", value: ws }, "PBX_WS_ENDPOINT must start with wss:// or ws://");
+  } else {
+    app.log.info(
+      { pbxWsEndpoint: ws, pbxHost: process.env.PBX_HOST || "209.145.60.79", hasTurn: !!process.env.TURN_SERVER },
+      "Telephony WebRTC config loaded",
+    );
+  }
+  if (!process.env.TURN_SERVER) {
+    app.log.warn({ context: "telephony-env" }, "TURN_SERVER is not set — audio may fail behind strict NAT (acceptable for local-network testing)");
+  }
+})();
+
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 type ProviderName = "TWILIO" | "VOIPMS";
 
@@ -163,11 +182,35 @@ const sbcUpstreamConfPath = process.env.SBC_UPSTREAM_CONF_PATH || "/etc/nginx/co
 const BILLING_PLAN_CODE = "SMS_MONTHLY_10";
 const BILLING_PLAN_PRICE_CENTS = 1000;
 
-const DEFAULT_ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" }
-];
+// ── WebRTC / telephony env (read once at module load, validated at startup) ────
+const pbxWsEndpoint: string | null = process.env.PBX_WS_ENDPOINT?.trim() || null;
+const pbxHostEnv: string = (process.env.PBX_HOST || "209.145.60.79").trim();
+const stunServerEnv: string = (process.env.STUN_SERVER || "stun:stun.l.google.com:19302").trim();
+const turnServerEnv: string | null = process.env.TURN_SERVER?.trim() || null;
+const turnUsernameEnv: string | null = process.env.TURN_USERNAME?.trim() || null;
+const turnPasswordEnv: string | null = process.env.TURN_PASSWORD?.trim() || null;
+
+// Build the canonical env-sourced ICE server list.
+// Tenant DB values override this when present (see resolveWebrtcConfig).
+function buildEnvIceServers(): Array<{ urls: string; username?: string; credential?: string }> {
+  const servers: Array<{ urls: string; username?: string; credential?: string }> = [
+    { urls: stunServerEnv },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+  ];
+  if (turnServerEnv) {
+    const turnUrl = (turnServerEnv.startsWith("turn:") || turnServerEnv.startsWith("turns:"))
+      ? turnServerEnv
+      : `turn:${turnServerEnv}:3478`;
+    const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
+    if (turnUsernameEnv) entry.username = turnUsernameEnv;
+    if (turnPasswordEnv) entry.credential = turnPasswordEnv;
+    servers.push(entry);
+  }
+  return servers;
+}
+
+const DEFAULT_ICE_SERVERS = buildEnvIceServers();
 
 function getEnvSolaConfig(): SolaCardknoxConfig {
   return {
@@ -219,13 +262,15 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
   });
 }
 
-function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?: string }): VitalPbxClient {
+function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?: string; ariBaseUrl?: string }): VitalPbxClient {
   const simulate = (process.env.PBX_SIMULATE || "false").toLowerCase() === "true";
   const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
   const token = config?.token || process.env.PBX_API_TOKEN;
   const secret = config?.secret || process.env.PBX_API_SECRET;
+  const ariBaseUrl = config?.ariBaseUrl ?? process.env.PBX_ARI_BASE_URL ?? undefined;
   return new VitalPbxClient({
     baseUrl,
+    ariBaseUrl: ariBaseUrl || undefined,
     apiToken: token,
     apiSecret: secret,
     timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
@@ -264,7 +309,7 @@ async function queuePbxJob(input: { tenantId: string; pbxInstanceId?: string | n
 
 async function getTenantPbxLinkOrThrow(tenantId: string) {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId }, include: { pbxInstance: true } });
-  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) {
+  if (!link || !link.pbxInstance.isEnabled) {
     const err: any = new Error("PBX_NOT_LINKED");
     err.code = "PBX_NOT_LINKED";
     throw err;
@@ -276,17 +321,18 @@ function resolveWebrtcConfig(tenant: any, link: any) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
   const configuredIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
   const explicitSipWsUrl = tenant?.sipWsUrl?.trim() || null;
-  // /sip is the public nginx websocket path that proxies internally to Kamailio on the SBC layer.
   const fallbackSipWsUrl = tenant?.webrtcRouteViaSbc
     ? "wss://app.connectcomunications.com/sip"
-    : (process.env.PBX_WS_ENDPOINT || null);
+    : pbxWsEndpoint;  // uses module-level pbxWsEndpoint (from PBX_WS_ENDPOINT env var)
   return {
     webrtcEnabled: !!tenant?.webrtcEnabled,
     webrtcRouteViaSbc: !!tenant?.webrtcRouteViaSbc,
     sipWsUrl: explicitSipWsUrl || fallbackSipWsUrl,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
-    iceServers: configuredIce.length ? configuredIce : DEFAULT_ICE_SERVERS,
+    // Tenant-configured ICE servers override env-sourced servers (TURN/STUN from env).
+    // buildEnvIceServers() is called fresh here so TURN credentials are always current.
+    iceServers: configuredIce.length ? configuredIce : buildEnvIceServers(),
     dtmfMode: tenant?.dtmfMode || "RFC2833"
   };
 }
@@ -2577,17 +2623,143 @@ app.post("/auth/login", async (req, reply) => {
   return { token };
 });
 
+// Unauthenticated — used by mobile app to log in AND provision via QR scan in one step.
+// The QR code contains a short-lived HMAC-signed token issued by POST /voice/mobile-provisioning/token.
+// Returns a full mobile session JWT + SIP provisioning bundle, eliminating the need for
+// the mobile app to already be authenticated before provisioning.
+app.post("/auth/mobile-qr-exchange", async (req, reply) => {
+  const input = z.object({
+    token: z.string().min(12),
+    deviceInfo: z.object({
+      platform: z.enum(["IOS", "ANDROID"]).optional(),
+      deviceName: z.string().max(128).optional(),
+      expoPushToken: z.string().optional(),
+      voipPushToken: z.string().optional(),
+    }).optional(),
+  }).parse(req.body || {});
+
+  // Rate-limit by token hash to prevent brute-force without leaking the token
+  const tokenHash = hashToken(input.token);
+  if (!checkBillingRateLimit(`qr-exchange:${tokenHash.slice(0, 16)}`, 5, 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  // Verify HMAC signature and expiry embedded in the token
+  const verified = verifyMobileProvisioningToken(input.token);
+  if (!verified) return reply.status(400).send({ error: "TOKEN_INVALID" });
+
+  // Fetch the stored token record
+  const tokenRow = await db.mobileProvisioningToken.findFirst({
+    where: { tokenHash, tenantId: verified.tenantId, userId: verified.userId }
+  });
+  if (!tokenRow) return reply.status(400).send({ error: "TOKEN_INVALID" });
+  if (tokenRow.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+
+  const now = new Date();
+  if (tokenRow.expiresAt < now) return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+
+  // Atomically consume the token (race-safe)
+  const consume = await db.mobileProvisioningToken.updateMany({
+    where: { id: tokenRow.id, usedAt: null, expiresAt: { gte: now } },
+    data: { usedAt: now }
+  });
+  if (consume.count === 0) {
+    const latest = await db.mobileProvisioningToken.findUnique({ where: { id: tokenRow.id } });
+    if (latest?.usedAt) return reply.status(400).send({ error: "TOKEN_ALREADY_USED" });
+    return reply.status(400).send({ error: "TOKEN_EXPIRED" });
+  }
+
+  // Load user from DB to build a proper JwtUser for provisioning
+  const dbUser = await db.user.findUnique({ where: { id: verified.userId } });
+  if (!dbUser || dbUser.tenantId !== verified.tenantId) {
+    return reply.status(400).send({ error: "USER_NOT_FOUND" });
+  }
+  const jwtUser: JwtUser = { sub: dbUser.id, tenantId: dbUser.tenantId, email: dbUser.email, role: dbUser.role };
+
+  // Issue SIP provisioning (resets SIP password on PBX, returns credentials)
+  let out: { sipPassword: string; provisioning: any; pbxExtensionLinkId: string };
+  try {
+    out = await issueOneTimeProvisioningForUser(jwtUser);
+  } catch (e: any) {
+    const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    return reply.status(code === "EXTENSION_NOT_ASSIGNED" ? 404 : 400).send({ error: code });
+  }
+
+  // Sign a full mobile session token (same shape as /auth/login)
+  const sessionToken = await reply.jwtSign({ sub: dbUser.id, tenantId: dbUser.tenantId, email: dbUser.email, role: dbUser.role });
+
+  // Upsert MobileDevice if push token provided (device can also register later via /mobile/devices/register)
+  let deviceId: string | null = null;
+  if (input.deviceInfo?.expoPushToken && input.deviceInfo?.platform) {
+    const device = await db.mobileDevice.upsert({
+      where: { expoPushToken: input.deviceInfo.expoPushToken },
+      create: {
+        tenantId: dbUser.tenantId,
+        userId: dbUser.id,
+        platform: input.deviceInfo.platform,
+        expoPushToken: input.deviceInfo.expoPushToken,
+        voipPushToken: input.deviceInfo.voipPushToken ?? null,
+        deviceName: input.deviceInfo.deviceName ?? null,
+        lastSeenAt: now,
+      },
+      update: {
+        userId: dbUser.id,
+        tenantId: dbUser.tenantId,
+        voipPushToken: input.deviceInfo.voipPushToken ?? undefined,
+        deviceName: input.deviceInfo.deviceName ?? undefined,
+        lastSeenAt: now,
+      },
+    });
+    deviceId = device.id;
+  }
+
+  await audit({
+    tenantId: dbUser.tenantId,
+    actorUserId: dbUser.id,
+    action: "MOBILE_QR_EXCHANGE",
+    entityType: "MobileProvisioningToken",
+    entityId: tokenRow.id,
+  });
+
+  return {
+    sessionToken,
+    sipPassword: out.sipPassword,
+    provisioning: out.provisioning,
+    deviceId,
+    user: { id: dbUser.id, email: dbUser.email, role: dbUser.role },
+  };
+});
+
 app.addHook("preHandler", async (req, reply) => {
   const path = req.url.split("?")[0];
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
-    || ["/health", "/auth/signup", "/auth/login", "/webhooks/twilio/sms-status", "/webhooks/sola-cardknox", "/webhooks/whatsapp/meta", "/webhooks/whatsapp/twilio/status"].includes(path)
+    || [
+        "/health",
+        "/auth/signup",
+        "/auth/login",
+        "/auth/mobile-qr-exchange",
+        "/webhooks/twilio/sms-status",
+        "/webhooks/sola-cardknox",
+        "/webhooks/whatsapp/meta",
+        "/webhooks/whatsapp/twilio/status"
+      ].includes(path)
   ) return;
   try {
     await req.jwtVerify();
   } catch {
     return reply.status(401).send({ error: "unauthorized" });
+  }
+  // SUPER_ADMIN VitalPBX tenant context override.
+  // When the frontend sends x-tenant-context: vpbx:{slug}, the backend bypasses the
+  // tenantPbxLink lookup and scopes PBX API calls directly to that VitalPBX tenant.
+  const user = req.user as JwtUser;
+  if (user?.role === "SUPER_ADMIN") {
+    const ctx = String((req.headers as any)["x-tenant-context"] || "").trim();
+    if (ctx.startsWith("vpbx:")) {
+      (req as any).pbxTenantOverride = ctx.slice(5); // e.g., "a_plus_center"
+    }
   }
 });
 
@@ -3658,9 +3830,22 @@ app.get("/admin/tenants", async (req, reply) => {
 
   const tenants = await db.tenant.findMany({ orderBy: { createdAt: "desc" } });
   const rows = await Promise.all(tenants.map(async (t) => {
-    const userCount = await db.user.count({ where: { tenantId: t.id } });
-    const campaignCount = await db.smsCampaign.count({ where: { tenantId: t.id } });
-    return { id: t.id, name: t.name, isApproved: t.isApproved, dailySmsCap: t.dailySmsCap, perSecondRate: t.perSecondRate, firstCampaignRequiresApproval: t.firstCampaignRequiresApproval, stats: { users: userCount, campaigns: campaignCount } };
+    const [userCount, campaignCount, pbxLink] = await Promise.all([
+      db.user.count({ where: { tenantId: t.id } }),
+      db.smsCampaign.count({ where: { tenantId: t.id } }),
+      db.tenantPbxLink.findUnique({ where: { tenantId: t.id }, select: { pbxTenantId: true, pbxInstanceId: true } }).catch(() => null),
+    ]);
+    return {
+      id: t.id,
+      name: t.name,
+      pbxTenantId: pbxLink?.pbxTenantId ?? null,
+      pbxInstanceId: pbxLink?.pbxInstanceId ?? null,
+      isApproved: t.isApproved,
+      dailySmsCap: t.dailySmsCap,
+      perSecondRate: t.perSecondRate,
+      firstCampaignRequiresApproval: t.firstCampaignRequiresApproval,
+      stats: { users: userCount, campaigns: campaignCount },
+    };
   }));
 
   return rows;
@@ -4893,6 +5078,96 @@ app.get("/voice/me/extension", async (req, reply) => {
   };
 });
 
+// Config completeness check — no secrets exposed, safe to call from dashboard UI.
+// Returns everything needed to diagnose why browser/mobile phone fails to register or gets no audio.
+app.get("/voice/webrtc/health", async (req, reply) => {
+  const user = getUser(req);
+
+  const [tenant, link, hasExtension, linkedDevices] = await Promise.all([
+    db.tenant.findUnique({ where: { id: user.tenantId } }),
+    db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } }),
+    db.pbxExtensionLink.findFirst({ where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } } }).then(Boolean),
+    db.mobileDevice.count({ where: { tenantId: user.tenantId, userId: user.sub } }),
+  ]);
+
+  const cfg = resolveWebrtcConfig(tenant, link);
+
+  // Check ICE servers in the resolved config
+  const iceServers: Array<{ urls: string | string[] }> = Array.isArray(cfg.iceServers) ? cfg.iceServers : [];
+  const stunConfigured = iceServers.some((s) => {
+    const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+    return urls.some((u) => String(u).startsWith("stun:"));
+  });
+  const turnConfigured = !!turnServerEnv || iceServers.some((s) => {
+    const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+    return urls.some((u) => String(u).startsWith("turn:") || String(u).startsWith("turns:"));
+  });
+
+  // Probe the telephony service health (AMI/ARI state) — best-effort, 3 s timeout.
+  // TELEPHONY_INTERNAL_URL defaults to localhost:3003.
+  let amiConnected: boolean | null = null;
+  let ariRestHealthy: boolean | null = null;
+  try {
+    const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL || "http://localhost:3003").replace(/\/$/, "");
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const hRes = await fetch(`${telephonyBase}/health`, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+    if (hRes.ok) {
+      const hBody = await hRes.json() as { ami?: { connected?: boolean }; ari?: { restHealthy?: boolean } };
+      amiConnected = hBody?.ami?.connected ?? null;
+      ariRestHealthy = hBody?.ari?.restHealthy ?? null;
+    }
+  } catch {
+    // Telephony service unreachable — report null rather than false
+  }
+
+  const browserReady = cfg.webrtcEnabled && !!cfg.sipWsUrl && !!cfg.sipDomain && !!hasExtension;
+  const mobileReady  = cfg.webrtcEnabled && !!cfg.sipWsUrl && !!cfg.sipDomain && !!hasExtension;
+
+  const missingConfig: string[] = [
+    !pbxWsEndpoint && !(tenant as any)?.sipWsUrl
+      ? "PBX_WS_ENDPOINT — set to wss://209.145.60.79:8089/ws on API server (or configure sipWsUrl in Voice→Settings→WebRTC)"
+      : null,
+    !cfg.sipDomain
+      ? "SIP_DOMAIN — set sipDomain in Voice→Settings→WebRTC"
+      : null,
+    !cfg.webrtcEnabled
+      ? "WEBRTC_ENABLED — enable WebRTC in Voice→Settings"
+      : null,
+    !stunConfigured
+      ? "STUN_SERVER — no STUN server in ICE list (set STUN_SERVER env var or add via Voice→Settings→ICE Servers)"
+      : null,
+    !turnConfigured
+      ? "TURN_SERVER — no TURN server configured; audio will fail behind strict NAT (set TURN_SERVER env var)"
+      : null,
+  ].filter((x): x is string => x !== null);
+
+  return {
+    pbxHost: pbxHostEnv,
+    pbxWsEndpoint: cfg.sipWsUrl ?? null,
+    sipDomain: cfg.sipDomain ?? null,
+    webrtcEnabled: cfg.webrtcEnabled,
+    amiConnected,
+    ariRestHealthy,
+    ariWebSocketSupported: false,
+    stunConfigured,
+    turnConfigured,
+    browserProvisioningReady: browserReady,
+    mobileProvisioningReady: mobileReady,
+    extensionAssigned: hasExtension,
+    linkedMobileDevices: linkedDevices,
+    missingConfig,
+    // Env-level config summary (never logs passwords)
+    envConfig: {
+      PBX_WS_ENDPOINT: pbxWsEndpoint ?? "(not set)",
+      STUN_SERVER: stunServerEnv,
+      TURN_SERVER: turnServerEnv ?? "(not set)",
+      TURN_USERNAME: turnUsernameEnv ? "(set)" : "(not set)",
+      TURN_PASSWORD: turnPasswordEnv ? "(set)" : "(not set)",
+    },
+  };
+});
+
 app.post("/voice/me/reset-sip-password", async (req, reply) => {
   const user = getUser(req);
   try {
@@ -4979,6 +5254,31 @@ app.post("/voice/mobile-provisioning/redeem", async (req, reply) => {
   try {
     const out = await issueOneTimeProvisioningForUser(user);
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_PROVISIONING_TOKEN_REDEEMED", entityType: "MobileProvisioningToken", entityId: tokenRow.id });
+
+    // Upsert device record if push token was supplied alongside the redemption
+    const di = input.deviceInfo;
+    if (di?.expoPushToken && di?.platform && ["IOS", "ANDROID"].includes(String(di.platform))) {
+      await db.mobileDevice.upsert({
+        where: { expoPushToken: String(di.expoPushToken) },
+        create: {
+          tenantId: user.tenantId,
+          userId: user.sub,
+          platform: di.platform as "IOS" | "ANDROID",
+          expoPushToken: String(di.expoPushToken),
+          voipPushToken: di.voipPushToken ? String(di.voipPushToken) : null,
+          deviceName: di.deviceName ? String(di.deviceName) : null,
+          lastSeenAt: now,
+        },
+        update: {
+          userId: user.sub,
+          tenantId: user.tenantId,
+          voipPushToken: di.voipPushToken ? String(di.voipPushToken) : undefined,
+          deviceName: di.deviceName ? String(di.deviceName) : undefined,
+          lastSeenAt: now,
+        },
+      });
+    }
+
     return { sipPassword: out.sipPassword, provisioning: out.provisioning };
   } catch (e: any) {
     const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
@@ -6762,6 +7062,26 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
   if (!canAccessVitalResourceAction(user, resource, "view")) return reply.status(403).send({ error: "forbidden" });
 
+  // SUPER_ADMIN with vpbx: tenant context: bypass tenantPbxLink, query VitalPBX directly.
+  const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
+  if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
+    const overrideCacheKey = `vpbx:${pbxTenantOverride}:${resource}`;
+    const overrideCached = PBX_RESOURCE_CACHE.get(overrideCacheKey);
+    if (overrideCached && Date.now() - overrideCached.at < PBX_LIVE_TTL_RESOURCES) {
+      return { resource, rows: overrideCached.rows };
+    }
+    const overrideInstance = await db.pbxInstance.findFirst({ where: { isEnabled: true } });
+    if (!overrideInstance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const overrideAuth = decryptJson<{ token: string; secret?: string }>(overrideInstance.apiAuthEncrypted);
+    const overrideRows = await vitalListByResource(
+      getVitalPbxClient({ baseUrl: overrideInstance.baseUrl, token: overrideAuth.token, secret: overrideAuth.secret }),
+      resource as VitalResourceName,
+      pbxTenantOverride
+    );
+    PBX_RESOURCE_CACHE.set(overrideCacheKey, { at: Date.now(), rows: overrideRows });
+    return { resource, rows: overrideRows };
+  }
+
   const cacheKey = `${user.tenantId}:${resource}`;
   const cached = PBX_RESOURCE_CACHE.get(cacheKey);
   if (cached && Date.now() - cached.at < PBX_LIVE_TTL_RESOURCES) {
@@ -8090,7 +8410,7 @@ function extractCallTimestampMs(input: any): number | null {
 
 function extractReportItems(report: any): any[] {
   if (Array.isArray(report)) return report;
-  const containers = [report, report?.data, report?.result, report?.report].filter(Boolean);
+  const containers = [report, report?.data, report?.result, report?.report, report?.data?.data].filter(Boolean);
   for (const box of containers) {
     if (Array.isArray(box)) return box;
     if (Array.isArray(box?.items)) return box.items;
@@ -8099,6 +8419,7 @@ function extractReportItems(report: any): any[] {
     if (Array.isArray(box?.cdr)) return box.cdr;
     if (Array.isArray(box?.cdrs)) return box.cdrs;
     if (Array.isArray(box?.calls)) return box.calls;
+    if (Array.isArray(box?.data)) return box.data;
   }
   return [];
 }
@@ -8120,7 +8441,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   const sinceMs = nowMs - windowMinutes * 60 * 1000;
   const cacheKey = `${scope}:${scope === "TENANT" ? user.tenantId : "all"}:${windowMinutes}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
-  if (cached && nowMs - cached.at < 15000) return cached.payload;
+  if (cached && nowMs - cached.at < 120_000) return cached.payload;
 
   const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
   let dbSourceRows = 0;
@@ -8153,20 +8474,19 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   dbSourceRows = normalizedRows.length;
 
   if (normalizedRows.length === 0 && scope === "GLOBAL") {
-    const links = await db.tenantPbxLink.findMany({
-      where: { pbxInstance: { isEnabled: true } },
-      include: { pbxInstance: true },
-      take: 200
+    // Query each unique PBX *instance* once — NOT each tenant.
+    // All 147 tenants share the same CDR feed so one call per instance is enough.
+    const enabledInstances = await db.pbxInstance.findMany({
+      where: { isEnabled: true },
+      orderBy: { updatedAt: "desc" },
+      take: 10
     });
-    for (const link of links) {
+    for (const instance of enabledInstances) {
       try {
-        const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-        const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
-        const cdr = await client.callEndpoint<any>("cdr.list", {
-          tenant: link.pbxTenantId || undefined,
-          query: cdrQueryWindow
-        });
-        const items = extractReportItems(cdr?.data || cdr);
+        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+        const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+        const direct = await client.callEndpoint<any>("cdr.list", { query: cdrQueryWindow }).catch(() => null);
+        const items = extractReportItems(direct?.data || direct);
         rawRowsSeen += items.length;
         for (const row of items) {
           const ts = extractCallTimestampMs(row);
@@ -8174,68 +8494,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
           normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
           parsedRowsSeen += 1;
         }
-        linkSourceRows = normalizedRows.length - dbSourceRows;
-      } catch {
-        // Keep aggregating remaining tenant links.
-      }
-    }
-    // If tenant links are stale/missing, fall back to enabled PBX instances directly.
-    if (normalizedRows.length === 0) {
-      const enabledInstances = await db.pbxInstance.findMany({
-        where: { isEnabled: true },
-        orderBy: { updatedAt: "desc" },
-        take: 10
-      });
-      for (const instance of enabledInstances) {
-        try {
-          let client: VitalPbxClient;
-          try {
-            const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-            client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-          } catch {
-            // Fallback to env token/secret if instance credentials are unreadable.
-            client = getVitalPbxClient({ baseUrl: instance.baseUrl });
-          }
-          // Try direct instance CDR query first (faster and avoids tenant fan-out timeouts).
-          const direct = await client.callEndpoint<any>("cdr.list", { query: cdrQueryWindow }).catch(() => null);
-          let items = extractReportItems(direct?.data || direct);
-          if (items.length === 0) {
-            const tenants = await client.listTenants().catch(() => []);
-            const tenantCandidates = Array.isArray(tenants) && tenants.length > 0
-              ? tenants.map((t: any) => String(t?.id || t?.tenant_id || t?.uuid || t?.name || "")).filter(Boolean).slice(0, 10)
-              : [];
-            for (const tenantId of tenantCandidates) {
-              const cdr = await client.callEndpoint<any>("cdr.list", {
-                tenant: tenantId,
-                query: cdrQueryWindow
-              }).catch(() => null);
-              const scopedItems = extractReportItems(cdr?.data || cdr);
-              if (scopedItems.length > 0) {
-                items = items.concat(scopedItems);
-              }
-            }
-          }
-          rawRowsSeen += items.length;
-          for (const row of items) {
-            const ts = extractCallTimestampMs(row);
-            if (!ts || ts < sinceMs || ts > nowMs) continue;
-            normalizedRows.push({ ts, direction: normalizeCallDirection(row) });
-            parsedRowsSeen += 1;
-          }
-          enabledSourceRows = normalizedRows.length - dbSourceRows - linkSourceRows;
-        } catch (e: any) {
-          app.log.warn(
-            {
-              source: "enabledInstance",
-              instanceId: instance.id,
-              baseUrl: instance.baseUrl,
-              error: String(e?.code || e?.message || "UNKNOWN"),
-              cause: String(e?.details?.cause || e?.cause?.message || "")
-            },
-            "dashboard_call_traffic_instance_fetch_error"
-          );
-          // Continue best-effort over remaining enabled instances.
-        }
+        enabledSourceRows = normalizedRows.length - dbSourceRows;
+      } catch (e: any) {
+        app.log.warn(
+          { source: "enabledInstance", instanceId: instance.id, error: String(e?.message || "UNKNOWN") },
+          "dashboard_call_traffic_instance_fetch_error"
+        );
       }
     }
   } else if (normalizedRows.length === 0) {
@@ -9537,8 +9801,8 @@ automationRuleTimer.unref();
 
 const PBX_LIVE_CACHE = new Map<string, { at: number; payload: any }>();
 const PBX_LIVE_INFLIGHT = new Map<string, Promise<any>>();
-const PBX_LIVE_TTL_COMBINED = 10_000;   // 10 s  per-tenant combined fetch
-const PBX_LIVE_TTL_ADMIN    = 30_000;   // 30 s  admin all-tenant aggregation
+const PBX_LIVE_TTL_COMBINED  = 120_000;  // 2 min  per-tenant combined fetch (CDR is expensive)
+const PBX_LIVE_TTL_ADMIN     = 300_000;  // 5 min  admin all-tenant aggregation
 const PBX_LIVE_TTL_RESOURCES = 120_000; // 120 s extension/trunk/queue lists
 
 function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
@@ -9697,22 +9961,42 @@ async function getAdminPbxLiveCombined(): Promise<{
   if (inflight) return inflight;
 
   const promise = (async () => {
+    // Query enabled PBX instances directly — do NOT rely on TenantPbxLink status
+    // because background sync jobs may flip links to ERROR even when the PBX is reachable.
+    const enabledInstances = await db.pbxInstance.findMany({
+      where: { isEnabled: true },
+      take: 10
+    });
+
     const links = await db.tenantPbxLink.findMany({
-      where: { status: "LINKED", pbxInstance: { isEnabled: true } },
+      where: { pbxInstanceId: { in: enabledInstances.map(i => i.id) } },
       include: { pbxInstance: true },
       take: 200
     });
 
+    const instanceMap = new Map<string, typeof links[0]>();
+    for (const link of links) {
+      if (!instanceMap.has(link.pbxInstance.id)) {
+        instanceMap.set(link.pbxInstance.id, link);
+      }
+    }
+    for (const inst of enabledInstances) {
+      if (!instanceMap.has(inst.id)) {
+        instanceMap.set(inst.id, {
+          pbxInstance: inst,
+          tenantId: "global",
+          pbxTenantId: null
+        } as any);
+      }
+    }
+
+    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
     let totalCallsToday = 0, totalIncoming = 0, totalOutgoing = 0, totalInternal = 0;
     let totalAnswered = 0, totalMissed = 0, totalActive = 0;
-    type TenantSummaryEntry = { tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string };
-    const tenantSummaries: TenantSummaryEntry[] = [];
-    const allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[] = [];
 
-    await Promise.all(links.map(async (link) => {
+    for (const [, link] of instanceMap) {
       try {
-        // Reuse per-tenant cache — no duplicate CDR/ARI fetch if tenant was recently polled.
-        const s = await getPbxLiveCombined(link, link.tenantId);
+        const s = await fetchPbxLiveSummaryForLink(link, link.tenantId);
         totalCallsToday += s.callsToday;
         totalIncoming   += s.incomingToday;
         totalOutgoing   += s.outgoingToday;
@@ -9721,20 +10005,12 @@ async function getAdminPbxLiveCombined(): Promise<{
         totalMissed     += s.missedToday;
         totalActive     += s.activeCalls;
         allActiveCalls.push(...s.activeCallsList);
-        tenantSummaries.push({
-          tenantId: link.tenantId,
-          callsToday: s.callsToday,
-          incomingToday: s.incomingToday,
-          outgoingToday: s.outgoingToday,
-          internalToday: s.internalToday,
-          activeCalls: s.activeCalls,
-          activeCallsSource: s.activeCallsSource
-        });
       } catch {
-        // best-effort
+        // best-effort per instance
       }
-    }));
+    }
 
+    const tenantCount = links.length;
     const result = {
       totalCallsToday,
       incomingToday: totalIncoming,
@@ -9743,8 +10019,8 @@ async function getAdminPbxLiveCombined(): Promise<{
       answeredToday: totalAnswered,
       missedToday: totalMissed,
       totalActiveCalls: totalActive,
-      activeTenantsCount: tenantSummaries.filter((t) => t.callsToday > 0).length,
-      topTenants: [...tenantSummaries].sort((a, b) => b.callsToday - a.callsToday).slice(0, 10),
+      activeTenantsCount: tenantCount,
+      topTenants: [] as Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }>,
       allActiveCalls,
       lastUpdatedAt: new Date().toISOString()
     };
@@ -9769,11 +10045,31 @@ app.get("/pbx/live/combined", async (req, reply) => {
   if (!user) return;
   if (!ensureCredentialCrypto(reply)) return;
 
+  // SUPER_ADMIN with vpbx: tenant context: use first enabled instance scoped to that tenant.
+  const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
+  if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
+    const overrideInstance = await db.pbxInstance.findFirst({ where: { isEnabled: true } });
+    if (!overrideInstance) return requirePbxLink(reply);
+    const syntheticLink = {
+      pbxInstance: { baseUrl: overrideInstance.baseUrl, apiAuthEncrypted: overrideInstance.apiAuthEncrypted },
+      pbxTenantId: pbxTenantOverride
+    };
+    try {
+      const r = await getPbxLiveCombined(syntheticLink, `vpbx:${pbxTenantOverride}`);
+      return {
+        summary: { tenantId: pbxTenantOverride, callsToday: r.callsToday, incomingToday: r.incomingToday, outgoingToday: r.outgoingToday, internalToday: r.internalToday, answeredToday: r.answeredToday, missedToday: r.missedToday, activeCalls: r.activeCalls, activeCallsSource: r.activeCallsSource, registeredEndpoints: r.registeredEndpoints, unregisteredEndpoints: r.unregisteredEndpoints, lastUpdatedAt: r.lastUpdatedAt },
+        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt }
+      };
+    } catch (err: any) {
+      return reply.status(502).send({ error: err?.code || "PBX_UNAVAILABLE", message: String(err?.message || "PBX data unavailable") });
+    }
+  }
+
   const link = await db.tenantPbxLink.findUnique({
     where: { tenantId: user.tenantId },
     include: { pbxInstance: true }
   });
-  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
+  if (!link || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
 
   try {
     const r = await getPbxLiveCombined(link, user.tenantId);
@@ -9814,7 +10110,7 @@ app.get("/pbx/live/summary", async (req, reply) => {
     where: { tenantId: user.tenantId },
     include: { pbxInstance: true }
   });
-  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
+  if (!link || !link.pbxInstance.isEnabled) return requirePbxLink(reply);
 
   try {
     const r = await getPbxLiveCombined(link, user.tenantId);
@@ -9845,7 +10141,7 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
     where: { tenantId: user.tenantId },
     include: { pbxInstance: true }
   });
-  if (!link || link.status !== "LINKED" || !link.pbxInstance.isEnabled) {
+  if (!link || !link.pbxInstance.isEnabled) {
     return { calls: [], source: "unavailable", message: "No active PBX link." };
   }
 
@@ -9858,14 +10154,6 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
 });
 
 // ─── Admin endpoints ──────────────────────────────────────────────────────────
-
-function requireSuperAdmin(user: any, reply: any): boolean {
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") {
-    reply.status(403).send({ error: "forbidden" });
-    return false;
-  }
-  return true;
-}
 
 // GET /admin/pbx/live/combined — single request for admin dashboard (preferred)
 app.get("/admin/pbx/live/combined", async (req, reply) => {
@@ -9946,8 +10234,56 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 // END PBX LIVE METRICS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Startup telephony/WebRTC config validation ────────────────────────────────
+// Runs just before listen so logs appear during startup, not at module load.
 const port = Number(process.env.PORT || 3001);
-app.listen({ host: "0.0.0.0", port }).catch((e) => {
+(async () => {
+  // Validate and log telephony env vars at startup.
+  // This makes missing-config problems immediately visible in container logs.
+  const missingAtStart: string[] = [];
+
+  if (!pbxWsEndpoint) {
+    missingAtStart.push("PBX_WS_ENDPOINT");
+    app.log.warn(
+      "PBX_WS_ENDPOINT is NOT set — browser/mobile WebRTC will not know where to connect. " +
+      "Set PBX_WS_ENDPOINT=wss://209.145.60.79:8089/ws"
+    );
+  } else {
+    // Reject insecure or stale endpoints
+    if (pbxWsEndpoint.startsWith("ws://")) {
+      app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT uses insecure ws:// — browsers require wss://");
+    } else if (pbxWsEndpoint.includes(":8088") || pbxWsEndpoint.includes(":5060")) {
+      app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT port looks stale — expected :8089/ws");
+    } else {
+      app.log.info({ pbxWsEndpoint }, "PBX WebSocket endpoint OK");
+    }
+  }
+
+  if (!turnServerEnv) {
+    app.log.warn(
+      "TURN_SERVER is NOT set — audio will likely fail for users behind strict/symmetric NAT. " +
+      "Install coturn on the backend server and set TURN_SERVER, TURN_USERNAME, TURN_PASSWORD."
+    );
+  } else {
+    app.log.info(
+      { turnServer: turnServerEnv, turnUsername: turnUsernameEnv ? "(set)" : "(not set)", turnPassword: turnPasswordEnv ? "(set)" : "(not set)" },
+      "TURN server configured"
+    );
+  }
+
+  app.log.info(
+    { stunServer: stunServerEnv },
+    "STUN server configured"
+  );
+
+  if (missingAtStart.length > 0) {
+    app.log.warn({ missingAtStart }, "WebRTC provisioning is INCOMPLETE — see warnings above");
+  } else {
+    app.log.info("WebRTC telephony env config OK");
+  }
+
+  await app.listen({ host: "0.0.0.0", port });
+})().catch((e) => {
   app.log.error(e);
   process.exit(1);
 });

@@ -135,10 +135,11 @@ export async function loadTeamMembers(scope: AdminScope): Promise<{ rows: TeamMe
       extension: String(u.extension || `${100 + idx}`),
       email: String(u.email || "unknown@tenant.local"),
       role: String(u.role || "END_USER"),
-      presence: idx % 4 === 0 ? "ON_CALL" : "AVAILABLE",
-      registered: idx % 5 !== 0,
-      forwarding: idx % 3 === 0,
-      voicemail: true
+      // Presence is driven by live AMI data in the UI via TelephonyContext, not from this API call
+      presence: "AVAILABLE" as const,
+      registered: Boolean(u.registered ?? u.isRegistered ?? true),
+      forwarding: Boolean(u.callForwardingEnabled ?? false),
+      voicemail: Boolean(u.voicemailEnabled ?? true)
     })), scopeLabel: "TENANT" };
   } catch {
     return { scopeLabel: "TENANT", rows: [] };
@@ -219,17 +220,7 @@ export async function loadCallsData(scope: AdminScope): Promise<{ live: CallItem
     }));
     return { live: liveRows, history: historyRows, scopeLabel: "TENANT" };
   } catch {
-    return {
-      scopeLabel: "TENANT",
-      live: [
-        { id: "lc1", extension: "204", direction: "Inbound", caller: "+1 415 220 7782", duration: "00:02:13", state: "Talking" },
-        { id: "lc2", extension: "207", direction: "Queue", caller: "Support Queue", duration: "00:00:44", state: "Ringing" }
-      ],
-      history: [
-        { id: "h1", when: "09:12", ext: "204", direction: "Outbound", number: "+1 212 330 4500", disposition: "Answered", recording: true },
-        { id: "h2", when: "09:34", ext: "207", direction: "Inbound", number: "+1 718 111 9088", disposition: "Missed", recording: false }
-      ]
-    };
+    return { scopeLabel: "TENANT", live: [], history: [] };
   }
 }
 
@@ -329,20 +320,24 @@ export async function loadRecordingsData(): Promise<RecordingItem[]> {
       duration: String(r.duration || r.durationSec || "00:00")
     }));
   } catch {
-    return [
-      { id: "r1", title: "Inbound Support Call", from: "Ext 204 -> +1 212 555 7788", duration: "03:21" },
-      { id: "r2", title: "Outbound Sales Follow-up", from: "Ext 207 -> +1 646 332 8812", duration: "07:02" }
-    ];
+    return [];
   }
 }
 
 export async function loadVoicemailData(): Promise<RecordingItem[]> {
-  // No dedicated endpoint yet in API; fallback to recordings shape.
-  return [
-    { id: "v1", title: "New voicemail - Sales", from: "+1 212 555 8899", duration: "00:32" },
-    { id: "v2", title: "Callback requested", from: "+1 646 222 1098", duration: "00:19" },
-    { id: "v3", title: "After-hours message", from: "+1 917 000 3991", duration: "01:03" }
-  ];
+  // Voicemail endpoint not yet available in API; returns empty until backend exposes /voice/voicemail.
+  try {
+    const items = await apiGet<any[]>("/voice/voicemail");
+    if (!Array.isArray(items)) return [];
+    return items.slice(0, 20).map((r: any, idx) => ({
+      id: String(r.id || `vm-${idx}`),
+      title: String(r.callerName || r.callerId || "Voicemail"),
+      from: String(r.callerId || r.from || "Unknown"),
+      duration: String(r.durationSec || r.duration || "00:00")
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export async function loadAdminSignals(scope: AdminScope): Promise<{ pbxInstanceCount: number; degraded: number; tenantCount: number; failoversRecent: number }> {
@@ -440,18 +435,7 @@ export async function loadChatFeed(scope: AdminScope): Promise<{ conversations: 
     }));
     return { conversations, timeline, scopeLabel: "TENANT" };
   } catch {
-    return {
-      scopeLabel: "TENANT",
-      conversations: [
-        { id: "c1", title: "NOC Team", detail: "Queue alert resolved.", unread: 4 },
-        { id: "c2", title: "Support Escalation", detail: "Call spike in queue B.", unread: 1 },
-        { id: "c3", title: "Billing Ops", detail: "Invoice run complete.", unread: 0 }
-      ],
-      timeline: [
-        { id: "t1", title: "Message", detail: "Queue alert resolved." },
-        { id: "t2", title: "Message", detail: "Updating status board now." }
-      ]
-    };
+    return { scopeLabel: "TENANT", conversations: [], timeline: [] };
   }
 }
 
@@ -502,14 +486,7 @@ export async function loadSmsThreads(scope: AdminScope): Promise<{ threads: SmsT
     }
     return { threads: Array.from(byTo.values()), scopeLabel: "TENANT" };
   } catch {
-    return {
-      scopeLabel: "TENANT",
-      threads: [
-        { id: "s1", phone: "+1 (646) 990-1021", preview: "Can we confirm my install date?", status: "DELIVERY_ISSUE" },
-        { id: "s2", phone: "Northline Logistics", preview: "Dispatch accepted.", status: "DELIVERED" },
-        { id: "s3", phone: "Acme Prospect - NY", preview: "Please send quote.", status: "SENT" }
-      ]
-    };
+    return { scopeLabel: "TENANT", threads: [] };
   }
 }
 
@@ -560,12 +537,6 @@ export async function loadContacts(search: string | undefined, scope: AdminScope
       tags: Array.isArray(r.tags) ? r.tags.join(", ") : ""
     })), scopeLabel: "TENANT" };
   } catch {
-    return {
-      scopeLabel: "TENANT",
-      rows: [
-        { id: "c1", name: "Harris Clinic", company: "Harris Clinic", number: "+1 212 112 7788", email: "ops@harrisclinic.com", tags: "VIP" },
-        { id: "c2", name: "Monroe Supply", company: "Monroe Supply", number: "+1 646 903 2210", email: "service@monroe.com", tags: "Billing" }
-      ]
-    };
+    return { scopeLabel: "TENANT", rows: [] };
   }
 }
