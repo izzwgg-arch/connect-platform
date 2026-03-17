@@ -39,7 +39,7 @@ export function registerTelephonyRoutes(
     const tenantId = getTenantId(res);
     let calls = telephony.callStore.getActive();
     if (tenantId !== null) {
-      calls = calls.filter((c) => c.tenantId === null || c.tenantId === tenantId);
+      calls = calls.filter((c) => c.tenantId === tenantId);
     }
     res.json(calls.map(normalizeCallForClient));
   });

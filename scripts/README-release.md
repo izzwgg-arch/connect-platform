@@ -2,6 +2,23 @@
 
 Safe tagged release deployment/rollback scripts.
 
+## Git deploy key
+
+The server uses a **read-only deploy key** for `git fetch`/`git pull` from GitHub:
+
+- **Fingerprint:** `SHA256:2lz0/oLGArI7/PVzm4foQzt390aqckA2QNZnWlBV/Xo`
+- **Usage:** Add the matching public key to this repo as a **Deploy key** (Settings → Deploy keys). On the server, ensure `git` uses that key for `github.com` (e.g. `~/.ssh/config` or `GIT_SSH_COMMAND`).
+
+Verify on the server: `ssh -T git@github.com` and confirm the fingerprint when prompted. To force git to use the deploy key on the server, add to `~/.ssh/config`:
+
+```
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile /path/to/deploy_key
+  IdentitiesOnly yes
+```
+
 ## Status
 
 ```bash

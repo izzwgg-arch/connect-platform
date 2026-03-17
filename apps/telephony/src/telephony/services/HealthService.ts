@@ -62,4 +62,15 @@ export class HealthService {
       lastError: this.ari.lastError,
     };
   }
+
+  /** Internal diagnostics (admin/dev). Use when ENABLE_TELEPHONY_DEBUG=true. */
+  getDiagnostics(): {
+    calls: ReturnType<CallStateStore["getDiagnostics"]>;
+    lastAmiEventAt: string | null;
+  } {
+    return {
+      calls: this.calls.getDiagnostics(),
+      lastAmiEventAt: this.ami.lastEventAt?.toISOString() ?? null,
+    };
+  }
 }

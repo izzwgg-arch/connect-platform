@@ -25,10 +25,8 @@ export function TelephonyProvider({ children }: { children: ReactNode }) {
     const queueList = [...socket.queues.values()];
 
     const callsByTenant = (tenantId: string | null): LiveCall[] => {
-      if (tenantId === null) return activeCalls;
-      return activeCalls.filter(
-        (c) => c.tenantId === null || c.tenantId === tenantId,
-      );
+      if (tenantId === null) return activeCalls; // master: all calls
+      return activeCalls.filter((c) => c.tenantId === tenantId); // tenant: only that tenant (exclude unresolved)
     };
 
     return {

@@ -17,14 +17,16 @@ export class SnapshotService {
 
   // Returns a point-in-time snapshot suitable for sending to a new WS client.
   getSnapshot(tenantId?: string | null): TelephonySnapshot {
+    this.calls.runStaleCleanup();
     let calls = this.calls.getActive();
     let exts = this.extensions.getAll();
     let qs = this.queues.getAll();
 
+    // Strict tenant filter when set (match portal callsByTenant: unresolved only in master)
     if (tenantId !== undefined && tenantId !== null) {
-      calls = calls.filter((c) => c.tenantId === null || c.tenantId === tenantId);
-      exts = exts.filter((e) => e.tenantId === null || e.tenantId === tenantId);
-      qs = qs.filter((q) => q.tenantId === null || q.tenantId === tenantId);
+      calls = calls.filter((c) => c.tenantId === tenantId);
+      exts = exts.filter((e) => e.tenantId === tenantId);
+      qs = qs.filter((q) => q.tenantId === tenantId);
     }
 
     return {

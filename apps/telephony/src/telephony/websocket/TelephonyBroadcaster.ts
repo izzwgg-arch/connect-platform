@@ -5,7 +5,7 @@ import type { CallStateStore } from "../state/CallStateStore";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import type { HealthService } from "../services/HealthService";
-import { normalizeCallForClient } from "../normalizers/normalizeCallEvent";
+import { normalizeCallForClient, isLocalOnlyCall } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
 import type { NormalizedCall, NormalizedExtensionState, NormalizedQueueState } from "../types";
@@ -76,6 +76,24 @@ export class TelephonyBroadcaster {
   }
 
   private debouncedCallUpsert(call: NormalizedCall): void {
+    // Local-only (helper) calls: do not show as user-facing; still process remove when they hang up
+    if (isLocalOnlyCall(call) && call.state !== "hungup") {
+      return;
+    }
+    // Hungup calls: do not broadcast upsert; send remove only so clients drop the row immediately
+    if (call.state === "hungup") {
+      const key = `call:${call.id}`;
+      const pending = this.debounceMap.get(key);
+      if (pending) {
+        clearTimeout(pending);
+        this.debounceMap.delete(key);
+      }
+      this.pendingCalls.delete(call.id);
+      this.pendingRemovals.add(call.id);
+      this.scheduleFlushRemovals();
+      return;
+    }
+
     const key = `call:${call.id}`;
     this.pendingCalls.set(call.id, call);
 
@@ -87,6 +105,13 @@ export class TelephonyBroadcaster {
       const latest = this.pendingCalls.get(call.id);
       if (!latest) return;
       this.pendingCalls.delete(call.id);
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        const activeCount = this.calls.getActive().length;
+        log.debug(
+          { callId: latest.id, wsClients: this.socket.clientCount(), snapshotActiveCount: activeCount },
+          "live_call: websocket_upsert_broadcast",
+        );
+      }
       this.socket.broadcast(
         "telephony.call.upsert",
         normalizeCallForClient(latest),
@@ -105,6 +130,12 @@ export class TelephonyBroadcaster {
 
     const t = setTimeout(() => {
       this.debounceMap.delete(key);
+      if (env.ENABLE_TELEPHONY_DEBUG && this.pendingRemovals.size > 0) {
+        log.debug(
+          { removeCount: this.pendingRemovals.size, callIds: [...this.pendingRemovals], snapshotActiveCount: this.calls.getActive().length },
+          "live_call: websocket_remove_broadcast",
+        );
+      }
       for (const callId of this.pendingRemovals) {
         this.socket.broadcast("telephony.call.remove", { callId });
       }
@@ -117,10 +148,18 @@ export class TelephonyBroadcaster {
 
   private startSnapshotTimer(): void {
     this.snapshotTimer = setInterval(() => {
+      this.calls.runStaleCleanup();
+      const snapshotActiveCount = this.calls.getActive().length;
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        log.debug(
+          { snapshotActiveCount, wsClients: this.socket.clientCount() },
+          "live_call: snapshot_active_count",
+        );
+      }
       if (this.socket.clientCount() === 0) return;
       this.socket.broadcast("telephony.health", this.health.getHealth());
       log.trace(
-        { clients: this.socket.clientCount(), calls: this.calls.getActive().length },
+        { clients: this.socket.clientCount(), calls: snapshotActiveCount },
         "Health broadcast",
       );
     }, env.TELEPHONY_SNAPSHOT_INTERVAL_MS);

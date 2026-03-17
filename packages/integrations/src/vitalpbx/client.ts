@@ -42,6 +42,29 @@ function unwrapData<T = any>(payload: any): T {
   return payload as T;
 }
 
+/** Start and end of "today" in the given IANA timezone. End is min(now, end of today in zone). */
+function getTodayBoundsInTimezone(tz: string): { start: Date; end: Date } {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD
+  const parts = dateStr.split("-").map(Number);
+  const y = parts[0], m = parts[1], d = parts[2];
+  if (y === undefined || m === undefined || d === undefined || Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) {
+    const utcStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    return { start: utcStart, end: now };
+  }
+  const noonUtc = Date.UTC(y, m - 1, d, 12, 0, 0, 0);
+  const inTz = new Date(noonUtc).toLocaleString("en-US", { timeZone: tz, hour: "numeric", minute: "numeric", hour12: false });
+  const [hourStr, minStr] = inTz.split(":").map((s) => s.trim());
+  const hourInTz = Number.parseInt(hourStr ?? "0", 10);
+  const minInTz = Number.parseInt(minStr ?? "0", 10);
+  const offsetMs = (hourInTz * 60 + minInTz) * 60 * 1000;
+  const startUtc = noonUtc - offsetMs;
+  const start = new Date(startUtc);
+  const endOfDayUtc = startUtc + 24 * 60 * 60 * 1000 - 1;
+  const end = new Date(Math.min(now.getTime(), endOfDayUtc));
+  return { start, end };
+}
+
 function isIdempotentRead(method: VitalPbxHttpMethod): boolean {
   return method === "GET";
 }
@@ -471,11 +494,16 @@ export class VitalPbxClient {
   // ---- Live / real-time helpers ----
 
   /**
-   * Returns CDR rows for today (midnight UTC to now) with direction classification.
+   * Returns CDR rows for today with direction classification.
+   * If options.timezone (IANA, e.g. America/New_York) is set, "today" is the business day in that zone;
+   * otherwise midnight UTC to now (backward compatible).
    * VitalPBX /api/v2/cdr only contains completed calls (written on hangup).
    * calltype: 1=internal, 2=incoming, 3=outgoing.
    */
-  async getCdrToday(tenantId?: string): Promise<{
+  async getCdrToday(
+    tenantId?: string,
+    options?: { timezone?: string }
+  ): Promise<{
     rows: any[];
     incoming: number;
     outgoing: number;
@@ -484,13 +512,23 @@ export class VitalPbxClient {
     missed: number;
     total: number;
   }> {
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
+    const now = new Date();
+    let startDate: Date;
+    let endDate: Date = now;
+    if (options?.timezone && options.timezone.trim()) {
+      const tz = options.timezone.trim();
+      const { start, end } = getTodayBoundsInTimezone(tz);
+      startDate = start;
+      endDate = end;
+    } else {
+      startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    }
     const query: Record<string, string | number | boolean> = {
       limit: 1000,
       sort_by: "date",
       sort_order: "asc",
-      start_date: Math.floor(todayStart.getTime() / 1000)
+      start_date: startDate.toISOString(),
+      end_date: endDate.toISOString()
     };
     let rows: any[] = [];
     try {
@@ -500,6 +538,7 @@ export class VitalPbxClient {
         : Array.isArray(data?.items) ? data.items
         : Array.isArray(data?.rows) ? data.rows
         : Array.isArray(data) ? data
+        : Array.isArray((envelope as any)?.result) ? (envelope as any).result
         : [];
       const seen = new Map<string, any>();
       for (const r of raw) {
@@ -510,20 +549,30 @@ export class VitalPbxClient {
     } catch {
       rows = [];
     }
+    const startMs = startDate.getTime();
+    const endMs = endDate.getTime();
+    rows = rows.filter((r) => {
+      const dateStr = String(r?.date ?? r?.calldate ?? "").trim();
+      if (!dateStr) return true;
+      const t = new Date(dateStr).getTime();
+      return !Number.isNaN(t) && t >= startMs && t <= endMs;
+    });
     let incoming = 0, outgoing = 0, internal = 0, answered = 0, missed = 0;
     for (const r of rows) {
       const ct = Number(r?.calltype ?? r?.callType ?? 0);
-      if (ct === 2) incoming++;
+      let isIncoming = false;
+      if (ct === 2) { incoming++; isIncoming = true; }
       else if (ct === 3) outgoing++;
       else if (ct === 1) internal++;
       else {
         const dir = String(r?.direction || r?.call_type || "").toLowerCase();
-        if (dir.includes("in")) incoming++;
+        if (dir.includes("in") && !dir.includes("internal")) { incoming++; isIncoming = true; }
         else if (dir.includes("internal")) internal++;
         else outgoing++;
       }
-      if (String(r?.disposition || "").toUpperCase() === "ANSWERED") answered++;
-      else missed++;
+      const disposition = String(r?.disposition || "").toUpperCase();
+      if (disposition === "ANSWERED") answered++;
+      else if (isIncoming) missed++;
     }
     return { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
   }

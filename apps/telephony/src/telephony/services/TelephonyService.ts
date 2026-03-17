@@ -1,8 +1,10 @@
 import { childLogger } from "../../logging/logger";
+import { env } from "../../config/env";
 import type { AmiClient } from "../ami/AmiClient";
 import type { AriClient } from "../ari/AriClient";
 import { mapAmiFrame } from "../ami/AmiEventMapper";
 import type { CallStateStore } from "../state/CallStateStore";
+import { isHelperChannel } from "../normalizers/normalizeCallEvent";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import { TenantResolver } from "../state/TenantResolver";
@@ -50,7 +52,11 @@ export class TelephonyService {
     });
 
     this.ami.on("disconnected", (reason) => {
-      log.warn({ reason }, "AMI disconnected — call state may be stale");
+      log.warn({ reason }, "AMI disconnected — clearing call state to avoid ghosts");
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        log.debug({ reason }, "live_call: disconnect_clearAll_triggered");
+      }
+      this.calls.clearAll();
     });
   }
 
@@ -74,17 +80,39 @@ export class TelephonyService {
     const typed = mapAmiFrame(frame);
     if (!typed) return;
 
+    if (env.ENABLE_TELEPHONY_DEBUG) {
+      log.debug(
+        { event: typed.event, linkedid: (typed as { linkedid?: string }).linkedid, uniqueid: (typed as { uniqueid?: string }).uniqueid },
+        "live_call: event_received",
+      );
+    }
+
     switch (typed.event) {
       case "Newchannel": {
+        const linkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
+        const isHelper = isHelperChannel(typed.channel);
+        const linkedIdEmpty = !(typed.linkedid ?? "").trim();
+        if (linkedIdEmpty && isHelper) {
+          if (env.ENABLE_TELEPHONY_DEBUG) {
+            log.debug({ channel: typed.channel }, "live_call: helper_channel_skipped_no_linkedid");
+          }
+          break;
+        }
         const tenantId = this.resolver.resolve({
           channel: typed.channel,
           context: typed.context,
           callerIdNum: typed.callerIDNum,
           exten: typed.exten,
         });
+        if (env.ENABLE_TELEPHONY_DEBUG) {
+          log.debug(
+            { linkedId, channel: typed.channel, tenantId, resolved: tenantId != null },
+            tenantId != null ? "live_call: tenant_resolved" : "live_call: tenant_unresolved",
+          );
+        }
         const direction = inferDirection(typed.context, typed.exten, typed.callerIDNum);
         this.calls.upsertFromNewchannel({
-          linkedId: typed.linkedid,
+          linkedId,
           uniqueid: typed.uniqueid,
           channel: typed.channel,
           channelState: typed.channelState,
@@ -98,15 +126,16 @@ export class TelephonyService {
           direction,
         });
         log.debug(
-          { linkedId: typed.linkedid, channel: typed.channel },
+          { linkedId, channel: typed.channel },
           "Newchannel",
         );
         break;
       }
 
       case "Newstate": {
+        const linkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         this.calls.updateChannelState({
-          linkedId: typed.linkedid,
+          linkedId,
           uniqueid: typed.uniqueid,
           channelState: typed.channelState,
           connectedLineNum: typed.connectedLineNum,
@@ -115,13 +144,14 @@ export class TelephonyService {
       }
 
       case "DialBegin": {
+        const dialLinkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         this.calls.onDialBegin({
-          linkedId: typed.linkedid,
+          linkedId: dialLinkedId,
           callerIDNum: typed.callerIDNum,
           destination: typed.destination,
         });
         log.debug(
-          { linkedId: typed.linkedid, dest: typed.destination },
+          { linkedId: dialLinkedId, dest: typed.destination },
           "DialBegin",
         );
         break;
@@ -136,14 +166,15 @@ export class TelephonyService {
       }
 
       case "BridgeEnter": {
+        const bridgeLinkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         this.calls.onBridgeEnter({
-          linkedId: typed.linkedid,
+          linkedId: bridgeLinkedId,
           uniqueid: typed.uniqueid,
           bridgeId: typed.bridgeUniqueid,
           bridgeNumChannels: typed.bridgeNumChannels,
         });
         log.debug(
-          { linkedId: typed.linkedid, bridge: typed.bridgeUniqueid },
+          { linkedId: bridgeLinkedId, bridge: typed.bridgeUniqueid },
           "BridgeEnter",
         );
         break;
@@ -151,22 +182,23 @@ export class TelephonyService {
 
       case "BridgeLeave": {
         this.calls.onBridgeLeave({
-          linkedId: typed.linkedid,
+          linkedId: effectiveLinkedId(typed.linkedid, typed.uniqueid),
           bridgeId: typed.bridgeUniqueid,
         });
         break;
       }
 
       case "Hangup": {
+        const hangupLinkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         this.calls.onHangup({
-          linkedId: typed.linkedid,
+          linkedId: hangupLinkedId,
           uniqueid: typed.uniqueid,
           channel: typed.channel,
           cause: typed.cause,
         });
         log.debug(
           {
-            linkedId: typed.linkedid,
+            linkedId: hangupLinkedId,
             channel: typed.channel,
             cause: `${typed.cause} ${typed.causeTxt}`,
           },
@@ -177,7 +209,7 @@ export class TelephonyService {
 
       case "Cdr": {
         this.calls.onCdr({
-          linkedId: typed.linkedid,
+          linkedId: effectiveLinkedId(typed.linkedid, typed.uniqueid),
           duration: typed.duration,
           billableSeconds: typed.billableSeconds,
           disposition: typed.disposition,
@@ -190,7 +222,10 @@ export class TelephonyService {
           channel: typed.channel,
           callerIdNum: typed.callerIDNum,
         });
-        this.calls.onQueueJoin({ linkedId: typed.linkedid, queue: typed.queue });
+        this.calls.onQueueJoin({
+          linkedId: effectiveLinkedId(typed.linkedid, typed.uniqueid),
+          queue: typed.queue,
+        });
         this.queues.onCallerJoin({ queue: typed.queue, tenantId });
         log.debug({ queue: typed.queue, linkedId: typed.linkedid }, "QueueCallerJoin");
         break;
@@ -350,6 +385,12 @@ export class TelephonyService {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Use linkedId when non-empty; else uniqueid so we never key calls by "". */
+function effectiveLinkedId(linkedid: string, uniqueid: string): string {
+  const id = (linkedid ?? "").trim();
+  return id.length > 0 ? id : uniqueid;
+}
 
 function inferDirection(
   context: string,

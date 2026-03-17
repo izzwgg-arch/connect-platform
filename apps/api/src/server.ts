@@ -9871,7 +9871,8 @@ async function fetchPbxLiveSummaryForLink(
   const client = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
   const pbxTenantId = link.pbxTenantId || undefined;
 
-  const cdrToday = await client.getCdrToday(pbxTenantId).catch(() => ({
+  const pbxTimezone = process.env.PBX_TIMEZONE?.trim() || undefined;
+  const cdrToday = await client.getCdrToday(pbxTenantId, { timezone: pbxTimezone }).catch(() => ({
     rows: [], incoming: 0, outgoing: 0, internal: 0, answered: 0, missed: 0, total: 0
   }));
 
