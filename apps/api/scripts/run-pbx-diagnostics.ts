@@ -143,25 +143,21 @@ async function run(tenantId: string): Promise<void> {
 const tenantId = process.argv[2];
 loadEnv();
 
-if (!tenantId) {
-  db.tenantPbxLink.findMany({ select: { tenantId: true }, distinct: ["tenantId"] })
-    .then((rows) => {
-      if (rows.length === 0) {
-        console.error("No tenants with a PBX link found.");
-        process.exit(1);
-      }
-      console.log("Tenants with a PBX link (use one as argument):");
-      rows.forEach((r) => console.log(" ", r.tenantId));
-      process.exit(0);
-    })
-    .catch((e) => {
-      console.error(e);
+async function main(): Promise<void> {
+  if (!tenantId) {
+    const rows = await db.tenantPbxLink.findMany({ select: { tenantId: true }, distinct: ["tenantId"] });
+    if (rows.length === 0) {
+      console.error("No tenants with a PBX link found.");
       process.exit(1);
-    });
-  return;
+    }
+    console.log("Tenants with a PBX link (use one as argument):");
+    rows.forEach((r) => console.log(" ", r.tenantId));
+    return;
+  }
+  await run(tenantId);
 }
 
-run(tenantId)
+main()
   .then(() => process.exit(0))
   .catch((e) => {
     console.error(e);
