@@ -18,8 +18,8 @@ services:
       PBX_API_TOKEN: ${PBX_API_TOKEN:-}
       PBX_API_SECRET: ${PBX_API_SECRET:-}
       PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
-      # IANA timezone for "today" KPI (e.g. America/New_York). Set in .env.platform or here.
-      PBX_TIMEZONE: ${PBX_TIMEZONE:-}
+      # IANA timezone for "today" KPI. Defaults to America/New_York; override via .env.platform or host shell.
+      PBX_TIMEZONE: ${PBX_TIMEZONE:-America/New_York}
       # Confirmed WSS endpoint on this PBX build. Override in .env.platform if different.
       PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-wss://209.145.60.79:8089/ws}
       # STUN server — used as fallback ICE when tenant has no custom ICE servers
