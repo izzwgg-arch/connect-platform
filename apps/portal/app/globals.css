@@ -1069,7 +1069,7 @@ body {
 .console-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 260px 1fr;
   background: linear-gradient(180deg, var(--console-bg-soft), var(--console-bg));
 }
 
@@ -1132,9 +1132,9 @@ body {
 }
 
 .rail-link.active {
-  color: #fff;
-  border-color: color-mix(in srgb, var(--console-accent) 60%, var(--console-border));
-  background: linear-gradient(160deg, color-mix(in srgb, var(--console-accent) 34%, transparent), transparent);
+  color: var(--console-accent);
+  border-color: color-mix(in srgb, var(--console-accent) 30%, var(--console-border));
+  background: color-mix(in srgb, var(--console-accent) 15%, transparent);
 }
 
 .secondary-rail {
@@ -1222,8 +1222,10 @@ body {
 
 .secondary-link.active {
   color: var(--console-text);
-  border-color: color-mix(in srgb, var(--console-accent) 45%, var(--console-border));
-  background: linear-gradient(145deg, color-mix(in srgb, var(--console-accent) 20%, transparent), transparent);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--console-accent) 12%, transparent);
+  border-left: 2px solid var(--console-accent);
+  padding-left: 6px;
 }
 
 .secondary-link-icon {
@@ -1250,7 +1252,7 @@ body {
   background: color-mix(in srgb, var(--console-panel) 95%, transparent);
   position: sticky;
   top: 0;
-  z-index: 30;
+  z-index: 50;
   padding: 8px 14px;
 }
 
