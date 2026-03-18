@@ -70,6 +70,7 @@ export type CdrPayload = {
   talkSec: number;
   queueId: string | null;
   hangupCause: string | null;
+  channels: string[];        // Raw Asterisk channel names (e.g. PJSIP/344822_Comfortone-xxx)
 };
 
 export class CdrNotifier {
@@ -142,6 +143,9 @@ export class CdrNotifier {
       talkSec,
       queueId: call.queueId ?? null,
       hangupCause: String(call.metadata?.hangupCause ?? "") || null,
+      // call.channels is empty by hangup time (cleared as each leg ends).
+      // Use metadata.seenChannels which accumulates all channels during the call lifetime.
+      channels: (call.metadata?.seenChannels as string[] | undefined) ?? call.channels,
     };
 
     if (env.ENABLE_TELEPHONY_DEBUG) {

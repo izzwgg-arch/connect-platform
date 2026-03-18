@@ -328,6 +328,12 @@ export class CallStateStore extends EventEmitter {
     if (!call.channels.includes(params.channel)) {
       call.channels.push(params.channel);
     }
+    // Accumulate all seen channels in metadata so they survive post-hangup channel clear.
+    // CdrNotifier uses this for PJSIP endpoint → tenant resolution.
+    const seen = (call.metadata["seenChannels"] as string[] | undefined) ?? [];
+    if (!seen.includes(params.channel)) {
+      call.metadata["seenChannels"] = [...seen, params.channel];
+    }
     if (!call.extensions.includes(params.channel)) {
       const ext = extractExtension(params.channel);
       if (ext && !call.extensions.includes(ext)) call.extensions.push(ext);
@@ -441,6 +447,13 @@ export class CallStateStore extends EventEmitter {
     for (const ch of fromCall.channels) {
       if (!intoCall.channels.includes(ch)) intoCall.channels.push(ch);
     }
+    // Merge seenChannels metadata so the accumulated channel history is preserved
+    const fromSeen = (fromCall.metadata["seenChannels"] as string[] | undefined) ?? fromCall.channels;
+    const intoSeen = (intoCall.metadata["seenChannels"] as string[] | undefined) ?? [...intoCall.channels];
+    for (const ch of fromSeen) {
+      if (!intoSeen.includes(ch)) intoSeen.push(ch);
+    }
+    intoCall.metadata["seenChannels"] = intoSeen;
     for (const br of fromCall.bridgeIds) {
       if (!intoCall.bridgeIds.includes(br)) intoCall.bridgeIds.push(br);
     }

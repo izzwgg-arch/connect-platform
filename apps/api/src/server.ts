@@ -8425,6 +8425,65 @@ function extractReportItems(report: any): any[] {
   return [];
 }
 
+// ─── VitalPBX tenant cache for CDR tenant resolution ─────────────────────────
+// Caches the VitalPBX tenant list so CDR ingest doesn't hit the API on every call.
+// Lookup map keys: lowercased tenant name slug AND numeric tenant ID (both → vpbx:slug).
+let _vpbxTenantCache: { entries: Array<{ name: string; numericId: string }>; fetchedAt: number } | null = null;
+const VPBX_TENANT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getVpbxTenantLookup(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (!_vpbxTenantCache || now - _vpbxTenantCache.fetchedAt > VPBX_TENANT_CACHE_TTL_MS) {
+    try {
+      const client = getVitalPbxClient();
+      const tenants = await client.listTenants();
+      _vpbxTenantCache = {
+        entries: tenants
+          .filter((t: any) => t && typeof t === "object")
+          .map((t: any) => ({
+            name: String(t.name || "").trim(),
+            numericId: String(t.tenant_id ?? t.id ?? "").trim(),
+          }))
+          .filter((t: any) => t.name),
+        fetchedAt: now,
+      };
+      app.log.debug({ count: _vpbxTenantCache.entries.length }, "cdr-ingest: VitalPBX tenant cache refreshed");
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: VitalPBX tenant cache refresh failed");
+      if (!_vpbxTenantCache) return new Map();
+    }
+  }
+  const map = new Map<string, string>();
+  for (const t of _vpbxTenantCache!.entries) {
+    // Key by lowercased name slug → vpbx:name (preserving original case from VitalPBX)
+    if (t.name) map.set(t.name.toLowerCase(), `vpbx:${t.name}`);
+    // Key by numeric ID string → same vpbx:name
+    if (t.numericId && /^\d+$/.test(t.numericId)) map.set(t.numericId, `vpbx:${t.name}`);
+  }
+  return map;
+}
+
+/** Try to extract a tenantId (vpbx:slug) from Asterisk channel names using VitalPBX tenant lookup.
+ *  VitalPBX names PJSIP endpoints like "{numericTenantId}_{tenantSlug}-{uniqueid}"
+ *  e.g. "PJSIP/344822_Comfortone-00003060" → match "344822" or "Comfortone" against tenant list */
+function resolveTenantFromChannels(channels: string[], tenantMap: Map<string, string>): string | null {
+  for (const channel of channels) {
+    const m = /PJSIP\/([^-]+)-/.exec(channel);
+    if (!m) continue;
+    const endpoint = m[1]!; // e.g. "344822_Comfortone"
+    // Try the full endpoint name first (unusual but possible)
+    const full = tenantMap.get(endpoint.toLowerCase());
+    if (full) return full;
+    // Split by underscore and try each part
+    for (const part of endpoint.split("_")) {
+      if (!part) continue;
+      const hit = tenantMap.get(part.toLowerCase());
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 // ─── Connect CDR ingest ──────────────────────────────────────────────────────
 // Internal endpoint: the telephony service POSTs completed call data here.
 // No user auth required — secured by a shared CDR_INGEST_SECRET header.
@@ -8454,6 +8513,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     talkSec:     z.number().int().min(0).default(0),
     queueId:     z.string().nullable().optional(),
     hangupCause: z.string().nullable().optional(),
+    channels:    z.array(z.string()).optional().default([]),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -8462,12 +8522,28 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   }
   const d = parsed.data;
 
+  // If the telephony service could not resolve a tenantId, try to derive it here
+  // using the channel endpoint names against the VitalPBX tenant list.
+  let resolvedTenantId = d.tenantId ?? null;
+  if (!resolvedTenantId && d.channels.length > 0) {
+    try {
+      const tenantMap = await getVpbxTenantLookup();
+      const fromChannels = resolveTenantFromChannels(d.channels, tenantMap);
+      if (fromChannels) {
+        resolvedTenantId = fromChannels;
+        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId }, "cdr-ingest: tenantId resolved from channels");
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: channel tenant resolution error (non-fatal)");
+    }
+  }
+
   try {
     await db.connectCdr.upsert({
       where: { linkedId: d.linkedId },
       create: {
         linkedId:    d.linkedId,
-        tenantId:    d.tenantId ?? null,
+        tenantId:    resolvedTenantId,
         fromNumber:  d.fromNumber ?? null,
         toNumber:    d.toNumber ?? null,
         direction:   d.direction,
@@ -8482,7 +8558,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
       },
       update: {
         // On duplicate linkedId: update only if incoming data is richer
-        tenantId:    d.tenantId ?? undefined,
+        tenantId:    resolvedTenantId ?? undefined,
         fromNumber:  d.fromNumber ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   d.direction !== "unknown" ? d.direction : undefined,
