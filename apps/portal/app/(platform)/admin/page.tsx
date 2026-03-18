@@ -69,6 +69,7 @@ export default function AdminPage() {
             <Link className="btn ghost" href="/admin/pbx">PBX Instances</Link>
             <Link className="btn ghost" href="/admin/pbx/events">PBX Events</Link>
             <Link className="btn ghost" href="/admin/billing">Admin Billing</Link>
+            <Link className="btn ghost" href="/admin/cdr-tenant-map">CDR Tenant Mapping</Link>
           </div>
         </section>
       </div>

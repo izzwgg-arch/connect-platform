@@ -55,6 +55,7 @@ export const navItems: NavItem[] = [
   { href: "/admin/pbx/events",   label: "PBX Events",         icon: "PE", section: "admin", permission: "can_view_admin" },
   { href: "/admin/permissions",  label: "Permissions",        icon: "PM", section: "admin", permission: "can_manage_global_settings" },
   { href: "/admin/billing",      label: "Admin Billing",      icon: "AB", section: "admin", permission: "can_view_admin" },
+  { href: "/admin/cdr-tenant-map", label: "CDR Tenant Map",  icon: "CM", section: "admin", permission: "can_view_admin" },
 
   { href: "/billing",            label: "Billing Overview",   icon: "BL", section: "billing", permission: "can_view_reports" },
   { href: "/billing/invoices",   label: "Invoices",           icon: "IN", section: "billing", permission: "can_view_reports" },
