@@ -18,7 +18,9 @@ function normalizeDirection(dir: string): "incoming" | "outgoing" | "internal" |
 //  2. If answeredAt is set → answered
 //  3. Inbound with no answer → missed
 //  4. Outbound/internal with no answer → canceled
-function deriveDisposition(call: NormalizedCall): string {
+// resolvedDir: pass the already-inferred direction (may differ from call.direction when we
+// applied number heuristics above). Avoids double-inferring direction inside this function.
+function deriveDisposition(call: NormalizedCall, resolvedDir?: string): string {
   const cdrDisp = String(call.metadata?.cdrDisposition ?? "").toUpperCase().trim();
   if (cdrDisp === "ANSWERED") return "answered";
   if (cdrDisp === "NO ANSWER") return "missed";
@@ -28,7 +30,7 @@ function deriveDisposition(call: NormalizedCall): string {
 
   // Infer from call data
   if (call.answeredAt) return "answered";
-  const dir = normalizeDirection(call.direction);
+  const dir = resolvedDir ?? normalizeDirection(call.direction);
   if (dir === "incoming") return "missed";
   if (dir === "outgoing" || dir === "internal") return "canceled";
   return "unknown";
@@ -98,8 +100,25 @@ export class CdrNotifier {
       return;
     }
 
-    const dir = normalizeDirection(call.direction);
-    const disposition = deriveDisposition(call);
+    let dir = normalizeDirection(call.direction);
+
+    // If direction is still unknown, try to infer from caller/callee number lengths.
+    // A long (7+ digit) source number is almost always an inbound call from PSTN.
+    // A short source with a long destination is an outbound call from an extension.
+    // This runs in the notifier so it applies even when the AMI Cdr event isn't available.
+    if (dir === "unknown" && (call.from || call.to)) {
+      const srcDigits = (call.from ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const dstDigits = (call.to  ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const srcLong  = srcDigits.length >= 7;
+      const dstLong  = dstDigits.length >= 7;
+      const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
+      const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
+      if (srcLong)               dir = "incoming";
+      else if (srcShort && dstLong)  dir = "outgoing";
+      else if (srcShort && dstShort) dir = "internal";
+    }
+
+    const disposition = deriveDisposition(call, dir);
 
     // talkSec: time from answer to end (0 if unanswered)
     let talkSec = 0;
