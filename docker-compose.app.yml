@@ -46,7 +46,7 @@ services:
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
       # Shared secret for /internal/cdr-ingest — must match telephony service CDR_INGEST_SECRET.
       CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
-    command: sh -lc "pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
+    command: sh -lc "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
     networks:
