@@ -134,18 +134,20 @@ export default function DashboardPage() {
     return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); clearInterval(t4); };
   }, [isGlobal]);
 
-  // When a call ends (removed from the WebSocket), refresh KPI cards immediately.
-  // Wait 3 s so the CDR ingest async write has time to commit before we query it.
-  const prevCallsSize = useRef<number | null>(null);
+  // When a call ends (goes to hungup state), refresh KPI cards after a short delay.
+  // We track activeCalls.length (non-hungup) so we detect the end as soon as the
+  // state changes — giving the CDR ingest pipeline time to write to DB before we query.
+  const prevActiveCount = useRef<number | null>(null);
   useEffect(() => {
-    const size = telephony.calls.size;
-    if (prevCallsSize.current !== null && size < prevCallsSize.current) {
-      const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 3_000);
-      prevCallsSize.current = size;
+    const count = liveCalls.length;
+    if (prevActiveCount.current !== null && count < prevActiveCount.current) {
+      // A call just ended — wait 4 s for CDR ingest to commit, then refresh KPIs
+      const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 4_000);
+      prevActiveCount.current = count;
       return () => clearTimeout(timer);
     }
-    prevCallsSize.current = size;
-  }, [telephony.calls.size]);
+    prevActiveCount.current = count;
+  }, [liveCalls.length]);
 
   // Platform billing/activity — fetched once per scope change, no tick.
   const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
