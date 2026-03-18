@@ -49,6 +49,16 @@ type DashboardCallTraffic = {
   points: Array<{ label: string; incoming: number; outgoing: number; internal: number }>;
 };
 
+type ConnectKpis = {
+  incomingToday: number;
+  outgoingToday: number;
+  internalToday: number;
+  missedToday: number;
+  scope: "global" | "tenant";
+  tenantId?: string;
+  asOf: string;
+};
+
 function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: string; isGlobal: boolean }) {
   const [diagnostics, setDiagnostics] = useState<PbxLiveDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
@@ -125,10 +135,18 @@ export default function DashboardPage() {
   // Platform billing/activity — fetched once per scope change, no tick.
   const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
 
-  // ONE combined PBX call returns both summary + active calls.
+  // ONE combined PBX call — used for ACTIVE CALLS only. KPIs come from Connect CDR below.
   const pbxCombinedState = useAsyncResource<PbxLiveCombined | AdminPbxLiveCombined>(
     () => isGlobal ? loadAdminPbxLiveCombined() : loadPbxLiveCombined(),
     [adminScope, combinedTick]
+  );
+
+  // Connect-owned KPI totals from the ConnectCdr DB table.
+  // This is the authoritative source for Incoming / Outgoing / Internal / Missed today.
+  const kpiParam = isGlobal ? "" : (tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "");
+  const connectKpisState = useAsyncResource<ConnectKpis>(
+    () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
+    [adminScope, tenantId, combinedTick]
   );
 
   // Call traffic chart — slower cadence, already server-cached.
@@ -172,13 +190,16 @@ export default function DashboardPage() {
     s !== null && "totalCallsToday" in s;
 
   const callsToday = isAdminSummary(pbxLive) ? pbxLive.totalCallsToday : pbxLive?.callsToday ?? null;
-  const incomingToday = isAdminSummary(pbxLive) ? pbxLive.incomingToday : pbxLive?.incomingToday ?? null;
-  const outgoingToday = isAdminSummary(pbxLive) ? pbxLive.outgoingToday : pbxLive?.outgoingToday ?? null;
-  const internalToday = isAdminSummary(pbxLive) ? pbxLive.internalToday : pbxLive?.internalToday ?? null;
   const answeredToday = isAdminSummary(pbxLive) ? pbxLive.answeredToday : pbxLive?.answeredToday ?? null;
   const activeCallCount = isAdminSummary(pbxLive) ? pbxLive.totalActiveCalls : pbxLive?.activeCalls ?? null;
   const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
-  const missedToday = isAdminSummary(pbxLive) ? pbxLive.missedToday : pbxLive?.missedToday ?? null;
+
+  // KPI cards use Connect-owned CDR data (not PBX live API)
+  const connectKpis = connectKpisState.status === "success" ? connectKpisState.data : null;
+  const incomingToday = connectKpis?.incomingToday ?? null;
+  const outgoingToday = connectKpis?.outgoingToday ?? null;
+  const internalToday = connectKpis?.internalToday ?? null;
+  const missedToday   = connectKpis?.missedToday ?? null;
 
   const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
 

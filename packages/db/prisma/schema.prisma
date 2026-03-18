@@ -1092,6 +1092,32 @@ model CallRecord {
   @@index([tenantId, startedAt])
 }
 
+// Connect-owned CDR — one row per completed canonical call.
+// Populated by the telephony service via /internal/cdr-ingest when a call ends.
+// This is the authoritative source for dashboard KPI cards and call history.
+model ConnectCdr {
+  id          String    @id @default(cuid())
+  linkedId    String    @unique           // Asterisk Linkedid — canonical dedupe key
+  tenantId    String?                     // null = tenant could not be resolved
+  fromNumber  String?
+  toNumber    String?
+  direction   String                      // "incoming" | "outgoing" | "internal" | "unknown"
+  disposition String                      // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
+  startedAt   DateTime
+  answeredAt  DateTime?
+  endedAt     DateTime
+  durationSec Int       @default(0)       // wall time: endedAt - startedAt (seconds)
+  talkSec     Int       @default(0)       // talk time: endedAt - answeredAt (0 if unanswered)
+  queueId     String?
+  hangupCause String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([tenantId, startedAt])           // per-tenant KPI queries
+  @@index([startedAt])                     // global aggregate queries
+  @@index([tenantId, direction, startedAt]) // typed per-tenant KPI queries
+}
+
 model PbxJob {
   id            String       @id @default(cuid())
   tenantId      String

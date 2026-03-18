@@ -8424,6 +8424,145 @@ function extractReportItems(report: any): any[] {
   return [];
 }
 
+// ─── Connect CDR ingest ──────────────────────────────────────────────────────
+// Internal endpoint: the telephony service POSTs completed call data here.
+// No user auth required — secured by a shared CDR_INGEST_SECRET header.
+// Performs an upsert by linkedId to prevent duplicate rows.
+app.post("/internal/cdr-ingest", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (secret) {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    // Constant-time compare
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) return reply.code(403).send({ error: "forbidden" });
+  }
+
+  const schema = z.object({
+    linkedId:    z.string().min(1),
+    tenantId:    z.string().nullable().optional(),
+    fromNumber:  z.string().nullable().optional(),
+    toNumber:    z.string().nullable().optional(),
+    direction:   z.enum(["incoming", "outgoing", "internal", "unknown"]),
+    disposition: z.enum(["answered", "missed", "busy", "failed", "canceled", "unknown"]),
+    startedAt:   z.string().datetime(),
+    answeredAt:  z.string().datetime().nullable().optional(),
+    endedAt:     z.string().datetime(),
+    durationSec: z.number().int().min(0).default(0),
+    talkSec:     z.number().int().min(0).default(0),
+    queueId:     z.string().nullable().optional(),
+    hangupCause: z.string().nullable().optional(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "invalid payload", issues: parsed.error.issues });
+  }
+  const d = parsed.data;
+
+  try {
+    await db.connectCdr.upsert({
+      where: { linkedId: d.linkedId },
+      create: {
+        linkedId:    d.linkedId,
+        tenantId:    d.tenantId ?? null,
+        fromNumber:  d.fromNumber ?? null,
+        toNumber:    d.toNumber ?? null,
+        direction:   d.direction,
+        disposition: d.disposition,
+        startedAt:   new Date(d.startedAt),
+        answeredAt:  d.answeredAt ? new Date(d.answeredAt) : null,
+        endedAt:     new Date(d.endedAt),
+        durationSec: d.durationSec,
+        talkSec:     d.talkSec,
+        queueId:     d.queueId ?? null,
+        hangupCause: d.hangupCause ?? null,
+      },
+      update: {
+        // On duplicate linkedId: update only if incoming data is richer
+        tenantId:    d.tenantId ?? undefined,
+        fromNumber:  d.fromNumber ?? undefined,
+        toNumber:    d.toNumber ?? undefined,
+        direction:   d.direction !== "unknown" ? d.direction : undefined,
+        disposition: d.disposition !== "unknown" ? d.disposition : undefined,
+        answeredAt:  d.answeredAt ? new Date(d.answeredAt) : undefined,
+        durationSec: d.durationSec > 0 ? d.durationSec : undefined,
+        talkSec:     d.talkSec > 0 ? d.talkSec : undefined,
+        queueId:     d.queueId ?? undefined,
+        hangupCause: d.hangupCause ?? undefined,
+      },
+    });
+    return reply.code(200).send({ ok: true });
+  } catch (err: any) {
+    app.log.error({ linkedId: d.linkedId, err: err?.message }, "cdr-ingest: db error");
+    return reply.code(500).send({ error: "db_error" });
+  }
+});
+
+// ─── Connect CDR KPI totals ───────────────────────────────────────────────────
+// Returns today's call counts from the Connect-owned ConnectCdr table.
+// This is the authoritative source for dashboard KPI cards.
+// Scope: tenantId param → per-tenant; absent or "global" → all tenants aggregate.
+app.get("/dashboard/call-kpis", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const query = z.object({
+    tenantId: z.string().optional(),
+  }).parse(req.query || {});
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  // tenantId param is only honoured for super admins; regular users get their own tenant
+  const scopeTenantId = isSuperAdmin
+    ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
+    : user.tenantId ?? null;
+
+  // "today" in the configured business timezone
+  const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+  const nowUtc = new Date();
+  // Get today's date string in that timezone (YYYY-MM-DD)
+  const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: timezone });
+  const [y, mo, d] = todayStr.split("-").map(Number);
+  // Build UTC boundaries for the full calendar day in that timezone
+  // We approximate: get the offset by looking at noon-UTC in that timezone
+  const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
+  const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", {
+    timeZone: timezone, hour: "numeric", minute: "numeric", hour12: false
+  });
+  const [hStr, mStr] = noonLocal.split(":");
+  const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
+  const dayStartUtc = new Date(noonUtc - offsetMs);
+  const dayEndUtc   = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+
+  const timeWhere = { gte: dayStartUtc, lt: dayEndUtc };
+
+  try {
+    if (scopeTenantId) {
+      // Per-tenant: single set of counts scoped to one tenant
+      const [incoming, outgoing, internal, missed] = await Promise.all([
+        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "incoming", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "outgoing", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "internal", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
+      ]);
+      return reply.send({ incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed, scope: "tenant", tenantId: scopeTenantId, asOf: nowUtc.toISOString() });
+    } else {
+      // Global aggregate: all tenants combined
+      const [incoming, outgoing, internal, missed] = await Promise.all([
+        db.connectCdr.count({ where: { direction: "incoming", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { direction: "outgoing", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { direction: "internal", startedAt: timeWhere } }),
+        db.connectCdr.count({ where: { direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
+      ]);
+      return reply.send({ incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed, scope: "global", asOf: nowUtc.toISOString() });
+    }
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "call-kpis: db error");
+    return reply.code(500).send({ error: "db_error" });
+  }
+});
+
 app.get("/dashboard/call-traffic", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;

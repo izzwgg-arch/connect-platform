@@ -44,6 +44,8 @@ services:
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
+      # Shared secret for /internal/cdr-ingest — must match telephony service CDR_INGEST_SECRET.
+      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
     command: sh -lc "pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
@@ -99,6 +101,9 @@ services:
       TELEPHONY_SNAPSHOT_INTERVAL_MS: ${TELEPHONY_SNAPSHOT_INTERVAL_MS:-5000}
       TELEPHONY_EVENT_DEBOUNCE_MS: ${TELEPHONY_EVENT_DEBOUNCE_MS:-100}
       ENABLE_TELEPHONY_DEBUG: ${ENABLE_TELEPHONY_DEBUG:-false}
+      # CDR persistence: telephony POSTs completed calls to the API for DB storage.
+      CDR_INGEST_URL: ${CDR_INGEST_URL:-http://api:3001/internal/cdr-ingest}
+      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
     ports:
       - "127.0.0.1:3003:3003"
     networks:

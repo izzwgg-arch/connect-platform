@@ -15,6 +15,7 @@ import { HealthService } from "./services/HealthService";
 import { SnapshotService } from "./services/SnapshotService";
 import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
+import { CdrNotifier } from "./services/CdrNotifier";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
 
@@ -42,6 +43,14 @@ export function createTelephonyModule(server: http.Server) {
 
   const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore);
   const healthService = new HealthService(ami, ari, callStore, extStore, queueStore);
+
+  // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
+  const cdrNotifier = new CdrNotifier();
+  callStore.on("callUpsert", (call) => {
+    if (call.state === "hungup") {
+      cdrNotifier.notify(call);
+    }
+  });
   const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService);
   const socketServer = new TelephonySocketServer(server, snapshotService);
   const broadcaster = new TelephonyBroadcaster(

@@ -25,6 +25,11 @@ const schema = z.object({
     .string()
     .transform((v) => v.toLowerCase() === "true")
     .default("false"),
+
+  // CDR ingest — when set, completed calls are POSTed to this URL so the API
+  // can persist them in ConnectCdr. If unset, CDR persistence is skipped.
+  CDR_INGEST_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
+  CDR_INGEST_SECRET: z.string().optional().or(z.literal("").transform(() => undefined)),
 });
 
 function loadEnv() {
