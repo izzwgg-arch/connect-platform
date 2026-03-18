@@ -592,10 +592,18 @@ export class CallStateStore extends EventEmitter {
     // Try dcontext first (same patterns as Newchannel context inference), then number heuristics.
     if (call.direction === "unknown") {
       const dctx = (params.dcontext ?? "").toLowerCase();
-      if (dctx.includes("from-trunk") || dctx.includes("from-pstn") || dctx.includes("from-external") || dctx.includes("inbound")) {
+      if (
+        dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
+        dctx.includes("from-external") || dctx.includes("inbound") ||
+        /^ivr-\d/.test(dctx)  // VitalPBX IVR context = inbound
+      ) {
         call.direction = "inbound";
-      } else if (dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound")) {
-        call.direction = /^\d{3,5}$/.test(params.destination ?? "") ? "internal" : "outbound";
+      } else if (
+        dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
+        /^trk-[^-]+-dial/.test(dctx) ||  // VitalPBX trk-{n}-dial = outbound trunk dial
+        /^t\d+_cos-/.test(dctx)           // VitalPBX T{n}_cos-{x} = Class of Service outbound
+      ) {
+        call.direction = /^\d{2,6}$/.test(params.destination ?? "") ? "internal" : "outbound";
       } else if (params.source && params.destination) {
         // Number-length heuristic: only 10-digit numbers count as external PSTN.
         // 7-digit local numbers are ambiguous — don't classify as outgoing.
@@ -848,6 +856,21 @@ function extractExtension(channel: string): string | null {
 }
 
 function isInternalExtension(dest: string): boolean {
-  // Internal extensions are typically 3-5 digit numbers
-  return /^\d{3,5}$/.test(dest.split("@")[0] ?? "");
+  // Strip SIP URI parameters and get the base part before '@'
+  const bare = dest.split("@")[0] ?? "";
+
+  // Plain short number: 101, 205, 1001, etc.
+  if (/^\d{2,6}$/.test(bare)) return true;
+
+  // Local/{ext}@{context} — VitalPBX IVR routing to an extension
+  // e.g. Local/105@T11_ivr-only-extensions-00000dec;1 → bare = "Local/105"
+  if (/^Local\/(\d{2,6})$/.test(bare)) return true;
+
+  // PJSIP/T{n}_{ext}-{hex} or PJSIP/{ext}-{hex} — VitalPBX tenant extension channels
+  // e.g. PJSIP/T11_105-00002d2a, PJSIP/T18_101-00002d27
+  // Must NOT match trunk channels like PJSIP/344022_trust-xxxx (trunk prefix = all digits + slug)
+  const pjsipM = /^(?:PJSIP|SIP)\/([A-Za-z]\d+_)?(\d{2,6})(?:-[\da-f]+)?$/i.exec(bare);
+  if (pjsipM) return true;
+
+  return false;
 }

@@ -419,6 +419,8 @@ function inferDirection(
 ): import("../types").CallDirection {
   const ctx = context.toLowerCase();
 
+  // ── Inbound indicators ────────────────────────────────────────────────────
+  // Standard VitalPBX / Asterisk patterns that mean a call arrived FROM outside.
   if (
     ctx.includes("from-trunk") ||
     ctx.includes("from-pstn") ||
@@ -427,22 +429,30 @@ function inferDirection(
   ) {
     return "inbound";
   }
+  // VitalPBX IVR contexts: IVR-{n}, ivr-{n} — caller entered an IVR menu → incoming.
+  if (/^ivr-\d/.test(ctx)) return "inbound";
 
+  // ── Outbound indicators ───────────────────────────────────────────────────
   if (
     ctx.includes("from-internal") ||
     ctx.includes("ext-local") ||
     ctx.includes("outbound")
   ) {
-    // Short exten (3-5 digits) = extension-to-extension internal call
-    if (/^\d{3,5}$/.test(exten)) return "internal";
+    // Short exten (2-6 digits) = extension-to-extension internal call
+    if (/^\d{2,6}$/.test(exten)) return "internal";
     // Full 10-digit PSTN number = outbound to external
     if (/^\d{10,}$/.test(exten.replace(/\D/g, "").replace(/^1(\d{10})$/, "$1"))) return "outbound";
     // 7-9 digit numbers are ambiguous (local PSTN or long extensions) — let CDR clarify
     return "unknown";
   }
+  // VitalPBX trunk dial contexts: trk-{n}-dial, trk-{slug}-dial — extension dialing out.
+  if (/^trk-[^-]+-dial/.test(ctx)) return "outbound";
+  // VitalPBX Class-of-Service contexts: T{n}_cos-{x} — extension using outbound routing.
+  if (/^t\d+_cos-/.test(ctx)) return "outbound";
 
-  // Heuristic: if both callerID and exten are short extensions → internal
-  if (/^\d{3,5}$/.test(callerIdNum) && /^\d{3,5}$/.test(exten)) return "internal";
+  // ── Heuristic fallback ────────────────────────────────────────────────────
+  // Both callerID and exten are short extensions → internal
+  if (/^\d{2,6}$/.test(callerIdNum) && /^\d{2,6}$/.test(exten)) return "internal";
 
   return "unknown";
 }
