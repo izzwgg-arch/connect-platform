@@ -66,11 +66,11 @@ fi
 log "running prisma migrate deploy"
 run_heavy "deploy:${REQ_TAG}:prisma-migrate" pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma
 
-if [[ "${FORCE_REBUILD:-0}" == "1" ]]; then
-  log "FORCE_REBUILD=1 -> compose up --build"
+if [[ "${FORCE_REBUILD:-1}" == "1" ]]; then
+  log "rebuilding api/portal/worker/realtime images"
   run_heavy "deploy:${REQ_TAG}:compose-build" docker compose -f docker-compose.app.yml up -d --build api portal worker realtime
 else
-  log "restart only api/portal/worker/realtime"
+  log "FORCE_REBUILD=0 -> restart only (no image rebuild)"
   run_heavy "deploy:${REQ_TAG}:compose-restart" docker compose -f docker-compose.app.yml restart api portal worker realtime
 fi
 
