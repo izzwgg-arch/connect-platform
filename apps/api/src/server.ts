@@ -2740,6 +2740,7 @@ app.addHook("preHandler", async (req, reply) => {
         "/auth/signup",
         "/auth/login",
         "/auth/mobile-qr-exchange",
+        "/internal/cdr-ingest",
         "/webhooks/twilio/sms-status",
         "/webhooks/sola-cardknox",
         "/webhooks/whatsapp/meta",
