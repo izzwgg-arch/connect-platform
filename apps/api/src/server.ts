@@ -8507,24 +8507,89 @@ async function getVpbxTenantLookup(): Promise<Map<string, string>> {
   return map;
 }
 
+/** Normalize a string for fuzzy tenant slug matching.
+ *  Replaces hyphens with underscores and lowercases — so "Relax-Tires" matches "relax_tires". */
+function normSlug(s: string): string {
+  return s.toLowerCase().replace(/-/g, "_");
+}
+
 /** Try to extract a tenantId (vpbx:slug) from Asterisk channel names using VitalPBX tenant lookup.
  *  VitalPBX names PJSIP endpoints like "{numericTenantId}_{tenantSlug}-{uniqueid}"
- *  e.g. "PJSIP/344822_Comfortone-00003060" → match "344822" or "Comfortone" against tenant list */
+ *  e.g. "PJSIP/344822_Comfortone-00003060" → match "344822" or "Comfortone" against tenant list.
+ *  Also builds a normalized (hyphen→underscore) lookup to handle naming mismatches. */
 function resolveTenantFromChannels(channels: string[], tenantMap: Map<string, string>): string | null {
+  // Build normalized slug map (handles hyphen/underscore mismatch in endpoint names)
+  const normMap = new Map<string, string>();
+  for (const [key, val] of tenantMap) {
+    normMap.set(normSlug(key), val);
+  }
+
   for (const channel of channels) {
-    const m = /PJSIP\/([^-]+)-/.exec(channel);
+    const m = /PJSIP\/([^-]+(?:-[^-]+)*?)-[\da-f]{8}/i.exec(channel) ??
+              /PJSIP\/([^-]+)-/.exec(channel);
     if (!m) continue;
-    const endpoint = m[1]!; // e.g. "344822_Comfortone"
-    // Try the full endpoint name first (unusual but possible)
-    const full = tenantMap.get(endpoint.toLowerCase());
+    const endpoint = m[1]!; // e.g. "344822_Comfortone" or "relax_tires"
+    // Try exact lookup first
+    const full = tenantMap.get(endpoint.toLowerCase()) ?? normMap.get(normSlug(endpoint));
     if (full) return full;
-    // Split by underscore and try each part
+    // Split by underscore and try each part (handles "{numericId}_{slug}")
     for (const part of endpoint.split("_")) {
       if (!part) continue;
-      const hit = tenantMap.get(part.toLowerCase());
+      const hit = tenantMap.get(part.toLowerCase()) ?? normMap.get(normSlug(part));
+      if (hit) return hit;
+    }
+    // Also split by hyphen for endpoint names like "Relax-Tires"
+    for (const part of endpoint.split("-")) {
+      if (!part) continue;
+      const hit = tenantMap.get(part.toLowerCase()) ?? normMap.get(normSlug(part));
       if (hit) return hit;
     }
   }
+  return null;
+}
+
+/** Try to extract a tenantId (vpbx:slug) from AMI dcontext using VitalPBX tenant list.
+ *  VitalPBX names contexts like "ext-local-relax_tires", "from-pstn-relax_tires",
+ *  "app-queue-relax_tires", "app-dial-relax_tires", etc.
+ *  Strategy: check if the dcontext ends with a known tenant slug (case-insensitive + normalized). */
+function resolveTenantFromDcontext(dcontext: string | null | undefined, tenantMap: Map<string, string>): string | null {
+  if (!dcontext) return null;
+
+  // Build normalized slug map
+  const normMap = new Map<string, string>();
+  for (const [key, val] of tenantMap) {
+    normMap.set(normSlug(key), val);
+  }
+
+  const ctx = dcontext.trim();
+  // Check all known VitalPBX context prefixes — slug follows the last "-"
+  const VPBX_CTX_PREFIXES = [
+    "ext-local-", "from-pstn-", "from-internal-", "from-trunk-",
+    "outbound-", "from-external-",
+    "app-queue-", "app-dial-", "app-ringgroup-", "app-announcement-",
+    "app-followme-", "app-blacklist-", "app-voicemail-", "app-dnd-",
+    "macro-dial-exec-",
+  ];
+  for (const pfx of VPBX_CTX_PREFIXES) {
+    if (ctx.toLowerCase().startsWith(pfx)) {
+      const slug = ctx.slice(pfx.length).trim();
+      if (!slug || /^\d+$/.test(slug)) continue;
+      // Try exact match first, then normalized
+      const hit = tenantMap.get(slug.toLowerCase()) ?? normMap.get(normSlug(slug));
+      if (hit) return hit;
+      // Also return direct slug if it looks like a real tenant name (not in tenant list yet)
+      if (slug.length > 2) return `vpbx:${slug}`;
+    }
+  }
+
+  // Fallback: check if any tenant slug appears as the last path segment of the context
+  // e.g. "custom-context-relax_tires" → "relax_tires"
+  const lastSegment = ctx.split("-").pop() ?? "";
+  if (lastSegment.length > 2 && !/^\d+$/.test(lastSegment)) {
+    const hit = tenantMap.get(lastSegment.toLowerCase()) ?? normMap.get(normSlug(lastSegment));
+    if (hit) return hit;
+  }
+
   return null;
 }
 
@@ -8558,6 +8623,8 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     queueId:     z.string().nullable().optional(),
     hangupCause: z.string().nullable().optional(),
     channels:    z.array(z.string()).optional().default([]),
+    dcontext:    z.string().nullable().optional(),    // AMI Cdr dcontext — "ext-local-{slug}", "app-queue-{slug}", etc.
+    accountCode: z.string().nullable().optional(),    // AMI Cdr accountCode — sometimes set to tenant slug
   });
 
   const parsed = schema.safeParse(req.body);
@@ -8566,10 +8633,34 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   }
   const d = parsed.data;
 
-  // If the telephony service could not resolve a tenantId, try two fallback strategies:
-  // 1. PJSIP channel endpoint name → VitalPBX tenant lookup (works when channel uses tenant slug in name)
-  // 2. Admin-configured CdrTenantRule: exact DID match on toNumber / extension prefix on fromNumber
+  // Multi-strategy tenant resolution (each only runs if previous strategies fail):
+  // 1. Trust tenantId from telephony service (resolved via AMI context at call time)
+  // 2. dcontext from AMI Cdr event — most reliable: "ext-local-{slug}", "app-queue-{slug}", etc.
+  // 3. PJSIP channel endpoint name — "PJSIP/{numericId}_{slug}-{uniqueid}"
+  // 4. Admin-configured CdrTenantRule — DID/extension prefix mappings configured in admin UI
   let resolvedTenantId = d.tenantId ?? null;
+
+  if (!resolvedTenantId && (d.dcontext || d.accountCode)) {
+    try {
+      const tenantMap = await getVpbxTenantLookup();
+      const fromDcontext = resolveTenantFromDcontext(d.dcontext, tenantMap);
+      if (fromDcontext) {
+        resolvedTenantId = fromDcontext;
+        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId, dcontext: d.dcontext }, "cdr-ingest: tenantId resolved from dcontext");
+      } else if (d.accountCode && d.accountCode.trim() && !/^\d+$/.test(d.accountCode.trim())) {
+        // accountCode fallback — some VitalPBX setups use this for tenant slug
+        const codeSlug = d.accountCode.trim();
+        const hit = tenantMap.get(codeSlug.toLowerCase());
+        if (hit) {
+          resolvedTenantId = hit;
+          app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId, accountCode: d.accountCode }, "cdr-ingest: tenantId resolved from accountCode");
+        }
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: dcontext tenant resolution error (non-fatal)");
+    }
+  }
+
   if (!resolvedTenantId && d.channels.length > 0) {
     try {
       const tenantMap = await getVpbxTenantLookup();
@@ -8582,6 +8673,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
       app.log.warn({ err: err?.message }, "cdr-ingest: channel tenant resolution error (non-fatal)");
     }
   }
+
   if (!resolvedTenantId) {
     try {
       const fromRules = await resolveTenantFromRules(d.fromNumber ?? null, d.toNumber ?? null);
@@ -8747,10 +8839,16 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
   const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
   if (!admin) return;
 
-  const rules = await db.cdrTenantRule.findMany();
-  if (rules.length === 0) return { ok: true, updated: 0, message: "no rules configured" };
+  // Pre-fetch VitalPBX tenant map once for the whole backfill
+  let tenantMap: Map<string, string>;
+  try {
+    tenantMap = await getVpbxTenantLookup();
+  } catch {
+    tenantMap = new Map();
+  }
 
-  // Process in batches to avoid loading too many rows at once
+  // Process in batches to avoid loading too many rows at once.
+  // Uses all resolution strategies: dcontext, channels, admin rules.
   let updated = 0;
   let cursor: string | undefined;
   while (true) {
@@ -8760,12 +8858,13 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
       orderBy: { id: "asc" },
-      select: { id: true, fromNumber: true, toNumber: true },
+      select: { id: true, fromNumber: true, toNumber: true, hangupCause: true },
     });
     if (batch.length === 0) break;
     cursor = batch[batch.length - 1]!.id;
 
     for (const row of batch) {
+      // Admin-configured DID/extension rules (dcontext/channel data not stored in DB so unavailable for backfill)
       const tenantId = await resolveTenantFromRules(row.fromNumber, row.toNumber);
       if (tenantId) {
         await db.connectCdr.update({ where: { id: row.id }, data: { tenantId } });
@@ -8775,7 +8874,7 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
   }
 
   app.log.info({ updated }, "cdr: tenant rules backfill complete");
-  return { ok: true, updated };
+  return reply.send({ ok: true, updated });
 });
 
 app.get("/dashboard/call-traffic", async (req, reply) => {

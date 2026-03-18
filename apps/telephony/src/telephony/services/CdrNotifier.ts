@@ -71,6 +71,8 @@ export type CdrPayload = {
   queueId: string | null;
   hangupCause: string | null;
   channels: string[];        // Raw Asterisk channel names (e.g. PJSIP/344822_Comfortone-xxx)
+  dcontext: string | null;   // AMI Cdr dcontext — VitalPBX names this "ext-local-{slug}", "from-pstn-{slug}", etc.
+  accountCode: string | null; // AMI Cdr accountCode — sometimes set to tenant slug
 };
 
 export class CdrNotifier {
@@ -146,6 +148,10 @@ export class CdrNotifier {
       // call.channels is empty by hangup time (cleared as each leg ends).
       // Use metadata.seenChannels which accumulates all channels during the call lifetime.
       channels: (call.metadata?.seenChannels as string[] | undefined) ?? call.channels,
+      // AMI Cdr dcontext is the most reliable tenant indicator for VitalPBX — e.g. "ext-local-relax_tires".
+      // accountCode may also carry the tenant slug in some VitalPBX installations.
+      dcontext: (call.metadata?.cdrDcontext as string | undefined) ?? null,
+      accountCode: (call.metadata?.cdrAccountCode as string | undefined) ?? null,
     };
 
     if (env.ENABLE_TELEPHONY_DEBUG) {
