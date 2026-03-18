@@ -8920,17 +8920,18 @@ app.post("/admin/cdr/fix-directions", async (req, reply) => {
     for (const row of rows) {
       const from = (row.fromNumber ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
       const to   = (row.toNumber   ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      if (from.length >= 7) {
-        // External caller → this is incoming (even if dialplan routed through an internal context)
-        const newDisposition = (row.toNumber && to.length >= 2 && to.length <= 6) ? undefined : undefined;
+      if (from.length >= 10) {
+        // 10-digit external caller → this is incoming, not outgoing
         await db.connectCdr.update({ where: { id: row.id }, data: { direction: "incoming" } });
         fixed++;
         app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→incoming");
       } else if (from.length >= 2 && from.length <= 6 && to.length >= 2 && to.length <= 6) {
-        // Both short → internal
+        // Both short extensions → internal
         await db.connectCdr.update({ where: { id: row.id }, data: { direction: "internal" } });
         fixed++;
         app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→internal");
+      } else if (from.length >= 2 && from.length <= 6 && to.length >= 7 && to.length < 10) {
+        // Extension calling 7-9 digit number — ambiguous (local PSTN), keep as outgoing
       }
     }
   }

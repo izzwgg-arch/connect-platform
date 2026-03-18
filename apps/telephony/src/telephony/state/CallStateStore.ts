@@ -342,11 +342,15 @@ export class CallStateStore extends EventEmitter {
     call.state = channelStateToCallState(params.channelState);
     call.connectedLine = params.connectedLineNum || call.connectedLine;
 
-    // Only promote direction from "unknown" — never overwrite an already-resolved direction
-    // (inbound/outbound) with a secondary channel's direction.  When an external call arrives,
-    // Asterisk fires Newchannel for the trunk leg (from-trunk → inbound) AND the extension leg
-    // (from-internal → outbound).  The extension leg must NOT overwrite the trunk leg's direction.
-    if (call.direction === "unknown" && params.direction !== "unknown") call.direction = params.direction;
+    // Direction priority: inbound > outbound/internal > unknown.
+    // "inbound" can overwrite anything (trunk leg fires after the internal routing leg in VitalPBX,
+    // so we must allow it to win even when a previous channel already said "outbound").
+    // "outbound/internal" only upgrade from "unknown" — they cannot demote "inbound".
+    if (params.direction === "inbound") {
+      call.direction = "inbound"; // always accept inbound from any channel
+    } else if (call.direction === "unknown" && params.direction !== "unknown") {
+      call.direction = params.direction;
+    }
 
     this.calls.set(params.linkedId, call);
     this.emit("callUpsert", { ...call });
@@ -593,11 +597,12 @@ export class CallStateStore extends EventEmitter {
       } else if (dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound")) {
         call.direction = /^\d{3,5}$/.test(params.destination ?? "") ? "internal" : "outbound";
       } else if (params.source && params.destination) {
-        // Number-length heuristic: strip country code prefix, compare digit counts
+        // Number-length heuristic: only 10-digit numbers count as external PSTN.
+        // 7-digit local numbers are ambiguous — don't classify as outgoing.
         const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
         const dstDigits = params.destination.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-        const srcLong = srcDigits.length >= 7;
-        const dstLong = dstDigits.length >= 7;
+        const srcLong = srcDigits.length >= 10;
+        const dstLong = dstDigits.length >= 10;
         const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
         const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
         if (srcLong) call.direction = "inbound";

@@ -112,11 +112,13 @@ export class CdrNotifier {
     if (dir === "unknown" && (call.from || call.to)) {
       const srcDigits = (call.from ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
       const dstDigits = (call.to  ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      const srcLong  = srcDigits.length >= 7;
-      const dstLong  = dstDigits.length >= 7;
+      // Only count a number as "external PSTN" if it's 10+ digits (full national number).
+      // 7-digit local numbers are ambiguous and should not trigger outgoing classification.
+      const srcLong  = srcDigits.length >= 10;
+      const dstLong  = dstDigits.length >= 10;
       const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
       const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
-      if (srcLong)               dir = "incoming";
+      if (srcLong)                   dir = "incoming";
       else if (srcShort && dstLong)  dir = "outgoing";
       else if (srcShort && dstShort) dir = "internal";
     }

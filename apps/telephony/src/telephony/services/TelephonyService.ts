@@ -433,12 +433,15 @@ function inferDirection(
     ctx.includes("ext-local") ||
     ctx.includes("outbound")
   ) {
-    // Distinguish internal from outbound by whether the dialed number is short (extension)
+    // Short exten (3-5 digits) = extension-to-extension internal call
     if (/^\d{3,5}$/.test(exten)) return "internal";
-    return "outbound";
+    // Full 10-digit PSTN number = outbound to external
+    if (/^\d{10,}$/.test(exten.replace(/\D/g, "").replace(/^1(\d{10})$/, "$1"))) return "outbound";
+    // 7-9 digit numbers are ambiguous (local PSTN or long extensions) — let CDR clarify
+    return "unknown";
   }
 
-  // Heuristic: if callerID is a short number and exten is also short → internal
+  // Heuristic: if both callerID and exten are short extensions → internal
   if (/^\d{3,5}$/.test(callerIdNum) && /^\d{3,5}$/.test(exten)) return "internal";
 
   return "unknown";
