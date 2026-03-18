@@ -1,5 +1,6 @@
 import type { AmiFrame } from "./AmiTypes";
 import type {
+  AmiCoreShowChannel,
   AmiNewchannel,
   AmiNewstate,
   AmiDialBegin,
@@ -45,6 +46,25 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         exten: g("Exten"),
         priority: g("Priority"),
       } satisfies AmiNewchannel;
+
+    // CoreShowChannel is the response to the CoreShowChannels bootstrap action.
+    // Asterisk may use UniqueID / LinkedID (capital) so we fall back.
+    case "CoreShowChannel":
+      return {
+        event: "CoreShowChannel",
+        channel: g("Channel"),
+        uniqueid: g("Uniqueid") || g("UniqueID"),
+        linkedid: g("Linkedid") || g("LinkedID"),
+        channelState: g("ChannelState"),
+        channelStateDesc: g("ChannelStateDesc"),
+        callerIDNum: g("CallerIDNum"),
+        callerIDName: g("CallerIDName"),
+        connectedLineNum: g("ConnectedLineNum"),
+        connectedLineName: g("ConnectedLineName"),
+        context: g("Context"),
+        exten: g("Exten"),
+        priority: g("Priority"),
+      } satisfies AmiCoreShowChannel;
 
     case "Newstate":
       return {

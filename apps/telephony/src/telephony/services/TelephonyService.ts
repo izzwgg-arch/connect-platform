@@ -49,6 +49,9 @@ export class TelephonyService {
 
     this.ami.on("connected", () => {
       log.info("AMI connected — telephony service active");
+      // Bootstrap: request all currently active channels so reconnects don't miss ongoing calls.
+      // 500ms delay lets AMI finish its initial burst of FullyBooted/status events first.
+      setTimeout(() => this.bootstrapActiveChannels(), 500);
     });
 
     this.ami.on("disconnected", (reason) => {
@@ -58,6 +61,15 @@ export class TelephonyService {
       }
       this.calls.clearAll();
     });
+  }
+
+  private bootstrapActiveChannels(): void {
+    try {
+      this.ami.sendAction("CoreShowChannels");
+      log.info("AMI bootstrap: CoreShowChannels sent — seeding active channels");
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, "AMI bootstrap: CoreShowChannels failed (service may be starting)");
+    }
   }
 
   private bindAri(): void {
@@ -88,6 +100,9 @@ export class TelephonyService {
     }
 
     switch (typed.event) {
+      // CoreShowChannel arrives in response to our CoreShowChannels bootstrap action.
+      // Treat it exactly like Newchannel to seed the call store with pre-existing calls.
+      case "CoreShowChannel":
       case "Newchannel": {
         const linkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         const isHelper = isHelperChannel(typed.channel);
@@ -127,7 +142,7 @@ export class TelephonyService {
         });
         log.debug(
           { linkedId, channel: typed.channel },
-          "Newchannel",
+          typed.event,
         );
         break;
       }

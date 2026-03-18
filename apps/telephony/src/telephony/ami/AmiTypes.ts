@@ -6,6 +6,7 @@ export type AmiFrame = Record<string, string>;
 export type AmiEventName =
   | "FullyBooted"
   | "Newchannel"
+  | "CoreShowChannel"
   | "Newstate"
   | "NewConnectedLine"
   | "DialBegin"
@@ -227,8 +228,28 @@ export interface AmiBlindTransfer {
   result: string;
 }
 
+// CoreShowChannel — response to CoreShowChannels action; one per active channel.
+// Structurally identical to Newchannel but uses UniqueID/LinkedID (capital) in some
+// Asterisk builds. Mapper handles both spellings via fallback.
+export interface AmiCoreShowChannel {
+  event: "CoreShowChannel";
+  channel: string;
+  uniqueid: string;
+  linkedid: string;
+  channelState: string;
+  channelStateDesc: string;
+  callerIDNum: string;
+  callerIDName: string;
+  connectedLineNum: string;
+  connectedLineName: string;
+  context: string;
+  exten: string;
+  priority: string;
+}
+
 // Union of all typed AMI events
 export type TypedAmiEvent =
+  | AmiCoreShowChannel
   | AmiNewchannel
   | AmiNewstate
   | AmiDialBegin
