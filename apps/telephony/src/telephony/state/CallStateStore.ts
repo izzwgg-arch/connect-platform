@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { childLogger } from "../../../logging/logger";
-import { env } from "../../../config/env";
+import { childLogger } from "../../logging/logger";
+import { env } from "../../config/env";
 import type { NormalizedCall, CallState, CallDirection } from "../types";
 import {
   isLocalOnlyCall,
