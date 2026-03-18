@@ -8877,6 +8877,85 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
   return reply.send({ ok: true, updated });
 });
 
+// ─── Fix CDR directions ───────────────────────────────────────────────────────
+// POST /admin/cdr/fix-directions
+// Re-evaluates direction for CDR rows where the number-length heuristic strongly
+// disagrees with the stored direction.  High-confidence rules only:
+//   1. direction="outgoing" + fromNumber is a 10-digit PSTN number → incoming
+//      (outgoing calls originate from short extensions, not 10-digit external numbers)
+//   2. direction="incoming" + both fromNumber and toNumber are short (≤6 digits) → internal
+//   3. direction="outgoing" + toNumber is a short extension AND fromNumber is short → internal
+// Optionally scoped to today only (scope=today) or all time (scope=all).
+app.post("/admin/cdr/fix-directions", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+
+  const query = z.object({
+    scope: z.enum(["today", "all"]).optional().default("today"),
+  }).parse(req.query || {});
+
+  const whereBase = query.scope === "today" ? (() => {
+    const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    const nowUtc = new Date();
+    const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: timezone });
+    const [y, mo, d] = todayStr.split("-").map(Number);
+    const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
+    const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", { timeZone: timezone, hour: "numeric", minute: "numeric", hour12: false });
+    const [hStr, mStr] = noonLocal.split(":");
+    const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
+    const dayStartUtc = new Date(noonUtc - offsetMs);
+    const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    return { startedAt: { gte: dayStartUtc, lt: dayEndUtc } };
+  })() : {};
+
+  let fixed = 0;
+
+  // Rule 1: direction=outgoing but fromNumber looks like an external PSTN number (7-15 digits)
+  // These can never be outgoing — the caller is an external party, so the call is incoming.
+  {
+    const rows = await db.connectCdr.findMany({
+      where: { ...whereBase, direction: "outgoing" },
+      select: { id: true, fromNumber: true, toNumber: true },
+    });
+    for (const row of rows) {
+      const from = (row.fromNumber ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const to   = (row.toNumber   ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      if (from.length >= 7) {
+        // External caller → this is incoming (even if dialplan routed through an internal context)
+        const newDisposition = (row.toNumber && to.length >= 2 && to.length <= 6) ? undefined : undefined;
+        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "incoming" } });
+        fixed++;
+        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→incoming");
+      } else if (from.length >= 2 && from.length <= 6 && to.length >= 2 && to.length <= 6) {
+        // Both short → internal
+        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "internal" } });
+        fixed++;
+        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→internal");
+      }
+    }
+  }
+
+  // Rule 2: direction=incoming but both numbers are short extensions → internal
+  {
+    const rows = await db.connectCdr.findMany({
+      where: { ...whereBase, direction: "incoming" },
+      select: { id: true, fromNumber: true, toNumber: true },
+    });
+    for (const row of rows) {
+      const from = (row.fromNumber ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const to   = (row.toNumber   ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      if (from.length >= 2 && from.length <= 6 && to.length >= 2 && to.length <= 6) {
+        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "internal" } });
+        fixed++;
+        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: incoming→internal");
+      }
+    }
+  }
+
+  app.log.info({ fixed, scope: query.scope }, "cdr: fix-directions complete");
+  return reply.send({ ok: true, fixed, scope: query.scope });
+});
+
 app.get("/dashboard/call-traffic", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;

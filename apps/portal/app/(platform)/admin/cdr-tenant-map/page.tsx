@@ -43,7 +43,9 @@ export default function CdrTenantMapPage() {
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [fixingDirs, setFixingDirs] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  const [fixDirResult, setFixDirResult] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   function refresh() { setRefreshKey((k) => k + 1); }
@@ -87,6 +89,20 @@ export default function CdrTenantMapPage() {
       setBackfillResult("Backfill failed: " + (e?.message || "unknown error"));
     } finally {
       setBackfilling(false);
+    }
+  }
+
+  async function fixDirections(scope: "today" | "all") {
+    if (scope === "all" && !confirm("This will re-evaluate direction for ALL CDR rows. Continue?")) return;
+    setFixingDirs(true);
+    setFixDirResult(null);
+    try {
+      const res = await apiPost<{ fixed: number; scope: string }>(`/admin/cdr/fix-directions?scope=${scope}`);
+      setFixDirResult(`Fixed ${res.fixed} call(s) with wrong direction (scope: ${res.scope}).`);
+    } catch (e: any) {
+      setFixDirResult("Fix failed: " + (e?.message || "unknown error"));
+    } finally {
+      setFixingDirs(false);
     }
   }
 
@@ -144,6 +160,25 @@ export default function CdrTenantMapPage() {
             </button>
           </div>
           {backfillResult && <div className="state-box success" style={{ marginTop: "0.5rem" }}>{backfillResult}</div>}
+        </section>
+
+        {/* Fix misclassified directions */}
+        <section className="panel">
+          <h3>Fix Call Directions</h3>
+          <p className="text-muted">
+            Corrects CDR rows where the call direction is wrong. Uses number-length rules:
+            an external 10-digit caller can never be "outgoing" — it is always "incoming".
+            Run <strong>Today only</strong> after any mismatch with the PBX dashboard, or <strong>All time</strong> to repair historical data.
+          </p>
+          <div className="row-actions">
+            <button className="btn primary" onClick={() => fixDirections("today")} disabled={fixingDirs}>
+              {fixingDirs ? "Fixing…" : "Fix Today's Calls"}
+            </button>
+            <button className="btn secondary" onClick={() => fixDirections("all")} disabled={fixingDirs}>
+              Fix All Historical
+            </button>
+          </div>
+          {fixDirResult && <div className="state-box success" style={{ marginTop: "0.5rem" }}>{fixDirResult}</div>}
         </section>
 
         {/* Add rule form */}
