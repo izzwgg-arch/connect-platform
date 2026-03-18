@@ -8435,7 +8435,11 @@ async function getVpbxTenantLookup(): Promise<Map<string, string>> {
   const now = Date.now();
   if (!_vpbxTenantCache || now - _vpbxTenantCache.fetchedAt > VPBX_TENANT_CACHE_TTL_MS) {
     try {
-      const client = getVitalPbxClient();
+      // Use the DB-stored PbxInstance (same approach as /admin/pbx/tenants route)
+      const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+      if (!instance) throw new Error("no enabled PbxInstance found");
+      const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+      const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
       const tenants = await client.listTenants();
       _vpbxTenantCache = {
         entries: tenants
