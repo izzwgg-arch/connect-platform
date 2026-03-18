@@ -1118,6 +1118,30 @@ model ConnectCdr {
   @@index([tenantId, direction, startedAt]) // typed per-tenant KPI queries
 }
 
+// Admin-configured rules that map DID or extension patterns to VitalPBX tenant slugs.
+// Populated via the /admin/cdr/tenant-rules API. Used by CDR ingest to assign tenantId
+// when it cannot be resolved from AMI events.
+//
+// matchType:
+//   "did"              — exact match on toNumber (e.g., "8452449666")
+//   "from_did"         — exact match on fromNumber (for outgoing calls from a DID)
+//   "extension_prefix" — fromNumber starts with this prefix (e.g., "10" matches 100-109)
+//
+// tenantSlug: VitalPBX tenant name field (e.g., "a_plus_center") — stored without vpbx: prefix.
+//             The tenantId written to ConnectCdr will be "vpbx:{tenantSlug}".
+model CdrTenantRule {
+  id          String   @id @default(cuid())
+  matchType   String   // "did" | "from_did" | "extension_prefix"
+  matchValue  String   // the phone number, DID, or prefix
+  tenantSlug  String   // VitalPBX tenant name (without vpbx: prefix)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([matchType, matchValue])
+  @@index([matchType, matchValue])
+}
+
 model PbxJob {
   id            String       @id @default(cuid())
   tenantId      String

@@ -8425,6 +8425,46 @@ function extractReportItems(report: any): any[] {
   return [];
 }
 
+// ─── CDR tenant rules cache ───────────────────────────────────────────────────
+// In-memory cache of CdrTenantRule rows. Refreshed on first use and on every rule write.
+let _cdrRulesCache: Array<{ matchType: string; matchValue: string; tenantSlug: string }> | null = null;
+
+async function getCdrTenantRules() {
+  if (!_cdrRulesCache) {
+    _cdrRulesCache = await db.cdrTenantRule.findMany({
+      select: { matchType: true, matchValue: true, tenantSlug: true },
+    });
+  }
+  return _cdrRulesCache;
+}
+
+function invalidateCdrRulesCache() {
+  _cdrRulesCache = null;
+}
+
+/** Resolve a VitalPBX tenantId ("vpbx:{slug}") from CDR numbers using admin-configured rules. */
+async function resolveTenantFromRules(fromNumber: string | null, toNumber: string | null): Promise<string | null> {
+  const rules = await getCdrTenantRules();
+  for (const rule of rules) {
+    if (rule.matchType === "did" && toNumber) {
+      if (toNumber === rule.matchValue || toNumber.replace(/^\+1/, "") === rule.matchValue) {
+        return `vpbx:${rule.tenantSlug}`;
+      }
+    }
+    if (rule.matchType === "from_did" && fromNumber) {
+      if (fromNumber === rule.matchValue || fromNumber.replace(/^\+1/, "") === rule.matchValue) {
+        return `vpbx:${rule.tenantSlug}`;
+      }
+    }
+    if (rule.matchType === "extension_prefix" && fromNumber) {
+      if (fromNumber.startsWith(rule.matchValue)) {
+        return `vpbx:${rule.tenantSlug}`;
+      }
+    }
+  }
+  return null;
+}
+
 // ─── VitalPBX tenant cache for CDR tenant resolution ─────────────────────────
 // Caches the VitalPBX tenant list so CDR ingest doesn't hit the API on every call.
 // Lookup map keys: lowercased tenant name slug AND numeric tenant ID (both → vpbx:slug).
@@ -8526,8 +8566,9 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   }
   const d = parsed.data;
 
-  // If the telephony service could not resolve a tenantId, try to derive it here
-  // using the channel endpoint names against the VitalPBX tenant list.
+  // If the telephony service could not resolve a tenantId, try two fallback strategies:
+  // 1. PJSIP channel endpoint name → VitalPBX tenant lookup (works when channel uses tenant slug in name)
+  // 2. Admin-configured CdrTenantRule: exact DID match on toNumber / extension prefix on fromNumber
   let resolvedTenantId = d.tenantId ?? null;
   if (!resolvedTenantId && d.channels.length > 0) {
     try {
@@ -8539,6 +8580,17 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
       }
     } catch (err: any) {
       app.log.warn({ err: err?.message }, "cdr-ingest: channel tenant resolution error (non-fatal)");
+    }
+  }
+  if (!resolvedTenantId) {
+    try {
+      const fromRules = await resolveTenantFromRules(d.fromNumber ?? null, d.toNumber ?? null);
+      if (fromRules) {
+        resolvedTenantId = fromRules;
+        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId }, "cdr-ingest: tenantId resolved from CdrTenantRule");
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: CdrTenantRule lookup error (non-fatal)");
     }
   }
 
@@ -8642,6 +8694,88 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     app.log.error({ err: err?.message }, "call-kpis: db error");
     return reply.code(500).send({ error: "db_error" });
   }
+});
+
+// ─── CDR Tenant Mapping Rules (admin) ────────────────────────────────────────
+// Lets super-admins configure DID/extension patterns → VitalPBX tenant slug mappings.
+// These rules are used by /internal/cdr-ingest to assign tenantId when AMI events
+// don't carry enough tenant information.
+//
+// GET  /admin/cdr/tenant-rules           → list all rules
+// POST /admin/cdr/tenant-rules           → create or update a rule (upsert by matchType+matchValue)
+// DELETE /admin/cdr/tenant-rules/:id     → delete a rule
+// POST /admin/cdr/tenant-rules/backfill  → retroactively apply rules to existing CDR rows with tenantId=null
+
+app.get("/admin/cdr/tenant-rules", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+  const rules = await db.cdrTenantRule.findMany({ orderBy: { createdAt: "asc" } });
+  return { rules };
+});
+
+app.post("/admin/cdr/tenant-rules", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+  const input = z.object({
+    matchType:   z.enum(["did", "from_did", "extension_prefix"]),
+    matchValue:  z.string().min(1).max(30),
+    tenantSlug:  z.string().min(1).max(100),
+    description: z.string().max(200).optional(),
+  }).parse(req.body || {});
+
+  const rule = await db.cdrTenantRule.upsert({
+    where: { matchType_matchValue: { matchType: input.matchType, matchValue: input.matchValue } },
+    create: { ...input },
+    update: { tenantSlug: input.tenantSlug, description: input.description ?? undefined },
+  });
+  invalidateCdrRulesCache();
+  return { ok: true, rule };
+});
+
+app.delete("/admin/cdr/tenant-rules/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  await db.cdrTenantRule.delete({ where: { id } }).catch(() => null);
+  invalidateCdrRulesCache();
+  return { ok: true };
+});
+
+// Retroactively apply current rules to ConnectCdr rows that still have tenantId=null.
+// Returns the number of rows updated.
+app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+
+  const rules = await db.cdrTenantRule.findMany();
+  if (rules.length === 0) return { ok: true, updated: 0, message: "no rules configured" };
+
+  // Process in batches to avoid loading too many rows at once
+  let updated = 0;
+  let cursor: string | undefined;
+  while (true) {
+    const batch = await db.connectCdr.findMany({
+      where: { tenantId: null },
+      take: 200,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
+      orderBy: { id: "asc" },
+      select: { id: true, fromNumber: true, toNumber: true },
+    });
+    if (batch.length === 0) break;
+    cursor = batch[batch.length - 1]!.id;
+
+    for (const row of batch) {
+      const tenantId = await resolveTenantFromRules(row.fromNumber, row.toNumber);
+      if (tenantId) {
+        await db.connectCdr.update({ where: { id: row.id }, data: { tenantId } });
+        updated++;
+      }
+    }
+  }
+
+  app.log.info({ updated }, "cdr: tenant rules backfill complete");
+  return { ok: true, updated };
 });
 
 app.get("/dashboard/call-traffic", async (req, reply) => {
