@@ -357,6 +357,11 @@ export class CallStateStore extends EventEmitter {
     const newState = channelStateToCallState(params.channelState);
     if (shouldUpgradeState(call.state, newState)) {
       call.state = newState;
+      // Mark answeredAt the first time a channel goes Up (state 6).
+      // BridgeEnter also sets this; whichever fires first wins (both are guarded by !answeredAt).
+      if (newState === "up" && !call.answeredAt) {
+        call.answeredAt = new Date().toISOString();
+      }
       if (env.ENABLE_TELEPHONY_DEBUG && (newState === "ringing" || newState === "up")) {
         log.debug({ callId: params.linkedId, state: newState }, "live_call: call_marked_ringing_or_talking");
       }

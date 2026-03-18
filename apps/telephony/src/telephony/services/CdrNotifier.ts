@@ -28,7 +28,7 @@ function deriveDisposition(call: NormalizedCall, resolvedDir?: string): string {
   if (cdrDisp === "FAILED" || cdrDisp === "CONGESTION") return "failed";
   if (cdrDisp === "CANCEL" || cdrDisp === "CANCELED") return "canceled";
 
-  // Infer from call data
+  // Infer from call data — answeredAt is set when a channel goes to Up state or a bridge forms.
   if (call.answeredAt) return "answered";
   const dir = resolvedDir ?? normalizeDirection(call.direction);
   if (dir === "incoming") return "missed";
