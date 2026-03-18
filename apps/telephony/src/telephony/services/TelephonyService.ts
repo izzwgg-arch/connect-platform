@@ -213,6 +213,11 @@ export class TelephonyService {
           duration: typed.duration,
           billableSeconds: typed.billableSeconds,
           disposition: typed.disposition,
+          source: typed.source,
+          destination: typed.destination,
+          dcontext: typed.dcontext,
+          accountCode: typed.accountCode,
+          channel: typed.channel,
         });
         break;
       }

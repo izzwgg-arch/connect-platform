@@ -28,6 +28,28 @@ const HANGUP_RETAIN_MS = 30_000;
 /** Max call duration (seconds) for duration-based stale cleanup. Only used when call has no live channel. */
 const MAX_CALL_DURATION_SECONDS = 8000;
 
+// Shared VitalPBX multi-tenant context prefixes. Used to extract tenant slug from dcontext/accountCode.
+const VPBX_CTX_PREFIXES = ["ext-local-", "from-pstn-", "from-internal-", "from-trunk-", "outbound-", "from-external-"];
+
+/** Extract a "vpbx:{slug}" tenantId from a CDR dcontext or accountCode value (or null if none found). */
+function resolveTenantFromCdrFields(dcontext?: string, accountCode?: string): string | null {
+  const contextToCheck = dcontext || "";
+  if (contextToCheck) {
+    const ctx = contextToCheck.toLowerCase();
+    for (const pfx of VPBX_CTX_PREFIXES) {
+      if (ctx.startsWith(pfx)) {
+        const slug = contextToCheck.slice(pfx.length).trim();
+        if (slug && !/^\d+$/.test(slug)) return `vpbx:${slug}`;
+      }
+    }
+  }
+  if (accountCode) {
+    const code = accountCode.trim();
+    if (code && !/^\d+$/.test(code)) return `vpbx:${code}`;
+  }
+  return null;
+}
+
 export class CallStateStore extends EventEmitter {
   // Primary map: linkedId → NormalizedCall
   private calls = new Map<string, NormalizedCall>();
@@ -502,12 +524,19 @@ export class CallStateStore extends EventEmitter {
     }
   }
 
-  // Called on CDR — update billing seconds
+  // Called on CDR — update billing seconds, fix direction/from/to if still unknown.
+  // The AMI CDR event fires after Hangup while the call is still in the 30s retention window,
+  // so CdrNotifier will run again with the updated (better) data.
   onCdr(params: {
     linkedId: string;
     duration: string;
     billableSeconds: string;
     disposition: string;
+    source?: string;
+    destination?: string;
+    dcontext?: string;
+    accountCode?: string;
+    channel?: string;
   }): void {
     const call = this.calls.get(params.linkedId);
     if (!call) return;
@@ -517,6 +546,43 @@ export class CallStateStore extends EventEmitter {
     if (!isNaN(dur) && dur > call.durationSec) call.durationSec = dur;
     if (!isNaN(bill) && bill > call.billableSec) call.billableSec = bill;
     call.metadata["cdrDisposition"] = params.disposition;
+
+    // Populate from/to from CDR source/destination if missing
+    if (params.source && !call.from) call.from = params.source;
+    if (params.destination && !call.to) call.to = params.destination;
+
+    // Store raw CDR fields for downstream use
+    if (params.dcontext) call.metadata["cdrDcontext"] = params.dcontext;
+    if (params.accountCode) call.metadata["cdrAccountCode"] = params.accountCode;
+
+    // If tenant still unresolved, try to extract from dcontext or accountCode.
+    // dcontext may be "ext-local-a_plus_center" → tenantId becomes "vpbx:a_plus_center".
+    if (!call.tenantId && (params.dcontext || params.accountCode)) {
+      const resolved = resolveTenantFromCdrFields(params.dcontext, params.accountCode);
+      if (resolved) call.tenantId = resolved;
+    }
+
+    // Attempt to fix direction if still unknown.
+    // Try dcontext first (same patterns as Newchannel context inference), then number heuristics.
+    if (call.direction === "unknown") {
+      const dctx = (params.dcontext ?? "").toLowerCase();
+      if (dctx.includes("from-trunk") || dctx.includes("from-pstn") || dctx.includes("from-external") || dctx.includes("inbound")) {
+        call.direction = "inbound";
+      } else if (dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound")) {
+        call.direction = /^\d{3,5}$/.test(params.destination ?? "") ? "internal" : "outbound";
+      } else if (params.source && params.destination) {
+        // Number-length heuristic: strip country code prefix, compare digit counts
+        const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const dstDigits = params.destination.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const srcLong = srcDigits.length >= 7;
+        const dstLong = dstDigits.length >= 7;
+        const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
+        const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
+        if (srcLong) call.direction = "inbound";
+        else if (srcShort && dstLong) call.direction = "outbound";
+        else if (srcShort && dstShort) call.direction = "internal";
+      }
+    }
 
     this.emit("callUpsert", { ...call });
   }

@@ -119,6 +119,8 @@ export interface AmiCdr {
   event: "Cdr";
   source: string;
   destination: string;
+  dcontext: string;      // destination context — useful for direction inference
+  accountCode: string;   // VitalPBX tenant account code
   channel: string;
   destChannel: string;
   uniqueid: string;

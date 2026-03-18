@@ -128,6 +128,8 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         event: "Cdr",
         source: g("Source"),
         destination: g("Destination"),
+        dcontext: g("Dcontext"),
+        accountCode: g("AccountCode"),
         channel: g("Channel"),
         destChannel: g("DestinationChannel"),
         uniqueid: g("UniqueID"),

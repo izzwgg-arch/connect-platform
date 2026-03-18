@@ -35,6 +35,8 @@ export class TenantResolver {
     callerIdNum?: string;
     exten?: string;
     channelVar?: string;
+    dcontext?: string;
+    accountCode?: string;
   }): string | null {
     // 1. Explicit override via channel variable (e.g. CC_TENANT_ID)
     if (params.channelVar) return params.channelVar;
@@ -45,7 +47,7 @@ export class TenantResolver {
       if (match) return match[1] ?? null;
     }
 
-    // 3. Context-based lookup
+    // 3. Context-based lookup (configured prefix map)
     if (params.context) {
       const ctx = params.context.toLowerCase();
       for (const [prefix, tenantId] of this.contextMap) {
@@ -53,7 +55,31 @@ export class TenantResolver {
       }
     }
 
-    // 4. Extension prefix
+    // 4. VitalPBX multi-tenant: extract slug from AMI context or dcontext.
+    // VitalPBX names contexts like "ext-local-{slug}", "from-pstn-{slug}", etc.
+    // We store as "vpbx:{slug}" to match the portal's tenant switcher ID format.
+    const contextToCheck = params.dcontext || params.context || "";
+    if (contextToCheck) {
+      const ctx = contextToCheck.toLowerCase();
+      const VPBX_CTX_PREFIXES = [
+        "ext-local-", "from-pstn-", "from-internal-", "from-trunk-",
+        "outbound-", "from-external-",
+      ];
+      for (const pfx of VPBX_CTX_PREFIXES) {
+        if (ctx.startsWith(pfx)) {
+          const slug = contextToCheck.slice(pfx.length).trim();
+          if (slug && !/^\d+$/.test(slug)) return `vpbx:${slug}`;
+        }
+      }
+    }
+
+    // 5. VitalPBX CDR AccountCode — may be set to tenant slug for some installations
+    if (params.accountCode) {
+      const code = params.accountCode.trim();
+      if (code && !/^\d+$/.test(code)) return `vpbx:${code}`;
+    }
+
+    // 6. Extension prefix map
     const ext = params.exten ?? params.callerIdNum ?? "";
     if (ext) {
       for (const [prefix, tenantId] of this.prefixMap) {
@@ -61,7 +87,7 @@ export class TenantResolver {
       }
     }
 
-    // 5. No match — caller sees a null tenantId (admin-scoped)
+    // 7. No match — null tenantId (visible in global/admin scope only)
     return null;
   }
 
