@@ -342,7 +342,11 @@ export class CallStateStore extends EventEmitter {
     call.state = channelStateToCallState(params.channelState);
     call.connectedLine = params.connectedLineNum || call.connectedLine;
 
-    if (params.direction !== "unknown") call.direction = params.direction;
+    // Only promote direction from "unknown" — never overwrite an already-resolved direction
+    // (inbound/outbound) with a secondary channel's direction.  When an external call arrives,
+    // Asterisk fires Newchannel for the trunk leg (from-trunk → inbound) AND the extension leg
+    // (from-internal → outbound).  The extension leg must NOT overwrite the trunk leg's direction.
+    if (call.direction === "unknown" && params.direction !== "unknown") call.direction = params.direction;
 
     this.calls.set(params.linkedId, call);
     this.emit("callUpsert", { ...call });
