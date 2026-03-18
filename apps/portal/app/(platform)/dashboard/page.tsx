@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Users, ListOrdered, Truck, Activity } from "lucide-react";
 import { apiGet } from "../../../services/apiClient";
 import { DetailCard } from "../../../components/DetailCard";
@@ -113,24 +113,39 @@ export default function DashboardPage() {
   const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
 
   // Staggered ticks — scope-aware cadence to protect VitalPBX CDR from overload.
-  // GLOBAL (admin) scope aggregates 100+ tenants — poll far less frequently.
-  // TENANT scope fetches one CDR query — can afford slightly more frequent refresh.
-  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : PBX live data
+  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : PBX live data + active calls
+  // kpiTick       30 s baseline : KPI cards (also bumped instantly when a call ends)
   // trafficTick   300 s (GLOBAL) / 120 s (TENANT) : CDR traffic chart
   // resourcesTick 300 s : extension/trunk/queue counts (rarely change)
-  const [combinedTick, setCombinedTick]   = useState(0);
-  const [trafficTick,  setTrafficTick]    = useState(0);
+  const [combinedTick,  setCombinedTick]  = useState(0);
+  const [kpiTick,       setKpiTick]       = useState(0);
+  const [trafficTick,   setTrafficTick]   = useState(0);
   const [resourcesTick, setResourcesTick] = useState(0);
 
   useEffect(() => {
     const combinedMs  = isGlobal ? 120_000 : 60_000;
     const trafficMs   = isGlobal ? 300_000 : 120_000;
     const resourcesMs = 300_000;
+    const kpiMs       = 30_000; // 30 s baseline for KPI cards
     const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  combinedMs);
     const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  trafficMs);
     const t3 = window.setInterval(() => setResourcesTick((v) => v + 1), resourcesMs);
-    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
+    const t4 = window.setInterval(() => setKpiTick((v)       => v + 1), kpiMs);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); clearInterval(t4); };
   }, [isGlobal]);
+
+  // When a call ends (removed from the WebSocket), refresh KPI cards immediately.
+  // Wait 3 s so the CDR ingest async write has time to commit before we query it.
+  const prevCallsSize = useRef<number | null>(null);
+  useEffect(() => {
+    const size = telephony.calls.size;
+    if (prevCallsSize.current !== null && size < prevCallsSize.current) {
+      const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 3_000);
+      prevCallsSize.current = size;
+      return () => clearTimeout(timer);
+    }
+    prevCallsSize.current = size;
+  }, [telephony.calls.size]);
 
   // Platform billing/activity — fetched once per scope change, no tick.
   const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
@@ -143,10 +158,11 @@ export default function DashboardPage() {
 
   // Connect-owned KPI totals from the ConnectCdr DB table.
   // This is the authoritative source for Incoming / Outgoing / Internal / Missed today.
+  // Uses kpiTick which refreshes every 30 s AND immediately after each call ends.
   const kpiParam = isGlobal ? "" : (tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "");
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
-    [adminScope, tenantId, combinedTick]
+    [adminScope, tenantId, kpiTick]
   );
 
   // Call traffic chart — slower cadence, already server-cached.
@@ -226,7 +242,7 @@ export default function DashboardPage() {
       <div className="stack compact-stack dashboard-2026">
         <PageHeader
           title="Overview"
-          subtitle={`${scopeLabel} scope. ${telephony.isLive ? "Active calls update in real time." : `Data refreshes every ${isGlobal ? "2 min" : "60 s"}.`}`}
+          subtitle={`${scopeLabel} scope. ${telephony.isLive ? "Live calls and KPIs update automatically." : `Data refreshes every 30 s.`}`}
           badges={<><ScopeBadge scope={scopeLabel} /><LiveBadge status={telephony.status} /></>}
           actions={<QRPairingModal />}
         />
