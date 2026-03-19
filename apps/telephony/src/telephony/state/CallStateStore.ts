@@ -396,9 +396,20 @@ export class CallStateStore extends EventEmitter {
     const call = this.calls.get(params.linkedId);
     if (!call || call.state === "hungup") return;
 
+    const callerDigits = (params.callerIDNum ?? "").replace(/\D/g, "");
+    const callerShort = callerDigits.length >= 2 && callerDigits.length <= 6;
+
     if (call.direction === "unknown") {
-      // The originating channel is placing an outbound dial
+      // The originating channel is placing a dial — internal if destination is clearly an extension
       call.direction = isInternalExtension(params.destination) ? "internal" : "outbound";
+    } else if (
+      call.direction === "outbound" &&
+      callerShort &&
+      isInternalExtension(params.destination)
+    ) {
+      // VitalPBX often labels the first Newchannel as outbound (T{n}_cos-*) even when the
+      // extension is dialing another extension (105 → 101). Promote to internal.
+      call.direction = "internal";
     }
     if (call.state === "unknown" || call.state === "ringing") {
       call.state = "dialing";
@@ -592,19 +603,27 @@ export class CallStateStore extends EventEmitter {
     // Try dcontext first (same patterns as Newchannel context inference), then number heuristics.
     if (call.direction === "unknown") {
       const dctx = (params.dcontext ?? "").toLowerCase();
+      const destBare = (params.destination ?? "").replace(/\D/g, "");
+      const destIsShortExt = /^\d{2,6}$/.test(destBare);
+      const destIsLongPstn = /^\d{10,}$/.test(destBare.replace(/^1(\d{10})$/, "$1"));
       if (
         dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
         dctx.includes("from-external") || dctx.includes("inbound") ||
-        /^ivr-\d/.test(dctx)  // VitalPBX IVR context = inbound
+        /^ivr-\d/.test(dctx) ||           // VitalPBX IVR = inbound
+        /^trk-[^-]+-in/.test(dctx)        // VitalPBX trunk ingress = inbound
       ) {
         call.direction = "inbound";
       } else if (
         dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
-        /^trk-[^-]+-dial/.test(dctx) ||  // VitalPBX trk-{n}-dial = outbound trunk dial
-        /^t\d+_cos-/.test(dctx)           // VitalPBX T{n}_cos-{x} = Class of Service outbound
+        /^trk-[^-]+-dial/.test(dctx) ||
+        /^t\d+_cos-/.test(dctx) ||
+        dctx.includes("sub-local-dialing")
       ) {
-        call.direction = /^\d{2,6}$/.test(params.destination ?? "") ? "internal" : "outbound";
-      } else if (params.source && params.destination) {
+        if (destIsShortExt) call.direction = "internal";
+        else if (destIsLongPstn) call.direction = "outbound";
+        // else leave unknown → number heuristic
+      }
+      if (call.direction === "unknown" && params.source && params.destination) {
         // Number-length heuristic: only 10-digit numbers count as external PSTN.
         // 7-digit local numbers are ambiguous — don't classify as outgoing.
         const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
