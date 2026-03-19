@@ -531,8 +531,9 @@ export class VitalPbxClient {
       startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     }
     // Send "YYYY-MM-DD" strings — VitalPBX MySQL datetime filter accepts this format.
-    const query: Record<string, string | number | boolean> = {
-      limit: 1000,
+    // High-volume tenants can exceed 1000 rows/day; page until a short page (or cap pages).
+    const queryBase: Record<string, string | number | boolean> = {
+      limit: 800,
       sort_by: "date",
       sort_order: "asc",
       start_date: todayStr,
@@ -541,19 +542,33 @@ export class VitalPbxClient {
     let rows: any[] = [];
     let rawRowCountFromApi = 0;
     try {
-      const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
-      const data = unwrapData<any>(envelope);
-      const raw = Array.isArray(data?.result) ? data.result
-        : Array.isArray(data?.items) ? data.items
-        : Array.isArray(data?.rows) ? data.rows
-        : Array.isArray(data) ? data
-        : Array.isArray((envelope as any)?.result) ? (envelope as any).result
-        : [];
-      rawRowCountFromApi = raw.length;
       const seen = new Map<string, any>();
-      for (const r of raw) {
-        const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
-        seen.set(id, r);
+      const pageLimit = 800;
+      const maxPages = 25; // up to 20k rows / tenant / day
+      for (let page = 0; page < maxPages; page++) {
+        const query: Record<string, string | number | boolean> = {
+          ...queryBase,
+          limit: pageLimit,
+          offset: page * pageLimit,
+        };
+        const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
+        const data = unwrapData<any>(envelope);
+        const raw = Array.isArray(data?.result) ? data.result
+          : Array.isArray(data?.items) ? data.items
+          : Array.isArray(data?.rows) ? data.rows
+          : Array.isArray(data) ? data
+          : Array.isArray((envelope as any)?.result) ? (envelope as any).result
+          : [];
+        rawRowCountFromApi += raw.length;
+        let newlyAdded = 0;
+        for (const r of raw) {
+          const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
+          if (!seen.has(id)) newlyAdded++;
+          seen.set(id, r);
+        }
+        if (raw.length < pageLimit) break;
+        // If PBX ignores offset we get duplicate IDs — stop to avoid a useless loop.
+        if (page > 0 && newlyAdded === 0) break;
       }
       rows = [...seen.values()];
     } catch {

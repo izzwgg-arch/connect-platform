@@ -8726,15 +8726,99 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
 });
 
 // ─── Connect CDR KPI totals ───────────────────────────────────────────────────
-// Returns today's call counts from the Connect-owned ConnectCdr table.
-// This is the authoritative source for dashboard KPI cards.
-// Scope: tenantId param → per-tenant; absent or "global" → all tenants aggregate.
+// source=connect → counts from ConnectCdr (AMI-ingested, one row per linkedId).
+// source=pbx     → read-only VitalPBX /api/v2/cdr per PBX tenant, summed — matches the PBX UI
+//                  “Calls Traffic Today” (calltype 1/2/3). Use when ConnectCdr diverges.
+async function aggregateVitalpbxTodayCallKpis(opts: {
+  timezone: string;
+  /** VitalPBX tenant name (matches PBX listTenants `name`) when super-admin uses vpbx:slug from UI */
+  pbxScopeSlug: string | null;
+  /** VitalPBX numeric tenant id from TenantPbxLink — strongest match for Connect DB tenants */
+  pbxScopeNumericId: string | null;
+  /** Original scope id for JSON (Connect tenant cuid, vpbx:slug, or null) */
+  responseTenantId: string | null;
+}): Promise<{
+  incomingToday: number;
+  outgoingToday: number;
+  internalToday: number;
+  missedToday: number;
+  scope: "global" | "tenant";
+  tenantId?: string;
+  tenantsQueried: number;
+  source: "pbx";
+}> {
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) throw new Error("NO_PBX_INSTANCE");
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+
+  const tenants = await client.listTenants();
+  const excludeNames = new Set(["vitalpbx", "smoke", "billing", "test"].map((s) => s.toLowerCase()));
+
+  type Tgt = { id: string; name: string };
+  const targets: Tgt[] = [];
+  for (const t of tenants) {
+    const name = String((t as { name?: string }).name || "").trim();
+    const id = String((t as { tenant_id?: string; id?: string }).tenant_id ?? (t as { id?: string }).id ?? "").trim();
+    if (!id || !name) continue;
+    if (excludeNames.has(name.toLowerCase())) continue;
+
+    if (opts.pbxScopeNumericId) {
+      if (id !== opts.pbxScopeNumericId) continue;
+    } else if (opts.pbxScopeSlug) {
+      if (normSlug(name) !== normSlug(opts.pbxScopeSlug)) continue;
+    }
+    targets.push({ id, name });
+  }
+
+  if (opts.responseTenantId && targets.length === 0) {
+    return {
+      incomingToday: 0,
+      outgoingToday: 0,
+      internalToday: 0,
+      missedToday: 0,
+      scope: "tenant",
+      tenantId: opts.responseTenantId,
+      tenantsQueried: 0,
+      source: "pbx",
+    };
+  }
+
+  const batchSize = 6;
+  let incoming = 0;
+  let outgoing = 0;
+  let internal = 0;
+  let missed = 0;
+  for (let i = 0; i < targets.length; i += batchSize) {
+    const slice = targets.slice(i, i + batchSize);
+    const parts = await Promise.all(slice.map(({ id }) => client.getCdrToday(id, { timezone: opts.timezone })));
+    for (const d of parts) {
+      incoming += d.incoming;
+      outgoing += d.outgoing;
+      internal += d.internal;
+      missed += d.missed;
+    }
+  }
+
+  return {
+    incomingToday: incoming,
+    outgoingToday: outgoing,
+    internalToday: internal,
+    missedToday: missed,
+    scope: opts.responseTenantId ? "tenant" : "global",
+    ...(opts.responseTenantId ? { tenantId: opts.responseTenantId } : {}),
+    tenantsQueried: targets.length,
+    source: "pbx",
+  };
+}
+
 app.get("/dashboard/call-kpis", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
 
   const query = z.object({
     tenantId: z.string().optional(),
+    source: z.enum(["connect", "pbx"]).optional().default("pbx"),
   }).parse(req.query || {});
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
@@ -8762,6 +8846,35 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
 
   const timeWhere = { gte: dayStartUtc, lt: dayEndUtc };
 
+  if (query.source === "pbx") {
+    try {
+      let pbxSlug: string | null = null;
+      let pbxNum: string | null = null;
+      if (scopeTenantId) {
+        if (scopeTenantId.startsWith("vpbx:")) {
+          pbxSlug = scopeTenantId.slice(5);
+        } else {
+          const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } });
+          pbxNum = link?.pbxTenantId?.trim() || null;
+          if (!pbxNum) {
+            const t = await db.tenant.findUnique({ where: { id: scopeTenantId }, select: { name: true } });
+            pbxSlug = t?.name?.trim() || null;
+          }
+        }
+      }
+      const agg = await aggregateVitalpbxTodayCallKpis({
+        timezone,
+        pbxScopeSlug: pbxSlug,
+        pbxScopeNumericId: pbxNum,
+        responseTenantId: scopeTenantId,
+      });
+      return reply.send({ ...agg, asOf: nowUtc.toISOString() });
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "call-kpis: pbx aggregate failed, falling back to ConnectCdr");
+      // fall through to connect counts
+    }
+  }
+
   try {
     if (scopeTenantId) {
       // Per-tenant: single set of counts scoped to one tenant
@@ -8771,7 +8884,17 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
         db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "internal", startedAt: timeWhere } }),
         db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
       ]);
-      return reply.send({ incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed, scope: "tenant", tenantId: scopeTenantId, asOf: nowUtc.toISOString() });
+      return reply.send({
+        incomingToday: incoming,
+        outgoingToday: outgoing,
+        internalToday: internal,
+        missedToday: missed,
+        scope: "tenant",
+        tenantId: scopeTenantId,
+        asOf: nowUtc.toISOString(),
+        source: "connect",
+        ...(query.source === "pbx" ? { pbxFallback: true as const } : {}),
+      });
     } else {
       // Global aggregate: all tenants combined
       const [incoming, outgoing, internal, missed] = await Promise.all([
@@ -8780,7 +8903,16 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
         db.connectCdr.count({ where: { direction: "internal", startedAt: timeWhere } }),
         db.connectCdr.count({ where: { direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
       ]);
-      return reply.send({ incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed, scope: "global", asOf: nowUtc.toISOString() });
+      return reply.send({
+        incomingToday: incoming,
+        outgoingToday: outgoing,
+        internalToday: internal,
+        missedToday: missed,
+        scope: "global",
+        asOf: nowUtc.toISOString(),
+        source: "connect",
+        ...(query.source === "pbx" ? { pbxFallback: true as const } : {}),
+      });
     }
   } catch (err: any) {
     app.log.error({ err: err?.message }, "call-kpis: db error");
@@ -8864,7 +8996,8 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
     cursor = batch[batch.length - 1]!.id;
 
     for (const row of batch) {
-      // Admin-configured DID/extension rules (dcontext/channel data not stored in DB so unavailable for backfill)
+      // Admin-configured DID/extension rules only. Does NOT fix direction or totals — use
+      // POST /admin/cdr/fix-directions for misclassified ConnectCdr; dashboard KPIs can use ?source=pbx.
       const tenantId = await resolveTenantFromRules(row.fromNumber, row.toNumber);
       if (tenantId) {
         await db.connectCdr.update({ where: { id: row.id }, data: { tenantId } });

@@ -57,6 +57,10 @@ type ConnectKpis = {
   scope: "global" | "tenant";
   tenantId?: string;
   asOf: string;
+  /** connect = ConnectCdr DB; pbx = VitalPBX /api/v2/cdr (matches PBX UI traffic chart) */
+  source?: "connect" | "pbx";
+  pbxFallback?: boolean;
+  tenantsQueried?: number;
 };
 
 function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: string; isGlobal: boolean }) {
@@ -158,10 +162,12 @@ export default function DashboardPage() {
     [adminScope, combinedTick]
   );
 
-  // Connect-owned KPI totals from the ConnectCdr DB table.
-  // This is the authoritative source for Incoming / Outgoing / Internal / Missed today.
-  // Uses kpiTick which refreshes every 30 s AND immediately after each call ends.
-  const kpiParam = isGlobal ? "" : (tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "");
+  // KPI totals: source=pbx uses read-only VitalPBX CDR per tenant (same classification as the PBX
+  // “Calls Traffic Today”). source=connect would use ConnectCdr (AMI-linkedId), which can diverge.
+  const kpiSearch = new URLSearchParams();
+  kpiSearch.set("source", "pbx");
+  if (!isGlobal && tenantId) kpiSearch.set("tenantId", tenantId);
+  const kpiParam = `?${kpiSearch.toString()}`;
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
     [adminScope, tenantId, kpiTick]
@@ -212,12 +218,17 @@ export default function DashboardPage() {
   const activeCallCount = isAdminSummary(pbxLive) ? pbxLive.totalActiveCalls : pbxLive?.activeCalls ?? null;
   const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
 
-  // KPI cards use Connect-owned CDR data (not PBX live API)
   const connectKpis = connectKpisState.status === "success" ? connectKpisState.data : null;
   const incomingToday = connectKpis?.incomingToday ?? null;
   const outgoingToday = connectKpis?.outgoingToday ?? null;
   const internalToday = connectKpis?.internalToday ?? null;
   const missedToday   = connectKpis?.missedToday ?? null;
+  const kpiSourceNote =
+    connectKpis?.pbxFallback
+      ? "Today totals: Connect database (PBX CDR API unavailable — check PbxInstance / app-key)."
+      : connectKpis?.source === "pbx"
+        ? `Today totals: VitalPBX CDR${typeof connectKpis.tenantsQueried === "number" && connectKpis.tenantsQueried > 0 ? ` (${connectKpis.tenantsQueried} tenant${connectKpis.tenantsQueried === 1 ? "" : "s"})` : ""} — matches PBX traffic chart.`
+        : null;
 
   const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
 
@@ -261,6 +272,9 @@ export default function DashboardPage() {
         {/* SECTION A — KPI CARDS */}
         <section className="dash-section" aria-label="Key metrics">
           <h3 className="dash-section-title">Key metrics</h3>
+          {kpiSourceNote ? (
+            <p className="text-sm opacity-80 mb-2 max-w-3xl">{kpiSourceNote}</p>
+          ) : null}
           <div className="dash-kpi-grid">
             <article className={`dash-kpi-card active-calls`}>
               <div className="dash-kpi-label">Active Calls</div>
