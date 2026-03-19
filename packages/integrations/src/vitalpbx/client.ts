@@ -267,8 +267,48 @@ export class VitalPbxClient {
 
   // ---- Tenants ----
   async listTenants(): Promise<any[]> {
-    const out = await this.callEndpoint<any[]>("tenants.list");
-    return Array.isArray(out.data) ? out.data : [];
+    const out = await this.callEndpoint<any>("tenants.list");
+    const data = unwrapData<any>(out);
+    const pick = (d: unknown): any[] =>
+      Array.isArray(d)
+        ? d
+        : d && typeof d === "object"
+          ? Array.isArray((d as { result?: unknown }).result)
+            ? ((d as { result: any[] }).result)
+            : Array.isArray((d as { rows?: unknown }).rows)
+              ? ((d as { rows: any[] }).rows)
+              : Array.isArray((d as { items?: unknown }).items)
+                ? ((d as { items: any[] }).items)
+                : []
+          : [];
+    let rows = pick(data);
+    if (rows.length === 0 && Array.isArray((out as { data?: unknown }).data)) {
+      rows = (out as { data: any[] }).data;
+    }
+    // VitalPBX may paginate; fetch further pages if offset is honored.
+    const pageSize = 200;
+    if (rows.length === pageSize) {
+      const seen = new Set(rows.map((t: any) => String(t?.tenant_id ?? t?.id ?? t?.name ?? "")));
+      for (let page = 1; page < 50; page++) {
+        const next = await this.callEndpoint<any>("tenants.list", {
+          query: { limit: pageSize, offset: page * pageSize },
+        });
+        const nd = unwrapData<any>(next);
+        const chunk = pick(nd);
+        if (chunk.length === 0) break;
+        let added = 0;
+        for (const t of chunk) {
+          const k = String(t?.tenant_id ?? t?.id ?? t?.name ?? "");
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            rows.push(t);
+            added++;
+          }
+        }
+        if (chunk.length < pageSize || added === 0) break;
+      }
+    }
+    return rows;
   }
   async getTenant(id: string): Promise<any> {
     return unwrapData(await this.callEndpoint<any>("tenants.get", { pathParams: { tenantId: id } }));
@@ -514,30 +554,34 @@ export class VitalPbxClient {
     debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string };
   }> {
     const now = new Date();
-    // VitalPBX CDR API expects "YYYY-MM-DD" date strings in the PBX server's local timezone.
-    // Using date-only format is safest: VitalPBX interprets it as the full calendar day.
+    // VitalPBX /api/v2/cdr filters on start_date/end_date as UNIX TIMESTAMPS (seconds), not YYYY-MM-DD.
+    // Date-only strings yield empty result sets → dashboard KPIs all zero.
     let todayStr: string;
     let startDate: Date;
     let endDate: Date = now;
     if (options?.timezone && options.timezone.trim()) {
       const tz = options.timezone.trim();
-      // Get today's date in the business timezone as "YYYY-MM-DD"
-      todayStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // → "2026-03-17"
+      todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
       const { start, end } = getTodayBoundsInTimezone(tz);
       startDate = start;
       endDate = end;
     } else {
-      todayStr = now.toLocaleDateString("en-CA"); // UTC date
-      startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+      todayStr = now.toLocaleDateString("en-CA", { timeZone: "UTC" });
+      const y = now.getUTCFullYear();
+      const m = now.getUTCMonth();
+      const d = now.getUTCDate();
+      startDate = new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+      endDate = new Date(Math.min(now.getTime(), Date.UTC(y, m, d, 23, 59, 59, 999)));
     }
-    // Send "YYYY-MM-DD" strings — VitalPBX MySQL datetime filter accepts this format.
+    const startSec = Math.floor(startDate.getTime() / 1000);
+    const endSec = Math.floor(endDate.getTime() / 1000);
     // High-volume tenants can exceed 1000 rows/day; page until a short page (or cap pages).
     const queryBase: Record<string, string | number | boolean> = {
       limit: 800,
       sort_by: "date",
       sort_order: "asc",
-      start_date: todayStr,
-      end_date: todayStr
+      start_date: startSec,
+      end_date: endSec,
     };
     let rows: any[] = [];
     let rawRowCountFromApi = 0;
