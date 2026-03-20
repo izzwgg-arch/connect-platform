@@ -1,8 +1,6 @@
 /**
- * PBX Live Metrics Service
- * Calls the real VitalPBX-backed live endpoints in the API.
- * VitalPBX /api/v2/cdr = completed calls only (written at hangup).
- * Active calls require Asterisk ARI; see /pbx/live/active-calls.
+ * PBX Live Metrics Service — API routes use ConnectCdr for “today” totals (AMI ingest) + ARI for live channels.
+ * The dashboard does not use VitalPBX REST CDR for these endpoints.
  */
 import { apiGet } from "./apiClient";
 

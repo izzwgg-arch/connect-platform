@@ -57,7 +57,7 @@ type ConnectKpis = {
   scope: "global" | "tenant";
   tenantId?: string;
   asOf: string;
-  /** connect = ConnectCdr DB; pbx = VitalPBX /api/v2/cdr (matches PBX UI traffic chart) */
+  /** connect = ConnectCdr DB (default); pbx = VitalPBX CDR API only if enabled server-side */
   source?: "connect" | "pbx";
   pbxFallback?: boolean;
   tenantsQueried?: number;
@@ -116,26 +116,22 @@ export default function DashboardPage() {
   const tenantId = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
   const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
 
-  // Staggered ticks — scope-aware cadence to protect VitalPBX CDR from overload.
-  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : PBX live data + active calls
+  // Staggered ticks — scope-aware cadence (live combined = DB KPIs + ARI only; no VitalPBX REST CDR).
+  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : live summary + active calls (ARI)
   // kpiTick       30 s baseline : KPI cards (also bumped instantly when a call ends)
-  // trafficTick   300 s (GLOBAL) / 120 s (TENANT) : CDR traffic chart
-  // resourcesTick 300 s : extension/trunk/queue counts (rarely change)
+  // trafficTick   300 s (GLOBAL) / 120 s (TENANT) : call traffic chart (ConnectCdr / callRecord)
   const [combinedTick,  setCombinedTick]  = useState(0);
   const [kpiTick,       setKpiTick]       = useState(0);
   const [trafficTick,   setTrafficTick]   = useState(0);
-  const [resourcesTick, setResourcesTick] = useState(0);
 
   useEffect(() => {
     const combinedMs  = isGlobal ? 120_000 : 60_000;
     const trafficMs   = isGlobal ? 300_000 : 120_000;
-    const resourcesMs = 300_000;
     const kpiMs       = 30_000; // 30 s baseline for KPI cards
     const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  combinedMs);
     const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  trafficMs);
-    const t3 = window.setInterval(() => setResourcesTick((v) => v + 1), resourcesMs);
-    const t4 = window.setInterval(() => setKpiTick((v)       => v + 1), kpiMs);
-    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); clearInterval(t4); };
+    const t3 = window.setInterval(() => setKpiTick((v)       => v + 1), kpiMs);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
   }, [isGlobal]);
 
   // When a call ends (goes to hungup state), refresh KPI cards after a short delay.
@@ -162,42 +158,21 @@ export default function DashboardPage() {
     [adminScope, combinedTick]
   );
 
-  // KPI totals: source=pbx uses read-only VitalPBX CDR per tenant (same classification as the PBX
-  // “Calls Traffic Today”). source=connect would use ConnectCdr (AMI-linkedId), which can diverge.
-  const kpiSearch = new URLSearchParams();
-  kpiSearch.set("source", "pbx");
-  if (!isGlobal && tenantId) kpiSearch.set("tenantId", tenantId);
-  const kpiParam = `?${kpiSearch.toString()}`;
+  // KPI totals: default ConnectCdr (DB) — no VitalPBX REST fan-out. Optional PBX aggregate is API-only
+  // when CALL_KPIS_USE_VITALPBX_API=true and ?source=pbx (admin/debug; heavy on the PBX).
+  const kpiParam =
+    !isGlobal && tenantId
+      ? `?tenantId=${encodeURIComponent(tenantId)}`
+      : "";
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
     [adminScope, tenantId, kpiTick]
   );
 
-  // Call traffic chart — slower cadence, already server-cached.
+  // Call traffic chart — slower cadence, already server-cached (ConnectCdr / callRecord only; no PBX REST).
   const trafficState = useAsyncResource<DashboardCallTraffic>(
     () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
     [adminScope, trafficTick]
-  );
-
-  // Resource counts — slowest cadence; server-cached 120 s anyway.
-  const pbxCountsState = useAsyncResource(
-    async () => {
-      if (isGlobal) return null;
-      const safeCount = async (resource: string) => {
-        try {
-          const res = await apiGet<{ rows?: unknown[] }>(`/voice/pbx/resources/${resource}`);
-          return Array.isArray(res?.rows) ? res.rows.length : 0;
-        } catch { return null; }
-      };
-      const [extensions, trunks, queues, ringGroups] = await Promise.all([
-        safeCount("extensions"),
-        safeCount("trunks"),
-        safeCount("queues"),
-        safeCount("ring-groups")
-      ]);
-      return { extensions, trunks, queues, ringGroups };
-    },
-    [adminScope, resourcesTick]
   );
 
   const data        = state.status === "success" ? state.data : null;
@@ -208,7 +183,6 @@ export default function DashboardPage() {
   const pbxLive    = combined?.summary ?? null;
   const activeCalls = combined?.activeCalls ?? null;
   const traffic    = trafficState.status === "success" ? trafficState.data : null;
-  const pbxCounts  = pbxCountsState.status === "success" ? pbxCountsState.data : null;
 
   const isAdminSummary = (s: PbxLiveSummary | AdminPbxLiveSummary | null): s is AdminPbxLiveSummary =>
     s !== null && "totalCallsToday" in s;
@@ -225,7 +199,7 @@ export default function DashboardPage() {
   const missedToday   = connectKpis?.missedToday ?? null;
   const kpiSourceNote =
     connectKpis?.pbxFallback
-      ? "Today totals: Connect database (PBX CDR API unavailable — check PbxInstance / app-key)."
+      ? "Today totals: Connect database (VitalPBX CDR aggregate failed — check PBX API / instance)."
       : connectKpis?.source === "pbx"
         ? `Today totals: VitalPBX CDR${typeof connectKpis.tenantsQueried === "number" && connectKpis.tenantsQueried > 0 ? ` (${connectKpis.tenantsQueried} tenant${connectKpis.tenantsQueried === 1 ? "" : "s"})` : ""} — matches PBX traffic chart.`
         : null;
@@ -397,7 +371,7 @@ export default function DashboardPage() {
             {trafficState.status === "error" ? (
               <ErrorState message="Call traffic data unavailable." />
             ) : !traffic || traffic.points.length === 0 ? (
-              <EmptyState title="No call traffic yet today" message="As calls complete, they appear here from the PBX CDR." />
+              <EmptyState title="No call traffic in this window" message="Completed calls appear here from Connect (AMI-ingested CDR), or legacy call records if present." />
             ) : (
               <>
                 <div className="dash-chart-wrap">
@@ -414,12 +388,15 @@ export default function DashboardPage() {
 
           <div className="dashboard-side-stack">
             <h3 className="dash-section-title">System summary</h3>
+            <p className="text-sm opacity-70 mb-2 max-w-xl">
+              Extension, queue, trunk, and ring-group counts are not loaded here so the dashboard does not call the PBX REST API. Use the PBX section in the nav for those lists.
+            </p>
             <div className="dash-summary-grid">
               {[
-                { label: "Extensions", value: pbxCounts?.extensions ?? null, icon: Users, color: "var(--console-accent)" },
-                { label: "Ring groups", value: pbxCounts?.ringGroups ?? null, icon: ListOrdered, color: "var(--dash-internal)" },
-                { label: "Queues", value: pbxCounts?.queues ?? null, icon: ListOrdered, color: "var(--console-warning)" },
-                { label: "Trunks", value: pbxCounts?.trunks ?? null, icon: Truck, color: "var(--dash-incoming)" }
+                { label: "Extensions", value: null, icon: Users, color: "var(--console-accent)" },
+                { label: "Ring groups", value: null, icon: ListOrdered, color: "var(--dash-internal)" },
+                { label: "Queues", value: null, icon: ListOrdered, color: "var(--console-warning)" },
+                { label: "Trunks", value: null, icon: Truck, color: "var(--dash-incoming)" }
               ].map(({ label, value, icon: Icon, color }) => (
                 <article key={label} className="dash-summary-card">
                   <div className="dash-summary-icon" style={{ background: color }}>
