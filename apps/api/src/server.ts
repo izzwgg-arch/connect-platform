@@ -9563,7 +9563,8 @@ automationRuleTimer.unref();
 
 const PBX_LIVE_CACHE = new Map<string, { at: number; payload: any }>();
 const PBX_LIVE_INFLIGHT = new Map<string, Promise<any>>();
-const PBX_LIVE_TTL_COMBINED  = 120_000;  // 2 min  per-tenant combined fetch (CDR is expensive)
+const PBX_LIVE_TTL_COMBINED  = 120_000;  // 2 min  CDR-today numbers (expensive VitalPBX query)
+const PBX_LIVE_TTL_ACTIVE    =  10_000;  // 10 s   ARI active-calls snapshot (must be near real-time)
 const PBX_LIVE_TTL_ADMIN     = 300_000;  // 5 min  admin all-tenant aggregation
 const PBX_LIVE_TTL_RESOURCES = 120_000; // 120 s extension/trunk/queue lists
 
@@ -9637,25 +9638,42 @@ async function fetchPbxLiveSummaryForLink(
     rows: [], incoming: 0, outgoing: 0, internal: 0, answered: 0, missed: 0, total: 0
   }));
 
-  const ariUser = process.env.PBX_ARI_USER || "";
-  const ariPass = process.env.PBX_ARI_PASS || "";
+  // Accept both naming conventions: ARI_USERNAME (telephony service) and PBX_ARI_USER (legacy)
+  const ariUser = process.env.ARI_USERNAME || process.env.PBX_ARI_USER || "";
+  const ariPass = process.env.ARI_PASSWORD || process.env.PBX_ARI_PASS || "";
   let activeCallsList: ReturnType<typeof normalizePbxActiveCall>[] = [];
   let activeCallsSource: "ari" | "unavailable" = "unavailable";
   let registeredEndpoints: number | null = null;
   let unregisteredEndpoints: number | null = null;
 
   if (ariUser && ariPass) {
-    const [ariChannels, endpointCounts] = await Promise.all([
-      client.getAriChannels(ariUser, ariPass).catch(() => null),
-      client.getAriEndpointCounts(ariUser, ariPass).catch(() => null)
-    ]);
-    if (Array.isArray(ariChannels)) {
-      activeCallsList = ariChannels.map((ch) => normalizePbxActiveCall(ch, tenantId));
-      activeCallsSource = "ari";
+    // ARI active-calls use a short 10 s cache separate from the 2 min CDR cache.
+    const ariCacheKey = `ari-active:${tenantId}`;
+    const ariCached = PBX_LIVE_CACHE.get(ariCacheKey);
+    let ariResult: { calls: ReturnType<typeof normalizePbxActiveCall>[]; registered: number | null; unregistered: number | null } | null = null;
+
+    if (ariCached && Date.now() - ariCached.at < PBX_LIVE_TTL_ACTIVE) {
+      ariResult = ariCached.payload;
+    } else {
+      const [ariChannels, endpointCounts] = await Promise.all([
+        client.getAriChannels(ariUser, ariPass).catch(() => null),
+        client.getAriEndpointCounts(ariUser, ariPass).catch(() => null)
+      ]);
+      if (Array.isArray(ariChannels)) {
+        ariResult = {
+          calls: ariChannels.map((ch) => normalizePbxActiveCall(ch, tenantId)),
+          registered: endpointCounts?.registered ?? null,
+          unregistered: endpointCounts?.unregistered ?? null
+        };
+        PBX_LIVE_CACHE.set(ariCacheKey, { at: Date.now(), payload: ariResult });
+      }
     }
-    if (endpointCounts) {
-      registeredEndpoints = endpointCounts.registered;
-      unregisteredEndpoints = endpointCounts.unregistered;
+
+    if (ariResult) {
+      activeCallsList = ariResult.calls;
+      activeCallsSource = "ari";
+      registeredEndpoints = ariResult.registered;
+      unregisteredEndpoints = ariResult.unregistered;
     }
   }
 
