@@ -27,6 +27,7 @@ import {
   SolaCardknoxAdapter,
   type SolaCardknoxConfig,
   VitalPbxClient,
+  inferPbxLiveDirection,
   type VitalPbxPermission,
   WirePbxClient,
   normalizeWirePbxEvent,
@@ -1105,6 +1106,36 @@ function canAccessAdminBilling(user: JwtUser): boolean {
 
 function canAccessCampaignSend(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
+}
+
+function constantTimeEqualStr(a: string, b: string): boolean {
+  try {
+    const ba = Buffer.from(a, "utf8");
+    const bb = Buffer.from(b, "utf8");
+    if (ba.length !== bb.length) return false;
+    return timingSafeEqual(ba, bb);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * TEMPORARY: gate for POST /admin/dev/generate-observe-token (remove when observation is done).
+ * Allowed when NODE_ENV=development, or when DEV_OBSERVE_TOKEN_SECRET (≥16 chars) matches
+ * header X-Dev-Observe-Secret or JSON body field "secret" (constant-time compare).
+ */
+function canIssueDevObserveJwt(req: { headers: Record<string, unknown>; body?: unknown }): boolean {
+  if ((process.env.NODE_ENV || "") === "development") return true;
+  const envSecret = (process.env.DEV_OBSERVE_TOKEN_SECRET || "").trim();
+  if (envSecret.length < 16) return false;
+  const h = String(req.headers["x-dev-observe-secret"] ?? "").trim();
+  let bodySecret = "";
+  if (req.body && typeof req.body === "object" && req.body !== null && "secret" in (req.body as object)) {
+    const s = (req.body as { secret?: unknown }).secret;
+    if (typeof s === "string") bodySecret = s.trim();
+  }
+  const provided = h.length > 0 ? h : bodySecret;
+  return constantTimeEqualStr(provided, envSecret);
 }
 
 function canManageCustomerWorkflow(user: JwtUser): boolean {
@@ -2730,17 +2761,49 @@ app.post("/auth/mobile-qr-exchange", async (req, reply) => {
   };
 });
 
+// TEMPORARY: short-lived SUPER_ADMIN JWT for read-only observation scripts (no DB / no user creation).
+// Remove after PBX↔Connect observation. Gated by NODE_ENV=development or DEV_OBSERVE_TOKEN_SECRET.
+app.post("/admin/dev/generate-observe-token", async (req, reply) => {
+  if (!canIssueDevObserveJwt({ headers: req.headers as Record<string, unknown>, body: req.body })) {
+    return reply.status(404).send({ error: "not_found" });
+  }
+  const input = z
+    .object({
+      expiresMinutes: z.number().int().min(5).max(120).optional(),
+      secret: z.string().optional(),
+    })
+    .parse(req.body || {});
+  const minutes = Math.min(120, Math.max(5, input.expiresMinutes ?? 90));
+  const expiresInSeconds = minutes * 60;
+  const token = await reply.jwtSign(
+    {
+      sub: "dev-observe-token",
+      tenantId: "global",
+      email: "observe@dev.internal",
+      role: "SUPER_ADMIN",
+    },
+    { sign: { expiresIn: expiresInSeconds } },
+  );
+  return { token };
+});
+
 app.addHook("preHandler", async (req, reply) => {
   const path = req.url.split("?")[0];
+  // Reverse proxies often mount the API under a prefix (e.g. /api/...); req.url keeps that prefix.
+  const isDevObserveTokenPath =
+    path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
+  const isInternalCdrIngestPath =
+    path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
+    || isDevObserveTokenPath
+    || isInternalCdrIngestPath
     || [
         "/health",
         "/auth/signup",
         "/auth/login",
         "/auth/mobile-qr-exchange",
-        "/internal/cdr-ingest",
         "/webhooks/twilio/sms-status",
         "/webhooks/sola-cardknox",
         "/webhooks/whatsapp/meta",
@@ -8830,24 +8893,8 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
     : user.tenantId ?? null;
 
-  // "today" in the configured business timezone
-  const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
   const nowUtc = new Date();
-  // Get today's date string in that timezone (YYYY-MM-DD)
-  const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: timezone });
-  const [y, mo, d] = todayStr.split("-").map(Number);
-  // Build UTC boundaries for the full calendar day in that timezone
-  // We approximate: get the offset by looking at noon-UTC in that timezone
-  const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
-  const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", {
-    timeZone: timezone, hour: "numeric", minute: "numeric", hour12: false
-  });
-  const [hStr, mStr] = noonLocal.split(":");
-  const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
-  const dayStartUtc = new Date(noonUtc - offsetMs);
-  const dayEndUtc   = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
-
-  const timeWhere = { gte: dayStartUtc, lt: dayEndUtc };
+  const { timezone, timeWhere } = computePbxLocalDayRangeUtc(nowUtc);
 
   if (wantPbxAggregate) {
     try {
@@ -10413,6 +10460,8 @@ function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
   durationSeconds: number;
   state: string;
   queue: string | null;
+  bridgeId?: string;
+  bridgeChannelCount?: number;
 } {
   const state = String(raw?.state || raw?.channelstate_text || raw?.status || "Up").toLowerCase();
   const caller = String(raw?.caller?.number || raw?.callerid_num || raw?.src || raw?.from || "");
@@ -10421,10 +10470,10 @@ function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
   const durationSec = raw?.duration != null ? Number(raw.duration) : raw?.creationtime
     ? Math.floor((Date.now() - new Date(raw.creationtime).getTime()) / 1000)
     : 0;
-  let direction: "incoming" | "outgoing" | "internal" = "incoming";
-  const dialplan = String(raw?.dialplan?.context || raw?.context || "").toLowerCase();
-  if (dialplan.includes("internal") || dialplan.includes("local")) direction = "internal";
-  else if (dialplan.includes("out") || dialplan.includes("trunk") || dialplan.includes("external")) direction = "outgoing";
+  const ctx = String(raw?.dialplan?.context || raw?.context || "");
+  const exten = String(raw?.dialplan?.exten || raw?.exten || "");
+  const callerIdNum = String(raw?.caller?.number || raw?.callerid_num || raw?.src || raw?.from || "");
+  const direction = inferPbxLiveDirection(ctx, exten, callerIdNum);
   return {
     channelId: String(raw?.id || raw?.channel || raw?.uniqueid || `ch-${Math.random().toString(36).slice(2)}`),
     tenantId: tenantId || null,
@@ -10435,7 +10484,9 @@ function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
     startedAt: creationTime ? new Date(creationTime).toISOString() : null,
     durationSeconds: Math.max(0, durationSec),
     state,
-    queue: raw?.queue || null
+    queue: raw?.queue || null,
+    ...(raw?.bridgeId != null ? { bridgeId: String(raw.bridgeId) } : {}),
+    ...(raw?.bridgeChannelCount != null ? { bridgeChannelCount: Number(raw.bridgeChannelCount) } : {})
   };
 }
 
@@ -10444,17 +10495,15 @@ function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
 // Active channels + registration counts use Asterisk ARI HTTP only (same host; not the Vital app API).
 // All concurrent requests for the same tenant key share one Promise.
 
-/** tenantKey: real tenant id, vpbx:* slug id, or "global" for all rows in DB. */
-async function getConnectCdrTodayKpisForLiveDashboard(tenantKey: string): Promise<{
-  callsToday: number;
-  incomingToday: number;
-  outgoingToday: number;
-  internalToday: number;
-  answeredToday: number;
-  missedToday: number;
-}> {
+/** Full calendar day in PBX_TIMEZONE as UTC half-open interval [start, end). Matches dashboard/call-kpis Connect counts. */
+function computePbxLocalDayRangeUtc(nowUtc: Date = new Date()): {
+  timezone: string;
+  todayStr: string;
+  dayStartUtc: Date;
+  dayEndUtc: Date;
+  timeWhere: { gte: Date; lt: Date };
+} {
   const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
-  const nowUtc = new Date();
   const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: timezone });
   const [y, mo, d] = todayStr.split("-").map(Number);
   const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
@@ -10465,7 +10514,25 @@ async function getConnectCdrTodayKpisForLiveDashboard(tenantKey: string): Promis
   const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
   const dayStartUtc = new Date(noonUtc - offsetMs);
   const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
-  const timeWhere = { gte: dayStartUtc, lt: dayEndUtc };
+  return {
+    timezone,
+    todayStr,
+    dayStartUtc,
+    dayEndUtc,
+    timeWhere: { gte: dayStartUtc, lt: dayEndUtc },
+  };
+}
+
+/** tenantKey: real tenant id, vpbx:* slug id, or "global" for all rows in DB. */
+async function getConnectCdrTodayKpisForLiveDashboard(tenantKey: string): Promise<{
+  callsToday: number;
+  incomingToday: number;
+  outgoingToday: number;
+  internalToday: number;
+  answeredToday: number;
+  missedToday: number;
+}> {
+  const { timeWhere } = computePbxLocalDayRangeUtc();
   const tenantClause = tenantKey === "global" ? {} : { tenantId: tenantKey };
   const base = { ...tenantClause, startedAt: timeWhere };
   const [incoming, outgoing, internal, missed, answered, total] = await Promise.all([
@@ -10513,13 +10580,45 @@ async function fetchAriSliceForPbxLive(
   let registeredEndpoints: number | null = null;
   let unregisteredEndpoints: number | null = null;
   if (ariUser && ariPass) {
-    const [ariChannels, endpointCounts] = await Promise.all([
-      client.getAriChannels(ariUser, ariPass).catch(() => null),
+    const [bridged, endpointCounts] = await Promise.all([
+      client.getAriBridgedActiveCalls(ariUser, ariPass).catch(() => null),
       client.getAriEndpointCounts(ariUser, ariPass).catch(() => null)
     ]);
-    if (Array.isArray(ariChannels)) {
-      activeCallsList = ariChannels.map((ch) => normalizePbxActiveCall(ch, tenantLabel));
+    if (bridged) {
       activeCallsSource = "ari";
+      activeCallsList = bridged.bridges.map((b) =>
+        normalizePbxActiveCall(
+          {
+            id: b.sourceKind === "bridge" ? `bridge:${b.bridgeId}` : b.bridgeId,
+            state: "Up",
+            caller: { number: b.caller },
+            connected: { number: b.callee },
+            dialplan: {
+              context: b.dialplanContext ?? "",
+              exten: b.dialplanExten ?? ""
+            },
+            bridgeId: b.bridgeId,
+            bridgeChannelCount: b.channelCount
+          },
+          tenantLabel
+        )
+      );
+      if (
+        bridged.debug.totalBridges > 0 &&
+        bridged.debug.qualifyingBridges === 0 &&
+        bridged.debug.orphanLegCalls === 0
+      ) {
+        app.log.warn(
+          {
+            tenantLabel,
+            activeCalls: bridged.activeCalls,
+            verification: bridged.verification
+          },
+          "pbx_live:ari_bridged_active_all_bridges_excluded"
+        );
+      } else if (process.env.PBX_ARI_BRIDGED_VERIFY_LOG?.toLowerCase() === "true") {
+        app.log.info({ tenantLabel, verification: bridged.verification }, "pbx_live:ari_bridged_active_verify");
+      }
     }
     if (endpointCounts) {
       registeredEndpoints = endpointCounts.registered;
@@ -10834,7 +10933,7 @@ app.get("/pbx/live/diagnostics", async (req, reply) => {
       missedToday: kpi.missedToday,
       answeredToday: kpi.answeredToday,
       callsToday: kpi.callsToday,
-      ariChannelsSample: ari.activeCallsList.length,
+      ariBridgedActiveCalls: ari.activeCallsList.length,
       code: "OK"
     });
   } catch (err: any) {
@@ -11023,6 +11122,246 @@ app.get("/admin/pbx/live/summary", async (req, reply) => {
   } catch (err: any) {
     return reply.status(502).send({ error: "PBX_UNAVAILABLE", message: String(err?.message || "Aggregation failed") });
   }
+});
+
+// GET /admin/diagnostics/ari-bridged-active-calls — temporary VitalPBX parity verification (super-admin only).
+// Query: ?pbxInstanceId=... optional; defaults to most recently updated enabled instance.
+app.get("/admin/diagnostics/ari-bridged-active-calls", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const q = z.object({ pbxInstanceId: z.string().optional() }).parse(req.query || {});
+
+  const instance = q.pbxInstanceId
+    ? await db.pbxInstance.findFirst({ where: { id: q.pbxInstanceId, isEnabled: true } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+
+  if (!instance) {
+    return reply.code(404).send({ error: "NO_PBX_INSTANCE", message: "No matching enabled PBX instance." });
+  }
+
+  const ariUser = process.env.PBX_ARI_USER || "";
+  const ariPass = process.env.PBX_ARI_PASS || "";
+  if (!ariUser || !ariPass) {
+    return reply.code(503).send({
+      error: "ARI_NOT_CONFIGURED",
+      message: "Set PBX_ARI_USER and PBX_ARI_PASS on the API service."
+    });
+  }
+
+  try {
+    const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+    const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+    const result = await client.getAriBridgedActiveCalls(ariUser, ariPass);
+    if (!result) {
+      return reply.code(502).send({
+        error: "ARI_FETCH_FAILED",
+        message: "Could not read /ari/bridges and /ari/channels from ARI."
+      });
+    }
+
+    let pbxBaseUrlHost: string | null = null;
+    try {
+      pbxBaseUrlHost = new URL(instance.baseUrl).hostname;
+    } catch {
+      pbxBaseUrlHost = null;
+    }
+
+    return reply.send({
+      asOf: new Date().toISOString(),
+      pbxInstanceId: instance.id,
+      pbxBaseUrlHost,
+      summaryRows: result.bridges,
+      rawBridgeCount: result.verification.rawBridgeCount,
+      rawChannelCount: result.verification.rawChannelCount,
+      qualifyingBridgeCount: result.verification.qualifyingBridgeCount,
+      bridgeBackedCallCount: result.verification.bridgeBackedCallCount,
+      orphanLegCallCount: result.verification.orphanLegCallCount,
+      finalActiveCalls: result.verification.finalActiveCalls,
+      qualifyingBridges: result.verification.qualifyingBridges,
+      excludedBridges: result.verification.excludedBridges,
+      orphanLegs: result.verification.orphanLegs
+    });
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message), instanceId: instance.id }, "admin_diagnostics_ari_bridged_active_failed");
+    return reply.code(502).send({ error: "DIAGNOSTICS_FAILED", message: String(err?.message || err) });
+  }
+});
+
+// GET /admin/diagnostics/pbx-cdr-today-kpis — VitalPBX dashboard-equivalent "today" totals (cdr.list + calltype), super-admin only.
+// Does not require CALL_KPIS_USE_VITALPBX_API (explicit read-only diagnostic).
+app.get("/admin/diagnostics/pbx-cdr-today-kpis", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
+
+  let pbxSlug: string | null = null;
+  let pbxNum: string | null = null;
+  if (scopeTenantId) {
+    if (scopeTenantId.startsWith("vpbx:")) {
+      pbxSlug = scopeTenantId.slice(5);
+    } else {
+      const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } });
+      pbxNum = link?.pbxTenantId?.trim() || null;
+      if (!pbxNum) {
+        const t = await db.tenant.findUnique({ where: { id: scopeTenantId }, select: { name: true } });
+        pbxSlug = t?.name?.trim() || null;
+      }
+    }
+  }
+
+  const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+  try {
+    const agg = await aggregateVitalpbxTodayCallKpis({
+      timezone,
+      pbxScopeSlug: pbxSlug,
+      pbxScopeNumericId: pbxNum,
+      responseTenantId: scopeTenantId,
+    });
+    return reply.send({
+      asOf: new Date().toISOString(),
+      timezone,
+      pbxDashboardDefinition: {
+        api: "VitalPBX REST v2 cdr.list (paged)",
+        directionMapping:
+          "calltype 1=internal, 2=incoming, 3=outgoing; see VitalPbxClient.getCdrToday in @connect/integrations",
+        timeWindow:
+          "Unix start_date/end_date for local calendar day with end = min(now, end of local day); same as VitalPBX UI CDR today",
+      },
+      ...agg,
+    });
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message) }, "admin_diagnostics_pbx_cdr_today_kpis_failed");
+    return reply.code(502).send({ error: "PBX_CDR_TODAY_FAILED", message: String(err?.message || err) });
+  }
+});
+
+// GET /admin/diagnostics/connect-cdr-today-breakdown — ConnectCdr direction counts + samples (same day window as live KPI cards).
+app.get("/admin/diagnostics/connect-cdr-today-breakdown", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
+  const { timezone, todayStr, dayStartUtc, dayEndUtc, timeWhere } = computePbxLocalDayRangeUtc();
+  const baseWhere = scopeTenantId ? { tenantId: scopeTenantId, startedAt: timeWhere } : { startedAt: timeWhere };
+
+  const grouped = await db.connectCdr.groupBy({
+    by: ["direction"],
+    where: baseWhere,
+    _count: { _all: true },
+  });
+  const countsByDirection: Record<string, number> = {};
+  for (const g of grouped) {
+    countsByDirection[g.direction] = g._count._all;
+  }
+
+  const totalRows = await db.connectCdr.count({ where: baseWhere });
+  const tenantIdNullCount = await db.connectCdr.count({
+    where: { ...baseWhere, tenantId: null },
+  });
+
+  let heuristicNotOutgoingShortFromLongToCount = 0;
+  let heuristicSamples: Array<{
+    id: string;
+    linkedId: string;
+    tenantId: string | null;
+    fromNumber: string | null;
+    toNumber: string | null;
+    direction: string;
+    disposition: string;
+    startedAt: Date;
+    durationSec: number;
+  }> = [];
+
+  try {
+    if (scopeTenantId) {
+      const hc = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${dayStartUtc} AND "startedAt" < ${dayEndUtc}
+        AND "tenantId" = ${scopeTenantId}
+        AND direction <> 'outgoing'
+        AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+        AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+      `;
+      heuristicNotOutgoingShortFromLongToCount = Number(hc[0]?.c ?? 0);
+      heuristicSamples = await db.$queryRaw`
+        SELECT id, "linkedId", "tenantId", "fromNumber", "toNumber", direction, disposition, "startedAt", "durationSec"
+        FROM "ConnectCdr"
+        WHERE "startedAt" >= ${dayStartUtc} AND "startedAt" < ${dayEndUtc}
+        AND "tenantId" = ${scopeTenantId}
+        AND direction <> 'outgoing'
+        AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+        AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+        ORDER BY "startedAt" DESC
+        LIMIT 15
+      `;
+    } else {
+      const hc = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${dayStartUtc} AND "startedAt" < ${dayEndUtc}
+        AND direction <> 'outgoing'
+        AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+        AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+      `;
+      heuristicNotOutgoingShortFromLongToCount = Number(hc[0]?.c ?? 0);
+      heuristicSamples = await db.$queryRaw`
+        SELECT id, "linkedId", "tenantId", "fromNumber", "toNumber", direction, disposition, "startedAt", "durationSec"
+        FROM "ConnectCdr"
+        WHERE "startedAt" >= ${dayStartUtc} AND "startedAt" < ${dayEndUtc}
+        AND direction <> 'outgoing'
+        AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+        AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+        ORDER BY "startedAt" DESC
+        LIMIT 15
+      `;
+    }
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message) }, "connect_cdr_today_breakdown_heuristic_query_failed");
+  }
+
+  const outgoingSamples = await db.connectCdr.findMany({
+    where: { ...baseWhere, direction: "outgoing" },
+    orderBy: { startedAt: "desc" },
+    take: 15,
+    select: {
+      id: true,
+      linkedId: true,
+      tenantId: true,
+      fromNumber: true,
+      toNumber: true,
+      direction: true,
+      disposition: true,
+      startedAt: true,
+      durationSec: true,
+    },
+  });
+
+  const tenantKey = scopeTenantId ?? "global";
+  const liveDashboardKpis = await getConnectCdrTodayKpisForLiveDashboard(tenantKey);
+
+  return reply.send({
+    asOf: new Date().toISOString(),
+    timezone,
+    todayStr,
+    dayStartUtc: dayStartUtc.toISOString(),
+    dayEndUtc: dayEndUtc.toISOString(),
+    scope: scopeTenantId ? "tenant" : "global",
+    tenantId: scopeTenantId,
+    countsByDirection,
+    totalRows,
+    tenantIdNullCount,
+    heuristicNotOutgoingShortFromLongToCount,
+    heuristicNote:
+      "Rows with short from (2–6 digits) and long to (10+ digits) but direction != outgoing — likely misclassified outbound or ambiguous local numbers.",
+    outgoingSamples,
+    heuristicMisclassifiedCandidates: heuristicSamples,
+    liveDashboardKpis,
+  });
 });
 
 // GET /admin/pbx/live/active-calls — reads from shared admin aggregation cache
