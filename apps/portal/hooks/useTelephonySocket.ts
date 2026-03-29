@@ -128,6 +128,13 @@ export function useTelephonySocket(): TelephonySocketState {
 
   const connect = useCallback(() => {
     if (stoppedRef.current) return;
+    const existing = wsRef.current;
+    if (
+      existing &&
+      (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
 
     const url = wsUrl();
     if (!url) {

@@ -4,6 +4,7 @@ import type { AriClient } from "../ari/AriClient";
 import type { CallStateStore } from "../state/CallStateStore";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
+import type { AriBridgedActivePoller } from "../ari/AriBridgedActivePoller";
 import { env } from "../../config/env";
 
 export class HealthService {
@@ -15,6 +16,7 @@ export class HealthService {
     private readonly calls: CallStateStore,
     private readonly extensions: ExtensionStateStore,
     private readonly queues: QueueStateStore,
+    private readonly bridgePoller: AriBridgedActivePoller,
   ) {}
 
   getHealth(): TelephonyHealth {
@@ -37,7 +39,7 @@ export class HealthService {
       status,
       ami: amiHealth,
       ari: ariHealth,
-      activeCalls: this.calls.getActive().length,
+      activeCalls: this.bridgePoller.getActiveCallCount(),
       activeExtensions: this.extensions.getAll().length,
       activeQueues: this.queues.getAll().length,
       uptimeSec: Math.floor((Date.now() - this.startedAt) / 1000),
@@ -66,10 +68,12 @@ export class HealthService {
   /** Internal diagnostics (admin/dev). Use when ENABLE_TELEPHONY_DEBUG=true. */
   getDiagnostics(): {
     calls: ReturnType<CallStateStore["getDiagnostics"]>;
+    ariBridgedActive: ReturnType<AriBridgedActivePoller["getLast"]>;
     lastAmiEventAt: string | null;
   } {
     return {
       calls: this.calls.getDiagnostics(),
+      ariBridgedActive: this.bridgePoller.getLast(),
       lastAmiEventAt: this.ami.lastEventAt?.toISOString() ?? null,
     };
   }

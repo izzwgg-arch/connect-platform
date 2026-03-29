@@ -3,6 +3,7 @@ import type { CallStateStore } from "../state/CallStateStore";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import type { HealthService } from "./HealthService";
+import type { AriBridgedActivePoller } from "../ari/AriBridgedActivePoller";
 import { normalizeCallForClient } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
@@ -13,12 +14,13 @@ export class SnapshotService {
     private readonly extensions: ExtensionStateStore,
     private readonly queues: QueueStateStore,
     private readonly health: HealthService,
+    private readonly bridgePoller: AriBridgedActivePoller,
   ) {}
 
   // Returns a point-in-time snapshot suitable for sending to a new WS client.
   getSnapshot(tenantId?: string | null): TelephonySnapshot {
     this.calls.runStaleCleanup();
-    let calls = this.calls.getActive();
+    let calls = this.bridgePoller.getCallsForSnapshot();
     let exts = this.extensions.getAll();
     let qs = this.queues.getAll();
 

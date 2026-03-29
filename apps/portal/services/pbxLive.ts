@@ -33,6 +33,9 @@ export type PbxActiveCall = {
   durationSeconds: number;
   state: string;
   queue: string | null;
+  /** Present when row is one ARI bridge (VitalPBX-style active call). */
+  bridgeId?: string;
+  bridgeChannelCount?: number;
 };
 
 export type PbxActiveCallsResponse = {
@@ -84,6 +87,8 @@ export type PbxLiveDiagnostics = {
   callsToday?: number;
   /** When step is ok: date range sent to PBX and raw row count from CDR API (before client-side filter). */
   cdrDebug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr?: string };
+  /** Bridged active calls from ARI (same method as live combined). */
+  ariBridgedActiveCalls?: number;
 };
 
 export async function loadPbxLiveDiagnostics(): Promise<PbxLiveDiagnostics> {

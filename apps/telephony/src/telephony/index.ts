@@ -16,6 +16,7 @@ import { SnapshotService } from "./services/SnapshotService";
 import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
+import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
 
@@ -42,7 +43,8 @@ export function createTelephonyModule(server: http.Server) {
   const queueStore = new QueueStateStore();
 
   const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore);
-  const healthService = new HealthService(ami, ari, callStore, extStore, queueStore);
+  const ariBridgedPoller = new AriBridgedActivePoller(ari);
+  const healthService = new HealthService(ami, ari, callStore, extStore, queueStore, ariBridgedPoller);
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
   const cdrNotifier = new CdrNotifier();
@@ -51,11 +53,11 @@ export function createTelephonyModule(server: http.Server) {
       cdrNotifier.notify(call);
     }
   });
-  const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService);
+  const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService, ariBridgedPoller);
   const socketServer = new TelephonySocketServer(server, snapshotService);
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
-    callStore,
+    ariBridgedPoller,
     extStore,
     queueStore,
     healthService,
@@ -66,11 +68,13 @@ export function createTelephonyModule(server: http.Server) {
     log.info("Starting telephony module");
     ami.start();
     ari.start();
+    ariBridgedPoller.start();
   }
 
   function stop() {
     log.info("Stopping telephony module");
     broadcaster.stop();
+    ariBridgedPoller.stop();
     socketServer.close();
     ami.stop();
     ari.stop();
@@ -79,6 +83,7 @@ export function createTelephonyModule(server: http.Server) {
   return {
     ami,
     ari,
+    ariBridgedPoller,
     ariActions,
     telephonyService,
     healthService,

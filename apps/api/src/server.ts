@@ -8781,6 +8781,20 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         hangupCause: d.hangupCause ?? undefined,
       },
     });
+    if (process.env.CDR_PIPELINE_DIAG?.trim() === "1") {
+      app.log.info(
+        {
+          phase: "cdr_ingest_persisted",
+          linkedId: d.linkedId,
+          tenantId: resolvedTenantId,
+          direction: d.direction,
+          fromNumber: d.fromNumber ?? null,
+          toNumber: d.toNumber ?? null,
+          startedAt: d.startedAt,
+        },
+        "cdr_pipeline_diag"
+      );
+    }
     return reply.code(200).send({ ok: true });
   } catch (err: any) {
     app.log.error({ linkedId: d.linkedId, err: err?.message }, "cdr-ingest: db error");
@@ -8792,6 +8806,17 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
 // Default: source=connect → ConnectCdr only (DB counts — no extra load on the PBX).
 // source=pbx is ONLY honored when CALL_KPIS_USE_VITALPBX_API=true — it fans out listTenants + getCdrToday
 // per tenant and can peg PBX CPU; do not enable in production unless you accept that cost.
+/** Comma-separated tenant names to skip when aggregating VitalPBX CDR (listTenants `name`). Default: smoke,billing,test. Set to empty or "none" to include all. Excluding "vitalpbx" was dropping a large share of traffic vs the real PBX UI. */
+function parseVitalpbxCdrAggregateExcludeNames(): Set<string> {
+  const env = process.env.VITALPBX_CDR_AGGREGATE_EXCLUDE_NAMES;
+  if (env === undefined || env === null) {
+    return new Set(["smoke", "billing", "test"]);
+  }
+  const raw = env.trim();
+  if (raw === "" || raw.toLowerCase() === "none") return new Set<string>();
+  return new Set(raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+
 async function aggregateVitalpbxTodayCallKpis(opts: {
   timezone: string;
   /** VitalPBX tenant name (matches PBX listTenants `name`) when super-admin uses vpbx:slug from UI */
@@ -8818,7 +8843,7 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
 
   const tenants = await client.listTenants();
-  const excludeNames = new Set(["vitalpbx", "smoke", "billing", "test"].map((s) => s.toLowerCase()));
+  const excludeNames = parseVitalpbxCdrAggregateExcludeNames();
 
   type Tgt = { id: string; name: string };
   const targets: Tgt[] = [];
@@ -11368,6 +11393,450 @@ app.get("/admin/diagnostics/connect-cdr-today-breakdown", async (req, reply) => 
     heuristicMisclassifiedCandidates: heuristicSamples,
     liveDashboardKpis,
   });
+});
+
+/** PBX REST row → join key (Asterisk linkedid when present; else uniqueid). */
+function pbxCdrRowLinkedKey(row: any): string {
+  const v = row?.linkedid ?? row?.linked_id ?? row?.uniqueid ?? row?.unique_id;
+  if (v == null || String(v).trim() === "") return "";
+  return String(v).trim();
+}
+
+function pbxCdrDirectionFromRow(r: any): "incoming" | "outgoing" | "internal" | "unknown" {
+  const ct = Number(r?.calltype ?? r?.callType ?? 0);
+  if (ct === 1) return "internal";
+  if (ct === 2) return "incoming";
+  if (ct === 3) return "outgoing";
+  const dir = String(r?.direction || r?.call_type || "").toLowerCase();
+  if (dir.includes("in") && !dir.includes("internal")) return "incoming";
+  if (dir.includes("internal")) return "internal";
+  if (dir.includes("out")) return "outgoing";
+  return "unknown";
+}
+
+async function runCdrPipelineReconciliation(params: {
+  scopeTenantId: string | null;
+  pbxSlug: string | null;
+  pbxNum: string | null;
+  dayStartUtc: Date;
+  dayEndExclusive: Date;
+  timezone: string;
+  todayStr: string;
+}): Promise<Record<string, unknown>> {
+  const timeWhere = { gte: params.dayStartUtc, lt: params.dayEndExclusive };
+  const baseWhere = params.scopeTenantId
+    ? { tenantId: params.scopeTenantId, startedAt: timeWhere }
+    : { startedAt: timeWhere };
+
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) throw new Error("NO_PBX_INSTANCE");
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+
+  const tenants = await client.listTenants();
+  const excludeNames = parseVitalpbxCdrAggregateExcludeNames();
+  type Tgt = { id: string; name: string };
+  const targets: Tgt[] = [];
+  for (const t of tenants) {
+    const name = String((t as { name?: string }).name || "").trim();
+    const id = String((t as { tenant_id?: string; id?: string }).tenant_id ?? (t as { id?: string }).id ?? "").trim();
+    if (!id || !name) continue;
+    if (excludeNames.has(name.toLowerCase())) continue;
+    if (params.pbxNum) {
+      if (id !== params.pbxNum) continue;
+    } else if (params.pbxSlug) {
+      if (normSlug(name) !== normSlug(params.pbxSlug)) continue;
+    }
+    targets.push({ id, name });
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startSec = Math.floor(params.dayStartUtc.getTime() / 1000);
+  const endSec = Math.min(nowSec, Math.max(startSec, Math.floor((params.dayEndExclusive.getTime() - 1) / 1000)));
+
+  const paginationNotesByTenant: Record<string, string | undefined> = {};
+  let pbxRawRowTotal = 0;
+  const mergedPbxRows: any[] = [];
+  const batchSize = 6;
+  for (let i = 0; i < targets.length; i += batchSize) {
+    const slice = targets.slice(i, i + batchSize);
+    const parts = await Promise.all(
+      slice.map(async ({ id, name }) => {
+        const pack = await client.getCdrRowsForWindow(id, startSec, endSec, { maxPages: 200, pageLimit: 800 });
+        paginationNotesByTenant[name] = pack.paginationNotes;
+        return { id, name, pack };
+      })
+    );
+    for (const { id, name, pack } of parts) {
+      pbxRawRowTotal += pack.rawRowCountFromApi;
+      for (const r of pack.rows) {
+        mergedPbxRows.push({ ...r, _pbxTenantId: id, _pbxTenantName: name });
+      }
+    }
+  }
+
+  let pbxRowsWithoutJoinKey = 0;
+  const canonicalByLinked = new Map<string, any>();
+  for (const r of mergedPbxRows) {
+    const key = pbxCdrRowLinkedKey(r);
+    if (!key) {
+      pbxRowsWithoutJoinKey++;
+      continue;
+    }
+    const prev = canonicalByLinked.get(key);
+    if (!prev) {
+      canonicalByLinked.set(key, r);
+      continue;
+    }
+    const score = (x: any) => Number(x?.billsec ?? x?.duration ?? 0);
+    if (score(r) >= score(prev)) canonicalByLinked.set(key, r);
+  }
+
+  const pbxCanonicalTotal = canonicalByLinked.size;
+  const pbxByDir = { incoming: 0, outgoing: 0, internal: 0, unknown: 0 };
+  for (const r of canonicalByLinked.values()) {
+    const d = pbxCdrDirectionFromRow(r);
+    pbxByDir[d]++;
+  }
+
+  const connectRows: Array<{
+    linkedId: string;
+    tenantId: string | null;
+    direction: string;
+    fromNumber: string | null;
+    toNumber: string | null;
+    startedAt: Date;
+  }> = await db.connectCdr.findMany({
+    where: baseWhere,
+    select: {
+      linkedId: true,
+      tenantId: true,
+      direction: true,
+      fromNumber: true,
+      toNumber: true,
+      startedAt: true,
+    },
+  });
+
+  const connectTotal = connectRows.length;
+  const connectByDir = { incoming: 0, outgoing: 0, internal: 0, unknown: 0 };
+  let connectTenantNull = 0;
+  let connectDirectionUnknown = 0;
+  for (const c of connectRows) {
+    const d = c.direction as keyof typeof connectByDir;
+    if (d in connectByDir) connectByDir[d]++;
+    if (c.tenantId == null) connectTenantNull++;
+    if (c.direction === "unknown") connectDirectionUnknown++;
+  }
+
+  const tenantKey = params.scopeTenantId ?? "global";
+  const kpiTenantClause = tenantKey === "global" ? {} : { tenantId: tenantKey };
+  const [kpiIncoming, kpiOutgoing, kpiInternal] = await Promise.all([
+    db.connectCdr.count({ where: { ...kpiTenantClause, startedAt: timeWhere, direction: "incoming" } }),
+    db.connectCdr.count({ where: { ...kpiTenantClause, startedAt: timeWhere, direction: "outgoing" } }),
+    db.connectCdr.count({ where: { ...kpiTenantClause, startedAt: timeWhere, direction: "internal" } }),
+  ]);
+
+  const connectLinkedIds = new Set(connectRows.map((c) => c.linkedId));
+  const missingKeys: string[] = [];
+  for (const k of canonicalByLinked.keys()) {
+    if (!connectLinkedIds.has(k)) missingKeys.push(k);
+  }
+
+  const onlyConnectKeys: string[] = [];
+  for (const c of connectRows) {
+    if (!canonicalByLinked.has(c.linkedId)) onlyConnectKeys.push(c.linkedId);
+  }
+
+  type MisRow = {
+    linkedId: string;
+    from: string | null;
+    to: string | null;
+    startedAt: string;
+    expectedDirection: string;
+    actualDirection: string;
+    pbxTenantName?: string;
+    tenantId: string | null;
+  };
+
+  const misclassified: MisRow[] = [];
+  for (const c of connectRows) {
+    const pbx = canonicalByLinked.get(c.linkedId);
+    if (!pbx) continue;
+    const exp = pbxCdrDirectionFromRow(pbx);
+    if (c.direction === "unknown" || exp === "unknown") continue;
+    if (exp !== c.direction) {
+      misclassified.push({
+        linkedId: c.linkedId,
+        from: c.fromNumber ?? (String(pbx?.src ?? pbx?.source ?? "").trim() || null),
+        to: c.toNumber ?? (String(pbx?.dst ?? pbx?.destination ?? "").trim() || null),
+        startedAt: c.startedAt.toISOString(),
+        expectedDirection: exp,
+        actualDirection: c.direction,
+        pbxTenantName: pbx?._pbxTenantName,
+        tenantId: c.tenantId,
+      });
+    }
+  }
+
+  const pbxTime = (r: any): string => {
+    const raw = r?.date ?? r?.calldate ?? r?.start ?? r?.time;
+    if (raw == null) return "";
+    if (typeof raw === "number") {
+      const ms = raw < 1e12 ? raw * 1000 : raw;
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+    }
+    const d = new Date(String(raw));
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  };
+
+  const missingByPbxDir = { incoming: 0, outgoing: 0, internal: 0, unknown: 0 };
+  const missingSamples: MisRow[] = [];
+  for (const k of missingKeys) {
+    const r = canonicalByLinked.get(k)!;
+    const d = pbxCdrDirectionFromRow(r);
+    missingByPbxDir[d]++;
+    if (missingSamples.length < 12) {
+      missingSamples.push({
+        linkedId: k,
+        from: String(r?.src ?? r?.source ?? "") || null,
+        to: String(r?.dst ?? r?.destination ?? "") || null,
+        startedAt: pbxTime(r),
+        expectedDirection: d,
+        actualDirection: "(no ConnectCdr row)",
+        pbxTenantName: r?._pbxTenantName,
+        tenantId: null,
+      });
+    }
+  }
+
+  const nullTenantSamples = connectRows
+    .filter((c) => c.tenantId == null)
+    .slice(0, 12)
+    .map((c) => ({
+      linkedId: c.linkedId,
+      from: c.fromNumber,
+      to: c.toNumber,
+      startedAt: c.startedAt.toISOString(),
+      expectedDirection: "(n/a)",
+      actualDirection: c.direction,
+      tenantId: null as string | null,
+    }));
+
+  let dupLinkedGroups = 0;
+  let dupExtraRows = 0;
+  try {
+    const dupRaw = params.scopeTenantId
+      ? await db.$queryRaw<Array<{ linkedId: string; c: bigint }>>`
+          SELECT "linkedId", COUNT(*)::bigint AS c FROM "ConnectCdr"
+          WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+            AND "tenantId" = ${params.scopeTenantId}
+          GROUP BY "linkedId" HAVING COUNT(*) > 1
+        `
+      : await db.$queryRaw<Array<{ linkedId: string; c: bigint }>>`
+          SELECT "linkedId", COUNT(*)::bigint AS c FROM "ConnectCdr"
+          WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+          GROUP BY "linkedId" HAVING COUNT(*) > 1
+        `;
+    dupLinkedGroups = dupRaw.length;
+    dupExtraRows = dupRaw.reduce((acc: number, row: { c: bigint }) => acc + Math.max(0, Number(row.c) - 1), 0);
+  } catch {
+    dupLinkedGroups = 0;
+    dupExtraRows = 0;
+  }
+
+  let heuristicShortFromLongNotOutgoing = 0;
+  let heuristicLongFromShortNotIncoming = 0;
+  try {
+    if (params.scopeTenantId) {
+      const [h1] = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+          AND "tenantId" = ${params.scopeTenantId}
+          AND direction <> 'outgoing'
+          AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+          AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+      `;
+      const [h2] = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+          AND "tenantId" = ${params.scopeTenantId}
+          AND direction <> 'incoming'
+          AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) >= 10
+          AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+      `;
+      heuristicShortFromLongNotOutgoing = Number(h1?.c ?? 0);
+      heuristicLongFromShortNotIncoming = Number(h2?.c ?? 0);
+    } else {
+      const [h1] = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+          AND direction <> 'outgoing'
+          AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+          AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) >= 10
+      `;
+      const [h2] = await db.$queryRaw<[{ c: bigint }]>`
+        SELECT COUNT(*)::bigint AS c FROM "ConnectCdr"
+        WHERE "startedAt" >= ${params.dayStartUtc} AND "startedAt" < ${params.dayEndExclusive}
+          AND direction <> 'incoming'
+          AND LENGTH(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g')) >= 10
+          AND LENGTH(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g')) BETWEEN 2 AND 6
+      `;
+      heuristicShortFromLongNotOutgoing = Number(h1?.c ?? 0);
+      heuristicLongFromShortNotIncoming = Number(h2?.c ?? 0);
+    }
+  } catch {
+    /* optional diagnostics */
+  }
+
+  const kpiExclusionVsPersisted = 0;
+
+  const section3TopLossPoints = [
+    { cause: "pbx_canonical_row_missing_in_ConnectCdr", count: missingKeys.length, note: "PBX cdr.list row (by linkedid|uniqueid) with no matching ConnectCdr.linkedId — ingest skipped, wrong key, or telephony never posted." },
+    { cause: "direction_mismatch_pbx_calltype_vs_ConnectCdr", count: misclassified.length, note: "Same linkedId; PBX calltype direction differs from Connect direction (excludes unknown on either side)." },
+    { cause: "ConnectCdr_tenantId_null", count: connectTenantNull, note: "Persisted rows missing tenant — global KPI counts them; per-tenant dashboard omits them." },
+    { cause: "ConnectCdr_direction_unknown", count: connectDirectionUnknown, note: "Ingest marked direction unknown." },
+    { cause: "duplicate_linkedId_groups", count: dupLinkedGroups, note: "Schema has unique linkedId — expect 0 unless constraint bypassed." },
+    { cause: "heuristic_short_from_long_to_not_outgoing", count: heuristicShortFromLongNotOutgoing, note: "Possible outbound misclassified as incoming/internal." },
+    { cause: "heuristic_long_from_short_to_not_incoming", count: heuristicLongFromShortNotIncoming, note: "Possible inbound misclassified." },
+    { cause: "ConnectCdr_only_not_in_pbx_window", count: onlyConnectKeys.length, note: "LinkedIds in Connect but not in PBX pull — timezone/window, tenant scope, or REST vs AMI id mismatch." },
+    { cause: "pbx_rows_without_join_key", count: pbxRowsWithoutJoinKey, note: "PBX rows missing linkedid and uniqueid — cannot join to Connect." },
+    { cause: "kpi_query_exclusion", count: kpiExclusionVsPersisted, note: "Reserved; 0 when KPI uses same startedAt window as this diagnostic." },
+  ].sort((a, b) => b.count - a.count);
+
+  const section5MinimalFixPlanOrdered = [
+    ...(parseVitalpbxCdrAggregateExcludeNames().has("vitalpbx")
+      ? ["Unset VITALPBX_CDR_AGGREGATE_EXCLUDE_NAMES vitalpbx if that tenant carries production traffic."]
+      : []),
+    ...(missingKeys.length > 0
+      ? ["Trace telephony CdrNotifier skip reasons and POST /internal/cdr-ingest reachability for missing linkedIds."]
+      : []),
+    ...(misclassified.length > 0 ? ["Align inferDirection / AMI classification with VitalPBX calltype for the sample linkedIds."] : []),
+    ...(connectTenantNull > 0 ? ["Improve dcontext/channel/CdrTenantRule resolution so tenantId is set before persist."] : []),
+    ...(heuristicShortFromLongNotOutgoing > 0 ? ["Review outbound legs stored as incoming using heuristic samples."] : []),
+    "Confirm PBX REST totals match VitalPBX UI for the same window; if not, pagination or tenant list is still wrong.",
+  ];
+
+  const funnelDir = (dir: "incoming" | "outgoing" | "internal") => ({
+    pbxCanonical: pbxByDir[dir],
+    connectPersisted: connectByDir[dir],
+    kpiCounted: dir === "incoming" ? kpiIncoming : dir === "outgoing" ? kpiOutgoing : kpiInternal,
+    missingVersusConnect: missingByPbxDir[dir],
+  });
+
+  return {
+    section1_timeWindow: {
+      timezone: params.timezone,
+      todayStr: params.todayStr,
+      dayStartUtc: params.dayStartUtc.toISOString(),
+      dayEndExclusiveUtc: params.dayEndExclusive.toISOString(),
+      pbxApiStartSec: startSec,
+      pbxApiEndSec: endSec,
+      pbxSource: "VitalPBX REST v2 cdr.list (paged per tenant; join key linkedid || uniqueid)",
+      tenantsTargeted: targets.map((t) => t.name),
+      tenantExcludePolicy: "VITALPBX_CDR_AGGREGATE_EXCLUDE_NAMES (default smoke,billing,test — vitalpbx not excluded by default)",
+      paginationNotesByTenant,
+    },
+    section1_totals: {
+      pbxRawRowsFromApi: pbxRawRowTotal,
+      pbxCanonicalCalls: pbxCanonicalTotal,
+      pbxByDirection: pbxByDir,
+      connectCdrRows: connectTotal,
+      connectByDirection: connectByDir,
+      kpiQuerySameWindow: { incoming: kpiIncoming, outgoing: kpiOutgoing, internal: kpiInternal },
+    },
+    section2_missingCallFunnel: {
+      incoming: funnelDir("incoming"),
+      outgoing: funnelDir("outgoing"),
+      internal: funnelDir("internal"),
+      evidenceNote:
+        "Reached ingest is not counted here (no request log). Rows missing from ConnectCdr are bucket A/B until ingest logs prove otherwise.",
+    },
+    section3_topLossPoints: section3TopLossPoints,
+    section4_sampleMismatches: {
+      missingFromConnect: missingSamples.slice(0, 10),
+      misclassified: misclassified.slice(0, 10),
+      tenantNull: nullTenantSamples.slice(0, 10),
+      onlyInConnectLinkedIdsSample: onlyConnectKeys.slice(0, 10),
+    },
+    section5_minimalFixPlanOrdered: section5MinimalFixPlanOrdered,
+    counts: {
+      missingPbxCanonicalNotInConnect: missingKeys.length,
+      misclassifiedDirection: misclassified.length,
+      connectTenantIdNull: connectTenantNull,
+      connectOnlyRows: onlyConnectKeys.length,
+      duplicateLinkedIdGroups: dupLinkedGroups,
+      duplicateExtraRows: dupExtraRows,
+    },
+  };
+}
+
+// GET /admin/diagnostics/cdr-pipeline-reconciliation — PBX cdr.list vs ConnectCdr (super-admin, heavy).
+app.get("/admin/diagnostics/cdr-pipeline-reconciliation", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!ensureCredentialCrypto(reply)) return;
+
+  const q = z
+    .object({
+      tenantId: z.string().optional(),
+      startIso: z.string().optional(),
+      endIso: z.string().optional(),
+    })
+    .parse(req.query || {});
+
+  const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
+  let pbxSlug: string | null = null;
+  let pbxNum: string | null = null;
+  if (scopeTenantId) {
+    if (scopeTenantId.startsWith("vpbx:")) {
+      pbxSlug = scopeTenantId.slice(5);
+    } else {
+      const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } });
+      pbxNum = link?.pbxTenantId?.trim() || null;
+      if (!pbxNum) {
+        const t = await db.tenant.findUnique({ where: { id: scopeTenantId }, select: { name: true } });
+        pbxSlug = t?.name?.trim() || null;
+      }
+    }
+  }
+
+  let dayStartUtc: Date;
+  let dayEndExclusive: Date;
+  let timezone: string;
+  let todayStr: string;
+  if (q.startIso && q.endIso) {
+    dayStartUtc = new Date(q.startIso);
+    dayEndExclusive = new Date(q.endIso);
+    if (Number.isNaN(dayStartUtc.getTime()) || Number.isNaN(dayEndExclusive.getTime())) {
+      return reply.code(400).send({ error: "INVALID_ISO_RANGE" });
+    }
+    timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    todayStr = dayStartUtc.toISOString().slice(0, 10);
+  } else {
+    const r = computePbxLocalDayRangeUtc();
+    dayStartUtc = r.dayStartUtc;
+    dayEndExclusive = r.dayEndUtc;
+    timezone = r.timezone;
+    todayStr = r.todayStr;
+  }
+
+  try {
+    const body = await runCdrPipelineReconciliation({
+      scopeTenantId,
+      pbxSlug,
+      pbxNum,
+      dayStartUtc,
+      dayEndExclusive,
+      timezone,
+      todayStr,
+    });
+    return reply.send({ asOf: new Date().toISOString(), ...body });
+  } catch (err: any) {
+    app.log.warn({ err: String(err?.message) }, "admin_diagnostics_cdr_pipeline_reconciliation_failed");
+    return reply.code(502).send({ error: "CDR_PIPELINE_RECONCILIATION_FAILED", message: String(err?.message || err) });
+  }
 });
 
 // GET /admin/pbx/live/active-calls — reads from shared admin aggregation cache

@@ -13,6 +13,7 @@
     "db:migrate": "pnpm --filter @connect/db prisma:migrate",
     "smoke:pbx:v1.1.0": "node scripts/smoke-v1.1.0.mjs",
     "smoke:pbx": "node scripts/smoke-v1.1.0.mjs",
+    "audit-pbx": "node scripts/pbx-live-observe.mjs",
     "mobile:start": "pnpm --filter @connect/mobile start",
     "mobile:android": "pnpm --filter @connect/mobile android",
     "mobile:ios": "pnpm --filter @connect/mobile ios",

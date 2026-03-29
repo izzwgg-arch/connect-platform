@@ -464,6 +464,87 @@ export class VitalPbxClient {
     };
   }
 
+  private unwrapCdrListPayload(envelope: any): any[] {
+    const data = unwrapData<any>(envelope);
+    return Array.isArray(data?.result)
+      ? data.result
+      : Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.rows)
+          ? data.rows
+          : Array.isArray(data)
+            ? data
+            : Array.isArray((envelope as any)?.result)
+              ? (envelope as any).result
+              : [];
+  }
+
+  /**
+   * Raw CDR rows for a Unix-second window (same filters as VitalPBX UI list).
+   * Pages until a short page or maxPages. If offset pagination returns only duplicates (API ignores offset),
+   * retries with 1-based `page` query param.
+   */
+  async getCdrRowsForWindow(
+    tenantId: string | undefined,
+    startSec: number,
+    endSec: number,
+    options?: { maxPages?: number; pageLimit?: number }
+  ): Promise<{ rows: any[]; rawRowCountFromApi: number; paginationNotes?: string }> {
+    const pageLimit = Math.min(Math.max(Number(options?.pageLimit ?? 800), 1), 1000);
+    const maxPages = Math.min(Math.max(Number(options?.maxPages ?? 200), 1), 500);
+    const queryBase: Record<string, string | number | boolean> = {
+      limit: pageLimit,
+      sort_by: "date",
+      sort_order: "asc",
+      start_date: startSec,
+      end_date: endSec,
+    };
+
+    const runPaged = async (usePageParam: boolean) => {
+      const seen = new Map<string, any>();
+      let rawRowCountFromApi = 0;
+      let hitDuplicatePage = false;
+      for (let p = 0; p < maxPages; p++) {
+        const query: Record<string, string | number | boolean> = usePageParam
+          ? { ...queryBase, limit: pageLimit, page: p + 1 }
+          : { ...queryBase, limit: pageLimit, offset: p * pageLimit };
+        const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
+        const raw = this.unwrapCdrListPayload(envelope);
+        rawRowCountFromApi += raw.length;
+        let newlyAdded = 0;
+        for (const r of raw) {
+          const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
+          if (!seen.has(id)) newlyAdded++;
+          seen.set(id, r);
+        }
+        if (raw.length < pageLimit) break;
+        if (p > 0 && newlyAdded === 0) {
+          hitDuplicatePage = true;
+          break;
+        }
+      }
+      return { seen, rawRowCountFromApi, hitDuplicatePage };
+    };
+
+    const first = await runPaged(false);
+    let paginationNotes: string | undefined;
+    let { seen, rawRowCountFromApi } = first;
+
+    if (first.hitDuplicatePage && first.seen.size > 0) {
+      const second = await runPaged(true);
+      if (second.seen.size > first.seen.size) {
+        seen = second.seen;
+        rawRowCountFromApi = second.rawRowCountFromApi;
+        paginationNotes = "cdr.list ignored offset; used page-based pagination";
+      } else {
+        paginationNotes =
+          "cdr.list duplicate page with offset=0 growth; page param did not increase row count — list may be capped or ignoring pagination";
+      }
+    }
+
+    return { rows: [...seen.values()], rawRowCountFromApi, paginationNotes };
+  }
+
   async listCallRecordings(input: { tenantId?: string; extension?: string; dateFrom?: string; dateTo?: string; q?: string }): Promise<any[]> {
     const cdr = await this.fetchCdrs({
       tenantId: input.tenantId,
@@ -576,46 +657,14 @@ export class VitalPbxClient {
     }
     const startSec = Math.floor(startDate.getTime() / 1000);
     const endSec = Math.floor(endDate.getTime() / 1000);
-    // High-volume tenants can exceed 1000 rows/day; page until a short page (or cap pages).
-    const queryBase: Record<string, string | number | boolean> = {
-      limit: 800,
-      sort_by: "date",
-      sort_order: "asc",
-      start_date: startSec,
-      end_date: endSec,
-    };
     let rows: any[] = [];
     let rawRowCountFromApi = 0;
+    let paginationNotes: string | undefined;
     try {
-      const seen = new Map<string, any>();
-      const pageLimit = 800;
-      const maxPages = 25; // up to 20k rows / tenant / day
-      for (let page = 0; page < maxPages; page++) {
-        const query: Record<string, string | number | boolean> = {
-          ...queryBase,
-          limit: pageLimit,
-          offset: page * pageLimit,
-        };
-        const envelope = await this.callEndpoint<any>("cdr.list", { tenant: tenantId, query });
-        const data = unwrapData<any>(envelope);
-        const raw = Array.isArray(data?.result) ? data.result
-          : Array.isArray(data?.items) ? data.items
-          : Array.isArray(data?.rows) ? data.rows
-          : Array.isArray(data) ? data
-          : Array.isArray((envelope as any)?.result) ? (envelope as any).result
-          : [];
-        rawRowCountFromApi += raw.length;
-        let newlyAdded = 0;
-        for (const r of raw) {
-          const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
-          if (!seen.has(id)) newlyAdded++;
-          seen.set(id, r);
-        }
-        if (raw.length < pageLimit) break;
-        // If PBX ignores offset we get duplicate IDs — stop to avoid a useless loop.
-        if (page > 0 && newlyAdded === 0) break;
-      }
-      rows = [...seen.values()];
+      const pack = await this.getCdrRowsForWindow(tenantId, startSec, endSec, { maxPages: 25, pageLimit: 800 });
+      rows = pack.rows;
+      rawRowCountFromApi = pack.rawRowCountFromApi;
+      paginationNotes = pack.paginationNotes;
     } catch {
       rows = [];
     }
@@ -648,14 +697,15 @@ export class VitalPbxClient {
       answered: number;
       missed: number;
       total: number;
-      debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string };
+      debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string; paginationNotes?: string };
     } = { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
     if (options?.debug) {
       result.debug = {
         requestStartIso: startDate.toISOString(),
         requestEndIso: endDate.toISOString(),
         rawRowCountFromApi,
-        todayStr
+        todayStr,
+        ...(paginationNotes ? { paginationNotes } : {})
       };
     }
     return result;

@@ -24,8 +24,9 @@ export function registerHealthRoutes(router: Router, telephony: TelephonyModule)
       const dashboardRowCount = req.query["rows"] != null ? Number(req.query["rows"]) : null;
 
       const health = telephony.healthService.getHealth();
-      const activeCalls = telephony.callStore.getActive();
+      const activeCalls = telephony.ariBridgedPoller.getCallsForSnapshot();
       const telephonyCallsCount = activeCalls.length;
+      const amiDerivedActive = telephony.callStore.getActive();
       const diagnostics = telephony.healthService.getDiagnostics();
       const forensic = telephony.callStore.getForensicReport();
 
@@ -37,9 +38,10 @@ export function registerHealthRoutes(router: Router, telephony: TelephonyModule)
           dashboardRowCount,
           telephonyHealthActiveCalls: health.activeCalls,
           telephonyCallsCount,
-          diagnosticsRawChannelCount: diagnostics.rawChannelCount,
-          diagnosticsDerivedActiveCount: diagnostics.derivedActiveCount,
-          overcountSuspected: diagnostics.overcountSuspected ?? false,
+          amiDerivedActiveCount: amiDerivedActive.length,
+          diagnosticsRawChannelCount: diagnostics.calls.rawChannelCount,
+          diagnosticsDerivedActiveCount: diagnostics.calls.derivedActiveCount,
+          overcountSuspected: diagnostics.calls.overcountSuspected ?? false,
         },
         telephonyHealth: health,
         telephonyCallsSample: activeCalls.slice(0, 20).map((c) => ({

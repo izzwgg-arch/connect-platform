@@ -9,6 +9,7 @@ import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import { TenantResolver } from "../state/TenantResolver";
 import type { AmiFrame } from "../ami/AmiTypes";
+import { inferLiveCallDirection } from "../inferLiveCallDirection";
 
 const log = childLogger("TelephonyService");
 
@@ -125,7 +126,7 @@ export class TelephonyService {
             tenantId != null ? "live_call: tenant_resolved" : "live_call: tenant_unresolved",
           );
         }
-        const direction = inferDirection(typed.context, typed.exten, typed.callerIDNum);
+        const direction = inferLiveCallDirection(typed.context, typed.exten, typed.callerIDNum);
         this.calls.upsertFromNewchannel({
           linkedId,
           uniqueid: typed.uniqueid,
@@ -410,68 +411,4 @@ export class TelephonyService {
 function effectiveLinkedId(linkedid: string, uniqueid: string): string {
   const id = (linkedid ?? "").trim();
   return id.length > 0 ? id : uniqueid;
-}
-
-function inferDirection(
-  context: string,
-  exten: string,
-  callerIdNum: string,
-): import("../types").CallDirection {
-  const ctx = context.toLowerCase();
-
-  // ── Inbound indicators ────────────────────────────────────────────────────
-  // Standard VitalPBX / Asterisk patterns that mean a call arrived FROM outside.
-  if (
-    ctx.includes("from-trunk") ||
-    ctx.includes("from-pstn") ||
-    ctx.includes("from-external") ||
-    ctx.includes("inbound")
-  ) {
-    return "inbound";
-  }
-  // VitalPBX IVR contexts: IVR-{n}, ivr-{n} — caller entered an IVR menu → incoming.
-  if (/^ivr-\d/.test(ctx)) return "inbound";
-  // VitalPBX trunk ingress: trk-{n}-in, trk-{slug}-in — call arrived FROM the carrier (inbound).
-  // This was missing before and caused massive under-count of "incoming" vs the PBX dashboard.
-  if (/^trk-[^-]+-in/.test(ctx)) return "inbound";
-
-  const extenDigits = exten.replace(/\D/g, "").replace(/^1(\d{10})$/, "$1");
-
-  // ── Outbound indicators ───────────────────────────────────────────────────
-  if (
-    ctx.includes("from-internal") ||
-    ctx.includes("ext-local") ||
-    ctx.includes("outbound")
-  ) {
-    // Short exten (2-6 digits) = extension-to-extension internal call
-    if (/^\d{2,6}$/.test(exten)) return "internal";
-    // Full 10-digit PSTN number = outbound to external
-    if (/^\d{10,}$/.test(extenDigits)) return "outbound";
-    // 7-9 digit numbers are ambiguous (local PSTN or long extensions) — let CDR clarify
-    return "unknown";
-  }
-  // VitalPBX trunk dial: extension dialing out through a trunk — only outbound if PSTN-sized dial.
-  if (/^trk-[^-]+-dial/.test(ctx)) {
-    if (/^\d{2,6}$/.test(exten)) return "internal";
-    if (/^\d{10,}$/.test(extenDigits)) return "outbound";
-    return "unknown";
-  }
-  // VitalPBX Class-of-Service: T{n}_cos-* — used for BOTH internal and external dials.
-  // Must NOT default to outbound or extension→extension shows as OUT on live calls / KPIs.
-  if (/^t\d+_cos-/.test(ctx)) {
-    if (/^\d{2,6}$/.test(exten)) return "internal";
-    if (/^\d{10,}$/.test(extenDigits)) return "outbound";
-    return "unknown";
-  }
-  // VitalPBX local subroutine when connecting extensions inside a tenant
-  if (ctx.includes("sub-local-dialing")) {
-    if (/^\d{2,6}$/.test(exten)) return "internal";
-    return "unknown";
-  }
-
-  // ── Heuristic fallback ────────────────────────────────────────────────────
-  // Both callerID and exten are short extensions → internal
-  if (/^\d{2,6}$/.test(callerIdNum) && /^\d{2,6}$/.test(exten)) return "internal";
-
-  return "unknown";
 }

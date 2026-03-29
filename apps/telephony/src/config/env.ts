@@ -20,7 +20,8 @@ const schema = z.object({
 
   TELEPHONY_WS_PATH: z.string().default("/ws/telephony"),
   TELEPHONY_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
-  TELEPHONY_EVENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(100),
+  // Extension/queue WS upserts — floor 1s recommended to avoid CPU spikes alongside AMI.
+  TELEPHONY_EVENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(1000),
   ENABLE_TELEPHONY_DEBUG: z
     .string()
     .transform((v) => v.toLowerCase() === "true")
