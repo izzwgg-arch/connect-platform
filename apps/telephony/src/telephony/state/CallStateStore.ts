@@ -608,7 +608,9 @@ export class CallStateStore extends EventEmitter {
       const destIsLongPstn = /^\d{10,}$/.test(destBare.replace(/^1(\d{10})$/, "$1"));
       if (
         dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
-        dctx.includes("from-external") || dctx.includes("inbound") ||
+        dctx.includes("from-external") || dctx.includes("from-did") ||  // VitalPBX DID-routed inbound
+        dctx.includes("inbound") ||
+        /^did-/.test(dctx) ||              // VitalPBX DID contexts = inbound
         /^ivr-\d/.test(dctx) ||           // VitalPBX IVR = inbound
         /^trk-[^-]+-in/.test(dctx)        // VitalPBX trunk ingress = inbound
       ) {
@@ -623,16 +625,22 @@ export class CallStateStore extends EventEmitter {
         else if (destIsLongPstn) call.direction = "outbound";
         // else leave unknown → number heuristic
       }
-      if (call.direction === "unknown" && params.source && params.destination) {
+      if (call.direction === "unknown" && (params.source || params.destination || call.from)) {
         // Number-length heuristic: only 10-digit numbers count as external PSTN.
         // 7-digit local numbers are ambiguous — don't classify as outgoing.
-        const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-        const dstDigits = params.destination.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-        const srcLong = srcDigits.length >= 10;
-        const dstLong = dstDigits.length >= 10;
+        // Check both AMI Cdr Source (params.source) AND call.from (set from the original trunk
+        // Newchannel callerIDNum). For transferred inbound calls, params.source may be the
+        // transferring extension rather than the original PSTN caller, but call.from retains
+        // the original PSTN CallerID from the trunk leg.
+        const srcDigits = (params.source ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const dstDigits = (params.destination ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const fromDigits = (call.from ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const srcLong  = srcDigits.length >= 10;
+        const dstLong  = dstDigits.length >= 10;
         const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
         const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
-        if (srcLong) call.direction = "inbound";
+        const fromLong = fromDigits.length >= 10;
+        if (srcLong || fromLong) call.direction = "inbound";
         else if (srcShort && dstLong) call.direction = "outbound";
         else if (srcShort && dstShort) call.direction = "internal";
       }

@@ -9141,8 +9141,8 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     const connectRows = await db.connectCdr.findMany({
       where:
         scope === "GLOBAL" && isSuperAdmin
-          ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
-          : { tenantId: user.tenantId, startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } },
+          ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) }, direction: { not: "unknown" } }
+          : { tenantId: user.tenantId, startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) }, direction: { not: "unknown" } },
       select: { startedAt: true, direction: true },
       orderBy: { startedAt: "desc" },
       take: 5000

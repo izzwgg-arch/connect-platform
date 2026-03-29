@@ -425,10 +425,13 @@ function inferDirection(
     ctx.includes("from-trunk") ||
     ctx.includes("from-pstn") ||
     ctx.includes("from-external") ||
+    ctx.includes("from-did") ||    // VitalPBX DID-routed inbound calls
     ctx.includes("inbound")
   ) {
     return "inbound";
   }
+  // VitalPBX DID contexts: did-{slug}, did-lookup — DID-based inbound routing.
+  if (/^did-/.test(ctx)) return "inbound";
   // VitalPBX IVR contexts: IVR-{n}, ivr-{n} — caller entered an IVR menu → incoming.
   if (/^ivr-\d/.test(ctx)) return "inbound";
   // VitalPBX trunk ingress: trk-{n}-in, trk-{slug}-in — call arrived FROM the carrier (inbound).
