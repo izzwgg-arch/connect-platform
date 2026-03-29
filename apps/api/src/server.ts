@@ -11457,14 +11457,20 @@ async function runCdrPipelineReconciliation(params: {
   const paginationNotesByTenant: Record<string, string | undefined> = {};
   let pbxRawRowTotal = 0;
   const mergedPbxRows: any[] = [];
+  const tenantFetchErrors: Record<string, string> = {};
   const batchSize = 6;
   for (let i = 0; i < targets.length; i += batchSize) {
     const slice = targets.slice(i, i + batchSize);
     const parts = await Promise.all(
       slice.map(async ({ id, name }) => {
-        const pack = await client.getCdrRowsForWindow(id, startSec, endSec, { maxPages: 200, pageLimit: 800 });
-        paginationNotesByTenant[name] = pack.paginationNotes;
-        return { id, name, pack };
+        try {
+          const pack = await client.getCdrRowsForWindow(id, startSec, endSec, { maxPages: 25, pageLimit: 800 });
+          paginationNotesByTenant[name] = pack.paginationNotes;
+          return { id, name, pack, error: null };
+        } catch (err: any) {
+          tenantFetchErrors[name] = String(err?.message || err);
+          return { id, name, pack: { rows: [] as any[], rawRowCountFromApi: 0 }, error: String(err?.message || err) };
+        }
       })
     );
     for (const { id, name, pack } of parts) {
@@ -11737,6 +11743,7 @@ async function runCdrPipelineReconciliation(params: {
       tenantsTargeted: targets.map((t) => t.name),
       tenantExcludePolicy: "VITALPBX_CDR_AGGREGATE_EXCLUDE_NAMES (default smoke,billing,test — vitalpbx not excluded by default)",
       paginationNotesByTenant,
+      tenantFetchErrors,
     },
     section1_totals: {
       pbxRawRowsFromApi: pbxRawRowTotal,
