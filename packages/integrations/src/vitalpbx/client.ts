@@ -1,3 +1,4 @@
+import { computeBridgedActiveCalls, type BridgedActiveResult } from "./ariBridgedActiveCalls";
 import { getVitalPbxEndpoint, listVitalPbxEndpoints } from "./endpointRegistry";
 import { makeVitalPbxError, normalizeVitalPbxError } from "./errors";
 import type {
@@ -618,15 +619,10 @@ export class VitalPbxClient {
     } catch {
       rows = [];
     }
-    // Light sanity check: VitalPBX filters server-side, so trust the response.
-    // Only drop rows that clearly belong to a different date (loose check to handle timezone edge-cases).
-    const todayPrefix = todayStr; // "2026-03-17"
-    rows = rows.filter((r) => {
-      const dateStr = String(r?.date ?? r?.calldate ?? "").trim();
-      if (!dateStr) return true; // keep rows with no date field
-      // Accept if the date string starts with today (handles "2026-03-17 14:30:00" format)
-      return dateStr.startsWith(todayPrefix);
-    });
+    // Do NOT filter rows again by YYYY-MM-DD string here. The API already scoped the query with
+    // start_date/end_date (Unix seconds). A client-side startsWith(todayStr) drops valid rows when
+    // VitalPBX returns US dates ("03/29/2026 ..."), epochs, or other formats — that made dashboard
+    // KPI totals far lower than the VitalPBX UI (which uses the same API window).
     let incoming = 0, outgoing = 0, internal = 0, answered = 0, missed = 0;
     for (const r of rows) {
       const ct = Number(r?.calltype ?? r?.callType ?? 0);
@@ -688,6 +684,40 @@ export class VitalPbxClient {
       if (!res.ok) return null;
       const payload = await res.json().catch(() => null);
       return Array.isArray(payload) ? payload : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Active calls = qualifying ARI bridges (≥2 non-Local, non-Down legs) plus unbridged
+   * party channels not counted as Message/ or Local/ helpers (PBX `core show channels` parity).
+   */
+  async getAriBridgedActiveCalls(ariUser?: string, ariPassword?: string): Promise<BridgedActiveResult | null> {
+    if (!ariUser || !ariPassword) return null;
+    const ariBase = String(this.cfg.ariBaseUrl || this.cfg.baseUrl || "").replace(/\/$/, "");
+    if (!ariBase) return null;
+    const credentials = Buffer.from(`${ariUser}:${ariPassword}`).toString("base64");
+    const headers = {
+      authorization: `Basic ${credentials}`,
+      accept: "application/json"
+    };
+    const signal = timeoutSignal(Math.min(this.cfg.timeoutMs, 8000));
+    try {
+      const [bRes, cRes] = await Promise.all([
+        fetch(`${ariBase}/ari/bridges`, { method: "GET", headers, signal }),
+        fetch(`${ariBase}/ari/channels`, { method: "GET", headers, signal })
+      ]);
+      if (!bRes.ok || !cRes.ok) return null;
+      const bridges = await bRes.json().catch(() => null);
+      const channels = await cRes.json().catch(() => null);
+      if (!Array.isArray(bridges) || !Array.isArray(channels)) return null;
+      const result = computeBridgedActiveCalls(bridges, channels);
+      this.emit({
+        direction: "response",
+        message: `ari_bridged_active calls=${result.activeCalls} bridges=${result.debug.totalBridges} channels=${result.debug.totalChannels} bridgeRows=${result.debug.qualifyingBridges} orphans=${result.debug.orphanLegCalls} excluded=${result.debug.excluded.length}`
+      });
+      return result;
     } catch {
       return null;
     }

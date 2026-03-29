@@ -8805,6 +8805,8 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
   outgoingToday: number;
   internalToday: number;
   missedToday: number;
+  /** Sum of CDR row counts per tenant after getCdrToday pagination+dedupe (sanity vs UI volume). */
+  cdrRowsTotalAcrossTenants: number;
   scope: "global" | "tenant";
   tenantId?: string;
   tenantsQueried: number;
@@ -8840,6 +8842,7 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
       outgoingToday: 0,
       internalToday: 0,
       missedToday: 0,
+      cdrRowsTotalAcrossTenants: 0,
       scope: "tenant",
       tenantId: opts.responseTenantId,
       tenantsQueried: 0,
@@ -8852,6 +8855,7 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
   let outgoing = 0;
   let internal = 0;
   let missed = 0;
+  let cdrRowsTotalAcrossTenants = 0;
   for (let i = 0; i < targets.length; i += batchSize) {
     const slice = targets.slice(i, i + batchSize);
     const parts = await Promise.all(slice.map(({ id }) => client.getCdrToday(id, { timezone: opts.timezone })));
@@ -8860,6 +8864,7 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
       outgoing += d.outgoing;
       internal += d.internal;
       missed += d.missed;
+      cdrRowsTotalAcrossTenants += d.total;
     }
   }
 
@@ -8868,6 +8873,7 @@ async function aggregateVitalpbxTodayCallKpis(opts: {
     outgoingToday: outgoing,
     internalToday: internal,
     missedToday: missed,
+    cdrRowsTotalAcrossTenants,
     scope: opts.responseTenantId ? "tenant" : "global",
     ...(opts.responseTenantId ? { tenantId: opts.responseTenantId } : {}),
     tenantsQueried: targets.length,
