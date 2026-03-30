@@ -11496,18 +11496,45 @@ async function runCdrPipelineReconciliation(params: {
   let pbxRawRowTotal = 0;
   const mergedPbxRows: any[] = [];
   const tenantFetchErrors: Record<string, string> = {};
-  const batchSize = 6;
+  // Fetch CDR rows for each tenant. Use chunked (hourly) fetching to avoid timeouts on
+  // high-volume tenants (e.g. gesheft) where a full-day API query exceeds PBX_TIMEOUT_MS.
+  // Tenants are processed in batches of 4 (reduced from 6) to limit concurrent PBX load.
+  const batchSize = 4;
   for (let i = 0; i < targets.length; i += batchSize) {
     const slice = targets.slice(i, i + batchSize);
     const parts = await Promise.all(
       slice.map(async ({ id, name }) => {
         try {
+          // First try the direct (non-chunked) fetch — faster for small tenants
           const pack = await client.getCdrRowsForWindow(id, startSec, endSec, { maxPages: 25, pageLimit: 800 });
           paginationNotesByTenant[name] = pack.paginationNotes;
-          return { id, name, pack, error: null };
-        } catch (err: any) {
-          tenantFetchErrors[name] = String(err?.message || err);
-          return { id, name, pack: { rows: [] as any[], rawRowCountFromApi: 0 }, error: String(err?.message || err) };
+          return { id, name, pack: { rows: pack.rows, rawRowCountFromApi: pack.rawRowCountFromApi }, error: null };
+        } catch (directErr: any) {
+          // If the direct fetch timed out, retry with hourly chunked fetching
+          if (String(directErr?.message || directErr).includes("timed out") || String(directErr?.message || directErr).includes("timeout")) {
+            try {
+              const chunked = await client.getCdrRowsForWindowChunked(id, startSec, endSec, {
+                maxPages: 10,
+                pageLimit: 400,
+                chunkSec: 3600, // 1-hour chunks
+              });
+              if (chunked.chunkErrors.length > 0) {
+                const errSummary = chunked.chunkErrors.map(e => `[${e.chunkStart}-${e.chunkEnd}]: ${e.error}`).join("; ");
+                paginationNotesByTenant[name] = `chunked fetch; ${chunked.chunkCount} chunks; ${chunked.chunkErrors.length} chunk errors: ${errSummary}`;
+                tenantFetchErrors[name] = `partial: ${chunked.chunkErrors.length}/${chunked.chunkCount} chunks failed`;
+              } else {
+                paginationNotesByTenant[name] = `chunked fetch; ${chunked.chunkCount} 1-hour chunks; direct fetch timed out`;
+              }
+              return { id, name, pack: { rows: chunked.rows, rawRowCountFromApi: chunked.rawRowCountFromApi }, error: null };
+            } catch (chunkedErr: any) {
+              const msg = String(chunkedErr?.message || chunkedErr);
+              tenantFetchErrors[name] = `chunked fallback failed: ${msg}`;
+              return { id, name, pack: { rows: [] as any[], rawRowCountFromApi: 0 }, error: msg };
+            }
+          }
+          const msg = String(directErr?.message || directErr);
+          tenantFetchErrors[name] = msg;
+          return { id, name, pack: { rows: [] as any[], rawRowCountFromApi: 0 }, error: msg };
         }
       })
     );
@@ -11828,13 +11855,19 @@ app.get("/admin/diagnostics/cdr-pipeline-reconciliation", async (req, reply) => 
       tenantId: z.string().optional(),
       startIso: z.string().optional(),
       endIso: z.string().optional(),
+      // Convenience: Unix-second timestamps accepted in addition to ISO strings
+      startSec: z.coerce.number().int().optional(),
+      endSec: z.coerce.number().int().optional(),
+      // Direct PBX tenant slug override (bypasses tenantId lookup)
+      pbxSlug: z.string().optional(),
+      pbxNum: z.string().optional(),
     })
     .parse(req.query || {});
 
   const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
-  let pbxSlug: string | null = null;
-  let pbxNum: string | null = null;
-  if (scopeTenantId) {
+  let pbxSlug: string | null = q.pbxSlug?.trim() || null;
+  let pbxNum: string | null = q.pbxNum?.trim() || null;
+  if (!pbxSlug && !pbxNum && scopeTenantId) {
     if (scopeTenantId.startsWith("vpbx:")) {
       pbxSlug = scopeTenantId.slice(5);
     } else {
@@ -11851,7 +11884,12 @@ app.get("/admin/diagnostics/cdr-pipeline-reconciliation", async (req, reply) => 
   let dayEndExclusive: Date;
   let timezone: string;
   let todayStr: string;
-  if (q.startIso && q.endIso) {
+  if (q.startSec && q.endSec) {
+    dayStartUtc = new Date(q.startSec * 1000);
+    dayEndExclusive = new Date(q.endSec * 1000);
+    timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    todayStr = dayStartUtc.toISOString().slice(0, 10);
+  } else if (q.startIso && q.endIso) {
     dayStartUtc = new Date(q.startIso);
     dayEndExclusive = new Date(q.endIso);
     if (Number.isNaN(dayStartUtc.getTime()) || Number.isNaN(dayEndExclusive.getTime())) {

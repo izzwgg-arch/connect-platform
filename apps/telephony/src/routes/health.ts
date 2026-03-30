@@ -1,5 +1,6 @@
 import type { Router, Request } from "express";
 import type { TelephonyModule } from "../telephony";
+import { getCdrStats, resetCdrStats } from "../telephony/services/CdrNotifier";
 
 export function registerHealthRoutes(router: Router, telephony: TelephonyModule): void {
   router.get("/health", (_req, res) => {
@@ -11,6 +12,17 @@ export function registerHealthRoutes(router: Router, telephony: TelephonyModule)
   // Always expose diagnostics/forensic for live mismatch investigation (no debug flag required).
   router.get("/diagnostics", (_req, res) => {
     res.json(telephony.healthService.getDiagnostics());
+  });
+
+  // CDR ingestion counters — skip reasons, HTTP errors, post-ok counts.
+  // Lifetime totals since container start. Reset via DELETE /cdr-stats.
+  router.get("/cdr-stats", (_req, res) => {
+    res.json(getCdrStats());
+  });
+
+  router.delete("/cdr-stats", (_req, res) => {
+    resetCdrStats();
+    res.json({ ok: true, message: "CDR stats counters reset" });
   });
 
   /**

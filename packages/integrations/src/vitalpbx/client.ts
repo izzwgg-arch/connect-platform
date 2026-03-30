@@ -545,6 +545,62 @@ export class VitalPbxClient {
     return { rows: [...seen.values()], rawRowCountFromApi, paginationNotes };
   }
 
+  /**
+   * Same as getCdrRowsForWindow but splits the window into hourly (or configurable) chunks
+   * and fetches each chunk sequentially. Prevents timeouts for high-volume tenants (e.g. gesheft)
+   * where a full-day query causes the VitalPBX server to time out on large CDR table scans.
+   *
+   * @param chunkSec - size of each sub-window in seconds (default: 3600 = 1 hour)
+   */
+  async getCdrRowsForWindowChunked(
+    tenantId: string | undefined,
+    startSec: number,
+    endSec: number,
+    options?: { maxPages?: number; pageLimit?: number; chunkSec?: number }
+  ): Promise<{
+    rows: any[];
+    rawRowCountFromApi: number;
+    chunkCount: number;
+    chunkErrors: Array<{ chunkStart: number; chunkEnd: number; error: string }>;
+    paginationNotes?: string;
+  }> {
+    const chunkSec = Math.max(Number(options?.chunkSec ?? 3600), 60);
+    const seen = new Map<string, any>();
+    let rawRowCountFromApi = 0;
+    const chunkErrors: Array<{ chunkStart: number; chunkEnd: number; error: string }> = [];
+    const paginationNotesList: string[] = [];
+    let chunkCount = 0;
+
+    for (let cs = startSec; cs < endSec; cs += chunkSec) {
+      const ce = Math.min(cs + chunkSec, endSec);
+      chunkCount++;
+      try {
+        const result = await this.getCdrRowsForWindow(tenantId, cs, ce, {
+          maxPages: options?.maxPages ?? 25,
+          pageLimit: options?.pageLimit ?? 800,
+        });
+        rawRowCountFromApi += result.rawRowCountFromApi;
+        for (const r of result.rows) {
+          const id = String(
+            r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`,
+          );
+          seen.set(id, r);
+        }
+        if (result.paginationNotes) paginationNotesList.push(`chunk[${cs}]: ${result.paginationNotes}`);
+      } catch (err: any) {
+        chunkErrors.push({ chunkStart: cs, chunkEnd: ce, error: String(err?.message || err) });
+      }
+    }
+
+    return {
+      rows: [...seen.values()],
+      rawRowCountFromApi,
+      chunkCount,
+      chunkErrors,
+      paginationNotes: paginationNotesList.length > 0 ? paginationNotesList.join("; ") : undefined,
+    };
+  }
+
   async listCallRecordings(input: { tenantId?: string; extension?: string; dateFrom?: string; dateTo?: string; q?: string }): Promise<any[]> {
     const cdr = await this.fetchCdrs({
       tenantId: input.tenantId,

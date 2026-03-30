@@ -56,6 +56,44 @@ function shouldSkip(call: NormalizedCall): string | null {
   return null;
 }
 
+// ── In-process observability counters ────────────────────────────────────────
+// Lifetime counters (reset on container restart). Exposed via getCdrStats().
+// All mutations happen synchronously on the Node.js event loop — no lock needed.
+export type CdrStats = {
+  notified: number;
+  skipped: Record<string, number>;
+  httpErrors: number;
+  httpTimeouts: number;
+  postedOk: number;
+  since: string; // ISO timestamp of when counters were last reset
+};
+
+let _stats: CdrStats = {
+  notified: 0,
+  skipped: {},
+  httpErrors: 0,
+  httpTimeouts: 0,
+  postedOk: 0,
+  since: new Date().toISOString(),
+};
+
+/** Returns a snapshot of CDR notifier counters. Safe to call from any thread. */
+export function getCdrStats(): Readonly<CdrStats> {
+  return { ..._stats, skipped: { ..._stats.skipped } };
+}
+
+/** Reset all counters (e.g. after debugging). */
+export function resetCdrStats(): void {
+  _stats = {
+    notified: 0,
+    skipped: {},
+    httpErrors: 0,
+    httpTimeouts: 0,
+    postedOk: 0,
+    since: new Date().toISOString(),
+  };
+}
+
 export type CdrPayload = {
   linkedId: string;
   tenantId: string | null;
@@ -95,10 +133,28 @@ export class CdrNotifier {
   notify(call: NormalizedCall): void {
     if (!this.url) return;
 
+    _stats.notified++;
+
     const skipReason = shouldSkip(call);
     if (skipReason) {
+      _stats.skipped[skipReason] = (_stats.skipped[skipReason] ?? 0) + 1;
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ linkedId: call.id, reason: skipReason }, "cdr: skipped");
+      } else {
+        // Always log skips with direction/tenant info so missing calls are visible in prod
+        log.info(
+          {
+            linkedId: call.id,
+            reason: skipReason,
+            direction: call.direction,
+            tenantId: call.tenantId ?? null,
+            from: call.from ?? null,
+            to: call.to ?? null,
+            durationSec: call.durationSec,
+            dcontext: (call.metadata?.cdrDcontext as string | undefined) ?? null,
+          },
+          "cdr: skipped",
+        );
       }
       return;
     }
@@ -167,23 +223,57 @@ export class CdrNotifier {
   }
 
   private async postAsync(payload: CdrPayload): Promise<void> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    try {
-      const res = await fetch(this.url!, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(this.secret ? { "x-cdr-secret": this.secret } : {}),
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        log.warn({ linkedId: payload.linkedId, status: res.status }, "cdr: ingest HTTP error");
+    // Retry up to 3 times with brief exponential backoff (1s, 2s, 4s).
+    // Covers transient network blips and brief API container restarts during deploys.
+    const MAX_ATTEMPTS = 3;
+    const TIMEOUT_MS = 8000;
+    let lastErr: unknown;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      try {
+        const res = await fetch(this.url!, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(this.secret ? { "x-cdr-secret": this.secret } : {}),
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) {
+          _stats.httpErrors++;
+          log.warn({ linkedId: payload.linkedId, status: res.status, attempt }, "cdr: ingest HTTP error");
+          // 4xx errors are not retryable (bad payload); 5xx are retryable
+          if (res.status < 500) return;
+          lastErr = new Error(`HTTP ${res.status}`);
+        } else {
+          _stats.postedOk++;
+          return;
+        }
+      } catch (err: unknown) {
+        clearTimeout(timer);
+        if ((err as Error)?.name === "AbortError") {
+          _stats.httpTimeouts++;
+          log.warn({ linkedId: payload.linkedId, attempt }, "cdr: ingest POST timed out (8s)");
+          lastErr = err;
+        } else {
+          _stats.httpErrors++;
+          lastErr = err;
+        }
       }
-    } finally {
-      clearTimeout(timer);
+
+      if (attempt < MAX_ATTEMPTS) {
+        const delayMs = 1000 * Math.pow(2, attempt - 1); // 1s, 2s
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
+
+    log.error(
+      { linkedId: payload.linkedId, err: (lastErr as Error)?.message, attempts: MAX_ATTEMPTS },
+      "cdr: ingest failed after all retries — call will be missing from Connect",
+    );
   }
 }
