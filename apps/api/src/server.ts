@@ -11989,6 +11989,21 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
     // Null-tenant rows
     const nullTenantCount = await db.connectCdr.count({ where: { ...baseWhere, tenantId: null } });
 
+    // Edge-case counts: rows excluded from canonical override due to ambiguous numbers
+    // Feature-code calls: to = 1–4 digits (voicemail shortcuts, transfer codes)
+    const featureCodeCount = candidateRows.filter((r: CandidateRow) => {
+      const toD = (r.toNumber ?? "").replace(/\D/g, "");
+      return toD.length >= 1 && toD.length <= 4;
+    }).length;
+    // Ambiguous local-PSTN calls: extension → 7–9 digit number (may be outgoing, but excluded
+    // from canonical override to avoid false positives with 7-digit PBX extension IDs)
+    const ambiguousLocalCount = candidateRows.filter((r: CandidateRow) => {
+      const fromD = (r.fromNumber ?? "").replace(/\D/g, "");
+      const toD   = (r.toNumber   ?? "").replace(/\D/g, "");
+      const fromIsExt = fromD.length >= 2 && fromD.length <= 6;
+      return fromIsExt && toD.length >= 7 && toD.length <= 9;
+    }).length;
+
     return reply.send({
       asOf: new Date().toISOString(),
       window: {
@@ -12017,7 +12032,10 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
       directionMismatches: {
         count: directionMismatches.length,
         summary: mismatchSummary,
-        samples: directionMismatches.slice(0, 20).map((r) => ({
+        note: directionMismatches.length === 0
+          ? "No mismatches — all stored directions match canonical rules. Backfill is not needed."
+          : "Rows where stored direction differs from canonical. Run POST /admin/cdr/fix-directions?dryRun=false&scope=all to apply.",
+        samples: directionMismatches.slice(0, 20).map((r: MismatchRow) => ({
           linkedId: r.linkedId,
           from: r.fromNumber,
           to: r.toNumber,
@@ -12025,8 +12043,27 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
           canonicalDir: r.canonical,
         })),
       },
+      edgeCases: {
+        ambiguousLocalCalls: {
+          count: ambiguousLocalCount,
+          note: "Calls from a short extension to a 7–9 digit number. Not auto-reclassified as outgoing because 7-digit numbers are ambiguous (some PBX deployments use 7-digit extension IDs). These may be local PSTN outgoing calls; review manually if needed.",
+        },
+        featureCodeCalls: {
+          count: featureCodeCount,
+          note: "Calls to 1–4 digit destinations (voicemail shortcuts, transfer codes, etc). Direction left as stored; these are typically not real calls to external parties.",
+        },
+      },
       nullTenantRows: nullTenantCount,
-      backfillNote: "To apply direction fixes to existing rows: POST /admin/cdr/fix-directions?dryRun=false&scope=all",
+      countingModelNote: [
+        "Connect stores one row per linked call (deduplicated by linkedId).",
+        "The PBX CDR database stores one record per channel leg.",
+        "A single logical call (e.g. inbound → IVR → queue → extension) creates 3–5 CDR records in Asterisk but only 1 row in Connect.",
+        "Therefore Connect totals will be lower than PBX dashboard totals even after direction correction.",
+        "This is expected and not a bug — it reflects different counting models (calls vs call-legs).",
+      ].join(" "),
+      backfillNote: directionMismatches.length > 0
+        ? "Apply direction fixes: POST /admin/cdr/fix-directions?dryRun=false&scope=all"
+        : "No backfill needed — stored directions match canonical rules.",
     });
   } catch (err: any) {
     app.log.error({ err: err?.message }, "admin_diagnostics_dashboard_reconciliation: error");

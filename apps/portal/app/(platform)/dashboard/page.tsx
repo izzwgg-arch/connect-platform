@@ -287,9 +287,17 @@ export default function DashboardPage() {
           </div>
           {kpiMode === "canonical" ? (
             <p className="dash-kpi-mode-note">
-              Direction-corrected: calls from a short extension to an external number are counted as outgoing. Raw values shown in parentheses where they differ.
+              <strong>Direction-corrected:</strong> outbound calls (extension → PSTN) that were stored as incoming due to a multi-leg AMI classification issue are re-counted correctly.
+              Raw stored values shown in parentheses where they differ.{" "}
+              <span className="dash-kpi-pbx-gap-note">
+                PBX totals may still be higher — the PBX counts all channel-leg CDR records per call; Connect stores one row per linked call (deduped by linkedId).
+              </span>
             </p>
-          ) : null}
+          ) : (
+            <p className="dash-kpi-mode-note dash-kpi-mode-note--raw">
+              <strong>Raw stored:</strong> direction values exactly as stored in the Connect database. Outbound calls made from extensions may show as incoming here if not yet corrected. Use Direction-corrected mode for the accurate view.
+            </p>
+          )}
           {kpiSourceNote ? (
             <p className="text-sm opacity-80 mb-2 max-w-3xl">{kpiSourceNote}</p>
           ) : null}
