@@ -1110,6 +1110,7 @@ model ConnectCdr {
   talkSec     Int       @default(0)       // talk time: endedAt - answeredAt (0 if unanswered)
   queueId     String?
   hangupCause String?
+  rawLegCount Int       @default(1)       // how many CDR notifications were received for this linkedId (channel-leg count)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

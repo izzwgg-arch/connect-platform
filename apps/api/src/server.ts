@@ -8773,9 +8773,11 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec,
         queueId:     d.queueId ?? null,
         hangupCause: d.hangupCause ?? null,
+        rawLegCount: 1,
       },
       update: {
-        // On duplicate linkedId: update only if incoming data is richer
+        // On duplicate linkedId: update only if incoming data is richer.
+        // rawLegCount always increments — each notification represents one channel-leg CDR.
         tenantId:    resolvedTenantId ?? undefined,
         fromNumber:  d.fromNumber ?? undefined,
         toNumber:    d.toNumber ?? undefined,
@@ -8786,6 +8788,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec > 0 ? d.talkSec : undefined,
         queueId:     d.queueId ?? undefined,
         hangupCause: d.hangupCause ?? undefined,
+        rawLegCount: { increment: 1 },
       },
     });
     if (process.env.CDR_PIPELINE_DIAG?.trim() === "1") {
@@ -11585,6 +11588,7 @@ async function runCdrPipelineReconciliation(params: {
     fromNumber: string | null;
     toNumber: string | null;
     startedAt: Date;
+    rawLegCount: number;
   }> = await db.connectCdr.findMany({
     where: baseWhere,
     select: {
@@ -11594,6 +11598,7 @@ async function runCdrPipelineReconciliation(params: {
       fromNumber: true,
       toNumber: true,
       startedAt: true,
+      rawLegCount: true,
     },
   });
 
@@ -11601,11 +11606,13 @@ async function runCdrPipelineReconciliation(params: {
   const connectByDir = { incoming: 0, outgoing: 0, internal: 0, unknown: 0 };
   let connectTenantNull = 0;
   let connectDirectionUnknown = 0;
+  let connectRawLegTotal = 0;
   for (const c of connectRows) {
     const d = c.direction as keyof typeof connectByDir;
     if (d in connectByDir) connectByDir[d]++;
     if (c.tenantId == null) connectTenantNull++;
     if (c.direction === "unknown") connectDirectionUnknown++;
+    connectRawLegTotal += c.rawLegCount;
   }
 
   const tenantKey = params.scopeTenantId ?? "global";
@@ -11823,6 +11830,8 @@ async function runCdrPipelineReconciliation(params: {
       pbxCanonicalCalls: pbxCanonicalTotal,
       pbxByDirection: pbxByDir,
       connectCdrRows: connectTotal,
+      connectRawLegTotal,                    // SUM(rawLegCount) — PBX-style channel-leg count from Connect
+      connectLegsPerCall: connectTotal > 0 ? Math.round((connectRawLegTotal / connectTotal) * 100) / 100 : null,
       connectByDirection: connectByDir,
       kpiQuerySameWindow: { incoming: kpiIncoming, outgoing: kpiOutgoing, internal: kpiInternal },
     },
@@ -12113,6 +12122,204 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
     });
   } catch (err: any) {
     app.log.error({ err: err?.message }, "admin_diagnostics_dashboard_reconciliation: error");
+    return reply.code(500).send({ error: "INTERNAL_ERROR", message: String(err?.message || err) });
+  }
+});
+
+// ── GET /admin/diagnostics/raw-vs-deduped ─────────────────────────────────────
+// Compares Connect's raw CDR leg count (SUM rawLegCount) vs unique logical calls
+// (COUNT *) for the current day window.
+// Provides PBX-style raw counting parity validation without touching PBX API.
+// rawLegCount on each ConnectCdr row is incremented once per CdrNotifier notification —
+// i.e. once per AMI Cdr event (one per Asterisk channel leg). SUM should approximate
+// the PBX dashboard's raw CDR row count.
+app.get("/admin/diagnostics/raw-vs-deduped", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+
+  const q = z.object({
+    tenantId: z.string().optional(),
+    startIso: z.string().optional(),
+    endIso:   z.string().optional(),
+    startSec: z.coerce.number().int().optional(),
+    endSec:   z.coerce.number().int().optional(),
+    limit:    z.coerce.number().int().min(1).max(100).optional(),
+  }).parse(req.query || {});
+
+  const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
+
+  let startUtc: Date;
+  let endUtc: Date;
+  let timezone: string;
+  let windowStr: string;
+  if (q.startSec && q.endSec) {
+    startUtc   = new Date(q.startSec * 1000);
+    endUtc     = new Date(q.endSec * 1000);
+    timezone   = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    windowStr  = `${startUtc.toISOString()} → ${endUtc.toISOString()}`;
+  } else if (q.startIso && q.endIso) {
+    startUtc   = new Date(q.startIso);
+    endUtc     = new Date(q.endIso);
+    if (Number.isNaN(startUtc.getTime()) || Number.isNaN(endUtc.getTime())) {
+      return reply.code(400).send({ error: "INVALID_ISO_RANGE" });
+    }
+    timezone   = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    windowStr  = `${startUtc.toISOString()} → ${endUtc.toISOString()}`;
+  } else {
+    const r    = computePbxLocalDayRangeUtc();
+    startUtc   = r.dayStartUtc;
+    endUtc     = r.dayEndUtc;
+    timezone   = r.timezone;
+    windowStr  = `${r.todayStr} (${timezone})`;
+  }
+
+  const timeWhere = { gte: startUtc, lt: endUtc };
+  const baseWhere = scopeTenantId ? { tenantId: scopeTenantId, startedAt: timeWhere } : { startedAt: timeWhere };
+
+  try {
+    // Aggregate: total raw legs, unique calls, direction breakdown
+    type AggRow = {
+      uniqueCalls: bigint; rawLegTotal: bigint;
+      rawLegIncoming: bigint; rawLegOutgoing: bigint; rawLegInternal: bigint; rawLegUnknown: bigint;
+      dedupIncoming: bigint; dedupOutgoing: bigint; dedupInternal: bigint; dedupUnknown: bigint;
+      nullTenantCount: bigint; multiLegCount: bigint; maxLegs: bigint;
+    };
+    const agg: AggRow[] = scopeTenantId
+      ? await db.$queryRaw<AggRow[]>`
+          SELECT
+            COUNT(*) AS "uniqueCalls",
+            SUM("rawLegCount") AS "rawLegTotal",
+            SUM(CASE WHEN direction = 'incoming' THEN "rawLegCount" ELSE 0 END) AS "rawLegIncoming",
+            SUM(CASE WHEN direction = 'outgoing' THEN "rawLegCount" ELSE 0 END) AS "rawLegOutgoing",
+            SUM(CASE WHEN direction = 'internal' THEN "rawLegCount" ELSE 0 END) AS "rawLegInternal",
+            SUM(CASE WHEN direction NOT IN ('incoming','outgoing','internal') THEN "rawLegCount" ELSE 0 END) AS "rawLegUnknown",
+            COUNT(CASE WHEN direction = 'incoming' THEN 1 END) AS "dedupIncoming",
+            COUNT(CASE WHEN direction = 'outgoing' THEN 1 END) AS "dedupOutgoing",
+            COUNT(CASE WHEN direction = 'internal' THEN 1 END) AS "dedupInternal",
+            COUNT(CASE WHEN direction NOT IN ('incoming','outgoing','internal') THEN 1 END) AS "dedupUnknown",
+            COUNT(CASE WHEN "tenantId" IS NULL THEN 1 END) AS "nullTenantCount",
+            COUNT(CASE WHEN "rawLegCount" > 1 THEN 1 END) AS "multiLegCount",
+            MAX("rawLegCount") AS "maxLegs"
+          FROM "ConnectCdr"
+          WHERE "startedAt" >= ${startUtc} AND "startedAt" < ${endUtc} AND "tenantId" = ${scopeTenantId}
+        `
+      : await db.$queryRaw<AggRow[]>`
+          SELECT
+            COUNT(*) AS "uniqueCalls",
+            SUM("rawLegCount") AS "rawLegTotal",
+            SUM(CASE WHEN direction = 'incoming' THEN "rawLegCount" ELSE 0 END) AS "rawLegIncoming",
+            SUM(CASE WHEN direction = 'outgoing' THEN "rawLegCount" ELSE 0 END) AS "rawLegOutgoing",
+            SUM(CASE WHEN direction = 'internal' THEN "rawLegCount" ELSE 0 END) AS "rawLegInternal",
+            SUM(CASE WHEN direction NOT IN ('incoming','outgoing','internal') THEN "rawLegCount" ELSE 0 END) AS "rawLegUnknown",
+            COUNT(CASE WHEN direction = 'incoming' THEN 1 END) AS "dedupIncoming",
+            COUNT(CASE WHEN direction = 'outgoing' THEN 1 END) AS "dedupOutgoing",
+            COUNT(CASE WHEN direction = 'internal' THEN 1 END) AS "dedupInternal",
+            COUNT(CASE WHEN direction NOT IN ('incoming','outgoing','internal') THEN 1 END) AS "dedupUnknown",
+            COUNT(CASE WHEN "tenantId" IS NULL THEN 1 END) AS "nullTenantCount",
+            COUNT(CASE WHEN "rawLegCount" > 1 THEN 1 END) AS "multiLegCount",
+            MAX("rawLegCount") AS "maxLegs"
+          FROM "ConnectCdr"
+          WHERE "startedAt" >= ${startUtc} AND "startedAt" < ${endUtc}
+        `;
+
+    const a = agg[0];
+    const uniqueCalls   = Number(a?.uniqueCalls ?? 0);
+    const rawLegTotal   = Number(a?.rawLegTotal ?? 0);
+    const multiLegCount = Number(a?.multiLegCount ?? 0);
+    const maxLegs       = Number(a?.maxLegs ?? 0);
+    const legsPerCall   = uniqueCalls > 0 ? Math.round((rawLegTotal / uniqueCalls) * 100) / 100 : null;
+
+    // Top linkedIds with the most legs (multi-leg calls = best examples)
+    const topMultiLeg = await db.connectCdr.findMany({
+      where: { ...baseWhere, rawLegCount: { gt: 1 } },
+      orderBy: { rawLegCount: "desc" },
+      take: Number(q.limit ?? 10),
+      select: {
+        linkedId: true,
+        rawLegCount: true,
+        fromNumber: true,
+        toNumber: true,
+        direction: true,
+        tenantId: true,
+        durationSec: true,
+        disposition: true,
+        startedAt: true,
+      },
+    });
+
+    // Distribution of rawLegCount values
+    type DistRow = { legs: number; count: bigint };
+    const distribution: DistRow[] = scopeTenantId
+      ? await db.$queryRaw<DistRow[]>`
+          SELECT "rawLegCount" AS legs, COUNT(*) AS count
+          FROM "ConnectCdr"
+          WHERE "startedAt" >= ${startUtc} AND "startedAt" < ${endUtc} AND "tenantId" = ${scopeTenantId}
+          GROUP BY "rawLegCount" ORDER BY "rawLegCount" ASC LIMIT 20
+        `
+      : await db.$queryRaw<DistRow[]>`
+          SELECT "rawLegCount" AS legs, COUNT(*) AS count
+          FROM "ConnectCdr"
+          WHERE "startedAt" >= ${startUtc} AND "startedAt" < ${endUtc}
+          GROUP BY "rawLegCount" ORDER BY "rawLegCount" ASC LIMIT 20
+        `;
+
+    return reply.send({
+      asOf: new Date().toISOString(),
+      window: windowStr,
+      scope: scopeTenantId ?? "global",
+      // ── Core parity numbers ───────────────────────────────────────────────
+      connectUniqueCalls: uniqueCalls,
+      connectRawLegTotal: rawLegTotal,
+      legsPerCall,
+      multiLegCalls: multiLegCount,
+      singleLegCalls: uniqueCalls - multiLegCount,
+      maxLegsOnOneCall: maxLegs,
+      // ── Direction breakdown ───────────────────────────────────────────────
+      byDirection: {
+        rawLegs: {
+          incoming: Number(a?.rawLegIncoming ?? 0),
+          outgoing: Number(a?.rawLegOutgoing ?? 0),
+          internal: Number(a?.rawLegInternal ?? 0),
+          unknown:  Number(a?.rawLegUnknown  ?? 0),
+        },
+        uniqueCalls: {
+          incoming: Number(a?.dedupIncoming ?? 0),
+          outgoing: Number(a?.dedupOutgoing ?? 0),
+          internal: Number(a?.dedupInternal ?? 0),
+          unknown:  Number(a?.dedupUnknown  ?? 0),
+        },
+      },
+      nullTenantCalls: Number(a?.nullTenantCount ?? 0),
+      // ── Leg count distribution ────────────────────────────────────────────
+      legCountDistribution: distribution.map((r) => ({
+        legs: Number(r.legs),
+        calls: Number(r.count),
+      })),
+      // ── Examples of multi-leg calls ───────────────────────────────────────
+      topMultiLegExamples: topMultiLeg.map((r) => ({
+        linkedId: r.linkedId,
+        rawLegs: r.rawLegCount,
+        fromNumber: r.fromNumber,
+        toNumber: r.toNumber,
+        direction: r.direction,
+        tenantId: r.tenantId,
+        durationSec: r.durationSec,
+        disposition: r.disposition,
+        startedAt: r.startedAt.toISOString(),
+      })),
+      // ── Explanation ───────────────────────────────────────────────────────
+      explanation: [
+        `Connect stores one row per linkedId (logical call). rawLegCount on each row counts how many AMI Cdr events (channel legs) were received for that call.`,
+        `connectRawLegTotal (${rawLegTotal}) is the PBX-style raw CDR count — this should approximate the PBX dashboard total.`,
+        `connectUniqueCalls (${uniqueCalls}) is Connect's deduplicated logical call count.`,
+        legsPerCall !== null
+          ? `Average ${legsPerCall}× legs per logical call — consistent with Asterisk generating ${legsPerCall}× CDR records per call through IVR/queue/extension routing.`
+          : "No calls in window.",
+        `Note: rawLegCount only counts since the rawLegCount column was added (migration 20260330100000). Historical rows default to 1.`,
+      ].join(" "),
+    });
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "admin_diagnostics_raw_vs_deduped: error");
     return reply.code(500).send({ error: "INTERNAL_ERROR", message: String(err?.message || err) });
   }
 });

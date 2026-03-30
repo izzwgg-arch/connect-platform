@@ -1778,3 +1778,143 @@ table tr:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Ingestion Parity Panel (super-admin only) ───────────────────── */
+.dash-ingest-panel {
+  background: var(--console-surface, #16181c);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.dash-ingest-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dash-ingest-badge {
+  display: inline-block;
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.dash-ingest-toggle {
+  font-size: 12px;
+  padding: 4px 10px;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.dash-ingest-hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--console-muted);
+  opacity: 0.75;
+}
+
+.dash-ingest-body {
+  margin-top: 12px;
+}
+
+.dash-ingest-window {
+  font-size: 0.8rem;
+  color: var(--console-muted);
+  margin-bottom: 10px;
+}
+
+.dash-ingest-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 768px) {
+  .dash-ingest-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.dash-ingest-stat {
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.dash-ingest-stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--console-text, #e8eaf0);
+  line-height: 1.2;
+}
+
+.dash-ingest-stat-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--console-muted);
+  margin-top: 2px;
+}
+
+.dash-ingest-stat-note {
+  font-size: 0.67rem;
+  color: var(--console-muted);
+  opacity: 0.6;
+  margin-top: 1px;
+}
+
+.dash-ingest-table-wrap {
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.dash-ingest-table { font-size: 0.8rem; }
+
+.dash-ingest-distribution {
+  font-size: 0.78rem;
+  color: var(--console-muted);
+  margin-bottom: 10px;
+  line-height: 1.8;
+}
+
+.dash-ingest-dist-chip {
+  display: inline-block;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 1px 7px;
+  margin: 2px 3px;
+  font-family: var(--font-mono, monospace);
+}
+
+.dash-ingest-examples {
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+}
+
+.dash-ingest-examples summary {
+  cursor: pointer;
+  color: var(--console-accent, #6366f1);
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.dash-ingest-note {
+  font-size: 0.75rem;
+  color: var(--console-muted);
+  opacity: 0.7;
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  padding: 6px 10px;
+  border-left: 2px solid rgba(255,255,255,0.1);
+  margin-top: 8px;
+}

@@ -69,6 +69,35 @@ type ConnectKpis = {
   canonical?: { incoming: number; outgoing: number; internal: number; missed: number; total: number };
 };
 
+type RawVsDedupedStats = {
+  asOf: string;
+  window: string;
+  connectUniqueCalls: number;
+  connectRawLegTotal: number;
+  legsPerCall: number | null;
+  multiLegCalls: number;
+  singleLegCalls: number;
+  maxLegsOnOneCall: number;
+  byDirection: {
+    rawLegs:     { incoming: number; outgoing: number; internal: number; unknown: number };
+    uniqueCalls: { incoming: number; outgoing: number; internal: number; unknown: number };
+  };
+  nullTenantCalls: number;
+  legCountDistribution: Array<{ legs: number; calls: number }>;
+  topMultiLegExamples: Array<{
+    linkedId: string;
+    rawLegs: number;
+    fromNumber: string | null;
+    toNumber: string | null;
+    direction: string;
+    tenantId: string | null;
+    durationSec: number;
+    disposition: string;
+    startedAt: string;
+  }>;
+  explanation: string;
+};
+
 function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: string; isGlobal: boolean }) {
   const [diagnostics, setDiagnostics] = useState<PbxLiveDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
@@ -125,6 +154,8 @@ export default function DashboardPage() {
   // KPI display mode: "canonical" applies direction-correction rules at query time (no DB writes).
   // "raw" shows stored values exactly as in DB.  Default is canonical since it's more accurate.
   const [kpiMode, setKpiMode] = useState<"raw" | "canonical">("canonical");
+  // Ingestion parity panel — collapsed by default to avoid extra API calls on every load.
+  const [showIngestionPanel, setShowIngestionPanel] = useState(false);
 
   // Staggered ticks — scope-aware cadence (live combined = DB KPIs + ARI only; no VitalPBX REST CDR).
   // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : live summary + active calls (ARI)
@@ -178,6 +209,14 @@ export default function DashboardPage() {
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
     [adminScope, tenantId, kpiTick, kpiMode]
+  );
+
+  // Ingestion parity panel — only loaded when the super-admin explicitly expands it (not on every page load).
+  const rawVsDedupedState = useAsyncResource<RawVsDedupedStats>(
+    () => showIngestionPanel && isGlobal
+      ? apiGet<RawVsDedupedStats>("/admin/diagnostics/raw-vs-deduped")
+      : Promise.resolve(null as unknown as RawVsDedupedStats),
+    [showIngestionPanel, isGlobal]
   );
 
   // Call traffic chart — slower cadence, already server-cached (ConnectCdr / callRecord only; no PBX REST).
@@ -532,6 +571,138 @@ export default function DashboardPage() {
               </table>
             </div>
           </DetailCard>
+        ) : null}
+
+        {/* SECTION F — RAW vs DEDUPED ingestion parity (super-admin global only) */}
+        {isGlobal ? (
+          <section className="dash-section dash-ingest-panel" aria-label="Ingestion parity">
+            <div className="dash-ingest-header">
+              <h3 className="dash-section-title" style={{ margin: 0 }}>
+                Ingestion parity
+                <span className="dash-ingest-badge">Admin only</span>
+              </h3>
+              <button
+                className="dash-ingest-toggle btn ghost"
+                onClick={() => setShowIngestionPanel((v) => !v)}
+                title={showIngestionPanel ? "Collapse ingestion parity panel" : "Expand to compare Connect raw CDR leg count vs PBX-style counting"}
+              >
+                {showIngestionPanel ? "Collapse ▲" : "Expand ▼"}
+              </button>
+            </div>
+            {!showIngestionPanel ? (
+              <p className="dash-ingest-hint">
+                Validate that Connect ingests all PBX channel-leg CDR events before deduplication.
+                Shows raw leg count vs unique logical calls — use this to prove counting model parity.
+              </p>
+            ) : rawVsDedupedState.status === "loading" ? (
+              <LoadingSkeleton rows={2} />
+            ) : rawVsDedupedState.status === "error" ? (
+              <ErrorState message="Could not load ingestion parity data." />
+            ) : rawVsDedupedState.data ? (
+              <div className="dash-ingest-body">
+                <p className="dash-ingest-window">
+                  Window: <strong>{rawVsDedupedState.data.window}</strong>
+                  <span className="muted"> · as of {new Date(rawVsDedupedState.data.asOf).toLocaleTimeString()}</span>
+                </p>
+                {/* Core parity numbers */}
+                <div className="dash-ingest-grid">
+                  <div className="dash-ingest-stat">
+                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.connectRawLegTotal.toLocaleString()}</div>
+                    <div className="dash-ingest-stat-label">Connect raw legs</div>
+                    <div className="dash-ingest-stat-note">≈ PBX-style CDR row count</div>
+                  </div>
+                  <div className="dash-ingest-stat">
+                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.connectUniqueCalls.toLocaleString()}</div>
+                    <div className="dash-ingest-stat-label">Unique logical calls</div>
+                    <div className="dash-ingest-stat-note">deduped by linkedId</div>
+                  </div>
+                  <div className="dash-ingest-stat">
+                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.legsPerCall ?? "—"}×</div>
+                    <div className="dash-ingest-stat-label">Legs per call</div>
+                    <div className="dash-ingest-stat-note">raw ÷ unique</div>
+                  </div>
+                  <div className="dash-ingest-stat">
+                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.multiLegCalls.toLocaleString()}</div>
+                    <div className="dash-ingest-stat-label">Multi-leg calls</div>
+                    <div className="dash-ingest-stat-note">linkedIds with {">"}1 leg</div>
+                  </div>
+                </div>
+                {/* Direction breakdown comparison */}
+                <div className="dash-ingest-table-wrap">
+                  <table className="data-table dash-ingest-table">
+                    <thead>
+                      <tr>
+                        <th>Direction</th>
+                        <th>Raw legs</th>
+                        <th>Unique calls</th>
+                        <th>Ratio</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["incoming", "outgoing", "internal", "unknown"] as const).map((dir) => {
+                        const legs  = rawVsDedupedState.data!.byDirection.rawLegs[dir];
+                        const calls = rawVsDedupedState.data!.byDirection.uniqueCalls[dir];
+                        const ratio = calls > 0 ? (legs / calls).toFixed(2) : "—";
+                        return (
+                          <tr key={dir}>
+                            <td><span className={`chip ${dir === "incoming" ? "success" : dir === "outgoing" ? "warning" : dir === "internal" ? "info" : ""}`}>{dir}</span></td>
+                            <td>{legs.toLocaleString()}</td>
+                            <td>{calls.toLocaleString()}</td>
+                            <td className="mono">{ratio}×</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Leg distribution */}
+                {rawVsDedupedState.data.legCountDistribution.length > 0 ? (
+                  <div className="dash-ingest-distribution">
+                    <strong>Leg count distribution:</strong>{" "}
+                    {rawVsDedupedState.data.legCountDistribution.map(({ legs, calls }) => (
+                      <span key={legs} className="dash-ingest-dist-chip">
+                        {legs} leg{legs !== 1 ? "s" : ""}: {calls.toLocaleString()} call{calls !== 1 ? "s" : ""}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {/* Top multi-leg examples */}
+                {rawVsDedupedState.data.topMultiLegExamples.length > 0 ? (
+                  <details className="dash-ingest-examples">
+                    <summary>Top multi-leg examples ({rawVsDedupedState.data.topMultiLegExamples.length} shown)</summary>
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead>
+                          <tr><th>linkedId</th><th>Legs</th><th>From</th><th>To</th><th>Direction</th><th>Tenant</th><th>Duration</th></tr>
+                        </thead>
+                        <tbody>
+                          {rawVsDedupedState.data.topMultiLegExamples.map((ex) => (
+                            <tr key={ex.linkedId}>
+                              <td className="mono" style={{ fontSize: "0.7rem" }}>{ex.linkedId}</td>
+                              <td><strong>{ex.rawLegs}</strong></td>
+                              <td className="mono">{ex.fromNumber || "—"}</td>
+                              <td className="mono">{ex.toNumber || "—"}</td>
+                              <td><span className={`chip ${ex.direction === "incoming" ? "success" : ex.direction === "outgoing" ? "warning" : "info"}`}>{ex.direction}</span></td>
+                              <td className="muted">{ex.tenantId?.replace("vpbx:", "") || "null"}</td>
+                              <td className="mono">{ex.durationSec}s</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                ) : (
+                  <p className="muted" style={{ fontSize: "0.82rem" }}>
+                    No multi-leg calls found yet — rawLegCount only accumulates for calls received after the migration was applied.
+                  </p>
+                )}
+                <p className="dash-ingest-note">
+                  <strong>Note:</strong> rawLegCount accumulates from the time migration 20260330100000 was applied.
+                  Historical rows default to 1. Full parity comparison requires calls ingested after the migration.
+                </p>
+              </div>
+            ) : null}
+          </section>
         ) : null}
 
         <DetailCard title="Recent activity">
