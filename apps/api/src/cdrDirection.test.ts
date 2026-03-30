@@ -16,6 +16,8 @@
  *  8. wouldOverride() identifies misclassified rows
  *  9. Ambiguous 7-9 digit numbers: direction not overridden
  * 10. cdrCanonicalDirectionSql() returns a CASE statement
+ * 11. dcontext overrides number heuristics (PSTN→PSTN outbound fix)
+ * 12. directionFromDcontext() recognizes inbound/outbound contexts
  */
 
 import test from "node:test";
@@ -38,11 +40,37 @@ function isExtension(digits: string): boolean {
 function isExternal(digits: string): boolean {
   return digits.length >= 10 && digits.length <= 15;
 }
+
+function directionFromDcontext(
+  dcontext: string | null | undefined,
+  toNumber?: string | null | undefined,
+): CdrDirection | null {
+  if (!dcontext) return null;
+  const dctx = dcontext.toLowerCase();
+  if (
+    dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
+    dctx.includes("from-external") || dctx.includes("inbound") ||
+    /^ivr-\d/.test(dctx) || /^trk-[^-]+-in/.test(dctx)
+  ) return "incoming";
+  if (
+    dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
+    /^trk-[^-]+-dial/.test(dctx) || /^t\d+_cos-/.test(dctx) || dctx.includes("sub-local-dialing")
+  ) {
+    const destDigits = digitsOnly(toNumber);
+    if (isExtension(destDigits)) return "internal";
+    return "outgoing";
+  }
+  return null;
+}
+
 function canonicalDirection(
   fromNumber: string | null | undefined,
   toNumber: string | null | undefined,
   storedDir: string,
+  dcontext?: string | null | undefined,
 ): CdrDirection {
+  const fromCtx = directionFromDcontext(dcontext, toNumber);
+  if (fromCtx) return fromCtx;
   const from = digitsOnly(fromNumber);
   const to = digitsOnly(toNumber);
   if (from || to) {
@@ -57,8 +85,9 @@ function wouldOverride(
   fromNumber: string | null | undefined,
   toNumber: string | null | undefined,
   storedDir: string,
+  dcontext?: string | null | undefined,
 ): boolean {
-  return canonicalDirection(fromNumber, toNumber, storedDir) !== storedDir;
+  return canonicalDirection(fromNumber, toNumber, storedDir, dcontext) !== storedDir;
 }
 function cdrCanonicalDirectionSql(
   fromCol = '"fromNumber"',
@@ -193,4 +222,73 @@ test("cdrCanonicalDirectionSql accepts custom column names", () => {
   assert.ok(sql.includes("t.from_num"));
   assert.ok(sql.includes("t.to_num"));
   assert.ok(sql.includes("t.dir"));
+});
+
+// 11. dcontext overrides number heuristics
+test("dcontext ext-local: PSTN→PSTN call classified as outgoing despite both numbers being long", () => {
+  // THE BUG: from=8457990527, to=8452449666, stored as incoming
+  // dcontext=ext-local-gesheft means user dialed out → should be outgoing
+  assert.equal(canonicalDirection("8457990527", "8452449666", "incoming", "ext-local-gesheft"), "outgoing");
+});
+test("dcontext from-trunk: PSTN→PSTN classified as incoming", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "outgoing", "from-trunk"), "incoming");
+});
+test("dcontext ext-local with short dest: classified as internal", () => {
+  assert.equal(canonicalDirection("8457990527", "105", "incoming", "ext-local-gesheft"), "internal");
+});
+test("dcontext sub-local-dialing: outgoing call", () => {
+  assert.equal(canonicalDirection("105", "8453519000", "incoming", "sub-local-dialing"), "outgoing");
+});
+test("dcontext from-internal with long dest: outgoing", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "incoming", "from-internal"), "outgoing");
+});
+test("dcontext trk-trunk1-in: inbound", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "unknown", "trk-trunk1-in"), "incoming");
+});
+test("dcontext trk-trunk1-dial: outgoing", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "incoming", "trk-trunk1-dial"), "outgoing");
+});
+test("dcontext ivr-1: inbound", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "unknown", "ivr-1"), "incoming");
+});
+test("dcontext t1_cos-default: outgoing", () => {
+  assert.equal(canonicalDirection("8457990527", "8452449666", "incoming", "t1_cos-default"), "outgoing");
+});
+test("dcontext null: falls back to number heuristic (ext→PSTN = outgoing)", () => {
+  assert.equal(canonicalDirection("107", "8453519000", "incoming", null), "outgoing");
+});
+test("dcontext empty string: falls back to number heuristic", () => {
+  assert.equal(canonicalDirection("107", "8453519000", "incoming", ""), "outgoing");
+});
+test("dcontext takes priority even when number heuristic would disagree", () => {
+  // ext-local + short ext as dest → internal, even though from is short ext and to is short ext
+  assert.equal(canonicalDirection("107", "202", "outgoing", "ext-local-foo"), "internal");
+});
+
+// 12. directionFromDcontext() standalone
+test("directionFromDcontext: from-trunk → incoming", () => {
+  assert.equal(directionFromDcontext("from-trunk"), "incoming");
+});
+test("directionFromDcontext: from-pstn → incoming", () => {
+  assert.equal(directionFromDcontext("from-pstn"), "incoming");
+});
+test("directionFromDcontext: ext-local-gesheft → outgoing (no dest)", () => {
+  assert.equal(directionFromDcontext("ext-local-gesheft"), "outgoing");
+});
+test("directionFromDcontext: ext-local with extension dest → internal", () => {
+  assert.equal(directionFromDcontext("ext-local-gesheft", "105"), "internal");
+});
+test("directionFromDcontext: unrecognized → null", () => {
+  assert.equal(directionFromDcontext("some-random-context"), null);
+});
+test("directionFromDcontext: null → null", () => {
+  assert.equal(directionFromDcontext(null), null);
+});
+
+// 13. wouldOverride with dcontext
+test("wouldOverride: dcontext ext-local corrects PSTN→PSTN stored as incoming", () => {
+  assert.equal(wouldOverride("8457990527", "8452449666", "incoming", "ext-local-gesheft"), true);
+});
+test("wouldOverride: dcontext ext-local already outgoing → no override", () => {
+  assert.equal(wouldOverride("8457990527", "8452449666", "outgoing", "ext-local-gesheft"), false);
 });

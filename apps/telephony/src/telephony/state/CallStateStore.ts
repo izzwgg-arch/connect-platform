@@ -599,43 +599,58 @@ export class CallStateStore extends EventEmitter {
       if (resolved) call.tenantId = resolved;
     }
 
-    // Attempt to fix direction if still unknown.
-    // Try dcontext first (same patterns as Newchannel context inference), then number heuristics.
-    if (call.direction === "unknown") {
-      const dctx = (params.dcontext ?? "").toLowerCase();
-      const destBare = (params.destination ?? "").replace(/\D/g, "");
-      const destIsShortExt = /^\d{2,6}$/.test(destBare);
-      const destIsLongPstn = /^\d{10,}$/.test(destBare.replace(/^1(\d{10})$/, "$1"));
-      if (
-        dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
-        dctx.includes("from-external") || dctx.includes("inbound") ||
-        /^ivr-\d/.test(dctx) ||           // VitalPBX IVR = inbound
-        /^trk-[^-]+-in/.test(dctx)        // VitalPBX trunk ingress = inbound
-      ) {
-        call.direction = "inbound";
-      } else if (
-        dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
-        /^trk-[^-]+-dial/.test(dctx) ||
-        /^t\d+_cos-/.test(dctx) ||
-        dctx.includes("sub-local-dialing")
-      ) {
-        if (destIsShortExt) call.direction = "internal";
-        else if (destIsLongPstn) call.direction = "outbound";
-        // else leave unknown → number heuristic
+    // Direction correction from AMI Cdr event fields.
+    // dcontext is the MOST AUTHORITATIVE direction signal — it reflects the Asterisk
+    // dialplan context that originated the call (e.g. "ext-local-gesheft" = internal/outbound,
+    // "from-trunk" = inbound). This MUST override any earlier heuristic that may have
+    // misclassified the call (e.g. Newchannel trunk leg setting "inbound" on an outbound call
+    // whose caller-ID is a 10-digit DID).
+    const dctx = (params.dcontext ?? "").toLowerCase();
+    const destBare = (params.destination ?? "").replace(/\D/g, "");
+    const destIsShortExt = /^\d{2,6}$/.test(destBare);
+    const destIsLongPstn = /^\d{10,}$/.test(destBare.replace(/^1(\d{10})$/, "$1"));
+
+    const prevDir = call.direction;
+    let dcontextDir: CallDirection | null = null;
+
+    if (
+      dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
+      dctx.includes("from-external") || dctx.includes("inbound") ||
+      /^ivr-\d/.test(dctx) ||
+      /^trk-[^-]+-in/.test(dctx)
+    ) {
+      dcontextDir = "inbound";
+    } else if (
+      dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
+      /^trk-[^-]+-dial/.test(dctx) ||
+      /^t\d+_cos-/.test(dctx) ||
+      dctx.includes("sub-local-dialing")
+    ) {
+      if (destIsShortExt) dcontextDir = "internal";
+      else if (destIsLongPstn) dcontextDir = "outbound";
+      else dcontextDir = "outbound"; // ext-local context with ambiguous dest = still outbound
+    }
+
+    if (dcontextDir) {
+      call.direction = dcontextDir;
+      if (prevDir !== dcontextDir) {
+        log.info(
+          { callId: call.id, prev: prevDir, now: dcontextDir, dcontext: params.dcontext },
+          "cdr: dcontext overrode direction"
+        );
       }
-      if (call.direction === "unknown" && params.source && params.destination) {
-        // Number-length heuristic: only 10-digit numbers count as external PSTN.
-        // 7-digit local numbers are ambiguous — don't classify as outgoing.
-        const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-        const dstDigits = params.destination.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-        const srcLong = srcDigits.length >= 10;
-        const dstLong = dstDigits.length >= 10;
-        const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
-        const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
-        if (srcLong) call.direction = "inbound";
-        else if (srcShort && dstLong) call.direction = "outbound";
-        else if (srcShort && dstShort) call.direction = "internal";
-      }
+    } else if (call.direction === "unknown" && params.source && params.destination) {
+      // Fallback: number-length heuristic only when dcontext gave no signal AND direction is still unknown.
+      const srcDigits = params.source.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const dstDigits = params.destination.replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+      const srcLong = srcDigits.length >= 10;
+      const dstLong = dstDigits.length >= 10;
+      const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
+      const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
+      if (srcShort && dstLong) call.direction = "outbound";
+      else if (srcLong && dstShort) call.direction = "inbound";
+      else if (srcShort && dstShort) call.direction = "internal";
+      else if (srcLong) call.direction = "inbound";
     }
 
     this.emit("callUpsert", { ...call });

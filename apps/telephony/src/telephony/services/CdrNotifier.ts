@@ -161,22 +161,43 @@ export class CdrNotifier {
 
     let dir = normalizeDirection(call.direction);
 
-    // If direction is still unknown, try to infer from caller/callee number lengths.
-    // A long (7+ digit) source number is almost always an inbound call from PSTN.
-    // A short source with a long destination is an outbound call from an extension.
-    // This runs in the notifier so it applies even when the AMI Cdr event isn't available.
+    // dcontext from the AMI Cdr event is the most authoritative direction signal.
+    // It tells us the Asterisk dialplan context that originated the call:
+    //   "ext-local-*" / "from-internal" = user-originated (outgoing or internal)
+    //   "from-trunk" / "from-pstn"       = PSTN inbound
+    // This MUST be checked first because the number heuristic fails when
+    // both from and to are full 10-digit PSTN numbers (outbound call showing DID as caller-ID).
+    const dcontext = (call.metadata?.cdrDcontext as string | undefined) ?? null;
+    if (dcontext) {
+      const dctx = dcontext.toLowerCase();
+      if (
+        dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
+        dctx.includes("from-external") || dctx.includes("inbound") ||
+        /^ivr-\d/.test(dctx) || /^trk-[^-]+-in/.test(dctx)
+      ) {
+        dir = "incoming";
+      } else if (
+        dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
+        /^trk-[^-]+-dial/.test(dctx) || /^t\d+_cos-/.test(dctx) || dctx.includes("sub-local-dialing")
+      ) {
+        const dstDigits = (call.to ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
+        const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
+        dir = dstShort ? "internal" : "outgoing";
+      }
+    }
+
+    // Fallback: number-length heuristic only when dcontext gave no signal and direction is still unknown.
     if (dir === "unknown" && (call.from || call.to)) {
       const srcDigits = (call.from ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
       const dstDigits = (call.to  ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      // Only count a number as "external PSTN" if it's 10+ digits (full national number).
-      // 7-digit local numbers are ambiguous and should not trigger outgoing classification.
       const srcLong  = srcDigits.length >= 10;
       const dstLong  = dstDigits.length >= 10;
       const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
       const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
-      if (srcLong)                   dir = "incoming";
-      else if (srcShort && dstLong)  dir = "outgoing";
+      if (srcShort && dstLong) dir = "outgoing";
+      else if (srcLong && dstShort) dir = "incoming";
       else if (srcShort && dstShort) dir = "internal";
+      else if (srcLong) dir = "incoming";
     }
 
     const disposition = deriveDisposition(call, dir);

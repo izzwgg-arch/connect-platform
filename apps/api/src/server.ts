@@ -8754,7 +8754,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   // Multi-leg AMI events can set direction from the wrong channel (e.g. trunk leg
   // of an outbound call reports context=from-trunk → "inbound").  The number-pattern
   // rules are unambiguous: short extension → long PSTN = outgoing, and vice versa.
-  const resolvedDirection = canonicalDirection(d.fromNumber, d.toNumber, d.direction);
+  const resolvedDirection = canonicalDirection(d.fromNumber, d.toNumber, d.direction, d.dcontext);
 
   try {
     await db.connectCdr.upsert({
@@ -8773,6 +8773,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec,
         queueId:     d.queueId ?? null,
         hangupCause: d.hangupCause ?? null,
+        dcontext:    d.dcontext ?? null,
         rawLegCount: 1,
       },
       update: {
@@ -8788,6 +8789,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec > 0 ? d.talkSec : undefined,
         queueId:     d.queueId ?? undefined,
         hangupCause: d.hangupCause ?? undefined,
+        dcontext:    d.dcontext ?? undefined,
         rawLegCount: { increment: 1 },
       },
     });
@@ -9174,13 +9176,13 @@ app.post("/admin/cdr/fix-directions", async (req, reply) => {
 
   const rows = await db.connectCdr.findMany({
     where: whereBase,
-    select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true },
+    select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true, dcontext: true },
   });
 
   const changes: Array<{ id: string; linkedId: string; from: string | null; to: string | null; was: string; becomes: string }> = [];
 
   for (const row of rows) {
-    const becomes = canonicalDirection(row.fromNumber, row.toNumber, row.direction);
+    const becomes = canonicalDirection(row.fromNumber, row.toNumber, row.direction, row.dcontext);
     if (becomes !== row.direction) {
       changes.push({ id: row.id, linkedId: row.linkedId, from: row.fromNumber, to: row.toNumber, was: row.direction, becomes });
     }
@@ -12025,14 +12027,14 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
     } : null;
 
     // Direction-misclassified rows (raw direction != canonical direction)
-    type CandidateRow = { id: string; linkedId: string; fromNumber: string | null; toNumber: string | null; direction: string };
+    type CandidateRow = { id: string; linkedId: string; fromNumber: string | null; toNumber: string | null; direction: string; dcontext: string | null };
     const candidateRows: CandidateRow[] = await db.connectCdr.findMany({
       where: baseWhere,
-      select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true },
+      select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true, dcontext: true },
     });
     type MismatchRow = CandidateRow & { canonical: string };
     const directionMismatches: MismatchRow[] = candidateRows
-      .map((r: CandidateRow): MismatchRow => ({ ...r, canonical: canonicalDirection(r.fromNumber, r.toNumber, r.direction) }))
+      .map((r: CandidateRow): MismatchRow => ({ ...r, canonical: canonicalDirection(r.fromNumber, r.toNumber, r.direction, r.dcontext) }))
       .filter((r: MismatchRow) => r.canonical !== r.direction);
 
     const mismatchSummary = directionMismatches.reduce<Record<string, number>>((acc: Record<string, number>, r: MismatchRow) => {
