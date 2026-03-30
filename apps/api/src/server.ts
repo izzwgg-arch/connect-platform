@@ -34,6 +34,7 @@ import {
   type NormalizedWirePbxEvent
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
+import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -8749,6 +8750,12 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     }
   }
 
+  // Apply deterministic direction override before storage.
+  // Multi-leg AMI events can set direction from the wrong channel (e.g. trunk leg
+  // of an outbound call reports context=from-trunk → "inbound").  The number-pattern
+  // rules are unambiguous: short extension → long PSTN = outgoing, and vice versa.
+  const resolvedDirection = canonicalDirection(d.fromNumber, d.toNumber, d.direction);
+
   try {
     await db.connectCdr.upsert({
       where: { linkedId: d.linkedId },
@@ -8757,7 +8764,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         tenantId:    resolvedTenantId,
         fromNumber:  d.fromNumber ?? null,
         toNumber:    d.toNumber ?? null,
-        direction:   d.direction,
+        direction:   resolvedDirection,
         disposition: d.disposition,
         startedAt:   new Date(d.startedAt),
         answeredAt:  d.answeredAt ? new Date(d.answeredAt) : null,
@@ -8772,7 +8779,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         tenantId:    resolvedTenantId ?? undefined,
         fromNumber:  d.fromNumber ?? undefined,
         toNumber:    d.toNumber ?? undefined,
-        direction:   d.direction !== "unknown" ? d.direction : undefined,
+        direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
         disposition: d.disposition !== "unknown" ? d.disposition : undefined,
         answeredAt:  d.answeredAt ? new Date(d.answeredAt) : undefined,
         durationSec: d.durationSec > 0 ? d.durationSec : undefined,
@@ -8787,7 +8794,9 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
           phase: "cdr_ingest_persisted",
           linkedId: d.linkedId,
           tenantId: resolvedTenantId,
-          direction: d.direction,
+          rawDirection: d.direction,
+          direction: resolvedDirection,
+          directionOverridden: resolvedDirection !== d.direction,
           fromNumber: d.fromNumber ?? null,
           toNumber: d.toNumber ?? null,
           startedAt: d.startedAt,
@@ -8913,6 +8922,9 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   const query = z.object({
     tenantId: z.string().optional(),
     source: z.enum(["connect", "pbx"]).optional().default("connect"),
+    // mode=canonical: apply direction override rules at query time (no DB writes).
+    // Returns corrected counts alongside raw counts so the UI can show both.
+    mode: z.enum(["raw", "canonical"]).optional().default("raw"),
   }).parse(req.query || {});
 
   const pbxKpiApiAllowed = process.env.CALL_KPIS_USE_VITALPBX_API?.toLowerCase() === "true";
@@ -8959,44 +8971,84 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   }
 
   try {
-    if (scopeTenantId) {
-      // Per-tenant: single set of counts scoped to one tenant
-      const [incoming, outgoing, internal, missed] = await Promise.all([
-        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "incoming", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "outgoing", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "internal", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { tenantId: scopeTenantId, direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
-      ]);
+    const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
+    const baseWhere = { ...tenantClause, startedAt: timeWhere };
+
+    const [incoming, outgoing, internal, missed, total] = await Promise.all([
+      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "internal" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming", disposition: "missed" } }),
+      db.connectCdr.count({ where: baseWhere }),
+    ]);
+
+    // Canonical mode: compute direction-corrected counts via SQL CASE expression.
+    // This does NOT write to the DB — it corrects at query time for display only.
+    let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number } | null = null;
+    if (query.mode === "canonical") {
+      const tenantSql = scopeTenantId ? `AND "tenantId" = '${scopeTenantId.replace(/'/g, "''")}'` : "";
+      const startSql  = `'${timeWhere.gte.toISOString()}'::timestamptz`;
+      const endSql    = `'${timeWhere.lt.toISOString()}'::timestamptz`;
+      const dirSql    = cdrCanonicalDirectionSql();
+
+      type CanonRow = { incoming: bigint; outgoing: bigint; internal: bigint; missed: bigint; total: bigint };
+      const [cr] = await db.$queryRawUnsafe<CanonRow[]>(`
+        WITH c AS (
+          SELECT
+            (${dirSql}) AS dir,
+            disposition
+          FROM "ConnectCdr"
+          WHERE "startedAt" >= ${startSql} AND "startedAt" < ${endSql}
+          ${tenantSql}
+        )
+        SELECT
+          COUNT(*) FILTER (WHERE dir = 'incoming') AS incoming,
+          COUNT(*) FILTER (WHERE dir = 'outgoing') AS outgoing,
+          COUNT(*) FILTER (WHERE dir = 'internal') AS internal,
+          COUNT(*) FILTER (WHERE dir = 'incoming' AND disposition = 'missed') AS missed,
+          COUNT(*) AS total
+        FROM c
+      `);
+      if (cr) {
+        canonicalCounts = {
+          incoming: Number(cr.incoming),
+          outgoing: Number(cr.outgoing),
+          internal: Number(cr.internal),
+          missed:   Number(cr.missed),
+          total:    Number(cr.total),
+        };
+      }
+    }
+
+    const base = {
+      incomingToday: incoming,
+      outgoingToday: outgoing,
+      internalToday: internal,
+      missedToday: missed,
+      callsToday: total,
+      scope: scopeTenantId ? "tenant" as const : "global" as const,
+      ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
+      asOf: nowUtc.toISOString(),
+      source: "connect" as const,
+      mode: query.mode,
+      ...(wantPbxAggregate ? { pbxFallback: true as const } : {}),
+    };
+
+    if (canonicalCounts) {
       return reply.send({
-        incomingToday: incoming,
-        outgoingToday: outgoing,
-        internalToday: internal,
-        missedToday: missed,
-        scope: "tenant",
-        tenantId: scopeTenantId,
-        asOf: nowUtc.toISOString(),
-        source: "connect",
-        ...(wantPbxAggregate ? { pbxFallback: true as const } : {}),
-      });
-    } else {
-      // Global aggregate: all tenants combined
-      const [incoming, outgoing, internal, missed] = await Promise.all([
-        db.connectCdr.count({ where: { direction: "incoming", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { direction: "outgoing", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { direction: "internal", startedAt: timeWhere } }),
-        db.connectCdr.count({ where: { direction: "incoming", disposition: "missed", startedAt: timeWhere } }),
-      ]);
-      return reply.send({
-        incomingToday: incoming,
-        outgoingToday: outgoing,
-        internalToday: internal,
-        missedToday: missed,
-        scope: "global",
-        asOf: nowUtc.toISOString(),
-        source: "connect",
-        ...(wantPbxAggregate ? { pbxFallback: true as const } : {}),
+        ...base,
+        canonical: canonicalCounts,
+        // When canonical mode is active, expose corrected values as the primary KPIs
+        // so the dashboard can display them directly; raw values remain available.
+        raw: { incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed },
+        incomingToday: canonicalCounts.incoming,
+        outgoingToday: canonicalCounts.outgoing,
+        internalToday: canonicalCounts.internal,
+        missedToday:   canonicalCounts.missed,
       });
     }
+
+    return reply.send(base);
   } catch (err: any) {
     app.log.error({ err: err?.message }, "call-kpis: db error");
     return reply.code(500).send({ error: "db_error" });
@@ -9094,83 +9146,69 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
 });
 
 // ─── Fix CDR directions ───────────────────────────────────────────────────────
-// POST /admin/cdr/fix-directions
-// Re-evaluates direction for CDR rows where the number-length heuristic strongly
-// disagrees with the stored direction.  High-confidence rules only:
-//   1. direction="outgoing" + fromNumber is a 10-digit PSTN number → incoming
-//      (outgoing calls originate from short extensions, not 10-digit external numbers)
-//   2. direction="incoming" + both fromNumber and toNumber are short (≤6 digits) → internal
-//   3. direction="outgoing" + toNumber is a short extension AND fromNumber is short → internal
-// Optionally scoped to today only (scope=today) or all time (scope=all).
+// POST /admin/cdr/fix-directions?scope=today|all&dryRun=true
+// Re-evaluates direction for every ConnectCdr row using canonicalDirection() rules:
+//   • from=extension(2-6), to=external(10+) → outgoing  ← primary bug fix
+//   • from=external(10+), to=extension(2-6) → incoming
+//   • from=extension(2-6), to=extension(2-6) → internal
+// Rows that already have the correct direction are skipped.
+// dryRun=true (default) only counts; does not write.
 app.post("/admin/cdr/fix-directions", async (req, reply) => {
   const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
   if (!admin) return;
 
   const query = z.object({
     scope: z.enum(["today", "all"]).optional().default("today"),
+    dryRun: z.enum(["true", "false"]).optional().default("true"),
   }).parse(req.query || {});
 
+  const isDryRun = query.dryRun !== "false";
+
   const whereBase = query.scope === "today" ? (() => {
-    const timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
-    const nowUtc = new Date();
-    const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: timezone });
-    const [y, mo, d] = todayStr.split("-").map(Number);
-    const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
-    const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", { timeZone: timezone, hour: "numeric", minute: "numeric", hour12: false });
-    const [hStr, mStr] = noonLocal.split(":");
-    const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
-    const dayStartUtc = new Date(noonUtc - offsetMs);
-    const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
-    return { startedAt: { gte: dayStartUtc, lt: dayEndUtc } };
+    const { timeWhere } = computePbxLocalDayRangeUtc();
+    return { startedAt: timeWhere };
   })() : {};
 
+  const rows = await db.connectCdr.findMany({
+    where: whereBase,
+    select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true },
+  });
+
+  const changes: Array<{ id: string; linkedId: string; from: string | null; to: string | null; was: string; becomes: string }> = [];
+
+  for (const row of rows) {
+    const becomes = canonicalDirection(row.fromNumber, row.toNumber, row.direction);
+    if (becomes !== row.direction) {
+      changes.push({ id: row.id, linkedId: row.linkedId, from: row.fromNumber, to: row.toNumber, was: row.direction, becomes });
+    }
+  }
+
   let fixed = 0;
-
-  // Rule 1: direction=outgoing but fromNumber looks like an external PSTN number (7-15 digits)
-  // These can never be outgoing — the caller is an external party, so the call is incoming.
-  {
-    const rows = await db.connectCdr.findMany({
-      where: { ...whereBase, direction: "outgoing" },
-      select: { id: true, fromNumber: true, toNumber: true },
-    });
-    for (const row of rows) {
-      const from = (row.fromNumber ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      const to   = (row.toNumber   ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      if (from.length >= 10) {
-        // 10-digit external caller → this is incoming, not outgoing
-        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "incoming" } });
-        fixed++;
-        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→incoming");
-      } else if (from.length >= 2 && from.length <= 6 && to.length >= 2 && to.length <= 6) {
-        // Both short extensions → internal
-        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "internal" } });
-        fixed++;
-        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: outgoing→internal");
-      } else if (from.length >= 2 && from.length <= 6 && to.length >= 7 && to.length < 10) {
-        // Extension calling 7-9 digit number — ambiguous (local PSTN), keep as outgoing
-      }
+  if (!isDryRun) {
+    for (const ch of changes) {
+      await db.connectCdr.update({ where: { id: ch.id }, data: { direction: ch.becomes } });
+      fixed++;
+      app.log.info({ linkedId: ch.linkedId, from: ch.from, to: ch.to, was: ch.was, becomes: ch.becomes }, "cdr fix-directions: applied");
     }
+    app.log.info({ fixed, scope: query.scope }, "cdr: fix-directions complete");
   }
 
-  // Rule 2: direction=incoming but both numbers are short extensions → internal
-  {
-    const rows = await db.connectCdr.findMany({
-      where: { ...whereBase, direction: "incoming" },
-      select: { id: true, fromNumber: true, toNumber: true },
-    });
-    for (const row of rows) {
-      const from = (row.fromNumber ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      const to   = (row.toNumber   ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      if (from.length >= 2 && from.length <= 6 && to.length >= 2 && to.length <= 6) {
-        await db.connectCdr.update({ where: { id: row.id }, data: { direction: "internal" } });
-        fixed++;
-        app.log.info({ id: row.id, from: row.fromNumber, to: row.toNumber }, "cdr fix-directions: incoming→internal");
-      }
-    }
-  }
+  const summary = changes.reduce<Record<string, number>>((acc, c) => {
+    const k = `${c.was}→${c.becomes}`;
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {});
 
-  app.log.info({ fixed, scope: query.scope }, "cdr: fix-directions complete");
-  return reply.send({ ok: true, fixed, scope: query.scope });
+  return reply.send({
+    ok: true,
+    dryRun: isDryRun,
+    scope: query.scope,
+    rowsScanned: rows.length,
+    wouldFix: changes.length,
+    fixed: isDryRun ? 0 : fixed,
+    summary,
+    samples: changes.slice(0, 20).map((c) => ({ linkedId: c.linkedId, from: c.from, to: c.to, was: c.was, becomes: c.becomes })),
+  });
 });
 
 app.get("/dashboard/call-traffic", async (req, reply) => {
@@ -11843,6 +11881,156 @@ app.get("/admin/diagnostics/cdr-pipeline-reconciliation", async (req, reply) => 
   } catch (err: any) {
     app.log.warn({ err: String(err?.message) }, "admin_diagnostics_cdr_pipeline_reconciliation_failed");
     return reply.code(502).send({ error: "CDR_PIPELINE_RECONCILIATION_FAILED", message: String(err?.message || err) });
+  }
+});
+
+// ─── Dashboard Reconciliation ─────────────────────────────────────────────────
+// GET /admin/diagnostics/dashboard-reconciliation
+// Returns a side-by-side comparison of Connect Raw vs Connect Canonical (direction-corrected)
+// KPI counts for the same time window used by /dashboard/call-kpis.
+// Designed to be fast (DB-only, no PBX API calls) and safe to poll regularly.
+app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+
+  const q = z.object({
+    tenantId: z.string().optional(),
+    startIso: z.string().optional(),
+    endIso: z.string().optional(),
+  }).parse(req.query || {});
+
+  const scopeTenantId = q.tenantId && q.tenantId !== "global" ? q.tenantId : null;
+
+  let timeWhere: { gte: Date; lt: Date };
+  let timezone: string;
+  let todayStr: string;
+  if (q.startIso && q.endIso) {
+    const s = new Date(q.startIso);
+    const e = new Date(q.endIso);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+      return reply.code(400).send({ error: "INVALID_ISO_RANGE" });
+    }
+    timeWhere = { gte: s, lt: e };
+    timezone = process.env.PBX_TIMEZONE?.trim() || "UTC";
+    todayStr = s.toISOString().slice(0, 10);
+  } else {
+    const r = computePbxLocalDayRangeUtc();
+    timeWhere = r.timeWhere;
+    timezone = r.timezone;
+    todayStr = r.todayStr;
+  }
+
+  try {
+    const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
+    const baseWhere = { ...tenantClause, startedAt: timeWhere };
+
+    // Raw counts — as stored in DB
+    const [rawIncoming, rawOutgoing, rawInternal, rawUnknown, rawMissed, rawTotal] = await Promise.all([
+      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "internal" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "unknown" } }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming", disposition: "missed" } }),
+      db.connectCdr.count({ where: baseWhere }),
+    ]);
+
+    // Canonical counts — direction-corrected via SQL CASE
+    const tenantSql = scopeTenantId ? `AND "tenantId" = '${scopeTenantId.replace(/'/g, "''")}'` : "";
+    const startSql  = `'${timeWhere.gte.toISOString()}'::timestamptz`;
+    const endSql    = `'${timeWhere.lt.toISOString()}'::timestamptz`;
+    const dirSql    = cdrCanonicalDirectionSql();
+
+    type CanonAgg = { incoming: bigint; outgoing: bigint; internal: bigint; unknown: bigint; missed: bigint; total: bigint };
+    const [cr] = await db.$queryRawUnsafe<CanonAgg[]>(`
+      WITH c AS (
+        SELECT
+          (${dirSql}) AS dir,
+          disposition
+        FROM "ConnectCdr"
+        WHERE "startedAt" >= ${startSql} AND "startedAt" < ${endSql}
+        ${tenantSql}
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE dir = 'incoming') AS incoming,
+        COUNT(*) FILTER (WHERE dir = 'outgoing') AS outgoing,
+        COUNT(*) FILTER (WHERE dir = 'internal') AS internal,
+        COUNT(*) FILTER (WHERE dir = 'unknown')  AS unknown,
+        COUNT(*) FILTER (WHERE dir = 'incoming' AND disposition = 'missed') AS missed,
+        COUNT(*) AS total
+      FROM c
+    `);
+
+    const canon = cr ? {
+      incoming: Number(cr.incoming),
+      outgoing: Number(cr.outgoing),
+      internal: Number(cr.internal),
+      unknown:  Number(cr.unknown),
+      missed:   Number(cr.missed),
+      total:    Number(cr.total),
+    } : null;
+
+    // Direction-misclassified rows (raw direction != canonical direction)
+    type CandidateRow = { id: string; linkedId: string; fromNumber: string | null; toNumber: string | null; direction: string };
+    const candidateRows: CandidateRow[] = await db.connectCdr.findMany({
+      where: baseWhere,
+      select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true },
+    });
+    type MismatchRow = CandidateRow & { canonical: string };
+    const directionMismatches: MismatchRow[] = candidateRows
+      .map((r: CandidateRow): MismatchRow => ({ ...r, canonical: canonicalDirection(r.fromNumber, r.toNumber, r.direction) }))
+      .filter((r: MismatchRow) => r.canonical !== r.direction);
+
+    const mismatchSummary = directionMismatches.reduce<Record<string, number>>((acc: Record<string, number>, r: MismatchRow) => {
+      const k = `${r.direction}→${r.canonical}`;
+      acc[k] = (acc[k] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    // Null-tenant rows
+    const nullTenantCount = await db.connectCdr.count({ where: { ...baseWhere, tenantId: null } });
+
+    return reply.send({
+      asOf: new Date().toISOString(),
+      window: {
+        start: timeWhere.gte.toISOString(),
+        end: timeWhere.lt.toISOString(),
+        timezone,
+        todayStr,
+        scope: scopeTenantId ?? "global",
+      },
+      raw: {
+        incoming: rawIncoming,
+        outgoing: rawOutgoing,
+        internal: rawInternal,
+        unknown: rawUnknown,
+        missed: rawMissed,
+        total: rawTotal,
+      },
+      canonical: canon,
+      delta: canon ? {
+        incoming: canon.incoming - rawIncoming,
+        outgoing: canon.outgoing - rawOutgoing,
+        internal: canon.internal - rawInternal,
+        total: canon.total - rawTotal,
+        note: "canonical - raw; positive = direction-corrected rows were added to this bucket",
+      } : null,
+      directionMismatches: {
+        count: directionMismatches.length,
+        summary: mismatchSummary,
+        samples: directionMismatches.slice(0, 20).map((r) => ({
+          linkedId: r.linkedId,
+          from: r.fromNumber,
+          to: r.toNumber,
+          storedDir: r.direction,
+          canonicalDir: r.canonical,
+        })),
+      },
+      nullTenantRows: nullTenantCount,
+      backfillNote: "To apply direction fixes to existing rows: POST /admin/cdr/fix-directions?dryRun=false&scope=all",
+    });
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "admin_diagnostics_dashboard_reconciliation: error");
+    return reply.code(500).send({ error: "INTERNAL_ERROR", message: String(err?.message || err) });
   }
 });
 
