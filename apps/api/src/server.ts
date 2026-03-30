@@ -264,7 +264,7 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
   });
 }
 
-function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?: string; ariBaseUrl?: string }): VitalPbxClient {
+function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?: string; ariBaseUrl?: string; timeoutMs?: number }): VitalPbxClient {
   const simulate = (process.env.PBX_SIMULATE || "false").toLowerCase() === "true";
   const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
   const token = config?.token || process.env.PBX_API_TOKEN;
@@ -275,7 +275,7 @@ function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?:
     ariBaseUrl: ariBaseUrl || undefined,
     apiToken: token,
     apiSecret: secret,
-    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+    timeoutMs: config?.timeoutMs ?? Number(process.env.PBX_TIMEOUT_MS || 10000),
     simulate,
     logger: (entry) => {
       const payload = {
@@ -11469,7 +11469,15 @@ async function runCdrPipelineReconciliation(params: {
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) throw new Error("NO_PBX_INSTANCE");
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  // Use a longer timeout for reconciliation CDR fetches (PBX_RECONCILIATION_TIMEOUT_MS,
+  // default 45s) so chunked gesheft fetches don't time out at the standard 10s limit.
+  const reconciliationTimeoutMs = Number(process.env.PBX_RECONCILIATION_TIMEOUT_MS || 45000);
+  const client = getVitalPbxClient({
+    baseUrl: instance.baseUrl,
+    token: auth.token,
+    secret: auth.secret,
+    timeoutMs: reconciliationTimeoutMs,
+  });
 
   const tenants = await client.listTenants();
   const excludeNames = parseVitalpbxCdrAggregateExcludeNames();
@@ -11516,7 +11524,7 @@ async function runCdrPipelineReconciliation(params: {
               const chunked = await client.getCdrRowsForWindowChunked(id, startSec, endSec, {
                 maxPages: 10,
                 pageLimit: 400,
-                chunkSec: 3600, // 1-hour chunks
+                chunkSec: 1800, // 30-minute chunks (smaller = less likely to timeout)
               });
               if (chunked.chunkErrors.length > 0) {
                 const errSummary = chunked.chunkErrors.map(e => `[${e.chunkStart}-${e.chunkEnd}]: ${e.error}`).join("; ");
