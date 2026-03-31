@@ -346,8 +346,8 @@ export default function DashboardPage() {
               {kpiSourceDisplay}
             </span>
           </div>
-          {isGlobal ? (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+              <strong style={{ fontSize: 12 }}>PBX Preview Override</strong>
               <label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <input
                   type="checkbox"
@@ -392,7 +392,6 @@ export default function DashboardPage() {
                 Clear
               </button>
             </div>
-          ) : null}
           <div className="dash-kpi-grid">
             <article className={`dash-kpi-card active-calls`}>
               <div className="dash-kpi-label">Active Calls</div>
