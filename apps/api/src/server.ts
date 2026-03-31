@@ -7240,6 +7240,92 @@ app.get("/voice/pbx/call-reports", async (req, reply) => {
   return { report };
 });
 
+app.get("/voice/pbx/cdr-history", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMessaging);
+  if (!user) return;
+  const q = z.object({
+    tenantId: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  }).parse(req.query || {});
+
+  const maxRows = q.limit ?? 200;
+  const isSuper = user.role === "SUPER_ADMIN";
+
+  let rows: any[];
+  if (_pbxCdrCache.ts === 0 || Date.now() - _pbxCdrCache.ts > 120_000) {
+    return reply.send({ items: [], stale: true, message: "CDR cache warming up — data will appear shortly." });
+  }
+
+  if (isSuper) {
+    if (q.tenantId) {
+      rows = _pbxCdrCache.byTenant.get(q.tenantId) || [];
+      if (rows.length === 0) {
+        const link = await db.tenantPbxLink.findUnique({ where: { tenantId: q.tenantId }, include: { tenant: true } });
+        if (link) {
+          const slug = normSlug(link.tenant?.name || "");
+          if (slug) rows = _pbxCdrCache.byTenant.get(`vpbx:${slug}`) || [];
+        }
+      }
+    } else {
+      rows = _pbxCdrCache.rows;
+    }
+  } else {
+    rows = _pbxCdrCache.byTenant.get(user.tenantId) || [];
+    if (rows.length === 0) {
+      const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { tenant: true } });
+      if (link) {
+        const slug = normSlug(link.tenant?.name || "");
+        if (slug) rows = _pbxCdrCache.byTenant.get(`vpbx:${slug}`) || [];
+      }
+    }
+  }
+
+  // Format rows for client
+  const sorted = rows.slice().sort((a: any, b: any) => {
+    const ta = String(a?.calldate || a?.start || "");
+    const tb = String(b?.calldate || b?.start || "");
+    return tb.localeCompare(ta);
+  });
+
+  const items = sorted.slice(0, maxRows).map((r: any) => {
+    const ct = Number(r?.calltype ?? r?.callType ?? 0);
+    let direction = "unknown";
+    if (ct === 1) direction = "internal";
+    else if (ct === 2) direction = "incoming";
+    else if (ct === 3) direction = "outgoing";
+    else {
+      const dir = String(r?.direction || r?.call_type || "").toLowerCase();
+      if (dir.includes("in") && !dir.includes("internal")) direction = "incoming";
+      else if (dir.includes("internal")) direction = "internal";
+      else if (dir.includes("out")) direction = "outgoing";
+    }
+    const disp = String(r?.disposition || "").toUpperCase();
+    const tid = String(r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? "").trim();
+    return {
+      id: String(r?.uniqueid || r?.id || r?.cdr_id || ""),
+      linkedId: String(r?.linkedid || r?.linkedId || ""),
+      calldate: String(r?.calldate || r?.start || ""),
+      src: String(r?.src || r?.source || ""),
+      dst: String(r?.dst || r?.destination || ""),
+      clid: String(r?.clid || r?.callerid || ""),
+      direction,
+      disposition: disp === "ANSWERED" ? "Answered" : disp === "NO ANSWER" ? "No Answer" : disp === "BUSY" ? "Busy" : disp || "Unknown",
+      duration: Number(r?.duration || 0),
+      billsec: Number(r?.billsec || 0),
+      pbxTenantId: tid,
+      dcontext: String(r?.dcontext || ""),
+    };
+  });
+
+  return reply.send({
+    items,
+    total: rows.length,
+    showing: items.length,
+    asOf: new Date(_pbxCdrCache.ts).toISOString(),
+    scope: isSuper && !q.tenantId ? "all" : "tenant",
+  });
+});
+
 app.get("/billing/sola/config", async (req, reply) => {
   const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
@@ -8817,9 +8903,8 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
 });
 
 // ─── Connect CDR KPI totals ───────────────────────────────────────────────────
-// Default: source=connect → ConnectCdr only (DB counts — no extra load on the PBX).
-// source=pbx is ONLY honored when CALL_KPIS_USE_VITALPBX_API=true — it fans out listTenants + getCdrToday
-// per tenant and can peg PBX CPU; do not enable in production unless you accept that cost.
+// Default: source=connect → ConnectCdr only (DB counts).
+// source=pbx → reads from background cache (single global PBX query every 30s).
 /** Comma-separated tenant names to skip when aggregating VitalPBX CDR (listTenants `name`). Default: smoke,billing,test. Set to empty or "none" to include all. Excluding "vitalpbx" was dropping a large share of traffic vs the real PBX UI. */
 function parseVitalpbxCdrAggregateExcludeNames(): Set<string> {
   const env = process.env.VITALPBX_CDR_AGGREGATE_EXCLUDE_NAMES;
@@ -8831,92 +8916,247 @@ function parseVitalpbxCdrAggregateExcludeNames(): Set<string> {
   return new Set(raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 }
 
+const _pbxKpiCache = new Map<string, { ts: number; data: any }>();
+const _pbxCdrCache: { ts: number; rows: any[]; byTenant: Map<string, any[]> } = { ts: 0, rows: [], byTenant: new Map() };
+const PBX_KPI_BG_INTERVAL_MS = 30_000;
+const PBX_FULL_REFRESH_EVERY = 10; // full refresh every 10 ticks (~5 min)
+let _pbxBgStarted = false;
+let _pbxRefreshRunning = false;
+let _pbxTickCount = 0;
+let _pbxLastEndSec = 0; // Unix sec of the last data point in cache
+let _pbxActiveTenantIds: string[] = []; // Tenants with CDRs
+let _pbxIdToName = new Map<string, string>();
+let _pbxLinks: Array<{ pbxTenantId: string | null; tenantId: string }> = [];
+
+function classifyRow(r: any): { direction: string; isIncoming: boolean; isMissed: boolean } {
+  const ct = Number(r?.calltype ?? r?.callType ?? 0);
+  let direction = "unknown";
+  let isIncoming = false;
+  if (ct === 2) { direction = "incoming"; isIncoming = true; }
+  else if (ct === 3) { direction = "outgoing"; }
+  else if (ct === 1) { direction = "internal"; }
+  else {
+    const dir = String(r?.direction || r?.call_type || "").toLowerCase();
+    if (dir.includes("in") && !dir.includes("internal")) { direction = "incoming"; isIncoming = true; }
+    else if (dir.includes("internal")) { direction = "internal"; }
+    else { direction = "outgoing"; }
+  }
+  const disp = String(r?.disposition || "").toUpperCase();
+  const isMissed = disp !== "ANSWERED" && isIncoming;
+  return { direction, isIncoming, isMissed };
+}
+
+function rebuildCacheFromRows(allRows: any[], idToName: Map<string, string>, links: Array<{ pbxTenantId: string | null; tenantId: string }>) {
+  type TCount = { incoming: number; outgoing: number; internal: number; missed: number; total: number };
+
+  // PBX dashboard counts raw CDR rows by calltype (SUM(IF(calltype=X,1,0))).
+  // No linkedid grouping — every CDR row counts as one call.
+  const byTenant = new Map<string, TCount>();
+  const rowsByTenant = new Map<string, any[]>();
+  let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
+
+  for (const r of allRows) {
+    const tid = String(r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? "0").trim();
+    if (!rowsByTenant.has(tid)) rowsByTenant.set(tid, []);
+    rowsByTenant.get(tid)!.push(r);
+
+    if (!byTenant.has(tid)) byTenant.set(tid, { incoming: 0, outgoing: 0, internal: 0, missed: 0, total: 0 });
+    const tc = byTenant.get(tid)!;
+    tc.total++;
+
+    const ct = Number(r?.calltype ?? r?.callType ?? 0);
+    if (ct === 2) {
+      globalIn++; tc.incoming++;
+      const disp = String(r?.disposition || "").toUpperCase();
+      if (disp !== "ANSWERED") { globalMissed++; tc.missed++; }
+    } else if (ct === 3) {
+      globalOut++; tc.outgoing++;
+    } else if (ct === 1) {
+      globalInt++; tc.internal++;
+    }
+  }
+
+  const now = Date.now();
+  const asOf = new Date().toISOString();
+  _pbxKpiCache.set("pbx:global", { ts: now, data: {
+    incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
+    missedToday: globalMissed, cdrRowsTotalAcrossTenants: allRows.length,
+    scope: "global", tenantsQueried: byTenant.size, source: "pbx", asOf, _ts: now,
+  }});
+
+  const pbxToConnect = new Map<string, string>();
+  for (const l of links) { if (l.pbxTenantId) pbxToConnect.set(l.pbxTenantId.trim(), l.tenantId); }
+  for (const [tid, counts] of byTenant) {
+    const tName = idToName.get(tid) || tid;
+    const tenantData = {
+      incomingToday: counts.incoming, outgoingToday: counts.outgoing, internalToday: counts.internal,
+      missedToday: counts.missed, cdrRowsTotalAcrossTenants: counts.total,
+      scope: "tenant" as const, tenantsQueried: 1, source: "pbx" as const, asOf, _ts: now,
+    };
+    const connectId = pbxToConnect.get(tid);
+    if (connectId) _pbxKpiCache.set(`pbx:${connectId}`, { ts: now, data: tenantData });
+    _pbxKpiCache.set(`pbx:vpbx:${normSlug(tName)}`, { ts: now, data: tenantData });
+  }
+
+  const cdrByConnect = new Map<string, any[]>();
+  for (const [tid, rows] of rowsByTenant) {
+    const connectId = pbxToConnect.get(tid);
+    if (connectId) cdrByConnect.set(connectId, rows);
+    const tName = idToName.get(tid) || tid;
+    cdrByConnect.set(`vpbx:${normSlug(tName)}`, rows);
+  }
+  _pbxCdrCache.ts = now;
+  _pbxCdrCache.rows = allRows;
+  _pbxCdrCache.byTenant = cdrByConnect;
+
+  return { globalIn, globalOut, globalInt, globalMissed, byTenant };
+}
+
+function startPbxKpiBackgroundRefresh() {
+  if (_pbxBgStarted) return;
+  _pbxBgStarted = true;
+  const tz = process.env.PBX_TIMEZONE || "America/New_York";
+
+  const doRefresh = async () => {
+    if (_pbxRefreshRunning) return;
+    _pbxRefreshRunning = true;
+    const t0 = Date.now();
+    const isFullRefresh = _pbxTickCount % PBX_FULL_REFRESH_EVERY === 0 || _pbxLastEndSec === 0;
+    _pbxTickCount++;
+
+    try {
+      const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+      if (!instance) { app.log.warn("pbx-kpi-bg: no PBX instance"); return; }
+      const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+
+      if (isFullRefresh) {
+        // ── FULL REFRESH: single query to main (admin) tenant ──
+        // VitalPBX admin CDR API returns ALL tenants' CDRs. Single query avoids
+        // cross-tenant duplicates and matches PBX dashboard counting exactly.
+        const fullStartSec = Math.floor(Date.now() / 1000);
+        const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 60_000 });
+        const tenantList = await client.listTenants();
+        _pbxIdToName = new Map<string, string>();
+        const allTenantIds: string[] = [];
+        for (const t of tenantList) {
+          const id = String((t as any).tenant_id ?? (t as any).id ?? "").trim();
+          const name = String((t as any).name ?? "").trim();
+          if (id && name) { _pbxIdToName.set(id, name); allTenantIds.push(id); }
+        }
+        app.log.info({ tenantIds: allTenantIds.slice(0, 10), names: Array.from(_pbxIdToName.entries()).slice(0, 10) }, "pbx-kpi-bg: tenant list");
+
+        const allRows: any[] = [];
+        const seenRowIds = new Set<string>();
+        const activeTids: string[] = [];
+        const failedTids: string[] = [];
+        for (const tid of allTenantIds) {
+          try {
+            const tData = await client.getCdrToday(tid, { timezone: tz, chunkSec: 1800 });
+            const deduped = tData.rows;
+            for (const r of deduped) {
+              if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
+              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
+              if (rid && seenRowIds.has(rid)) continue;
+              if (rid) seenRowIds.add(rid);
+              allRows.push(r);
+            }
+            if (deduped.length > 0) activeTids.push(tid);
+          } catch (err: any) {
+            failedTids.push(tid);
+            app.log.warn({ tid, err: err?.message }, "pbx-kpi-bg: tenant full-refresh failed");
+          }
+        }
+        _pbxActiveTenantIds = activeTids.length > 0 ? activeTids : allTenantIds;
+        _pbxLinks = (await db.tenantPbxLink.findMany()).map(l => ({ pbxTenantId: l.pbxTenantId, tenantId: l.tenantId }));
+        _pbxLastEndSec = fullStartSec;
+
+        // Backfill
+        const backfillClient = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45_000 });
+        const backfillEndSec = Math.floor(Date.now() / 1000);
+        let backfilled = 0;
+        for (const tid of [...new Set([..._pbxActiveTenantIds, ...failedTids])]) {
+          try {
+            const pack = await backfillClient.getCdrRowsForWindow(tid, fullStartSec - 60, backfillEndSec, { maxPages: 25, pageLimit: 800 });
+            for (const r of pack.rows) {
+              if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
+              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
+              if (rid && seenRowIds.has(rid)) continue;
+              if (rid) seenRowIds.add(rid);
+              allRows.push(r);
+              backfilled++;
+            }
+          } catch { /* skip */ }
+        }
+        _pbxLastEndSec = backfillEndSec;
+
+        const { globalIn, globalOut, globalInt, globalMissed } = rebuildCacheFromRows(allRows, _pbxIdToName, _pbxLinks);
+        app.log.info({ elapsedMs: Date.now() - t0, rawRows: allRows.length, uniqueIds: seenRowIds.size, backfilled, failedTids: failedTids.length, activeTenants: activeTids.length, totalTenants: allTenantIds.length, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "full+backfill" }, "pbx-kpi-bg: refresh ok");
+      } else {
+        // ── DELTA REFRESH: query only [lastEndSec, now] for active tenants ──
+        const deltaClient = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 30_000 });
+        const startSec = _pbxLastEndSec - 120; // 2 min overlap for safety
+        const endSec = Math.floor(Date.now() / 1000);
+        let deltaRows = 0;
+        const existingRows = _pbxCdrCache.rows.slice();
+        const existingRowIds = new Set(existingRows.map((r: any) => String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`)).filter(Boolean));
+
+        for (const tid of _pbxActiveTenantIds) {
+          try {
+            const pack = await deltaClient.getCdrRowsForWindow(tid, startSec, endSec, { maxPages: 15, pageLimit: 800 });
+            for (const r of pack.rows) {
+              if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
+              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
+              if (rid && existingRowIds.has(rid)) continue;
+              if (rid) existingRowIds.add(rid);
+              existingRows.push(r);
+              deltaRows++;
+            }
+          } catch { /* skip */ }
+        }
+
+        _pbxLastEndSec = endSec;
+        const { globalIn, globalOut, globalInt, globalMissed } = rebuildCacheFromRows(existingRows, _pbxIdToName, _pbxLinks);
+        app.log.info({ elapsedMs: Date.now() - t0, deltaRows, totalRows: existingRows.length, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "delta" }, "pbx-kpi-bg: refresh ok");
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
+    } finally {
+      _pbxRefreshRunning = false;
+    }
+  };
+
+  setTimeout(doRefresh, 3_000);
+  setInterval(doRefresh, PBX_KPI_BG_INTERVAL_MS);
+}
+
+/**
+ * Diagnostics-only helper — reads from background cache or does a single global query.
+ * Used by /admin/diagnostics/pbx-cdr-today-kpis. No per-tenant fan-out.
+ */
 async function aggregateVitalpbxTodayCallKpis(opts: {
   timezone: string;
-  /** VitalPBX tenant name (matches PBX listTenants `name`) when super-admin uses vpbx:slug from UI */
   pbxScopeSlug: string | null;
-  /** VitalPBX numeric tenant id from TenantPbxLink — strongest match for Connect DB tenants */
   pbxScopeNumericId: string | null;
-  /** Original scope id for JSON (Connect tenant cuid, vpbx:slug, or null) */
   responseTenantId: string | null;
-}): Promise<{
-  incomingToday: number;
-  outgoingToday: number;
-  internalToday: number;
-  missedToday: number;
-  /** Sum of CDR row counts per tenant after getCdrToday pagination+dedupe (sanity vs UI volume). */
-  cdrRowsTotalAcrossTenants: number;
-  scope: "global" | "tenant";
-  tenantId?: string;
-  tenantsQueried: number;
-  source: "pbx";
-}> {
+}): Promise<any> {
+  // Try cache first
+  const cacheKey = opts.responseTenantId
+    ? (opts.pbxScopeSlug ? `pbx:vpbx:${normSlug(opts.pbxScopeSlug)}` : `pbx:${opts.responseTenantId}`)
+    : "pbx:global";
+  const cached = _pbxKpiCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 120_000) return cached.data;
+  const globalCached = _pbxKpiCache.get("pbx:global");
+  if (!opts.responseTenantId && globalCached && Date.now() - globalCached.ts < 120_000) return globalCached.data;
+  // Fallback: single global query
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) throw new Error("NO_PBX_INSTANCE");
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-
-  const tenants = await client.listTenants();
-  const excludeNames = parseVitalpbxCdrAggregateExcludeNames();
-
-  type Tgt = { id: string; name: string };
-  const targets: Tgt[] = [];
-  for (const t of tenants) {
-    const name = String((t as { name?: string }).name || "").trim();
-    const id = String((t as { tenant_id?: string; id?: string }).tenant_id ?? (t as { id?: string }).id ?? "").trim();
-    if (!id || !name) continue;
-    if (excludeNames.has(name.toLowerCase())) continue;
-
-    if (opts.pbxScopeNumericId) {
-      if (id !== opts.pbxScopeNumericId) continue;
-    } else if (opts.pbxScopeSlug) {
-      if (normSlug(name) !== normSlug(opts.pbxScopeSlug)) continue;
-    }
-    targets.push({ id, name });
-  }
-
-  if (opts.responseTenantId && targets.length === 0) {
-    return {
-      incomingToday: 0,
-      outgoingToday: 0,
-      internalToday: 0,
-      missedToday: 0,
-      cdrRowsTotalAcrossTenants: 0,
-      scope: "tenant",
-      tenantId: opts.responseTenantId,
-      tenantsQueried: 0,
-      source: "pbx",
-    };
-  }
-
-  const batchSize = 6;
-  let incoming = 0;
-  let outgoing = 0;
-  let internal = 0;
-  let missed = 0;
-  let cdrRowsTotalAcrossTenants = 0;
-  for (let i = 0; i < targets.length; i += batchSize) {
-    const slice = targets.slice(i, i + batchSize);
-    const parts = await Promise.all(slice.map(({ id }) => client.getCdrToday(id, { timezone: opts.timezone })));
-    for (const d of parts) {
-      incoming += d.incoming;
-      outgoing += d.outgoing;
-      internal += d.internal;
-      missed += d.missed;
-      cdrRowsTotalAcrossTenants += d.total;
-    }
-  }
-
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45_000 });
+  const data = await client.getCdrToday(undefined, { timezone: opts.timezone, chunkSec: 7200 });
   return {
-    incomingToday: incoming,
-    outgoingToday: outgoing,
-    internalToday: internal,
-    missedToday: missed,
-    cdrRowsTotalAcrossTenants,
-    scope: opts.responseTenantId ? "tenant" : "global",
-    ...(opts.responseTenantId ? { tenantId: opts.responseTenantId } : {}),
-    tenantsQueried: targets.length,
-    source: "pbx",
+    incomingToday: data.incoming, outgoingToday: data.outgoing, internalToday: data.internal,
+    missedToday: data.missed, cdrRowsTotalAcrossTenants: data.total,
+    scope: "global", tenantsQueried: 1, source: "pbx",
   };
 }
 
@@ -8926,14 +9166,11 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
 
   const query = z.object({
     tenantId: z.string().optional(),
-    source: z.enum(["connect", "pbx"]).optional().default("connect"),
-    // mode=canonical: apply direction override rules at query time (no DB writes).
-    // Returns corrected counts alongside raw counts so the UI can show both.
+    source: z.enum(["connect", "pbx"]).optional().default("pbx"),
     mode: z.enum(["raw", "canonical"]).optional().default("raw"),
   }).parse(req.query || {});
 
-  const pbxKpiApiAllowed = process.env.CALL_KPIS_USE_VITALPBX_API?.toLowerCase() === "true";
-  const wantPbxAggregate = query.source === "pbx" && pbxKpiApiAllowed;
+  const wantPbxAggregate = query.source === "pbx";
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   // tenantId param is only honoured for super admins; regular users get their own tenant
@@ -8945,34 +9182,15 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   const { timezone, timeWhere } = computePbxLocalDayRangeUtc(nowUtc);
 
   if (wantPbxAggregate) {
-    try {
-      let pbxSlug: string | null = null;
-      let pbxNum: string | null = null;
-      if (scopeTenantId) {
-        if (scopeTenantId.startsWith("vpbx:")) {
-          pbxSlug = scopeTenantId.slice(5);
-        } else {
-          const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } });
-          pbxNum = link?.pbxTenantId?.trim() || null;
-          if (!pbxNum) {
-            const t = await db.tenant.findUnique({ where: { id: scopeTenantId }, select: { name: true } });
-            pbxSlug = t?.name?.trim() || null;
-          }
-        }
-      }
-      const agg = await aggregateVitalpbxTodayCallKpis({
-        timezone,
-        pbxScopeSlug: pbxSlug,
-        pbxScopeNumericId: pbxNum,
-        responseTenantId: scopeTenantId,
-      });
-      return reply.send({ ...agg, asOf: nowUtc.toISOString() });
-    } catch (err: any) {
-      app.log.warn({ err: err?.message }, "call-kpis: pbx aggregate failed, falling back to ConnectCdr");
-      // fall through to connect counts
+    const cacheKey = `pbx:${scopeTenantId ?? "global"}`;
+    const cached = _pbxKpiCache.get(cacheKey);
+    if (cached) {
+      const { perTenant: _pt, ...rest } = cached.data;
+      return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
     }
-  } else if (query.source === "pbx" && !pbxKpiApiAllowed) {
-    app.log.debug("call-kpis: source=pbx ignored (set CALL_KPIS_USE_VITALPBX_API=true to enable — heavy on PBX)");
+    // No cache yet — fall through to ConnectCdr instantly rather than blocking
+    // the HTTP request for 50-60s while the background refresh completes.
+    // The portal polls every 30s, so PBX data appears once the cache warms up.
   }
 
   try {
@@ -12397,6 +12615,7 @@ const port = Number(process.env.PORT || 3001);
   }
 
   await app.listen({ host: "0.0.0.0", port });
+  startPbxKpiBackgroundRefresh();
 })().catch((e) => {
   app.log.error(e);
   process.exit(1);
