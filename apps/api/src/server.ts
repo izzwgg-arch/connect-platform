@@ -8946,71 +8946,6 @@ function classifyRow(r: any): { direction: string; isIncoming: boolean; isMissed
   return { direction, isIncoming, isMissed };
 }
 
-function rebuildCacheFromRows(allRows: any[], idToName: Map<string, string>, links: Array<{ pbxTenantId: string | null; tenantId: string }>) {
-  type TCount = { incoming: number; outgoing: number; internal: number; missed: number; total: number };
-
-  // PBX dashboard counts raw CDR rows by calltype (SUM(IF(calltype=X,1,0))).
-  // No linkedid grouping — every CDR row counts as one call.
-  const byTenant = new Map<string, TCount>();
-  const rowsByTenant = new Map<string, any[]>();
-  let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
-
-  for (const r of allRows) {
-    const tid = String(r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? "0").trim();
-    if (!rowsByTenant.has(tid)) rowsByTenant.set(tid, []);
-    rowsByTenant.get(tid)!.push(r);
-
-    if (!byTenant.has(tid)) byTenant.set(tid, { incoming: 0, outgoing: 0, internal: 0, missed: 0, total: 0 });
-    const tc = byTenant.get(tid)!;
-    tc.total++;
-
-    const ct = Number(r?.calltype ?? r?.callType ?? 0);
-    if (ct === 2) {
-      globalIn++; tc.incoming++;
-      const disp = String(r?.disposition || "").toUpperCase();
-      if (disp !== "ANSWERED") { globalMissed++; tc.missed++; }
-    } else if (ct === 3) {
-      globalOut++; tc.outgoing++;
-    } else if (ct === 1) {
-      globalInt++; tc.internal++;
-    }
-  }
-
-  const now = Date.now();
-  const asOf = new Date().toISOString();
-  _pbxKpiCache.set("pbx:global", { ts: now, data: {
-    incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
-    missedToday: globalMissed, cdrRowsTotalAcrossTenants: allRows.length,
-    scope: "global", tenantsQueried: byTenant.size, source: "pbx", asOf, _ts: now,
-  }});
-
-  const pbxToConnect = new Map<string, string>();
-  for (const l of links) { if (l.pbxTenantId) pbxToConnect.set(l.pbxTenantId.trim(), l.tenantId); }
-  for (const [tid, counts] of byTenant) {
-    const tName = idToName.get(tid) || tid;
-    const tenantData = {
-      incomingToday: counts.incoming, outgoingToday: counts.outgoing, internalToday: counts.internal,
-      missedToday: counts.missed, cdrRowsTotalAcrossTenants: counts.total,
-      scope: "tenant" as const, tenantsQueried: 1, source: "pbx" as const, asOf, _ts: now,
-    };
-    const connectId = pbxToConnect.get(tid);
-    if (connectId) _pbxKpiCache.set(`pbx:${connectId}`, { ts: now, data: tenantData });
-    _pbxKpiCache.set(`pbx:vpbx:${normSlug(tName)}`, { ts: now, data: tenantData });
-  }
-
-  const cdrByConnect = new Map<string, any[]>();
-  for (const [tid, rows] of rowsByTenant) {
-    const connectId = pbxToConnect.get(tid);
-    if (connectId) cdrByConnect.set(connectId, rows);
-    const tName = idToName.get(tid) || tid;
-    cdrByConnect.set(`vpbx:${normSlug(tName)}`, rows);
-  }
-  _pbxCdrCache.ts = now;
-  _pbxCdrCache.rows = allRows;
-  _pbxCdrCache.byTenant = cdrByConnect;
-
-  return { globalIn, globalOut, globalInt, globalMissed, byTenant };
-}
 
 function startPbxKpiBackgroundRefresh() {
   if (_pbxBgStarted) return;
@@ -9045,22 +8980,31 @@ function startPbxKpiBackgroundRefresh() {
         }
         app.log.info({ tenantIds: allTenantIds.slice(0, 10), names: Array.from(_pbxIdToName.entries()).slice(0, 10) }, "pbx-kpi-bg: tenant list");
 
+        // Sum per-tenant counts from getCdrToday (same method the old working code used).
+        // Do NOT collect rows then re-count — cross-tenant dedup can swap direction.
+        let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
         const allRows: any[] = [];
-        const seenRowIds = new Set<string>();
+        const perTenantCounts = new Map<string, { incoming: number; outgoing: number; internal: number; missed: number; total: number }>();
         const activeTids: string[] = [];
         const failedTids: string[] = [];
         for (const tid of allTenantIds) {
           try {
             const tData = await client.getCdrToday(tid, { timezone: tz, chunkSec: 1800 });
-            const deduped = tData.rows;
-            for (const r of deduped) {
+            // Use getCdrToday's own counts — they match PBX per-tenant counting
+            globalIn += tData.incoming;
+            globalOut += tData.outgoing;
+            globalInt += tData.internal;
+            globalMissed += tData.missed;
+            perTenantCounts.set(tid, {
+              incoming: tData.incoming, outgoing: tData.outgoing,
+              internal: tData.internal, missed: tData.missed, total: tData.total,
+            });
+            // Collect rows for CDR cache (call history) — tag with tenant
+            for (const r of tData.allRawRows) {
               if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
-              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
-              if (rid && seenRowIds.has(rid)) continue;
-              if (rid) seenRowIds.add(rid);
               allRows.push(r);
             }
-            if (deduped.length > 0) activeTids.push(tid);
+            if (tData.total > 0) activeTids.push(tid);
           } catch (err: any) {
             failedTids.push(tid);
             app.log.warn({ tid, err: err?.message }, "pbx-kpi-bg: tenant full-refresh failed");
@@ -9068,55 +9012,116 @@ function startPbxKpiBackgroundRefresh() {
         }
         _pbxActiveTenantIds = activeTids.length > 0 ? activeTids : allTenantIds;
         _pbxLinks = (await db.tenantPbxLink.findMany()).map(l => ({ pbxTenantId: l.pbxTenantId, tenantId: l.tenantId }));
-        _pbxLastEndSec = fullStartSec;
+        _pbxLastEndSec = Math.floor(Date.now() / 1000);
 
-        // Backfill
-        const backfillClient = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45_000 });
-        const backfillEndSec = Math.floor(Date.now() / 1000);
-        let backfilled = 0;
-        for (const tid of [...new Set([..._pbxActiveTenantIds, ...failedTids])]) {
-          try {
-            const pack = await backfillClient.getCdrRowsForWindow(tid, fullStartSec - 60, backfillEndSec, { maxPages: 25, pageLimit: 800 });
-            for (const r of pack.rows) {
-              if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
-              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
-              if (rid && seenRowIds.has(rid)) continue;
-              if (rid) seenRowIds.add(rid);
-              allRows.push(r);
-              backfilled++;
-            }
-          } catch { /* skip */ }
+        // Store global KPIs from summed per-tenant counts
+        const now = Date.now();
+        const asOf = new Date().toISOString();
+        _pbxKpiCache.set("pbx:global", { ts: now, data: {
+          incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
+          missedToday: globalMissed, cdrRowsTotalAcrossTenants: globalIn + globalOut + globalInt,
+          scope: "global", tenantsQueried: perTenantCounts.size, source: "pbx", asOf, _ts: now,
+        }});
+
+        // Store per-tenant KPIs and CDR rows
+        const pbxToConnect = new Map<string, string>();
+        for (const l of _pbxLinks) { if (l.pbxTenantId) pbxToConnect.set(l.pbxTenantId.trim(), l.tenantId); }
+        const cdrByConnect = new Map<string, any[]>();
+        for (const [tid, counts] of perTenantCounts) {
+          const tName = _pbxIdToName.get(tid) || tid;
+          const tenantData = {
+            incomingToday: counts.incoming, outgoingToday: counts.outgoing, internalToday: counts.internal,
+            missedToday: counts.missed, cdrRowsTotalAcrossTenants: counts.total,
+            scope: "tenant" as const, tenantsQueried: 1, source: "pbx" as const, asOf, _ts: now,
+          };
+          const connectId = pbxToConnect.get(tid);
+          if (connectId) _pbxKpiCache.set(`pbx:${connectId}`, { ts: now, data: tenantData });
+          _pbxKpiCache.set(`pbx:vpbx:${normSlug(tName)}`, { ts: now, data: tenantData });
         }
-        _pbxLastEndSec = backfillEndSec;
+        // Build CDR cache grouped by tenant for call history
+        const rowsByTenant = new Map<string, any[]>();
+        for (const r of allRows) {
+          const tid = String(r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? "0").trim();
+          if (!rowsByTenant.has(tid)) rowsByTenant.set(tid, []);
+          rowsByTenant.get(tid)!.push(r);
+        }
+        for (const [tid, rows] of rowsByTenant) {
+          const connectId = pbxToConnect.get(tid);
+          if (connectId) cdrByConnect.set(connectId, rows);
+          const tName = _pbxIdToName.get(tid) || tid;
+          cdrByConnect.set(`vpbx:${normSlug(tName)}`, rows);
+        }
+        _pbxCdrCache.ts = now;
+        _pbxCdrCache.rows = allRows;
+        _pbxCdrCache.byTenant = cdrByConnect;
 
-        const { globalIn, globalOut, globalInt, globalMissed } = rebuildCacheFromRows(allRows, _pbxIdToName, _pbxLinks);
-        app.log.info({ elapsedMs: Date.now() - t0, rawRows: allRows.length, uniqueIds: seenRowIds.size, backfilled, failedTids: failedTids.length, activeTenants: activeTids.length, totalTenants: allTenantIds.length, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "full+backfill" }, "pbx-kpi-bg: refresh ok");
+        app.log.info({ elapsedMs: Date.now() - t0, rawRows: allRows.length, failedTids: failedTids.length, activeTenants: activeTids.length, totalTenants: allTenantIds.length, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "full" }, "pbx-kpi-bg: refresh ok");
       } else {
-        // ── DELTA REFRESH: query only [lastEndSec, now] for active tenants ──
+        // ── DELTA REFRESH: re-query active tenants for full day counts ──
+        // Using getCdrToday per-tenant to get accurate counts (same as full refresh
+        // but only for tenants that had activity). This avoids the direction-swap
+        // problem caused by cross-tenant row dedup.
         const deltaClient = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 30_000 });
-        const startSec = _pbxLastEndSec - 120; // 2 min overlap for safety
-        const endSec = Math.floor(Date.now() / 1000);
-        let deltaRows = 0;
-        const existingRows = _pbxCdrCache.rows.slice();
-        const existingRowIds = new Set(existingRows.map((r: any) => String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`)).filter(Boolean));
-
+        let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
+        const allRows: any[] = [];
+        const perTenantCounts = new Map<string, { incoming: number; outgoing: number; internal: number; missed: number; total: number }>();
         for (const tid of _pbxActiveTenantIds) {
           try {
-            const pack = await deltaClient.getCdrRowsForWindow(tid, startSec, endSec, { maxPages: 15, pageLimit: 800 });
-            for (const r of pack.rows) {
+            const tData = await deltaClient.getCdrToday(tid, { timezone: tz, chunkSec: 1800 });
+            globalIn += tData.incoming;
+            globalOut += tData.outgoing;
+            globalInt += tData.internal;
+            globalMissed += tData.missed;
+            perTenantCounts.set(tid, {
+              incoming: tData.incoming, outgoing: tData.outgoing,
+              internal: tData.internal, missed: tData.missed, total: tData.total,
+            });
+            for (const r of tData.allRawRows) {
               if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
-              const rid = String(r?.id || r?.uniqueid || `${r?.src||""}_${r?.dst||""}_${r?.calldate||r?.date||""}`);
-              if (rid && existingRowIds.has(rid)) continue;
-              if (rid) existingRowIds.add(rid);
-              existingRows.push(r);
-              deltaRows++;
+              allRows.push(r);
             }
           } catch { /* skip */ }
         }
 
-        _pbxLastEndSec = endSec;
-        const { globalIn, globalOut, globalInt, globalMissed } = rebuildCacheFromRows(existingRows, _pbxIdToName, _pbxLinks);
-        app.log.info({ elapsedMs: Date.now() - t0, deltaRows, totalRows: existingRows.length, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "delta" }, "pbx-kpi-bg: refresh ok");
+        // Update caches
+        const now = Date.now();
+        const asOf = new Date().toISOString();
+        _pbxKpiCache.set("pbx:global", { ts: now, data: {
+          incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
+          missedToday: globalMissed, cdrRowsTotalAcrossTenants: globalIn + globalOut + globalInt,
+          scope: "global", tenantsQueried: perTenantCounts.size, source: "pbx", asOf, _ts: now,
+        }});
+        const pbxToConnect = new Map<string, string>();
+        for (const l of _pbxLinks) { if (l.pbxTenantId) pbxToConnect.set(l.pbxTenantId.trim(), l.tenantId); }
+        const cdrByConnect = new Map<string, any[]>();
+        for (const [tid, counts] of perTenantCounts) {
+          const tName = _pbxIdToName.get(tid) || tid;
+          const tenantData = {
+            incomingToday: counts.incoming, outgoingToday: counts.outgoing, internalToday: counts.internal,
+            missedToday: counts.missed, cdrRowsTotalAcrossTenants: counts.total,
+            scope: "tenant" as const, tenantsQueried: 1, source: "pbx" as const, asOf, _ts: now,
+          };
+          const connectId = pbxToConnect.get(tid);
+          if (connectId) _pbxKpiCache.set(`pbx:${connectId}`, { ts: now, data: tenantData });
+          _pbxKpiCache.set(`pbx:vpbx:${normSlug(tName)}`, { ts: now, data: tenantData });
+        }
+        const rowsByTenant = new Map<string, any[]>();
+        for (const r of allRows) {
+          const tid = String(r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? "0").trim();
+          if (!rowsByTenant.has(tid)) rowsByTenant.set(tid, []);
+          rowsByTenant.get(tid)!.push(r);
+        }
+        for (const [tid, rows] of rowsByTenant) {
+          const connectId = pbxToConnect.get(tid);
+          if (connectId) cdrByConnect.set(connectId, rows);
+          const tName = _pbxIdToName.get(tid) || tid;
+          cdrByConnect.set(`vpbx:${normSlug(tName)}`, rows);
+        }
+        _pbxCdrCache.ts = now;
+        _pbxCdrCache.rows = allRows;
+        _pbxCdrCache.byTenant = cdrByConnect;
+        _pbxLastEndSec = Math.floor(Date.now() / 1000);
+        app.log.info({ elapsedMs: Date.now() - t0, totalRows: allRows.length, tenants: perTenantCounts.size, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: "delta" }, "pbx-kpi-bg: refresh ok");
       }
     } catch (err: any) {
       app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
