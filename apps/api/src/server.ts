@@ -9139,6 +9139,109 @@ async function fetchGlobalCdrCounts(
   }
 }
 
+async function fetchGlobalCdrCountsByTenantFanout(
+  baseUrl: string,
+  appKey: string,
+  secret: string | undefined,
+  tz: string
+): Promise<{ incoming: number; outgoing: number; internal: number; missed: number; total: number; rows: any[] } | null> {
+  try {
+    const nowUtc = new Date();
+    const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: tz });
+    const [y, mo, d] = todayStr.split("-").map(Number);
+    const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
+    const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", {
+      timeZone: tz, hour: "numeric", minute: "numeric", hour12: false
+    });
+    const [hStr, mStr] = noonLocal.split(":");
+    const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
+    const dayStartUtc = new Date(noonUtc - offsetMs);
+    const startSec = Math.floor(dayStartUtc.getTime() / 1000);
+    const endSec = Math.floor(nowUtc.getTime() / 1000);
+
+    const client = getVitalPbxClient({
+      baseUrl,
+      token: appKey,
+      secret,
+      timeoutMs: 15_000,
+    });
+
+    const excludeNames = parseVitalpbxCdrAggregateExcludeNames();
+    const tenants = await client.listTenants();
+    const tenantTargets = tenants
+      .map((t: any) => ({
+        id: String(t?.tenant_id ?? t?.id ?? "").trim(),
+        name: String(t?.name ?? "").trim(),
+      }))
+      .filter((t: any) => t.id && t.name && !excludeNames.has(t.name.toLowerCase()));
+    if (tenantTargets.length === 0) return null;
+
+    const allRows: any[] = [];
+    const batchSize = 2; // hard cap PBX load
+    for (let i = 0; i < tenantTargets.length; i += batchSize) {
+      const batch = tenantTargets.slice(i, i + batchSize);
+      const parts = await Promise.all(
+        batch.map(async (t: any) => {
+          try {
+            const envelope = await client.callEndpoint<any>("cdr.list", {
+              tenant: t.id,
+              query: {
+                limit: 1000,
+                sort_by: "date",
+                sort_order: "desc",
+                start_date: startSec,
+                end_date: endSec,
+              },
+            });
+            const data = (envelope as any)?.data ?? envelope;
+            const rows = Array.isArray(data?.result)
+              ? data.result
+              : Array.isArray(data?.items)
+                ? data.items
+                : Array.isArray(data?.rows)
+                  ? data.rows
+                  : Array.isArray(data)
+                    ? data
+                    : [];
+            return rows.map((r: any) => ({ ...r, tenantid: r?.tenantid ?? r?.tenant_id ?? r?.tenant ?? t.id }));
+          } catch {
+            return [];
+          }
+        })
+      );
+      for (const rows of parts) allRows.push(...rows);
+    }
+    if (allRows.length === 0) return null;
+
+    const seen = new Set<string>();
+    let incoming = 0, outgoing = 0, internal = 0, missed = 0;
+    const deduped: any[] = [];
+    for (const r of allRows) {
+      const tenant = String(r?.tenant ?? r?.tenantid ?? r?.tenant_id ?? "").trim();
+      if (!tenant) continue;
+      const key = String(r?.id ?? r?.cdr_id ?? "").trim()
+        || String(r?.uniqueid ?? r?.linkedid ?? "").trim()
+        || [
+          String(r?.date ?? r?.start ?? "").trim(),
+          String(r?.src ?? r?.source ?? "").trim(),
+          String(r?.dst ?? r?.destination ?? "").trim(),
+          String(r?.calltype ?? r?.callType ?? "").trim(),
+          tenant,
+        ].join("|");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(r);
+      const ct = Number(r?.calltype ?? r?.callType ?? 0);
+      if (ct === 2) { incoming++; const disp = String(r?.disposition || "").toUpperCase(); if (disp !== "ANSWERED") missed++; }
+      else if (ct === 3) outgoing++;
+      else if (ct === 1) internal++;
+    }
+    return { incoming, outgoing, internal, missed, total: incoming + outgoing + internal, rows: deduped };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchTenantCdrCounts(
   baseUrl: string,
   appKey: string,
@@ -9210,7 +9313,21 @@ async function fetchLivePbxKpisByScope(params: {
       };
     }
     const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
-    if (!live || live.total <= 0) throw new Error("PBX_UNAVAILABLE_GLOBAL_FETCH_FAILED");
+    if (!live || live.total <= 0) {
+      const fanout = await fetchGlobalCdrCountsByTenantFanout(instance.baseUrl, auth.token, auth.secret, timezone);
+      if (!fanout || fanout.total <= 0) throw new Error("PBX_UNAVAILABLE_GLOBAL_FETCH_FAILED");
+      return {
+        incomingToday: fanout.incoming,
+        outgoingToday: fanout.outgoing,
+        internalToday: fanout.internal,
+        missedToday: fanout.missed,
+        cdrRowsTotalAcrossTenants: fanout.total,
+        scope: "global" as const,
+        tenantsQueried: 1,
+        source: "pbx-tenant-fanout-cdr",
+        asOf: asOfIso,
+      };
+    }
     return {
       incomingToday: live.incoming,
       outgoingToday: live.outgoing,
@@ -9290,7 +9407,23 @@ function startPbxKpiBackgroundRefresh() {
         return;
       }
 
-      // Keep last-known good PBX global cache; do NOT fall back to Connect or tenant fan-out.
+      // ── TERTIARY: bounded tenant fan-out fallback (real PBX, deduped) ──
+      const fanout = await fetchGlobalCdrCountsByTenantFanout(instance.baseUrl, auth.token, auth.secret, tz);
+      if (fanout && fanout.total > 0) {
+        const now = Date.now();
+        const asOf = new Date().toISOString();
+        _pbxKpiCache.set("pbx:global", { ts: now, data: {
+          incomingToday: fanout.incoming, outgoingToday: fanout.outgoing, internalToday: fanout.internal,
+          missedToday: fanout.missed, cdrRowsTotalAcrossTenants: fanout.total,
+          scope: "global", tenantsQueried: 1, source: "pbx-tenant-fanout-cdr", asOf, _ts: now,
+        }});
+        _pbxCdrCache.ts = now;
+        _pbxCdrCache.rows = fanout.rows;
+        app.log.info({ elapsedMs: Date.now() - t0, incoming: fanout.incoming, outgoing: fanout.outgoing, internal: fanout.internal, total: fanout.total, mode: "tenant-fanout-cdr" }, "pbx-kpi-bg: refresh ok");
+        return;
+      }
+
+      // Keep last-known good PBX global cache; do NOT fall back to Connect-derived totals.
       app.log.warn({ elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: global source unavailable, keeping last global KPI cache");
     } catch (err: any) {
       app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
