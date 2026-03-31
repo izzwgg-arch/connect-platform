@@ -9121,10 +9121,41 @@ async function fetchGlobalCdrCounts(
           : Array.isArray(data)
             ? data
             : [];
-    if (rows.length === 0) return null;
+    let candidateRows = rows;
+    if (candidateRows.length === 0) {
+      // Fallback: some PBX global contexts ignore date range params.
+      // Do a single lightweight latest-rows read and filter to "today" locally.
+      const envelope2 = await client.callEndpoint<any>("cdr.list", {
+        query: {
+          limit: 1000,
+          sort_by: "date",
+          sort_order: "desc",
+        },
+      });
+      const data2 = (envelope2 as any)?.data ?? envelope2;
+      const rows2 = Array.isArray(data2?.result)
+        ? data2.result
+        : Array.isArray(data2?.items)
+          ? data2.items
+          : Array.isArray(data2?.rows)
+            ? data2.rows
+            : Array.isArray(data2)
+              ? data2
+              : [];
+      const todayKey = nowUtc.toLocaleDateString("en-CA", { timeZone: tz });
+      candidateRows = rows2.filter((r: any) => {
+        const raw = String(r?.date ?? r?.start ?? r?.calldate ?? "").trim();
+        if (!raw) return false;
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10) === todayKey;
+        const parsed = new Date(raw);
+        if (Number.isNaN(parsed.getTime())) return false;
+        return parsed.toLocaleDateString("en-CA", { timeZone: tz }) === todayKey;
+      });
+    }
+    if (candidateRows.length === 0) return null;
 
     let incoming = 0, outgoing = 0, internal = 0, missed = 0;
-    for (const r of rows) {
+    for (const r of candidateRows) {
       // PBX dashboard excludes rows with empty tenant.
       const tenant = String(r?.tenant ?? r?.tenantid ?? r?.tenant_id ?? "").trim();
       if (!tenant) continue;
@@ -9133,7 +9164,7 @@ async function fetchGlobalCdrCounts(
       else if (ct === 3) outgoing++;
       else if (ct === 1) internal++;
     }
-    return { incoming, outgoing, internal, missed, total: incoming + outgoing + internal, rows };
+    return { incoming, outgoing, internal, missed, total: incoming + outgoing + internal, rows: candidateRows };
   } catch {
     return null;
   }
