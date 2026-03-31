@@ -65,14 +65,6 @@ type ConnectKpis = {
   cached?: boolean;
 };
 
-type PbxPreviewOverride = {
-  enabled: boolean;
-  incoming: string;
-  outgoing: string;
-  internal: string;
-  missed: string;
-};
-
 type RawVsDedupedStats = {
   asOf: string;
   window: string;
@@ -165,35 +157,6 @@ export default function DashboardPage() {
   const [combinedTick,  setCombinedTick]  = useState(0);
   const [kpiTick,       setKpiTick]       = useState(0);
   const [trafficTick,   setTrafficTick]   = useState(0);
-  const [pbxPreviewOverride, setPbxPreviewOverride] = useState<PbxPreviewOverride>({
-    enabled: false,
-    incoming: "",
-    outgoing: "",
-    internal: "",
-    missed: "",
-  });
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("pbxPreviewOverride");
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<PbxPreviewOverride>;
-      setPbxPreviewOverride((prev) => ({
-        ...prev,
-        ...parsed,
-      }));
-    } catch {
-      // Ignore local parse errors and keep defaults.
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("pbxPreviewOverride", JSON.stringify(pbxPreviewOverride));
-    } catch {
-      // Ignore storage write errors.
-    }
-  }, [pbxPreviewOverride]);
 
   useEffect(() => {
     const combinedMs  = isGlobal ? 120_000 : 60_000;
@@ -273,20 +236,10 @@ export default function DashboardPage() {
   const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
 
   const connectKpis = connectKpisState.status === "success" ? connectKpisState.data : null;
-  const incomingTodayRaw = connectKpis?.incomingToday ?? null;
-  const outgoingTodayRaw = connectKpis?.outgoingToday ?? null;
-  const internalTodayRaw = connectKpis?.internalToday ?? null;
-  const missedTodayRaw   = connectKpis?.missedToday ?? null;
-
-  const toNumOrNull = (v: string) => {
-    if (!v.trim()) return null;
-    const n = Number(v);
-    return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
-  };
-  const incomingToday = pbxPreviewOverride.enabled ? (toNumOrNull(pbxPreviewOverride.incoming) ?? incomingTodayRaw) : incomingTodayRaw;
-  const outgoingToday = pbxPreviewOverride.enabled ? (toNumOrNull(pbxPreviewOverride.outgoing) ?? outgoingTodayRaw) : outgoingTodayRaw;
-  const internalToday = pbxPreviewOverride.enabled ? (toNumOrNull(pbxPreviewOverride.internal) ?? internalTodayRaw) : internalTodayRaw;
-  const missedToday   = pbxPreviewOverride.enabled ? (toNumOrNull(pbxPreviewOverride.missed) ?? missedTodayRaw) : missedTodayRaw;
+  const incomingToday = connectKpis?.incomingToday ?? null;
+  const outgoingToday = connectKpis?.outgoingToday ?? null;
+  const internalToday = connectKpis?.internalToday ?? null;
+  const missedToday   = connectKpis?.missedToday ?? null;
 
   const kpiSource = connectKpis?.source ?? "connect";
   const cacheAge = (connectKpis as any)?.cacheAgeMs;
@@ -295,9 +248,6 @@ export default function DashboardPage() {
     kpiSource === "pbx"
       ? `Source: VitalPBX CDR${cacheAgeLabel}`
       : "Source: Connect CDR (fallback)";
-  const kpiSourceDisplay = pbxPreviewOverride.enabled
-    ? `${kpiSourceNote} — Preview override enabled`
-    : kpiSourceNote;
 
   const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
 
@@ -343,55 +293,9 @@ export default function DashboardPage() {
           <div className="dash-section-header">
             <h3 className="dash-section-title">Key metrics</h3>
             <span className={`dash-kpi-source-badge ${kpiSource === "pbx" ? "pbx" : "connect"}`}>
-              {kpiSourceDisplay}
+              {kpiSourceNote}
             </span>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-              <strong style={{ fontSize: 12 }}>PBX Preview Override</strong>
-              <label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={pbxPreviewOverride.enabled}
-                  onChange={(e) => setPbxPreviewOverride((s) => ({ ...s, enabled: e.target.checked }))}
-                />
-                Preview override
-              </label>
-              <input
-                aria-label="Preview incoming"
-                placeholder="PBX incoming"
-                value={pbxPreviewOverride.incoming}
-                onChange={(e) => setPbxPreviewOverride((s) => ({ ...s, incoming: e.target.value }))}
-                style={{ width: 110 }}
-              />
-              <input
-                aria-label="Preview outgoing"
-                placeholder="PBX outgoing"
-                value={pbxPreviewOverride.outgoing}
-                onChange={(e) => setPbxPreviewOverride((s) => ({ ...s, outgoing: e.target.value }))}
-                style={{ width: 110 }}
-              />
-              <input
-                aria-label="Preview internal"
-                placeholder="PBX internal"
-                value={pbxPreviewOverride.internal}
-                onChange={(e) => setPbxPreviewOverride((s) => ({ ...s, internal: e.target.value }))}
-                style={{ width: 110 }}
-              />
-              <input
-                aria-label="Preview missed"
-                placeholder="PBX missed"
-                value={pbxPreviewOverride.missed}
-                onChange={(e) => setPbxPreviewOverride((s) => ({ ...s, missed: e.target.value }))}
-                style={{ width: 110 }}
-              />
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setPbxPreviewOverride({ enabled: false, incoming: "", outgoing: "", internal: "", missed: "" })}
-              >
-                Clear
-              </button>
-            </div>
           <div className="dash-kpi-grid">
             <article className={`dash-kpi-card active-calls`}>
               <div className="dash-kpi-label">Active Calls</div>

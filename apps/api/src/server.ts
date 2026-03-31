@@ -8919,7 +8919,6 @@ function parseVitalpbxCdrAggregateExcludeNames(): Set<string> {
 const _pbxKpiCache = new Map<string, { ts: number; data: any }>();
 const _pbxCdrCache: { ts: number; rows: any[]; byTenant: Map<string, any[]> } = { ts: 0, rows: [], byTenant: new Map() };
 const PBX_KPI_BG_INTERVAL_MS = 30_000;
-const PBX_FULL_REFRESH_EVERY = 10; // full refresh every 10 ticks (~5 min)
 let _pbxBgStarted = false;
 let _pbxRefreshRunning = false;
 let _pbxTickCount = 0;
@@ -9093,12 +9092,30 @@ async function fetchGlobalCdrCounts(
       baseUrl,
       token: appKey,
       secret,
-      timeoutMs: 45_000,
+      timeoutMs: 20_000,
     });
 
-    // Query WITHOUT tenant header/query to mirror PBX global CDR source.
-    const pack = await client.getCdrRowsForWindow(undefined, startSec, endSec, { maxPages: 60, pageLimit: 1000 });
-    const rows = pack.rows;
+    // Single lightweight global CDR read (no tenant header) to avoid PBX CPU overload.
+    // We intentionally avoid multi-page scans in the 30s loop.
+    const envelope = await client.callEndpoint<any>("cdr.list", {
+      query: {
+        limit: 1000,
+        sort_by: "date",
+        sort_order: "asc",
+        start_date: startSec,
+        end_date: endSec,
+      },
+    });
+    const data = (envelope as any)?.data ?? envelope;
+    const rows = Array.isArray(data?.result)
+      ? data.result
+      : Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.rows)
+          ? data.rows
+          : Array.isArray(data)
+            ? data
+            : [];
     if (rows.length === 0) return null;
 
     let incoming = 0, outgoing = 0, internal = 0, missed = 0;
@@ -9126,7 +9143,6 @@ function startPbxKpiBackgroundRefresh() {
     if (_pbxRefreshRunning) return;
     _pbxRefreshRunning = true;
     const t0 = Date.now();
-    const isFullRefresh = _pbxTickCount % PBX_FULL_REFRESH_EVERY === 0 || _pbxLastEndSec === 0;
     _pbxTickCount++;
 
     try {
@@ -9146,10 +9162,6 @@ function startPbxKpiBackgroundRefresh() {
         }});
         app.log.info({ elapsedMs: Date.now() - t0, incoming: dashStats.incoming, outgoing: dashStats.outgoing, internal: dashStats.internal, mode: "dashboard-scrape" }, "pbx-kpi-bg: refresh ok");
 
-        // Still need per-tenant data and CDR rows — do per-tenant queries in background
-        if (isFullRefresh) {
-          await refreshPerTenantData(instance, auth, tz, t0);
-        }
         return;
       }
 
@@ -9167,18 +9179,11 @@ function startPbxKpiBackgroundRefresh() {
         _pbxCdrCache.rows = globalCdr.rows;
         app.log.info({ elapsedMs: Date.now() - t0, incoming: globalCdr.incoming, outgoing: globalCdr.outgoing, internal: globalCdr.internal, total: globalCdr.total, mode: "global-cdr" }, "pbx-kpi-bg: refresh ok");
 
-        if (isFullRefresh) {
-          await refreshPerTenantData(instance, auth, tz, t0);
-        }
         return;
       }
 
-      // ── FALLBACK: refresh tenant-scoped caches only; do not override global KPI mirror ──
-      if (isFullRefresh) {
-        await refreshPerTenantData(instance, auth, tz, t0, false);
-      } else {
-        app.log.warn({ elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: global source unavailable, keeping last global KPI cache");
-      }
+      // Keep last-known good PBX global cache; do NOT fall back to Connect or tenant fan-out.
+      app.log.warn({ elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: global source unavailable, keeping last global KPI cache");
     } catch (err: any) {
       app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
     } finally {
@@ -9186,7 +9191,7 @@ function startPbxKpiBackgroundRefresh() {
     }
   };
 
-  setTimeout(doRefresh, 3_000);
+  setTimeout(doRefresh, 0);
   setInterval(doRefresh, PBX_KPI_BG_INTERVAL_MS);
 }
 
@@ -9249,9 +9254,33 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
       const { perTenant: _pt, ...rest } = cached.data;
       return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
     }
-    // No cache yet — fall through to ConnectCdr instantly rather than blocking
-    // the HTTP request for 50-60s while the background refresh completes.
-    // The portal polls every 30s, so PBX data appears once the cache warms up.
+    if (!scopeTenantId) {
+      // No cache yet for global PBX source: do one lightweight live fetch now.
+      try {
+        const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+        if (!instance) return reply.code(503).send({ error: "PBX source unavailable: no PBX instance configured" });
+        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+        const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
+        if (live) {
+          return reply.send({
+            incomingToday: live.incoming,
+            outgoingToday: live.outgoing,
+            internalToday: live.internal,
+            missedToday: live.missed,
+            cdrRowsTotalAcrossTenants: live.total,
+            scope: "global",
+            tenantsQueried: 0,
+            source: "pbx-global-cdr",
+            asOf: nowUtc.toISOString(),
+            cached: false,
+            cacheAgeMs: 0,
+          });
+        }
+      } catch {
+        // fall through to explicit PBX-unavailable response
+      }
+    }
+    return reply.code(503).send({ error: "PBX source unavailable (no cached PBX data yet). Retrying automatically." });
   }
 
   try {
