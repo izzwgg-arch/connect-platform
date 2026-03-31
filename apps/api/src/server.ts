@@ -9403,8 +9403,13 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   if (wantPbxAggregate) {
     const cacheKey = `pbx:${scopeTenantId ?? "global"}`;
     const cached = _pbxKpiCache.get(cacheKey);
-    // 30s PBX cache to keep data fresh while protecting CPU
-    if (cached && Date.now() - cached.ts < 30_000) {
+    // Always prefer cache for global scope to avoid request-path PBX load spikes.
+    if (!scopeTenantId && cached) {
+      const { perTenant: _pt, ...rest } = cached.data;
+      return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
+    }
+    // Tenant scope: 30s PBX cache to keep data fresh while protecting CPU.
+    if (scopeTenantId && cached && Date.now() - cached.ts < 30_000) {
       const { perTenant: _pt, ...rest } = cached.data;
       return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
     }
@@ -9422,20 +9427,22 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
       _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: payload });
       return reply.send({ ...payload, cached: false, cacheAgeMs: 0 });
     } catch {
-      // PBX fallback path (still PBX, not Connect): use aggregate helper.
-      try {
-        const agg = await aggregateVitalpbxTodayCallKpis({
-          timezone,
-          pbxScopeSlug: scopeTenantId?.startsWith("vpbx:") ? scopeTenantId.slice(5) : null,
-          pbxScopeNumericId: scopeTenantId && !scopeTenantId.startsWith("vpbx:")
-            ? (await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } }))?.pbxTenantId ?? null
-            : null,
-          responseTenantId: scopeTenantId,
-        });
-        _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: agg });
-        return reply.send({ ...agg, cached: false, cacheAgeMs: 0, fallbackPath: "aggregateVitalpbxTodayCallKpis" });
-      } catch {
-        // continue to stale/503 behavior below
+      // Tenant scope only: PBX fallback path (still PBX, not Connect).
+      if (scopeTenantId) {
+        try {
+          const agg = await aggregateVitalpbxTodayCallKpis({
+            timezone,
+            pbxScopeSlug: scopeTenantId.startsWith("vpbx:") ? scopeTenantId.slice(5) : null,
+            pbxScopeNumericId: !scopeTenantId.startsWith("vpbx:")
+              ? (await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId } }))?.pbxTenantId ?? null
+              : null,
+            responseTenantId: scopeTenantId,
+          });
+          _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: agg });
+          return reply.send({ ...agg, cached: false, cacheAgeMs: 0, fallbackPath: "aggregateVitalpbxTodayCallKpis" });
+        } catch {
+          // continue to stale/503 behavior below
+        }
       }
       const prev = _pbxKpiCache.get(cacheKey);
       if (prev) {
