@@ -8927,8 +8927,6 @@ let _pbxLastEndSec = 0; // Unix sec of the last data point in cache
 let _pbxActiveTenantIds: string[] = []; // Tenants with CDRs
 let _pbxIdToName = new Map<string, string>();
 let _pbxLinks: Array<{ pbxTenantId: string | null; tenantId: string }> = [];
-let _pbxMainTenantId: string | null = null;
-let _pbxMainTenantResolvedAt = 0;
 
 function classifyRow(r: any): { direction: string; isIncoming: boolean; isMissed: boolean } {
   const ct = Number(r?.calltype ?? r?.callType ?? 0);
@@ -9182,36 +9180,6 @@ async function resolvePbxTenantScope(scopeTenantId: string): Promise<{ pbxTenant
   return { pbxTenantId: null, scopeLabel: scopeTenantId };
 }
 
-async function resolveMainPbxTenantId(baseUrl: string, appKey: string, secret?: string): Promise<string | null> {
-  const now = Date.now();
-  if (_pbxMainTenantId && now - _pbxMainTenantResolvedAt < 10 * 60_000) return _pbxMainTenantId;
-  try {
-    const client = getVitalPbxClient({ baseUrl, token: appKey, secret, timeoutMs: 20_000 });
-    const tenants = await client.listTenants();
-    const envId = String(process.env.PBX_MAIN_TENANT_ID || "").trim();
-    if (envId) {
-      _pbxMainTenantId = envId;
-      _pbxMainTenantResolvedAt = now;
-      return envId;
-    }
-    const envSlug = normSlug(String(process.env.PBX_MAIN_TENANT_SLUG || "gesheft"));
-    const bySlug = tenants.find((t: any) => normSlug(String((t as any)?.name || "")) === envSlug);
-    const bySlugId = bySlug ? String((bySlug as any).tenant_id ?? (bySlug as any).id ?? "").trim() : "";
-    if (bySlugId) {
-      _pbxMainTenantId = bySlugId;
-      _pbxMainTenantResolvedAt = now;
-      return bySlugId;
-    }
-    const first = tenants.find((t: any) => String((t as any)?.tenant_id ?? (t as any)?.id ?? "").trim().length > 0);
-    const firstId = first ? String((first as any).tenant_id ?? (first as any).id ?? "").trim() : "";
-    _pbxMainTenantId = firstId || null;
-    _pbxMainTenantResolvedAt = now;
-    return _pbxMainTenantId;
-  } catch {
-    return null;
-  }
-}
-
 async function fetchLivePbxKpisByScope(params: {
   scopeTenantId: string | null;
   timezone: string;
@@ -9223,26 +9191,22 @@ async function fetchLivePbxKpisByScope(params: {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
 
   if (!scopeTenantId) {
-    const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
-    if (!live || live.total <= 0) {
-      // Some VitalPBX setups do not return rows when tenant header is omitted.
-      // Fallback to the configured main PBX tenant (single-tenant query; CPU-safe).
-      const mainTid = await resolveMainPbxTenantId(instance.baseUrl, auth.token, auth.secret);
-      if (!mainTid) throw new Error("PBX_UNAVAILABLE_MAIN_TENANT_NOT_FOUND");
-      const mainLive = await fetchTenantCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone, mainTid);
-      if (!mainLive) throw new Error("PBX_UNAVAILABLE_MAIN_TENANT_FETCH_FAILED");
+    const dashStats = await fetchPbxDashboardStats(instance.baseUrl, auth.token);
+    if (dashStats && (dashStats.incoming > 0 || dashStats.outgoing > 0 || dashStats.internal > 0)) {
       return {
-        incomingToday: mainLive.incoming,
-        outgoingToday: mainLive.outgoing,
-        internalToday: mainLive.internal,
-        missedToday: mainLive.missed,
-        cdrRowsTotalAcrossTenants: mainLive.total,
+        incomingToday: dashStats.incoming,
+        outgoingToday: dashStats.outgoing,
+        internalToday: dashStats.internal,
+        missedToday: 0,
+        cdrRowsTotalAcrossTenants: dashStats.incoming + dashStats.outgoing + dashStats.internal + dashStats.transit,
         scope: "global" as const,
-        tenantsQueried: 1,
-        source: "pbx-main-tenant-cdr",
+        tenantsQueried: 0,
+        source: "pbx-dashboard",
         asOf: asOfIso,
       };
     }
+    const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
+    if (!live || live.total <= 0) throw new Error("PBX_UNAVAILABLE_GLOBAL_FETCH_FAILED");
     return {
       incomingToday: live.incoming,
       outgoingToday: live.outgoing,
