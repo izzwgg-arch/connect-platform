@@ -8963,12 +8963,6 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
     _pbxLinks = (await db.tenantPbxLink.findMany()).map(l => ({ pbxTenantId: l.pbxTenantId, tenantId: l.tenantId }));
   }
 
-  // Query ONLY the single largest tenant for global KPIs.
-  // The PBX admin dashboard queries one global CDR table.
-  // Querying multiple tenants double-counts forwarded call legs.
-  // The main trunk tenant's CDRs match what the PBX admin sees.
-  let mainTid = "";
-  let mainData: { incoming: number; outgoing: number; internal: number; missed: number; total: number; allRawRows: any[] } | null = null;
   const perTenantCounts = new Map<string, { incoming: number; outgoing: number; internal: number; missed: number; total: number }>();
   const allRows: any[] = [];
   const activeTids: string[] = [];
@@ -8978,11 +8972,6 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
       const tData = await client.getCdrToday(tid, { timezone: tz, chunkSec: 1800 });
       perTenantCounts.set(tid, { incoming: tData.incoming, outgoing: tData.outgoing, internal: tData.internal, missed: tData.missed, total: tData.total });
       if (tData.total > 0) activeTids.push(tid);
-      // Track which tenant has the most CDRs — that's the main trunk tenant
-      if (!mainData || tData.total > mainData.total) {
-        mainTid = tid;
-        mainData = tData;
-      }
       for (const r of tData.allRawRows) {
         if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
         allRows.push(r);
@@ -8992,23 +8981,8 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
   if (activeTids.length > 0) _pbxActiveTenantIds = activeTids;
   _pbxLastEndSec = Math.floor(Date.now() / 1000);
 
-  // Global KPIs use ONLY the main tenant's counts — matches PBX admin dashboard
-  const globalIn = mainData?.incoming ?? 0;
-  const globalOut = mainData?.outgoing ?? 0;
-  const globalInt = mainData?.internal ?? 0;
-  const globalMissed = mainData?.missed ?? 0;
-
   const now = Date.now();
   const asOf = new Date().toISOString();
-  const existingGlobal = _pbxKpiCache.get("pbx:global");
-  if (!existingGlobal || Date.now() - existingGlobal.ts > 5_000) {
-    _pbxKpiCache.set("pbx:global", { ts: now, data: {
-      incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
-      missedToday: globalMissed, cdrRowsTotalAcrossTenants: mainData?.total ?? 0,
-      scope: "global", tenantsQueried: perTenantCounts.size, source: "pbx", asOf, _ts: now,
-      _mainTenant: { id: mainTid, name: _pbxIdToName.get(mainTid) || mainTid },
-    }});
-  }
 
   const pbxToConnect = new Map<string, string>();
   for (const l of _pbxLinks) { if (l.pbxTenantId) pbxToConnect.set(l.pbxTenantId.trim(), l.tenantId); }
@@ -9039,7 +9013,7 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
   _pbxCdrCache.ts = now;
   _pbxCdrCache.rows = allRows;
   _pbxCdrCache.byTenant = cdrByConnect;
-  app.log.info({ elapsedMs: Date.now() - t0, mainTid, mainTidName: _pbxIdToName.get(mainTid), mainTidRows: mainData?.total ?? 0, totalRawRows: allRows.length, tenants: perTenantCounts.size, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: deltaOnly ? "delta-main" : "full-main" }, "pbx-kpi-bg: refresh ok");
+  app.log.info({ elapsedMs: Date.now() - t0, totalRawRows: allRows.length, tenants: perTenantCounts.size, mode: deltaOnly ? "delta-tenant-cache" : "full-tenant-cache" }, "pbx-kpi-bg: refresh ok");
 }
 
 /**
@@ -9099,7 +9073,12 @@ async function fetchPbxDashboardStats(baseUrl: string, appKey: string): Promise<
  * Alternative: try calling the CDR API WITHOUT a tenant header.
  * If VitalPBX returns global CDRs in admin mode, this gives exact counts.
  */
-async function fetchGlobalCdrCounts(baseUrl: string, appKey: string, tz: string): Promise<{ incoming: number; outgoing: number; internal: number; missed: number; total: number; rows: any[] } | null> {
+async function fetchGlobalCdrCounts(
+  baseUrl: string,
+  appKey: string,
+  secret: string | undefined,
+  tz: string
+): Promise<{ incoming: number; outgoing: number; internal: number; missed: number; total: number; rows: any[] } | null> {
   try {
     const now = new Date();
     const formatter = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
@@ -9110,25 +9089,29 @@ async function fetchGlobalCdrCounts(baseUrl: string, appKey: string, tz: string)
     const startSec = Math.floor(new Date(y, m, d, 0, 0, 0).getTime() / 1000);
     const endSec = Math.floor(Date.now() / 1000);
 
-    const url = `${baseUrl.replace(/\/+$/, "")}/api/v2/cdr?limit=1000&sort_by=date&sort_order=asc&start_date=${startSec}&end_date=${endSec}`;
-    const res = await fetch(url, {
-      headers: { "app-key": appKey, "content-type": "application/json", accept: "application/json" },
-      signal: AbortSignal.timeout(30_000),
+    const client = getVitalPbxClient({
+      baseUrl,
+      token: appKey,
+      secret,
+      timeoutMs: 45_000,
     });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const data = json?.data ?? json;
-    const rows = Array.isArray(data?.result) ? data.result : Array.isArray(data?.items) ? data.items : Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
+
+    // Query WITHOUT tenant header/query to mirror PBX global CDR source.
+    const pack = await client.getCdrRowsForWindow(undefined, startSec, endSec, { maxPages: 60, pageLimit: 1000 });
+    const rows = pack.rows;
     if (rows.length === 0) return null;
 
     let incoming = 0, outgoing = 0, internal = 0, missed = 0;
     for (const r of rows) {
+      // PBX dashboard excludes rows with empty tenant.
+      const tenant = String(r?.tenant ?? r?.tenantid ?? r?.tenant_id ?? "").trim();
+      if (!tenant) continue;
       const ct = Number(r?.calltype ?? r?.callType ?? 0);
       if (ct === 2) { incoming++; const disp = String(r?.disposition || "").toUpperCase(); if (disp !== "ANSWERED") missed++; }
       else if (ct === 3) outgoing++;
       else if (ct === 1) internal++;
     }
-    return { incoming, outgoing, internal, missed, total: rows.length, rows };
+    return { incoming, outgoing, internal, missed, total: incoming + outgoing + internal, rows };
   } catch {
     return null;
   }
@@ -9171,7 +9154,7 @@ function startPbxKpiBackgroundRefresh() {
       }
 
       // ── SECONDARY: try global CDR query without tenant header ──
-      const globalCdr = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, tz);
+      const globalCdr = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, tz);
       if (globalCdr && globalCdr.total > 0) {
         const now = Date.now();
         const asOf = new Date().toISOString();
@@ -9190,8 +9173,12 @@ function startPbxKpiBackgroundRefresh() {
         return;
       }
 
-      // ── FALLBACK: per-tenant queries ──
-      await refreshPerTenantData(instance, auth, tz, t0, !isFullRefresh);
+      // ── FALLBACK: refresh tenant-scoped caches only; do not override global KPI mirror ──
+      if (isFullRefresh) {
+        await refreshPerTenantData(instance, auth, tz, t0, false);
+      } else {
+        app.log.warn({ elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: global source unavailable, keeping last global KPI cache");
+      }
     } catch (err: any) {
       app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
     } finally {
