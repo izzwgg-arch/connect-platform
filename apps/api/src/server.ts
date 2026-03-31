@@ -9080,14 +9080,18 @@ async function fetchGlobalCdrCounts(
   tz: string
 ): Promise<{ incoming: number; outgoing: number; internal: number; missed: number; total: number; rows: any[] } | null> {
   try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
-    const parts = formatter.formatToParts(now);
-    const y = Number(parts.find(p => p.type === "year")!.value);
-    const m = Number(parts.find(p => p.type === "month")!.value) - 1;
-    const d = Number(parts.find(p => p.type === "day")!.value);
-    const startSec = Math.floor(new Date(y, m, d, 0, 0, 0).getTime() / 1000);
-    const endSec = Math.floor(Date.now() / 1000);
+    const nowUtc = new Date();
+    const todayStr = nowUtc.toLocaleDateString("en-CA", { timeZone: tz });
+    const [y, mo, d] = todayStr.split("-").map(Number);
+    const noonUtc = Date.UTC(y!, mo! - 1, d!, 12, 0, 0, 0);
+    const noonLocal = new Date(noonUtc).toLocaleTimeString("en-US", {
+      timeZone: tz, hour: "numeric", minute: "numeric", hour12: false
+    });
+    const [hStr, mStr] = noonLocal.split(":");
+    const offsetMs = ((Number(hStr ?? 0) * 60) + Number(mStr ?? 0)) * 60 * 1000;
+    const dayStartUtc = new Date(noonUtc - offsetMs);
+    const startSec = Math.floor(dayStartUtc.getTime() / 1000);
+    const endSec = Math.floor(nowUtc.getTime() / 1000);
 
     const client = getVitalPbxClient({
       baseUrl,
@@ -9102,7 +9106,7 @@ async function fetchGlobalCdrCounts(
       query: {
         limit: 1000,
         sort_by: "date",
-        sort_order: "asc",
+        sort_order: "desc",
         start_date: startSec,
         end_date: endSec,
       },
