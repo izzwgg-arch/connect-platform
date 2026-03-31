@@ -8963,22 +8963,17 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
     _pbxLinks = (await db.tenantPbxLink.findMany()).map(l => ({ pbxTenantId: l.pbxTenantId, tenantId: l.tenantId }));
   }
 
-  const tidsToQuery = deltaOnly ? _pbxActiveTenantIds : _pbxActiveTenantIds;
-  let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
-  const allRows: any[] = [];
+  const tidsToQuery = _pbxActiveTenantIds;
+  const rawCollected: any[] = [];
   const perTenantCounts = new Map<string, { incoming: number; outgoing: number; internal: number; missed: number; total: number }>();
   const activeTids: string[] = [];
   for (const tid of tidsToQuery) {
     try {
       const tData = await client.getCdrToday(tid, { timezone: tz, chunkSec: 1800 });
-      globalIn += tData.incoming;
-      globalOut += tData.outgoing;
-      globalInt += tData.internal;
-      globalMissed += tData.missed;
       perTenantCounts.set(tid, { incoming: tData.incoming, outgoing: tData.outgoing, internal: tData.internal, missed: tData.missed, total: tData.total });
       for (const r of tData.allRawRows) {
         if (!r.tenantid && !r.tenant_id && !r.tenant) r.tenantid = tid;
-        allRows.push(r);
+        rawCollected.push(r);
       }
       if (tData.total > 0) activeTids.push(tid);
     } catch { /* skip */ }
@@ -8986,15 +8981,35 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
   if (activeTids.length > 0) _pbxActiveTenantIds = activeTids;
   _pbxLastEndSec = Math.floor(Date.now() / 1000);
 
+  // Dedup by uniqueid — the PBX CDR table has one row per uniqueid.
+  // Per-tenant API responses return overlapping rows for forwarded/transferred calls.
+  // Keeping first occurrence preserves the original calltype from the database.
+  const seenUid = new Map<string, any>();
+  for (const r of rawCollected) {
+    const uid = String(r?.uniqueid || r?.id || "");
+    if (uid && seenUid.has(uid)) continue;
+    if (uid) seenUid.set(uid, r);
+  }
+  const allRows = [...seenUid.values()];
+
+  // Count from deduped rows — matches PBX dashboard's SUM(IF(calltype=N,1,0))
+  let globalIn = 0, globalOut = 0, globalInt = 0, globalMissed = 0;
+  for (const r of allRows) {
+    const ct = Number(r?.calltype ?? r?.callType ?? 0);
+    if (ct === 2) { globalIn++; const disp = String(r?.disposition || "").toUpperCase(); if (disp !== "ANSWERED") globalMissed++; }
+    else if (ct === 3) globalOut++;
+    else if (ct === 1) globalInt++;
+  }
+
   const now = Date.now();
   const asOf = new Date().toISOString();
-  // Only update global KPIs if no dashboard/global source already set them this tick
   const existingGlobal = _pbxKpiCache.get("pbx:global");
   if (!existingGlobal || Date.now() - existingGlobal.ts > 5_000) {
     _pbxKpiCache.set("pbx:global", { ts: now, data: {
       incomingToday: globalIn, outgoingToday: globalOut, internalToday: globalInt,
-      missedToday: globalMissed, cdrRowsTotalAcrossTenants: globalIn + globalOut + globalInt,
+      missedToday: globalMissed, cdrRowsTotalAcrossTenants: allRows.length,
       scope: "global", tenantsQueried: perTenantCounts.size, source: "pbx", asOf, _ts: now,
+      _debug: { rawCollected: rawCollected.length, afterDedup: allRows.length, duplicatesRemoved: rawCollected.length - allRows.length },
     }});
   }
 
@@ -9027,7 +9042,7 @@ async function refreshPerTenantData(instance: any, auth: any, tz: string, t0: nu
   _pbxCdrCache.ts = now;
   _pbxCdrCache.rows = allRows;
   _pbxCdrCache.byTenant = cdrByConnect;
-  app.log.info({ elapsedMs: Date.now() - t0, totalRows: allRows.length, tenants: perTenantCounts.size, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, mode: deltaOnly ? "delta-pertenant" : "full-pertenant" }, "pbx-kpi-bg: refresh ok");
+  app.log.info({ elapsedMs: Date.now() - t0, rawCollected: rawCollected.length, afterDedup: allRows.length, dupsRemoved: rawCollected.length - allRows.length, tenants: perTenantCounts.size, incoming: globalIn, outgoing: globalOut, internal: globalInt, missed: globalMissed, total: globalIn + globalOut + globalInt, mode: deltaOnly ? "delta-dedup" : "full-dedup" }, "pbx-kpi-bg: refresh ok");
 }
 
 /**
