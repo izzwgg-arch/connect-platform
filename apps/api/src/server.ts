@@ -8917,6 +8917,7 @@ function parseVitalpbxCdrAggregateExcludeNames(): Set<string> {
 }
 
 const _pbxKpiCache = new Map<string, { ts: number; data: any }>();
+const _pbxKpiInflight = new Map<string, Promise<any>>();
 const _pbxCdrCache: { ts: number; rows: any[]; byTenant: Map<string, any[]> } = { ts: 0, rows: [], byTenant: new Map() };
 const PBX_KPI_BG_INTERVAL_MS = 30_000;
 let _pbxBgStarted = false;
@@ -9134,6 +9135,95 @@ async function fetchGlobalCdrCounts(
   }
 }
 
+async function fetchTenantCdrCounts(
+  baseUrl: string,
+  appKey: string,
+  secret: string | undefined,
+  timezone: string,
+  pbxTenantId: string,
+): Promise<{ incoming: number; outgoing: number; internal: number; missed: number; total: number } | null> {
+  try {
+    const client = getVitalPbxClient({
+      baseUrl,
+      token: appKey,
+      secret,
+      timeoutMs: 20_000,
+    });
+    const data = await client.getCdrToday(pbxTenantId, { timezone, chunkSec: 1800 });
+    return {
+      incoming: data.incoming,
+      outgoing: data.outgoing,
+      internal: data.internal,
+      missed: data.missed,
+      total: data.total,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolvePbxTenantScope(scopeTenantId: string): Promise<{ pbxTenantId: string | null; scopeLabel: string | null }> {
+  if (!scopeTenantId) return { pbxTenantId: null, scopeLabel: null };
+  if (scopeTenantId.startsWith("vpbx:")) {
+    const slug = normSlug(scopeTenantId.slice(5));
+    const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+    if (!instance) return { pbxTenantId: null, scopeLabel: scopeTenantId };
+    const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+    const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 20_000 });
+    const tenants = await client.listTenants();
+    const t = tenants.find((x: any) => normSlug(String(x?.name || "")) === slug);
+    const id = t ? String((t as any).tenant_id ?? (t as any).id ?? "").trim() : "";
+    return { pbxTenantId: id || null, scopeLabel: scopeTenantId };
+  }
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopeTenantId }, include: { tenant: true } });
+  if (link?.pbxTenantId) return { pbxTenantId: link.pbxTenantId.trim(), scopeLabel: link.tenant?.name ?? scopeTenantId };
+  return { pbxTenantId: null, scopeLabel: scopeTenantId };
+}
+
+async function fetchLivePbxKpisByScope(params: {
+  scopeTenantId: string | null;
+  timezone: string;
+  asOfIso: string;
+}): Promise<any> {
+  const { scopeTenantId, timezone, asOfIso } = params;
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) throw new Error("PBX_UNAVAILABLE_NO_INSTANCE");
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+
+  if (!scopeTenantId) {
+    const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
+    if (!live) throw new Error("PBX_UNAVAILABLE_GLOBAL_FETCH_FAILED");
+    return {
+      incomingToday: live.incoming,
+      outgoingToday: live.outgoing,
+      internalToday: live.internal,
+      missedToday: live.missed,
+      cdrRowsTotalAcrossTenants: live.total,
+      scope: "global" as const,
+      tenantsQueried: 0,
+      source: "pbx-global-cdr",
+      asOf: asOfIso,
+    };
+  }
+
+  const scope = await resolvePbxTenantScope(scopeTenantId);
+  if (!scope.pbxTenantId) throw new Error("PBX_UNAVAILABLE_TENANT_MAPPING");
+  const live = await fetchTenantCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone, scope.pbxTenantId);
+  if (!live) throw new Error("PBX_UNAVAILABLE_TENANT_FETCH_FAILED");
+  return {
+    incomingToday: live.incoming,
+    outgoingToday: live.outgoing,
+    internalToday: live.internal,
+    missedToday: live.missed,
+    cdrRowsTotalAcrossTenants: live.total,
+    scope: "tenant" as const,
+    tenantId: scopeTenantId,
+    tenantsQueried: 1,
+    source: "pbx-tenant-cdr",
+    asOf: asOfIso,
+  };
+}
+
 function startPbxKpiBackgroundRefresh() {
   if (_pbxBgStarted) return;
   _pbxBgStarted = true;
@@ -9250,37 +9340,34 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   if (wantPbxAggregate) {
     const cacheKey = `pbx:${scopeTenantId ?? "global"}`;
     const cached = _pbxKpiCache.get(cacheKey);
-    if (cached) {
+    // 30s PBX cache to keep data fresh while protecting CPU
+    if (cached && Date.now() - cached.ts < 30_000) {
       const { perTenant: _pt, ...rest } = cached.data;
       return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
     }
-    if (!scopeTenantId) {
-      // No cache yet for global PBX source: do one lightweight live fetch now.
-      try {
-        const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
-        if (!instance) return reply.code(503).send({ error: "PBX source unavailable: no PBX instance configured" });
-        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-        const live = await fetchGlobalCdrCounts(instance.baseUrl, auth.token, auth.secret, timezone);
-        if (live) {
-          return reply.send({
-            incomingToday: live.incoming,
-            outgoingToday: live.outgoing,
-            internalToday: live.internal,
-            missedToday: live.missed,
-            cdrRowsTotalAcrossTenants: live.total,
-            scope: "global",
-            tenantsQueried: 0,
-            source: "pbx-global-cdr",
-            asOf: nowUtc.toISOString(),
-            cached: false,
-            cacheAgeMs: 0,
-          });
-        }
-      } catch {
-        // fall through to explicit PBX-unavailable response
+    try {
+      let inflight = _pbxKpiInflight.get(cacheKey);
+      if (!inflight) {
+        inflight = fetchLivePbxKpisByScope({
+          scopeTenantId,
+          timezone,
+          asOfIso: nowUtc.toISOString(),
+        });
+        _pbxKpiInflight.set(cacheKey, inflight);
       }
+      const payload = await inflight;
+      _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: payload });
+      return reply.send({ ...payload, cached: false, cacheAgeMs: 0 });
+    } catch {
+      const prev = _pbxKpiCache.get(cacheKey);
+      if (prev) {
+        const { perTenant: _pt, ...rest } = prev.data;
+        return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - prev.ts, stale: true });
+      }
+      return reply.code(503).send({ error: "PBX source unavailable (live fetch failed). Retrying automatically." });
+    } finally {
+      _pbxKpiInflight.delete(cacheKey);
     }
-    return reply.code(503).send({ error: "PBX source unavailable (no cached PBX data yet). Retrying automatically." });
   }
 
   try {

@@ -244,8 +244,9 @@ export default function DashboardPage() {
   const kpiSource = connectKpis?.source ?? "connect";
   const cacheAge = (connectKpis as any)?.cacheAgeMs;
   const cacheAgeLabel = cacheAge ? ` (cached ${Math.round(cacheAge / 1000)}s ago)` : "";
+  const isPbxSource = typeof kpiSource === "string" && kpiSource.startsWith("pbx");
   const kpiSourceNote =
-    kpiSource === "pbx"
+    isPbxSource
       ? `Source: VitalPBX CDR${cacheAgeLabel}`
       : "Source: Connect CDR (fallback)";
 
@@ -292,7 +293,7 @@ export default function DashboardPage() {
         <section className="dash-section" aria-label="Key metrics">
           <div className="dash-section-header">
             <h3 className="dash-section-title">Key metrics</h3>
-            <span className={`dash-kpi-source-badge ${kpiSource === "pbx" ? "pbx" : "connect"}`}>
+            <span className={`dash-kpi-source-badge ${isPbxSource ? "pbx" : "connect"}`}>
               {kpiSourceNote}
             </span>
           </div>
