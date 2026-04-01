@@ -7562,7 +7562,7 @@ app.get("/calls/history", async (req, reply) => {
   const stillUnresolvedNumbers = new Set<string>();
   for (const r of rows) {
     if (r.tenantId) continue;
-    if (r.linkedId && (linkedIdToTenant.has(r.linkedId) || siblingTenantByLinkedId.has(r.linkedId))) continue;
+    if (r.linkedId && siblingTenantByLinkedId.has(r.linkedId)) continue;
     const f = digitsOnly(r.fromNumber);
     const t = digitsOnly(r.toNumber);
     if (f.length >= 10) stillUnresolvedNumbers.add(f.slice(-10));
