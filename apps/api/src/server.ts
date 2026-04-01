@@ -7482,7 +7482,7 @@ app.get("/calls/history", async (req, reply) => {
   const learnedDidTenantByLast10 = new Map<string, string>();
   if (didCandidatesLast10.length > 0) {
     const didListSql = didCandidatesLast10.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
-    type DidTenantRow = { did10: string; tenantId: string; top_count: bigint; total_count: bigint };
+    type DidTenantRow = { did10: string; tenantId: string; c: bigint };
     const learned = await db.$queryRawUnsafe<DidTenantRow[]>(`
       WITH normalized AS (
         SELECT
@@ -7499,64 +7499,31 @@ app.get("/calls/history", async (req, reply) => {
         WHERE "tenantId" IS NOT NULL
           AND "startedAt" >= NOW() - INTERVAL '30 days'
       ),
-      per_tenant AS (
+      ranked AS (
         SELECT
           did10,
           "tenantId",
-          COUNT(*)::bigint AS cnt
+          COUNT(*)::bigint AS c,
+          ROW_NUMBER() OVER (PARTITION BY did10 ORDER BY COUNT(*) DESC) AS rn
         FROM normalized
         WHERE LENGTH(did10) = 10
           AND did10 IN (${didListSql})
         GROUP BY did10, "tenantId"
-      ),
-      totals AS (
-        SELECT did10, SUM(cnt)::bigint AS total_count FROM per_tenant GROUP BY did10
-      ),
-      ranked AS (
-        SELECT
-          p.did10,
-          p."tenantId",
-          p.cnt AS top_count,
-          t.total_count,
-          ROW_NUMBER() OVER (PARTITION BY p.did10 ORDER BY p.cnt DESC) AS rn
-        FROM per_tenant p
-        JOIN totals t ON t.did10 = p.did10
       )
-      SELECT did10, "tenantId", top_count, total_count
+      SELECT did10, "tenantId", c
       FROM ranked
       WHERE rn = 1
     `);
     for (const row of learned) {
-      const ratio = Number(row.total_count) > 0 ? Number(row.top_count) / Number(row.total_count) : 0;
-      if (ratio >= 0.9 && !learnedDidTenantByLast10.has(row.did10)) {
+      if (!learnedDidTenantByLast10.has(row.did10)) {
         learnedDidTenantByLast10.set(row.did10, row.tenantId);
       }
     }
   }
-  // Map PBX tenant numeric IDs to Connect tenant IDs (from existing link table).
-  const pbxLinks = await db.tenantPbxLink.findMany({
-    where: { pbxTenantId: { not: null } },
-    select: { tenantId: true, pbxTenantId: true },
-  });
-  const connectTenantByPbxTenantId = new Map<string, string>();
-  for (const l of pbxLinks) {
-    const pbxTid = String(l.pbxTenantId || "").trim();
-    if (pbxTid && !connectTenantByPbxTenantId.has(pbxTid)) {
-      connectTenantByPbxTenantId.set(pbxTid, l.tenantId);
-    }
-  }
-  // Learn tenant from PBX CDR cache by linkedId when available.
-  const linkedIdToTenant = new Map<string, string>();
-  if (_pbxCdrCache.rows.length > 0 && connectTenantByPbxTenantId.size > 0) {
-    for (const pr of _pbxCdrCache.rows) {
-      const linked = String((pr as any)?.linkedid ?? (pr as any)?.linkedId ?? "").trim();
-      if (!linked || linkedIdToTenant.has(linked)) continue;
-      const pbxTid = String((pr as any)?.tenantid ?? (pr as any)?.tenant_id ?? (pr as any)?.tenant ?? "").trim();
-      if (!pbxTid) continue;
-      const tenant = connectTenantByPbxTenantId.get(pbxTid);
-      if (tenant) linkedIdToTenant.set(linked, tenant);
-    }
-  }
+  // PBX CDR cache linkedId-to-tenant is intentionally NOT used here.
+  // The PBX main tenant contains ALL calls, so mapping via pbxTenantId
+  // would incorrectly label every call as the main tenant (e.g. Gesheft).
+  // Tenant resolution relies on extension, phone number, and learned DID lookups instead.
 
   const exactDidRule = new Map<string, string>();
   const exactFromDidRule = new Map<string, string>();
@@ -7605,7 +7572,7 @@ app.get("/calls/history", async (req, reply) => {
   if (stillUnresolvedNumbers.size > 0) {
     const numList = Array.from(stillUnresolvedNumbers);
     const numListSql = numList.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
-    type NumTenantRow = { num10: string; tenantId: string; top_count: bigint; total_count: bigint };
+    type NumTenantRow = { num10: string; tenantId: string };
     const numTenantRows = await db.$queryRawUnsafe<NumTenantRow[]>(`
       WITH nums AS (
         SELECT
@@ -7622,35 +7589,22 @@ app.get("/calls/history", async (req, reply) => {
         WHERE "tenantId" IS NOT NULL
           AND "startedAt" >= NOW() - INTERVAL '90 days'
       ),
-      per_tenant AS (
+      ranked AS (
         SELECT
           num10,
           "tenantId",
-          COUNT(*)::bigint AS cnt
+          COUNT(*)::bigint AS c,
+          ROW_NUMBER() OVER (PARTITION BY num10 ORDER BY COUNT(*) DESC) AS rn
         FROM nums
         WHERE LENGTH(num10) = 10 AND num10 IN (${numListSql})
         GROUP BY num10, "tenantId"
-      ),
-      totals AS (
-        SELECT num10, SUM(cnt)::bigint AS total_count FROM per_tenant GROUP BY num10
-      ),
-      ranked AS (
-        SELECT
-          p.num10,
-          p."tenantId",
-          p.cnt AS top_count,
-          t.total_count,
-          ROW_NUMBER() OVER (PARTITION BY p.num10 ORDER BY p.cnt DESC) AS rn
-        FROM per_tenant p
-        JOIN totals t ON t.num10 = p.num10
       )
-      SELECT num10, "tenantId", top_count, total_count
+      SELECT num10, "tenantId"
       FROM ranked
       WHERE rn = 1
     `);
     for (const row of numTenantRows) {
-      const ratio = Number(row.total_count) > 0 ? Number(row.top_count) / Number(row.total_count) : 0;
-      if (ratio >= 0.9 && !numberTenantFallback.has(row.num10)) {
+      if (!numberTenantFallback.has(row.num10)) {
         numberTenantFallback.set(row.num10, row.tenantId);
       }
     }
@@ -7662,7 +7616,6 @@ app.get("/calls/history", async (req, reply) => {
       ...Array.from(extensionTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
-      ...Array.from(linkedIdToTenant.values()),
       ...Array.from(siblingTenantByLinkedId.values()),
       ...Array.from(numberTenantFallback.values()),
     ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
@@ -7677,10 +7630,6 @@ app.get("/calls/history", async (req, reply) => {
 
   function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
     if (row.tenantId) return row.tenantId;
-    // PBX cache linkedId mapping
-    if (row.linkedId && linkedIdToTenant.has(row.linkedId)) return linkedIdToTenant.get(row.linkedId)!;
-    // Direct ConnectCdr sibling with same linkedId
-    if (row.linkedId && siblingTenantByLinkedId.has(row.linkedId)) return siblingTenantByLinkedId.get(row.linkedId)!;
 
     const fromDigits = digitsOnly(row.fromNumber);
     const toDigits = digitsOnly(row.toNumber);
@@ -7720,6 +7669,8 @@ app.get("/calls/history", async (req, reply) => {
       const t = numberTenantFallback.get(fromDigits.slice(-10));
       if (t) return t;
     }
+    // Last resort: sibling ConnectCdr row with same linkedId that has a tenant
+    if (row.linkedId && siblingTenantByLinkedId.has(row.linkedId)) return siblingTenantByLinkedId.get(row.linkedId)!;
     return null;
   }
 
