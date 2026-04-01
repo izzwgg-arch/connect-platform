@@ -7343,6 +7343,25 @@ function mapDispositionToHistoryStatus(disposition: string | null | undefined): 
   return "missed";
 }
 
+function digitsOnly(value: string | null | undefined): string {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function extractLikelyExtension(value: string | null | undefined): string | null {
+  const d = digitsOnly(value);
+  if (d.length >= 2 && d.length <= 6) return d;
+  return null;
+}
+
+function pickRangExtension(direction: string, fromNumber: string | null | undefined, toNumber: string | null | undefined): string | null {
+  const fromExt = extractLikelyExtension(fromNumber);
+  const toExt = extractLikelyExtension(toNumber);
+  if (direction === "incoming") return toExt || fromExt;
+  if (direction === "outgoing") return fromExt || toExt;
+  if (direction === "internal") return toExt || fromExt;
+  return toExt || fromExt;
+}
+
 app.get("/calls/history", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -7417,6 +7436,37 @@ app.get("/calls/history", async (req, reply) => {
     db.connectCdr.count({ where: { ...where, direction: "internal" } }),
   ]);
 
+  const extensionCandidates = Array.from(new Set(
+    rows
+      .flatMap((r) => [extractLikelyExtension(r.fromNumber), extractLikelyExtension(r.toNumber)])
+      .filter((v): v is string => Boolean(v))
+  ));
+  const [extensions, tenantRules] = await Promise.all([
+    extensionCandidates.length > 0
+      ? db.extension.findMany({
+        where: { extNumber: { in: extensionCandidates }, status: "ACTIVE" },
+        select: { extNumber: true, tenantId: true },
+      })
+      : Promise.resolve([]),
+    db.cdrTenantRule.findMany({
+      select: { matchType: true, matchValue: true, tenantSlug: true },
+    }),
+  ]);
+  const extensionTenantByExt = new Map<string, string>();
+  for (const e of extensions) {
+    if (!extensionTenantByExt.has(e.extNumber)) extensionTenantByExt.set(e.extNumber, e.tenantId);
+  }
+
+  const exactDidRule = new Map<string, string>();
+  const exactFromDidRule = new Map<string, string>();
+  const extensionPrefixRules: Array<{ prefix: string; tenantId: string }> = [];
+  for (const rule of tenantRules) {
+    const tenantRef = `vpbx:${rule.tenantSlug}`;
+    if (rule.matchType === "did") exactDidRule.set(digitsOnly(rule.matchValue), tenantRef);
+    else if (rule.matchType === "from_did") exactFromDidRule.set(digitsOnly(rule.matchValue), tenantRef);
+    else if (rule.matchType === "extension_prefix") extensionPrefixRules.push({ prefix: digitsOnly(rule.matchValue), tenantId: tenantRef });
+  }
+
   const tenantIds = Array.from(
     new Set(
       rows
@@ -7432,10 +7482,29 @@ app.get("/calls/history", async (req, reply) => {
     : [];
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
 
+  function inferTenantIdForRow(row: { tenantId: string | null; fromNumber: string | null; toNumber: string | null }): string | null {
+    if (row.tenantId) return row.tenantId;
+    const fromDigits = digitsOnly(row.fromNumber);
+    const toDigits = digitsOnly(row.toNumber);
+    const fromExt = extractLikelyExtension(row.fromNumber);
+    const toExt = extractLikelyExtension(row.toNumber);
+
+    if (toExt && extensionTenantByExt.has(toExt)) return extensionTenantByExt.get(toExt)!;
+    if (fromExt && extensionTenantByExt.has(fromExt)) return extensionTenantByExt.get(fromExt)!;
+    if (toDigits && exactDidRule.has(toDigits)) return exactDidRule.get(toDigits)!;
+    if (fromDigits && exactFromDidRule.has(fromDigits)) return exactFromDidRule.get(fromDigits)!;
+    if (fromExt) {
+      const prefixMatch = extensionPrefixRules.find((r) => fromExt.startsWith(r.prefix));
+      if (prefixMatch) return prefixMatch.tenantId;
+    }
+    return null;
+  }
+
   const items = rows.map((r) => {
-    const tenantName = !r.tenantId
-      ? "Unassigned"
-      : (tenantNameById.get(r.tenantId) || prettifyTenantSlugFromId(r.tenantId));
+    const inferredTenantId = inferTenantIdForRow(r);
+    const tenantName = inferredTenantId
+      ? (tenantNameById.get(inferredTenantId) || prettifyTenantSlugFromId(inferredTenantId))
+      : "Unassigned";
     return {
       callId: r.linkedId || r.id,
       rowId: r.id,
@@ -7447,8 +7516,9 @@ app.get("/calls/history", async (req, reply) => {
       disposition: r.disposition,
       durationSec: r.durationSec || 0,
       startedAt: r.startedAt.toISOString(),
-      tenantId: r.tenantId,
+      tenantId: inferredTenantId,
       tenantName,
+      rangExtension: pickRangExtension(r.direction, r.fromNumber, r.toNumber),
     };
   });
 

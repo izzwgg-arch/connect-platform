@@ -34,6 +34,7 @@ type CallHistoryRow = {
   startedAt: string;
   tenantId: string | null;
   tenantName: string;
+  rangExtension: string | null;
 };
 
 type CallHistoryResponse = {
@@ -279,6 +280,7 @@ export default function CallsPage() {
                       <th />
                       <th>From</th>
                       <th>To</th>
+                      <th>Rang Ext</th>
                       <th>Direction</th>
                       <th>Status</th>
                       <th>Duration</th>
@@ -294,6 +296,7 @@ export default function CallsPage() {
                           <td className="calls-col-icon"><DirectionIcon direction={row.direction} /></td>
                           <td className="mono">{row.fromNumber || "—"}</td>
                           <td className="mono">{row.toNumber || "—"}</td>
+                          <td className="mono">{row.rangExtension || "—"}</td>
                           <td><span className={`chip ${directionClass(row.direction)}`}>{directionLabel(row.direction)}</span></td>
                           <td>
                             <span className={`chip ${
