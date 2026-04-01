@@ -7520,6 +7520,30 @@ app.get("/calls/history", async (req, reply) => {
       }
     }
   }
+  // Map PBX tenant numeric IDs to Connect tenant IDs (from existing link table).
+  const pbxLinks = await db.tenantPbxLink.findMany({
+    where: { pbxTenantId: { not: null } },
+    select: { tenantId: true, pbxTenantId: true },
+  });
+  const connectTenantByPbxTenantId = new Map<string, string>();
+  for (const l of pbxLinks) {
+    const pbxTid = String(l.pbxTenantId || "").trim();
+    if (pbxTid && !connectTenantByPbxTenantId.has(pbxTid)) {
+      connectTenantByPbxTenantId.set(pbxTid, l.tenantId);
+    }
+  }
+  // Learn tenant from PBX CDR cache by linkedId when available.
+  const linkedIdToTenant = new Map<string, string>();
+  if (_pbxCdrCache.rows.length > 0 && connectTenantByPbxTenantId.size > 0) {
+    for (const pr of _pbxCdrCache.rows) {
+      const linked = String((pr as any)?.linkedid ?? (pr as any)?.linkedId ?? "").trim();
+      if (!linked || linkedIdToTenant.has(linked)) continue;
+      const pbxTid = String((pr as any)?.tenantid ?? (pr as any)?.tenant_id ?? (pr as any)?.tenant ?? "").trim();
+      if (!pbxTid) continue;
+      const tenant = connectTenantByPbxTenantId.get(pbxTid);
+      if (tenant) linkedIdToTenant.set(linked, tenant);
+    }
+  }
 
   const exactDidRule = new Map<string, string>();
   const exactFromDidRule = new Map<string, string>();
@@ -7537,6 +7561,7 @@ app.get("/calls/history", async (req, reply) => {
       ...Array.from(extensionTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
+      ...Array.from(linkedIdToTenant.values()),
     ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
   ));
   const tenants = tenantIds.length > 0
@@ -7547,8 +7572,9 @@ app.get("/calls/history", async (req, reply) => {
     : [];
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
 
-  function inferTenantIdForRow(row: { tenantId: string | null; fromNumber: string | null; toNumber: string | null }): string | null {
+  function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
     if (row.tenantId) return row.tenantId;
+    if (row.linkedId && linkedIdToTenant.has(row.linkedId)) return linkedIdToTenant.get(row.linkedId)!;
     const fromDigits = digitsOnly(row.fromNumber);
     const toDigits = digitsOnly(row.toNumber);
     const fromExt = extractLikelyExtension(row.fromNumber);
