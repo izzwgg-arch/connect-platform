@@ -7562,6 +7562,8 @@ app.get("/calls/history", async (req, reply) => {
       ...Array.from(phoneTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
       ...Array.from(linkedIdToTenant.values()),
+      ...Array.from(siblingTenantByLinkedId.values()),
+      ...Array.from(numberTenantFallback.values()),
     ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
   ));
   const tenants = tenantIds.length > 0
@@ -7572,9 +7574,88 @@ app.get("/calls/history", async (req, reply) => {
     : [];
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
 
+  // --- LinkedId sibling lookup: find tenantId from other ConnectCdr rows sharing the same linkedId ---
+  const nullTenantLinkedIds = Array.from(new Set(
+    rows
+      .filter((r) => !r.tenantId && r.linkedId)
+      .map((r) => r.linkedId)
+  ));
+  const siblingTenantByLinkedId = new Map<string, string>();
+  if (nullTenantLinkedIds.length > 0) {
+    const siblingRows = await db.connectCdr.findMany({
+      where: {
+        linkedId: { in: nullTenantLinkedIds },
+        tenantId: { not: null },
+      },
+      select: { linkedId: true, tenantId: true },
+      distinct: ["linkedId"],
+    });
+    for (const sr of siblingRows) {
+      if (sr.tenantId && !siblingTenantByLinkedId.has(sr.linkedId)) {
+        siblingTenantByLinkedId.set(sr.linkedId, sr.tenantId);
+      }
+    }
+  }
+
+  // --- Number-to-tenant fallback: for still-unresolved rows, check ConnectCdr for same numbers with known tenant ---
+  const stillUnresolvedNumbers = new Set<string>();
+  for (const r of rows) {
+    if (r.tenantId) continue;
+    if (r.linkedId && (linkedIdToTenant.has(r.linkedId) || siblingTenantByLinkedId.has(r.linkedId))) continue;
+    const f = digitsOnly(r.fromNumber);
+    const t = digitsOnly(r.toNumber);
+    if (f.length >= 10) stillUnresolvedNumbers.add(f.slice(-10));
+    if (t.length >= 10) stillUnresolvedNumbers.add(t.slice(-10));
+  }
+  const numberTenantFallback = new Map<string, string>();
+  if (stillUnresolvedNumbers.size > 0) {
+    const numList = Array.from(stillUnresolvedNumbers);
+    const numListSql = numList.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
+    type NumTenantRow = { num10: string; tenantId: string };
+    const numTenantRows = await db.$queryRawUnsafe<NumTenantRow[]>(`
+      WITH nums AS (
+        SELECT
+          "tenantId",
+          RIGHT(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g'), 10) AS num10
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "startedAt" >= NOW() - INTERVAL '90 days'
+        UNION ALL
+        SELECT
+          "tenantId",
+          RIGHT(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g'), 10) AS num10
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "startedAt" >= NOW() - INTERVAL '90 days'
+      ),
+      ranked AS (
+        SELECT
+          num10,
+          "tenantId",
+          COUNT(*)::bigint AS c,
+          ROW_NUMBER() OVER (PARTITION BY num10 ORDER BY COUNT(*) DESC) AS rn
+        FROM nums
+        WHERE LENGTH(num10) = 10 AND num10 IN (${numListSql})
+        GROUP BY num10, "tenantId"
+      )
+      SELECT num10, "tenantId"
+      FROM ranked
+      WHERE rn = 1
+    `);
+    for (const row of numTenantRows) {
+      if (!numberTenantFallback.has(row.num10)) {
+        numberTenantFallback.set(row.num10, row.tenantId);
+      }
+    }
+  }
+
   function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
     if (row.tenantId) return row.tenantId;
+    // PBX cache linkedId mapping
     if (row.linkedId && linkedIdToTenant.has(row.linkedId)) return linkedIdToTenant.get(row.linkedId)!;
+    // Direct ConnectCdr sibling with same linkedId
+    if (row.linkedId && siblingTenantByLinkedId.has(row.linkedId)) return siblingTenantByLinkedId.get(row.linkedId)!;
+
     const fromDigits = digitsOnly(row.fromNumber);
     const toDigits = digitsOnly(row.toNumber);
     const fromExt = extractLikelyExtension(row.fromNumber);
@@ -7603,6 +7684,15 @@ app.get("/calls/history", async (req, reply) => {
     if (fromExt) {
       const prefixMatch = extensionPrefixRules.find((r) => fromExt.startsWith(r.prefix));
       if (prefixMatch) return prefixMatch.tenantId;
+    }
+    // Broad number-to-tenant fallback (90 days of ConnectCdr history)
+    if (toDigits.length >= 10) {
+      const t = numberTenantFallback.get(toDigits.slice(-10));
+      if (t) return t;
+    }
+    if (fromDigits.length >= 10) {
+      const t = numberTenantFallback.get(fromDigits.slice(-10));
+      if (t) return t;
     }
     return null;
   }
