@@ -163,64 +163,39 @@ export type CallHistoryItem = {
   number: string;
   disposition: string;
   recording: boolean;
+  src?: string;
+  dst?: string;
+  duration?: number;
+  billsec?: number;
+  pbxTenantId?: string;
 };
 
-export async function loadCallsData(scope: AdminScope): Promise<{ live: CallItem[]; history: CallHistoryItem[]; scopeLabel: "GLOBAL" | "TENANT" }> {
-  if (scope === "GLOBAL") {
-    try {
-      const [instances, providerHealth] = await Promise.all([apiGet<any[]>("/admin/pbx/instances"), apiGet<any>("/admin/sms/provider-health")]);
-      const live = (Array.isArray(instances) ? instances : []).slice(0, 30).map((i: any, idx: number) => ({
-        id: String(i.id || `g-live-${idx}`),
-        extension: String(i.provider || "PBX"),
-        direction: "Platform",
-        caller: String(i.name || i.baseUrl || "Instance"),
-        duration: "00:00:00",
-        state: i.isEnabled ? "Healthy" : "Degraded"
-      }));
-      const topFail = Array.isArray(providerHealth?.topFailingTenants) ? providerHealth.topFailingTenants : [];
-      const history = topFail.slice(0, 30).map((t: any, idx: number) => ({
-        id: String(t.tenantId || `g-h-${idx}`),
-        when: "Global",
-        ext: "-",
-        direction: "Tenant",
-        number: String(t.tenantName || t.tenantId || "Tenant"),
-        disposition: Number(t.failed || 0) > 0 ? "Attention" : "Stable",
-        recording: false
-      }));
-      return { live, history, scopeLabel: "GLOBAL" };
-    } catch {
-      return {
-        scopeLabel: "GLOBAL",
-        live: [{ id: "g-l1", extension: "PBX", direction: "Platform", caller: "Global call monitor", duration: "00:00:00", state: "Unavailable" }],
-        history: [{ id: "g-h1", when: "Global", ext: "-", direction: "Tenant", number: "No data", disposition: "Unavailable", recording: false }]
-      };
-    }
-  }
+export async function loadCallsData(scope: AdminScope, tenantId?: string | null): Promise<{ live: CallItem[]; history: CallHistoryItem[]; scopeLabel: "GLOBAL" | "TENANT" }> {
+  const isGlobal = scope === "GLOBAL";
+  const cdrPath = isGlobal
+    ? (tenantId ? `/voice/pbx/cdr-history?tenantId=${encodeURIComponent(tenantId)}&limit=200` : "/voice/pbx/cdr-history?limit=200")
+    : "/voice/pbx/cdr-history?limit=200";
+
   try {
-    const [live, reports] = await Promise.all([apiGet<any[]>("/voice/calls"), apiGet<any>("/voice/pbx/call-reports")]);
-    const liveRows = Array.isArray(live)
-      ? live.slice(0, 20).map((c: any, idx) => ({
-          id: String(c.id || c.callId || `lc-${idx}`),
-          extension: String(c.extension || c.toExtension || "N/A"),
-          direction: String(c.direction || "Inbound"),
-          caller: String(c.from || c.caller || "Unknown"),
-          duration: String(c.duration || c.durationSec || "00:00:00"),
-          state: String(c.state || c.status || "Talking")
-        }))
-      : [];
-    const historySource = Array.isArray(reports?.items) ? reports.items : Array.isArray(reports) ? reports : [];
-    const historyRows = historySource.slice(0, 30).map((r: any, idx: number) => ({
-      id: String(r.id || r.callId || `h-${idx}`),
-      when: String(r.startedAt || r.createdAt || "").slice(11, 16) || "N/A",
-      ext: String(r.extension || r.toExtension || "N/A"),
-      direction: String(r.direction || "Inbound"),
-      number: String(r.from || r.to || "Unknown"),
-      disposition: String(r.disposition || r.status || "Answered"),
-      recording: Boolean(r.recordingUrl || r.hasRecording)
+    const cdrRes = await apiGet<any>(cdrPath);
+    const items = Array.isArray(cdrRes?.items) ? cdrRes.items : [];
+    const history: CallHistoryItem[] = items.map((r: any, idx: number) => ({
+      id: String(r.id || r.linkedId || `cdr-${idx}`),
+      when: r.calldate ? String(r.calldate).slice(11, 16) : "N/A",
+      ext: r.src && r.src.length <= 5 ? r.src : r.dst && r.dst.length <= 5 ? r.dst : "—",
+      direction: r.direction === "incoming" ? "Incoming" : r.direction === "outgoing" ? "Outgoing" : r.direction === "internal" ? "Internal" : r.direction || "Unknown",
+      number: r.direction === "incoming" ? (r.src || "Unknown") : (r.dst || "Unknown"),
+      disposition: String(r.disposition || "Unknown"),
+      recording: false,
+      src: r.src || "",
+      dst: r.dst || "",
+      duration: Number(r.duration || 0),
+      billsec: Number(r.billsec || 0),
+      pbxTenantId: r.pbxTenantId || "",
     }));
-    return { live: liveRows, history: historyRows, scopeLabel: "TENANT" };
+    return { live: [], history, scopeLabel: isGlobal ? "GLOBAL" : "TENANT" };
   } catch {
-    return { scopeLabel: "TENANT", live: [], history: [] };
+    return { scopeLabel: isGlobal ? "GLOBAL" : "TENANT", live: [], history: [] };
   }
 }
 

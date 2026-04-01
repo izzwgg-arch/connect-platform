@@ -489,7 +489,7 @@ export class VitalPbxClient {
     startSec: number,
     endSec: number,
     options?: { maxPages?: number; pageLimit?: number }
-  ): Promise<{ rows: any[]; rawRowCountFromApi: number; paginationNotes?: string }> {
+  ): Promise<{ rows: any[]; allRawRows: any[]; rawRowCountFromApi: number; paginationNotes?: string }> {
     const pageLimit = Math.min(Math.max(Number(options?.pageLimit ?? 800), 1), 1000);
     const maxPages = Math.min(Math.max(Number(options?.maxPages ?? 200), 1), 500);
     const queryBase: Record<string, string | number | boolean> = {
@@ -502,6 +502,7 @@ export class VitalPbxClient {
 
     const runPaged = async (usePageParam: boolean) => {
       const seen = new Map<string, any>();
+      const allRawRows: any[] = [];
       let rawRowCountFromApi = 0;
       let hitDuplicatePage = false;
       for (let p = 0; p < maxPages; p++) {
@@ -513,6 +514,7 @@ export class VitalPbxClient {
         rawRowCountFromApi += raw.length;
         let newlyAdded = 0;
         for (const r of raw) {
+          allRawRows.push(r);
           const id = String(r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`);
           if (!seen.has(id)) newlyAdded++;
           seen.set(id, r);
@@ -523,18 +525,20 @@ export class VitalPbxClient {
           break;
         }
       }
-      return { seen, rawRowCountFromApi, hitDuplicatePage };
+      return { seen, allRawRows, rawRowCountFromApi, hitDuplicatePage };
     };
 
     const first = await runPaged(false);
     let paginationNotes: string | undefined;
     let { seen, rawRowCountFromApi } = first;
+    let allRawRows = first.allRawRows;
 
     if (first.hitDuplicatePage && first.seen.size > 0) {
       const second = await runPaged(true);
       if (second.seen.size > first.seen.size) {
         seen = second.seen;
         rawRowCountFromApi = second.rawRowCountFromApi;
+        allRawRows = second.allRawRows;
         paginationNotes = "cdr.list ignored offset; used page-based pagination";
       } else {
         paginationNotes =
@@ -542,7 +546,7 @@ export class VitalPbxClient {
       }
     }
 
-    return { rows: [...seen.values()], rawRowCountFromApi, paginationNotes };
+    return { rows: [...seen.values()], allRawRows, rawRowCountFromApi, paginationNotes };
   }
 
   /**
@@ -559,6 +563,7 @@ export class VitalPbxClient {
     options?: { maxPages?: number; pageLimit?: number; chunkSec?: number }
   ): Promise<{
     rows: any[];
+    allRawRows: any[];
     rawRowCountFromApi: number;
     chunkCount: number;
     chunkErrors: Array<{ chunkStart: number; chunkEnd: number; error: string }>;
@@ -566,6 +571,7 @@ export class VitalPbxClient {
   }> {
     const chunkSec = Math.max(Number(options?.chunkSec ?? 3600), 60);
     const seen = new Map<string, any>();
+    const allRawRows: any[] = [];
     let rawRowCountFromApi = 0;
     const chunkErrors: Array<{ chunkStart: number; chunkEnd: number; error: string }> = [];
     const paginationNotesList: string[] = [];
@@ -574,12 +580,9 @@ export class VitalPbxClient {
     for (let cs = startSec; cs < endSec; cs += chunkSec) {
       const ce = Math.min(cs + chunkSec, endSec);
       chunkCount++;
-      try {
-        const result = await this.getCdrRowsForWindow(tenantId, cs, ce, {
-          maxPages: options?.maxPages ?? 25,
-          pageLimit: options?.pageLimit ?? 800,
-        });
+      const processResult = (result: { rows: any[]; allRawRows: any[]; rawRowCountFromApi: number; paginationNotes?: string }) => {
         rawRowCountFromApi += result.rawRowCountFromApi;
+        for (const r of result.allRawRows) allRawRows.push(r);
         for (const r of result.rows) {
           const id = String(
             r?.id || r?.uniqueid || `${r?.src || ""}-${r?.dst || ""}-${r?.calldate || r?.date || ""}`,
@@ -587,13 +590,28 @@ export class VitalPbxClient {
           seen.set(id, r);
         }
         if (result.paginationNotes) paginationNotesList.push(`chunk[${cs}]: ${result.paginationNotes}`);
-      } catch (err: any) {
-        chunkErrors.push({ chunkStart: cs, chunkEnd: ce, error: String(err?.message || err) });
+      };
+      try {
+        processResult(await this.getCdrRowsForWindow(tenantId, cs, ce, {
+          maxPages: options?.maxPages ?? 25,
+          pageLimit: options?.pageLimit ?? 800,
+        }));
+      } catch {
+        try {
+          processResult(await this.getCdrRowsForWindow(tenantId, cs, ce, {
+            maxPages: options?.maxPages ?? 25,
+            pageLimit: options?.pageLimit ?? 800,
+          }));
+          paginationNotesList.push(`chunk[${cs}]: succeeded on retry`);
+        } catch (err: any) {
+          chunkErrors.push({ chunkStart: cs, chunkEnd: ce, error: String(err?.message || err) });
+        }
       }
     }
 
     return {
       rows: [...seen.values()],
+      allRawRows,
       rawRowCountFromApi,
       chunkCount,
       chunkErrors,
@@ -680,15 +698,17 @@ export class VitalPbxClient {
    */
   async getCdrToday(
     tenantId?: string,
-    options?: { timezone?: string; debug?: boolean }
+    options?: { timezone?: string; debug?: boolean; chunkSec?: number }
   ): Promise<{
     rows: any[];
+    allRawRows: any[];
     incoming: number;
     outgoing: number;
     internal: number;
     answered: number;
     missed: number;
     total: number;
+    chunkErrors?: Array<{ chunkStart: number; chunkEnd: number; error: string }>;
     debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string };
   }> {
     const now = new Date();
@@ -714,22 +734,37 @@ export class VitalPbxClient {
     const startSec = Math.floor(startDate.getTime() / 1000);
     const endSec = Math.floor(endDate.getTime() / 1000);
     let rows: any[] = [];
+    let allRawRows: any[] = [];
     let rawRowCountFromApi = 0;
     let paginationNotes: string | undefined;
+    let chunkErrors: Array<{ chunkStart: number; chunkEnd: number; error: string }> | undefined;
     try {
-      const pack = await this.getCdrRowsForWindow(tenantId, startSec, endSec, { maxPages: 25, pageLimit: 800 });
+      const pack = await this.getCdrRowsForWindow(tenantId, startSec, endSec, {
+        maxPages: 25,
+        pageLimit: 800,
+      });
       rows = pack.rows;
+      allRawRows = pack.allRawRows;
       rawRowCountFromApi = pack.rawRowCountFromApi;
       paginationNotes = pack.paginationNotes;
     } catch {
-      rows = [];
+      const chunkSec = options?.chunkSec ?? 1800;
+      try {
+        const chunked = await this.getCdrRowsForWindowChunked(tenantId, startSec, endSec, {
+          maxPages: 25, pageLimit: 800, chunkSec,
+        });
+        rows = chunked.rows;
+        allRawRows = chunked.allRawRows;
+        rawRowCountFromApi = chunked.rawRowCountFromApi;
+        paginationNotes = chunked.paginationNotes;
+        if (chunked.chunkErrors.length > 0) chunkErrors = chunked.chunkErrors;
+      } catch {
+        rows = [];
+        allRawRows = [];
+      }
     }
-    // Do NOT filter rows again by YYYY-MM-DD string here. The API already scoped the query with
-    // start_date/end_date (Unix seconds). A client-side startsWith(todayStr) drops valid rows when
-    // VitalPBX returns US dates ("03/29/2026 ..."), epochs, or other formats — that made dashboard
-    // KPI totals far lower than the VitalPBX UI (which uses the same API window).
     let incoming = 0, outgoing = 0, internal = 0, answered = 0, missed = 0;
-    for (const r of rows) {
+    for (const r of allRawRows) {
       const ct = Number(r?.calltype ?? r?.callType ?? 0);
       let isIncoming = false;
       if (ct === 2) { incoming++; isIncoming = true; }
@@ -747,14 +782,17 @@ export class VitalPbxClient {
     }
     const result: {
       rows: any[];
+      allRawRows: any[];
       incoming: number;
       outgoing: number;
       internal: number;
       answered: number;
       missed: number;
       total: number;
+      chunkErrors?: Array<{ chunkStart: number; chunkEnd: number; error: string }>;
       debug?: { requestStartIso: string; requestEndIso: string; rawRowCountFromApi: number; todayStr: string; paginationNotes?: string };
-    } = { rows, incoming, outgoing, internal, answered, missed, total: rows.length };
+    } = { rows, allRawRows, incoming, outgoing, internal, answered, missed, total: allRawRows.length };
+    if (chunkErrors) result.chunkErrors = chunkErrors;
     if (options?.debug) {
       result.debug = {
         requestStartIso: startDate.toISOString(),

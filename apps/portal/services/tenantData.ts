@@ -1,7 +1,7 @@
 /**
  * Tenant scope model:
- * - For SUPER_ADMIN, the switcher shows real VitalPBX tenants (loaded from /admin/pbx/tenants).
- * - Each VitalPBX tenant gets an ID of "vpbx:{name}" (slug), e.g. "vpbx:a_plus_center".
+ * - For SUPER_ADMIN, the switcher lists all enabled VitalPBX tenants from /admin/pbx/tenants.
+ * - Each row uses ID "vpbx:{slug}" where slug is VitalPBX `name` (may be numeric); fallback "vpbx:{tenant_id}".
  * - apiClient sends x-tenant-context: vpbx:a_plus_center — backend detects this prefix and
  *   scopes PBX API calls directly to that VitalPBX tenant (bypassing tenantPbxLink lookup).
  * - Falls back to platform tenant list when VitalPBX is unreachable.
@@ -27,36 +27,29 @@ type VitalTenantRaw = {
   [key: string]: unknown;
 };
 
-/** Words that mark a name as an internal/test/helper PBX tenant — not a real customer. */
-const JUNK_WORDS = ["smoke", "test", "default", "helper", "billing", "system", "demo", "trial", "internal", "local", "switch smoke", "bc switch", "bg ", "staging", "sandbox"];
-/** Names that are exactly a junk token. */
-const JUNK_NAME_EXACT = new Set(["admin", "smoke", "test", "default", "helper", "billing", "system", "demo", "trial", "internal", "local", "bg"]);
+/** PBX slug values we still hide from the switcher (system / lab tenants only). */
+const EXCLUDED_PBX_SLUGS = new Set(["smoke", "billing", "test", "default", "helper", "demo", "trial", "local", "bg"]);
 
-function isJunkTenantName(name: string): boolean {
-  const lower = name.toLowerCase().trim();
-  if (JUNK_NAME_EXACT.has(lower)) return true;
-  // Purely numeric IDs (e.g., "1773006287") — VitalPBX internal domain IDs, not real names
-  if (/^\d{6,}$/.test(lower)) return true;
-  // Name contains a junk keyword (e.g., "BC Switch Smoke 1772387612")
-  for (const word of JUNK_WORDS) {
-    if (lower.includes(word)) return true;
-  }
-  // Name ends with a long numeric suffix (e.g., "SomeName 1772387612") — PBX-auto-generated
-  if (/\s\d{7,}$/.test(lower)) return true;
+function isExcludedPbxSlug(slug: string): boolean {
+  const s = slug.toLowerCase().trim();
+  if (!s) return true;
+  if (EXCLUDED_PBX_SLUGS.has(s)) return true;
+  if (s.includes("switch smoke") || s.includes("bc switch")) return true;
   return false;
 }
 
-function resolveDisplayName(t: VitalTenantRaw): string | null {
+/** Label for the tenant picker — never drop a tenant just because VitalPBX used a numeric slug. */
+function resolveDisplayName(t: VitalTenantRaw): string {
   const description = String(t.description || "").trim();
   const name = String(t.name || "").trim();
-  // Use description if it exists and isn't purely numeric
+  const tid = String(t.tenant_id ?? t.id ?? "").trim();
   if (description && !/^\d+$/.test(description)) return description;
-  // Use name if it looks like a real human-readable name (not purely numeric)
   if (name && !/^\d+$/.test(name)) {
-    // Convert underscores/dashes to spaces for display
     return name.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
-  return null;
+  if (name) return name;
+  if (tid) return `Tenant ${tid}`;
+  return "Unnamed tenant";
 }
 
 export async function loadTenantOptions(): Promise<Tenant[]> {
@@ -69,19 +62,14 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
     if (pbxResult?.tenants && Array.isArray(pbxResult.tenants) && pbxResult.tenants.length > 0) {
       const tenants: Tenant[] = [];
       for (const t of pbxResult.tenants) {
-        // Skip disabled
         if (t.enabled === false || t.enabled === "no") continue;
 
         const slug = String(t.name || "").trim();
+        const tid = String(t.tenant_id ?? t.id ?? "").trim();
+        if (slug && isExcludedPbxSlug(slug)) continue;
+
         const displayName = resolveDisplayName(t);
-
-        // Skip if we can't resolve a real human-readable name
-        if (!displayName) continue;
-        // Skip internal/helper/smoke entries
-        if (isJunkTenantName(displayName)) continue;
-        if (slug && isJunkTenantName(slug)) continue;
-
-        const id = slug ? `vpbx:${slug}` : String(t.tenant_id ?? t.id ?? "").trim();
+        const id = slug ? `vpbx:${slug}` : tid ? `vpbx:${tid}` : "";
         if (!id) continue;
 
         tenants.push({
@@ -101,7 +89,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
     const platformRows = await apiGet<PlatformTenantRow[]>("/admin/tenants").catch(() => null);
     if (!Array.isArray(platformRows)) return [];
     return platformRows
-      .filter((row) => row.name && !isJunkTenantName(row.name))
+      .filter((row) => row.name)
       .map((row) => ({
         id: String(row.id || ""),
         name: row.name || "Tenant",
