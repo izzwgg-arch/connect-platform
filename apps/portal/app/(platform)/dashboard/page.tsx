@@ -58,11 +58,15 @@ type ConnectKpis = {
   scope: "global" | "tenant";
   tenantId?: string;
   asOf: string;
+  /** connect = ConnectCdr DB (default); pbx = VitalPBX CDR API only if enabled server-side */
   source?: "connect" | "pbx";
   mode?: "raw" | "canonical";
   pbxFallback?: boolean;
   tenantsQueried?: number;
-  cached?: boolean;
+  /** Present when mode=canonical — the original stored values before direction correction */
+  raw?: { incomingToday: number; outgoingToday: number; internalToday: number; missedToday: number };
+  /** Present when mode=canonical — the direction-corrected counts */
+  canonical?: { incoming: number; outgoing: number; internal: number; missed: number; total: number };
 };
 
 type RawVsDedupedStats = {
@@ -147,6 +151,9 @@ export default function DashboardPage() {
   const tenantId = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
   const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
 
+  // KPI display mode: "canonical" applies direction-correction rules at query time (no DB writes).
+  // "raw" shows stored values exactly as in DB.  Default is canonical since it's more accurate.
+  const [kpiMode, setKpiMode] = useState<"raw" | "canonical">("canonical");
   // Ingestion parity panel — collapsed by default to avoid extra API calls on every load.
   const [showIngestionPanel, setShowIngestionPanel] = useState(false);
 
@@ -192,16 +199,16 @@ export default function DashboardPage() {
     [adminScope, combinedTick]
   );
 
-  // KPI totals: sourced from VitalPBX CDR API (matches PBX dashboard counting).
-  // Server caches aggressively (5 min) to avoid PBX CPU load.
+  // KPI totals: default ConnectCdr (DB) — no VitalPBX REST fan-out.
+  // mode=canonical applies direction-correction rules at query time.
   const kpiParam = (() => {
-    const params = new URLSearchParams({ source: "pbx" });
+    const params = new URLSearchParams({ mode: kpiMode });
     if (!isGlobal && tenantId) params.set("tenantId", tenantId);
     return `?${params.toString()}`;
   })();
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
-    [adminScope, tenantId, kpiTick]
+    [adminScope, tenantId, kpiTick, kpiMode]
   );
 
   // Ingestion parity panel — only loaded when the super-admin explicitly expands it (not on every page load).
@@ -241,14 +248,19 @@ export default function DashboardPage() {
   const internalToday = connectKpis?.internalToday ?? null;
   const missedToday   = connectKpis?.missedToday ?? null;
 
-  const kpiSource = connectKpis?.source ?? "connect";
-  const cacheAge = (connectKpis as any)?.cacheAgeMs;
-  const cacheAgeLabel = cacheAge ? ` (cached ${Math.round(cacheAge / 1000)}s ago)` : "";
-  const isPbxSource = typeof kpiSource === "string" && kpiSource.startsWith("pbx");
+  // When canonical mode is active, show raw values as annotations where they differ
+  const rawKpis = connectKpis?.raw ?? null;
+  const incomingRaw = rawKpis?.incomingToday ?? null;
+  const outgoingRaw = rawKpis?.outgoingToday ?? null;
+  const internalRaw = rawKpis?.internalToday ?? null;
+  const missedRaw   = rawKpis?.missedToday ?? null;
+
   const kpiSourceNote =
-    isPbxSource
-      ? `Source: VitalPBX CDR${cacheAgeLabel}`
-      : "Source: Connect CDR (fallback)";
+    connectKpis?.pbxFallback
+      ? "Today totals: Connect database (VitalPBX CDR aggregate failed — check PBX API / instance)."
+      : connectKpis?.source === "pbx"
+        ? `Today totals: VitalPBX CDR${typeof connectKpis.tenantsQueried === "number" && connectKpis.tenantsQueried > 0 ? ` (${connectKpis.tenantsQueried} tenant${connectKpis.tenantsQueried === 1 ? "" : "s"})` : ""} — matches PBX traffic chart.`
+        : null;
 
   const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
 
@@ -293,10 +305,41 @@ export default function DashboardPage() {
         <section className="dash-section" aria-label="Key metrics">
           <div className="dash-section-header">
             <h3 className="dash-section-title">Key metrics</h3>
-            <span className={`dash-kpi-source-badge ${isPbxSource ? "pbx" : "connect"}`}>
-              {kpiSourceNote}
-            </span>
+            <div className="dash-kpi-mode-toggle" role="group" aria-label="KPI counting mode">
+              <button
+                type="button"
+                className={`dash-kpi-mode-btn${kpiMode === "canonical" ? " active" : ""}`}
+                onClick={() => setKpiMode("canonical")}
+                title="Direction-corrected: short extension → external number classified as outgoing"
+              >
+                Direction-corrected
+              </button>
+              <button
+                type="button"
+                className={`dash-kpi-mode-btn${kpiMode === "raw" ? " active" : ""}`}
+                onClick={() => setKpiMode("raw")}
+                title="Raw stored values from Connect database, no corrections applied"
+              >
+                Raw stored
+              </button>
+            </div>
           </div>
+          {kpiMode === "canonical" ? (
+            <p className="dash-kpi-mode-note">
+              <strong>Direction-corrected:</strong> outbound calls (extension → PSTN) that were stored as incoming due to a multi-leg AMI classification issue are re-counted correctly.
+              Raw stored values shown in parentheses where they differ.{" "}
+              <span className="dash-kpi-pbx-gap-note">
+                PBX totals may still be higher — the PBX counts all channel-leg CDR records per call; Connect stores one row per linked call (deduped by linkedId).
+              </span>
+            </p>
+          ) : (
+            <p className="dash-kpi-mode-note dash-kpi-mode-note--raw">
+              <strong>Raw stored:</strong> direction values exactly as stored in the Connect database. Outbound calls made from extensions may show as incoming here if not yet corrected. Use Direction-corrected mode for the accurate view.
+            </p>
+          )}
+          {kpiSourceNote ? (
+            <p className="text-sm opacity-80 mb-2 max-w-3xl">{kpiSourceNote}</p>
+          ) : null}
           <div className="dash-kpi-grid">
             <article className={`dash-kpi-card active-calls`}>
               <div className="dash-kpi-label">Active Calls</div>
@@ -306,22 +349,42 @@ export default function DashboardPage() {
             <article className="dash-kpi-card incoming">
               <div className="dash-kpi-label">Incoming today</div>
               <div className="dash-kpi-value">{incomingToday !== null ? incomingToday : "--"}</div>
-              <div className="dash-kpi-meta">Inbound</div>
+              <div className="dash-kpi-meta">
+                Inbound
+                {kpiMode === "canonical" && incomingRaw !== null && incomingRaw !== incomingToday
+                  ? <span className="dash-kpi-raw-note"> (raw: {incomingRaw})</span>
+                  : null}
+              </div>
             </article>
             <article className="dash-kpi-card outgoing">
               <div className="dash-kpi-label">Outgoing today</div>
               <div className="dash-kpi-value">{outgoingToday !== null ? outgoingToday : "--"}</div>
-              <div className="dash-kpi-meta">Outbound</div>
+              <div className="dash-kpi-meta">
+                Outbound
+                {kpiMode === "canonical" && outgoingRaw !== null && outgoingRaw !== outgoingToday
+                  ? <span className="dash-kpi-raw-note"> (raw: {outgoingRaw})</span>
+                  : null}
+              </div>
             </article>
             <article className="dash-kpi-card internal">
               <div className="dash-kpi-label">Internal today</div>
               <div className="dash-kpi-value">{internalToday !== null ? internalToday : "--"}</div>
-              <div className="dash-kpi-meta">Extension-to-extension</div>
+              <div className="dash-kpi-meta">
+                Extension-to-extension
+                {kpiMode === "canonical" && internalRaw !== null && internalRaw !== internalToday
+                  ? <span className="dash-kpi-raw-note"> (raw: {internalRaw})</span>
+                  : null}
+              </div>
             </article>
             <article className="dash-kpi-card missed">
               <div className="dash-kpi-label">Missed today</div>
               <div className="dash-kpi-value">{missedToday !== null ? missedToday : "--"}</div>
-              <div className="dash-kpi-meta">Unanswered</div>
+              <div className="dash-kpi-meta">
+                Unanswered
+                {kpiMode === "canonical" && missedRaw !== null && missedRaw !== missedToday
+                  ? <span className="dash-kpi-raw-note"> (raw: {missedRaw})</span>
+                  : null}
+              </div>
             </article>
             {isGlobal && isAdminSummary(pbxLive) ? (
               <article className="dash-kpi-card">
