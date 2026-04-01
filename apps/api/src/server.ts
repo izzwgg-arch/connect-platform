@@ -7441,6 +7441,12 @@ app.get("/calls/history", async (req, reply) => {
       .flatMap((r) => [extractLikelyExtension(r.fromNumber), extractLikelyExtension(r.toNumber)])
       .filter((v): v is string => Boolean(v))
   ));
+  const didCandidatesLast10 = Array.from(new Set(
+    rows
+      .flatMap((r) => [digitsOnly(r.fromNumber), digitsOnly(r.toNumber)])
+      .map((d) => (d.length >= 10 ? d.slice(-10) : ""))
+      .filter((v) => Boolean(v))
+  ));
   const [extensions, tenantRules] = await Promise.all([
     extensionCandidates.length > 0
       ? db.extension.findMany({
@@ -7452,9 +7458,24 @@ app.get("/calls/history", async (req, reply) => {
       select: { matchType: true, matchValue: true, tenantSlug: true },
     }),
   ]);
+  const phoneRows = didCandidatesLast10.length > 0
+    ? await db.phoneNumber.findMany({
+      where: {
+        OR: didCandidatesLast10.map((d) => ({ phoneNumber: { endsWith: d } })),
+      },
+      select: { phoneNumber: true, tenantId: true },
+    })
+    : [];
   const extensionTenantByExt = new Map<string, string>();
   for (const e of extensions) {
     if (!extensionTenantByExt.has(e.extNumber)) extensionTenantByExt.set(e.extNumber, e.tenantId);
+  }
+  const phoneTenantByLast10 = new Map<string, string>();
+  for (const p of phoneRows) {
+    const d = digitsOnly(p.phoneNumber);
+    if (d.length < 10) continue;
+    const last10 = d.slice(-10);
+    if (!phoneTenantByLast10.has(last10)) phoneTenantByLast10.set(last10, p.tenantId);
   }
 
   const exactDidRule = new Map<string, string>();
@@ -7467,13 +7488,13 @@ app.get("/calls/history", async (req, reply) => {
     else if (rule.matchType === "extension_prefix") extensionPrefixRules.push({ prefix: digitsOnly(rule.matchValue), tenantId: tenantRef });
   }
 
-  const tenantIds = Array.from(
-    new Set(
-      rows
-        .map((r) => r.tenantId)
-        .filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
-    )
-  );
+  const tenantIds = Array.from(new Set(
+    [
+      ...rows.map((r) => r.tenantId),
+      ...Array.from(extensionTenantByExt.values()),
+      ...Array.from(phoneTenantByLast10.values()),
+    ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
+  ));
   const tenants = tenantIds.length > 0
     ? await db.tenant.findMany({
       where: { id: { in: tenantIds } },
@@ -7491,6 +7512,14 @@ app.get("/calls/history", async (req, reply) => {
 
     if (toExt && extensionTenantByExt.has(toExt)) return extensionTenantByExt.get(toExt)!;
     if (fromExt && extensionTenantByExt.has(fromExt)) return extensionTenantByExt.get(fromExt)!;
+    if (toDigits.length >= 10) {
+      const t = phoneTenantByLast10.get(toDigits.slice(-10));
+      if (t) return t;
+    }
+    if (fromDigits.length >= 10) {
+      const t = phoneTenantByLast10.get(fromDigits.slice(-10));
+      if (t) return t;
+    }
     if (toDigits && exactDidRule.has(toDigits)) return exactDidRule.get(toDigits)!;
     if (fromDigits && exactFromDidRule.has(fromDigits)) return exactFromDidRule.get(fromDigits)!;
     if (fromExt) {
