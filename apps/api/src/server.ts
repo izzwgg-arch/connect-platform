@@ -7555,25 +7555,6 @@ app.get("/calls/history", async (req, reply) => {
     else if (rule.matchType === "extension_prefix") extensionPrefixRules.push({ prefix: digitsOnly(rule.matchValue), tenantId: tenantRef });
   }
 
-  const tenantIds = Array.from(new Set(
-    [
-      ...rows.map((r) => r.tenantId),
-      ...Array.from(extensionTenantByExt.values()),
-      ...Array.from(phoneTenantByLast10.values()),
-      ...Array.from(learnedDidTenantByLast10.values()),
-      ...Array.from(linkedIdToTenant.values()),
-      ...Array.from(siblingTenantByLinkedId.values()),
-      ...Array.from(numberTenantFallback.values()),
-    ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
-  ));
-  const tenants = tenantIds.length > 0
-    ? await db.tenant.findMany({
-      where: { id: { in: tenantIds } },
-      select: { id: true, name: true },
-    })
-    : [];
-  const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
-
   // --- LinkedId sibling lookup: find tenantId from other ConnectCdr rows sharing the same linkedId ---
   const nullTenantLinkedIds = Array.from(new Set(
     rows
@@ -7648,6 +7629,25 @@ app.get("/calls/history", async (req, reply) => {
       }
     }
   }
+
+  const tenantIds = Array.from(new Set(
+    [
+      ...rows.map((r) => r.tenantId),
+      ...Array.from(extensionTenantByExt.values()),
+      ...Array.from(phoneTenantByLast10.values()),
+      ...Array.from(learnedDidTenantByLast10.values()),
+      ...Array.from(linkedIdToTenant.values()),
+      ...Array.from(siblingTenantByLinkedId.values()),
+      ...Array.from(numberTenantFallback.values()),
+    ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
+  ));
+  const tenants = tenantIds.length > 0
+    ? await db.tenant.findMany({
+      where: { id: { in: tenantIds } },
+      select: { id: true, name: true },
+    })
+    : [];
+  const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
 
   function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
     if (row.tenantId) return row.tenantId;
