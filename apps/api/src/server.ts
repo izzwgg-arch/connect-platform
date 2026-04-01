@@ -7490,6 +7490,7 @@ app.get("/calls/history", async (req, reply) => {
           RIGHT(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g'), 10) AS did10
         FROM "ConnectCdr"
         WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
           AND "startedAt" >= NOW() - INTERVAL '30 days'
         UNION ALL
         SELECT
@@ -7497,6 +7498,7 @@ app.get("/calls/history", async (req, reply) => {
           RIGHT(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g'), 10) AS did10
         FROM "ConnectCdr"
         WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
           AND "startedAt" >= NOW() - INTERVAL '30 days'
       ),
       ranked AS (
@@ -7538,7 +7540,7 @@ app.get("/calls/history", async (req, reply) => {
   // --- LinkedId sibling lookup: find tenantId from other ConnectCdr rows sharing the same linkedId ---
   const nullTenantLinkedIds = Array.from(new Set(
     rows
-      .filter((r) => !r.tenantId && r.linkedId)
+      .filter((r) => (!r.tenantId || r.tenantId.startsWith("vpbx:")) && r.linkedId)
       .map((r) => r.linkedId)
   ));
   const siblingTenantByLinkedId = new Map<string, string>();
@@ -7552,7 +7554,7 @@ app.get("/calls/history", async (req, reply) => {
       distinct: ["linkedId"],
     });
     for (const sr of siblingRows) {
-      if (sr.tenantId && !siblingTenantByLinkedId.has(sr.linkedId)) {
+      if (sr.tenantId && !sr.tenantId.startsWith("vpbx:") && !siblingTenantByLinkedId.has(sr.linkedId)) {
         siblingTenantByLinkedId.set(sr.linkedId, sr.tenantId);
       }
     }
@@ -7561,7 +7563,7 @@ app.get("/calls/history", async (req, reply) => {
   // --- Number-to-tenant fallback: for still-unresolved rows, check ConnectCdr for same numbers with known tenant ---
   const stillUnresolvedNumbers = new Set<string>();
   for (const r of rows) {
-    if (r.tenantId) continue;
+    if (r.tenantId && !r.tenantId.startsWith("vpbx:")) continue;
     if (r.linkedId && siblingTenantByLinkedId.has(r.linkedId)) continue;
     const f = digitsOnly(r.fromNumber);
     const t = digitsOnly(r.toNumber);
@@ -7580,6 +7582,7 @@ app.get("/calls/history", async (req, reply) => {
           RIGHT(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g'), 10) AS num10
         FROM "ConnectCdr"
         WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
           AND "startedAt" >= NOW() - INTERVAL '90 days'
         UNION ALL
         SELECT
@@ -7587,6 +7590,7 @@ app.get("/calls/history", async (req, reply) => {
           RIGHT(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g'), 10) AS num10
         FROM "ConnectCdr"
         WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
           AND "startedAt" >= NOW() - INTERVAL '90 days'
       ),
       ranked AS (
@@ -7629,7 +7633,8 @@ app.get("/calls/history", async (req, reply) => {
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
 
   function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
-    if (row.tenantId) return row.tenantId;
+    const hasRealTenantId = row.tenantId && !row.tenantId.startsWith("vpbx:");
+    if (hasRealTenantId) return row.tenantId;
 
     const fromDigits = digitsOnly(row.fromNumber);
     const toDigits = digitsOnly(row.toNumber);
@@ -7669,8 +7674,10 @@ app.get("/calls/history", async (req, reply) => {
       const t = numberTenantFallback.get(fromDigits.slice(-10));
       if (t) return t;
     }
-    // Last resort: sibling ConnectCdr row with same linkedId that has a tenant
+    // Sibling ConnectCdr row with same linkedId that has a real tenant
     if (row.linkedId && siblingTenantByLinkedId.has(row.linkedId)) return siblingTenantByLinkedId.get(row.linkedId)!;
+    // Fall back to the vpbx: slug if nothing better was found
+    if (row.tenantId) return row.tenantId;
     return null;
   }
 
