@@ -7448,11 +7448,17 @@ app.get("/calls/history", async (req, reply) => {
       .map((d) => (d.length >= 10 ? d.slice(-10) : ""))
       .filter((v) => Boolean(v))
   ));
-  const [extensions, tenantRules] = await Promise.all([
+  const [extensions, pbxExtLinks, tenantRules] = await Promise.all([
     extensionCandidates.length > 0
       ? db.extension.findMany({
         where: { extNumber: { in: extensionCandidates } },
         select: { extNumber: true, tenantId: true },
+      })
+      : Promise.resolve([]),
+    extensionCandidates.length > 0
+      ? db.pbxExtensionLink.findMany({
+        where: { pbxExtensionId: { in: extensionCandidates } },
+        select: { pbxExtensionId: true, tenantId: true },
       })
       : Promise.resolve([]),
     db.cdrTenantRule.findMany({
@@ -7470,6 +7476,11 @@ app.get("/calls/history", async (req, reply) => {
   const extensionTenantByExt = new Map<string, string>();
   for (const e of extensions) {
     if (!extensionTenantByExt.has(e.extNumber)) extensionTenantByExt.set(e.extNumber, e.tenantId);
+  }
+  const extensionTenantByPbxExtId = new Map<string, string>();
+  for (const l of pbxExtLinks) {
+    const ext = String(l.pbxExtensionId || "").trim();
+    if (ext && !extensionTenantByPbxExtId.has(ext)) extensionTenantByPbxExtId.set(ext, l.tenantId);
   }
   const phoneTenantByLast10 = new Map<string, string>();
   for (const p of phoneRows) {
@@ -7663,6 +7674,7 @@ app.get("/calls/history", async (req, reply) => {
     [
       ...rows.map((r) => r.tenantId),
       ...Array.from(extensionTenantByExt.values()),
+      ...Array.from(extensionTenantByPbxExtId.values()),
       ...Array.from(learnedExtTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
@@ -7716,6 +7728,8 @@ app.get("/calls/history", async (req, reply) => {
 
     if (toExt && extensionTenantByExt.has(toExt)) return extensionTenantByExt.get(toExt)!;
     if (fromExt && extensionTenantByExt.has(fromExt)) return extensionTenantByExt.get(fromExt)!;
+    if (toExt && extensionTenantByPbxExtId.has(toExt)) return extensionTenantByPbxExtId.get(toExt)!;
+    if (fromExt && extensionTenantByPbxExtId.has(fromExt)) return extensionTenantByPbxExtId.get(fromExt)!;
     if (toExt && learnedExtTenantByExt.has(toExt)) return learnedExtTenantByExt.get(toExt)!;
     if (fromExt && learnedExtTenantByExt.has(fromExt)) return learnedExtTenantByExt.get(fromExt)!;
     if (toDigits.length >= 10) {
