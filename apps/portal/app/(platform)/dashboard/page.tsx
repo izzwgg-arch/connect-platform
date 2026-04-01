@@ -202,7 +202,7 @@ export default function DashboardPage() {
   // KPI totals: default ConnectCdr (DB) — no VitalPBX REST fan-out.
   // mode=canonical applies direction-correction rules at query time.
   const kpiParam = (() => {
-    const params = new URLSearchParams({ mode: kpiMode });
+    const params = new URLSearchParams({ source: "connect", mode: kpiMode });
     if (!isGlobal && tenantId) params.set("tenantId", tenantId);
     return `?${params.toString()}`;
   })();
