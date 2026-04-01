@@ -8927,6 +8927,8 @@ let _pbxLastEndSec = 0; // Unix sec of the last data point in cache
 let _pbxActiveTenantIds: string[] = []; // Tenants with CDRs
 let _pbxIdToName = new Map<string, string>();
 let _pbxLinks: Array<{ pbxTenantId: string | null; tenantId: string }> = [];
+let _pbxGlobalFailCount = 0;
+let _pbxGlobalNextAllowedAt = 0;
 
 function classifyRow(r: any): { direction: string; isIncoming: boolean; isMissed: boolean } {
   const ct = Number(r?.calltype ?? r?.callType ?? 0);
@@ -9280,6 +9282,8 @@ function startPbxKpiBackgroundRefresh() {
 
   const doRefresh = async () => {
     if (_pbxRefreshRunning) return;
+    // Failure backoff: if global source is unavailable, avoid hammering PBX every 30s.
+    if (Date.now() < _pbxGlobalNextAllowedAt) return;
     _pbxRefreshRunning = true;
     const t0 = Date.now();
     _pbxTickCount++;
@@ -9294,6 +9298,8 @@ function startPbxKpiBackgroundRefresh() {
       if (dashStats && (dashStats.incoming > 0 || dashStats.outgoing > 0)) {
         const now = Date.now();
         const asOf = new Date().toISOString();
+        _pbxGlobalFailCount = 0;
+        _pbxGlobalNextAllowedAt = 0;
         _pbxKpiCache.set("pbx:global", { ts: now, data: {
           incomingToday: dashStats.incoming, outgoingToday: dashStats.outgoing, internalToday: dashStats.internal,
           missedToday: 0, cdrRowsTotalAcrossTenants: dashStats.incoming + dashStats.outgoing + dashStats.internal + dashStats.transit,
@@ -9309,6 +9315,8 @@ function startPbxKpiBackgroundRefresh() {
       if (globalCdr && globalCdr.total > 0) {
         const now = Date.now();
         const asOf = new Date().toISOString();
+        _pbxGlobalFailCount = 0;
+        _pbxGlobalNextAllowedAt = 0;
         _pbxKpiCache.set("pbx:global", { ts: now, data: {
           incomingToday: globalCdr.incoming, outgoingToday: globalCdr.outgoing, internalToday: globalCdr.internal,
           missedToday: globalCdr.missed, cdrRowsTotalAcrossTenants: globalCdr.total,
@@ -9322,8 +9330,14 @@ function startPbxKpiBackgroundRefresh() {
       }
 
       // Keep last-known good PBX global cache; do NOT fall back to Connect-derived totals.
+      _pbxGlobalFailCount += 1;
+      const backoffMs = Math.min(5 * 60_000, Math.max(30_000, _pbxGlobalFailCount * 30_000));
+      _pbxGlobalNextAllowedAt = Date.now() + backoffMs;
       app.log.warn({ elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: global source unavailable, keeping last global KPI cache");
     } catch (err: any) {
+      _pbxGlobalFailCount += 1;
+      const backoffMs = Math.min(5 * 60_000, Math.max(30_000, _pbxGlobalFailCount * 30_000));
+      _pbxGlobalNextAllowedAt = Date.now() + backoffMs;
       app.log.warn({ err: err?.message, elapsedMs: Date.now() - t0 }, "pbx-kpi-bg: refresh failed");
     } finally {
       _pbxRefreshRunning = false;
