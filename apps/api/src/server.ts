@@ -7450,7 +7450,7 @@ app.get("/calls/history", async (req, reply) => {
   const [extensions, tenantRules] = await Promise.all([
     extensionCandidates.length > 0
       ? db.extension.findMany({
-        where: { extNumber: { in: extensionCandidates }, status: "ACTIVE" },
+        where: { extNumber: { in: extensionCandidates } },
         select: { extNumber: true, tenantId: true },
       })
       : Promise.resolve([]),
@@ -7476,6 +7476,50 @@ app.get("/calls/history", async (req, reply) => {
     if (d.length < 10) continue;
     const last10 = d.slice(-10);
     if (!phoneTenantByLast10.has(last10)) phoneTenantByLast10.set(last10, p.tenantId);
+  }
+  // Learn ext→tenant from recent ConnectCdr rows with real tenant IDs.
+  const learnedExtTenantByExt = new Map<string, string>();
+  if (extensionCandidates.length > 0) {
+    const extListSql = extensionCandidates.map((e) => `'${e.replace(/'/g, "''")}'`).join(", ");
+    type ExtTenantRow = { ext: string; tenantId: string; c: bigint };
+    const learnedExt = await db.$queryRawUnsafe<ExtTenantRow[]>(`
+      WITH ext_rows AS (
+        SELECT
+          "tenantId",
+          REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g') AS ext
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
+          AND "startedAt" >= NOW() - INTERVAL '90 days'
+        UNION ALL
+        SELECT
+          "tenantId",
+          REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g') AS ext
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "tenantId" NOT LIKE 'vpbx:%'
+          AND "startedAt" >= NOW() - INTERVAL '90 days'
+      ),
+      ranked AS (
+        SELECT
+          ext,
+          "tenantId",
+          COUNT(*)::bigint AS c,
+          ROW_NUMBER() OVER (PARTITION BY ext ORDER BY COUNT(*) DESC) AS rn
+        FROM ext_rows
+        WHERE LENGTH(ext) BETWEEN 2 AND 6
+          AND ext IN (${extListSql})
+        GROUP BY ext, "tenantId"
+      )
+      SELECT ext, "tenantId", c
+      FROM ranked
+      WHERE rn = 1
+    `);
+    for (const row of learnedExt) {
+      if (!learnedExtTenantByExt.has(row.ext)) {
+        learnedExtTenantByExt.set(row.ext, row.tenantId);
+      }
+    }
   }
   // Learn DID→tenant from recent ConnectCdr rows with known tenantId.
   // This helps label legacy/unassigned rows where DID inventory or explicit rules are incomplete.
@@ -7618,6 +7662,7 @@ app.get("/calls/history", async (req, reply) => {
     [
       ...rows.map((r) => r.tenantId),
       ...Array.from(extensionTenantByExt.values()),
+      ...Array.from(learnedExtTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
       ...Array.from(siblingTenantByLinkedId.values()),
@@ -7643,6 +7688,8 @@ app.get("/calls/history", async (req, reply) => {
 
     if (toExt && extensionTenantByExt.has(toExt)) return extensionTenantByExt.get(toExt)!;
     if (fromExt && extensionTenantByExt.has(fromExt)) return extensionTenantByExt.get(fromExt)!;
+    if (toExt && learnedExtTenantByExt.has(toExt)) return learnedExtTenantByExt.get(toExt)!;
+    if (fromExt && learnedExtTenantByExt.has(fromExt)) return learnedExtTenantByExt.get(fromExt)!;
     if (toDigits.length >= 10) {
       const t = phoneTenantByLast10.get(toDigits.slice(-10));
       if (t) return t;
