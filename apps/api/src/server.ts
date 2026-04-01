@@ -7482,7 +7482,7 @@ app.get("/calls/history", async (req, reply) => {
   const learnedDidTenantByLast10 = new Map<string, string>();
   if (didCandidatesLast10.length > 0) {
     const didListSql = didCandidatesLast10.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
-    type DidTenantRow = { did10: string; tenantId: string; c: bigint };
+    type DidTenantRow = { did10: string; tenantId: string; top_count: bigint; total_count: bigint };
     const learned = await db.$queryRawUnsafe<DidTenantRow[]>(`
       WITH normalized AS (
         SELECT
@@ -7499,23 +7499,36 @@ app.get("/calls/history", async (req, reply) => {
         WHERE "tenantId" IS NOT NULL
           AND "startedAt" >= NOW() - INTERVAL '30 days'
       ),
-      ranked AS (
+      per_tenant AS (
         SELECT
           did10,
           "tenantId",
-          COUNT(*)::bigint AS c,
-          ROW_NUMBER() OVER (PARTITION BY did10 ORDER BY COUNT(*) DESC) AS rn
+          COUNT(*)::bigint AS cnt
         FROM normalized
         WHERE LENGTH(did10) = 10
           AND did10 IN (${didListSql})
         GROUP BY did10, "tenantId"
+      ),
+      totals AS (
+        SELECT did10, SUM(cnt)::bigint AS total_count FROM per_tenant GROUP BY did10
+      ),
+      ranked AS (
+        SELECT
+          p.did10,
+          p."tenantId",
+          p.cnt AS top_count,
+          t.total_count,
+          ROW_NUMBER() OVER (PARTITION BY p.did10 ORDER BY p.cnt DESC) AS rn
+        FROM per_tenant p
+        JOIN totals t ON t.did10 = p.did10
       )
-      SELECT did10, "tenantId", c
+      SELECT did10, "tenantId", top_count, total_count
       FROM ranked
       WHERE rn = 1
     `);
     for (const row of learned) {
-      if (!learnedDidTenantByLast10.has(row.did10)) {
+      const ratio = Number(row.total_count) > 0 ? Number(row.top_count) / Number(row.total_count) : 0;
+      if (ratio >= 0.9 && !learnedDidTenantByLast10.has(row.did10)) {
         learnedDidTenantByLast10.set(row.did10, row.tenantId);
       }
     }
@@ -7592,7 +7605,7 @@ app.get("/calls/history", async (req, reply) => {
   if (stillUnresolvedNumbers.size > 0) {
     const numList = Array.from(stillUnresolvedNumbers);
     const numListSql = numList.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
-    type NumTenantRow = { num10: string; tenantId: string };
+    type NumTenantRow = { num10: string; tenantId: string; top_count: bigint; total_count: bigint };
     const numTenantRows = await db.$queryRawUnsafe<NumTenantRow[]>(`
       WITH nums AS (
         SELECT
@@ -7609,22 +7622,35 @@ app.get("/calls/history", async (req, reply) => {
         WHERE "tenantId" IS NOT NULL
           AND "startedAt" >= NOW() - INTERVAL '90 days'
       ),
-      ranked AS (
+      per_tenant AS (
         SELECT
           num10,
           "tenantId",
-          COUNT(*)::bigint AS c,
-          ROW_NUMBER() OVER (PARTITION BY num10 ORDER BY COUNT(*) DESC) AS rn
+          COUNT(*)::bigint AS cnt
         FROM nums
         WHERE LENGTH(num10) = 10 AND num10 IN (${numListSql})
         GROUP BY num10, "tenantId"
+      ),
+      totals AS (
+        SELECT num10, SUM(cnt)::bigint AS total_count FROM per_tenant GROUP BY num10
+      ),
+      ranked AS (
+        SELECT
+          p.num10,
+          p."tenantId",
+          p.cnt AS top_count,
+          t.total_count,
+          ROW_NUMBER() OVER (PARTITION BY p.num10 ORDER BY p.cnt DESC) AS rn
+        FROM per_tenant p
+        JOIN totals t ON t.num10 = p.num10
       )
-      SELECT num10, "tenantId"
+      SELECT num10, "tenantId", top_count, total_count
       FROM ranked
       WHERE rn = 1
     `);
     for (const row of numTenantRows) {
-      if (!numberTenantFallback.has(row.num10)) {
+      const ratio = Number(row.total_count) > 0 ? Number(row.top_count) / Number(row.total_count) : 0;
+      if (ratio >= 0.9 && !numberTenantFallback.has(row.num10)) {
         numberTenantFallback.set(row.num10, row.tenantId);
       }
     }
