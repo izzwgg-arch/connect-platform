@@ -498,20 +498,10 @@ p {
 .dash-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
 .dash-section-header .dash-section-title { margin-bottom: 0; }
 
-/* Direction mode toggle */
-.dash-kpi-mode-toggle { display: flex; gap: 2px; background: var(--dash-card-border); border-radius: 6px; padding: 2px; }
-.dash-kpi-mode-btn { font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 4px; border: none; background: transparent; color: var(--console-muted); cursor: pointer; transition: background 0.12s, color 0.12s; white-space: nowrap; }
-.dash-kpi-mode-btn.active { background: var(--dash-card); color: var(--console-text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
-.dash-kpi-mode-btn:hover:not(.active) { color: var(--console-text); }
-
-/* Mode explanation note */
-.dash-kpi-mode-note { font-size: 11px; color: var(--console-muted); margin-bottom: 10px; padding: 6px 10px; background: rgba(43, 165, 255, 0.06); border-left: 3px solid var(--console-accent); border-radius: 0 4px 4px 0; line-height: 1.5; }
-.dash-kpi-mode-note--raw { background: rgba(255, 193, 7, 0.06); border-left-color: var(--console-warning, #ffc107); }
-/* Inline callout for PBX counting model difference */
-.dash-kpi-pbx-gap-note { display: inline; color: var(--console-muted); opacity: 0.8; }
-
-/* Raw value annotation on corrected KPI cards */
-.dash-kpi-raw-note { opacity: 0.55; font-size: 10px; margin-left: 3px; }
+/* KPI source badge */
+.dash-kpi-source-badge { font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 4px; white-space: nowrap; }
+.dash-kpi-source-badge.pbx { background: rgba(76, 175, 80, 0.12); color: #4caf50; }
+.dash-kpi-source-badge.connect { background: rgba(255, 193, 7, 0.12); color: #ffc107; }
 
 /* Dashboard 2026 — KPI row */
 .dash-kpi-grid {
@@ -1576,6 +1566,107 @@ body {
 
 .chip.info {
   color: var(--console-accent);
+}
+
+.chip.neutral {
+  color: var(--console-muted);
+}
+
+/* Calls History 2026 */
+.calls-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.calls-toolbar-left,
+.calls-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.calls-count {
+  font-size: 12px;
+  color: var(--console-muted);
+}
+
+.calls-search {
+  width: 260px;
+}
+
+.calls-date {
+  width: 150px;
+}
+
+.calls-page-size {
+  min-width: 96px;
+}
+
+.calls-history-wrap {
+  overflow: auto;
+  border: 1px solid var(--console-border);
+  border-radius: 10px;
+}
+
+.calls-history-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.calls-history-table thead th {
+  text-align: left;
+  padding: 10px 9px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--console-muted);
+  border-bottom: 1px solid var(--console-border);
+  background: color-mix(in srgb, var(--console-panel-soft) 70%, transparent);
+}
+
+.calls-history-table tbody td {
+  padding: 10px 9px;
+  border-bottom: 1px solid var(--console-border);
+}
+
+.calls-history-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--console-panel-soft) 45%, transparent);
+}
+
+.calls-history-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.calls-history-row:hover {
+  background: color-mix(in srgb, var(--console-accent) 7%, transparent) !important;
+}
+
+.calls-col-icon {
+  width: 32px;
+}
+
+.calls-dir-icon {
+  display: inline-block;
+}
+
+.calls-dir-icon.incoming { color: var(--console-success); }
+.calls-dir-icon.outgoing { color: var(--console-accent); }
+.calls-dir-icon.internal { color: #8f6bff; }
+
+.calls-pagination {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .audio-row {

@@ -7326,6 +7326,155 @@ app.get("/voice/pbx/cdr-history", async (req, reply) => {
   });
 });
 
+function prettifyTenantSlugFromId(tenantId: string): string {
+  if (!tenantId.startsWith("vpbx:")) return tenantId;
+  const slug = tenantId.slice(5).trim();
+  if (!slug) return "System";
+  return slug
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function mapDispositionToHistoryStatus(disposition: string | null | undefined): "answered" | "missed" | "canceled" | "failed" {
+  const d = String(disposition || "").toLowerCase().trim();
+  if (d === "answered") return "answered";
+  if (d === "canceled") return "canceled";
+  if (d === "failed") return "failed";
+  return "missed";
+}
+
+app.get("/calls/history", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const query = z.object({
+    tenantId: z.string().optional(),
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+    direction: z.enum(["all", "incoming", "outgoing", "internal"]).optional().default("all"),
+    status: z.enum(["all", "answered", "missed", "canceled", "failed"]).optional().default("all"),
+    search: z.string().optional(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    pageSize: z.coerce.number().int().min(10).max(200).optional().default(100),
+  }).parse(req.query || {});
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const scopeTenantId = isSuperAdmin
+    ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
+    : user.tenantId ?? null;
+
+  const { dayStartUtc, dayEndUtc } = computePbxLocalDayRangeUtc();
+  const startAt = query.startDate ? new Date(query.startDate) : dayStartUtc;
+  const endAt = query.endDate ? new Date(query.endDate) : dayEndUtc;
+  if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime()) || startAt >= endAt) {
+    return reply.status(400).send({ error: "invalid_date_window" });
+  }
+
+  const where: any = {
+    startedAt: { gte: startAt, lt: endAt },
+    ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
+  };
+
+  if (query.direction !== "all") where.direction = query.direction;
+
+  if (query.status !== "all") {
+    if (query.status === "answered") where.disposition = "answered";
+    else if (query.status === "canceled") where.disposition = "canceled";
+    else if (query.status === "failed") where.disposition = "failed";
+    else if (query.status === "missed") where.disposition = { in: ["missed", "busy", "no answer", "no_answer"] };
+  }
+
+  const normalizedSearch = String(query.search || "").trim();
+  if (normalizedSearch) {
+    where.OR = [
+      { fromNumber: { contains: normalizedSearch, mode: "insensitive" } },
+      { toNumber: { contains: normalizedSearch, mode: "insensitive" } },
+    ];
+  }
+
+  const skip = (query.page - 1) * query.pageSize;
+  const [total, rows, incoming, outgoing, internal] = await Promise.all([
+    db.connectCdr.count({ where }),
+    db.connectCdr.findMany({
+      where,
+      orderBy: { startedAt: "desc" },
+      skip,
+      take: query.pageSize,
+      select: {
+        id: true,
+        linkedId: true,
+        fromNumber: true,
+        toNumber: true,
+        direction: true,
+        disposition: true,
+        durationSec: true,
+        startedAt: true,
+        tenantId: true,
+      },
+    }),
+    db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
+    db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
+    db.connectCdr.count({ where: { ...where, direction: "internal" } }),
+  ]);
+
+  const tenantIds = Array.from(
+    new Set(
+      rows
+        .map((r) => r.tenantId)
+        .filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
+    )
+  );
+  const tenants = tenantIds.length > 0
+    ? await db.tenant.findMany({
+      where: { id: { in: tenantIds } },
+      select: { id: true, name: true },
+    })
+    : [];
+  const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+
+  const items = rows.map((r) => {
+    const tenantName = !r.tenantId
+      ? "Unassigned"
+      : (tenantNameById.get(r.tenantId) || prettifyTenantSlugFromId(r.tenantId));
+    return {
+      callId: r.linkedId || r.id,
+      rowId: r.id,
+      linkedId: r.linkedId,
+      fromNumber: r.fromNumber || "",
+      toNumber: r.toNumber || "",
+      direction: (["incoming", "outgoing", "internal"].includes(r.direction) ? r.direction : "incoming") as "incoming" | "outgoing" | "internal",
+      status: mapDispositionToHistoryStatus(r.disposition),
+      disposition: r.disposition,
+      durationSec: r.durationSec || 0,
+      startedAt: r.startedAt.toISOString(),
+      tenantId: r.tenantId,
+      tenantName,
+    };
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+  return reply.send({
+    items,
+    total,
+    showing: items.length,
+    page: query.page,
+    pageSize: query.pageSize,
+    totalPages,
+    window: {
+      startIso: startAt.toISOString(),
+      endIso: endAt.toISOString(),
+      timezone: process.env.PBX_TIMEZONE?.trim() || "UTC",
+    },
+    scope: scopeTenantId ? "tenant" : "global",
+    totalsByDirection: {
+      incoming,
+      outgoing,
+      internal,
+      total,
+    },
+  });
+});
+
 app.get("/billing/sola/config", async (req, reply) => {
   const admin = await requirePermission(req, reply, canManageBilling);
   if (!admin) return;
