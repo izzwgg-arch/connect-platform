@@ -7477,6 +7477,49 @@ app.get("/calls/history", async (req, reply) => {
     const last10 = d.slice(-10);
     if (!phoneTenantByLast10.has(last10)) phoneTenantByLast10.set(last10, p.tenantId);
   }
+  // Learn DID→tenant from recent ConnectCdr rows with known tenantId.
+  // This helps label legacy/unassigned rows where DID inventory or explicit rules are incomplete.
+  const learnedDidTenantByLast10 = new Map<string, string>();
+  if (didCandidatesLast10.length > 0) {
+    const didListSql = didCandidatesLast10.map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
+    type DidTenantRow = { did10: string; tenantId: string; c: bigint };
+    const learned = await db.$queryRawUnsafe<DidTenantRow[]>(`
+      WITH normalized AS (
+        SELECT
+          "tenantId",
+          RIGHT(REGEXP_REPLACE(COALESCE("toNumber", ''), '[^0-9]', '', 'g'), 10) AS did10
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "startedAt" >= NOW() - INTERVAL '30 days'
+        UNION ALL
+        SELECT
+          "tenantId",
+          RIGHT(REGEXP_REPLACE(COALESCE("fromNumber", ''), '[^0-9]', '', 'g'), 10) AS did10
+        FROM "ConnectCdr"
+        WHERE "tenantId" IS NOT NULL
+          AND "startedAt" >= NOW() - INTERVAL '30 days'
+      ),
+      ranked AS (
+        SELECT
+          did10,
+          "tenantId",
+          COUNT(*)::bigint AS c,
+          ROW_NUMBER() OVER (PARTITION BY did10 ORDER BY COUNT(*) DESC) AS rn
+        FROM normalized
+        WHERE LENGTH(did10) = 10
+          AND did10 IN (${didListSql})
+        GROUP BY did10, "tenantId"
+      )
+      SELECT did10, "tenantId", c
+      FROM ranked
+      WHERE rn = 1
+    `);
+    for (const row of learned) {
+      if (!learnedDidTenantByLast10.has(row.did10)) {
+        learnedDidTenantByLast10.set(row.did10, row.tenantId);
+      }
+    }
+  }
 
   const exactDidRule = new Map<string, string>();
   const exactFromDidRule = new Map<string, string>();
@@ -7493,6 +7536,7 @@ app.get("/calls/history", async (req, reply) => {
       ...rows.map((r) => r.tenantId),
       ...Array.from(extensionTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
+      ...Array.from(learnedDidTenantByLast10.values()),
     ].filter((v): v is string => Boolean(v) && !String(v).startsWith("vpbx:"))
   ));
   const tenants = tenantIds.length > 0
@@ -7518,6 +7562,14 @@ app.get("/calls/history", async (req, reply) => {
     }
     if (fromDigits.length >= 10) {
       const t = phoneTenantByLast10.get(fromDigits.slice(-10));
+      if (t) return t;
+    }
+    if (toDigits.length >= 10) {
+      const t = learnedDidTenantByLast10.get(toDigits.slice(-10));
+      if (t) return t;
+    }
+    if (fromDigits.length >= 10) {
+      const t = learnedDidTenantByLast10.get(fromDigits.slice(-10));
       if (t) return t;
     }
     if (toDigits && exactDidRule.has(toDigits)) return exactDidRule.get(toDigits)!;
