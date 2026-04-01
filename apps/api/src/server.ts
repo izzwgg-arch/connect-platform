@@ -7424,6 +7424,7 @@ app.get("/calls/history", async (req, reply) => {
         linkedId: true,
         fromNumber: true,
         toNumber: true,
+        dcontext: true,
         direction: true,
         disposition: true,
         durationSec: true,
@@ -7676,10 +7677,37 @@ app.get("/calls/history", async (req, reply) => {
     })
     : [];
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+  const allTenants = await db.tenant.findMany({ select: { id: true, name: true } });
+  const normalizeTenantSlug = (value: string) =>
+    String(value || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "");
+  const tenantIdByNormalizedSlug = new Map<string, string>();
+  for (const t of allTenants) {
+    const key = normalizeTenantSlug(t.name);
+    if (key && !tenantIdByNormalizedSlug.has(key)) tenantIdByNormalizedSlug.set(key, t.id);
+  }
+  const mapVpbxLikeTenantToConnect = (tenantLike: string | null | undefined): string | null => {
+    const raw = String(tenantLike || "").trim();
+    if (!raw) return null;
+    const slug = raw.startsWith("vpbx:") ? raw.slice(5) : raw;
+    const key = normalizeTenantSlug(slug.replace(/[_-]+/g, " "));
+    return key ? (tenantIdByNormalizedSlug.get(key) || null) : null;
+  };
+  const dcontextToTenant = (dcontext: string | null | undefined): string | null => {
+    const dc = String(dcontext || "").toLowerCase();
+    if (!dc) return null;
+    const m = dc.match(/ext-local-([a-z0-9_-]+)/i);
+    if (!m?.[1]) return null;
+    return mapVpbxLikeTenantToConnect(m[1]);
+  };
 
-  function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null }): string | null {
+  function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null; dcontext?: string | null }): string | null {
     const hasRealTenantId = row.tenantId && !row.tenantId.startsWith("vpbx:");
     if (hasRealTenantId) return row.tenantId;
+    const mappedFromVpbx = mapVpbxLikeTenantToConnect(row.tenantId);
+    if (mappedFromVpbx) return mappedFromVpbx;
 
     const fromDigits = digitsOnly(row.fromNumber);
     const toDigits = digitsOnly(row.toNumber);
@@ -7723,6 +7751,9 @@ app.get("/calls/history", async (req, reply) => {
     }
     // Sibling ConnectCdr row with same linkedId that has a real tenant
     if (row.linkedId && siblingTenantByLinkedId.has(row.linkedId)) return siblingTenantByLinkedId.get(row.linkedId)!;
+    // Fall back to context-derived tenant slug (e.g. ext-local-tenant_slug)
+    const mappedFromContext = dcontextToTenant(row.dcontext);
+    if (mappedFromContext) return mappedFromContext;
     // Fall back to the vpbx: slug if nothing better was found
     if (row.tenantId) return row.tenantId;
     return null;
