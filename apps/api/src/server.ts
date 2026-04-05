@@ -10475,6 +10475,95 @@ app.post("/admin/cdr/fix-directions", async (req, reply) => {
   });
 });
 
+/** Synced VitalPBX inbound DIDs from PbxTenantInboundDid (no live PBX calls). */
+app.get("/dashboard/tenant-phone-numbers", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) {
+    return reply.send({
+      scope: isSuperAdmin && !query.tenantId?.trim() ? "global" : "tenant",
+      pbxInstanceId: null,
+      connectTenantId: null,
+      connectTenantName: null,
+      phoneNumbers: [] as unknown[],
+      message: "No enabled PBX instance — inbound DIDs are not synced.",
+    });
+  }
+
+  // Super-admin, global dashboard: summary only (no tenantId query).
+  if (isSuperAdmin && !query.tenantId?.trim()) {
+    const [grouped, unlinkedCount, totalActive] = await Promise.all([
+      db.pbxTenantInboundDid.groupBy({
+        by: ["connectTenantId"],
+        where: { pbxInstanceId: instance.id, active: true, connectTenantId: { not: null } },
+        _count: { _all: true },
+      }),
+      db.pbxTenantInboundDid.count({
+        where: { pbxInstanceId: instance.id, active: true, connectTenantId: null },
+      }),
+      db.pbxTenantInboundDid.count({ where: { pbxInstanceId: instance.id, active: true } }),
+    ]);
+    const ids = grouped.map((g) => g.connectTenantId).filter((id): id is string => !!id);
+    const tenants =
+      ids.length > 0 ? await db.tenant.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : [];
+    const nameById = new Map(tenants.map((t) => [t.id, t.name]));
+    const tenantsWithNumbers = grouped
+      .filter((g) => g.connectTenantId)
+      .map((g) => ({
+        connectTenantId: g.connectTenantId!,
+        connectTenantName: nameById.get(g.connectTenantId!) ?? "Unknown tenant",
+        activeNumberCount: g._count._all,
+      }))
+      .sort((a, b) => a.connectTenantName.localeCompare(b.connectTenantName));
+
+    return reply.send({
+      scope: "global" as const,
+      pbxInstanceId: instance.id,
+      message:
+        "Select tenant scope in the header and pick a tenant to see all phone numbers synced for that workspace. Numbers come from the last PBX tenant refresh (admin), not live API calls.",
+      totalActiveNumbers: totalActive,
+      unlinkedActiveNumberCount: unlinkedCount,
+      tenantsWithNumbers,
+    });
+  }
+
+  const targetTenantId = isSuperAdmin ? query.tenantId!.trim() : user.tenantId;
+  if (!targetTenantId) {
+    return reply.status(400).send({ error: "tenant_required", message: "tenantId is required for this user." });
+  }
+  if (!isSuperAdmin && targetTenantId !== user.tenantId) {
+    return reply.status(403).send({ error: "forbidden" });
+  }
+
+  const [tenantRow, rows] = await Promise.all([
+    db.tenant.findUnique({ where: { id: targetTenantId }, select: { id: true, name: true } }),
+    db.pbxTenantInboundDid.findMany({
+      where: { pbxInstanceId: instance.id, connectTenantId: targetTenantId, active: true },
+      orderBy: [{ e164: "asc" }],
+    }),
+  ]);
+
+  return reply.send({
+    scope: "tenant" as const,
+    pbxInstanceId: instance.id,
+    connectTenantId: targetTenantId,
+    connectTenantName: tenantRow?.name ?? null,
+    phoneNumbers: rows.map((r) => ({
+      e164: r.e164,
+      rawNumber: r.rawNumber,
+      pbxTenantId: r.vitalTenantId,
+      pbxTenantCode: r.pbxTenantCode,
+      pbxTenantSlug: r.pbxTenantSlug,
+      active: r.active,
+    })),
+  });
+});
+
 app.get("/dashboard/call-traffic", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;

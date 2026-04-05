@@ -576,6 +576,48 @@ p {
 }
 .dash-live-panel h3 { margin: 0 0 16px 0; font-size: 15px; font-weight: 600; }
 .dash-section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--console-text); }
+
+/* Assigned phone numbers (PBX DID sync) */
+.tenant-phone-panel.panel { padding: 16px 18px; }
+.tenant-phone-summary-table { font-size: 13px; }
+.tenant-phone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tenant-phone-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--dash-card);
+  border: 1px solid var(--dash-card-border);
+}
+.tenant-phone-number {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tenant-phone-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+@media (max-width: 520px) {
+  .tenant-phone-pill-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 /* System summary cards */
 .dash-summary-grid {
   display: grid;

@@ -144,11 +144,46 @@ function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: str
   );
 }
 
+function formatDidDisplay(e164: string): string {
+  const d = String(e164 || "").replace(/\D/g, "");
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  if (d.length === 11 && d.startsWith("1")) return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  return e164 || "—";
+}
+
+type DashboardTenantPhoneGlobal = {
+  scope: "global";
+  pbxInstanceId: string | null;
+  message?: string;
+  totalActiveNumbers?: number;
+  unlinkedActiveNumberCount?: number;
+  tenantsWithNumbers?: Array<{ connectTenantId: string; connectTenantName: string; activeNumberCount: number }>;
+};
+
+type DashboardTenantPhoneScoped = {
+  scope: "tenant";
+  pbxInstanceId: string | null;
+  connectTenantId: string;
+  connectTenantName: string | null;
+  phoneNumbers: Array<{
+    e164: string;
+    rawNumber: string | null;
+    pbxTenantId: string;
+    pbxTenantCode: string | null;
+    pbxTenantSlug: string | null;
+    active: boolean;
+  }>;
+  message?: string;
+};
+
+type DashboardTenantPhoneResponse = DashboardTenantPhoneGlobal | DashboardTenantPhoneScoped;
+
 export default function DashboardPage() {
-  const { adminScope } = useAppContext();
+  const { adminScope, tenantId: contextTenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
   const telephony = useTelephony();
   const tenantId = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
+  const scopedTenantId = contextTenantId || tenantId;
   const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
 
   // KPI display mode: "canonical" applies direction-correction rules at query time (no DB writes).
@@ -224,6 +259,13 @@ export default function DashboardPage() {
     () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
     [adminScope, trafficTick]
   );
+
+  const tenantPhoneState = useAsyncResource<DashboardTenantPhoneResponse>(() => {
+    const path = isGlobal
+      ? "/dashboard/tenant-phone-numbers"
+      : `/dashboard/tenant-phone-numbers?tenantId=${encodeURIComponent(scopedTenantId || "")}`;
+    return apiGet<DashboardTenantPhoneResponse>(path);
+  }, [isGlobal, scopedTenantId]);
 
   const data        = state.status === "success" ? state.data : null;
   const activity    = data?.activity || [];
@@ -394,6 +436,86 @@ export default function DashboardPage() {
               </article>
             ) : null}
           </div>
+        </section>
+
+        {/* Synced PBX inbound DIDs (PbxTenantInboundDid) — no live PBX polling */}
+        <section className="dash-section" aria-label="Assigned phone numbers">
+          <h3 className="dash-section-title">Assigned phone numbers</h3>
+          <p className="text-sm opacity-70 mb-3 max-w-2xl">
+            Numbers assigned in VitalPBX to each tenant, stored in Connect when an admin refreshes PBX tenants. Switch to{" "}
+            <strong>tenant</strong> scope in the header to see the full list for the selected workspace.
+          </p>
+          {tenantPhoneState.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
+          {tenantPhoneState.status === "error" ? (
+            <ErrorState message={tenantPhoneState.error || "Unable to load assigned phone numbers."} />
+          ) : null}
+          {tenantPhoneState.status === "success" && tenantPhoneState.data.scope === "global" ? (
+            <div className="panel tenant-phone-panel">
+              <p className="text-sm mb-3">{tenantPhoneState.data.message}</p>
+              {typeof tenantPhoneState.data.totalActiveNumbers === "number" ? (
+                <p className="text-sm opacity-80 mb-2">
+                  <strong>{tenantPhoneState.data.totalActiveNumbers}</strong> active number
+                  {tenantPhoneState.data.totalActiveNumbers === 1 ? "" : "s"} synced across all tenants
+                  {typeof tenantPhoneState.data.unlinkedActiveNumberCount === "number" &&
+                  tenantPhoneState.data.unlinkedActiveNumberCount > 0
+                    ? ` (${tenantPhoneState.data.unlinkedActiveNumberCount} not linked to a Connect tenant yet)`
+                    : ""}
+                  .
+                </p>
+              ) : null}
+              {tenantPhoneState.data.tenantsWithNumbers && tenantPhoneState.data.tenantsWithNumbers.length > 0 ? (
+                <div className="table-wrap mt-2">
+                  <table className="data-table tenant-phone-summary-table">
+                    <thead>
+                      <tr>
+                        <th>Tenant</th>
+                        <th className="text-right">Synced numbers</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tenantPhoneState.data.tenantsWithNumbers.map((row) => (
+                        <tr key={row.connectTenantId}>
+                          <td>{row.connectTenantName}</td>
+                          <td className="text-right mono">{row.activeNumberCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm opacity-70">No tenant-linked numbers in the database yet. Run a PBX tenant refresh from admin.</p>
+              )}
+            </div>
+          ) : null}
+          {tenantPhoneState.status === "success" && tenantPhoneState.data.scope === "tenant" ? (
+            <div className="panel tenant-phone-panel">
+              {tenantPhoneState.data.message ? <p className="text-sm mb-3">{tenantPhoneState.data.message}</p> : null}
+              <p className="text-sm opacity-80 mb-3">
+                Workspace: <strong>{tenantPhoneState.data.connectTenantName || tenantPhoneState.data.connectTenantId}</strong>
+              </p>
+              {tenantPhoneState.data.phoneNumbers.length === 0 ? (
+                <EmptyState
+                  title="No phone numbers synced"
+                  message="No phone numbers are currently synced for this tenant. Use Admin → PBX tenant refresh (or sync tenant DIDs) after VitalPBX inbound numbers are configured."
+                />
+              ) : (
+                <ul className="tenant-phone-list">
+                  {tenantPhoneState.data.phoneNumbers.map((p) => (
+                    <li key={`${p.e164}-${p.pbxTenantId}`} className="tenant-phone-pill-row">
+                      <div className="tenant-phone-number">{formatDidDisplay(p.e164)}</div>
+                      <div className="tenant-phone-meta">
+                        {p.pbxTenantCode ? (
+                          <span className="chip info">{p.pbxTenantCode}</span>
+                        ) : null}
+                        {p.pbxTenantSlug ? <span className="chip neutral">{p.pbxTenantSlug}</span> : null}
+                        <span className={`chip ${p.active ? "success" : "warning"}`}>{p.active ? "Active" : "Inactive"}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
         </section>
 
         {/* SECTION B — LIVE CALLS PANEL */}
