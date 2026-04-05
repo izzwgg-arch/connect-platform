@@ -74,6 +74,43 @@ else
   run_heavy "deploy:${REQ_TAG}:compose-restart" docker compose -f docker-compose.app.yml restart api portal worker realtime
 fi
 
+# nginx returns 502 if clients hit during tsx/next startup — wait until localhost accepts traffic before smoke.
+wait_http() {
+  local url="$1"
+  local label="$2"
+  local attempts="${3:-45}"
+  local delay="${4:-2}"
+  local n=0
+  while [[ "$n" -lt "$attempts" ]]; do
+    if curl -sfS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
+      log "${label} accepting HTTP (${n}s after compose)"
+      return 0
+    fi
+    n=$((n + 1))
+    sleep "$delay"
+  done
+  fail "${label} did not become ready (${attempts} attempts, ${url})"
+}
+
+wait_http "http://127.0.0.1:3001/health" "api"
+# Next may reset a few early connections; retry until /login returns 2xx/3xx.
+wait_portal() {
+  local attempts="${1:-60}"
+  local n=0
+  while [[ "$n" -lt "$attempts" ]]; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 25 \
+      -H 'Host: app.connectcomunications.com' 'http://127.0.0.1:3000/login' 2>/dev/null || echo 000)"
+    if [[ "$code" =~ ^(200|301|302|303|307|308)$ ]]; then
+      log "portal accepting HTTP (${code}, ${n}s after compose)"
+      return 0
+    fi
+    n=$((n + 1))
+    sleep 2
+  done
+  fail "portal did not become ready (${attempts} attempts, http://127.0.0.1:3000/login)"
+}
+wait_portal
+
 log "check migrations"
 ./scripts/check-migrations.sh
 
