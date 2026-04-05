@@ -102,6 +102,7 @@ export const VITALPBX_ENDPOINTS: VitalPbxEndpointDefinition[] = [
   { key: "tenants.delete", folder: "Tenants", method: "DELETE", path: "/api/v2/tenants/:tenantId", capability: "tenants.crud" },
   { key: "tenants.changeState", folder: "Tenants", method: "PATCH", path: "/api/v2/tenants/:tenantId/:state", capability: "tenants.crud", notes: "state: enable|disable" },
   { key: "tenants.applyChanges", folder: "Tenants", method: "PUT", path: "/api/v2/tenants/:tenantId/apply_changes", capability: "tenants.crud" },
+  { key: "tenants.listInboundNumbers", folder: "Tenants", method: "GET", path: "/api/v2/tenants/:tenantId/inbound_numbers", capability: "tenants.crud" },
   { key: "tenants.addInboundNumbers", folder: "Tenants", method: "PATCH", path: "/api/v2/tenants/:tenantId/inbound_numbers", capability: "tenants.crud" },
   { key: "tenants.removeInboundNumbers", folder: "Tenants", method: "DELETE", path: "/api/v2/tenants/:tenantId/inbound_numbers", capability: "tenants.crud" },
 

@@ -9,12 +9,11 @@ export function deriveTenantCode(vitalTenantId: string, tenantSlug: string): str
   return id ? `T${id}` : slug.toUpperCase();
 }
 
-export async function syncPbxTenantDirectory(
+export async function syncPbxTenantDirectoryFromRows(
   db: PrismaClient,
   pbxInstanceId: string,
-  client: VitalPbxClient,
+  tenants: unknown[],
 ): Promise<{ upserted: number }> {
-  const tenants = await client.listTenants();
   let upserted = 0;
   for (const t of tenants) {
     const vitalTenantId = String((t as { tenant_id?: unknown }).tenant_id ?? (t as { id?: unknown }).id ?? "").trim();
@@ -44,4 +43,13 @@ export async function syncPbxTenantDirectory(
     upserted++;
   }
   return { upserted };
+}
+
+export async function syncPbxTenantDirectory(
+  db: PrismaClient,
+  pbxInstanceId: string,
+  client: VitalPbxClient,
+): Promise<{ upserted: number }> {
+  const tenants = await client.listTenants();
+  return syncPbxTenantDirectoryFromRows(db, pbxInstanceId, tenants);
 }

@@ -35,7 +35,8 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
-import { syncPbxTenantDirectory } from "./pbxTenantDirectorySync";
+import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
+import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
 
 const MAX_DAILY_LIMIT = 10000;
@@ -6998,10 +6999,58 @@ app.get("/admin/pbx/tenants", async (req, reply) => {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
   const tenants = await client.listTenants();
-  await syncPbxTenantDirectory(db, instance.id, client).catch((e: any) => {
+  let directoryUpserted = 0;
+  try {
+    const d = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+    directoryUpserted = d.upserted;
+  } catch (e: any) {
     app.log.warn({ err: e?.message }, "admin/pbx/tenants: directory sync failed");
+  }
+  let inboundDidSync = { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] };
+  try {
+    inboundDidSync = await syncPbxTenantInboundDids(db, instance.id, client, tenants);
+    if (inboundDidSync.errors.length) {
+      app.log.warn({ count: inboundDidSync.errors.length, sample: inboundDidSync.errors.slice(0, 3) }, "admin/pbx/tenants: some inbound DID fetches failed");
+    }
+  } catch (e: any) {
+    app.log.warn({ err: e?.message }, "admin/pbx/tenants: inbound DID sync failed");
+  }
+  return { instanceId: instance.id, tenants, directoryUpserted, inboundDidSync };
+});
+
+/** Explicit backfill: list tenants once, refresh directory + inbound DIDs (same PBX call pattern as GET /admin/pbx/tenants). */
+app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const instance = await db.pbxInstance.findUnique({ where: { id } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const tenants = await client.listTenants();
+  const { upserted: directoryUpserted } = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+  const inboundDidSync = await syncPbxTenantInboundDids(db, instance.id, client, tenants);
+  return { ok: true, instanceId: instance.id, directoryUpserted, inboundDidSync };
+});
+
+/** Read persisted PBX tenant ↔ inbound DID rows (for verification / future UI). */
+app.get("/admin/pbx/tenant-inbound-dids", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const query = z.object({ instanceId: z.string().optional(), vitalTenantId: z.string().optional(), activeOnly: z.enum(["0", "1"]).optional() }).parse(req.query || {});
+  const instance = query.instanceId
+    ? await db.pbxInstance.findUnique({ where: { id: query.instanceId } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const where: Record<string, unknown> = { pbxInstanceId: instance.id };
+  if (query.vitalTenantId?.trim()) where.vitalTenantId = query.vitalTenantId.trim();
+  if (query.activeOnly === "1") where.active = true;
+  const rows = await db.pbxTenantInboundDid.findMany({
+    where: where as any,
+    orderBy: [{ vitalTenantId: "asc" }, { e164: "asc" }],
+    take: 2000,
   });
-  return { instanceId: instance.id, tenants };
+  return { instanceId: instance.id, count: rows.length, rows };
 });
 
 app.post("/admin/pbx/tenants", async (req, reply) => {

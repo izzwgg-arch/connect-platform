@@ -43,6 +43,26 @@ function unwrapData<T = any>(payload: any): T {
   return payload as T;
 }
 
+/** Normalize VitalPBX list payloads (envelope or bare array, common keys). */
+function coerceVitalArray(payload: unknown): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  const o = payload as Record<string, unknown>;
+  if (Array.isArray(o.data)) return o.data as any[];
+  if (o.data && typeof o.data === "object" && !Array.isArray(o.data)) {
+    const inner = o.data as Record<string, unknown>;
+    for (const k of ["result", "rows", "items", "inbound_numbers", "inboundNumbers", "numbers"]) {
+      const v = inner[k];
+      if (Array.isArray(v)) return v as any[];
+    }
+  }
+  for (const k of ["result", "rows", "items", "inbound_numbers", "inboundNumbers", "numbers"]) {
+    const v = o[k];
+    if (Array.isArray(v)) return v as any[];
+  }
+  return [];
+}
+
 /** Start and end of "today" in the given IANA timezone. End is min(now, end of today in zone). */
 function getTodayBoundsInTimezone(tz: string): { start: Date; end: Date } {
   const now = new Date();
@@ -313,6 +333,35 @@ export class VitalPbxClient {
   }
   async getTenant(id: string): Promise<any> {
     return unwrapData(await this.callEndpoint<any>("tenants.get", { pathParams: { tenantId: id } }));
+  }
+
+  /** Inbound DIDs for a VitalPBX tenant. Uses GET /api/v2/tenants/:id/inbound_numbers; falls back to fields on tenants.get if missing. */
+  async listTenantInboundNumbers(tenantId: string): Promise<any[]> {
+    const id = String(tenantId || "").trim();
+    if (!id) return [];
+    try {
+      const out = await this.callEndpoint<any>("tenants.listInboundNumbers", { pathParams: { tenantId: id } });
+      return coerceVitalArray(out);
+    } catch (err: unknown) {
+      const e = err as { httpStatus?: number; details?: { status?: number } };
+      const st = e?.httpStatus ?? e?.details?.status;
+      if (st === 404 || st === 405) {
+        try {
+          const t = await this.getTenant(id);
+          if (t && typeof t === "object") {
+            const o = t as Record<string, unknown>;
+            for (const k of ["inbound_numbers", "inboundNumbers", "numbers"]) {
+              const v = o[k];
+              if (Array.isArray(v)) return v;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        return [];
+      }
+      throw err;
+    }
   }
   async createTenant(input: Record<string, unknown>): Promise<any> {
     return unwrapData(await this.callEndpoint<any>("tenants.create", { body: input }));
