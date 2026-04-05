@@ -26,6 +26,7 @@
     "bullmq": "^5.58.0",
     "fastify": "^5.6.0",
     "ioredis": "^5.8.0",
+    "mysql2": "^3.14.0",
     "zod": "^3.24.1",
     "@connect/security": "workspace:*"
   },

@@ -1,13 +1,14 @@
 // TenantResolver: maps call/channel metadata to a platform tenantId (Connect UUID or vpbx:slug).
 //
 // Priority (highest first):
-//   1. PbxTenantMapCache — Vital id / T8 / dialplan index → Connect tenant when linked
-//   2. Explicit channel-variable override (future)
-//   3. PJSIP endpoint @domain format
-//   4. Context-based configured prefix map
-//   5. VitalPBX context slug → vpbx:{slug}
-//   6. AccountCode → vpbx:{code}
-//   7. Extension prefix map
+//   1. PbxTenantMapCache — Ombutel-synced inbound DID → tenant (dialed / callee number, then caller)
+//   2. PbxTenantMapCache — Vital id / T8 / dialplan index → Connect tenant when linked
+//   3. Explicit channel-variable override (future)
+//   4. PJSIP endpoint @domain format
+//   5. Context-based configured prefix map
+//   6. VitalPBX context slug → vpbx:{slug}
+//   7. AccountCode → vpbx:{code}
+//   8. Extension prefix map
 
 import {
   extractPbxTenantHintsFromChannel,
@@ -47,12 +48,23 @@ export class TenantResolver {
     channelVar?: string;
     dcontext?: string;
     accountCode?: string;
+    /** Dialed party (e.g. callee) — matched against Ombutel inbound DID map first. */
+    toNumber?: string;
+    /** Caller party — second-chance DID match. */
+    fromNumber?: string;
   }): TenantResolution {
     const hints = mergePbxTenantHints(
       params.context ? extractPbxTenantHintsFromContext(params.context) : {},
       params.dcontext ? extractPbxTenantHintsFromContext(params.dcontext) : {},
       params.channel ? extractPbxTenantHintsFromChannel(params.channel) : {},
     );
+
+    if (this.mapCache) {
+      const byTo = this.mapCache.resolveInboundDidTenant(params.toNumber);
+      if (byTo && (byTo.tenantId || byTo.pbxVitalTenantId)) return byTo;
+      const byFrom = this.mapCache.resolveInboundDidTenant(params.fromNumber);
+      if (byFrom && (byFrom.tenantId || byFrom.pbxVitalTenantId)) return byFrom;
+    }
 
     if (this.mapCache) {
       const connectId = this.mapCache.resolveConnectTenant({

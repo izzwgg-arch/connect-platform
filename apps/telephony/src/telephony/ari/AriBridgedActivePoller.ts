@@ -21,11 +21,14 @@ function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[], resolver?: Te
       b.dialplanExten ?? "",
       callerRaw.replace(/\D/g, "") || callerRaw,
     );
+    const calleeRaw = b.callee === "—" ? "" : b.callee;
     const tres =
       resolver?.resolveDetails({
         context: b.dialplanContext ?? "",
         exten: b.dialplanExten ?? "",
         callerIdNum: callerRaw.replace(/\D/g, "") || callerRaw,
+        toNumber: calleeRaw.replace(/\D/g, "") || calleeRaw || undefined,
+        fromNumber: callerRaw.replace(/\D/g, "") || callerRaw || undefined,
       }) ?? null;
     const metaSource = b.sourceKind === "bridge" ? "ari_bridge" : "ari_orphan_leg";
     return {

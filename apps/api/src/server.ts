@@ -7008,7 +7008,7 @@ app.get("/admin/pbx/tenants", async (req, reply) => {
   }
   let inboundDidSync = { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] };
   try {
-    inboundDidSync = await syncPbxTenantInboundDids(db, instance.id, client, tenants);
+    inboundDidSync = await syncPbxTenantInboundDids(db, instance.id);
     if (inboundDidSync.errors.length) {
       app.log.warn({ count: inboundDidSync.errors.length, sample: inboundDidSync.errors.slice(0, 3) }, "admin/pbx/tenants: some inbound DID fetches failed");
     }
@@ -7029,7 +7029,7 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
   const tenants = await client.listTenants();
   const { upserted: directoryUpserted } = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
-  const inboundDidSync = await syncPbxTenantInboundDids(db, instance.id, client, tenants);
+  const inboundDidSync = await syncPbxTenantInboundDids(db, instance.id);
   return { ok: true, instanceId: instance.id, directoryUpserted, inboundDidSync };
 });
 
@@ -7558,6 +7558,30 @@ app.get("/calls/history", async (req, reply) => {
     const last10 = d.slice(-10);
     if (!phoneTenantByLast10.has(last10)) phoneTenantByLast10.set(last10, p.tenantId);
   }
+  const ombuDidTenantByLast10 = new Map<string, string>();
+  if (didCandidatesLast10.length > 0) {
+    const pbxHistInstance = await db.pbxInstance.findFirst({
+      where: { isEnabled: true },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+    });
+    if (pbxHistInstance) {
+      const didHits = await db.pbxTenantInboundDid.findMany({
+        where: {
+          pbxInstanceId: pbxHistInstance.id,
+          active: true,
+          e164: { in: [...new Set(didCandidatesLast10)] },
+          connectTenantId: { not: null },
+        },
+        select: { e164: true, connectTenantId: true },
+      });
+      for (const h of didHits) {
+        if (h.connectTenantId && !ombuDidTenantByLast10.has(h.e164)) {
+          ombuDidTenantByLast10.set(h.e164, h.connectTenantId);
+        }
+      }
+    }
+  }
   // Learn ext→tenant from recent ConnectCdr rows with real tenant IDs.
   const learnedExtTenantByExt = new Map<string, string>();
   if (extensionCandidates.length > 0) {
@@ -7822,6 +7846,14 @@ app.get("/calls/history", async (req, reply) => {
     if (fromExt && extensionTenantByPbxExtId.has(fromExt)) return extensionTenantByPbxExtId.get(fromExt)!;
     if (toExt && learnedExtTenantByExt.has(toExt)) return learnedExtTenantByExt.get(toExt)!;
     if (fromExt && learnedExtTenantByExt.has(fromExt)) return learnedExtTenantByExt.get(fromExt)!;
+    if (toDigits.length >= 10) {
+      const o = ombuDidTenantByLast10.get(toDigits.slice(-10));
+      if (o) return o;
+    }
+    if (fromDigits.length >= 10) {
+      const o = ombuDidTenantByLast10.get(fromDigits.slice(-10));
+      if (o) return o;
+    }
     if (toDigits.length >= 10) {
       const t = phoneTenantByLast10.get(toDigits.slice(-10));
       if (t) return t;
@@ -9537,9 +9569,13 @@ app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
   }
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.send({ version: 1, pbxInstanceId: null, fetchedAt: new Date().toISOString(), entries: [] });
-  const [rows, links] = await Promise.all([
+  const [rows, links, didRows] = await Promise.all([
     db.pbxTenantDirectory.findMany({ where: { pbxInstanceId: instance.id } }),
     db.tenantPbxLink.findMany({ where: { pbxInstanceId: instance.id, status: "LINKED" } }),
+    db.pbxTenantInboundDid.findMany({
+      where: { pbxInstanceId: instance.id, active: true },
+      select: { e164: true, vitalTenantId: true, pbxTenantCode: true, connectTenantId: true },
+    }),
   ]);
   const connectByVital = new Map<string, string>();
   for (const l of links) {
@@ -9557,11 +9593,18 @@ app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
     tenantSlug: r.tenantSlug,
     connectTenantId: connectByVital.get(r.vitalTenantId.trim().toLowerCase()) ?? null,
   }));
+  const didEntries = didRows.map((r) => ({
+    e164: r.e164,
+    vitalTenantId: r.vitalTenantId,
+    tenantCode: (r.pbxTenantCode || "").trim(),
+    connectTenantId: r.connectTenantId,
+  }));
   return reply.send({
-    version: 1,
+    version: 2,
     pbxInstanceId: instance.id,
     fetchedAt: new Date().toISOString(),
     entries,
+    didEntries,
   });
 });
 

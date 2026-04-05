@@ -988,6 +988,8 @@ model PbxInstance {
   name             String
   baseUrl          String
   apiAuthEncrypted String
+  /// Optional encrypted read-only MySQL URL for VitalPBX `ombutel` schema (e.g. mysql://user:pass@host:3306/ombutel). Used to sync inbound DID → tenant from ombu_inbound_routes.
+  ombuMysqlUrlEncrypted String?
   isEnabled        Boolean         @default(true)
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt

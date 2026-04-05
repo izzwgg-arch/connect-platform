@@ -123,6 +123,8 @@ export class TelephonyService {
           context: typed.context,
           callerIdNum: typed.callerIDNum,
           exten: typed.exten,
+          toNumber: typed.exten,
+          fromNumber: typed.callerIDNum,
         });
         if (env.ENABLE_TELEPHONY_DEBUG) {
           log.debug(

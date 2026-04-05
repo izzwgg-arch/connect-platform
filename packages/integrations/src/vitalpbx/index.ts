@@ -6,4 +6,5 @@ export { VitalPbxClient } from "./client";
 export * from "./ariBridgedActiveCalls";
 export * from "./inferPbxLiveDirection";
 export * from "./pbxTenantHints";
+export * from "./inboundDidDigits";
 export * from "./callDirectionPolicy";

@@ -4,6 +4,7 @@ import {
   extractPbxTenantHintsFromChannel,
   extractPbxTenantHintsFromContext,
   mergePbxTenantHints,
+  normalizeInboundDidDigits,
 } from "@connect/integrations";
 
 export type ResolvedCdrTenant = {
@@ -132,6 +133,33 @@ function packResult(
   };
 }
 
+async function tryResolveFromSyncedInboundDid(
+  db: PrismaClient,
+  pbxInstanceId: string,
+  maps: Awaited<ReturnType<typeof loadDirectoryMaps>>,
+  phone: string | null | undefined,
+  source: string,
+): Promise<ResolvedCdrTenant | null> {
+  const e164 = normalizeInboundDidDigits(phone);
+  if (!e164) return null;
+  const row = await db.pbxTenantInboundDid.findFirst({
+    where: { pbxInstanceId, e164, active: true },
+    select: { vitalTenantId: true, pbxTenantCode: true, connectTenantId: true },
+  });
+  if (!row) return null;
+  const vitalId = row.vitalTenantId.trim();
+  const dir = maps.byVital.get(vitalId.toLowerCase()) ?? null;
+  if (dir) {
+    return packResult(vitalId, dir, maps.connectByVital, source);
+  }
+  return {
+    tenantId: row.connectTenantId,
+    pbxVitalTenantId: vitalId,
+    pbxTenantCode: row.pbxTenantCode?.trim().toUpperCase() ?? null,
+    tenantResolutionSource: source,
+  };
+}
+
 export async function resolveCdrTenant(
   db: PrismaClient,
   pbxInstanceId: string,
@@ -146,7 +174,8 @@ export async function resolveCdrTenant(
     ruleResolver: () => Promise<string | null>;
   },
 ): Promise<ResolvedCdrTenant> {
-  const { byVital, byCode, bySlug, normSlugMap, connectByVital } = await loadDirectoryMaps(db, pbxInstanceId);
+  const maps = await loadDirectoryMaps(db, pbxInstanceId);
+  const { byVital, byCode, bySlug, normSlugMap, connectByVital } = maps;
 
   const telephony = String(input.telephonyTenantId || "").trim();
   if (telephony && !telephony.startsWith("vpbx:")) {
@@ -174,6 +203,11 @@ export async function resolveCdrTenant(
       return packResult(dir.vitalTenantId, dir, connectByVital, "telephony_vpbx_slug_directory");
     }
   }
+
+  const toDid = await tryResolveFromSyncedInboundDid(db, pbxInstanceId, maps, input.toNumber, "ombu_inbound_did_to");
+  if (toDid) return toDid;
+  const fromDid = await tryResolveFromSyncedInboundDid(db, pbxInstanceId, maps, input.fromNumber, "ombu_inbound_did_from");
+  if (fromDid) return fromDid;
 
   const hintObj = mergePbxTenantHints(
     input.pbxVitalTenantIdHint || input.pbxTenantCodeHint
