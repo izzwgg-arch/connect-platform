@@ -21,9 +21,13 @@ if ($status) {
   Write-Host "[deploy-via-ssh] working tree clean, no commit"
 }
 
-# 2) Tag (if not exists)
+# 2) Tag (if not exists) — git rev-parse writes to stderr when missing; avoid terminating the script on that.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $null = git rev-parse "refs/tags/$tag" 2>&1
-if ($LASTEXITCODE -ne 0) {
+$revParseExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($revParseExit -ne 0) {
   git tag $tag
   Write-Host "[deploy-via-ssh] tagged $tag"
 } else {
