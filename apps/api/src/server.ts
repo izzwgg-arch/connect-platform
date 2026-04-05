@@ -35,6 +35,8 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
+import { syncPbxTenantDirectory } from "./pbxTenantDirectorySync";
+import { resolveCdrTenant } from "./pbxTenantResolve";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -4449,7 +4451,12 @@ app.get("/pbx/status", async (req, reply) => {
 app.post("/pbx/link", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
-  const input = z.object({ pbxInstanceId: z.string(), pbxTenantId: z.string().optional(), pbxDomain: z.string().optional() }).parse(req.body || {});
+  const input = z.object({
+    pbxInstanceId: z.string(),
+    pbxTenantId: z.string().optional(),
+    pbxTenantCode: z.string().optional(),
+    pbxDomain: z.string().optional(),
+  }).parse(req.body || {});
 
   const instance = await db.pbxInstance.findUnique({ where: { id: input.pbxInstanceId } });
   if (!instance || !instance.isEnabled) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
@@ -4460,12 +4467,14 @@ app.post("/pbx/link", async (req, reply) => {
       tenantId: admin.tenantId,
       pbxInstanceId: input.pbxInstanceId,
       pbxTenantId: input.pbxTenantId || null,
+      pbxTenantCode: input.pbxTenantCode?.trim() || null,
       pbxDomain: input.pbxDomain || null,
       status: "LINKED"
     },
     update: {
       pbxInstanceId: input.pbxInstanceId,
       pbxTenantId: input.pbxTenantId || null,
+      pbxTenantCode: input.pbxTenantCode !== undefined ? (input.pbxTenantCode?.trim() || null) : undefined,
       pbxDomain: input.pbxDomain || null,
       status: "LINKED",
       lastError: null
@@ -6610,13 +6619,18 @@ app.post("/webhooks/pbx", async (req, reply) => {
   }
 
   const result = await upsertInviteFromPbxEvent(normalized, "WEBHOOK");
-  if (result?.tenantId) {
+  let pbxEventTenantId: string | null = null;
+  if (result && result.ok && "inviteId" in result && result.inviteId) {
+    const inv = await db.callInvite.findUnique({ where: { id: result.inviteId }, select: { tenantId: true } });
+    pbxEventTenantId = inv?.tenantId ?? null;
+  }
+  if (pbxEventTenantId) {
     const normalizedFrom = normalizeContactNumber(normalized.fromNumber);
     const normalizedTo = normalizeContactNumber(normalized.toExtension);
-    const customer = await findCustomerByContactNumber(result.tenantId, normalizedFrom || normalizedTo || null);
+    const customer = await findCustomerByContactNumber(pbxEventTenantId, normalizedFrom || normalizedTo || null);
     await db.pbxCallEvent.create({
       data: {
-        tenantId: result.tenantId,
+        tenantId: pbxEventTenantId,
         customerId: customer?.id || null,
         pbxTenantId: normalized.pbxTenantId || null,
         eventType: normalized.eventType,
@@ -6984,6 +6998,9 @@ app.get("/admin/pbx/tenants", async (req, reply) => {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
   const tenants = await client.listTenants();
+  await syncPbxTenantDirectory(db, instance.id, client).catch((e: any) => {
+    app.log.warn({ err: e?.message }, "admin/pbx/tenants: directory sync failed");
+  });
   return { instanceId: instance.id, tenants };
 });
 
@@ -7430,6 +7447,9 @@ app.get("/calls/history", async (req, reply) => {
         durationSec: true,
         startedAt: true,
         tenantId: true,
+        pbxVitalTenantId: true,
+        pbxTenantCode: true,
+        tenantResolutionSource: true,
       },
     }),
     db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
@@ -7689,6 +7709,20 @@ app.get("/calls/history", async (req, reply) => {
     })
     : [];
   const tenantNameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+  const pbxInst = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  const dirRows = pbxInst
+    ? await db.pbxTenantDirectory.findMany({
+        where: { pbxInstanceId: pbxInst.id },
+        select: { tenantSlug: true, displayName: true, tenantCode: true, vitalTenantId: true },
+      })
+    : [];
+  const dirDisplayBySlug = new Map<string, string>();
+  const dirDisplayByVital = new Map<string, string>();
+  for (const r of dirRows) {
+    const label = (r.displayName || "").trim() || r.tenantCode || r.tenantSlug;
+    dirDisplayBySlug.set(r.tenantSlug.toLowerCase(), label);
+    dirDisplayByVital.set(r.vitalTenantId.trim(), label);
+  }
   const allTenants = await db.tenant.findMany({ select: { id: true, name: true } });
   const normalizeTenantSlug = (value: string) =>
     String(value || "")
@@ -7715,7 +7749,14 @@ app.get("/calls/history", async (req, reply) => {
     return mapVpbxLikeTenantToConnect(m[1]);
   };
 
-  function inferTenantIdForRow(row: { tenantId: string | null; linkedId: string; fromNumber: string | null; toNumber: string | null; dcontext?: string | null }): string | null {
+  function inferTenantIdForRow(row: {
+    tenantId: string | null;
+    linkedId: string;
+    fromNumber: string | null;
+    toNumber: string | null;
+    dcontext?: string | null;
+    pbxVitalTenantId?: string | null;
+  }): string | null {
     const hasRealTenantId = row.tenantId && !row.tenantId.startsWith("vpbx:");
     if (hasRealTenantId) return row.tenantId;
     const mappedFromVpbx = mapVpbxLikeTenantToConnect(row.tenantId);
@@ -7775,9 +7816,20 @@ app.get("/calls/history", async (req, reply) => {
 
   const items = rows.map((r) => {
     const inferredTenantId = inferTenantIdForRow(r);
-    const tenantName = inferredTenantId
-      ? (tenantNameById.get(inferredTenantId) || prettifyTenantSlugFromId(inferredTenantId))
-      : "Unassigned";
+    let tenantName = "Unassigned";
+    if (inferredTenantId) {
+      if (!inferredTenantId.startsWith("vpbx:")) {
+        tenantName = tenantNameById.get(inferredTenantId) || prettifyTenantSlugFromId(inferredTenantId);
+      } else {
+        const slug = inferredTenantId.slice(5).toLowerCase();
+        tenantName =
+          dirDisplayBySlug.get(slug) || prettifyTenantSlugFromId(inferredTenantId);
+      }
+    }
+    if (tenantName === "Unassigned" && r.pbxVitalTenantId) {
+      const dn = dirDisplayByVital.get(r.pbxVitalTenantId.trim());
+      if (dn) tenantName = dn;
+    }
     return {
       callId: r.linkedId || r.id,
       rowId: r.id,
@@ -8658,7 +8710,7 @@ app.get("/customers/:id/activity", async (req, reply) => {
 
   const [invoiceEvents, paymentEvents, emailEvents, whatsappEvents, smsEvents, notes, tasks, pbxEvents] = await Promise.all([
     invoiceIds.length ? db.invoiceEvent.findMany({ where: { tenantId: admin.tenantId, invoiceId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
-    invoiceIds.length ? db.paymentEvent.findMany({ where: { tenantId: admin.tenantId, subscriptionId: { in: invoiceIds } }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
+    invoiceIds.length ? db.paymentEvent.findMany({ where: { tenantId: admin.tenantId, subscriptionId: { in: invoiceIds } }, orderBy: { receivedAt: "desc" }, take: 100 }) : Promise.resolve([]),
     emailOr.length ? db.emailJob.findMany({ where: { tenantId: admin.tenantId, OR: emailOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
     db.whatsAppMessage.findMany({ where: { tenantId: admin.tenantId, thread: { is: { OR: waOr } } }, orderBy: { createdAt: "desc" }, take: 100 }),
     smsOr.length ? db.smsMessage.findMany({ where: { campaign: { tenantId: admin.tenantId }, OR: smsOr }, orderBy: { createdAt: "desc" }, take: 100 }) : Promise.resolve([]),
@@ -8669,7 +8721,7 @@ app.get("/customers/:id/activity", async (req, reply) => {
 
   const timeline: Array<{ type: string; createdAt: Date; label: string; meta?: any }> = [];
   for (const e of invoiceEvents) timeline.push({ type: `INVOICE_${e.type}`, createdAt: e.createdAt, label: `Invoice ${e.type.toLowerCase()}`, meta: { invoiceId: e.invoiceId } });
-  for (const e of paymentEvents) timeline.push({ type: "PAYMENT_EVENT", createdAt: e.createdAt, label: `Payment ${String(e.status || "").toLowerCase()}`, meta: { amountCents: e.amountCents, currency: e.currency } });
+  for (const e of paymentEvents) timeline.push({ type: "PAYMENT_EVENT", createdAt: e.receivedAt, label: `Payment ${String(e.status || "").toLowerCase()}`, meta: { amountCents: e.amountCents, currency: e.currency } });
   for (const e of emailEvents) timeline.push({ type: "EMAIL_EVENT", createdAt: e.createdAt, label: `Email ${String(e.status || "").toLowerCase()} (${e.type})` });
   for (const e of whatsappEvents) timeline.push({ type: "WHATSAPP_EVENT", createdAt: e.createdAt, label: `WhatsApp ${String(e.direction || "").toLowerCase()} ${String(e.status || "").toLowerCase()}` });
   for (const e of smsEvents) timeline.push({ type: "SMS_EVENT", createdAt: e.createdAt, label: `SMS ${String(e.status || "").toLowerCase()}` });
@@ -8909,7 +8961,7 @@ app.get("/customers/:id/summary", async (req, reply) => {
     customerInvoiceIds.length
       ? db.paymentEvent.findMany({
           where: { tenantId: admin.tenantId, subscriptionId: { in: customerInvoiceIds } },
-          orderBy: { createdAt: "desc" },
+          orderBy: { receivedAt: "desc" },
           take: 20
         })
       : Promise.resolve([]),
@@ -8967,7 +9019,7 @@ app.get("/customers/:id/summary", async (req, reply) => {
       status: e.status,
       amountCents: e.amountCents,
       currency: e.currency,
-      createdAt: e.createdAt
+      createdAt: e.receivedAt
     })),
     smsActivity: {
       totalRecent: recentSms.length,
@@ -9122,6 +9174,9 @@ async function getVpbxTenantLookup(): Promise<Map<string, string>> {
       if (!instance) throw new Error("no enabled PbxInstance found");
       const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
       const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+      await syncPbxTenantDirectory(db, instance.id, client).catch((e: any) => {
+        app.log.warn({ err: e?.message }, "cdr-ingest: PbxTenantDirectory sync failed (non-fatal)");
+      });
       const tenants = await client.listTenants();
       _vpbxTenantCache = {
         entries: tenants
@@ -9265,8 +9320,11 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     queueId:     z.string().nullable().optional(),
     hangupCause: z.string().nullable().optional(),
     channels:    z.array(z.string()).optional().default([]),
-    dcontext:    z.string().nullable().optional(),    // AMI Cdr dcontext — "ext-local-{slug}", "app-queue-{slug}", etc.
-    accountCode: z.string().nullable().optional(),    // AMI Cdr accountCode — sometimes set to tenant slug
+    dcontext:    z.string().nullable().optional(),
+    dcontexts:   z.array(z.string()).optional().default([]),
+    accountCode: z.string().nullable().optional(),
+    pbxVitalTenantId: z.string().nullable().optional(),
+    pbxTenantCode: z.string().nullable().optional(),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -9275,71 +9333,88 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   }
   const d = parsed.data;
 
-  // Multi-strategy tenant resolution (each only runs if previous strategies fail):
-  // 1. Trust tenantId from telephony service (resolved via AMI context at call time)
-  // 2. dcontext from AMI Cdr event — most reliable: "ext-local-{slug}", "app-queue-{slug}", etc.
-  // 3. PJSIP channel endpoint name — "PJSIP/{numericId}_{slug}-{uniqueid}"
-  // 4. Admin-configured CdrTenantRule — DID/extension prefix mappings configured in admin UI
-  let resolvedTenantId = d.tenantId ?? null;
+  const existing = await db.connectCdr.findUnique({ where: { linkedId: d.linkedId } });
+  const newDcx = [...(d.dcontexts || []).map((s) => String(s).trim()), d.dcontext ? String(d.dcontext).trim() : ""].filter(Boolean);
+  const prevDcx = Array.isArray(existing?.dcontextsSeen) ? (existing!.dcontextsSeen as string[]) : [];
+  const mergedDcx = [...new Set([...prevDcx, ...newDcx])];
 
-  if (!resolvedTenantId && (d.dcontext || d.accountCode)) {
+  const newCh = (d.channels || []).map((s) => String(s).trim()).filter(Boolean);
+  const prevCh = Array.isArray(existing?.channelsSeen) ? (existing!.channelsSeen as string[]) : [];
+  const mergedCh = [...new Set([...prevCh, ...newCh])];
+
+  const pbxInstance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  let tenantPack = {
+    tenantId: null as string | null,
+    pbxVitalTenantId: null as string | null,
+    pbxTenantCode: null as string | null,
+    tenantResolutionSource: null as string | null,
+  };
+  if (pbxInstance) {
+    try {
+      const dirCount = await db.pbxTenantDirectory.count({ where: { pbxInstanceId: pbxInstance.id } });
+      if (dirCount === 0) {
+        const auth = decryptJson<{ token: string; secret?: string }>(pbxInstance.apiAuthEncrypted);
+        const client = getVitalPbxClient({ baseUrl: pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+        const { upserted } = await syncPbxTenantDirectory(db, pbxInstance.id, client);
+        app.log.info({ upserted }, "cdr-ingest: PbxTenantDirectory bootstrapped (was empty)");
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: PbxTenantDirectory bootstrap failed (non-fatal)");
+    }
+  }
+
+  if (pbxInstance) {
+    try {
+      tenantPack = await resolveCdrTenant(db, pbxInstance.id, {
+        telephonyTenantId: d.tenantId,
+        pbxVitalTenantIdHint: d.pbxVitalTenantId ?? null,
+        pbxTenantCodeHint: d.pbxTenantCode ?? null,
+        dcontexts: mergedDcx,
+        channels: mergedCh,
+        fromNumber: d.fromNumber,
+        toNumber: d.toNumber,
+        ruleResolver: () => resolveTenantFromRules(d.fromNumber ?? null, d.toNumber ?? null),
+      });
+    } catch (err: any) {
+      app.log.warn({ err: err?.message }, "cdr-ingest: resolveCdrTenant error (non-fatal)");
+    }
+  }
+
+  if (!tenantPack.tenantId && d.accountCode && d.accountCode.trim() && !/^\d+$/.test(d.accountCode.trim())) {
     try {
       const tenantMap = await getVpbxTenantLookup();
-      const fromDcontext = resolveTenantFromDcontext(d.dcontext, tenantMap);
-      if (fromDcontext) {
-        resolvedTenantId = fromDcontext;
-        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId, dcontext: d.dcontext }, "cdr-ingest: tenantId resolved from dcontext");
-      } else if (d.accountCode && d.accountCode.trim() && !/^\d+$/.test(d.accountCode.trim())) {
-        // accountCode fallback — some VitalPBX setups use this for tenant slug
-        const codeSlug = d.accountCode.trim();
-        const hit = tenantMap.get(codeSlug.toLowerCase());
-        if (hit) {
-          resolvedTenantId = hit;
-          app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId, accountCode: d.accountCode }, "cdr-ingest: tenantId resolved from accountCode");
-        }
+      const codeSlug = d.accountCode.trim();
+      const hit = tenantMap.get(codeSlug.toLowerCase());
+      if (hit) {
+        tenantPack = {
+          tenantId: hit,
+          pbxVitalTenantId: tenantPack.pbxVitalTenantId,
+          pbxTenantCode: tenantPack.pbxTenantCode,
+          tenantResolutionSource: "account_code_slug_map",
+        };
       }
     } catch (err: any) {
-      app.log.warn({ err: err?.message }, "cdr-ingest: dcontext tenant resolution error (non-fatal)");
+      app.log.warn({ err: err?.message }, "cdr-ingest: accountCode tenant resolution error (non-fatal)");
     }
   }
 
-  if (!resolvedTenantId && d.channels.length > 0) {
-    try {
-      const tenantMap = await getVpbxTenantLookup();
-      const fromChannels = resolveTenantFromChannels(d.channels, tenantMap);
-      if (fromChannels) {
-        resolvedTenantId = fromChannels;
-        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId }, "cdr-ingest: tenantId resolved from channels");
-      }
-    } catch (err: any) {
-      app.log.warn({ err: err?.message }, "cdr-ingest: channel tenant resolution error (non-fatal)");
-    }
-  }
+  const resolvedDirection = canonicalDirection(d.fromNumber, d.toNumber, d.direction, d.dcontext, {
+    dcontexts: mergedDcx,
+    channelNames: mergedCh,
+    telephonyDirectionHint: d.direction,
+  });
 
-  if (!resolvedTenantId) {
-    try {
-      const fromRules = await resolveTenantFromRules(d.fromNumber ?? null, d.toNumber ?? null);
-      if (fromRules) {
-        resolvedTenantId = fromRules;
-        app.log.info({ linkedId: d.linkedId, tenantId: resolvedTenantId }, "cdr-ingest: tenantId resolved from CdrTenantRule");
-      }
-    } catch (err: any) {
-      app.log.warn({ err: err?.message }, "cdr-ingest: CdrTenantRule lookup error (non-fatal)");
-    }
-  }
-
-  // Apply deterministic direction override before storage.
-  // Multi-leg AMI events can set direction from the wrong channel (e.g. trunk leg
-  // of an outbound call reports context=from-trunk → "inbound").  The number-pattern
-  // rules are unambiguous: short extension → long PSTN = outgoing, and vice versa.
-  const resolvedDirection = canonicalDirection(d.fromNumber, d.toNumber, d.direction, d.dcontext);
+  const lastDcontext = mergedDcx.length > 0 ? mergedDcx[mergedDcx.length - 1]! : d.dcontext ?? null;
 
   try {
     await db.connectCdr.upsert({
       where: { linkedId: d.linkedId },
       create: {
         linkedId:    d.linkedId,
-        tenantId:    resolvedTenantId,
+        tenantId:    tenantPack.tenantId,
+        pbxVitalTenantId: tenantPack.pbxVitalTenantId,
+        pbxTenantCode: tenantPack.pbxTenantCode,
+        tenantResolutionSource: tenantPack.tenantResolutionSource,
         fromNumber:  d.fromNumber ?? null,
         toNumber:    d.toNumber ?? null,
         direction:   resolvedDirection,
@@ -9351,13 +9426,16 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec,
         queueId:     d.queueId ?? null,
         hangupCause: d.hangupCause ?? null,
-        dcontext:    d.dcontext ?? null,
+        dcontext:    lastDcontext,
+        dcontextsSeen: mergedDcx,
+        channelsSeen: mergedCh,
         rawLegCount: 1,
       },
       update: {
-        // On duplicate linkedId: update only if incoming data is richer.
-        // rawLegCount always increments — each notification represents one channel-leg CDR.
-        tenantId:    resolvedTenantId ?? undefined,
+        tenantId:    tenantPack.tenantId != null ? tenantPack.tenantId : undefined,
+        pbxVitalTenantId: tenantPack.pbxVitalTenantId != null ? tenantPack.pbxVitalTenantId : undefined,
+        pbxTenantCode: tenantPack.pbxTenantCode != null ? tenantPack.pbxTenantCode : undefined,
+        tenantResolutionSource: tenantPack.tenantResolutionSource != null ? tenantPack.tenantResolutionSource : undefined,
         fromNumber:  d.fromNumber ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
@@ -9367,7 +9445,9 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         talkSec:     d.talkSec > 0 ? d.talkSec : undefined,
         queueId:     d.queueId ?? undefined,
         hangupCause: d.hangupCause ?? undefined,
-        dcontext:    d.dcontext ?? undefined,
+        dcontext:    lastDcontext ?? undefined,
+        dcontextsSeen: mergedDcx,
+        channelsSeen: mergedCh,
         rawLegCount: { increment: 1 },
       },
     });
@@ -9376,7 +9456,9 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         {
           phase: "cdr_ingest_persisted",
           linkedId: d.linkedId,
-          tenantId: resolvedTenantId,
+          tenantId: tenantPack.tenantId,
+          pbxVitalTenantId: tenantPack.pbxVitalTenantId,
+          tenantResolutionSource: tenantPack.tenantResolutionSource,
           rawDirection: d.direction,
           direction: resolvedDirection,
           directionOverridden: resolvedDirection !== d.direction,
@@ -9392,6 +9474,46 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     app.log.error({ linkedId: d.linkedId, err: err?.message }, "cdr-ingest: db error");
     return reply.code(500).send({ error: "db_error" });
   }
+});
+
+// Internal: telephony service pulls PBX tenant → Connect tenant map (same auth as cdr-ingest).
+app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (secret) {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) return reply.code(403).send({ error: "forbidden" });
+  }
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) return reply.send({ version: 1, pbxInstanceId: null, fetchedAt: new Date().toISOString(), entries: [] });
+  const [rows, links] = await Promise.all([
+    db.pbxTenantDirectory.findMany({ where: { pbxInstanceId: instance.id } }),
+    db.tenantPbxLink.findMany({ where: { pbxInstanceId: instance.id, status: "LINKED" } }),
+  ]);
+  const connectByVital = new Map<string, string>();
+  for (const l of links) {
+    const v = (l.pbxTenantId || "").trim().toLowerCase();
+    if (v) connectByVital.set(v, l.tenantId);
+    const code = (l.pbxTenantCode || "").trim().toUpperCase();
+    if (code) {
+      const hit = rows.find((r) => r.tenantCode.toUpperCase() === code);
+      if (hit) connectByVital.set(hit.vitalTenantId.trim().toLowerCase(), l.tenantId);
+    }
+  }
+  const entries = rows.map((r) => ({
+    vitalTenantId: r.vitalTenantId,
+    tenantCode: r.tenantCode,
+    tenantSlug: r.tenantSlug,
+    connectTenantId: connectByVital.get(r.vitalTenantId.trim().toLowerCase()) ?? null,
+  }));
+  return reply.send({
+    version: 1,
+    pbxInstanceId: instance.id,
+    fetchedAt: new Date().toISOString(),
+    entries,
+  });
 });
 
 // ─── Connect CDR KPI totals ───────────────────────────────────────────────────
@@ -9972,42 +10094,17 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
       db.connectCdr.count({ where: baseWhere }),
     ]);
 
-    // Canonical mode: compute direction-corrected counts via SQL CASE expression.
-    // This does NOT write to the DB — it corrects at query time for display only.
+    // Canonical mode: direction is authoritative at ingest (callDirectionPolicy + merged dcontexts).
+    // No SQL-time reclassification — avoids dashboard drift vs call history.
     let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number } | null = null;
     if (query.mode === "canonical") {
-      const tenantSql = scopeTenantId ? `AND "tenantId" = '${scopeTenantId.replace(/'/g, "''")}'` : "";
-      const startSql  = `'${timeWhere.gte.toISOString()}'::timestamptz`;
-      const endSql    = `'${timeWhere.lt.toISOString()}'::timestamptz`;
-      const dirSql    = cdrCanonicalDirectionSql();
-
-      type CanonRow = { incoming: bigint; outgoing: bigint; internal: bigint; missed: bigint; total: bigint };
-      const [cr] = await db.$queryRawUnsafe<CanonRow[]>(`
-        WITH c AS (
-          SELECT
-            (${dirSql}) AS dir,
-            disposition
-          FROM "ConnectCdr"
-          WHERE "startedAt" >= ${startSql} AND "startedAt" < ${endSql}
-          ${tenantSql}
-        )
-        SELECT
-          COUNT(*) FILTER (WHERE dir = 'incoming') AS incoming,
-          COUNT(*) FILTER (WHERE dir = 'outgoing') AS outgoing,
-          COUNT(*) FILTER (WHERE dir = 'internal') AS internal,
-          COUNT(*) FILTER (WHERE dir = 'incoming' AND disposition = 'missed') AS missed,
-          COUNT(*) AS total
-        FROM c
-      `);
-      if (cr) {
-        canonicalCounts = {
-          incoming: Number(cr.incoming),
-          outgoing: Number(cr.outgoing),
-          internal: Number(cr.internal),
-          missed:   Number(cr.missed),
-          total:    Number(cr.total),
-        };
-      }
+      canonicalCounts = {
+        incoming: Number(incoming),
+        outgoing: Number(outgoing),
+        internal: Number(internal),
+        missed: Number(missed),
+        total: Number(total),
+      };
     }
 
     const base = {
@@ -10135,6 +10232,119 @@ app.post("/admin/cdr/tenant-rules/backfill", async (req, reply) => {
   return reply.send({ ok: true, updated });
 });
 
+// POST /admin/cdr/repair-recent?days=7&dryRun=true — re-run tenant + direction resolution for recent rows.
+app.post("/admin/cdr/repair-recent", async (req, reply) => {
+  const admin = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!admin) return;
+
+  const query = z.object({
+    days: z.coerce.number().int().min(1).max(30).optional().default(7),
+    dryRun: z.enum(["true", "false"]).optional().default("true"),
+  }).parse(req.query || {});
+  const isDryRun = query.dryRun !== "false";
+  const since = new Date(Date.now() - query.days * 86_400_000);
+
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) {
+    return reply.send({ ok: false, error: "no_pbx_instance", tenantUpdates: 0, directionUpdates: 0 });
+  }
+
+  const rows = await db.connectCdr.findMany({
+    where: { startedAt: { gte: since } },
+    select: {
+      id: true,
+      linkedId: true,
+      fromNumber: true,
+      toNumber: true,
+      direction: true,
+      dcontext: true,
+      dcontextsSeen: true,
+      channelsSeen: true,
+      tenantId: true,
+    },
+  });
+
+  let tenantUpdates = 0;
+  let directionUpdates = 0;
+  const samples: Array<{ linkedId: string; field: string; was: string | null; becomes: string | null }> = [];
+
+  for (const row of rows) {
+    const mergedDcx = Array.isArray(row.dcontextsSeen) ? ([...(row.dcontextsSeen as string[])] as string[]) : [];
+    const mergedCh = Array.isArray(row.channelsSeen) ? ([...(row.channelsSeen as string[])] as string[]) : [];
+
+    const tenantPack = await resolveCdrTenant(db, instance.id, {
+      telephonyTenantId: row.tenantId,
+      pbxVitalTenantIdHint: null,
+      pbxTenantCodeHint: null,
+      dcontexts: mergedDcx,
+      channels: mergedCh,
+      fromNumber: row.fromNumber,
+      toNumber: row.toNumber,
+      ruleResolver: () => resolveTenantFromRules(row.fromNumber ?? null, row.toNumber ?? null),
+    });
+
+    const newDir = canonicalDirection(row.fromNumber, row.toNumber, row.direction, row.dcontext, {
+      dcontexts: mergedDcx,
+      channelNames: mergedCh,
+      telephonyDirectionHint: row.direction,
+    });
+
+    const tenantChanged =
+      tenantPack.tenantId != null && tenantPack.tenantId !== row.tenantId;
+    const dirChanged = newDir !== row.direction && newDir !== "unknown";
+
+    if (tenantChanged) {
+      tenantUpdates++;
+      if (samples.length < 15) {
+        samples.push({
+          linkedId: row.linkedId,
+          field: "tenantId",
+          was: row.tenantId,
+          becomes: tenantPack.tenantId,
+        });
+      }
+    }
+    if (dirChanged) {
+      directionUpdates++;
+      if (samples.length < 20) {
+        samples.push({
+          linkedId: row.linkedId,
+          field: "direction",
+          was: row.direction,
+          becomes: newDir,
+        });
+      }
+    }
+
+    if (!isDryRun && (tenantChanged || dirChanged)) {
+      await db.connectCdr.update({
+        where: { id: row.id },
+        data: {
+          ...(tenantChanged
+            ? {
+                tenantId: tenantPack.tenantId,
+                pbxVitalTenantId: tenantPack.pbxVitalTenantId,
+                pbxTenantCode: tenantPack.pbxTenantCode,
+                tenantResolutionSource: tenantPack.tenantResolutionSource,
+              }
+            : {}),
+          ...(dirChanged ? { direction: newDir } : {}),
+        },
+      });
+    }
+  }
+
+  return reply.send({
+    ok: true,
+    dryRun: isDryRun,
+    days: query.days,
+    rowsScanned: rows.length,
+    tenantUpdates,
+    directionUpdates,
+    samples,
+  });
+});
+
 // ─── Fix CDR directions ───────────────────────────────────────────────────────
 // POST /admin/cdr/fix-directions?scope=today|all&dryRun=true
 // Re-evaluates direction for every ConnectCdr row using canonicalDirection() rules:
@@ -10161,13 +10371,28 @@ app.post("/admin/cdr/fix-directions", async (req, reply) => {
 
   const rows = await db.connectCdr.findMany({
     where: whereBase,
-    select: { id: true, linkedId: true, fromNumber: true, toNumber: true, direction: true, dcontext: true },
+    select: {
+      id: true,
+      linkedId: true,
+      fromNumber: true,
+      toNumber: true,
+      direction: true,
+      dcontext: true,
+      dcontextsSeen: true,
+      channelsSeen: true,
+    },
   });
 
   const changes: Array<{ id: string; linkedId: string; from: string | null; to: string | null; was: string; becomes: string }> = [];
 
   for (const row of rows) {
-    const becomes = canonicalDirection(row.fromNumber, row.toNumber, row.direction, row.dcontext);
+    const dcx = Array.isArray(row.dcontextsSeen) ? (row.dcontextsSeen as string[]) : [];
+    const chn = Array.isArray(row.channelsSeen) ? (row.channelsSeen as string[]) : [];
+    const becomes = canonicalDirection(row.fromNumber, row.toNumber, row.direction, row.dcontext, {
+      dcontexts: dcx,
+      channelNames: chn,
+      telephonyDirectionHint: row.direction,
+    });
     if (becomes !== row.direction) {
       changes.push({ id: row.id, linkedId: row.linkedId, from: row.fromNumber, to: row.toNumber, was: row.direction, becomes });
     }
@@ -10344,10 +10569,10 @@ app.get("/dashboard/summary", async (req, reply) => {
     db.invoice.findMany({ where: { tenantId: admin.tenantId }, select: { id: true, status: true, customerId: true, amountCents: true } }),
     db.invoice.count({ where: { tenantId: admin.tenantId, status: "PAID", paidAt: { gte: since } } }),
     db.paymentEvent.findMany({
-      where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } },
-      orderBy: { createdAt: "desc" },
+      where: { tenantId: admin.tenantId, status: "FAILED", receivedAt: { gte: since } },
+      orderBy: { receivedAt: "desc" },
       take: 20,
-      select: { id: true, type: true, createdAt: true, amountCents: true, currency: true }
+      select: { id: true, type: true, receivedAt: true, amountCents: true, currency: true }
     }),
     db.smsCampaign.count({ where: { tenantId: admin.tenantId, status: "SENT", createdAt: { gte: since } } }),
     db.whatsAppMessage.count({ where: { tenantId: admin.tenantId, direction: "INBOUND", createdAt: { gte: since } } }),
@@ -10402,7 +10627,7 @@ app.get("/dashboard/summary", async (req, reply) => {
         type: f.type,
         amountCents: f.amountCents,
         currency: f.currency,
-        createdAt: f.createdAt
+        createdAt: f.receivedAt
       }))
     },
     messagingSummary: {
@@ -10484,10 +10709,10 @@ app.get("/dashboard/activity", async (req, reply) => {
       select: { invoiceId: true, type: true, createdAt: true }
     }),
     db.paymentEvent.findMany({
-      where: { tenantId: admin.tenantId, status: "FAILED", createdAt: { gte: since } },
-      orderBy: { createdAt: "desc" },
+      where: { tenantId: admin.tenantId, status: "FAILED", receivedAt: { gte: since } },
+      orderBy: { receivedAt: "desc" },
       take: 40,
-      select: { id: true, createdAt: true, amountCents: true, currency: true, subscriptionId: true }
+      select: { id: true, receivedAt: true, amountCents: true, currency: true, subscriptionId: true }
     }),
     db.smsCampaign.findMany({
       where: { tenantId: admin.tenantId, status: "SENT", createdAt: { gte: since } },
@@ -10526,7 +10751,7 @@ app.get("/dashboard/activity", async (req, reply) => {
   for (const e of paymentFailures) {
     items.push({
       type: "PAYMENT_FAILED",
-      timestamp: e.createdAt,
+      timestamp: e.receivedAt,
       label: `Payment failed${e.amountCents ? ` ($${(Number(e.amountCents) / 100).toFixed(2)})` : ""}`,
       link: e.subscriptionId ? `/dashboard/billing/invoices/${e.subscriptionId}` : "/dashboard/billing/invoices"
     });
@@ -10582,8 +10807,8 @@ app.get("/search/global", async (req, reply) => {
       where: {
         tenantId: user.tenantId,
         OR: [
-          { ext: { contains: q, mode: "insensitive" } },
-          { label: { contains: q, mode: "insensitive" } }
+          { extNumber: { contains: q, mode: "insensitive" } },
+          { displayName: { contains: q, mode: "insensitive" } }
         ]
       },
       take: 20
@@ -10593,7 +10818,7 @@ app.get("/search/global", async (req, reply) => {
         tenantId: user.tenantId,
         OR: [
           { phoneNumber: { contains: q, mode: "insensitive" } },
-          { label: { contains: q, mode: "insensitive" } }
+          { friendlyName: { contains: q, mode: "insensitive" } }
         ]
       },
       take: 20
@@ -10604,7 +10829,7 @@ app.get("/search/global", async (req, reply) => {
     q,
     customers: customers.map((r) => ({ id: r.id, displayName: r.displayName, primaryPhone: maskValue(r.primaryPhone, 3, 2), link: `/dashboard/customers/${r.id}` })),
     invoices: invoices.map((r) => ({ id: r.id, status: r.status, amountCents: r.amountCents, link: `/dashboard/billing/invoices/${r.id}` })),
-    extensions: extensions.map((r) => ({ id: r.id, ext: r.ext, label: r.label, link: `/dashboard/extensions` })),
+    extensions: extensions.map((r) => ({ id: r.id, ext: r.extNumber, label: r.displayName, link: `/dashboard/extensions` })),
     numbers: numbers.map((r) => ({ id: r.id, phoneNumber: maskValue(r.phoneNumber, 3, 2), link: `/dashboard/numbers` }))
   };
 });
@@ -10665,11 +10890,14 @@ app.get("/billing/invoices/:id", async (req, reply) => {
   if (!row) return reply.status(404).send({ error: "invoice_not_found" });
   const paymentAttempts = await db.paymentEvent.findMany({
     where: { tenantId: admin.tenantId, subscriptionId: id },
-    orderBy: { createdAt: "desc" },
+    orderBy: { receivedAt: "desc" },
     take: 20,
-    select: { id: true, type: true, status: true, providerEventId: true, amountCents: true, currency: true, createdAt: true }
+    select: { id: true, type: true, status: true, providerEventId: true, amountCents: true, currency: true, receivedAt: true }
   });
-  return { ...row, paymentAttempts };
+  return {
+    ...row,
+    paymentAttempts: paymentAttempts.map((p) => ({ ...p, createdAt: p.receivedAt }))
+  };
 });
 
 app.get("/billing/invoices/:id/events", async (req, reply) => {

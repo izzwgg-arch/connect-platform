@@ -4,6 +4,7 @@ import type { BridgedActiveCallRow, BridgedActiveResult } from "./ariBridgedActi
 import { computeBridgedActiveCalls } from "./ariBridgedActiveCalls";
 import type { NormalizedCall } from "../types";
 import { inferLiveCallDirection } from "../inferLiveCallDirection";
+import type { TenantResolver } from "../state/TenantResolver";
 import { env } from "../../config/env";
 import { childLogger } from "../../logging/logger";
 
@@ -11,7 +12,7 @@ const log = childLogger("AriBridgedActivePoller");
 
 const POLL_MS = 1000;
 
-function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[]): NormalizedCall[] {
+function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[], resolver?: TenantResolver): NormalizedCall[] {
   const now = new Date().toISOString();
   return rows.map((b) => {
     const callerRaw = b.caller === "—" ? "" : b.caller;
@@ -20,11 +21,17 @@ function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[]): NormalizedCa
       b.dialplanExten ?? "",
       callerRaw.replace(/\D/g, "") || callerRaw,
     );
+    const tres =
+      resolver?.resolveDetails({
+        context: b.dialplanContext ?? "",
+        exten: b.dialplanExten ?? "",
+        callerIdNum: callerRaw.replace(/\D/g, "") || callerRaw,
+      }) ?? null;
     const metaSource = b.sourceKind === "bridge" ? "ari_bridge" : "ari_orphan_leg";
     return {
       id: b.sourceKind === "bridge" ? `bridge:${b.bridgeId}` : b.bridgeId,
       linkedId: b.bridgeId,
-      tenantId: null,
+      tenantId: tres?.tenantId ?? null,
       direction,
       state: "up" as const,
       from: b.caller === "—" ? null : b.caller,
@@ -40,7 +47,12 @@ function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[]): NormalizedCa
       endedAt: null,
       durationSec: 0,
       billableSec: 0,
-      metadata: { source: metaSource, bridgeChannelCount: b.channelCount },
+      metadata: {
+        source: metaSource,
+        bridgeChannelCount: b.channelCount,
+        ...(tres?.pbxVitalTenantId ? { pbxVitalTenantId: tres.pbxVitalTenantId } : {}),
+        ...(tres?.pbxTenantCode ? { pbxTenantCode: tres.pbxTenantCode } : {}),
+      },
     };
   });
 }
@@ -55,7 +67,10 @@ export class AriBridgedActivePoller extends EventEmitter {
   private stopped = false;
   private last: BridgedActiveResult | null = null;
 
-  constructor(private readonly ari: AriClient) {
+  constructor(
+    private readonly ari: AriClient,
+    private readonly tenantResolver?: TenantResolver,
+  ) {
     super();
   }
 
@@ -80,7 +95,7 @@ export class AriBridgedActivePoller extends EventEmitter {
 
   getCallsForSnapshot(): NormalizedCall[] {
     if (!this.last) return [];
-    return bridgeRowsToNormalizedCalls(this.last.bridges);
+    return bridgeRowsToNormalizedCalls(this.last.bridges, this.tenantResolver);
   }
 
   getActiveCallCount(): number {

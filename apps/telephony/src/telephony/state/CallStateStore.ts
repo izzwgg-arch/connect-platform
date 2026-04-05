@@ -7,6 +7,7 @@ import {
   hasValidChannel,
   isHelperChannel,
 } from "../normalizers/normalizeCallEvent";
+import { extractPbxTenantHintsFromContext } from "../pbx/pbxTenantHints";
 
 const log = childLogger("CallStateStore");
 
@@ -310,6 +311,8 @@ export class CallStateStore extends EventEmitter {
     exten: string;
     tenantId: string | null;
     direction: CallDirection;
+    pbxVitalTenantId?: string | null;
+    pbxTenantCode?: string | null;
   }): NormalizedCall {
     this.channelIndex.set(params.uniqueid, params.linkedId);
 
@@ -318,12 +321,18 @@ export class CallStateStore extends EventEmitter {
       call = this.createEmpty(params.linkedId, params.tenantId, params.direction);
       call.from = params.callerIDNum || null;
       call.to = params.exten || null;
+      if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
+      if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ callId: params.linkedId, channel: params.channel, tenantId: params.tenantId }, "live_call: call_created");
       }
     } else if (env.ENABLE_TELEPHONY_DEBUG && !call.channels.includes(params.channel)) {
       log.debug({ callId: params.linkedId, channel: params.channel }, "live_call: call_merged_deduped");
     }
+
+    if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
+    if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
+    if (!call.tenantId && params.tenantId) call.tenantId = params.tenantId;
 
     if (!call.channels.includes(params.channel)) {
       call.channels.push(params.channel);
@@ -591,6 +600,17 @@ export class CallStateStore extends EventEmitter {
     // Store raw CDR fields for downstream use
     if (params.dcontext) call.metadata["cdrDcontext"] = params.dcontext;
     if (params.accountCode) call.metadata["cdrAccountCode"] = params.accountCode;
+
+    if (params.dcontext) {
+      const prev = (call.metadata["cdrDcontexts"] as string[] | undefined) ?? [];
+      const d = params.dcontext.trim();
+      if (d && !prev.includes(d)) {
+        call.metadata["cdrDcontexts"] = [...prev, d];
+      }
+      const h = extractPbxTenantHintsFromContext(params.dcontext);
+      if (h.vitalTenantId) call.metadata["pbxVitalTenantId"] = h.vitalTenantId;
+      if (h.tenantCode) call.metadata["pbxTenantCode"] = h.tenantCode;
+    }
 
     // If tenant still unresolved, try to extract from dcontext or accountCode.
     // dcontext may be "ext-local-a_plus_center" → tenantId becomes "vpbx:a_plus_center".

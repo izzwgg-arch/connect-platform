@@ -17,6 +17,7 @@ import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
 import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
+import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
 
@@ -42,8 +43,16 @@ export function createTelephonyModule(server: http.Server) {
   const extStore = new ExtensionStateStore();
   const queueStore = new QueueStateStore();
 
-  const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore);
-  const ariBridgedPoller = new AriBridgedActivePoller(ari);
+  const mapUrl =
+    env.TELEPHONY_PBX_MAP_URL ||
+    (env.CDR_INGEST_URL ? derivePbxTenantMapUrl(env.CDR_INGEST_URL) : undefined);
+  const pbxMapCache = new PbxTenantMapCache(mapUrl, env.CDR_INGEST_SECRET, 60_000);
+  pbxMapCache.start();
+
+  const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore, {
+    pbxTenantMapCache: pbxMapCache,
+  });
+  const ariBridgedPoller = new AriBridgedActivePoller(ari, telephonyService.getResolver());
   const healthService = new HealthService(ami, ari, callStore, extStore, queueStore, ariBridgedPoller);
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
@@ -73,6 +82,7 @@ export function createTelephonyModule(server: http.Server) {
 
   function stop() {
     log.info("Stopping telephony module");
+    pbxMapCache.stop();
     broadcaster.stop();
     ariBridgedPoller.stop();
     socketServer.close();

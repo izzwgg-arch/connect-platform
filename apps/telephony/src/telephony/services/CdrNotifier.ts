@@ -109,8 +109,11 @@ export type CdrPayload = {
   queueId: string | null;
   hangupCause: string | null;
   channels: string[];        // Raw Asterisk channel names (e.g. PJSIP/344822_Comfortone-xxx)
-  dcontext: string | null;   // AMI Cdr dcontext — VitalPBX names this "ext-local-{slug}", "from-pstn-{slug}", etc.
-  accountCode: string | null; // AMI Cdr accountCode — sometimes set to tenant slug
+  dcontext: string | null;   // last / primary AMI Cdr dcontext
+  dcontexts: string[];       // all legs
+  accountCode: string | null;
+  pbxVitalTenantId: string | null;
+  pbxTenantCode: string | null;
 };
 
 export class CdrNotifier {
@@ -210,6 +213,10 @@ export class CdrNotifier {
       ));
     }
 
+    const dcxList = (call.metadata?.cdrDcontexts as string[] | undefined) ?? [];
+    const primaryDctx = (call.metadata?.cdrDcontext as string | undefined) ?? null;
+    const dcontexts = dcxList.length > 0 ? dcxList : primaryDctx ? [primaryDctx] : [];
+
     const payload: CdrPayload = {
       linkedId: call.linkedId,
       tenantId: call.tenantId ?? null,
@@ -224,13 +231,12 @@ export class CdrNotifier {
       talkSec,
       queueId: call.queueId ?? null,
       hangupCause: String(call.metadata?.hangupCause ?? "") || null,
-      // call.channels is empty by hangup time (cleared as each leg ends).
-      // Use metadata.seenChannels which accumulates all channels during the call lifetime.
       channels: (call.metadata?.seenChannels as string[] | undefined) ?? call.channels,
-      // AMI Cdr dcontext is the most reliable tenant indicator for VitalPBX — e.g. "ext-local-relax_tires".
-      // accountCode may also carry the tenant slug in some VitalPBX installations.
-      dcontext: (call.metadata?.cdrDcontext as string | undefined) ?? null,
+      dcontext: primaryDctx,
+      dcontexts,
       accountCode: (call.metadata?.cdrAccountCode as string | undefined) ?? null,
+      pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
+      pbxTenantCode: (call.metadata?.pbxTenantCode as string | undefined) ?? null,
     };
 
     if (env.ENABLE_TELEPHONY_DEBUG) {

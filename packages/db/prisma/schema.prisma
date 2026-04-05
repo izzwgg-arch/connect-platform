@@ -995,6 +995,23 @@ model PbxInstance {
   cdrCursors       PbxCdrCursor[]
   pbxJobs          PbxJob[]
   webhookRegistration PbxWebhookRegistration?
+  tenantDirectory  PbxTenantDirectory[]
+}
+
+// Cached VitalPBX tenant rows for deterministic mapping (T8 / numeric id / slug -> Connect tenant).
+model PbxTenantDirectory {
+  id             String      @id @default(cuid())
+  pbxInstanceId  String
+  vitalTenantId  String
+  tenantSlug     String
+  tenantCode     String
+  displayName    String?
+  syncedAt       DateTime    @default(now())
+  pbxInstance    PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([pbxInstanceId, vitalTenantId])
+  @@index([pbxInstanceId, tenantCode])
+  @@index([pbxInstanceId, tenantSlug])
 }
 
 
@@ -1019,6 +1036,7 @@ model TenantPbxLink {
   tenantId      String        @unique
   pbxInstanceId String
   pbxTenantId   String?
+  pbxTenantCode String?
   pbxDomain     String?
   status        PbxLinkStatus @default(LINKED)
   lastSyncAt    DateTime?
@@ -1098,7 +1116,10 @@ model CallRecord {
 model ConnectCdr {
   id          String    @id @default(cuid())
   linkedId    String    @unique           // Asterisk Linkedid — canonical dedupe key
-  tenantId    String?                     // null = tenant could not be resolved
+  tenantId    String?                     // Connect Tenant.id when linked; else vpbx:{slug}; null = unassigned
+  pbxVitalTenantId String?                // VitalPBX tenant_id (numeric string, e.g. "8")
+  pbxTenantCode    String?                // Canonical label e.g. "T8"
+  tenantResolutionSource String?          // audit: how tenantId was chosen
   fromNumber  String?
   toNumber    String?
   direction   String                      // "incoming" | "outgoing" | "internal" | "unknown"
@@ -1111,6 +1132,8 @@ model ConnectCdr {
   queueId     String?
   hangupCause String?
   dcontext    String?                     // AMI Cdr dcontext — most authoritative direction signal (e.g. "ext-local-gesheft")
+  dcontextsSeen Json?                     // string[] — all AMI Cdr dcontext values observed for this linkedId
+  channelsSeen  Json?                     // string[] — accumulated channel names for direction evidence
   rawLegCount Int       @default(1)       // how many CDR notifications were received for this linkedId (channel-leg count)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

@@ -32,6 +32,10 @@ export class TelephonyService {
     this.bindAri();
   }
 
+  getResolver(): TenantResolver {
+    return this.resolver;
+  }
+
   private bindAmi(): void {
     // Must register an 'error' handler or Node.js will throw it as uncaught.
     // AMI errors (auth failures, network drops) trigger the internal reconnect
@@ -114,7 +118,7 @@ export class TelephonyService {
           }
           break;
         }
-        const tenantId = this.resolver.resolve({
+        const tres = this.resolver.resolveDetails({
           channel: typed.channel,
           context: typed.context,
           callerIdNum: typed.callerIDNum,
@@ -122,8 +126,8 @@ export class TelephonyService {
         });
         if (env.ENABLE_TELEPHONY_DEBUG) {
           log.debug(
-            { linkedId, channel: typed.channel, tenantId, resolved: tenantId != null },
-            tenantId != null ? "live_call: tenant_resolved" : "live_call: tenant_unresolved",
+            { linkedId, channel: typed.channel, tenantId: tres.tenantId, resolved: tres.tenantId != null },
+            tres.tenantId != null ? "live_call: tenant_resolved" : "live_call: tenant_unresolved",
           );
         }
         const direction = inferLiveCallDirection(typed.context, typed.exten, typed.callerIDNum);
@@ -138,7 +142,9 @@ export class TelephonyService {
           connectedLineName: typed.connectedLineName,
           context: typed.context,
           exten: typed.exten,
-          tenantId,
+          tenantId: tres.tenantId,
+          pbxVitalTenantId: tres.pbxVitalTenantId,
+          pbxTenantCode: tres.pbxTenantCode,
           direction,
         });
         log.debug(
