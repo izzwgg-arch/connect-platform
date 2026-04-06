@@ -46,8 +46,11 @@ export class JsSipClient implements SipClient {
   private incomingSessions: any[] = [];
   private callStartedAt: number | null = null;
   private callDirection: "outbound" | "inbound" = "outbound";
+  private livePingInterval: ReturnType<typeof setInterval> | null = null;
   /** Callback for submitting quality reports — injected by the context layer. */
   onCallQualityReport?: (report: Record<string, unknown>) => void;
+  /** Callback for sending live mid-call pings — injected by the context layer. */
+  onCallQualityPing?: (snapshot: Record<string, unknown>) => void;
 
   configure(bundle: ProvisioningBundle) {
     this.bundle = bundle;
@@ -59,6 +62,13 @@ export class JsSipClient implements SipClient {
 
   async register() {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
+
+    // Tear down any existing UA before creating a new one
+    if (this.ua) {
+      try { this.ua.stop(); } catch { /* ignore */ }
+      this.ua = null;
+    }
+
     this.events.onRegistrationState?.("registering");
     console.log('[SIP] Registering to', this.bundle.sipDomain, 'via', this.bundle.sipWsUrl);
 
@@ -152,11 +162,13 @@ export class JsSipClient implements SipClient {
       ICM.start("audio");
       if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.events.onCallState?.("connected");
+      this.startLivePing(session);
     });
 
     session.on("ended", (e: any) => {
       const cause = e?.cause || "normal";
       console.log('[SIP] Call ended, cause:', cause);
+      this.stopLivePing();
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
@@ -169,6 +181,7 @@ export class JsSipClient implements SipClient {
       const code = e?.response?.status_code;
       const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
       console.warn('[SIP] Call failed:', msg);
+      this.stopLivePing();
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
@@ -277,6 +290,7 @@ export class JsSipClient implements SipClient {
 
   async hangup() {
     console.log('[SIP] Hanging up');
+    this.stopLivePing();
     await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});
     ICM.stop();
     try {
@@ -336,6 +350,87 @@ export class JsSipClient implements SipClient {
 
   sendDtmf(digit: string) {
     this.session?.sendDTMF?.(digit);
+  }
+
+  private stopLivePing() {
+    if (this.livePingInterval !== null) {
+      clearInterval(this.livePingInterval);
+      this.livePingInterval = null;
+    }
+    // Tell dashboard the call is gone
+    this.onCallQualityPing?.({ _clear: true });
+  }
+
+  private startLivePing(session: any) {
+    this.stopLivePing();
+    this.livePingInterval = setInterval(async () => {
+      if (!this.onCallQualityPing) return;
+      const durationMs = this.callStartedAt ? Date.now() - this.callStartedAt : 0;
+      const snapshot: Record<string, unknown> = {
+        platform: "ANDROID",
+        durationMs,
+        direction: this.callDirection,
+      };
+
+      // Collect audio route
+      let audioRoute: string | null = null;
+      try {
+        const ICMModule = require('react-native-incall-manager').default || require('react-native-incall-manager');
+        audioRoute = ICMModule?.currentRoute?.() || null;
+      } catch { /* ignore */ }
+      if (audioRoute) snapshot.audioRoute = audioRoute;
+
+      // Network type
+      try {
+        const NetInfo = require("@react-native-community/netinfo");
+        if (NetInfo?.fetch) {
+          const state = await NetInfo.fetch();
+          if (state?.type) snapshot.networkType = state.type;
+        }
+      } catch { /* ignore */ }
+
+      // WebRTC stats
+      try {
+        const pc: RTCPeerConnection | null = session?.connection ?? null;
+        if (pc && typeof pc.getStats === "function") {
+          const stats = await pc.getStats();
+          const localCandidates = new Map<string, string>();
+          stats.forEach((r: any) => {
+            if (r.type === "local-candidate") localCandidates.set(r.id, r.candidateType || "");
+          });
+          stats.forEach((r: any) => {
+            if (r.type === "inbound-rtp" && r.kind === "audio") {
+              if (typeof r.packetsLost === "number") snapshot.packetsLost = r.packetsLost;
+              if (typeof r.packetsReceived === "number") snapshot.packetsReceived = r.packetsReceived;
+              if (typeof r.jitter === "number") snapshot.jitterMs = Math.round(r.jitter * 1000);
+              if (typeof r.bytesReceived === "number") snapshot.bytesReceived = r.bytesReceived;
+            }
+            if (r.type === "outbound-rtp" && r.kind === "audio") {
+              if (typeof r.packetsSent === "number") snapshot.packetsSent = r.packetsSent;
+              if (typeof r.bytesSent === "number") snapshot.bytesSent = r.bytesSent;
+            }
+            if (r.type === "candidate-pair" && r.nominated === true) {
+              if (typeof r.currentRoundTripTime === "number") snapshot.rttMs = Math.round(r.currentRoundTripTime * 1000);
+              const ct = localCandidates.get(r.localCandidateId);
+              if (ct) { snapshot.candidateType = ct; snapshot.isUsingRelay = ct === "relay"; }
+            }
+          });
+        }
+      } catch { /* ignore */ }
+
+      // Compute quality grade
+      const rtt = typeof snapshot.rttMs === "number" ? snapshot.rttMs : 999;
+      const jitter = typeof snapshot.jitterMs === "number" ? snapshot.jitterMs : 0;
+      const lost = typeof snapshot.packetsLost === "number" ? snapshot.packetsLost : 0;
+      const recv = typeof snapshot.packetsReceived === "number" ? snapshot.packetsReceived : 0;
+      const lossRate = recv > 0 ? (lost / (lost + recv)) * 100 : 0;
+      if (rtt <= 100 && jitter <= 10 && lossRate < 0.5) snapshot.qualityGrade = "excellent";
+      else if (rtt <= 200 && jitter <= 25 && lossRate < 1) snapshot.qualityGrade = "good";
+      else if (rtt <= 350 && jitter <= 50 && lossRate < 3) snapshot.qualityGrade = "fair";
+      else snapshot.qualityGrade = "poor";
+
+      this.onCallQualityPing(snapshot);
+    }, 10_000);
   }
 
   private async collectAndSubmitQualityReport(endReason: string) {

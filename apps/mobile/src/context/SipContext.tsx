@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { AppState } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { createSipClient } from "../sip";
-import { postCallQualityReport } from "../api/client";
+import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from "../api/client";
 import type { CallState, ProvisioningBundle, SipRegistrationState } from "../types";
 import { useAuth } from "./AuthContext";
 
@@ -65,14 +65,25 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   }, [callState]);
 
   // Wire the quality report callback — fires at end of each call
+  // Wire the live ping callback — fires every ~10 s during a call
   useEffect(() => {
     const client = clientRef.current as any;
-    if (typeof client.onCallQualityReport !== "undefined" || "onCallQualityReport" in client) {
+    if ("onCallQualityReport" in client || typeof client.onCallQualityReport !== "undefined") {
       client.onCallQualityReport = (report: Record<string, unknown>) => {
         if (!authToken) return;
         postCallQualityReport(authToken, report).catch(() => {
           // Non-fatal — telemetry loss acceptable
         });
+      };
+    }
+    if ("onCallQualityPing" in client || typeof client.onCallQualityPing !== "undefined") {
+      client.onCallQualityPing = (snapshot: Record<string, unknown>) => {
+        if (!authToken) return;
+        if (snapshot._clear) {
+          clearCallQualityPing(authToken).catch(() => {});
+        } else {
+          postCallQualityPing(authToken, snapshot).catch(() => {});
+        }
       };
     }
   }, [authToken]);
@@ -133,6 +144,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
         clientRef.current.configure(bundle);
         setHasProvisioning(true);
+        // Immediately re-register with the new credentials
+        await clientRef.current.register().catch((e) => {
+          console.warn("[SIP] Re-register after provisioning failed:", e?.message);
+        });
       },
 
       register: async () => {
