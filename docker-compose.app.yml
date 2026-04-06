@@ -58,7 +58,12 @@ services:
       context: .
       dockerfile: apps/portal/Dockerfile
     environment:
-      NEXT_PUBLIC_API_URL: https://app.connectcomunications.com/api
+      # Empty = browser uses same-origin `/api` (works for every hostname nginx serves; avoids
+      # hard-coding one domain when users open an alternate spelling/alias host).
+      # Local dev: set NEXT_PUBLIC_API_URL=http://localhost:3001 in apps/portal/.env.local
+      NEXT_PUBLIC_API_URL: ""
+      # Server-side fetches from the portal container (if any) reach the API service directly.
+      PORTAL_API_INTERNAL_URL: http://api:3001
       # Live AMI event stream for call/extension/queue state in the portal dashboard.
       # Must be wss:// in production (nginx proxies wss: → ws: internally).
       NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}

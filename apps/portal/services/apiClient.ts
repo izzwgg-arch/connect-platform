@@ -6,9 +6,36 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * API origin for browser calls.
+ * - If NEXT_PUBLIC_API_URL is set (non-empty), use it (local dev: http://localhost:3001).
+ * - If unset/empty at build time, use same-origin `/api` so the portal works on every
+ *   hostname nginx serves (avoids hard-coding one domain when users hit a typo/alias host).
+ */
 function baseUrl(): string {
-  const fromEnv = process.env.NEXT_PUBLIC_API_URL || "";
-  return fromEnv.replace(/\/$/, "");
+  const baked = process.env.NEXT_PUBLIC_API_URL;
+  const fromEnv = baked != null && String(baked).trim() !== "" ? String(baked).trim().replace(/\/$/, "") : "";
+  if (fromEnv) return fromEnv;
+  if (typeof window !== "undefined") {
+    return `${window.location.origin.replace(/\/$/, "")}/api`;
+  }
+  return (process.env.PORTAL_API_INTERNAL_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
+}
+
+function parseJsonResponse<T>(res: Response, text: string): T {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new ApiError(`Empty response body (${res.status})`, res.status);
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    const snippet = trimmed.length > 160 ? `${trimmed.slice(0, 160)}…` : trimmed;
+    throw new ApiError(
+      `Expected JSON from API but got ${res.headers.get("content-type") || "unknown type"} (starts with: ${snippet.replace(/\s+/g, " ")})`,
+      res.status,
+    );
+  }
 }
 
 function browserToken(): string {
@@ -43,14 +70,26 @@ async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: 
       cache: "no-store",
       signal: controller.signal
     });
+    const text = await res.text();
     if (!res.ok) {
-      const errPayload = (await res.json().catch(() => null)) as any;
+      let errPayload: any = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
       const errCode = String(errPayload?.error || "").trim();
       const errMessage = String(errPayload?.message || "").trim();
       const detail = [errCode, errMessage].filter(Boolean).join(": ");
-      throw new ApiError(detail || `Request failed (${res.status})`, res.status);
+      const fallback =
+        !errPayload && text.trim()
+          ? text.trim().length > 200
+            ? `${text.trim().slice(0, 200)}…`
+            : text.trim()
+          : "";
+      throw new ApiError(detail || fallback || `Request failed (${res.status})`, res.status);
     }
-    return (await res.json()) as T;
+    return parseJsonResponse<T>(res, text);
   } finally {
     clearTimeout(timeout);
   }
