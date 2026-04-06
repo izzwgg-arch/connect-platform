@@ -1,5 +1,6 @@
 FROM node:20-bookworm-slim
 WORKDIR /app
+ENV CI=true
 RUN corepack enable
 COPY . .
 RUN pnpm install --filter @connect/telephony...
