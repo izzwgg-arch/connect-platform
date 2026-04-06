@@ -211,6 +211,99 @@ export function DiagnosticsScreen() {
             <DiagRow label="DTMF Mode" value={parsedBundle?.dtmfMode || '—'} />
           </Section>
 
+          {/* ── ICE / TURN ── */}
+          <Section title="ICE / TURN">
+            {(() => {
+              const iceServers: any[] = parsedBundle?.iceServers ?? [];
+              const hasTurn = iceServers.some((s: any) => {
+                const urls: string[] = Array.isArray(s.urls) ? s.urls : [s.urls];
+                return urls.some((u: string) => u?.startsWith('turn:') || u?.startsWith('turns:'));
+              });
+              const hasStun = iceServers.some((s: any) => {
+                const urls: string[] = Array.isArray(s.urls) ? s.urls : [s.urls];
+                return urls.some((u: string) => u?.startsWith('stun:'));
+              });
+              const turnServers = iceServers.filter((s: any) => {
+                const urls: string[] = Array.isArray(s.urls) ? s.urls : [s.urls];
+                return urls.some((u: string) => u?.startsWith('turn:') || u?.startsWith('turns:'));
+              });
+              return (
+                <>
+                  <DiagRow
+                    label="TURN Configured"
+                    value={hasTurn ? 'Yes' : 'No — audio may fail behind strict NAT'}
+                    ok={hasTurn}
+                    warn={!hasTurn}
+                  />
+                  <DiagRow
+                    label="STUN Configured"
+                    value={hasStun ? 'Yes' : 'No'}
+                    ok={hasStun}
+                    warn={!hasStun}
+                  />
+                  {hasTurn && (
+                    <DiagRow
+                      label="TURN Credential"
+                      value={turnServers[0]?.username ? 'Present' : 'Missing — anonymous TURN'}
+                      ok={!!turnServers[0]?.username}
+                      warn={!turnServers[0]?.username}
+                    />
+                  )}
+                  <DiagRow
+                    label="Total ICE Servers"
+                    value={iceServers.length ? String(iceServers.length) : '0 — fallback only'}
+                    ok={iceServers.length > 0}
+                    warn={iceServers.length === 0}
+                  />
+                </>
+              );
+            })()}
+          </Section>
+
+          {/* ── Phone Readiness ── */}
+          <Section title="Phone Readiness">
+            {(() => {
+              const iceServers: any[] = parsedBundle?.iceServers ?? [];
+              const hasTurn = iceServers.some((s: any) => {
+                const urls: string[] = Array.isArray(s.urls) ? s.urls : [s.urls];
+                return urls.some((u: string) => u?.startsWith('turn:') || u?.startsWith('turns:'));
+              });
+              const checks = [
+                { label: 'SIP Registered', pass: sip.registrationState === 'registered' },
+                { label: 'Provisioning Loaded', pass: sip.hasProvisioning },
+                { label: 'WSS URL set', pass: !!parsedBundle?.sipWsUrl },
+                { label: 'SIP Domain set', pass: !!parsedBundle?.sipDomain },
+                { label: 'TURN configured', pass: hasTurn, warn: true },
+                { label: 'SIP Password set (server)', pass: !!voice?.hasSipPassword },
+                { label: 'WebRTC enabled (server)', pass: !!voice?.webrtcEnabled },
+              ];
+              const passed = checks.filter((c) => c.pass).length;
+              const required = checks.filter((c) => !c.warn).length;
+              const requiredPassed = checks.filter((c) => !c.warn && c.pass).length;
+              const ready = requiredPassed === required;
+              return (
+                <>
+                  <DiagRow
+                    label="Overall Status"
+                    value={ready ? `READY (${passed}/${checks.length})` : `NOT READY (${passed}/${checks.length})`}
+                    ok={ready}
+                    warn={!ready}
+                  />
+                  {checks.map((c) => (
+                    <DiagRow
+                      key={c.label}
+                      label={c.label}
+                      value={c.pass ? '✓' : c.warn ? '⚠ recommended' : '✕'}
+                      ok={c.pass}
+                      warn={!c.pass && c.warn}
+                      danger={!c.pass && !c.warn}
+                    />
+                  ))}
+                </>
+              );
+            })()}
+          </Section>
+
           {/* ── App Info ── */}
           <Section title="App Info">
             <DiagRow label="App Version" value={String(Constants.expoConfig?.version || '1.0.0')} />

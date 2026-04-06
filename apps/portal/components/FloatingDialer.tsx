@@ -289,7 +289,49 @@ export function FloatingDialer() {
               </div>
             ) : null}
 
-            {/* Diagnostics summary */}
+            {/* In-call quality stats */}
+            {phone.callState === "connected" && (
+              <div style={{
+                fontSize: 11,
+                borderTop: "1px solid var(--border)",
+                paddingTop: 8,
+                display: "flex",
+                flexDirection: "column",
+                gap: 3,
+              }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {phone.diag.isUsingRelay ? (
+                    <span style={{ padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.12)", color: "var(--success)", fontSize: 10, fontWeight: 600 }}>
+                      TURN Relay ✓
+                    </span>
+                  ) : phone.diag.selectedCandidateType ? (
+                    <span style={{ padding: "1px 6px", borderRadius: 4, background: "var(--panel-2)", color: "var(--text-dim)", fontSize: 10 }}>
+                      ICE: {phone.diag.selectedCandidateType}
+                    </span>
+                  ) : null}
+                  {phone.diag.rttMs !== null ? (
+                    <span style={{ padding: "1px 6px", borderRadius: 4, background: "var(--panel-2)", color: phone.diag.rttMs > 300 ? "var(--warning)" : "var(--text-dim)", fontSize: 10 }}>
+                      RTT {phone.diag.rttMs}ms
+                    </span>
+                  ) : null}
+                  {phone.diag.jitterMs !== null ? (
+                    <span style={{ padding: "1px 6px", borderRadius: 4, background: "var(--panel-2)", color: phone.diag.jitterMs > 30 ? "var(--warning)" : "var(--text-dim)", fontSize: 10 }}>
+                      Jitter {phone.diag.jitterMs}ms
+                    </span>
+                  ) : null}
+                  {phone.diag.packetsLost !== null && phone.diag.packetsLost > 0 ? (
+                    <span style={{ padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.1)", color: "var(--danger)", fontSize: 10 }}>
+                      ✕ {phone.diag.packetsLost} lost
+                    </span>
+                  ) : null}
+                </div>
+                {phone.diag.iceConnectionState && phone.diag.iceConnectionState !== "connected" && phone.diag.iceConnectionState !== "completed" ? (
+                  <span style={{ color: "var(--warning)", fontSize: 10 }}>ICE: {phone.diag.iceConnectionState}</span>
+                ) : null}
+              </div>
+            )}
+
+            {/* Pre-call readiness summary */}
             {!isInCall && (
               <div style={{
                 fontSize: 11,
@@ -301,7 +343,9 @@ export function FloatingDialer() {
                 gap: 3,
               }}>
                 {phone.diag.sipWssUrl ? (
-                  <span>WSS: {phone.diag.sipWssUrl}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    WSS: {phone.diag.sipWssUrl}
+                  </span>
                 ) : null}
                 {!phone.diag.hasTurn ? (
                   <span style={{ color: "var(--warning)" }}>⚠ No TURN — audio may fail behind NAT</span>
@@ -309,12 +353,9 @@ export function FloatingDialer() {
                   <span style={{ color: "var(--success)" }}>✓ TURN configured</span>
                 )}
                 {phone.diag.micPermission === "denied" ? (
-                  <span style={{ color: "var(--danger)" }}>✕ Microphone access denied</span>
+                  <span style={{ color: "var(--danger)" }}>✕ Microphone denied</span>
                 ) : phone.diag.micPermission === "granted" ? (
-                  <span style={{ color: "var(--success)" }}>✓ Microphone access granted</span>
-                ) : null}
-                {phone.diag.iceConnectionState ? (
-                  <span>ICE: {phone.diag.iceConnectionState}</span>
+                  <span style={{ color: "var(--success)" }}>✓ Microphone ready</span>
                 ) : null}
                 {phone.diag.lastRegError ? (
                   <span style={{ color: "var(--danger)" }}>✕ {phone.diag.lastRegError}</span>

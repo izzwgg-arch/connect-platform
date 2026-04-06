@@ -1,6 +1,43 @@
 import type { SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 
+// Voice-optimised audio constraints — same profile as the browser softphone.
+const VOICE_AUDIO_CONSTRAINTS = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+    sampleRate: { ideal: 48_000 },
+  } as MediaTrackConstraints,
+  video: false,
+};
+
+/** Best-effort InCallManager helper — silently no-ops if the native module is absent. */
+const ICM = {
+  start(media: "audio" | "video" = "audio") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("react-native-incall-manager").default;
+      m.start({ media });
+    } catch { /* module not linked */ }
+  },
+  stop() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("react-native-incall-manager").default;
+      m.stop();
+    } catch { /* module not linked */ }
+  },
+  setSpeaker(on: boolean) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("react-native-incall-manager").default;
+      m.setSpeakerphoneOn(on);
+    } catch { /* module not linked */ }
+  },
+};
+
 export class JsSipClient implements SipClient {
   private events: SipEvents = {};
   private bundle: ProvisioningBundle | null = null;
@@ -107,12 +144,14 @@ export class JsSipClient implements SipClient {
 
     session.on("confirmed", () => {
       console.log('[SIP] Call confirmed (connected)');
+      ICM.start("audio"); // ensure audio session active even if answer path skipped it
       this.events.onCallState?.("connected");
     });
 
     session.on("ended", (e: any) => {
       const cause = e?.cause || "normal";
       console.log('[SIP] Call ended, cause:', cause);
+      ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
@@ -123,6 +162,7 @@ export class JsSipClient implements SipClient {
       const code = e?.response?.status_code;
       const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
       console.warn('[SIP] Call failed:', msg);
+      ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
@@ -177,14 +217,16 @@ export class JsSipClient implements SipClient {
     const dest = `sip:${target}@${this.bundle.sipDomain}`;
     console.log('[SIP] Dialing:', dest);
     this.events.onCallState?.("dialing");
+    ICM.start("audio");
     try {
       this.session = this.ua.call(dest, {
-        mediaConstraints: { audio: true, video: false },
+        mediaConstraints: VOICE_AUDIO_CONSTRAINTS,
         pcConfig: this.ua._configuration?.pcConfig ?? {},
       });
       this.bindSession(this.session);
       console.log('[SIP] INVITE sent');
     } catch (e: any) {
+      ICM.stop();
       const msg = e?.message || "dial failed";
       console.error('[SIP] Dial error:', msg);
       this.events.onError?.(`Dial error: ${msg}`);
@@ -193,7 +235,8 @@ export class JsSipClient implements SipClient {
   }
 
   async answer() {
-    this.session?.answer?.({ mediaConstraints: { audio: true, video: false } });
+    ICM.start("audio");
+    this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
   }
 
   async answerIncoming(match?: SipMatch, timeoutMs = 5000): Promise<boolean> {
@@ -202,7 +245,8 @@ export class JsSipClient implements SipClient {
       const session = this.findIncoming(match);
       if (session) {
         this.session = session;
-        session.answer?.({ mediaConstraints: { audio: true, video: false } });
+        ICM.start("audio");
+        session.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
         return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 120));
@@ -223,6 +267,7 @@ export class JsSipClient implements SipClient {
 
   async hangup() {
     console.log('[SIP] Hanging up');
+    ICM.stop();
     try {
       this.session?.terminate?.();
     } catch (e) {
@@ -240,17 +285,8 @@ export class JsSipClient implements SipClient {
   }
 
   setSpeaker(speakerOn: boolean) {
-    // Use react-native-incall-manager if available for earpiece/speaker routing.
-    // This is a best-effort call — silently ignored if the module isn't linked.
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const InCallManager = require('react-native-incall-manager').default;
-      InCallManager.setSpeakerphoneOn(speakerOn);
-      console.log('[SIP] Speaker', speakerOn ? 'on' : 'off');
-    } catch {
-      // Module not available — audio routing unchanged
-      console.log('[SIP] setSpeaker: InCallManager not available, skipping');
-    }
+    ICM.setSpeaker(speakerOn);
+    console.log('[SIP] Speaker', speakerOn ? 'on' : 'off');
   }
 
   hold() {

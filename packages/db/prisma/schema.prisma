@@ -200,6 +200,7 @@ enum VoiceDiagEventType {
   CALL_ENDED
   ERROR
   MEDIA_TEST_RUN
+  CALL_QUALITY_REPORT
 }
 
 enum MediaTestStatus {

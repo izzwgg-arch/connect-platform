@@ -22,6 +22,8 @@ export type SipCallState =
 
 export type MicPermission = "unknown" | "granted" | "denied" | "prompt";
 
+export type IceCandidateType = "host" | "srflx" | "relay" | "prflx" | null;
+
 export interface SipDiagnostics {
   sipWssUrl: string | null;
   sipDomain: string | null;
@@ -32,6 +34,18 @@ export interface SipDiagnostics {
   micPermission: MicPermission;
   iceGatheringState: RTCIceGatheringState | null;
   iceConnectionState: RTCIceConnectionState | null;
+  /** Actual ICE candidate type in use — relay means TURN is active. */
+  selectedCandidateType: IceCandidateType;
+  /** True when the selected ICE path routes through a TURN relay. */
+  isUsingRelay: boolean;
+  /** Cumulative packets lost on inbound audio RTP stream. */
+  packetsLost: number | null;
+  /** Inbound audio jitter in milliseconds. */
+  jitterMs: number | null;
+  /** Round-trip time for the selected ICE candidate pair in milliseconds. */
+  rttMs: number | null;
+  /** True once at least one live remote audio track is attached to the element. */
+  remoteAudioReceiving: boolean;
   lastRegError: string | null;
   lastCallError: string | null;
   webrtcEnabled: boolean;
@@ -71,6 +85,16 @@ type VoiceExtension = {
   outboundProxy: string | null;
   iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>;
   dtmfMode: "RFC2833" | "SIP_INFO";
+};
+
+// ── Audio constraints ───────────────────────────────────────────────────────
+// Voice-optimised: echo cancellation, noise suppression, mono, 48kHz preferred.
+const VOICE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  sampleRate: { ideal: 48_000 },
 };
 
 // ── JsSIP dynamic import ────────────────────────────────────────────────────
@@ -119,6 +143,53 @@ async function checkMicPermission(): Promise<MicPermission> {
   }
 }
 
+/** Scrape getStats() for audio quality + ICE candidate type. Non-fatal. */
+async function pollCallStats(pc: RTCPeerConnection): Promise<{
+  packetsLost: number | null;
+  jitterMs: number | null;
+  rttMs: number | null;
+  selectedCandidateType: IceCandidateType;
+}> {
+  const result = {
+    packetsLost: null as number | null,
+    jitterMs: null as number | null,
+    rttMs: null as number | null,
+    selectedCandidateType: null as IceCandidateType,
+  };
+  try {
+    const stats = await pc.getStats();
+    // Build local-candidate map for candidate-pair → candidate-type lookup
+    const localCandidates = new Map<string, string>();
+    stats.forEach((r) => {
+      if (r.type === "local-candidate" && typeof (r as any).candidateType === "string") {
+        localCandidates.set(r.id, (r as any).candidateType);
+      }
+    });
+    stats.forEach((r) => {
+      // Inbound audio: packet loss + jitter
+      if (r.type === "inbound-rtp" && (r as any).kind === "audio") {
+        const ir = r as any;
+        if (typeof ir.packetsLost === "number") result.packetsLost = ir.packetsLost;
+        if (typeof ir.jitter === "number") result.jitterMs = Math.round(ir.jitter * 1000);
+      }
+      // Nominated ICE candidate pair: RTT + local candidate type
+      if (r.type === "candidate-pair" && (r as any).nominated === true) {
+        const cp = r as any;
+        if (typeof cp.currentRoundTripTime === "number") {
+          result.rttMs = Math.round(cp.currentRoundTripTime * 1000);
+        }
+        const localCandType = localCandidates.get(cp.localCandidateId);
+        if (localCandType) {
+          result.selectedCandidateType = localCandType as IceCandidateType;
+        }
+      }
+    });
+  } catch {
+    // getStats can throw if the PC is torn down
+  }
+  return result;
+}
+
 const DEFAULT_DIAG: SipDiagnostics = {
   sipWssUrl: null,
   sipDomain: null,
@@ -129,6 +200,12 @@ const DEFAULT_DIAG: SipDiagnostics = {
   micPermission: "unknown",
   iceGatheringState: null,
   iceConnectionState: null,
+  selectedCandidateType: null,
+  isUsingRelay: false,
+  packetsLost: null,
+  jitterMs: null,
+  rttMs: null,
+  remoteAudioReceiving: false,
   lastRegError: null,
   lastCallError: null,
   webrtcEnabled: false,
@@ -152,11 +229,32 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sessionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  /** Prevent double wirePC on the same RTCPeerConnection (newRTCSession + bindSession). */
   const wiredPeerConnectionsRef = useRef<WeakSet<RTCPeerConnection>>(new WeakSet());
+  const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function patchDiag(patch: Partial<SipDiagnostics>) {
     setDiag((prev) => ({ ...prev, ...patch }));
+  }
+
+  function stopStatsPolling() {
+    if (statsIntervalRef.current !== null) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
+  }
+
+  function startStatsPolling(pc: RTCPeerConnection) {
+    stopStatsPolling();
+    statsIntervalRef.current = setInterval(async () => {
+      const s = await pollCallStats(pc);
+      patchDiag({
+        packetsLost: s.packetsLost,
+        jitterMs: s.jitterMs,
+        rttMs: s.rttMs,
+        selectedCandidateType: s.selectedCandidateType,
+        isUsingRelay: s.selectedCandidateType === "relay",
+      });
+    }, 4_000);
   }
 
   // ── Initialise ─────────────────────────────────────────────────────────
@@ -166,14 +264,14 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     let cancelled = false;
 
     async function init() {
-      // Hidden audio element for remote media
+      // Off-screen audio element for remote media — display:none can block playback
+      // in some browsers, so we keep it in the layout but invisible.
       if (!audioRef.current) {
         const el = document.createElement("audio");
         el.autoplay = true;
         el.setAttribute("playsinline", "");
         el.muted = false;
         el.volume = 1.0;
-        // display:none can prevent playback in some browsers; keep element in layout off-screen.
         Object.assign(el.style, {
           position: "fixed",
           left: "-9999px",
@@ -186,11 +284,9 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         audioRef.current = el;
       }
 
-      // Check mic permission up front so the UI can warn immediately
       const micPerm = await checkMicPermission();
       if (!cancelled) patchDiag({ micPermission: micPerm });
 
-      // Fetch extension config (no SIP password — just metadata + WSS URL)
       let ext: VoiceExtension;
       try {
         ext = await apiGet<VoiceExtension>("/voice/me/extension");
@@ -206,7 +302,6 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         patchDiag({ webrtcEnabled: false });
         return;
       }
-
       if (cancelled) return;
 
       const sipWssUrl = ext.sipWsUrl ?? null;
@@ -224,38 +319,27 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         sipDomainConfigured: !!sipDomain,
       });
 
-      // Fail fast with actionable errors instead of silent breakage
       if (!ext.webrtcEnabled) {
         setError("WEBRTC_DISABLED — An administrator must enable WebRTC for this tenant. Go to PBX → Extensions → WebRTC Settings.");
         return;
       }
       if (!sipWssUrl) {
-        setError(
-          "SIP WSS URL is not configured. Set sipWsUrl in Voice → Settings → WebRTC, " +
-            "or set PBX_WS_ENDPOINT=wss://209.145.60.79:8089/ws on the API server.",
-        );
+        setError("SIP WSS URL is not configured. Set sipWsUrl in Voice → Settings → WebRTC.");
         return;
       }
       if (!sipDomain) {
-        setError(
-          "SIP Domain is not configured. Set sipDomain in Voice → Settings → WebRTC.",
-        );
+        setError("SIP Domain is not configured. Set sipDomain in Voice → Settings → WebRTC.");
         return;
       }
       if (!ext.sipUsername) {
         setError("No SIP username assigned. Contact your administrator.");
         return;
       }
+
       if (!hasTurnServer(ext.iceServers)) {
-        // Warn but do NOT block — STUN alone may work on a local/simple NAT
-        console.warn(
-          "[useSipPhone] No TURN server configured. " +
-            "Audio may fail behind strict NAT. Configure a coturn server and add its " +
-            "credentials via Voice → Settings → WebRTC → ICE Servers.",
-        );
+        console.warn("[SipPhone] No TURN server in ICE config — audio may fail behind strict NAT.");
       }
 
-      // Fetch real SIP credentials via POST (uses admin-stored encrypted password on VitalPBX)
       let sipPassword: string;
       try {
         const reset = await apiPost<{ sipPassword: string; provisioning?: { sipPassword: string } }>(
@@ -266,7 +350,9 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         if (cancelled) return;
         const raw = e instanceof Error ? e.message : "SIP_CREDENTIAL_FETCH_FAILED";
         const msg = raw.includes("SIP_CREDENTIAL_NOT_SET")
-          ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension. Go to PBX → Extensions → set SIP Password."
+          ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension."
+          : raw.includes("RATE_LIMITED")
+          ? "RATE_LIMITED — Too many credential requests. Reload the page to retry."
           : `Failed to fetch SIP credentials: ${raw}. Try refreshing the page.`;
         setError(msg);
         patchDiag({ lastRegError: msg });
@@ -274,26 +360,21 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       }
 
       if (cancelled || !sipPassword) {
-        setError("SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension. Go to PBX → Extensions → set SIP Password.");
+        setError("SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension.");
         return;
       }
 
-      // Build JsSIP UA
       try {
         const JsSIP = await loadJsSIP();
         if (cancelled) return;
 
         setRegState("connecting");
-
         const socket = new JsSIP.WebSocketInterface(sipWssUrl);
 
         const uaConfig: Record<string, unknown> = {
           sockets: [socket],
           uri: `sip:${ext.sipUsername}@${sipDomain}`,
           password: sipPassword,
-          // authorization_user must match the PJSIP auth object username in Asterisk.
-          // VitalPBX names auth objects after the device_name (e.g. "T2_103_1"), not the
-          // device user field ("103_1"). Sending the wrong auth username causes 401.
           authorization_user: ext.authUsername || ext.sipUsername,
           display_name: ext.displayName || ext.sipUsername,
           register: true,
@@ -313,16 +394,10 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
         const ua = new JsSIP.UA(uaConfig);
         uaRef.current = ua;
-
         let regFailCount = 0;
 
-        ua.on("connecting", () => {
-          if (!cancelled) setRegState("connecting");
-        });
-
-        ua.on("connected", () => {
-          if (!cancelled) setRegState("registering");
-        });
+        ua.on("connecting", () => { if (!cancelled) setRegState("connecting"); });
+        ua.on("connected",  () => { if (!cancelled) setRegState("registering"); });
 
         ua.on("disconnected", () => {
           if (!cancelled) {
@@ -339,30 +414,25 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             setRegState("registered");
             setError(null);
             patchDiag({ lastRegError: null });
-
-            // Proactively request microphone permission right after registration.
-            // This causes the browser to show the "Allow microphone" prompt immediately
-            // while the user is looking at the softphone, rather than failing silently
-            // at call initiation time. The stream is released right away — we only
-            // need the permission grant, not the audio track itself.
-            if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-              navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-                .then((stream) => {
-                  stream.getTracks().forEach((t) => t.stop());
-                  patchDiag({ lastRegError: null });
+            // Probe mic permission immediately after registration so the browser
+            // shows the "Allow microphone" prompt while the softphone is visible.
+            if (navigator.mediaDevices?.getUserMedia) {
+              navigator.mediaDevices
+                .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+                .then((s) => {
+                  s.getTracks().forEach((t) => t.stop());
+                  patchDiag({ micPermission: "granted" });
                 })
                 .catch((err) => {
-                  const msg = `Microphone access denied — please allow microphone in your browser/device settings. (${err?.name ?? err})`;
+                  const msg = `Microphone access denied — allow microphone in browser settings. (${err?.name ?? err})`;
                   if (!cancelled) setError(msg);
-                  patchDiag({ lastRegError: msg });
+                  patchDiag({ micPermission: "denied", lastRegError: msg });
                 });
             }
           }
         });
 
-        ua.on("unregistered", () => {
-          if (!cancelled) setRegState("idle");
-        });
+        ua.on("unregistered", () => { if (!cancelled) setRegState("idle"); });
 
         ua.on("registrationFailed", (e: { cause: string; response?: { status_code?: number } }) => {
           if (!cancelled) {
@@ -374,6 +444,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             setRegState("failed");
             setError(msg);
             patchDiag({ lastRegError: msg });
+            // Stop hammering the PBX after 3 consecutive failures — require manual reload.
             if (regFailCount >= 3) {
               try { ua.stop(); } catch { /* ignore */ }
               uaRef.current = null;
@@ -390,26 +461,21 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             session: any;
             request: { from: { uri: { user: string }; display_name?: string } };
           }) => {
-            console.log("[SIP] >>> newRTCSession event, originator:", data.originator);
             if (cancelled) return;
 
-            // JsSIP creates the RTCPeerConnection BEFORE firing newRTCSession
-            // for outgoing calls (line 287 vs 296 in RTCSession.js), so the
-            // "peerconnection" event has already fired by now. Wire the PC
-            // directly if it exists; fall back to the event for incoming calls.
+            // JsSIP creates RTCPeerConnection BEFORE firing newRTCSession for outgoing
+            // calls (RTCSession.js line 287 vs 296). Wire directly if PC already exists;
+            // fall back to the "peerconnection" event for incoming calls (answer path).
             if (data.session.connection) {
-              console.log("[SIP] >>> wiring PC directly from newRTCSession (connection already exists)");
               wirePC(data.session.connection);
             } else {
               data.session.on("peerconnection", (pcData: { peerconnection: RTCPeerConnection }) => {
-                console.log("[SIP] >>> peerconnection event fired (incoming)");
                 wirePC(pcData.peerconnection);
               });
             }
 
             if (data.originator === "remote") {
-              const party =
-                data.request.from.display_name || data.request.from.uri.user;
+              const party = data.request.from.display_name || data.request.from.uri.user;
               bindSession(data.session, party);
               setCallState("ringing");
               setRemoteParty(party);
@@ -431,10 +497,9 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
     return () => {
       cancelled = true;
+      stopStatsPolling();
       if (uaRef.current) {
-        try {
-          uaRef.current.stop();
-        } catch { /* ignore */ }
+        try { uaRef.current.stop(); } catch { /* ignore */ }
         uaRef.current = null;
       }
       if (audioRef.current) {
@@ -447,7 +512,23 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
   // ── Session lifecycle ───────────────────────────────────────────────────
 
+  const clearCallDiag = useCallback(() => {
+    stopStatsPolling();
+    patchDiag({
+      iceGatheringState: null,
+      iceConnectionState: null,
+      selectedCandidateType: null,
+      isUsingRelay: false,
+      packetsLost: null,
+      jitterMs: null,
+      rttMs: null,
+      remoteAudioReceiving: false,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const teardownRemoteAudioPlayback = useCallback(() => {
+    stopStatsPolling();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.srcObject = null;
@@ -457,15 +538,13 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   function attachRemoteStream(stream: MediaStream) {
     const el = audioRef.current;
     if (!el) {
-      console.warn("[SIP] audioRef missing — cannot play remote audio");
+      console.warn("[SipPhone] audioRef missing — cannot play remote audio");
       return;
     }
     el.srcObject = stream;
-    console.log("[SIP] attachRemoteStream: tracks", stream.getAudioTracks().map((t) => `${t.kind}:${t.readyState}`).join(", "));
-    el.play().then(() => {
-      console.log("[SIP] <audio>.play() succeeded");
-    }).catch((err) => {
-      console.warn("[SIP] <audio>.play() rejected:", err?.name, err?.message);
+    const tracks = stream.getAudioTracks();
+    patchDiag({ remoteAudioReceiving: tracks.some((t) => t.readyState === "live") });
+    el.play().catch((err) => {
       const resume = () => {
         audioRef.current?.play().catch(() => undefined);
         document.removeEventListener("click", resume);
@@ -475,8 +554,6 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       document.addEventListener("touchend", resume, { once: true });
       patchDiag({ lastCallError: `audio autoplay blocked: ${err?.name} — tap screen to hear audio` });
     });
-    // Do not also route this stream through AudioContext.destination — that plays the same
-    // remote audio twice (HTMLAudioElement + speakers) and causes echo / chorus / slowdown.
   }
 
   function syncReceiversToAudio(pc: RTCPeerConnection) {
@@ -484,60 +561,62 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       .getReceivers()
       .map((r) => r.track)
       .filter((t): t is MediaStreamTrack => !!t && t.kind === "audio" && t.readyState === "live");
-    if (tracks.length === 0) {
-      console.log("[SIP] syncReceiversToAudio: no live remote audio tracks yet");
-      return;
-    }
-    attachRemoteStream(new MediaStream(tracks));
+    if (tracks.length > 0) attachRemoteStream(new MediaStream(tracks));
   }
 
   function wirePC(pc: RTCPeerConnection) {
-    const wired = wiredPeerConnectionsRef.current;
-    if (wired.has(pc)) {
-      console.log("[SIP] wirePC: skip (already wired)");
-      return;
-    }
-    wired.add(pc);
-    console.log("[SIP] wirePC: attaching track + ICE listeners");
+    if (wiredPeerConnectionsRef.current.has(pc)) return;
+    wiredPeerConnectionsRef.current.add(pc);
 
     pc.addEventListener("track", (e: RTCTrackEvent) => {
-      console.log("[SIP] track event:", e.track.kind, "readyState:", e.track.readyState, "streams:", e.streams.length);
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       attachRemoteStream(stream);
     });
 
     pc.addEventListener("icegatheringstatechange", () => {
-      console.log("[SIP] ICE gathering:", pc.iceGatheringState);
       patchDiag({ iceGatheringState: pc.iceGatheringState });
     });
 
     pc.addEventListener("iceconnectionstatechange", () => {
-      console.log("[SIP] ICE connection:", pc.iceConnectionState);
       patchDiag({ iceConnectionState: pc.iceConnectionState });
+
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         syncReceiversToAudio(pc);
+        // Kick off stats polling and do an immediate first poll for candidate type.
+        startStatsPolling(pc);
+        pollCallStats(pc).then((s) => {
+          patchDiag({
+            selectedCandidateType: s.selectedCandidateType,
+            isUsingRelay: s.selectedCandidateType === "relay",
+            packetsLost: s.packetsLost,
+            jitterMs: s.jitterMs,
+            rttMs: s.rttMs,
+          });
+        });
       }
+
       if (pc.iceConnectionState === "failed") {
-        const msg = "ICE connection failed. Audio cannot traverse your NAT. Configure a TURN server in Voice → Settings → WebRTC.";
+        stopStatsPolling();
+        const msg = "ICE connection failed — audio cannot reach the PBX. "
+          + (diag.hasTurn
+            ? "TURN is configured; check firewall/UDP ports."
+            : "No TURN server configured — configure one via Voice → Settings → WebRTC.");
         setError(msg);
         patchDiag({ lastCallError: msg });
       }
+
       if (pc.iceConnectionState === "disconnected") {
         patchDiag({ lastCallError: "ICE disconnected — possible network interruption" });
       }
     });
 
     pc.addEventListener("connectionstatechange", () => {
-      console.log("[SIP] PC connection state:", pc.connectionState);
-      if (pc.connectionState === "connected") {
-        syncReceiversToAudio(pc);
-      }
+      if (pc.connectionState === "connected") syncReceiversToAudio(pc);
     });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function bindSession(session: any, party: string) {
-    console.log("[SIP] >>> bindSession called, party:", party, "session.connection:", !!session?.connection);
     sessionRef.current = session;
     setRemoteParty(party);
 
@@ -557,7 +636,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       setRemoteParty(null);
       setMutedState(false);
       teardownRemoteAudioPlayback();
-      patchDiag({ iceGatheringState: null, iceConnectionState: null });
+      clearCallDiag();
       setTimeout(() => setCallState("idle"), 2000);
     });
 
@@ -569,14 +648,12 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       setMutedState(false);
       setError(msg);
       teardownRemoteAudioPlayback();
-      patchDiag({ lastCallError: msg, iceGatheringState: null, iceConnectionState: null });
+      patchDiag({ lastCallError: msg });
+      clearCallDiag();
     });
 
-    // Do NOT call wirePC again here — newRTCSession already wired the PC once.
-    // Duplicate listeners were stacking multiple play() / AudioContext paths.
-    if (session.connection) {
-      syncReceiversToAudio(session.connection);
-    }
+    // Sync any already-live tracks if peerconnection was created before this binding.
+    if (session.connection) syncReceiversToAudio(session.connection);
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────
@@ -592,21 +669,17 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       const normalised = target.trim();
       if (!normalised) return;
 
-      console.log("[SIP] >>> dial() called, target:", normalised, "domain:", domain);
       setCallState("dialing");
       setError(null);
 
       navigator.mediaDevices
-        .getUserMedia({ audio: true, video: false })
+        .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
         .then((localStream) => {
-          console.log("[SIP] >>> getUserMedia OK, tracks:", localStream.getTracks().length);
           try {
-            console.log("[SIP] >>> calling ua.call()...");
             const session = uaRef.current!.call(`sip:${normalised}@${domain}`, {
               mediaStream: localStream,
               pcConfig: uaRef.current!._configuration?.pcConfig ?? {},
             });
-            console.log("[SIP] >>> ua.call() returned, session.connection:", !!session?.connection);
             bindSession(session, normalised);
           } catch (e: unknown) {
             localStream.getTracks().forEach((t) => t.stop());
@@ -619,13 +692,13 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         .catch((err) => {
           setCallState("idle");
           if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
-            setError("Microphone access denied. Please allow microphone in your browser settings for this site, then try again.");
+            setError("Microphone access denied. Allow microphone in your browser settings for this site, then try again.");
           } else if (err?.name === "NotFoundError") {
-            setError("No microphone found. Please connect a microphone or headset and try again.");
+            setError("No microphone found. Connect a headset or microphone and try again.");
           } else {
             setError(`Microphone error: ${err?.message ?? err}`);
           }
-          patchDiag({ lastCallError: `mic_denied: ${err?.name}` });
+          patchDiag({ lastCallError: `mic_error: ${err?.name}`, micPermission: "denied" });
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -635,7 +708,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   const answer = useCallback(() => {
     if (!sessionRef.current) return;
     navigator.mediaDevices
-      .getUserMedia({ audio: true, video: false })
+      .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
       .then((localStream) => {
         try {
           sessionRef.current?.answer({ mediaStream: localStream });
@@ -657,15 +730,14 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
   const hangup = useCallback(() => {
     if (!sessionRef.current) return;
-    try {
-      sessionRef.current.terminate();
-    } catch { /* already ended */ }
+    try { sessionRef.current.terminate(); } catch { /* already ended */ }
     sessionRef.current = null;
     setCallState("idle");
     setRemoteParty(null);
     setMutedState(false);
     teardownRemoteAudioPlayback();
-  }, [teardownRemoteAudioPlayback]);
+    clearCallDiag();
+  }, [teardownRemoteAudioPlayback, clearCallDiag]);
 
   const setMute = useCallback((mute: boolean) => {
     if (!sessionRef.current) return;
@@ -679,9 +751,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   const sendDtmf = useCallback(
     (digit: string) => {
       if (!sessionRef.current || callState !== "connected") return;
-      try {
-        sessionRef.current.sendDTMF(digit);
-      } catch { /* ignore */ }
+      try { sessionRef.current.sendDTMF(digit); } catch { /* ignore */ }
     },
     [callState],
   );
