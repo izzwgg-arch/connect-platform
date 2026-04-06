@@ -12,6 +12,7 @@ const labels: Record<TelephonySocketStatus, string> = {
   connected: "Live",
   disconnected: "Reconnecting…",
   error: "WS error",
+  failed: "WS failed",
 };
 
 const classes: Record<TelephonySocketStatus, string> = {
@@ -20,6 +21,7 @@ const classes: Record<TelephonySocketStatus, string> = {
   connected: "success",
   disconnected: "warning",
   error: "danger",
+  failed: "danger",
 };
 
 export function LiveBadge({ status }: Props) {
