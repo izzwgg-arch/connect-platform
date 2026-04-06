@@ -232,3 +232,14 @@ export async function getMediaTestStatus(token: string) {
   return json;
 }
 
+export async function postCallQualityReport(token: string, report: Record<string, unknown>) {
+  const res = await fetch(`${API_BASE}/voice/diag/call-quality-report`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CQR_FAILED");
+  return json;
+}
+

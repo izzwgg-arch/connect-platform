@@ -297,8 +297,35 @@ export function FloatingDialer() {
                 paddingTop: 8,
                 display: "flex",
                 flexDirection: "column",
-                gap: 3,
+                gap: 4,
               }}>
+                {/* Quality grade badge */}
+                {phone.diag.qualityGrade && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.5px",
+                      textTransform: "uppercase",
+                      background:
+                        phone.diag.qualityGrade === "excellent" ? "rgba(16,185,129,0.15)" :
+                        phone.diag.qualityGrade === "good" ? "rgba(16,185,129,0.1)" :
+                        phone.diag.qualityGrade === "fair" ? "rgba(245,158,11,0.12)" :
+                        "rgba(239,68,68,0.12)",
+                      color:
+                        phone.diag.qualityGrade === "excellent" || phone.diag.qualityGrade === "good" ? "var(--success)" :
+                        phone.diag.qualityGrade === "fair" ? "var(--warning)" :
+                        "var(--danger)",
+                    }}>
+                      {phone.diag.qualityGrade}
+                    </span>
+                    {phone.diag.audioCodec ? (
+                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{phone.diag.audioCodec}</span>
+                    ) : null}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {phone.diag.isUsingRelay ? (
                     <span style={{ padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.12)", color: "var(--success)", fontSize: 10, fontWeight: 600 }}>

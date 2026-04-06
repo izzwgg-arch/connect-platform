@@ -44,6 +44,10 @@ export class JsSipClient implements SipClient {
   private ua: any = null;
   private session: any = null;
   private incomingSessions: any[] = [];
+  private callStartedAt: number | null = null;
+  private callDirection: "outbound" | "inbound" = "outbound";
+  /** Callback for submitting quality reports — injected by the context layer. */
+  onCallQualityReport?: (report: Record<string, unknown>) => void;
 
   configure(bundle: ProvisioningBundle) {
     this.bundle = bundle;
@@ -118,6 +122,7 @@ export class JsSipClient implements SipClient {
       console.log('[SIP] New RTC session, originator:', e.originator);
 
       if (e.originator === "remote") {
+        this.callDirection = "inbound";
         const callerNumber = this.getSessionFrom(e.session);
         console.log('[SIP] Incoming call from:', callerNumber);
         this.incomingSessions.push(e.session);
@@ -144,13 +149,15 @@ export class JsSipClient implements SipClient {
 
     session.on("confirmed", () => {
       console.log('[SIP] Call confirmed (connected)');
-      ICM.start("audio"); // ensure audio session active even if answer path skipped it
+      ICM.start("audio");
+      if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.events.onCallState?.("connected");
     });
 
     session.on("ended", (e: any) => {
       const cause = e?.cause || "normal";
       console.log('[SIP] Call ended, cause:', cause);
+      this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
@@ -162,6 +169,7 @@ export class JsSipClient implements SipClient {
       const code = e?.response?.status_code;
       const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
       console.warn('[SIP] Call failed:', msg);
+      this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
@@ -216,6 +224,8 @@ export class JsSipClient implements SipClient {
     if (!this.ua || !this.bundle) throw new Error("SIP UA not registered");
     const dest = `sip:${target}@${this.bundle.sipDomain}`;
     console.log('[SIP] Dialing:', dest);
+    this.callDirection = "outbound";
+    this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
     ICM.start("audio");
     try {
@@ -267,6 +277,7 @@ export class JsSipClient implements SipClient {
 
   async hangup() {
     console.log('[SIP] Hanging up');
+    await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});
     ICM.stop();
     try {
       this.session?.terminate?.();
@@ -325,5 +336,89 @@ export class JsSipClient implements SipClient {
 
   sendDtmf(digit: string) {
     this.session?.sendDTMF?.(digit);
+  }
+
+  private async collectAndSubmitQualityReport(endReason: string) {
+    if (!this.callStartedAt) return;
+    const durationMs = Date.now() - this.callStartedAt;
+    if (durationMs < 1000) return;
+
+    // Collect device/network metadata for RCA
+    let deviceModel: string | null = null;
+    let networkType: string | null = null;
+    try {
+      const { Platform } = require("react-native");
+      deviceModel = Platform.OS === "android" ? `Android ${Platform.Version}` : `iOS ${Platform.Version}`;
+    } catch { /* ignore */ }
+    try {
+      const NetInfo = require("@react-native-community/netinfo");
+      if (NetInfo?.fetch) {
+        const state = await NetInfo.fetch();
+        networkType = state?.type || null;
+      }
+    } catch { /* netinfo may not be available */ }
+
+    const report: Record<string, unknown> = {
+      platform: "ANDROID",
+      durationMs,
+      direction: this.callDirection,
+      endReason,
+      deviceModel,
+      networkType,
+    };
+
+    try {
+      const pc: RTCPeerConnection | null = this.session?.connection ?? null;
+      if (pc && typeof pc.getStats === "function") {
+        const stats = await pc.getStats();
+        const localCandidates = new Map<string, string>();
+        let audioCodec: string | null = null;
+        const codecIds = new Map<string, string>();
+        stats.forEach((r: any) => {
+          if (r.type === "local-candidate" && typeof r.candidateType === "string") {
+            localCandidates.set(r.id, r.candidateType);
+          }
+          if (r.type === "codec" && typeof r.mimeType === "string") {
+            codecIds.set(r.id, r.mimeType.replace(/^audio\//, ""));
+          }
+        });
+        stats.forEach((r: any) => {
+          if (r.type === "inbound-rtp" && r.kind === "audio") {
+            if (typeof r.packetsLost === "number") report.packetsLost = r.packetsLost;
+            if (typeof r.packetsReceived === "number") report.packetsReceived = r.packetsReceived;
+            if (typeof r.jitter === "number") report.jitterMs = Math.round(r.jitter * 1000);
+            if (r.codecId && codecIds.has(r.codecId)) audioCodec = codecIds.get(r.codecId) ?? null;
+          }
+          if (r.type === "candidate-pair" && r.nominated === true) {
+            if (typeof r.currentRoundTripTime === "number") {
+              report.rttMs = Math.round(r.currentRoundTripTime * 1000);
+            }
+            const ct = localCandidates.get(r.localCandidateId);
+            if (ct) {
+              report.candidateType = ct;
+              report.isUsingRelay = ct === "relay";
+            }
+          }
+        });
+        if (audioCodec) report.audioCodec = audioCodec;
+      }
+    } catch {
+      // getStats may not be available on all RN-WebRTC versions
+    }
+
+    // Compute quality grade
+    const rtt = typeof report.rttMs === "number" ? (report.rttMs as number) : 999;
+    const jitter = typeof report.jitterMs === "number" ? (report.jitterMs as number) : 0;
+    const lost = typeof report.packetsLost === "number" ? (report.packetsLost as number) : 0;
+    const received = typeof report.packetsReceived === "number" ? (report.packetsReceived as number) : 0;
+    const lossRate = received > 0 ? (lost / (lost + received)) * 100 : 0;
+
+    if (rtt <= 100 && jitter <= 10 && lossRate < 0.5) report.qualityGrade = "excellent";
+    else if (rtt <= 200 && jitter <= 25 && lossRate < 1) report.qualityGrade = "good";
+    else if (rtt <= 350 && jitter <= 50 && lossRate < 3) report.qualityGrade = "fair";
+    else report.qualityGrade = "poor";
+
+    this.callStartedAt = null;
+    this.onCallQualityReport?.(report);
   }
 }

@@ -5812,6 +5812,454 @@ app.get("/voice/diag/sessions/:id/events", async (req, reply) => {
 });
 
 
+// ── Root Cause Analysis Engine ───────────────────────────────────────────────
+// Produces structured RCA for every degraded/bad call from captured telemetry.
+
+type RcaPrimaryCause =
+  | "network_instability" | "packet_loss" | "high_jitter" | "high_latency"
+  | "TURN_missing" | "ICE_failure" | "one_way_audio" | "audio_route_issue"
+  | "bluetooth_issue" | "device_issue" | "PBX_media_issue" | "unknown";
+
+type RcaSecondaryFactor =
+  | "WiFi_to_cellular_transition" | "no_relay_used" | "route_change_mid_call"
+  | "codec_mismatch" | "repeated_registration" | "reconnect_attempts"
+  | "device_model_pattern" | "network_pattern";
+
+type RcaConfidence = "HIGH" | "MEDIUM" | "LOW";
+
+type RcaSuggestedAction =
+  | "enable_TURN_relay" | "adjust_PBX_NAT_config" | "avoid_Bluetooth_on_device"
+  | "improve_network" | "investigate_firewall" | "investigate_PBX_media_path"
+  | "check_codec_config" | "check_client_network" | "none";
+
+interface CallRca {
+  primaryCause: RcaPrimaryCause;
+  secondaryFactors: RcaSecondaryFactor[];
+  confidence: RcaConfidence;
+  evidence: Record<string, unknown>;
+  suggestedAction: RcaSuggestedAction;
+  timeline: { callStart?: string; degradationDetected?: string; callEnd: string };
+}
+
+function computeCallRca(p: Record<string, unknown>): CallRca {
+  const rttMs = typeof p.rttMs === "number" ? p.rttMs : null;
+  const jitterMs = typeof p.jitterMs === "number" ? p.jitterMs : null;
+  const packetsLost = typeof p.packetsLost === "number" ? p.packetsLost : null;
+  const packetsReceived = typeof p.packetsReceived === "number" ? p.packetsReceived : null;
+  const candidateType = typeof p.candidateType === "string" ? p.candidateType : null;
+  const isUsingRelay = p.isUsingRelay === true;
+  const iceState = typeof p.iceConnectionState === "string" ? p.iceConnectionState : null;
+  const endReason = typeof p.endReason === "string" ? p.endReason : null;
+  const audioCodec = typeof p.audioCodec === "string" ? p.audioCodec : null;
+  const platform = typeof p.platform === "string" ? p.platform : null;
+  const durationMs = typeof p.durationMs === "number" ? p.durationMs : null;
+  const remoteAudioReceiving = p.remoteAudioReceiving === true;
+  const audioRoute = typeof p.audioRoute === "string" ? p.audioRoute : null;
+  const networkType = typeof p.networkType === "string" ? p.networkType : null;
+  const deviceModel = typeof p.deviceModel === "string" ? p.deviceModel : null;
+
+  const lossPercent = (packetsLost != null && packetsReceived != null && (packetsLost + packetsReceived) > 0)
+    ? (packetsLost / (packetsLost + packetsReceived)) * 100
+    : null;
+
+  const evidence: Record<string, unknown> = {};
+  if (rttMs !== null) evidence.rtt_ms = rttMs;
+  if (jitterMs !== null) evidence.jitter_ms = jitterMs;
+  if (lossPercent !== null) evidence.packet_loss_percent = Number(lossPercent.toFixed(2));
+  if (packetsLost !== null) evidence.packets_lost = packetsLost;
+  if (candidateType) evidence.ICE_type_used = candidateType;
+  if (audioRoute) evidence.audio_route = audioRoute;
+  if (deviceModel) evidence.device_model = deviceModel;
+  if (networkType) evidence.network_type = networkType;
+  if (audioCodec) evidence.audio_codec = audioCodec;
+  if (iceState) evidence.ice_connection_state = iceState;
+  if (platform) evidence.platform = platform;
+  if (durationMs !== null) evidence.duration_ms = durationMs;
+
+  const secondaryFactors: RcaSecondaryFactor[] = [];
+  let primaryCause: RcaPrimaryCause = "unknown";
+  let confidence: RcaConfidence = "LOW";
+  let suggestedAction: RcaSuggestedAction = "none";
+
+  const timeline: CallRca["timeline"] = {
+    callEnd: new Date().toISOString(),
+  };
+  if (durationMs !== null) {
+    timeline.callStart = new Date(Date.now() - durationMs).toISOString();
+  }
+
+  // ── Decision tree — ordered by evidence strength ──
+
+  // 1. ICE failure: definitive signal
+  if (iceState === "failed") {
+    primaryCause = "ICE_failure";
+    confidence = "HIGH";
+    suggestedAction = isUsingRelay ? "investigate_firewall" : "enable_TURN_relay";
+    if (!isUsingRelay) secondaryFactors.push("no_relay_used");
+    timeline.degradationDetected = timeline.callStart || timeline.callEnd;
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 2. TURN missing + bad quality: strong causal signal
+  if (!isUsingRelay && candidateType !== "relay") {
+    // If no TURN and any quality degradation, TURN is the prime suspect.
+    if ((rttMs !== null && rttMs > 200) || (lossPercent !== null && lossPercent > 1) || (jitterMs !== null && jitterMs > 30)) {
+      primaryCause = "TURN_missing";
+      confidence = "HIGH";
+      suggestedAction = "enable_TURN_relay";
+      secondaryFactors.push("no_relay_used");
+      if (rttMs !== null && rttMs > 300) secondaryFactors.push("network_pattern");
+      return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+    }
+    // No quality problems but still no TURN — note it as secondary
+    secondaryFactors.push("no_relay_used");
+  }
+
+  // 3. One-way audio: remote track not live or zero packets received
+  if (p.remoteAudioReceiving === false || (packetsReceived !== null && packetsReceived === 0 && durationMs !== null && durationMs > 3000)) {
+    primaryCause = "one_way_audio";
+    confidence = packetsReceived === 0 ? "HIGH" : "MEDIUM";
+    suggestedAction = isUsingRelay ? "investigate_PBX_media_path" : "enable_TURN_relay";
+    if (!isUsingRelay) secondaryFactors.push("no_relay_used");
+    timeline.degradationDetected = timeline.callStart || timeline.callEnd;
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 4. Severe packet loss (> 5%)
+  if (lossPercent !== null && lossPercent > 5) {
+    primaryCause = "packet_loss";
+    confidence = "HIGH";
+    suggestedAction = isUsingRelay ? "check_client_network" : "enable_TURN_relay";
+    if (rttMs !== null && rttMs > 300) secondaryFactors.push("network_pattern");
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 5. High jitter (> 50ms)
+  if (jitterMs !== null && jitterMs > 50) {
+    primaryCause = "high_jitter";
+    confidence = jitterMs > 80 ? "HIGH" : "MEDIUM";
+    suggestedAction = "check_client_network";
+    if (networkType === "cellular") secondaryFactors.push("WiFi_to_cellular_transition");
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 6. High latency (> 350ms RTT)
+  if (rttMs !== null && rttMs > 350) {
+    primaryCause = "high_latency";
+    confidence = rttMs > 500 ? "HIGH" : "MEDIUM";
+    suggestedAction = isUsingRelay ? "check_client_network" : "enable_TURN_relay";
+    if (!isUsingRelay) secondaryFactors.push("no_relay_used");
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 7. Moderate packet loss (1–5%)
+  if (lossPercent !== null && lossPercent > 1) {
+    primaryCause = "packet_loss";
+    confidence = "MEDIUM";
+    suggestedAction = "improve_network";
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 8. Bluetooth audio route on mobile
+  if (audioRoute && audioRoute.toLowerCase().includes("bluetooth")) {
+    primaryCause = "bluetooth_issue";
+    confidence = "MEDIUM";
+    suggestedAction = "avoid_Bluetooth_on_device";
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 9. Network instability: moderate jitter + moderate RTT together
+  if ((jitterMs !== null && jitterMs > 25) && (rttMs !== null && rttMs > 200)) {
+    primaryCause = "network_instability";
+    confidence = "MEDIUM";
+    suggestedAction = "improve_network";
+    if (networkType === "cellular") secondaryFactors.push("WiFi_to_cellular_transition");
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 10. Call ended abruptly with very short duration — possible PBX issue
+  if (durationMs !== null && durationMs < 5000 && endReason && endReason !== "normal" && endReason !== "user_hangup") {
+    primaryCause = "PBX_media_issue";
+    confidence = "LOW";
+    suggestedAction = "investigate_PBX_media_path";
+    return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+  }
+
+  // 11. Codec mismatch indicator (non-opus on WebRTC)
+  if (platform === "WEB" && audioCodec && !audioCodec.toLowerCase().includes("opus")) {
+    secondaryFactors.push("codec_mismatch");
+  }
+
+  // Fallback: could not determine from available evidence
+  primaryCause = "unknown";
+  confidence = "LOW";
+  suggestedAction = "none";
+  return { primaryCause, secondaryFactors, confidence, evidence, suggestedAction, timeline };
+}
+
+
+// ── Call Quality Report Ingestion ────────────────────────────────────────────
+app.post("/voice/diag/call-quality-report", async (req, reply) => {
+  const user = getUser(req);
+  if (!checkBillingRateLimit(`cqr:${user.sub}`, 30, 60 * 60 * 1000)) {
+    app.log.warn({ userId: user.sub, endpoint: "/voice/diag/call-quality-report" }, "rate_limit_cqr");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({
+    sessionId: z.string().max(60).optional(),
+    platform: z.enum(["WEB", "IOS", "ANDROID"]).optional(),
+    durationMs: z.number().int().nonnegative().optional(),
+    direction: z.enum(["outbound", "inbound"]).optional(),
+    remoteParty: z.string().max(64).optional(),
+    candidateType: z.string().max(16).optional().nullable(),
+    isUsingRelay: z.boolean().optional(),
+    rttMs: z.number().int().nonnegative().max(60_000).optional().nullable(),
+    jitterMs: z.number().int().nonnegative().max(10_000).optional().nullable(),
+    packetsLost: z.number().int().nonnegative().optional().nullable(),
+    packetsReceived: z.number().int().nonnegative().optional().nullable(),
+    audioCodec: z.string().max(32).optional().nullable(),
+    micPermission: z.string().max(16).optional(),
+    iceConnectionState: z.string().max(24).optional().nullable(),
+    remoteAudioReceiving: z.boolean().optional(),
+    endReason: z.string().max(64).optional(),
+    qualityGrade: z.enum(["excellent", "good", "fair", "poor", "failed"]).optional(),
+    audioRoute: z.string().max(32).optional().nullable(),
+    networkType: z.string().max(24).optional().nullable(),
+    deviceModel: z.string().max(64).optional().nullable(),
+  }).parse(req.body);
+
+  const payload: Record<string, unknown> = { ...input };
+  delete payload.sessionId;
+
+  // Compute quality grade server-side if not provided by the client.
+  if (!payload.qualityGrade) {
+    const rtt = typeof input.rttMs === "number" ? input.rttMs : 999;
+    const jitter = typeof input.jitterMs === "number" ? input.jitterMs : 0;
+    const loss = typeof input.packetsLost === "number" && typeof input.packetsReceived === "number" && input.packetsReceived > 0
+      ? (input.packetsLost / (input.packetsLost + input.packetsReceived)) * 100
+      : 0;
+
+    if (rtt <= 100 && jitter <= 10 && loss < 0.5) payload.qualityGrade = "excellent";
+    else if (rtt <= 200 && jitter <= 25 && loss < 1) payload.qualityGrade = "good";
+    else if (rtt <= 350 && jitter <= 50 && loss < 3) payload.qualityGrade = "fair";
+    else payload.qualityGrade = "poor";
+  }
+
+  // Run RCA for degraded/bad calls
+  const grade = String(payload.qualityGrade);
+  if (grade === "poor" || grade === "failed" || grade === "fair") {
+    payload.rca = computeCallRca(payload);
+  }
+
+  if (grade === "poor" || grade === "failed") {
+    const rca = payload.rca as CallRca | undefined;
+    app.log.warn({
+      userId: user.sub,
+      tenantId: user.tenantId,
+      grade,
+      rtt: input.rttMs,
+      jitter: input.jitterMs,
+      loss: input.packetsLost,
+      primaryCause: rca?.primaryCause,
+      confidence: rca?.confidence,
+      suggestedAction: rca?.suggestedAction,
+    }, "call_quality_degraded");
+  }
+
+  // Resolve or create session
+  let sessionId = input.sessionId || null;
+  if (!sessionId) {
+    const recent = await db.voiceClientSession.findFirst({
+      where: { userId: user.sub, lastSeenAt: { gte: new Date(Date.now() - 10 * 60 * 1000) } },
+      orderBy: { lastSeenAt: "desc" },
+      select: { id: true },
+    });
+    if (recent) {
+      sessionId = recent.id;
+    } else {
+      const newSession = await db.voiceClientSession.create({
+        data: {
+          tenantId: user.tenantId,
+          userId: user.sub,
+          platform: (input.platform as any) || "WEB",
+        },
+      });
+      sessionId = newSession.id;
+    }
+  }
+
+  const event = await db.voiceDiagEvent.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      sessionId,
+      type: "CALL_QUALITY_REPORT" as any,
+      payload: payload as any,
+    },
+  });
+
+  return { ok: true, eventId: event.id, qualityGrade: payload.qualityGrade, rca: payload.rca || null };
+});
+
+
+// ── Admin: Call Quality Analytics ────────────────────────────────────────────
+app.get("/admin/voice/quality/summary", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({ range: z.enum(["1h", "24h", "7d"]).optional() }).parse(req.query || {});
+  const rangeMs = q.range === "7d" ? 7 * 24 * 60 * 60 * 1000 : q.range === "1h" ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const since = new Date(Date.now() - rangeMs);
+
+  const reports = await db.voiceDiagEvent.findMany({
+    where: { type: "CALL_QUALITY_REPORT" as any, createdAt: { gte: since } },
+    select: { tenantId: true, userId: true, payload: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+    take: 5000,
+  });
+
+  let total = 0, excellent = 0, good = 0, fair = 0, poor = 0, failed = 0;
+  let totalRtt = 0, rttCount = 0, totalJitter = 0, jitterCount = 0, totalLoss = 0, lossCount = 0, relayCount = 0;
+  const tenantGrades = new Map<string, { total: number; poor: number; failed: number }>();
+  const causeCounts = new Map<string, number>();
+
+  for (const r of reports) {
+    total += 1;
+    const p = (r as any).payload || {};
+    const g = String(p.qualityGrade || "");
+    if (g === "excellent") excellent += 1;
+    else if (g === "good") good += 1;
+    else if (g === "fair") fair += 1;
+    else if (g === "poor") poor += 1;
+    else if (g === "failed") failed += 1;
+
+    if (typeof p.rttMs === "number") { totalRtt += p.rttMs; rttCount += 1; }
+    if (typeof p.jitterMs === "number") { totalJitter += p.jitterMs; jitterCount += 1; }
+    if (typeof p.packetsLost === "number") { totalLoss += p.packetsLost; lossCount += 1; }
+    if (p.isUsingRelay === true) relayCount += 1;
+
+    const tid = String(r.tenantId);
+    if (!tenantGrades.has(tid)) tenantGrades.set(tid, { total: 0, poor: 0, failed: 0 });
+    const tg = tenantGrades.get(tid)!;
+    tg.total += 1;
+    if (g === "poor") tg.poor += 1;
+    if (g === "failed") tg.failed += 1;
+
+    if (p.rca?.primaryCause) {
+      const c = String(p.rca.primaryCause);
+      causeCounts.set(c, (causeCounts.get(c) || 0) + 1);
+    }
+  }
+
+  const troubledTenantIds = [...tenantGrades.entries()]
+    .filter(([, v]) => v.poor + v.failed > 0)
+    .sort((a, b) => (b[1].poor + b[1].failed) - (a[1].poor + a[1].failed))
+    .map(([tid]) => tid)
+    .slice(0, 20);
+
+  const tenantNames = troubledTenantIds.length
+    ? await db.tenant.findMany({ where: { id: { in: troubledTenantIds } }, select: { id: true, name: true } })
+    : [];
+  const nameById = new Map(tenantNames.map((t) => [t.id, t.name]));
+
+  return {
+    range: q.range || "24h",
+    since: since.toISOString(),
+    totalReports: total,
+    grades: { excellent, good, fair, poor, failed },
+    averages: {
+      rttMs: rttCount ? Math.round(totalRtt / rttCount) : null,
+      jitterMs: jitterCount ? Math.round(totalJitter / jitterCount) : null,
+      packetsLostPerCall: lossCount ? Math.round(totalLoss / lossCount) : null,
+    },
+    relayUsagePercent: total ? Number(((relayCount / total) * 100).toFixed(1)) : 0,
+    rootCauseBreakdown: Object.fromEntries([...causeCounts.entries()].sort((a, b) => b[1] - a[1])),
+    troubledTenants: troubledTenantIds.map((tid) => ({
+      tenantId: tid,
+      tenantName: nameById.get(tid) || tid,
+      ...(tenantGrades.get(tid) || { total: 0, poor: 0, failed: 0 }),
+    })),
+  };
+});
+
+
+// ── Admin: RCA-enriched degraded calls with filters ──────────────────────────
+app.get("/admin/voice/quality/rca", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({
+    range: z.enum(["1h", "24h", "7d"]).optional(),
+    cause: z.string().max(40).optional(),
+    tenantId: z.string().max(60).optional(),
+    platform: z.enum(["WEB", "IOS", "ANDROID"]).optional(),
+    candidateType: z.string().max(16).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  }).parse(req.query || {});
+
+  const rangeMs = q.range === "7d" ? 7 * 86400000 : q.range === "1h" ? 3600000 : 86400000;
+  const since = new Date(Date.now() - rangeMs);
+  const take = q.limit || 100;
+
+  const where: any = { type: "CALL_QUALITY_REPORT" as any, createdAt: { gte: since } };
+  if (q.tenantId) where.tenantId = q.tenantId;
+
+  const events = await db.voiceDiagEvent.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    take: Math.min(take * 3, 1500),
+    select: { id: true, tenantId: true, userId: true, sessionId: true, createdAt: true, payload: true },
+  });
+
+  // Filter to degraded only + apply cause/platform/candidateType filters
+  let results = events.filter((e) => {
+    const p = (e as any).payload || {};
+    const grade = String(p.qualityGrade || "");
+    if (grade !== "poor" && grade !== "failed" && grade !== "fair") return false;
+    if (q.cause && p.rca?.primaryCause !== q.cause) return false;
+    if (q.platform && p.platform !== q.platform) return false;
+    if (q.candidateType && p.candidateType !== q.candidateType) return false;
+    return true;
+  }).slice(0, take);
+
+  const userIds = [...new Set(results.map((e) => e.userId))];
+  const tenantIds = [...new Set(results.map((e) => e.tenantId))];
+  const [users, tenants] = await Promise.all([
+    userIds.length ? db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true } }) : [],
+    tenantIds.length ? db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } }) : [],
+  ]);
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+  const nameById = new Map(tenants.map((t) => [t.id, t.name]));
+
+  return results.map((e) => {
+    const p = (e as any).payload || {};
+    return {
+      id: e.id,
+      createdAt: e.createdAt,
+      tenantId: e.tenantId,
+      tenantName: nameById.get(e.tenantId) || e.tenantId,
+      userId: e.userId,
+      userEmail: emailById.get(e.userId) || e.userId,
+      sessionId: e.sessionId,
+      qualityGrade: p.qualityGrade,
+      platform: p.platform ?? null,
+      direction: p.direction ?? null,
+      durationMs: p.durationMs ?? null,
+      rttMs: p.rttMs ?? null,
+      jitterMs: p.jitterMs ?? null,
+      packetsLost: p.packetsLost ?? null,
+      packetsReceived: p.packetsReceived ?? null,
+      candidateType: p.candidateType ?? null,
+      isUsingRelay: p.isUsingRelay ?? null,
+      audioCodec: p.audioCodec ?? null,
+      endReason: p.endReason ?? null,
+      rca: p.rca ?? null,
+    };
+  });
+});
+
+
 app.get("/voice/turn", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;

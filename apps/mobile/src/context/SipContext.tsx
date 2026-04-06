@@ -2,7 +2,9 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { AppState } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { createSipClient } from "../sip";
+import { postCallQualityReport } from "../api/client";
 import type { CallState, ProvisioningBundle, SipRegistrationState } from "../types";
+import { useAuth } from "./AuthContext";
 
 const PROVISION_KEY = "cc_mobile_provision";
 
@@ -40,6 +42,7 @@ type SipState = {
 const SipContext = createContext<SipState | undefined>(undefined);
 
 export function SipProvider({ children }: { children: React.ReactNode }) {
+  const { token: authToken } = useAuth();
   const clientRef = useRef(createSipClient());
   const [registrationState, setRegistrationState] = useState<SipRegistrationState>("idle");
   const [callState, setCallState] = useState<CallState>("idle");
@@ -60,6 +63,19 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       return () => clearTimeout(t);
     }
   }, [callState]);
+
+  // Wire the quality report callback — fires at end of each call
+  useEffect(() => {
+    const client = clientRef.current as any;
+    if (typeof client.onCallQualityReport !== "undefined" || "onCallQualityReport" in client) {
+      client.onCallQualityReport = (report: Record<string, unknown>) => {
+        if (!authToken) return;
+        postCallQualityReport(authToken, report).catch(() => {
+          // Non-fatal — telemetry loss acceptable
+        });
+      };
+    }
+  }, [authToken]);
 
   useEffect(() => {
     clientRef.current.setEvents({

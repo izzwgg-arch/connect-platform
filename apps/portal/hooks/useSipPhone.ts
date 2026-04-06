@@ -46,6 +46,10 @@ export interface SipDiagnostics {
   rttMs: number | null;
   /** True once at least one live remote audio track is attached to the element. */
   remoteAudioReceiving: boolean;
+  /** Negotiated audio codec name (e.g. "opus", "PCMU"). */
+  audioCodec: string | null;
+  /** Computed call quality grade based on live stats. */
+  qualityGrade: "excellent" | "good" | "fair" | "poor" | "failed" | null;
   lastRegError: string | null;
   lastCallError: string | null;
   webrtcEnabled: boolean;
@@ -148,31 +152,40 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<{
   packetsLost: number | null;
   jitterMs: number | null;
   rttMs: number | null;
+  packetsReceived: number | null;
+  audioCodec: string | null;
   selectedCandidateType: IceCandidateType;
 }> {
   const result = {
     packetsLost: null as number | null,
     jitterMs: null as number | null,
     rttMs: null as number | null,
+    packetsReceived: null as number | null,
+    audioCodec: null as string | null,
     selectedCandidateType: null as IceCandidateType,
   };
   try {
     const stats = await pc.getStats();
-    // Build local-candidate map for candidate-pair → candidate-type lookup
     const localCandidates = new Map<string, string>();
+    const codecMap = new Map<string, string>();
     stats.forEach((r) => {
       if (r.type === "local-candidate" && typeof (r as any).candidateType === "string") {
         localCandidates.set(r.id, (r as any).candidateType);
       }
+      if (r.type === "codec" && typeof (r as any).mimeType === "string") {
+        codecMap.set(r.id, (r as any).mimeType);
+      }
     });
     stats.forEach((r) => {
-      // Inbound audio: packet loss + jitter
       if (r.type === "inbound-rtp" && (r as any).kind === "audio") {
         const ir = r as any;
         if (typeof ir.packetsLost === "number") result.packetsLost = ir.packetsLost;
+        if (typeof ir.packetsReceived === "number") result.packetsReceived = ir.packetsReceived;
         if (typeof ir.jitter === "number") result.jitterMs = Math.round(ir.jitter * 1000);
+        if (ir.codecId && codecMap.has(ir.codecId)) {
+          result.audioCodec = codecMap.get(ir.codecId)!.replace("audio/", "");
+        }
       }
-      // Nominated ICE candidate pair: RTT + local candidate type
       if (r.type === "candidate-pair" && (r as any).nominated === true) {
         const cp = r as any;
         if (typeof cp.currentRoundTripTime === "number") {
@@ -188,6 +201,19 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<{
     // getStats can throw if the PC is torn down
   }
   return result;
+}
+
+/** Compute a quality grade from call stats. */
+function computeQualityGrade(rttMs: number | null, jitterMs: number | null, packetsLost: number | null, packetsReceived: number | null): "excellent" | "good" | "fair" | "poor" | "failed" {
+  const rtt = rttMs ?? 999;
+  const jitter = jitterMs ?? 0;
+  const lossRate = (packetsLost != null && packetsReceived != null && packetsReceived > 0)
+    ? (packetsLost / (packetsLost + packetsReceived)) * 100
+    : 0;
+  if (rtt <= 100 && jitter <= 10 && lossRate < 0.5) return "excellent";
+  if (rtt <= 200 && jitter <= 25 && lossRate < 1) return "good";
+  if (rtt <= 350 && jitter <= 50 && lossRate < 3) return "fair";
+  return "poor";
 }
 
 const DEFAULT_DIAG: SipDiagnostics = {
@@ -206,6 +232,8 @@ const DEFAULT_DIAG: SipDiagnostics = {
   jitterMs: null,
   rttMs: null,
   remoteAudioReceiving: false,
+  audioCodec: null,
+  qualityGrade: null,
   lastRegError: null,
   lastCallError: null,
   webrtcEnabled: false,
@@ -231,6 +259,10 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const wiredPeerConnectionsRef = useRef<WeakSet<RTCPeerConnection>>(new WeakSet());
   const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callStartedAtRef = useRef<number | null>(null);
+  const callDirectionRef = useRef<"outbound" | "inbound">("outbound");
+  /** Accumulator for the latest inbound-rtp packetsReceived count for the quality report. */
+  const packetsReceivedRef = useRef<number | null>(null);
 
   function patchDiag(patch: Partial<SipDiagnostics>) {
     setDiag((prev) => ({ ...prev, ...patch }));
@@ -247,14 +279,53 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     stopStatsPolling();
     statsIntervalRef.current = setInterval(async () => {
       const s = await pollCallStats(pc);
+      packetsReceivedRef.current = s.packetsReceived;
+      const grade = computeQualityGrade(s.rttMs, s.jitterMs, s.packetsLost, s.packetsReceived);
       patchDiag({
         packetsLost: s.packetsLost,
         jitterMs: s.jitterMs,
         rttMs: s.rttMs,
         selectedCandidateType: s.selectedCandidateType,
         isUsingRelay: s.selectedCandidateType === "relay",
+        audioCodec: s.audioCodec,
+        qualityGrade: grade,
       });
     }, 4_000);
+  }
+
+  /** Fire-and-forget: send a call quality report to the backend when a call ends. */
+  function submitCallQualityReport(endReason: string) {
+    const startedAt = callStartedAtRef.current;
+    const durationMs = startedAt ? Date.now() - startedAt : 0;
+    if (durationMs < 1000) return; // skip sub-second non-calls
+
+    const snap = diag;
+    const grade = computeQualityGrade(snap.rttMs, snap.jitterMs, snap.packetsLost, packetsReceivedRef.current);
+
+    // Gather network type from the Network Information API if available
+    const netInfo = (navigator as any).connection;
+    const networkType: string | null = netInfo?.effectiveType || netInfo?.type || null;
+
+    apiPost("/voice/diag/call-quality-report", {
+      platform: "WEB",
+      durationMs,
+      direction: callDirectionRef.current,
+      candidateType: snap.selectedCandidateType,
+      isUsingRelay: snap.isUsingRelay,
+      rttMs: snap.rttMs,
+      jitterMs: snap.jitterMs,
+      packetsLost: snap.packetsLost,
+      packetsReceived: packetsReceivedRef.current,
+      iceConnectionState: snap.iceConnectionState,
+      micPermission: snap.micPermission,
+      remoteAudioReceiving: snap.remoteAudioReceiving,
+      audioCodec: snap.audioCodec,
+      networkType,
+      endReason,
+      qualityGrade: grade,
+    }).catch(() => {
+      // Non-fatal — telemetry loss is acceptable
+    });
   }
 
   // ── Initialise ─────────────────────────────────────────────────────────
@@ -475,6 +546,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             }
 
             if (data.originator === "remote") {
+              callDirectionRef.current = "inbound";
               const party = data.request.from.display_name || data.request.from.uri.user;
               bindSession(data.session, party);
               setCallState("ringing");
@@ -523,6 +595,8 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       jitterMs: null,
       rttMs: null,
       remoteAudioReceiving: false,
+      audioCodec: null,
+      qualityGrade: null,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -622,25 +696,31 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
     session.on("progress", () => setCallState("ringing"));
     session.on("accepted", () => {
+      if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
       setCallState("connected");
       if (session.connection) syncReceiversToAudio(session.connection);
     });
     session.on("confirmed", () => {
+      if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
       setCallState("connected");
       if (session.connection) syncReceiversToAudio(session.connection);
     });
 
     session.on("ended", () => {
+      submitCallQualityReport("normal");
       sessionRef.current = null;
       setCallState("ended");
       setRemoteParty(null);
       setMutedState(false);
       teardownRemoteAudioPlayback();
       clearCallDiag();
+      callStartedAtRef.current = null;
+      packetsReceivedRef.current = null;
       setTimeout(() => setCallState("idle"), 2000);
     });
 
     session.on("failed", (e: { cause: string }) => {
+      submitCallQualityReport(e.cause || "failed");
       sessionRef.current = null;
       const msg = `Call failed: ${e.cause}`;
       setCallState("idle");
@@ -650,6 +730,8 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       teardownRemoteAudioPlayback();
       patchDiag({ lastCallError: msg });
       clearCallDiag();
+      callStartedAtRef.current = null;
+      packetsReceivedRef.current = null;
     });
 
     // Sync any already-live tracks if peerconnection was created before this binding.
@@ -669,6 +751,8 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       const normalised = target.trim();
       if (!normalised) return;
 
+      callDirectionRef.current = "outbound";
+      callStartedAtRef.current = Date.now();
       setCallState("dialing");
       setError(null);
 
@@ -730,6 +814,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
   const hangup = useCallback(() => {
     if (!sessionRef.current) return;
+    submitCallQualityReport("user_hangup");
     try { sessionRef.current.terminate(); } catch { /* already ended */ }
     sessionRef.current = null;
     setCallState("idle");
@@ -737,6 +822,8 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     setMutedState(false);
     teardownRemoteAudioPlayback();
     clearCallDiag();
+    callStartedAtRef.current = null;
+    packetsReceivedRef.current = null;
   }, [teardownRemoteAudioPlayback, clearCallDiag]);
 
   const setMute = useCallback((mute: boolean) => {

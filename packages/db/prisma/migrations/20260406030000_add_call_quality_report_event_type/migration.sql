@@ -1,0 +1,2 @@
+-- Add CALL_QUALITY_REPORT to VoiceDiagEventType enum
+ALTER TYPE "VoiceDiagEventType" ADD VALUE IF NOT EXISTS 'CALL_QUALITY_REPORT';
