@@ -38,6 +38,7 @@ import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
+import { syncExtensionsFromPbx } from "./pbxExtensionSync";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -355,10 +356,13 @@ function maskIceServersForResponse(input: any[]): any[] {
   });
 }
 
-function buildVoiceProvisioningBundle(tenant: any, link: any, sipUsername: string, sipPassword: string | null) {
+function buildVoiceProvisioningBundle(tenant: any, link: any, sipUsername: string, sipPassword: string | null, authUsername?: string | null) {
   const cfg = resolveWebrtcConfig(tenant, link);
   return {
     sipUsername,
+    // authUsername is the PJSIP auth object name (e.g. "T2_103_1" in VitalPBX 4).
+    // It goes into the SIP Authorization header. Falls back to sipUsername when absent.
+    authUsername: authUsername || sipUsername,
     sipPassword,
     sipWsUrl: cfg.sipWsUrl,
     sipDomain: cfg.sipDomain,
@@ -1530,12 +1534,14 @@ function verifyMobileProvisioningToken(token: string): null | { tokenId: string;
 }
 
 async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPassword: string; provisioning: any; pbxExtensionLinkId: string }> {
-  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) throw new Error("PBX_NOT_LINKED");
 
+  // Always require ownerUserId for ALL roles — admins get their own assigned extension,
+  // not an arbitrary first-in-tenant extension. This prevents cross-user credential bleed
+  // within a tenant when multiple admins exist.
   const row = await db.pbxExtensionLink.findFirst({
-    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
     include: { extension: true },
     orderBy: { createdAt: "asc" }
   });
@@ -1544,21 +1550,34 @@ async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPass
   let sipPassword = "";
   if (voiceSimulate) {
     sipPassword = `sim-webrtc-${Date.now()}`;
+  } else if ((row as any).sipPasswordEncrypted) {
+    // Preferred path: admin-provisioned encrypted SIP password (avoids VitalPBX reset call)
+    sipPassword = decryptJson<string>((row as any).sipPasswordEncrypted);
   } else {
-    const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-    const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
-    sipPassword = out.sipPassword;
+    // Fallback: attempt live password reset on PBX (VitalPBX 4 does not support this — will throw)
+    try {
+      const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+      const out = await getWirePbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(row.pbxExtensionId);
+      sipPassword = out.sipPassword;
+    } catch {
+      throw new Error("SIP_CREDENTIAL_NOT_SET");
+    }
   }
+
+  if (!sipPassword) throw new Error("SIP_CREDENTIAL_NOT_SET");
 
   await db.pbxExtensionLink.update({
     where: { id: row.id },
-    data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() }
+    data: { sipPasswordIssuedAt: new Date() }
   });
 
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
+  // authUsername = PJSIP auth object name (pbxDeviceName in VitalPBX 4, e.g. "T2_103_1").
+  // This is what goes into the SIP Authorization header digest — distinct from the SIP URI user.
+  const authUsername = (row as any).pbxDeviceName || row.pbxSipUsername;
   return {
     sipPassword,
-    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword),
+    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword, authUsername),
     pbxExtensionLinkId: row.id
   };
 }
@@ -2620,6 +2639,11 @@ const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string()
 
 app.post("/auth/signup", async (req, reply) => {
   const input = signupSchema.parse(req.body);
+  const ip = String((req.headers["x-forwarded-for"] as string | undefined) || req.ip || "unknown").split(",")[0].trim();
+  if (!checkBillingRateLimit(`signup:${ip}`, 5, 60 * 60 * 1000)) {
+    app.log.warn({ ip, endpoint: "/auth/signup" }, "rate_limit_signup");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   const tenant = await db.tenant.create({
     data: {
       name: input.tenantName,
@@ -2652,6 +2676,11 @@ app.post("/auth/signup", async (req, reply) => {
 
 app.post("/auth/login", async (req, reply) => {
   const input = z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body);
+  const emailKey = input.email.toLowerCase();
+  if (!checkBillingRateLimit(`login:${emailKey}`, 10, 15 * 60 * 1000)) {
+    app.log.warn({ email: emailKey, ip: req.ip, endpoint: "/auth/login" }, "rate_limit_login");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   const user = await db.user.findUnique({ where: { email: input.email } });
   if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) return reply.status(401).send({ error: "invalid_credentials" });
   const token = await reply.jwtSign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role });
@@ -2798,11 +2827,14 @@ app.addHook("preHandler", async (req, reply) => {
     path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
   const isInternalCdrIngestPath =
     path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
+  const isInternalTelephonyPath =
+    path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
+    || isInternalTelephonyPath
     || [
         "/health",
         "/auth/signup",
@@ -4614,10 +4646,150 @@ app.post("/pbx/extensions/:id/reset-sip-password", async (req, reply) => {
     sipPassword = out.sipPassword;
   }
 
-  await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordHash: await bcrypt.hash(sipPassword, 10), sipPasswordIssuedAt: new Date() } });
+  await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordIssuedAt: new Date() } });
   const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
   return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row.pbxSipUsername, sipPassword) };
+});
+
+/**
+ * Store the SIP password for an extension (encrypted). Admin-only.
+ * Required when PBX does not support password-reset via REST (e.g. VitalPBX 4).
+ * The password is stored AES-256-GCM encrypted using the same CREDENTIALS_MASTER_KEY
+ * as apiAuthEncrypted. After this is set, /voice/me/reset-sip-password will use it
+ * instead of calling the PBX.
+ */
+app.post("/pbx/extensions/:id/set-sip-password", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`set-sip-password:${admin.tenantId}`, 20, 60 * 60 * 1000)) {
+    app.log.warn({ tenantId: admin.tenantId, userId: admin.sub, endpoint: "/pbx/extensions/:id/set-sip-password" }, "rate_limit_set_sip_password");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  if (!ensureCredentialCrypto(reply)) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ sipPassword: z.string().min(4).max(128) }).parse(req.body || {});
+  const isSuperAdminSip = isRole(admin, ["SUPER_ADMIN"]);
+  const row = await db.pbxExtensionLink.findFirst({
+    where: isSuperAdminSip ? { id } : { id, tenantId: admin.tenantId },
+  });
+  if (!row) return reply.status(404).send({ error: "extension_not_found" });
+  const encrypted = encryptJson(input.sipPassword);
+  await db.pbxExtensionLink.update({
+    where: { id: row.id },
+    data: { sipPasswordEncrypted: encrypted, sipPasswordIssuedAt: new Date() } as any,
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_SET", entityType: "PbxExtensionLink", entityId: row.id });
+  return { ok: true };
+});
+
+/**
+ * Assign an extension to a user account. Admin-only.
+ * Sets Extension.ownerUserId so the user's softphone auto-provisions from this extension.
+ * Pass userId: null to unassign.
+ */
+app.post("/pbx/extensions/:id/assign", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`ext-assign:${admin.tenantId}`, 50, 60 * 60 * 1000)) {
+    app.log.warn({ tenantId: admin.tenantId, userId: admin.sub, endpoint: "/pbx/extensions/:id/assign" }, "rate_limit_ext_assign");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const { id } = req.params as { id: string };
+  const input = z.object({ userId: z.string().nullable() }).parse(req.body || {});
+  const isSuperAdmin = isRole(admin, ["SUPER_ADMIN"]);
+  // Try PbxExtensionLink.id first, then fall back to Extension.id directly
+  // SUPER_ADMIN can assign any extension across tenants; ADMIN is scoped to their tenant
+  let extensionId: string;
+  let extensionTenantId: string;
+  const linkRow = await db.pbxExtensionLink.findFirst({
+    where: isSuperAdmin ? { id } : { id, tenantId: admin.tenantId },
+  });
+  if (linkRow) {
+    extensionId = linkRow.extensionId;
+    extensionTenantId = linkRow.tenantId;
+  } else {
+    // id might be a Connect Extension.id (no PbxExtensionLink for this extension)
+    const extRow = await db.extension.findFirst({
+      where: isSuperAdmin ? { id } : { id, tenantId: admin.tenantId },
+    });
+    if (!extRow) return reply.status(404).send({ error: "extension_not_found" });
+    extensionId = extRow.id;
+    extensionTenantId = extRow.tenantId;
+  }
+  // Verify assigned user belongs to the same tenant as the extension
+  if (input.userId) {
+    const targetUser = await db.user.findUnique({ where: { id: input.userId } });
+    if (!targetUser || targetUser.tenantId !== extensionTenantId) {
+      return reply.status(404).send({ error: "user_not_found" });
+    }
+  }
+  await db.extension.update({
+    where: { id: extensionId },
+    data: { ownerUserId: input.userId },
+  });
+  await audit({
+    tenantId: extensionTenantId,
+    actorUserId: admin.sub,
+    action: input.userId ? "PBX_EXTENSION_ASSIGNED" : "PBX_EXTENSION_UNASSIGNED",
+    entityType: "Extension",
+    entityId: extensionId,
+  });
+  return { ok: true, extensionId, ownerUserId: input.userId };
+});
+
+/**
+ * Enable/disable WebRTC for this tenant and set the SIP domain.
+ * Without webrtcEnabled=true the softphone cannot register.
+ */
+app.post("/pbx/settings/webrtc", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`webrtc-settings:${admin.tenantId}`, 10, 60 * 60 * 1000)) {
+    app.log.warn({ tenantId: admin.tenantId, userId: admin.sub, endpoint: "/pbx/settings/webrtc" }, "rate_limit_webrtc_settings");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const input = z.object({
+    webrtcEnabled: z.boolean(),
+    sipDomain: z.string().optional(),
+    sipWsUrl: z.string().url().optional(),
+  }).parse(req.body || {});
+  await db.tenant.update({
+    where: { id: admin.tenantId },
+    data: {
+      webrtcEnabled: input.webrtcEnabled,
+      ...(input.sipDomain !== undefined ? { sipDomain: input.sipDomain } : {}),
+      ...(input.sipWsUrl !== undefined ? { sipWsUrl: input.sipWsUrl } : {}),
+    },
+  });
+  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "VOICE_WEBRTC_SETTINGS_UPDATED", entityType: "Tenant", entityId: admin.tenantId });
+  return { ok: true };
+});
+
+/**
+ * List users in the tenant (for extension assignment dropdown).
+ */
+app.get("/pbx/tenant-users", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`tenant-users:${admin.sub}`, 120, 60 * 60 * 1000)) {
+    app.log.warn({ tenantId: admin.tenantId, userId: admin.sub, endpoint: "/pbx/tenant-users" }, "rate_limit_tenant_users");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  // SUPER_ADMIN may pass ?tenantId= to list users for a specific tenant (e.g. when assigning
+  // extensions that belong to a different tenant from the admin's own platform tenant).
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const resolvedTenantId =
+    isRole(admin, ["SUPER_ADMIN"]) && query.tenantId
+      ? query.tenantId
+      : admin.tenantId;
+  const users = await db.user.findMany({
+    where: { tenantId: resolvedTenantId },
+    select: { id: true, email: true, role: true },
+    orderBy: { email: "asc" },
+    take: 200,
+  });
+  return { users };
 });
 
 app.get("/pbx/dids", async (req, reply) => {
@@ -5121,15 +5293,19 @@ app.post("/voice/media-test/report", async (req, reply) => {
 
 app.get("/voice/me/extension", async (req, reply) => {
   const user = getUser(req);
+  if (!checkBillingRateLimit(`ext-fetch:${user.sub}`, 60, 60 * 60 * 1000)) {
+    app.log.warn({ userId: user.sub, tenantId: user.tenantId, endpoint: "/voice/me/extension" }, "rate_limit_ext_fetch");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
   if (!tenant) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
 
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
-  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  // Always scope to this user's own assigned extension — never fall back to first-in-tenant
   const row = await db.pbxExtensionLink.findFirst({
-    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
     include: { extension: true },
     orderBy: { createdAt: "asc" }
   });
@@ -5142,7 +5318,12 @@ app.get("/voice/me/extension", async (req, reply) => {
     extensionNumber: row.extension.extNumber,
     displayName: row.extension.displayName,
     sipUsername: row.pbxSipUsername,
-    hasSipPassword: !!row.sipPasswordIssuedAt,
+    // authUsername = the PJSIP auth object username in Asterisk (= pbxDeviceName e.g. "T2_103_1").
+    // VitalPBX creates auth objects named after the device_name, so this is what goes in
+    // the SIP Authorization header. Falls back to pbxSipUsername if device name not stored.
+    authUsername: (row as any).pbxDeviceName || row.pbxSipUsername,
+    // True only when the encrypted SIP password has actually been stored — not stale issuedAt
+    hasSipPassword: !!(row as any).sipPasswordEncrypted,
     webrtcEnabled: cfg.webrtcEnabled,
     webrtcRouteViaSbc: cfg.webrtcRouteViaSbc,
     sipWsUrl: cfg.sipWsUrl,
@@ -5245,12 +5426,20 @@ app.get("/voice/webrtc/health", async (req, reply) => {
 
 app.post("/voice/me/reset-sip-password", async (req, reply) => {
   const user = getUser(req);
+  // Prevent credential-fetch abuse: max 30 per user per hour
+  if (!checkBillingRateLimit(`sip-provision:${user.sub}`, 30, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   try {
     const out = await issueOneTimeProvisioningForUser(user);
     await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "VOICE_ME_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: out.pbxExtensionLinkId });
     return { sipPassword: out.sipPassword, provisioning: out.provisioning };
   } catch (e: any) {
     const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    // Audit failures for known setup problems so admins can investigate
+    if (code === "EXTENSION_NOT_ASSIGNED" || code === "SIP_CREDENTIAL_NOT_SET") {
+      await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: `VOICE_ME_PROVISION_FAILED_${code}`, entityType: "User", entityId: user.sub }).catch(() => undefined);
+    }
     if (code === "PBX_NOT_LINKED") return reply.status(400).send({ error: code });
     if (code === "EXTENSION_NOT_ASSIGNED") return reply.status(404).send({ error: code });
     return reply.status(400).send({ error: code });
@@ -5269,9 +5458,9 @@ app.post("/voice/mobile-provisioning/token", async (req, reply) => {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId } });
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
-  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+  // Always require ownerUserId — admins must also have an extension assigned to themselves
   const row = await db.pbxExtensionLink.findFirst({
-    where: isAdmin ? { tenantId: user.tenantId } : { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
+    where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
     orderBy: { createdAt: "asc" }
   });
   if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
@@ -6432,12 +6621,20 @@ app.post("/mobile/devices/unregister", async (req, reply) => {
 
 app.get("/mobile/call-invites/pending", async (req, reply) => {
   const user = getUser(req);
+  if (!checkBillingRateLimit(`call-invites-poll:${user.sub}`, 60, 60 * 1000)) {
+    app.log.warn({ userId: user.sub, tenantId: user.tenantId, endpoint: "/mobile/call-invites/pending" }, "rate_limit_call_invites_poll");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   await db.callInvite.updateMany({ where: { tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { lt: new Date() } }, data: { status: "EXPIRED" } });
   return db.callInvite.findMany({ where: { tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: new Date() } }, orderBy: { createdAt: "desc" }, take: 20 });
 });
 
 app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   const user = getUser(req);
+  if (!checkBillingRateLimit(`call-invite-respond:${user.sub}`, 20, 60 * 1000)) {
+    app.log.warn({ userId: user.sub, tenantId: user.tenantId, endpoint: "/mobile/call-invites/:id/respond" }, "rate_limit_call_invite_respond");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
   const { id } = req.params as { id: string };
   const input = z.object({ action: z.enum(["ACCEPT", "DECLINE", "ACCEPTED", "DECLINED"]) }).parse(req.body || {});
   const action = input.action === "ACCEPT" || input.action === "ACCEPTED" ? "ACCEPT" : "DECLINE";
@@ -7033,6 +7230,55 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
   return { ok: true, instanceId: instance.id, directoryUpserted, inboundDidSync };
 });
 
+/**
+ * Sync VitalPBX extensions into Connect Extension + PbxExtensionLink tables.
+ * Requires TenantPbxLink rows to already exist (i.e. tenants must be linked first).
+ * Optional body: { vitalTenantId: "2" } to sync a single tenant.
+ */
+app.post("/admin/pbx/instances/:id/sync-extensions", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const { id } = req.params as { id: string };
+  const input = z
+    .object({ vitalTenantId: z.string().optional() })
+    .parse(req.body || {});
+  const instance = await db.pbxInstance.findUnique({ where: { id } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const syncResult = await syncExtensionsFromPbx(db, instance.id, client, {
+    vitalTenantId: input.vitalTenantId,
+  });
+  return { ok: true, ...syncResult };
+});
+
+/** Read synced Extension + PbxExtensionLink rows for a PBX instance (admin view). */
+app.get("/admin/pbx/extensions", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const query = z
+    .object({
+      instanceId: z.string().optional(),
+      tenantId: z.string().optional(),
+      vitalTenantId: z.string().optional(),
+    })
+    .parse(req.query || {});
+
+  const pbxLinks = await db.pbxExtensionLink.findMany({
+    where: {
+      ...(query.tenantId ? { tenantId: query.tenantId } : {}),
+    },
+    include: {
+      extension: { select: { id: true, extNumber: true, displayName: true, status: true } },
+    },
+    orderBy: [{ tenantId: "asc" }, { extension: { extNumber: "asc" } }],
+    take: 500,
+  });
+
+  return { ok: true, count: pbxLinks.length, extensions: pbxLinks };
+});
+
 /** Read persisted PBX tenant ↔ inbound DID rows (for verification / future UI). */
 app.get("/admin/pbx/tenant-inbound-dids", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
@@ -7193,7 +7439,96 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   if (!isVitalResourceName(resource)) return reply.status(400).send({ error: "resource_not_supported" });
   if (!canAccessVitalResourceAction(user, resource, "view")) return reply.status(403).send({ error: "forbidden" });
 
-  // SUPER_ADMIN with vpbx: tenant context: bypass tenantPbxLink, query VitalPBX directly.
+  // Extensions: serve from synced Connect DB (Phase 1 sync) — fast, no live VitalPBX call needed.
+  if (resource === "extensions") {
+    const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
+
+    // Determine the Connect tenantId to query
+    let queryTenantId: string | null = null;
+    if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
+      // Admin browsing a specific tenant by vitalTenantId override
+      const tenantLink = await db.tenantPbxLink.findFirst({
+        where: { pbxTenantId: pbxTenantOverride },
+      });
+      queryTenantId = tenantLink?.tenantId ?? null;
+    } else if (!isRole(user, ["SUPER_ADMIN"])) {
+      queryTenantId = user.tenantId;
+    }
+
+    if (queryTenantId) {
+      const dbExts = await db.extension.findMany({
+        where: { tenantId: queryTenantId, status: "ACTIVE" },
+        include: {
+          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
+          ownerUser: { select: { id: true, email: true } },
+          tenant: { select: { name: true } },
+        },
+        orderBy: { extNumber: "asc" },
+      });
+      const rows = dbExts.map((e) => ({
+        id: e.pbxLink?.pbxExtensionId ?? e.id,
+        extension: e.extNumber,
+        name: e.displayName,
+        callerName: e.displayName,
+        displayName: e.displayName,
+        technology: "pjsip",
+        status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
+        tenantName: e.tenant?.name ?? null,
+        tenantId: e.tenantId,
+        pbxExtensionId: e.pbxLink?.pbxExtensionId,
+        pbxSipUsername: e.pbxLink?.pbxSipUsername,
+        pbxDeviceName: e.pbxLink?.pbxDeviceName ?? null,
+        webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
+        connectExtensionId: e.id,
+        // Provisioning metadata
+        pbxExtensionLinkId: e.pbxLink?.id,
+        ownerUserId: e.ownerUserId,
+        assignedUser: e.ownerUser?.email ?? null,
+        pbxUserEmail: e.pbxUserEmail ?? null,
+        sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
+      }));
+      return { resource, rows, source: "connect_db" };
+    }
+
+    // Super admin without tenant override — return all extensions across all tenants
+    if (isRole(user, ["SUPER_ADMIN"])) {
+      const dbExts = await db.extension.findMany({
+        where: { status: "ACTIVE" },
+        include: {
+          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
+          tenant: { select: { name: true } },
+          ownerUser: { select: { id: true, email: true } },
+        },
+        orderBy: [{ tenantId: "asc" }, { extNumber: "asc" }],
+        take: 500,
+      });
+      const rows = dbExts.map((e) => ({
+        id: e.pbxLink?.pbxExtensionId ?? e.id,
+        extension: e.extNumber,
+        name: e.displayName,
+        callerName: e.displayName,
+        displayName: e.displayName,
+        technology: "pjsip",
+        status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
+        tenantName: e.tenant?.name,
+        tenantId: e.tenantId,
+        pbxExtensionId: e.pbxLink?.pbxExtensionId,
+        pbxSipUsername: e.pbxLink?.pbxSipUsername,
+        pbxDeviceName: e.pbxLink?.pbxDeviceName ?? null,
+        webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
+        connectExtensionId: e.id,
+        // Provisioning metadata
+        pbxExtensionLinkId: e.pbxLink?.id,
+        ownerUserId: e.ownerUserId,
+        assignedUser: e.ownerUser?.email ?? null,
+        pbxUserEmail: e.pbxUserEmail ?? null,
+        sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
+      }));
+      return { resource, rows, source: "connect_db" };
+    }
+  }
+
+  // All other resources: proxy to VitalPBX directly.
   const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
   if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
     const overrideCacheKey = `vpbx:${pbxTenantOverride}:${resource}`;
@@ -7409,6 +7744,177 @@ function mapDispositionToHistoryStatus(disposition: string | null | undefined): 
   return "missed";
 }
 
+// ─── Call outcome derivation ──────────────────────────────────────────────────
+// Derives human-readable call outcome fields from stored dcontextsSeen /
+// channelsSeen / disposition. No schema changes needed — computed at read time.
+type CallOutcome = {
+  answeredByType: "human" | "ivr" | "voicemail" | "system" | null;
+  humanAnswered: boolean;
+  ivrAnswered: boolean;
+  voicemailAnswered: boolean;
+  attemptedExtensions: string[];
+  journeySummary: string;
+  finalOutcomeReason: string;
+  journeySteps: Array<{ label: string; detail?: string; result: "ok" | "warn" | "missed" | "info" }>;
+};
+
+function deriveCallOutcome(row: {
+  disposition: string;
+  direction: string;
+  dcontextsSeen: unknown;
+  channelsSeen: unknown;
+  talkSec: number;
+  queueId?: string | null;
+  dcontext?: string | null;
+}): CallOutcome {
+  const dcontexts = (Array.isArray(row.dcontextsSeen) ? (row.dcontextsSeen as unknown[]) : [])
+    .map((s) => String(s).toLowerCase());
+  const channels = (Array.isArray(row.channelsSeen) ? (row.channelsSeen as unknown[]) : [])
+    .map((s) => String(s));
+
+  // Detect PBX components involved in this call
+  const hasIvr      = dcontexts.some((d) => /^ivr[-_]/.test(d) || d.includes("app-ivr") || /^ivr\d/.test(d));
+  const hasVoicemail = dcontexts.some((d) => d.includes("voicemail") || d.includes("-vmu") || d.includes("app-vm"));
+  const hasQueue    = dcontexts.some((d) => d.includes("queue")) || Boolean(row.queueId);
+  const hasRingGroup = dcontexts.some((d) => d.includes("ringgroup") || d.includes("ring-group"));
+  const hasAnnouncement = dcontexts.some((d) => d.includes("announcement"));
+
+  // Extract extension numbers from channel names (PJSIP/103-xxxxx, SIP/104@...)
+  const extPattern = /^(?:PJSIP|SIP|DAHDI|IAX2)\/(\d{2,6})[-@]/i;
+  const attemptedExtensions = [...new Set(
+    channels.map((ch) => extPattern.exec(ch)?.[1]).filter((e): e is string => Boolean(e))
+  )];
+
+  const isAnswered = row.disposition === "answered";
+  const isOutgoing = row.direction === "outgoing";
+  const isInternal = row.direction === "internal";
+
+  let answeredByType: CallOutcome["answeredByType"] = null;
+  let humanAnswered = false;
+  let ivrAnswered = false;
+  let voicemailAnswered = false;
+  let journeySummary = "";
+  let finalOutcomeReason = "";
+  const journeySteps: CallOutcome["journeySteps"] = [];
+
+  if (isOutgoing) {
+    if (isAnswered) {
+      answeredByType = "human";
+      humanAnswered = true;
+      journeySummary = "Outbound call answered";
+      finalOutcomeReason = "outbound_answered";
+      journeySteps.push({ label: "Outbound call placed", result: "info" });
+      journeySteps.push({ label: "Call answered", result: "ok" });
+    } else {
+      journeySummary = row.disposition === "canceled" ? "Outbound call canceled" : "Outbound call not answered";
+      finalOutcomeReason = row.disposition === "canceled" ? "outbound_canceled" : "outbound_missed";
+      journeySteps.push({ label: "Outbound call placed", result: "info" });
+      journeySteps.push({ label: row.disposition === "canceled" ? "Caller hung up" : "No answer", result: "missed" });
+    }
+    return { answeredByType, humanAnswered, ivrAnswered, voicemailAnswered, attemptedExtensions, journeySummary, finalOutcomeReason, journeySteps };
+  }
+
+  if (isInternal) {
+    if (isAnswered) {
+      answeredByType = "human";
+      humanAnswered = true;
+      const ext = attemptedExtensions[0];
+      journeySummary = ext ? `Internal call — extension ${ext} answered` : "Internal call answered";
+      finalOutcomeReason = "internal_answered";
+      journeySteps.push({ label: "Internal call", result: "info" });
+      journeySteps.push({ label: ext ? `Extension ${ext} answered` : "Answered", result: "ok" });
+    } else {
+      const ext = attemptedExtensions[0];
+      journeySummary = ext ? `Internal call — extension ${ext} did not answer` : "Internal call not answered";
+      finalOutcomeReason = "internal_missed";
+      journeySteps.push({ label: "Internal call", result: "info" });
+      journeySteps.push({ label: ext ? `Extension ${ext} rang — no answer` : "No answer", result: "missed" });
+    }
+    return { answeredByType, humanAnswered, ivrAnswered, voicemailAnswered, attemptedExtensions, journeySummary, finalOutcomeReason, journeySteps };
+  }
+
+  // ── Inbound call journey ────────────────────────────────────────────────────
+  journeySteps.push({ label: "Inbound call received", result: "info" });
+
+  if (hasIvr) {
+    ivrAnswered = true;
+    journeySteps.push({ label: "IVR menu answered", result: "ok", detail: "Automated menu presented to caller" });
+  }
+  if (hasAnnouncement && !hasIvr) {
+    journeySteps.push({ label: "Announcement played", result: "info" });
+  }
+  if (hasQueue) {
+    journeySteps.push({ label: "Placed in queue", result: "info", detail: row.queueId || undefined });
+  }
+  if (hasRingGroup) {
+    journeySteps.push({ label: "Ring group attempted", result: "info", detail: attemptedExtensions.length > 0 ? `Extensions: ${attemptedExtensions.join(", ")}` : undefined });
+  } else if (attemptedExtensions.length > 0 && !hasQueue) {
+    journeySteps.push({ label: `Extension${attemptedExtensions.length > 1 ? "s" : ""} rang`, result: "info", detail: attemptedExtensions.join(", ") });
+  }
+
+  if (isAnswered) {
+    if (hasVoicemail && row.talkSec >= 3) {
+      answeredByType = "voicemail";
+      voicemailAnswered = true;
+      journeySummary = "Answered by voicemail";
+      finalOutcomeReason = "voicemail_answered";
+      journeySteps.push({ label: "Voicemail answered", result: "warn", detail: "Call went to voicemail" });
+    } else if (attemptedExtensions.length > 0) {
+      answeredByType = "human";
+      humanAnswered = true;
+      const ext = attemptedExtensions[0];
+      journeySummary = hasIvr
+        ? `IVR answered, then extension ${ext} picked up`
+        : hasQueue
+          ? `Queue answered — extension ${ext} picked up`
+          : `Extension ${ext} answered`;
+      finalOutcomeReason = "human_answered";
+      journeySteps.push({ label: `Extension ${ext} answered`, result: "ok" });
+    } else if (hasIvr && !hasRingGroup && !hasQueue && attemptedExtensions.length === 0) {
+      answeredByType = "ivr";
+      journeySummary = "IVR answered — caller stayed in self-service";
+      finalOutcomeReason = "ivr_self_service";
+      journeySteps.push({ label: "Caller completed self-service in IVR", result: "ok" });
+    } else {
+      answeredByType = "human";
+      humanAnswered = true;
+      journeySummary = "Call answered";
+      finalOutcomeReason = "answered";
+      journeySteps.push({ label: "Call answered", result: "ok" });
+    }
+  } else {
+    // Not answered
+    if (hasIvr && attemptedExtensions.length > 0) {
+      journeySummary = `IVR answered — no extension picked up (tried: ${attemptedExtensions.join(", ")})`;
+      finalOutcomeReason = "ivr_then_missed";
+      journeySteps.push({ label: `Extension${attemptedExtensions.length > 1 ? "s" : ""} rang — no answer`, result: "missed", detail: attemptedExtensions.join(", ") });
+    } else if (hasIvr) {
+      journeySummary = "Caller hung up in IVR without reaching an agent";
+      finalOutcomeReason = "abandoned_in_ivr";
+      journeySteps.push({ label: "Caller abandoned in IVR", result: "missed" });
+    } else if (hasQueue && attemptedExtensions.length > 0) {
+      journeySummary = `Queue attempted — no agents answered (tried: ${attemptedExtensions.join(", ")})`;
+      finalOutcomeReason = "queue_missed";
+      journeySteps.push({ label: "No agents answered", result: "missed", detail: attemptedExtensions.join(", ") });
+    } else if (hasQueue) {
+      journeySummary = "Queue attempted — no agents available";
+      finalOutcomeReason = "queue_no_agents";
+      journeySteps.push({ label: "No agents available in queue", result: "missed" });
+    } else if (attemptedExtensions.length > 0) {
+      journeySummary = `Extension${attemptedExtensions.length > 1 ? "s" : ""} ${attemptedExtensions.join(", ")} rang — no answer`;
+      finalOutcomeReason = "extension_missed";
+      journeySteps.push({ label: `Extension${attemptedExtensions.length > 1 ? "s" : ""} rang — no answer`, result: "missed", detail: attemptedExtensions.join(", ") });
+    } else {
+      journeySummary = "Caller did not reach anyone";
+      finalOutcomeReason = "missed";
+      journeySteps.push({ label: "Call not answered", result: "missed" });
+    }
+    journeySteps.push({ label: "Call ended", result: "info", detail: `Final result: missed` });
+  }
+
+  return { answeredByType, humanAnswered, ivrAnswered, voicemailAnswered, attemptedExtensions, journeySummary, finalOutcomeReason, journeySteps };
+}
+
 function digitsOnly(value: string | null | undefined): string {
   return String(value || "").replace(/\D+/g, "");
 }
@@ -7489,16 +7995,24 @@ app.get("/calls/history", async (req, reply) => {
         id: true,
         linkedId: true,
         fromNumber: true,
+        fromName: true,
         toNumber: true,
         dcontext: true,
+        dcontextsSeen: true,
+        channelsSeen: true,
         direction: true,
         disposition: true,
         durationSec: true,
+        talkSec: true,
         startedAt: true,
+        answeredAt: true,
+        endedAt: true,
         tenantId: true,
         pbxVitalTenantId: true,
         pbxTenantCode: true,
         tenantResolutionSource: true,
+        queueId: true,
+        hangupCause: true,
       },
     }),
     db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
@@ -7770,6 +8284,7 @@ app.get("/calls/history", async (req, reply) => {
       ...Array.from(extensionTenantByPbxExtId.values()),
       ...Array.from(learnedExtTenantByExt.values()),
       ...Array.from(phoneTenantByLast10.values()),
+      ...Array.from(ombuDidTenantByLast10.values()),
       ...Array.from(learnedDidTenantByLast10.values()),
       ...Array.from(siblingTenantByLinkedId.values()),
       ...Array.from(numberTenantFallback.values()),
@@ -7797,6 +8312,12 @@ app.get("/calls/history", async (req, reply) => {
     dirDisplayByVital.set(r.vitalTenantId.trim(), label);
   }
   const allTenants = await db.tenant.findMany({ select: { id: true, name: true } });
+  // Back-fill tenantNameById with every Connect tenant so any inference path
+  // (vpbx-slug mapping, ombutel DID lookup, etc.) that resolves to a real Connect
+  // tenant ID always gets a human-readable name instead of the raw UUID.
+  for (const t of allTenants) {
+    if (!tenantNameById.has(t.id)) tenantNameById.set(t.id, t.name);
+  }
   const normalizeTenantSlug = (value: string) =>
     String(value || "")
       .toLowerCase()
@@ -7826,6 +8347,7 @@ app.get("/calls/history", async (req, reply) => {
     tenantId: string | null;
     linkedId: string;
     fromNumber: string | null;
+    fromName?: string | null;
     toNumber: string | null;
     dcontext?: string | null;
     pbxVitalTenantId?: string | null;
@@ -7911,20 +8433,42 @@ app.get("/calls/history", async (req, reply) => {
       const dn = dirDisplayByVital.get(r.pbxVitalTenantId.trim());
       if (dn) tenantName = dn;
     }
+    const outcome = deriveCallOutcome({
+      disposition: r.disposition,
+      direction: r.direction,
+      dcontextsSeen: r.dcontextsSeen,
+      channelsSeen: r.channelsSeen,
+      talkSec: r.talkSec || 0,
+      queueId: r.queueId,
+      dcontext: r.dcontext,
+    });
     return {
       callId: r.linkedId || r.id,
       rowId: r.id,
       linkedId: r.linkedId,
       fromNumber: r.fromNumber || "",
+      fromName: r.fromName || null,
       toNumber: r.toNumber || "",
       direction: (["incoming", "outgoing", "internal"].includes(r.direction) ? r.direction : "incoming") as "incoming" | "outgoing" | "internal",
       status: mapDispositionToHistoryStatus(r.disposition),
       disposition: r.disposition,
       durationSec: r.durationSec || 0,
+      talkSec: r.talkSec || 0,
       startedAt: r.startedAt.toISOString(),
+      answeredAt: r.answeredAt?.toISOString() ?? null,
+      endedAt: r.endedAt?.toISOString() ?? null,
       tenantId: inferredTenantId,
       tenantName,
       rangExtension: pickRangExtension(r.direction, r.fromNumber, r.toNumber),
+      // Derived call outcome fields
+      answeredByType: outcome.answeredByType,
+      humanAnswered: outcome.humanAnswered,
+      ivrAnswered: outcome.ivrAnswered,
+      voicemailAnswered: outcome.voicemailAnswered,
+      attemptedExtensions: outcome.attemptedExtensions,
+      journeySummary: outcome.journeySummary,
+      finalOutcomeReason: outcome.finalOutcomeReason,
+      journeySteps: outcome.journeySteps,
     };
   });
 
@@ -7949,6 +8493,48 @@ app.get("/calls/history", async (req, reply) => {
       total,
     },
   });
+});
+
+// ─── Live DID→tenant name map (used by portal live-call display) ──────────────
+// Returns the active inbound DID list with resolved Connect tenant names.
+// Lightweight — one small query, result is small (< 100 rows in practice).
+app.get("/calls/live-did-map", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+
+  const instance = await db.pbxInstance.findFirst({
+    where: { isEnabled: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!instance) return reply.send({ entries: [] });
+
+  const allDidRows = await db.pbxTenantInboundDid.findMany({
+    where: { pbxInstanceId: instance.id, active: true, connectTenantId: { not: null } },
+    select: { e164: true, connectTenantId: true },
+  });
+
+  // Scope: non-super-admins only see their own tenant's DIDs
+  const didRows = isSuperAdmin
+    ? allDidRows
+    : allDidRows.filter((r) => r.connectTenantId === (user.tenantId ?? null));
+
+  const tenantIds = [...new Set(didRows.map((r) => r.connectTenantId).filter(Boolean) as string[])];
+
+  const tenants = tenantIds.length > 0
+    ? await db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } })
+    : [];
+
+  const nameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+
+  const entries = didRows.map((r) => ({
+    e164: r.e164,
+    tenantId: r.connectTenantId as string,
+    tenantName: nameById.get(r.connectTenantId as string) ?? "Unknown tenant",
+  }));
+
+  return reply.send({ entries });
 });
 
 app.get("/billing/sola/config", async (req, reply) => {
@@ -9378,18 +9964,24 @@ function resolveTenantFromDcontext(dcontext: string | null | undefined, tenantMa
 app.post("/internal/cdr-ingest", async (req, reply) => {
   const secret = process.env.CDR_INGEST_SECRET?.trim();
   const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (secret) {
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/cdr-ingest" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
     if (!incoming) return reply.code(401).send({ error: "missing secret" });
     // Constant-time compare
     const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
     const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) return reply.code(403).send({ error: "forbidden" });
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/cdr-ingest" }, "rate_limit_internal_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
   }
 
   const schema = z.object({
     linkedId:    z.string().min(1),
     tenantId:    z.string().nullable().optional(),
     fromNumber:  z.string().nullable().optional(),
+    fromName:    z.string().nullable().optional(),
     toNumber:    z.string().nullable().optional(),
     direction:   z.enum(["incoming", "outgoing", "internal", "unknown"]),
     disposition: z.enum(["answered", "missed", "busy", "failed", "canceled", "unknown"]),
@@ -9497,6 +10089,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         pbxTenantCode: tenantPack.pbxTenantCode,
         tenantResolutionSource: tenantPack.tenantResolutionSource,
         fromNumber:  d.fromNumber ?? null,
+        fromName:    d.fromName ?? null,
         toNumber:    d.toNumber ?? null,
         direction:   resolvedDirection,
         disposition: d.disposition,
@@ -9518,6 +10111,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         pbxTenantCode: tenantPack.pbxTenantCode != null ? tenantPack.pbxTenantCode : undefined,
         tenantResolutionSource: tenantPack.tenantResolutionSource != null ? tenantPack.tenantResolutionSource : undefined,
         fromNumber:  d.fromNumber ?? undefined,
+        fromName:    d.fromName ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
         disposition: d.disposition !== "unknown" ? d.disposition : undefined,
@@ -9550,6 +10144,88 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         "cdr_pipeline_diag"
       );
     }
+
+    // ── Channel-based outbound PSTN leg detection ─────────────────────────────
+    // VitalPBX does not reliably emit AMI CDR events, so the CDR-event-based path
+    // in the telephony service never fires.  Instead we detect outbound PSTN legs
+    // directly from channelsSeen: when a ring-group, virtual extension, or follow-me
+    // dials an external number, Asterisk creates a Local channel whose first segment
+    // encodes the dialled PSTN number and whose context segment identifies the
+    // outbound dial route.
+    //
+    // Pattern:  Local/{7+digits}@T{n}_{cos-*|ext-local*|from-internal*|outbound*}-{hex}[;n]
+    //
+    // This runs for every ingest call (even updates) but uses upsert, so it is
+    // idempotent — re-ingest of the same linkedId will not duplicate the :out row.
+    if (resolvedDirection === "incoming" && mergedCh.length > 0) {
+      const outNumbers = new Map<string, string>(); // normalised number → context base
+      for (const ch of mergedCh) {
+        if (!ch.startsWith("Local/")) continue;
+        const atIdx = ch.indexOf("@");
+        if (atIdx < 0) continue;
+        const numPart = ch.slice("Local/".length, atIdx);
+        if (!/^\d{7,}$/.test(numPart)) continue;
+        const ctxRaw = ch.slice(atIdx + 1); // "T8_cos-all-0000243e;1"
+        // Only treat as an outbound PSTN dial when the context is an outbound route context
+        if (!/^T\d+_(?:cos-|ext-local|from-internal|outbound)/i.test(ctxRaw)) continue;
+        const normNum = numPart.replace(/^1(\d{10})$/, "$1");
+        if (!outNumbers.has(normNum)) {
+          // Strip hex suffix to get the clean context name  e.g. "T8_cos-all"
+          const ctxBase = ctxRaw.replace(/-[0-9a-f]+(?:;\d+)?$/i, "").replace(/-[0-9a-f]+$/i, "");
+          outNumbers.set(normNum, ctxBase);
+        }
+      }
+      let outIdx = 0;
+      for (const [outNum, outCtx] of outNumbers) {
+        const suffix = outIdx === 0 ? ":out" : `:out${outIdx}`;
+        outIdx++;
+        const outLinkedId = d.linkedId + suffix;
+        try {
+          const existingOut = await db.connectCdr.findUnique({ where: { linkedId: outLinkedId } });
+          await db.connectCdr.upsert({
+            where:  { linkedId: outLinkedId },
+            create: {
+              linkedId:               outLinkedId,
+              tenantId:               tenantPack.tenantId,
+              pbxVitalTenantId:       tenantPack.pbxVitalTenantId,
+              pbxTenantCode:          tenantPack.pbxTenantCode,
+              tenantResolutionSource: "channel_outbound_leg",
+              fromNumber:             d.toNumber ?? null,  // DID is the outbound caller-ID
+              toNumber:               outNum,
+              direction:              "outgoing",
+              disposition:            d.disposition,
+              startedAt:              new Date(d.startedAt),
+              answeredAt:             d.answeredAt ? new Date(d.answeredAt) : null,
+              endedAt:                new Date(d.endedAt),
+              durationSec:            d.talkSec,
+              talkSec:                d.talkSec,
+              queueId:                null,
+              hangupCause:            null,
+              dcontext:               outCtx,
+              dcontextsSeen:          [outCtx],
+              channelsSeen:           mergedCh,
+              rawLegCount:            0,
+            },
+            update: {
+              disposition:  d.disposition !== "unknown" ? d.disposition : undefined,
+              answeredAt:   d.answeredAt ? new Date(d.answeredAt) : undefined,
+              durationSec:  d.talkSec > 0 ? d.talkSec : undefined,
+              talkSec:      d.talkSec > 0 ? d.talkSec : undefined,
+              channelsSeen: mergedCh,
+            },
+          });
+          if (!existingOut) {
+            app.log.info(
+              { linkedId: outLinkedId, to: outNum, tenant: tenantPack.tenantId, ctx: outCtx },
+              "cdr-ingest: channel-based outbound-pstn-leg created",
+            );
+          }
+        } catch (outErr: any) {
+          app.log.warn({ linkedId: outLinkedId, err: outErr?.message }, "cdr-ingest: outbound-leg upsert failed (non-fatal)");
+        }
+      }
+    }
+
     return reply.code(200).send({ ok: true });
   } catch (err: any) {
     app.log.error({ linkedId: d.linkedId, err: err?.message }, "cdr-ingest: db error");
@@ -9561,11 +10237,16 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
 app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
   const secret = process.env.CDR_INGEST_SECRET?.trim();
   const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (secret) {
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/telephony/pbx-tenant-map" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
     if (!incoming) return reply.code(401).send({ error: "missing secret" });
     const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
     const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) return reply.code(403).send({ error: "forbidden" });
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/telephony/pbx-tenant-map" }, "rate_limit_internal_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
   }
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.send({ version: 1, pbxInstanceId: null, fetchedAt: new Date().toISOString(), entries: [] });
@@ -9587,18 +10268,40 @@ app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
       if (hit) connectByVital.set(hit.vitalTenantId.trim().toLowerCase(), l.tenantId);
     }
   }
-  const entries = rows.map((r) => ({
+  // Build entries (without names first to gather tenant IDs)
+  const rawEntries = rows.map((r) => ({
     vitalTenantId: r.vitalTenantId,
     tenantCode: r.tenantCode,
     tenantSlug: r.tenantSlug,
     connectTenantId: connectByVital.get(r.vitalTenantId.trim().toLowerCase()) ?? null,
   }));
-  const didEntries = didRows.map((r) => ({
+  const rawDidEntries = didRows.map((r) => ({
     e164: r.e164,
     vitalTenantId: r.vitalTenantId,
     tenantCode: (r.pbxTenantCode || "").trim(),
     connectTenantId: r.connectTenantId,
   }));
+
+  // Join tenant names in one query
+  const allConnectIds = [
+    ...rawEntries.map((e) => e.connectTenantId),
+    ...rawDidEntries.map((d) => d.connectTenantId),
+  ].filter((id): id is string => !!id);
+  const uniqueIds = [...new Set(allConnectIds)];
+  const tenantNameRows = uniqueIds.length > 0
+    ? await db.tenant.findMany({ where: { id: { in: uniqueIds } }, select: { id: true, name: true } })
+    : [];
+  const tenantNameById = new Map(tenantNameRows.map((t) => [t.id, t.name]));
+
+  const entries = rawEntries.map((e) => ({
+    ...e,
+    tenantName: e.connectTenantId ? (tenantNameById.get(e.connectTenantId) ?? null) : null,
+  }));
+  const didEntries = rawDidEntries.map((d) => ({
+    ...d,
+    tenantName: d.connectTenantId ? (tenantNameById.get(d.connectTenantId) ?? null) : null,
+  }));
+
   return reply.send({
     version: 2,
     pbxInstanceId: instance.id,

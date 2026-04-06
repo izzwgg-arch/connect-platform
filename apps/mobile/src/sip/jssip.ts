@@ -19,6 +19,16 @@ export class JsSipClient implements SipClient {
   async register() {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
     this.events.onRegistrationState?.("registering");
+    console.log('[SIP] Registering to', this.bundle.sipDomain, 'via', this.bundle.sipWsUrl);
+
+    // Register WebRTC globals lazily (not at startup — avoids native crash on launch)
+    try {
+      const { registerGlobals } = await import('react-native-webrtc');
+      registerGlobals();
+      console.log('[SIP] WebRTC globals registered');
+    } catch (e) {
+      console.warn('[SIP] WebRTC registerGlobals failed:', e);
+    }
 
     const JsSIP = (await import("jssip")).default as any;
     const socket = new JsSIP.WebSocketInterface(this.bundle.sipWsUrl);
@@ -27,9 +37,16 @@ export class JsSipClient implements SipClient {
       ? this.bundle.iceServers
       : [{ urls: "stun:stun.l.google.com:19302" }];
 
+    // authUsername = the PJSIP auth object name (e.g. "T2_103_1" in VitalPBX 4).
+    // This goes into the SIP Authorization header and MUST match what the PBX expects.
+    // It is often different from the SIP URI user (extension number).
+    const authUsername = this.bundle.authUsername || this.bundle.sipUsername;
+    console.log('[SIP] URI user:', this.bundle.sipUsername, '| Auth user:', authUsername);
+
     const uaConfig: Record<string, unknown> = {
       sockets: [socket],
       uri: `sip:${this.bundle.sipUsername}@${this.bundle.sipDomain}`,
+      authorization_user: authUsername,
       password: this.bundle.sipPassword,
       register: true,
       session_timers: false,
@@ -45,43 +62,71 @@ export class JsSipClient implements SipClient {
 
     this.ua = new JsSIP.UA(uaConfig);
 
-    this.ua.on("registered", () => this.events.onRegistrationState?.("registered"));
+    this.ua.on("registered", () => {
+      console.log('[SIP] Registered successfully');
+      this.events.onRegistrationState?.("registered");
+    });
+
     this.ua.on("registrationFailed", (e: any) => {
-      this.events.onRegistrationState?.("failed");
       const code = e?.response?.status_code;
       const cause = e?.cause || "unknown";
-      const msg = code
-        ? `SIP reg failed (${code}): ${cause}`
-        : `SIP reg failed: ${cause}`;
+      const msg = code ? `SIP reg failed (${code}): ${cause}` : `SIP reg failed: ${cause}`;
+      console.warn('[SIP] Registration failed:', msg);
+      this.events.onRegistrationState?.("failed");
       this.events.onError?.(msg);
     });
+
     this.ua.on("newRTCSession", (e: any) => {
       this.session = e.session;
+      console.log('[SIP] New RTC session, originator:', e.originator);
+
       if (e.originator === "remote") {
+        const callerNumber = this.getSessionFrom(e.session);
+        console.log('[SIP] Incoming call from:', callerNumber);
         this.incomingSessions.push(e.session);
-        this.events.onIncomingCall?.();
+        this.events.onIncomingCall?.(callerNumber);
         this.events.onCallState?.("ringing");
       }
       this.bindSession(this.session);
     });
 
+    this.ua.on("disconnected", (e: any) => {
+      console.warn('[SIP] UA disconnected:', e?.cause);
+    });
+
     this.ua.start();
+    console.log('[SIP] UA started');
   }
 
   private bindSession(session: any) {
-    session.on("progress", () => this.events.onCallState?.("ringing"));
-    session.on("confirmed", () => this.events.onCallState?.("connected"));
-    session.on("ended", () => {
+    session.on("progress", (e: any) => {
+      const code = e?.response?.status_code;
+      console.log('[SIP] Call progress, status:', code);
+      this.events.onCallState?.("ringing");
+    });
+
+    session.on("confirmed", () => {
+      console.log('[SIP] Call confirmed (connected)');
+      this.events.onCallState?.("connected");
+    });
+
+    session.on("ended", (e: any) => {
+      const cause = e?.cause || "normal";
+      console.log('[SIP] Call ended, cause:', cause);
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
     });
+
     session.on("failed", (e: any) => {
+      const cause = e?.cause || "unknown";
+      const code = e?.response?.status_code;
+      const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
+      console.warn('[SIP] Call failed:', msg);
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
-      const cause = e?.cause || "unknown";
-      this.events.onError?.(`Call failed: ${cause}`);
+      this.events.onError?.(msg);
     });
   }
 
@@ -90,7 +135,11 @@ export class JsSipClient implements SipClient {
   }
 
   private getSessionFrom(session: any): string {
-    return String(session?.remote_identity?.uri?.user || session?.remote_identity?.display_name || "");
+    return String(
+      session?.remote_identity?.display_name ||
+      session?.remote_identity?.uri?.user ||
+      ""
+    );
   }
 
   private getSessionTo(session: any): string {
@@ -102,10 +151,8 @@ export class JsSipClient implements SipClient {
     const from = this.normalizeNumber(this.getSessionFrom(session));
     const targetFrom = this.normalizeNumber(match.fromNumber || "");
     if (targetFrom && from && !from.endsWith(targetFrom) && !targetFrom.endsWith(from)) return false;
-
     const to = String(this.getSessionTo(session));
     if (match.toExtension && to && to !== String(match.toExtension)) return false;
-
     return true;
   }
 
@@ -127,12 +174,22 @@ export class JsSipClient implements SipClient {
 
   async dial(target: string) {
     if (!this.ua || !this.bundle) throw new Error("SIP UA not registered");
+    const dest = `sip:${target}@${this.bundle.sipDomain}`;
+    console.log('[SIP] Dialing:', dest);
     this.events.onCallState?.("dialing");
-    this.session = this.ua.call(`sip:${target}@${this.bundle.sipDomain}`, {
-      mediaConstraints: { audio: true, video: false },
-      pcConfig: this.ua._configuration?.pcConfig ?? {},
-    });
-    this.bindSession(this.session);
+    try {
+      this.session = this.ua.call(dest, {
+        mediaConstraints: { audio: true, video: false },
+        pcConfig: this.ua._configuration?.pcConfig ?? {},
+      });
+      this.bindSession(this.session);
+      console.log('[SIP] INVITE sent');
+    } catch (e: any) {
+      const msg = e?.message || "dial failed";
+      console.error('[SIP] Dial error:', msg);
+      this.events.onError?.(`Dial error: ${msg}`);
+      this.events.onCallState?.("ended");
+    }
   }
 
   async answer() {
@@ -165,17 +222,69 @@ export class JsSipClient implements SipClient {
   }
 
   async hangup() {
-    this.session?.terminate?.();
+    console.log('[SIP] Hanging up');
+    try {
+      this.session?.terminate?.();
+    } catch (e) {
+      console.warn('[SIP] Hangup error:', e);
+    }
     this.events.onCallState?.("ended");
   }
 
   setMute(mute: boolean) {
-    if (mute) this.session?.mute?.({ audio: true });
-    else this.session?.unmute?.({ audio: true });
+    if (mute) {
+      this.session?.mute?.({ audio: true });
+    } else {
+      this.session?.unmute?.({ audio: true });
+    }
   }
 
-  setSpeaker(_speakerOn: boolean) {
-    // Platform-specific audio routing can be layered in with native modules.
+  setSpeaker(speakerOn: boolean) {
+    // Use react-native-incall-manager if available for earpiece/speaker routing.
+    // This is a best-effort call — silently ignored if the module isn't linked.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const InCallManager = require('react-native-incall-manager').default;
+      InCallManager.setSpeakerphoneOn(speakerOn);
+      console.log('[SIP] Speaker', speakerOn ? 'on' : 'off');
+    } catch {
+      // Module not available — audio routing unchanged
+      console.log('[SIP] setSpeaker: InCallManager not available, skipping');
+    }
+  }
+
+  hold() {
+    if (!this.session) return;
+    try {
+      this.session.hold({
+        useUpdate: false,
+        eventHandlers: {
+          failed: (e: any) => {
+            console.warn('[SIP] Hold failed:', e?.cause);
+          },
+        },
+      });
+      console.log('[SIP] Hold sent');
+    } catch (e) {
+      console.warn('[SIP] Hold error:', e);
+    }
+  }
+
+  unhold() {
+    if (!this.session) return;
+    try {
+      this.session.unhold({
+        useUpdate: false,
+        eventHandlers: {
+          failed: (e: any) => {
+            console.warn('[SIP] Unhold failed:', e?.cause);
+          },
+        },
+      });
+      console.log('[SIP] Unhold sent');
+    } catch (e) {
+      console.warn('[SIP] Unhold error:', e);
+    }
   }
 
   sendDtmf(digit: string) {

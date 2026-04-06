@@ -1,208 +1,289 @@
-import React, { useCallback, useState } from "react";
-import { Platform, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import * as SecureStore from "expo-secure-store";
-import { Audio } from "expo-av";
-import { useFocusEffect } from "@react-navigation/native";
-import { HeaderBar } from "../components/HeaderBar";
-import { useSip } from "../context/SipContext";
-import { useAuth } from "../context/AuthContext";
-import { getVoiceExtension } from "../api/client";
-import type { VoiceExtension } from "../types";
-import { ui } from "../theme";
+import React, { useCallback, useState } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
+import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
+import { useSip } from '../context/SipContext';
+import { getVoiceExtension } from '../api/client';
+import { HeaderBar } from '../components/HeaderBar';
+import type { VoiceExtension } from '../types';
+import { typography } from '../theme/typography';
+import { spacing, radius } from '../theme/spacing';
 
-// Key used by SipContext to store the provisioning bundle
-const PROVISION_KEY = "cc_mobile_provision";
+const PROVISION_KEY = 'cc_mobile_provision';
 
-function Row({ label, value, ok }: { label: string; value: string; ok?: boolean | null }) {
-  const color =
-    ok === true ? "#22c55e" : ok === false ? "#ef4444" : ok === null ? "#f59e0b" : undefined;
+type RowProps = {
+  label: string;
+  value: string;
+  ok?: boolean;
+  warn?: boolean;
+  danger?: boolean;
+};
+
+function DiagRow({ label, value, ok, warn, danger }: RowProps) {
+  const { colors } = useTheme();
+  const color = danger
+    ? colors.danger
+    : ok
+    ? colors.successText
+    : warn
+    ? colors.warningText
+    : colors.textSecondary;
+
   return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "#f3f4f6" }}>
-      <Text style={[ui.text, { color: "#6b7280", fontSize: 12, flex: 1 }]}>{label}</Text>
-      <Text style={[ui.text, { fontSize: 12, flex: 2, textAlign: "right", color: color ?? "#111" }]}>{value}</Text>
+    <View style={[styles.row, { borderBottomColor: colors.borderSubtle }]}>
+      <Text style={[typography.labelLg, { color: colors.text, flex: 1 }]}>{label}</Text>
+      <Text
+        style={[typography.mono, { color, maxWidth: '60%', textAlign: 'right' }]}
+        numberOfLines={2}
+        selectable
+      >
+        {value}
+      </Text>
     </View>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const { colors } = useTheme();
+  return (
+    <>
+      <Text style={[typography.h4, { color: colors.text, marginTop: spacing['4'], marginBottom: spacing['2'] }]}>
+        {title}
+      </Text>
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        {children}
+      </View>
+    </>
   );
 }
 
 export function DiagnosticsScreen() {
-  const sip = useSip();
+  const { colors } = useTheme();
   const { token } = useAuth();
-  const [provBundle, setProvBundle] = useState<Record<string, unknown> | null>(null);
+  const sip = useSip();
+  const insets = useSafeAreaInsets();
+  const nav = useNavigation<any>();
+
   const [voice, setVoice] = useState<VoiceExtension | null>(null);
-  const [micPermission, setMicPermission] = useState<string>("unknown");
   const [loading, setLoading] = useState(false);
+  const [provBundle, setProvBundle] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      let mounted = true;
-      (async () => {
-        setLoading(true);
-        try {
-          // Load provisioning bundle from secure storage
-          const raw = await SecureStore.getItemAsync(PROVISION_KEY);
-          if (raw && mounted) {
-            const parsed = JSON.parse(raw);
-            setProvBundle(parsed);
-          }
-
-          // Check microphone permission
-          const { status } = await Audio.requestPermissionsAsync();
-          if (mounted) setMicPermission(status);
-
-          // Fetch voice extension config from API
-          if (token) {
-            const ext = await getVoiceExtension(token).catch(() => null);
-            if (mounted && ext) setVoice(ext);
-          }
-        } catch (e: unknown) {
-          // Best-effort — show whatever loaded
-        } finally {
-          if (mounted) setLoading(false);
-        }
-      })();
-      return () => { mounted = false; };
+      if (!token) return;
+      setLoading(true);
+      Promise.all([
+        getVoiceExtension(token).then(setVoice).catch(() => {}),
+        SecureStore.getItemAsync(PROVISION_KEY).then(setProvBundle).catch(() => {}),
+      ]).finally(() => setLoading(false));
     }, [token]),
   );
 
-  const bundle = provBundle as {
-    sipUsername?: string;
-    sipWsUrl?: string;
-    sipDomain?: string;
-    iceServers?: Array<{ urls: string | string[] }>;
-    outboundProxy?: string;
-  } | null;
+  const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://app.connectcomunications.com/api';
 
-  const hasStun = !!bundle?.iceServers?.some((s) => {
-    const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
-    return urls.some((u) => String(u).startsWith("stun:"));
-  });
-  const hasTurn = !!bundle?.iceServers?.some((s) => {
-    const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
-    return urls.some((u) => String(u).startsWith("turn:") || String(u).startsWith("turns:"));
-  });
+  const callStateColor = (s: string) => {
+    if (s === 'connected') return colors.successText;
+    if (s === 'dialing' || s === 'ringing') return colors.warningText;
+    if (s === 'ended') return colors.danger;
+    return colors.textSecondary;
+  };
+
+  const parsedBundle = (() => {
+    try {
+      return provBundle ? JSON.parse(provBundle) : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const handleClearProvisioning = () => {
+    Alert.alert(
+      'Clear Provisioning',
+      'This will remove your SIP credentials and require re-provisioning via QR code.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            await SecureStore.deleteItemAsync(PROVISION_KEY);
+            setProvBundle(null);
+            await sip.unregister();
+          },
+        },
+      ],
+    );
+  };
 
   return (
-    <View style={ui.screen}>
-      <HeaderBar title="Diagnostics" />
-      <ScrollView>
-        <View style={ui.content}>
-          {/* ── Mobile platform ─────────────────────────────── */}
-          <View style={ui.card}>
-            <Text style={ui.sectionTitle}>Platform</Text>
-            <Row label="OS" value={`${Platform.OS} ${Platform.Version}`} />
-            <Row label="Microphone" value={micPermission} ok={micPermission === "granted" ? true : micPermission === "denied" ? false : null} />
-          </View>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <HeaderBar title="Diagnostics" showBack onBack={() => nav.goBack()} />
 
-          {/* ── SIP registration ────────────────────────────── */}
-          <View style={ui.card}>
-            <Text style={ui.sectionTitle}>SIP Registration</Text>
-            <Row
+      {loading ? (
+        <View style={styles.loader}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={{ padding: spacing['4'], paddingBottom: insets.bottom + spacing['8'] }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── SIP Registration ── */}
+          <Section title="SIP Registration">
+            <DiagRow
               label="State"
               value={sip.registrationState}
-              ok={sip.registrationState === "registered" ? true : sip.registrationState === "failed" ? false : null}
+              ok={sip.registrationState === 'registered'}
+              warn={sip.registrationState === 'registering'}
+              danger={sip.registrationState === 'failed'}
             />
-            <Row
+            <DiagRow
+              label="Provisioned"
+              value={sip.hasProvisioning ? 'Yes' : 'No'}
+              ok={sip.hasProvisioning}
+              warn={!sip.hasProvisioning}
+            />
+            {sip.lastError ? (
+              <DiagRow label="Last Error" value={sip.lastError} danger />
+            ) : null}
+          </Section>
+
+          {/* ── Active Call ── */}
+          <Section title="Active Call">
+            <DiagRow
               label="Call State"
               value={sip.callState}
-              ok={null}
+              ok={sip.callState === 'connected'}
+              warn={sip.callState === 'dialing' || sip.callState === 'ringing'}
             />
-            <Row
-              label="Provisioned"
-              value={sip.hasProvisioning ? "Yes" : "No"}
-              ok={sip.hasProvisioning}
+            <DiagRow
+              label="Remote Party"
+              value={sip.remoteParty || '—'}
             />
-            {sip.lastError && (
-              <View style={{ marginTop: 6 }}>
-                <Text style={[ui.text, { fontSize: 11, color: "#6b7280" }]}>Last Error:</Text>
-                <Text style={[ui.text, { fontSize: 11, color: "#ef4444", marginTop: 2 }]} numberOfLines={3}>
-                  {sip.lastError}
-                </Text>
-              </View>
-            )}
-          </View>
+            <DiagRow label="Muted" value={sip.muted ? 'Yes' : 'No'} warn={sip.muted} />
+            <DiagRow label="Speaker" value={sip.speakerOn ? 'On' : 'Off'} />
+            <DiagRow label="On Hold" value={sip.onHold ? 'Yes' : 'No'} warn={sip.onHold} />
+          </Section>
 
-          {/* ── Provisioning bundle ─────────────────────────── */}
-          <View style={ui.card}>
-            <Text style={ui.sectionTitle}>Provisioning Bundle (stored)</Text>
-            {bundle ? (
-              <>
-                <Row label="SIP Username" value={bundle.sipUsername ?? "—"} ok={!!bundle.sipUsername} />
-                <Row label="SIP WSS URL" value={bundle.sipWsUrl ?? "NOT SET"} ok={!!bundle.sipWsUrl} />
-                <Row label="SIP Domain" value={bundle.sipDomain ?? "NOT SET"} ok={!!bundle.sipDomain} />
-                <Row label="Outbound Proxy" value={bundle.outboundProxy ?? "None"} />
-                <Row label="STUN" value={hasStun ? "Present" : "Missing"} ok={hasStun ? true : null} />
-                <Row label="TURN" value={hasTurn ? "Present" : "Not configured"} ok={hasTurn ? true : null} />
-                {!hasTurn && (
-                  <Text style={[ui.text, { fontSize: 11, color: "#d97706", marginTop: 4 }]}>
-                    ⚠ No TURN server. Audio may fail behind strict NAT.
-                  </Text>
-                )}
-              </>
-            ) : (
-              <Text style={[ui.text, { color: "#6b7280" }]}>
-                No provisioning bundle found. Use QR Provision or Provision via Reset on the Home screen.
-              </Text>
-            )}
-          </View>
+          {/* ── Extension (from API) ── */}
+          <Section title="Extension (Server)">
+            <DiagRow label="Extension #" value={voice?.extensionNumber || '—'} />
+            <DiagRow label="Display Name" value={voice?.displayName || '—'} />
+            <DiagRow label="SIP Username" value={voice?.sipUsername || '—'} />
+            <DiagRow
+              label="SIP Password Set"
+              value={voice?.hasSipPassword ? 'Yes' : 'No'}
+              ok={voice?.hasSipPassword}
+              warn={!voice?.hasSipPassword}
+            />
+            <DiagRow
+              label="WebRTC"
+              value={voice?.webrtcEnabled ? 'Enabled' : 'Disabled'}
+              ok={voice?.webrtcEnabled}
+              warn={!voice?.webrtcEnabled}
+            />
+          </Section>
 
-          {/* ── Voice extension config from API ─────────────── */}
-          <View style={ui.card}>
-            <Text style={ui.sectionTitle}>Voice Extension (from API)</Text>
-            {voice ? (
-              <>
-                <Row label="Extension" value={voice.extensionNumber} />
-                <Row label="SIP Username" value={voice.sipUsername ?? "—"} ok={!!voice.sipUsername} />
-                <Row label="WebRTC enabled" value={voice.webrtcEnabled ? "Yes" : "No"} ok={voice.webrtcEnabled} />
-                <Row label="WSS URL" value={voice.sipWsUrl ?? "NOT SET"} ok={!!voice.sipWsUrl} />
-                <Row label="SIP Domain" value={voice.sipDomain ?? "NOT SET"} ok={!!voice.sipDomain} />
-                <Row label="Has SIP password" value={voice.hasSipPassword ? "Yes" : "No — needs reset"} ok={voice.hasSipPassword} />
-              </>
-            ) : loading ? (
-              <Text style={[ui.text, { color: "#6b7280" }]}>Loading…</Text>
-            ) : (
-              <Text style={[ui.text, { color: "#6b7280" }]}>
-                {token ? "Could not load extension. Check PBX link in admin." : "Not logged in."}
-              </Text>
-            )}
-          </View>
+          {/* ── Provisioning Bundle (stored on device) ── */}
+          <Section title="Provisioning Bundle (Device)">
+            <DiagRow label="WSS URL" value={parsedBundle?.sipWsUrl || '—'} ok={!!parsedBundle?.sipWsUrl} />
+            <DiagRow label="SIP Domain" value={parsedBundle?.sipDomain || '—'} ok={!!parsedBundle?.sipDomain} />
+            <DiagRow label="SIP Username" value={parsedBundle?.sipUsername || '—'} />
+            <DiagRow label="Outbound Proxy" value={parsedBundle?.outboundProxy || 'None'} />
+            <DiagRow
+              label="ICE Servers"
+              value={parsedBundle?.iceServers?.length ? `${parsedBundle.iceServers.length} configured` : 'None'}
+              ok={(parsedBundle?.iceServers?.length ?? 0) > 0}
+            />
+            <DiagRow label="DTMF Mode" value={parsedBundle?.dtmfMode || '—'} />
+          </Section>
 
-          {/* ── Mobile VoIP constraints ─────────────────────── */}
-          <View style={ui.card}>
-            <Text style={ui.sectionTitle}>Mobile VoIP Limitations</Text>
-            <Text style={[ui.text, { fontSize: 12, color: "#6b7280", lineHeight: 18 }]}>
-              Current stack: Expo managed workflow (SDK 51){"\n\n"}
-              ✓ Foreground calling — fully supported{"\n"}
-              ✓ QR login, provisioning, registration{"\n"}
-              ✓ Outbound calls{"\n"}
-              ✓ Inbound calls while app is foregrounded{"\n\n"}
-              ✗ Background incoming calls — requires native modules:{"\n"}
-              {"  "}• iOS: react-native-callkeep + PushKit VoIP push{"\n"}
-              {"  "}• Android: ConnectionService + FCM data push{"\n"}
-              {"  "}• Both require ejecting to bare RN or custom dev client{"\n\n"}
-              To enable full background calling:{"\n"}
-              {"  "}1. Eject to bare React Native (expo eject){"\n"}
-              {"  "}2. Install react-native-callkeep{"\n"}
-              {"  "}3. Configure PushKit (iOS) / FCM (Android) on the backend{"\n"}
-              {"  "}4. Wire CallKeep answer action to sip.answerIncomingInvite()
-            </Text>
-          </View>
+          {/* ── App Info ── */}
+          <Section title="App Info">
+            <DiagRow label="App Version" value={String(Constants.expoConfig?.version || '1.0.0')} />
+            <DiagRow label="API Base" value={apiBase} />
+            <DiagRow
+              label="Voice Simulate"
+              value={process.env.EXPO_PUBLIC_VOICE_SIMULATE === 'true' ? 'ON ⚠' : 'OFF'}
+              warn={process.env.EXPO_PUBLIC_VOICE_SIMULATE === 'true'}
+            />
+          </Section>
+
+          {/* ── Actions ── */}
+          <TouchableOpacity
+            style={[styles.btn, { backgroundColor: colors.primary, marginTop: spacing['5'] }]}
+            onPress={() => sip.register()}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="refresh" size={18} color="#fff" style={{ marginRight: 8 }} />
+            <Text style={[typography.labelLg, { color: '#fff' }]}>Re-register</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
-            style={[ui.button, { marginHorizontal: 16, marginBottom: 24 }]}
-            onPress={async () => {
-              setProvBundle(null);
-              const raw = await SecureStore.getItemAsync(PROVISION_KEY);
-              if (raw) setProvBundle(JSON.parse(raw));
+            style={[styles.btn, { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1, marginTop: spacing['3'] }]}
+            onPress={() => {
               if (token) {
-                const ext = await getVoiceExtension(token).catch(() => null);
-                if (ext) setVoice(ext);
+                setLoading(true);
+                getVoiceExtension(token)
+                  .then(setVoice)
+                  .catch(() => {})
+                  .finally(() => setLoading(false));
               }
             }}
+            activeOpacity={0.85}
           >
-            <Text style={ui.buttonText}>Refresh</Text>
+            <Ionicons name="cloud-download-outline" size={18} color={colors.primary} style={{ marginRight: 8 }} />
+            <Text style={[typography.labelLg, { color: colors.primary }]}>Reload Extension Data</Text>
           </TouchableOpacity>
-        </View>
-      </ScrollView>
+
+          <TouchableOpacity
+            style={[styles.btn, { backgroundColor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.3)', borderWidth: 1, marginTop: spacing['3'] }]}
+            onPress={handleClearProvisioning}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="trash-outline" size={18} color={colors.danger} style={{ marginRight: 8 }} />
+            <Text style={[typography.labelLg, { color: colors.danger }]}>Clear Provisioning</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  loader: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  card: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: spacing['2'],
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing['4'],
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  btn: {
+    height: 50,
+    borderRadius: radius['2xl'],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

@@ -10,9 +10,13 @@ export interface LiveCall {
   id: string;
   linkedId: string;
   tenantId: string | null;
+  /** Human-readable tenant name resolved in the backend; non-null when the DID cache matched. */
+  tenantName: string | null;
   direction: CallDirection;
   state: CallState;
   from: string | null;
+  /** Caller name (CNAM) from AMI CallerIDName. Null when unavailable. */
+  fromName: string | null;
   to: string | null;
   connectedLine: string | null;
   channels: string[];

@@ -23,7 +23,8 @@ export class SimulatedSipClient implements SipClient {
     this.events.onRegistrationState?.("idle");
   }
 
-  async dial() {
+  async dial(target: string) {
+    console.log('[SIM] Dialing', target, '(simulated)');
     this.events.onCallState?.("dialing");
     setTimeout(() => this.events.onCallState?.("ringing"), 500);
     setTimeout(() => this.events.onCallState?.("connected"), 1200);
@@ -49,5 +50,7 @@ export class SimulatedSipClient implements SipClient {
 
   setMute() {}
   setSpeaker() {}
+  hold() {}
+  unhold() {}
   sendDtmf() {}
 }

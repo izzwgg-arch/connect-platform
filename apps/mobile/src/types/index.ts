@@ -20,6 +20,10 @@ export type VoiceExtension = {
 
 export type ProvisioningBundle = {
   sipUsername: string;
+  /** The username used in the SIP Authorization header (PJSIP auth object name).
+   * In VitalPBX 4 this is the device name (e.g. "T2_103_1"), NOT the extension number.
+   * Falls back to sipUsername when not set. */
+  authUsername?: string | null;
   sipPassword: string;
   sipWsUrl: string;
   sipDomain: string;

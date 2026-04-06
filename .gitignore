@@ -45,3 +45,6 @@ ops/logs
 ops/snapshots
 **/ops/snapshots
 **/*.log
+
+# local DB repair scratch (do not ship)
+tmp-link-repair-*.sql

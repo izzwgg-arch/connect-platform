@@ -1,11 +1,16 @@
 {
   "cli": {
-    "version": ">= 13.0.0"
+    "version": ">= 13.0.0",
+    "appVersionSource": "local"
   },
   "build": {
     "dev": {
       "developmentClient": true,
       "distribution": "internal",
+      "credentialsSource": "local",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "true",
         "EXPO_PUBLIC_LOG_LEVEL": "debug"
@@ -13,6 +18,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "credentialsSource": "local",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",
         "EXPO_PUBLIC_LOG_LEVEL": "info"
@@ -20,10 +29,17 @@
     },
     "production": {
       "autoIncrement": true,
+      "credentialsSource": "local",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",
         "EXPO_PUBLIC_LOG_LEVEL": "warn"
       }
     }
+  },
+  "submit": {
+    "production": {}
   }
 }

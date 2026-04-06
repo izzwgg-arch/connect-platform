@@ -24,6 +24,8 @@ export class TelephonySocketServer {
   private wss: WebSocketServer;
   private clients = new Set<WsClient>();
   private pingTimer: NodeJS.Timeout | null = null;
+  private connectionsByIp = new Map<string, number>();
+  private readonly MAX_CONNECTIONS_PER_IP = 10;
 
   constructor(
     private readonly server: http.Server,
@@ -74,6 +76,15 @@ export class TelephonySocketServer {
   }
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
+    const clientIp = req.socket.remoteAddress ?? "unknown";
+    const currentCount = this.connectionsByIp.get(clientIp) ?? 0;
+    if (currentCount >= this.MAX_CONNECTIONS_PER_IP) {
+      log.warn({ ip: clientIp, count: currentCount }, "WS per-IP connection limit exceeded — closing");
+      ws.close(1008, "Too many connections");
+      return;
+    }
+    this.connectionsByIp.set(clientIp, currentCount + 1);
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const token =
       extractBearerToken(req.headers.authorization) ??
@@ -84,17 +95,23 @@ export class TelephonySocketServer {
 
     try {
       const payload = jwt.verify(token, env.JWT_SECRET) as Record<string, unknown>;
-      // Expect the JWT payload to carry an optional tenantId claim
-      tenantId =
+      const rawTenantId =
         typeof payload["tenantId"] === "string" ? payload["tenantId"] : null;
+      const role =
+        typeof payload["role"] === "string" ? payload["role"].toUpperCase() : "";
+      // SUPER_ADMIN and ADMIN users see all tenants — treat as global (tenantId = null)
+      // so tenantFilter broadcasts every live call to them regardless of which tenant owns it.
+      const isGlobalRole = role === "SUPER_ADMIN" || role === "ADMIN";
+      tenantId = isGlobalRole ? null : rawTenantId;
     } catch {
       ws.close(1008, "Unauthorized");
+      this.decrementIpCount(clientIp);
       return;
     }
 
     const client: WsClient = { ws, tenantId, isAlive: true };
     this.clients.add(client);
-    log.info({ tenantId, total: this.clients.size }, "WS client connected");
+    log.info({ tenantId, ip: clientIp, total: this.clients.size }, "WS client connected");
 
     ws.on("pong", () => {
       client.isAlive = true;
@@ -102,16 +119,27 @@ export class TelephonySocketServer {
 
     ws.on("close", () => {
       this.clients.delete(client);
+      this.decrementIpCount(clientIp);
       log.debug({ tenantId, total: this.clients.size }, "WS client disconnected");
     });
 
     ws.on("error", (err) => {
       log.warn({ err: err.message }, "WS client error");
       this.clients.delete(client);
+      this.decrementIpCount(clientIp);
     });
 
     // Send initial snapshot
     this.sendSnapshot(client);
+  }
+
+  private decrementIpCount(ip: string): void {
+    const n = this.connectionsByIp.get(ip) ?? 0;
+    if (n <= 1) {
+      this.connectionsByIp.delete(ip);
+    } else {
+      this.connectionsByIp.set(ip, n - 1);
+    }
   }
 
   private sendSnapshot(client: WsClient): void {

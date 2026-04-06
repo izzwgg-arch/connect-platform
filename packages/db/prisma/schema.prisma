@@ -965,12 +965,13 @@ model Alert {
 }
 
 model Extension {
-  id          String            @id @default(cuid())
-  tenantId    String
-  extNumber   String
-  displayName String
-  ownerUserId String?
-  status      String            @default("ACTIVE")
+  id           String            @id @default(cuid())
+  tenantId     String
+  extNumber    String
+  displayName  String
+  pbxUserEmail String?
+  ownerUserId  String?
+  status       String            @default("ACTIVE")
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1074,19 +1075,25 @@ model TenantPbxLink {
 }
 
 model PbxExtensionLink {
-  id                  String    @id @default(cuid())
-  tenantId            String
-  extensionId         String    @unique
-  pbxExtensionId      String
-  pbxSipUsername      String
-  sipPasswordHash     String?
-  sipPasswordIssuedAt DateTime?
-  pbxDeviceId         String?
-  isSuspended         Boolean   @default(false)
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  extension           Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  id                   String    @id @default(cuid())
+  tenantId             String
+  extensionId          String    @unique
+  pbxExtensionId       String
+  pbxSipUsername       String
+  sipPasswordHash      String?
+  sipPasswordIssuedAt  DateTime?
+  /// AES-256-GCM encrypted SIP password (same envelope as apiAuthEncrypted). Set by admin via /pbx/extensions/:id/set-sip-password.
+  sipPasswordEncrypted String?
+  pbxDeviceId          String?
+  /// VitalPBX device_name for the active (WebRTC-preferred) device, e.g. "T2_103_1". Displayed in admin UI for disambiguation.
+  pbxDeviceName        String?
+  /// True when this extension has a device with a WebRTC profile assigned in VitalPBX.
+  webrtcEnabled        Boolean   @default(false)
+  isSuspended          Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension            Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, extensionId])
   @@index([pbxExtensionId])
@@ -1147,6 +1154,7 @@ model ConnectCdr {
   pbxTenantCode    String?                // Canonical label e.g. "T8"
   tenantResolutionSource String?          // audit: how tenantId was chosen
   fromNumber  String?
+  fromName    String?                     // CNAM from AMI CallerIDName (caller's display name)
   toNumber    String?
   direction   String                      // "incoming" | "outgoing" | "internal" | "unknown"
   disposition String                      // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"

@@ -98,6 +98,7 @@ export type CdrPayload = {
   linkedId: string;
   tenantId: string | null;
   fromNumber: string | null;
+  fromName: string | null;
   toNumber: string | null;
   direction: string;
   disposition: string;
@@ -164,6 +165,11 @@ export class CdrNotifier {
 
     let dir = normalizeDirection(call.direction);
 
+    // When a from-trunk CDR confirmed this call as inbound, the main record must always be
+    // "incoming" regardless of what later CDR events (outbound PSTN legs) wrote into
+    // cdrDcontext.  The outbound legs are emitted as separate records below.
+    const inboundConfirmed = call.metadata?.inboundConfirmedByCdr === true;
+
     // dcontext from the AMI Cdr event is the most authoritative direction signal.
     // It tells us the Asterisk dialplan context that originated the call:
     //   "ext-local-*" / "from-internal" = user-originated (outgoing or internal)
@@ -193,15 +199,26 @@ export class CdrNotifier {
     if (dir === "unknown" && (call.from || call.to)) {
       const srcDigits = (call.from ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
       const dstDigits = (call.to  ?? "").replace(/[^\d]/g, "").replace(/^1(\d{10})$/, "$1");
-      const srcLong  = srcDigits.length >= 10;
-      const dstLong  = dstDigits.length >= 10;
-      const srcShort = srcDigits.length >= 2 && srcDigits.length <= 6;
-      const dstShort = dstDigits.length >= 2 && dstDigits.length <= 6;
-      if (srcShort && dstLong) dir = "outgoing";
-      else if (srcLong && dstShort) dir = "incoming";
-      else if (srcShort && dstShort) dir = "internal";
-      else if (srcLong) dir = "incoming";
+    const srcLong   = srcDigits.length >= 10;
+    const dstLong   = dstDigits.length >= 10;
+    const srcShort  = srcDigits.length >= 2 && srcDigits.length <= 6;
+    const dstShort  = dstDigits.length >= 2 && dstDigits.length <= 6;
+    // 7–9 digit destination: PBX local-number expansion may not have run yet
+    // (e.g. extension 106 dials 2224034; PBX expands to 8452224034 on the trunk).
+    // Treat src=extension + dst=7–9 digits as outgoing, never incoming.
+    const dstLocalPstn = dstDigits.length >= 7 && dstDigits.length <= 9;
+    if (srcShort && dstLong) dir = "outgoing";
+    else if (srcShort && dstLocalPstn) dir = "outgoing";
+    else if (srcLong && dstShort) dir = "incoming";
+    else if (srcShort && dstShort) dir = "internal";
+    // srcLong with no clear dst signal: leave as unknown — do not guess incoming,
+    // because the trunk CDR leg of an outbound call also has srcLong (the caller-ID DID).
     }
+
+    // Final override: a call confirmed inbound by an authoritative from-trunk CDR is always
+    // "incoming" for its main record, even when an outbound-context CDR leg fired last and
+    // the heuristics above derived "outgoing" from cdrDcontext.
+    if (inboundConfirmed) dir = "incoming";
 
     const disposition = deriveDisposition(call, dir);
 
@@ -221,6 +238,7 @@ export class CdrNotifier {
       linkedId: call.linkedId,
       tenantId: call.tenantId ?? null,
       fromNumber: call.from ?? null,
+      fromName: call.fromName ?? null,
       toNumber: call.to ?? null,
       direction: dir,
       disposition,
@@ -247,6 +265,96 @@ export class CdrNotifier {
     this.postAsync(payload).catch((err: unknown) => {
       log.warn({ linkedId: call.id, err: (err as Error)?.message }, "cdr: ingest failed");
     });
+
+    // ── Outbound PSTN leg detection ───────────────────────────────────────────
+    // When an inbound call (confirmed by from-trunk CDR) also dials a real external PSTN
+    // destination — e.g. via a virtual extension, follow-me, ring-group outbound route,
+    // or any dialplan path that triggers an outbound trunk dial — we emit a SEPARATE
+    // CdrPayload for that leg so it appears as an outgoing record in history and counts.
+    //
+    // Detection criteria:
+    //   1. The overall call was confirmed inbound by a from-trunk CDR event.
+    //   2. At least one accumulated CDR leg has an outbound-type dcontext.
+    //   3. That leg's destination is ≥7 digits (PSTN or local-expanded number).
+    //      Short extensions (2–6 digits) are ring-group/queue attempts — not PSTN dials.
+    //
+    // The synthetic linkedId suffix ":out" (or ":out1", ":out2" …) ensures the API upserts
+    // a new ConnectCdr row distinct from the main inbound record.
+    if (inboundConfirmed) {
+      type StoredLeg = {
+        source: string; destination: string; dcontext: string;
+        duration: number; billableSec: number; disposition: string;
+      };
+      const allLegs = (call.metadata?.cdrLegs as StoredLeg[] | undefined) ?? [];
+      let outIdx = 0;
+      for (const leg of allLegs) {
+        const dctx = (leg.dcontext ?? "").toLowerCase();
+        const isOutboundCtx =
+          dctx.includes("from-internal") ||
+          dctx.includes("ext-local")     ||
+          dctx.includes("sub-local-dialing") ||
+          dctx.includes("outbound")      ||
+          /^t\d+_cos-/.test(dctx)        ||
+          /^trk-[^-]+-dial/.test(dctx);
+        if (!isOutboundCtx) continue;
+
+        const dstDigits = (leg.destination ?? "").replace(/\D/g, "").replace(/^1(\d{10})$/, "$1");
+        if (dstDigits.length < 7) continue; // extension attempt (2–6 digits) — not a PSTN dial
+
+        const suffix = outIdx === 0 ? ":out" : `:out${outIdx}`;
+        outIdx++;
+
+        const legDisp = String(leg.disposition ?? "").toUpperCase();
+        const legDisposition: string =
+          legDisp === "ANSWERED"                           ? "answered" :
+          legDisp === "BUSY"                               ? "busy"     :
+          legDisp === "FAILED" || legDisp === "CONGESTION" ? "failed"   :
+          legDisp === "CANCEL" || legDisp === "CANCELED"   ? "canceled" :
+          "missed";
+
+        const outPayload: CdrPayload = {
+          linkedId:         call.linkedId + suffix,
+          tenantId:         payload.tenantId,
+          fromNumber:       leg.source      || null,
+          fromName:         null,
+          toNumber:         leg.destination || null,
+          direction:        "outgoing",
+          disposition:      legDisposition,
+          startedAt:        call.startedAt,
+          answeredAt:       call.answeredAt ?? null,
+          endedAt:          call.endedAt!,
+          durationSec:      leg.duration,
+          talkSec:          leg.billableSec,
+          queueId:          null,
+          hangupCause:      null,
+          channels:         payload.channels,
+          dcontext:         leg.dcontext || null,
+          dcontexts:        leg.dcontext ? [leg.dcontext] : [],
+          accountCode:      payload.accountCode,
+          pbxVitalTenantId: payload.pbxVitalTenantId,
+          pbxTenantCode:    payload.pbxTenantCode,
+        };
+
+        if (env.ENABLE_TELEPHONY_DEBUG) {
+          log.debug(
+            { linkedId: outPayload.linkedId, to: outPayload.toNumber, dcontext: leg.dcontext },
+            "cdr: outbound-pstn-leg notifying",
+          );
+        } else {
+          log.info(
+            { linkedId: outPayload.linkedId, from: outPayload.fromNumber, to: outPayload.toNumber },
+            "cdr: outbound-pstn-leg detected in inbound call",
+          );
+        }
+
+        this.postAsync(outPayload).catch((err: unknown) => {
+          log.warn(
+            { linkedId: outPayload.linkedId, err: (err as Error)?.message },
+            "cdr: outbound-leg ingest failed",
+          );
+        });
+      }
+    }
   }
 
   private async postAsync(payload: CdrPayload): Promise<void> {

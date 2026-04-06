@@ -15,7 +15,7 @@
  */
 
 export type AriChannelDoc = {
-  id?: string;
+  id: string;
   name?: string;
   state?: string;
   caller?: { name?: string; number?: string };
@@ -44,9 +44,18 @@ export type BridgedActiveCallRow = {
   channelCount: number;
   caller: string;
   callee: string;
+  /** Raw channel names of all valid (non-Local, non-Down) members. Used by TenantResolver to extract T{n} hints. */
+  channelNames: string[];
+  /** ARI channel IDs parallel to channelNames. Used to fetch channel variables (e.g. CALLERID(num)). */
+  channelIds: string[];
   sourceKind: "bridge" | "orphan_leg";
   dialplanContext?: string;
   dialplanExten?: string;
+  /**
+   * The called/dialed DID — sourced from connected.number or fetched via CALLERID(num) channel variable.
+   * For inbound PSTN calls this is the DID (e.g. 8457823064).
+   */
+  calledNumber?: string;
 };
 
 export type BridgedActiveExcluded = { bridgeId: string; reason: string };
@@ -97,6 +106,7 @@ export type BridgedActiveResult = {
 function channelName(ch: AriChannelDoc): string {
   return String(ch.name ?? "").trim();
 }
+
 
 function isLocalHelperName(name: string): boolean {
   return name.startsWith("Local/");
@@ -192,6 +202,19 @@ function pickDialplanForGroup(group: AriChannelDoc[]): { context: string; exten:
     if (context) return { context, exten };
   }
   return dialplanOf(group[0]!);
+}
+
+/**
+ * Extract the called/dialed DID from channels.
+ * On inbound PSTN calls the trunk channel carries connected.number = the DID.
+ * Returns the first connected.number that looks like a real phone number (7+ digits).
+ */
+function pickCalledNumber(group: AriChannelDoc[]): string | undefined {
+  for (const ch of group) {
+    const n = String(ch.connected?.number ?? "").trim().replace(/\D/g, "");
+    if (n.length >= 7) return n;
+  }
+  return undefined;
 }
 
 /**
@@ -345,9 +368,12 @@ export function computeBridgedActiveCalls(
       channelCount: valid.length,
       caller,
       callee,
+      channelNames: valid.map((ch) => channelName(ch) || ""),
+      channelIds: valid.map((ch) => String(ch.id ?? "")),
       sourceKind: "bridge",
       dialplanContext: ctx || undefined,
       dialplanExten: ext || undefined,
+      calledNumber: pickCalledNumber(valid),
     });
 
     qualifyingBridges.push({
@@ -386,9 +412,12 @@ export function computeBridgedActiveCalls(
       channelCount: group.length,
       caller,
       callee,
+      channelNames: group.map((ch) => channelName(ch) || ""),
+      channelIds: group.map((ch) => String(ch.id ?? "")),
       sourceKind: "orphan_leg",
       dialplanContext: context || undefined,
       dialplanExten: exten || undefined,
+      calledNumber: pickCalledNumber(group),
     });
     orphanLegs.push({
       groupKey,

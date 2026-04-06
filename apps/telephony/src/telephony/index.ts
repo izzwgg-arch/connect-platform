@@ -62,11 +62,11 @@ export function createTelephonyModule(server: http.Server) {
       cdrNotifier.notify(call);
     }
   });
-  const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService, ariBridgedPoller);
+  const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService);
   const socketServer = new TelephonySocketServer(server, snapshotService);
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
-    ariBridgedPoller,
+    callStore,
     extStore,
     queueStore,
     healthService,

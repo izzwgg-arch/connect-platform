@@ -145,6 +145,7 @@ export class TelephonyService {
           context: typed.context,
           exten: typed.exten,
           tenantId: tres.tenantId,
+          tenantName: tres.tenantName ?? null,
           pbxVitalTenantId: tres.pbxVitalTenantId,
           pbxTenantCode: tres.pbxTenantCode,
           direction,

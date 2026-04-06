@@ -310,6 +310,7 @@ export class CallStateStore extends EventEmitter {
     context: string;
     exten: string;
     tenantId: string | null;
+    tenantName: string | null;
     direction: CallDirection;
     pbxVitalTenantId?: string | null;
     pbxTenantCode?: string | null;
@@ -321,6 +322,7 @@ export class CallStateStore extends EventEmitter {
       call = this.createEmpty(params.linkedId, params.tenantId, params.direction);
       call.from = params.callerIDNum || null;
       call.to = params.exten || null;
+      call.tenantName = params.tenantName;
       if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
       if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
       if (env.ENABLE_TELEPHONY_DEBUG) {
@@ -332,7 +334,29 @@ export class CallStateStore extends EventEmitter {
 
     if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
     if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
-    if (!call.tenantId && params.tenantId) call.tenantId = params.tenantId;
+
+    // Upgrade tenantId/tenantName when newly resolved (e.g. trunk Newchannel fires after internal leg)
+    if (!call.tenantId && params.tenantId) {
+      call.tenantId = params.tenantId;
+      call.tenantName = params.tenantName;
+    }
+
+    // Upgrade `to` from short extension to real DID when a longer number becomes available.
+    // VitalPBX: first Newchannel may set exten=extension(e.g."108"); trunk channel sets exten=DID.
+    const existingToDigits = (call.to ?? "").replace(/\D/g, "");
+    const newExtenDigits = (params.exten ?? "").replace(/\D/g, "");
+    if (newExtenDigits.length >= 10 && existingToDigits.length < 10) {
+      call.to = params.exten;
+    }
+
+    // Capture CNAM from the first meaningful CallerIDName seen.
+    // Exclude: generic placeholders, and purely numeric values (e.g. a DID "8457823064"
+    // that VitalPBX puts in CallerIDName on extension channels for display purposes).
+    const GENERIC_NAMES = new Set(["", "unknown", "Unknown", "UNKNOWN", "Wireless Caller", "Anonymous", "anonymous", "<unknown>"]);
+    const isNumericOnly = /^\+?[\d\s\-().]{6,}$/.test(params.callerIDName ?? "");
+    if (!call.fromName && params.callerIDName && !GENERIC_NAMES.has(params.callerIDName) && !isNumericOnly) {
+      call.fromName = params.callerIDName;
+    }
 
     if (!call.channels.includes(params.channel)) {
       call.channels.push(params.channel);
@@ -619,6 +643,27 @@ export class CallStateStore extends EventEmitter {
       if (resolved) call.tenantId = resolved;
     }
 
+    // Accumulate each CDR leg so CdrNotifier can detect and emit separate outbound PSTN legs.
+    // This captures the per-leg src/dst/context data that gets lost when the call is aggregated.
+    const legEntry = {
+      source:      (params.source      ?? "").trim(),
+      destination: (params.destination ?? "").trim(),
+      dcontext:    (params.dcontext    ?? "").trim(),
+      duration:    isNaN(dur)  ? 0 : dur,
+      billableSec: isNaN(bill) ? 0 : bill,
+      disposition: (params.disposition ?? "").trim(),
+    };
+    if (legEntry.source || legEntry.destination) {
+      const prevLegs = (call.metadata["cdrLegs"] as typeof legEntry[] | undefined) ?? [];
+      const isDupe = prevLegs.some(
+        (l) =>
+          l.source      === legEntry.source &&
+          l.destination === legEntry.destination &&
+          l.dcontext    === legEntry.dcontext,
+      );
+      if (!isDupe) call.metadata["cdrLegs"] = [...prevLegs, legEntry];
+    }
+
     // Direction correction from AMI Cdr event fields.
     // dcontext is the MOST AUTHORITATIVE direction signal — it reflects the Asterisk
     // dialplan context that originated the call (e.g. "ext-local-gesheft" = internal/outbound,
@@ -652,10 +697,21 @@ export class CallStateStore extends EventEmitter {
     }
 
     if (dcontextDir) {
-      call.direction = dcontextDir;
-      if (prevDir !== dcontextDir) {
+      if (dcontextDir === "inbound") {
+        // Authoritative from-trunk CDR: lock the call as inbound and set a permanent flag.
+        // Any later from-internal CDR events (outbound PSTN legs of the same linkedId) must
+        // NOT flip this direction — those legs are emitted as separate records by CdrNotifier.
+        call.direction = "inbound";
+        call.metadata["inboundConfirmedByCdr"] = true;
+      } else if (!call.metadata["inboundConfirmedByCdr"]) {
+        // Only update direction when not yet confirmed as inbound by a real from-trunk CDR.
+        // For hybrid inbound→PSTN-outbound flows this guard keeps the main record as inbound.
+        call.direction = dcontextDir;
+      }
+      // else: call is inbound-confirmed; non-inbound CDR context is for a separate outbound leg.
+      if (prevDir !== call.direction) {
         log.info(
-          { callId: call.id, prev: prevDir, now: dcontextDir, dcontext: params.dcontext },
+          { callId: call.id, prev: prevDir, now: call.direction, dcontext: params.dcontext },
           "cdr: dcontext overrode direction"
         );
       }
@@ -724,6 +780,8 @@ export class CallStateStore extends EventEmitter {
       id: linkedId,
       linkedId,
       tenantId,
+      tenantName: null,
+      fromName: null,
       direction,
       state: "unknown",
       from: null,

@@ -5,7 +5,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "types": ["react", "react-native"]
+    "types": ["react", "react-native", "node"]
   },
   "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx"]
 }

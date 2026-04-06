@@ -266,7 +266,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       if (sip.registrationState === "registered") {
         postVoiceDiagEvent(token, { sessionId: sid, type: "SIP_REGISTER", payload: { state: sip.registrationState } }).catch(() => undefined);
         postVoiceDiagEvent(token, { sessionId: sid, type: "WS_CONNECTED", payload: { state: sip.registrationState } }).catch(() => undefined);
-      } else if (prevReg === "registered" && sip.registrationState !== "registered") {
+      } else if (String(prevReg) === "registered") {
         postVoiceDiagEvent(token, { sessionId: sid, type: "SIP_UNREGISTER", payload: { state: sip.registrationState } }).catch(() => undefined);
         postVoiceDiagEvent(token, { sessionId: sid, type: "WS_DISCONNECTED", payload: { state: sip.registrationState } }).catch(() => undefined);
       } else if (String(sip.registrationState).toLowerCase().includes("fail")) {

@@ -133,6 +133,10 @@ export function classifyCallDirectionByEvidence(input: CallDirectionEvidenceInpu
     if (isExtension(fromDigits) && isExternal(toDigits)) return "outgoing";
     if (isExternal(fromDigits) && isExtension(toDigits)) return "incoming";
     if (isExtension(fromDigits) && isExtension(toDigits)) return "internal";
+    // Extension dialing a local 7–9 digit number: PBX may not have expanded the number
+    // to a full 10-digit PSTN number yet (e.g. 106 → 2224034 → PBX expands to 8452224034).
+    // Treat as outgoing — never classify an extension-originated call as incoming.
+    if (isExtension(fromDigits) && toDigits.length >= 7 && toDigits.length <= 9) return "outgoing";
   }
 
   const fromHint = hintToConnect(input.telephonyDirectionHint);

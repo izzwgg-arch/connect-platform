@@ -3,6 +3,8 @@ WORKDIR /app
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY . .
+# Ensure workspace deps (e.g. mysql2 for Ombutel DID sync) are installed in the image.
+RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @connect/integrations build
 # Regenerate Prisma client so it always matches the schema in this image.
 # This is needed when new models are added (e.g. ConnectCdr).

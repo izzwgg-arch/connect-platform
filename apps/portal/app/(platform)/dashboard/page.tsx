@@ -1,40 +1,33 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Users, ListOrdered, Truck, Activity } from "lucide-react";
+import {
+  ArrowDown, ArrowUp, ArrowLeftRight, Phone, TrendingUp, ShieldCheck, AlertTriangle, BarChart3,
+  Workflow, Users, Voicemail, Mic, CreditCard, Activity, Clock, GitMerge, ListOrdered,
+  CheckCircle2, XCircle, PhoneCall, Radio, Wifi, WifiOff,
+} from "lucide-react";
+import { LiveCallBadge } from "../../../components/LiveCallBadge";
 import { apiGet } from "../../../services/apiClient";
-import { DetailCard } from "../../../components/DetailCard";
-import { EmptyState } from "../../../components/EmptyState";
-import { ErrorState } from "../../../components/ErrorState";
-import { GlobalScopeNotice } from "../../../components/GlobalScopeNotice";
-import { LiveBadge } from "../../../components/LiveBadge";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
-import { QRPairingModal } from "../../../components/QRPairingModal";
-import { RoleGate } from "../../../components/RoleGate";
-import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useTelephony } from "../../../contexts/TelephonyContext";
 import {
   loadPbxLiveCombined,
   loadAdminPbxLiveCombined,
-  loadPbxLiveDiagnostics,
   formatDurationSec,
   directionLabel,
   directionClass,
   type PbxLiveSummary,
   type AdminPbxLiveSummary,
-  type PbxActiveCallsResponse,
   type PbxLiveCombined,
   type AdminPbxLiveCombined,
-  type PbxLiveDiagnostics
 } from "../../../services/pbxLive";
-import { loadDashboardData } from "../../../services/platformData";
 
-/** Display label for call state (presentation only) */
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function callStateLabel(state: string): string {
   const s = (state || "").toLowerCase();
   if (s === "ringing" || s === "dialing") return "Ringing";
@@ -44,9 +37,17 @@ function callStateLabel(state: string): string {
   return state || "—";
 }
 
+function DirectionIcon({ direction, size = 14 }: { direction: string; size?: number }) {
+  if (direction === "incoming") return <ArrowDown className="call-dir-icon incoming" size={size} />;
+  if (direction === "outgoing") return <ArrowUp className="call-dir-icon outgoing" size={size} />;
+  return <ArrowLeftRight className="call-dir-icon internal" size={size} />;
+}
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
 type DashboardCallTraffic = {
-  totals: { made: number; incoming: number; outgoing: number; internal: number };
-  points: Array<{ label: string; incoming: number; outgoing: number; internal: number }>;
+  totals: { made: number; incoming: number; outgoing: number; internal: number; missed?: number };
+  points: Array<{ label: string; incoming: number; outgoing: number; internal: number; missed?: number }>;
 };
 
 type ConnectKpis = {
@@ -58,166 +59,41 @@ type ConnectKpis = {
   scope: "global" | "tenant";
   tenantId?: string;
   asOf: string;
-  /** connect = ConnectCdr DB (default); pbx = VitalPBX CDR API only if enabled server-side */
   source?: "connect" | "pbx";
   mode?: "raw" | "canonical";
   pbxFallback?: boolean;
   tenantsQueried?: number;
-  /** Present when mode=canonical — the original stored values before direction correction */
-  raw?: { incomingToday: number; outgoingToday: number; internalToday: number; missedToday: number };
-  /** Present when mode=canonical — the direction-corrected counts */
-  canonical?: { incoming: number; outgoing: number; internal: number; missed: number; total: number };
 };
 
-type RawVsDedupedStats = {
-  asOf: string;
-  window: string;
-  connectUniqueCalls: number;
-  connectRawLegTotal: number;
-  legsPerCall: number | null;
-  multiLegCalls: number;
-  singleLegCalls: number;
-  maxLegsOnOneCall: number;
-  byDirection: {
-    rawLegs:     { incoming: number; outgoing: number; internal: number; unknown: number };
-    uniqueCalls: { incoming: number; outgoing: number; internal: number; unknown: number };
-  };
-  nullTenantCalls: number;
-  legCountDistribution: Array<{ legs: number; calls: number }>;
-  topMultiLegExamples: Array<{
-    linkedId: string;
-    rawLegs: number;
-    fromNumber: string | null;
-    toNumber: string | null;
-    direction: string;
-    tenantId: string | null;
-    durationSec: number;
-    disposition: string;
-    startedAt: string;
-  }>;
-  explanation: string;
-};
-
-function PbxErrorWithDiagnostics({ errorMessage, isGlobal }: { errorMessage: string; isGlobal: boolean }) {
-  const [diagnostics, setDiagnostics] = useState<PbxLiveDiagnostics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const runDiagnostics = async () => {
-    if (isGlobal) return;
-    setLoading(true);
-    setDiagnostics(null);
-    try {
-      const d = await loadPbxLiveDiagnostics();
-      setDiagnostics(d);
-    } catch {
-      setDiagnostics({ step: "reach", ok: false, message: "Failed to load diagnostics.", code: "REQUEST_FAILED" });
-    } finally {
-      setLoading(false);
-    }
-  };
-  return (
-    <>
-      <ErrorState message={errorMessage} />
-      {!isGlobal ? (
-        <div className="mt-3">
-          <button type="button" onClick={runDiagnostics} disabled={loading} className="btn btn-secondary btn-sm">
-            {loading ? "Running…" : "Run diagnostics"}
-          </button>
-          {diagnostics ? (
-            <div className="mt-2 p-2 rounded bg-black/10 text-sm font-mono">
-              <div><strong>Step:</strong> {diagnostics.step} {diagnostics.ok ? "✓" : "✗"}</div>
-              <div><strong>Message:</strong> {diagnostics.message}</div>
-              {diagnostics.code ? <div><strong>Code:</strong> {diagnostics.code}</div> : null}
-              {diagnostics.baseUrlHost != null ? <div><strong>PBX host:</strong> {diagnostics.baseUrlHost}</div> : null}
-              {diagnostics.hasLink != null ? <div><strong>Has link:</strong> {String(diagnostics.hasLink)}</div> : null}
-              {diagnostics.isEnabled != null ? <div><strong>Instance enabled:</strong> {String(diagnostics.isEnabled)}</div> : null}
-              {diagnostics.step === "ok" && diagnostics.incomingToday != null ? (
-                <div><strong>Today KPIs:</strong> In {diagnostics.incomingToday} / Out {diagnostics.outgoingToday} / Int {diagnostics.internalToday} / Missed {diagnostics.missedToday}</div>
-              ) : null}
-              {diagnostics.cdrDebug ? (
-                <div><strong>CDR request:</strong> date={diagnostics.cdrDebug.todayStr ?? "?"} ({diagnostics.cdrDebug.requestStartIso} → {diagnostics.cdrDebug.requestEndIso}); PBX returned {diagnostics.cdrDebug.rawRowCountFromApi} row(s)</div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function formatDidDisplay(e164: string): string {
-  const d = String(e164 || "").replace(/\D/g, "");
-  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-  if (d.length === 11 && d.startsWith("1")) return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
-  return e164 || "—";
-}
-
-type DashboardTenantPhoneGlobal = {
-  scope: "global";
-  pbxInstanceId: string | null;
-  message?: string;
-  totalActiveNumbers?: number;
-  unlinkedActiveNumberCount?: number;
-  tenantsWithNumbers?: Array<{ connectTenantId: string; connectTenantName: string; activeNumberCount: number }>;
-};
-
-type DashboardTenantPhoneScoped = {
-  scope: "tenant";
-  pbxInstanceId: string | null;
-  connectTenantId: string;
-  connectTenantName: string | null;
-  phoneNumbers: Array<{
-    e164: string;
-    rawNumber: string | null;
-    pbxTenantId: string;
-    pbxTenantCode: string | null;
-    pbxTenantSlug: string | null;
-    active: boolean;
-  }>;
-  message?: string;
-};
-
-type DashboardTenantPhoneResponse = DashboardTenantPhoneGlobal | DashboardTenantPhoneScoped;
+// ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  // ── Context & scope ──
   const { adminScope, tenantId: contextTenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
   const telephony = useTelephony();
   const tenantId = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
-  const scopedTenantId = contextTenantId || tenantId;
   const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
 
-  // KPI display mode: "canonical" applies direction-correction rules at query time (no DB writes).
-  // "raw" shows stored values exactly as in DB.  Default is canonical since it's more accurate.
-  const [kpiMode, setKpiMode] = useState<"raw" | "canonical">("canonical");
-  // Ingestion parity panel — collapsed by default to avoid extra API calls on every load.
-  const [showIngestionPanel, setShowIngestionPanel] = useState(false);
-
-  // Staggered ticks — scope-aware cadence (live combined = DB KPIs + ARI only; no VitalPBX REST CDR).
-  // combinedTick  120 s (GLOBAL) / 60 s (TENANT) : live summary + active calls (ARI)
-  // kpiTick       30 s baseline : KPI cards (also bumped instantly when a call ends)
-  // trafficTick   300 s (GLOBAL) / 120 s (TENANT) : call traffic chart (ConnectCdr / callRecord)
-  const [combinedTick,  setCombinedTick]  = useState(0);
-  const [kpiTick,       setKpiTick]       = useState(0);
-  const [trafficTick,   setTrafficTick]   = useState(0);
+  // ── Refresh ticks ──
+  const [combinedTick, setCombinedTick] = useState(0);
+  const [kpiTick,      setKpiTick]      = useState(0);
+  const [trafficTick,  setTrafficTick]  = useState(0);
 
   useEffect(() => {
-    const combinedMs  = isGlobal ? 120_000 : 60_000;
-    const trafficMs   = isGlobal ? 300_000 : 120_000;
-    const kpiMs       = 30_000; // 30 s baseline for KPI cards
-    const t1 = window.setInterval(() => setCombinedTick((v) => v + 1),  combinedMs);
-    const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1),  trafficMs);
-    const t3 = window.setInterval(() => setKpiTick((v)       => v + 1), kpiMs);
+    const combinedMs = isGlobal ? 120_000 : 60_000;
+    const trafficMs  = isGlobal ? 300_000 : 120_000;
+    const t1 = window.setInterval(() => setCombinedTick((v) => v + 1), combinedMs);
+    const t2 = window.setInterval(() => setTrafficTick((v)  => v + 1), trafficMs);
+    const t3 = window.setInterval(() => setKpiTick((v)       => v + 1), 30_000);
     return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
   }, [isGlobal]);
 
-  // When a call ends (goes to hungup state), refresh KPI cards after a short delay.
-  // We track activeCalls.length (non-hungup) so we detect the end as soon as the
-  // state changes — giving the CDR ingest pipeline time to write to DB before we query.
+  // Refresh KPIs when a call ends
   const prevActiveCount = useRef<number | null>(null);
   useEffect(() => {
     const count = liveCalls.length;
     if (prevActiveCount.current !== null && count < prevActiveCount.current) {
-      // A call just ended — wait 4 s for CDR ingest to commit, then refresh KPIs
       const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 4_000);
       prevActiveCount.current = count;
       return () => clearTimeout(timer);
@@ -225,660 +101,1248 @@ export default function DashboardPage() {
     prevActiveCount.current = count;
   }, [liveCalls.length]);
 
-  // Platform billing/activity — fetched once per scope change, no tick.
-  const state = useAsyncResource(() => loadDashboardData(adminScope), [adminScope]);
-
-  // ONE combined PBX call — used for ACTIVE CALLS only. KPIs come from Connect CDR below.
+  // ── Data fetching ──
   const pbxCombinedState = useAsyncResource<PbxLiveCombined | AdminPbxLiveCombined>(
     () => isGlobal ? loadAdminPbxLiveCombined() : loadPbxLiveCombined(),
     [adminScope, combinedTick]
   );
 
-  // KPI totals: default ConnectCdr (DB) — no VitalPBX REST fan-out.
-  // mode=canonical applies direction-correction rules at query time.
   const kpiParam = (() => {
-    const params = new URLSearchParams({ source: "connect", mode: kpiMode });
+    const params = new URLSearchParams({ source: "connect", mode: "canonical" });
     if (!isGlobal && tenantId) params.set("tenantId", tenantId);
     return `?${params.toString()}`;
   })();
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
-    [adminScope, tenantId, kpiTick, kpiMode]
+    [adminScope, tenantId, kpiTick]
   );
 
-  // Ingestion parity panel — only loaded when the super-admin explicitly expands it (not on every page load).
-  const rawVsDedupedState = useAsyncResource<RawVsDedupedStats>(
-    () => showIngestionPanel && isGlobal
-      ? apiGet<RawVsDedupedStats>("/admin/diagnostics/raw-vs-deduped")
-      : Promise.resolve(null as unknown as RawVsDedupedStats),
-    [showIngestionPanel, isGlobal]
-  );
-
-  // Call traffic chart — slower cadence, already server-cached (ConnectCdr / callRecord only; no PBX REST).
   const trafficState = useAsyncResource<DashboardCallTraffic>(
     () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
     [adminScope, trafficTick]
   );
 
-  const tenantPhoneState = useAsyncResource<DashboardTenantPhoneResponse>(() => {
-    const path = isGlobal
-      ? "/dashboard/tenant-phone-numbers"
-      : `/dashboard/tenant-phone-numbers?tenantId=${encodeURIComponent(scopedTenantId || "")}`;
-    return apiGet<DashboardTenantPhoneResponse>(path);
-  }, [isGlobal, scopedTenantId]);
-
-  const data        = state.status === "success" ? state.data : null;
-  const activity    = data?.activity || [];
-  const scopeLabel  = data?.scopeLabel || (adminScope as "GLOBAL" | "TENANT");
-
-  const combined   = pbxCombinedState.status === "success" ? pbxCombinedState.data : null;
-  const pbxLive    = combined?.summary ?? null;
-  const activeCalls = combined?.activeCalls ?? null;
-  const traffic    = trafficState.status === "success" ? trafficState.data : null;
+  // ── Derived values ──
+  const combined     = pbxCombinedState.status === "success" ? pbxCombinedState.data : null;
+  const pbxLive      = combined?.summary ?? null;
+  const activeCalls  = combined?.activeCalls ?? null;
+  const traffic      = trafficState.status === "success" ? trafficState.data : null;
 
   const isAdminSummary = (s: PbxLiveSummary | AdminPbxLiveSummary | null): s is AdminPbxLiveSummary =>
     s !== null && "totalCallsToday" in s;
 
-  const callsToday = isAdminSummary(pbxLive) ? pbxLive.totalCallsToday : pbxLive?.callsToday ?? null;
-  const answeredToday = isAdminSummary(pbxLive) ? pbxLive.answeredToday : pbxLive?.answeredToday ?? null;
-  const activeCallCount = isAdminSummary(pbxLive) ? pbxLive.totalActiveCalls : pbxLive?.activeCalls ?? null;
+  const activeCallCount   = isAdminSummary(pbxLive) ? pbxLive.totalActiveCalls : pbxLive?.activeCalls ?? null;
   const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
 
-  const connectKpis = connectKpisState.status === "success" ? connectKpisState.data : null;
+  const connectKpis   = connectKpisState.status === "success" ? connectKpisState.data : null;
   const incomingToday = connectKpis?.incomingToday ?? null;
   const outgoingToday = connectKpis?.outgoingToday ?? null;
   const internalToday = connectKpis?.internalToday ?? null;
   const missedToday   = connectKpis?.missedToday ?? null;
 
-  // When canonical mode is active, show raw values as annotations where they differ
-  const rawKpis = connectKpis?.raw ?? null;
-  const incomingRaw = rawKpis?.incomingToday ?? null;
-  const outgoingRaw = rawKpis?.outgoingToday ?? null;
-  const internalRaw = rawKpis?.internalToday ?? null;
-  const missedRaw   = rawKpis?.missedToday ?? null;
-
-  const kpiSourceNote =
-    connectKpis?.pbxFallback
-      ? "Today totals: Connect database (VitalPBX CDR aggregate failed — check PBX API / instance)."
-      : connectKpis?.source === "pbx"
-        ? `Today totals: VitalPBX CDR${typeof connectKpis.tenantsQueried === "number" && connectKpis.tenantsQueried > 0 ? ` (${connectKpis.tenantsQueried} tenant${connectKpis.tenantsQueried === 1 ? "" : "s"})` : ""} — matches PBX traffic chart.`
-        : null;
-
-  const peak = Math.max(1, ...(traffic?.points || []).map((p) => Math.max(p.incoming, p.outgoing, p.internal)));
-
-  // Tick every second so live call duration displays update (UI only, no API).
+  // 1-second tick for duration counters (UI only)
   const [, setDurationTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setDurationTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  // If WebSocket is live, use its authoritative active call count; fall back to ARI/CDR.
-  const wsActiveCalls = telephony.isLive ? liveCalls.length : null;
+  const wsActiveCalls      = telephony.isLive ? liveCalls.length : null;
   const displayActiveCount = wsActiveCalls !== null ? wsActiveCalls : activeCallCount;
-  const activeCountMeta = telephony.isLive
+  const activeCountMeta    = telephony.isLive
     ? "Live via AMI"
-    : activeCallsSource === "ari"
-    ? "Live via ARI"
-    : "ARI not configured";
+    : activeCallsSource === "ari" ? "Live via ARI" : "ARI not configured";
 
-  const lastSyncAt = pbxLive?.lastUpdatedAt ?? activeCalls?.lastUpdatedAt ?? null;
+  // ── Supporting card data ──
+  const totalCalls     = (incomingToday ?? 0) + (outgoingToday ?? 0) + (internalToday ?? 0);
+  const answeredCalls  = Math.max(0, totalCalls - (missedToday ?? 0));
+  const answerRate     = totalCalls > 0 ? Math.round((answeredCalls / totalCalls) * 100) : null;
+
+  // ── Smart insight derivation (pure frontend, no API) ──
+  const insight = deriveInsight({
+    incoming: incomingToday, outgoing: outgoingToday, internal: internalToday,
+    missed: missedToday, answerRate, totalCalls, kpisReady: connectKpisState.status === "success",
+  });
 
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
-      <div className="stack compact-stack dashboard-2026">
-        <PageHeader
-          title="Overview"
-          subtitle={`${scopeLabel} scope. ${telephony.isLive ? "Live calls and KPIs update automatically." : `Data refreshes every 30 s.`}`}
-          badges={<><ScopeBadge scope={scopeLabel} /><LiveBadge status={telephony.status} /></>}
-          actions={<QRPairingModal />}
-        />
+      <div className="dash-shell">
 
-        {isGlobal ? <GlobalScopeNotice /> : null}
-        {pbxCombinedState.status === "loading" ? <LoadingSkeleton rows={1} /> : null}
-        {pbxCombinedState.status === "error" ? (
-          <PbxErrorWithDiagnostics
-            errorMessage={pbxCombinedState.error || "PBX live metrics unavailable — check PBX link configuration."}
-            isGlobal={isGlobal}
+        <PageHeader title="Overview" />
+
+        {/* ── HERO CHART ── */}
+        <section className="dash-hero-section" aria-label="Call activity">
+          <div className="dash-hero-card">
+            <div className="dash-hero-header">
+              <div>
+                <h2 className="dash-hero-title">Call activity</h2>
+                <p className="dash-hero-sub">Today · direction-corrected</p>
+              </div>
+              <div className="dash-hero-legend">
+                <LegendItem color="var(--dash-incoming)" label="Incoming" value={traffic?.totals?.incoming ?? null} />
+                <LegendItem color="var(--dash-outgoing)" label="Outgoing" value={traffic?.totals?.outgoing ?? null} />
+                <LegendItem color="var(--dash-internal)" label="Internal" value={traffic?.totals?.internal ?? null} />
+                <LegendItem color="var(--dash-missed)"   label="Missed"   value={missedToday} />
+              </div>
+            </div>
+            <div className="dash-hero-plot">
+              {trafficState.status === "loading" ? (
+                <LoadingSkeleton rows={5} />
+              ) : !traffic || traffic.points.length === 0 ? (
+                <ChartEmptyState />
+              ) : (
+                <CallVolumeChart points={traffic.points} />
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ── KPI CARDS ── */}
+        <section className="dash-kpi-row" aria-label="Key metrics">
+          <KpiCard
+            label="Active Calls" value={displayActiveCount} meta={activeCountMeta}
+            variant="active" delay={0}
           />
-        ) : null}
-
-        {/* SECTION A — KPI CARDS */}
-        <section className="dash-section" aria-label="Key metrics">
-          <div className="dash-section-header">
-            <h3 className="dash-section-title">Key metrics</h3>
-            <div className="dash-kpi-mode-toggle" role="group" aria-label="KPI counting mode">
-              <button
-                type="button"
-                className={`dash-kpi-mode-btn${kpiMode === "canonical" ? " active" : ""}`}
-                onClick={() => setKpiMode("canonical")}
-                title="Direction-corrected: short extension → external number classified as outgoing"
-              >
-                Direction-corrected
-              </button>
-              <button
-                type="button"
-                className={`dash-kpi-mode-btn${kpiMode === "raw" ? " active" : ""}`}
-                onClick={() => setKpiMode("raw")}
-                title="Raw stored values from Connect database, no corrections applied"
-              >
-                Raw stored
-              </button>
-            </div>
-          </div>
-          {kpiMode === "canonical" ? (
-            <p className="dash-kpi-mode-note">
-              <strong>Direction-corrected:</strong> outbound calls (extension → PSTN) that were stored as incoming due to a multi-leg AMI classification issue are re-counted correctly.
-              Raw stored values shown in parentheses where they differ.{" "}
-              <span className="dash-kpi-pbx-gap-note">
-                PBX totals may still be higher — the PBX counts all channel-leg CDR records per call; Connect stores one row per linked call (deduped by linkedId).
-              </span>
-            </p>
-          ) : (
-            <p className="dash-kpi-mode-note dash-kpi-mode-note--raw">
-              <strong>Raw stored:</strong> direction values exactly as stored in the Connect database. Outbound calls made from extensions may show as incoming here if not yet corrected. Use Direction-corrected mode for the accurate view.
-            </p>
-          )}
-          {kpiSourceNote ? (
-            <p className="text-sm opacity-80 mb-2 max-w-3xl">{kpiSourceNote}</p>
-          ) : null}
-          <div className="dash-kpi-grid">
-            <article className={`dash-kpi-card active-calls`}>
-              <div className="dash-kpi-label">Active Calls</div>
-              <div className="dash-kpi-value">{displayActiveCount !== null ? displayActiveCount : "--"}</div>
-              <div className="dash-kpi-meta">{activeCountMeta}</div>
-            </article>
-            <article className="dash-kpi-card incoming">
-              <div className="dash-kpi-label">Incoming today</div>
-              <div className="dash-kpi-value">{incomingToday !== null ? incomingToday : "--"}</div>
-              <div className="dash-kpi-meta">
-                Inbound
-                {kpiMode === "canonical" && incomingRaw !== null && incomingRaw !== incomingToday
-                  ? <span className="dash-kpi-raw-note"> (raw: {incomingRaw})</span>
-                  : null}
-              </div>
-            </article>
-            <article className="dash-kpi-card outgoing">
-              <div className="dash-kpi-label">Outgoing today</div>
-              <div className="dash-kpi-value">{outgoingToday !== null ? outgoingToday : "--"}</div>
-              <div className="dash-kpi-meta">
-                Outbound
-                {kpiMode === "canonical" && outgoingRaw !== null && outgoingRaw !== outgoingToday
-                  ? <span className="dash-kpi-raw-note"> (raw: {outgoingRaw})</span>
-                  : null}
-              </div>
-            </article>
-            <article className="dash-kpi-card internal">
-              <div className="dash-kpi-label">Internal today</div>
-              <div className="dash-kpi-value">{internalToday !== null ? internalToday : "--"}</div>
-              <div className="dash-kpi-meta">
-                Extension-to-extension
-                {kpiMode === "canonical" && internalRaw !== null && internalRaw !== internalToday
-                  ? <span className="dash-kpi-raw-note"> (raw: {internalRaw})</span>
-                  : null}
-              </div>
-            </article>
-            <article className="dash-kpi-card missed">
-              <div className="dash-kpi-label">Missed today</div>
-              <div className="dash-kpi-value">{missedToday !== null ? missedToday : "--"}</div>
-              <div className="dash-kpi-meta">
-                Unanswered
-                {kpiMode === "canonical" && missedRaw !== null && missedRaw !== missedToday
-                  ? <span className="dash-kpi-raw-note"> (raw: {missedRaw})</span>
-                  : null}
-              </div>
-            </article>
-            {isGlobal && isAdminSummary(pbxLive) ? (
-              <article className="dash-kpi-card">
-                <div className="dash-kpi-label">Active tenants</div>
-                <div className="dash-kpi-value">{pbxLive.activeTenantsCount}</div>
-                <div className="dash-kpi-meta">With calls today</div>
-              </article>
-            ) : null}
-          </div>
-        </section>
-
-        {/* Synced PBX inbound DIDs (PbxTenantInboundDid) — no live PBX polling */}
-        <section className="dash-section" aria-label="Assigned phone numbers">
-          <h3 className="dash-section-title">Assigned phone numbers</h3>
-          <p className="text-sm opacity-70 mb-3 max-w-2xl">
-            Numbers assigned in VitalPBX to each tenant, stored in Connect when an admin refreshes PBX tenants. Switch to{" "}
-            <strong>tenant</strong> scope in the header to see the full list for the selected workspace.
-          </p>
-          {tenantPhoneState.status === "loading" ? <LoadingSkeleton rows={2} /> : null}
-          {tenantPhoneState.status === "error" ? (
-            <ErrorState message={tenantPhoneState.error || "Unable to load assigned phone numbers."} />
-          ) : null}
-          {tenantPhoneState.status === "success" && tenantPhoneState.data.scope === "global" ? (
-            <div className="panel tenant-phone-panel">
-              <p className="text-sm mb-3">{tenantPhoneState.data.message}</p>
-              {typeof tenantPhoneState.data.totalActiveNumbers === "number" ? (
-                <p className="text-sm opacity-80 mb-2">
-                  <strong>{tenantPhoneState.data.totalActiveNumbers}</strong> active number
-                  {tenantPhoneState.data.totalActiveNumbers === 1 ? "" : "s"} synced across all tenants
-                  {typeof tenantPhoneState.data.unlinkedActiveNumberCount === "number" &&
-                  tenantPhoneState.data.unlinkedActiveNumberCount > 0
-                    ? ` (${tenantPhoneState.data.unlinkedActiveNumberCount} not linked to a Connect tenant yet)`
-                    : ""}
-                  .
-                </p>
-              ) : null}
-              {tenantPhoneState.data.tenantsWithNumbers && tenantPhoneState.data.tenantsWithNumbers.length > 0 ? (
-                <div className="table-wrap mt-2">
-                  <table className="data-table tenant-phone-summary-table">
-                    <thead>
-                      <tr>
-                        <th>Tenant</th>
-                        <th className="text-right">Synced numbers</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tenantPhoneState.data.tenantsWithNumbers.map((row) => (
-                        <tr key={row.connectTenantId}>
-                          <td>{row.connectTenantName}</td>
-                          <td className="text-right mono">{row.activeNumberCount}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="text-sm opacity-70">No tenant-linked numbers in the database yet. Run a PBX tenant refresh from admin.</p>
-              )}
-            </div>
-          ) : null}
-          {tenantPhoneState.status === "success" && tenantPhoneState.data.scope === "tenant" ? (
-            <div className="panel tenant-phone-panel">
-              {tenantPhoneState.data.message ? <p className="text-sm mb-3">{tenantPhoneState.data.message}</p> : null}
-              <p className="text-sm opacity-80 mb-3">
-                Workspace: <strong>{tenantPhoneState.data.connectTenantName || tenantPhoneState.data.connectTenantId}</strong>
-              </p>
-              {tenantPhoneState.data.phoneNumbers.length === 0 ? (
-                <EmptyState
-                  title="No phone numbers synced"
-                  message="No phone numbers are currently synced for this tenant. Use Admin → PBX tenant refresh (or sync tenant DIDs) after VitalPBX inbound numbers are configured."
-                />
-              ) : (
-                <ul className="tenant-phone-list">
-                  {tenantPhoneState.data.phoneNumbers.map((p) => (
-                    <li key={`${p.e164}-${p.pbxTenantId}`} className="tenant-phone-pill-row">
-                      <div className="tenant-phone-number">{formatDidDisplay(p.e164)}</div>
-                      <div className="tenant-phone-meta">
-                        {p.pbxTenantCode ? (
-                          <span className="chip info">{p.pbxTenantCode}</span>
-                        ) : null}
-                        {p.pbxTenantSlug ? <span className="chip neutral">{p.pbxTenantSlug}</span> : null}
-                        <span className={`chip ${p.active ? "success" : "warning"}`}>{p.active ? "Active" : "Inactive"}</span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          <KpiCard
+            label="Incoming" value={incomingToday} meta="Today"
+            variant="incoming" delay={60}
+          />
+          <KpiCard
+            label="Outgoing" value={outgoingToday} meta="Today"
+            variant="outgoing" delay={120}
+          />
+          <KpiCard
+            label="Internal" value={internalToday} meta="Extension-to-extension"
+            variant="internal" delay={180}
+          />
+          <KpiCard
+            label="Missed" value={missedToday} meta="Unanswered"
+            variant="missed" delay={240}
+          />
+          {isGlobal && isAdminSummary(pbxLive) ? (
+            <KpiCard
+              label="Active Tenants" value={pbxLive.activeTenantsCount} meta="With calls today"
+              variant="default" delay={300}
+            />
           ) : null}
         </section>
 
-        {/* SECTION B — LIVE CALLS PANEL */}
+        {/* ── SUPPORTING METRIC CARDS ── */}
+        <section className="dash-support-row" aria-label="Call summary">
+          <CallMixCard
+            incoming={incomingToday}
+            outgoing={outgoingToday}
+            internal={internalToday}
+            loading={connectKpisState.status === "loading"}
+          />
+          <AnswerRateCard
+            rate={answerRate}
+            answered={connectKpisState.status === "success" ? answeredCalls : null}
+            missed={missedToday}
+            loading={connectKpisState.status === "loading"}
+          />
+        </section>
+
+        {/* ── INSIGHT ROW ── */}
+        <section className="dash-insights-row" aria-label="Insights">
+          <SmartInsightCard insight={insight} loading={connectKpisState.status === "loading"} />
+          <CallOutcomesCard
+            incoming={incomingToday}
+            outgoing={outgoingToday}
+            internal={internalToday}
+            missed={missedToday}
+            loading={connectKpisState.status === "loading"}
+          />
+          <TrafficSnapshotCard
+            incoming={incomingToday}
+            outgoing={outgoingToday}
+            internal={internalToday}
+            missed={missedToday}
+            loading={connectKpisState.status === "loading"}
+          />
+        </section>
+
+        {/* ── CALL FLOW PIPELINE ── */}
+        <section className="dash-section" aria-label="Call flow">
+          <CallFlowWidget
+            incoming={incomingToday}
+            answered={answeredCalls}
+            missed={missedToday}
+            outgoing={outgoingToday}
+            loading={connectKpisState.status === "loading"}
+          />
+        </section>
+
+        {/* ── ACTIVITY HEATMAP + SYSTEM STATUS ── */}
+        <section className="dash-wide-split" aria-label="Activity patterns">
+          <ActivityHeatmapCard
+            points={traffic?.points ?? []}
+            loading={trafficState.status === "loading"}
+          />
+          <div className="dash-side-stack">
+            <SystemStatusCard isConnected={telephony.status === "connected"} />
+            <TimeConditionCard />
+          </div>
+        </section>
+
+        {/* ── EXTENSION PRESENCE GRID ── */}
+        <section className="dash-section" aria-label="Extension presence">
+          <div className="dash-section-hdr">
+            <h3 className="dash-section-title">Extension presence</h3>
+            <span className="dash-shell-badge">Preview — wire up when live</span>
+          </div>
+          <ExtensionPresenceGrid />
+        </section>
+
+        {/* ── QUEUE + IVR + VOICEMAIL ROW ── */}
+        <section className="dash-three-col" aria-label="Operations">
+          <QueueAnalyticsCard />
+          <IvrAnalyticsCard />
+          <VoicemailCard />
+        </section>
+
+        {/* ── RECORDINGS + BILLING ROW ── */}
+        <section className="dash-two-col" aria-label="Records and billing">
+          <RecordingsCard />
+          <BillingSnapshotCard />
+        </section>
+
+        {/* ── LIVE CALLS ── */}
         <section className="dash-section" aria-label="Live calls">
           <h3 className="dash-section-title">Live calls</h3>
           <div className="dash-live-panel">
             {telephony.isLive ? (
               liveCalls.length > 0 ? (
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Caller</th>
-                        <th>Destination</th>
-                        <th>Direction</th>
-                        <th>Duration</th>
-                        <th>Status</th>
-                        {isGlobal ? <th>Tenant</th> : null}
-                        {isGlobal ? <th>Queue</th> : null}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {liveCalls.map((call) => {
-                        const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
-                        const elapsedSec = call.answeredAt
-                          ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
-                          : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
-                        return (
-                          <tr key={call.id}>
-                            <td className="mono">{call.from || "—"}</td>
-                            <td className="mono">{call.to || "—"}</td>
-                            <td><span className={`chip ${directionClass(dir)}`}>{dir === "incoming" ? "IN" : dir === "outgoing" ? "OUT" : "INTERNAL"}</span></td>
-                            <td className="mono">{formatDurationSec(elapsedSec)}</td>
-                            <td><span className="chip info">{callStateLabel(call.state)}</span></td>
-                            {isGlobal ? <td className="muted">{call.tenantId || "—"}</td> : null}
-                            {isGlobal ? <td className="muted">{call.queueId || "—"}</td> : null}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="calls-live-section">
+                  <div className="calls-live-header">
+                    <span className="calls-live-dot" />
+                    <h3 className="calls-live-title">Active</h3>
+                    <span className="calls-live-count">{liveCalls.length}</span>
+                  </div>
+                  <div className="calls-live-list">
+                    {liveCalls.map((call) => {
+                      const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
+                      const elapsed = call.answeredAt
+                        ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
+                        : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
+                      const displayTo = call.to
+                        ? call.to
+                        : <span style={{ fontStyle: "italic", color: "var(--console-muted)", fontSize: "0.8rem" }}>Resolving…</span>;
+                      const displayTenant = call.tenantName ?? call.tenantId ?? null;
+                      return (
+                        <div key={call.id} className="calls-live-row">
+                          <DirectionIcon direction={dir} size={15} />
+                          <span className="calls-live-caller">
+                            {call.fromName && <span className="calls-live-cnam">{call.fromName}</span>}
+                            <span className="mono">{call.from || "—"}</span>
+                          </span>
+                          <span className="calls-live-arrow">→</span>
+                          <span className="mono">{displayTo}</span>
+                          <span className={`chip ${directionClass(dir)}`}>{directionLabel(dir)}</span>
+                          <span className="chip info">{callStateLabel(call.state)}</span>
+                          <span className="mono muted">{formatDurationSec(elapsed)}</span>
+                          {isGlobal && displayTenant ? (
+                            <span className="muted">{displayTenant}</span>
+                          ) : null}
+                          <LiveCallBadge active />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : (
-                <EmptyState title="No active calls" message="All channels are idle." />
+                <LiveCallsEmptyState />
               )
             ) : pbxCombinedState.status === "loading" ? (
               <LoadingSkeleton rows={1} />
             ) : activeCalls?.calls && activeCalls.calls.length > 0 ? (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Caller</th>
-                      <th>Destination</th>
-                      <th>Direction</th>
-                      <th>Duration</th>
-                      <th>Status</th>
-                      {isGlobal ? <th>Tenant</th> : null}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeCalls.calls.map((call) => (
-                      <tr key={call.channelId}>
-                        <td className="mono">{call.caller || "—"}</td>
-                        <td className="mono">{call.callee || "—"}</td>
-                        <td><span className={`chip ${directionClass(call.direction)}`}>{call.direction === "incoming" ? "IN" : call.direction === "outgoing" ? "OUT" : "INTERNAL"}</span></td>
-                        <td className="mono">{formatDurationSec(call.durationSeconds)}</td>
-                        <td><span className="chip info">{callStateLabel(call.state)}</span></td>
-                        {isGlobal ? <td className="muted">{call.tenantId || "—"}</td> : null}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : activeCalls?.source === "unavailable" ? (
-              <EmptyState title="Active calls not available" message="Real-time active calls require the telephony service or Asterisk ARI." />
-            ) : (
-              <EmptyState title="No active calls" message="All channels are idle." />
-            )}
-          </div>
-        </section>
-
-        {/* SECTION C — CALL VOLUME GRAPH + SECTION D — SYSTEM SUMMARY: 2-col */}
-        <section className="dashboard-main-grid">
-          <DetailCard title="Call volume" actions={null}>
-            {trafficState.status === "error" ? (
-              <ErrorState message="Call traffic data unavailable." />
-            ) : !traffic || traffic.points.length === 0 ? (
-              <EmptyState title="No call traffic in this window" message="Completed calls appear here from Connect (AMI-ingested CDR), or legacy call records if present." />
-            ) : (
-              <>
-                <div className="dash-chart-wrap">
-                  <CallVolumeLineChart points={traffic.points} peak={peak} />
+              <div className="calls-live-section">
+                <div className="calls-live-header">
+                  <span className="calls-live-dot" />
+                  <h3 className="calls-live-title">Active</h3>
+                  <span className="calls-live-count">{activeCalls.calls.length}</span>
                 </div>
-                <div className="dash-chart-legend">
-                  <span><span className="dot" style={{ background: "var(--dash-incoming)"}} /> Incoming: {traffic.totals?.incoming ?? "--"}</span>
-                  <span><span className="dot" style={{ background: "var(--dash-outgoing)"}} /> Outgoing: {traffic.totals?.outgoing ?? "--"}</span>
-                  <span><span className="dot" style={{ background: "var(--dash-internal)"}} /> Internal: {traffic.totals?.internal ?? "--"}</span>
-                </div>
-              </>
-            )}
-          </DetailCard>
-
-          <div className="dashboard-side-stack">
-            <h3 className="dash-section-title">System summary</h3>
-            <p className="text-sm opacity-70 mb-2 max-w-xl">
-              Extension, queue, trunk, and ring-group counts are not loaded here so the dashboard does not call the PBX REST API. Use the PBX section in the nav for those lists.
-            </p>
-            <div className="dash-summary-grid">
-              {[
-                { label: "Extensions", value: null, icon: Users, color: "var(--console-accent)" },
-                { label: "Ring groups", value: null, icon: ListOrdered, color: "var(--dash-internal)" },
-                { label: "Queues", value: null, icon: ListOrdered, color: "var(--console-warning)" },
-                { label: "Trunks", value: null, icon: Truck, color: "var(--dash-incoming)" }
-              ].map(({ label, value, icon: Icon, color }) => (
-                <article key={label} className="dash-summary-card">
-                  <div className="dash-summary-icon" style={{ background: color }}>
-                    <Icon size={20} />
-                  </div>
-                  <div>
-                    <div className="dash-summary-value">{value === null ? "--" : value}</div>
-                    <div className="dash-summary-label">{label}</div>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            {/* SECTION E — QUICK HEALTH */}
-            <h3 className="dash-section-title" style={{ marginTop: 16 }}>Quick health</h3>
-            <div className="dash-health-panel">
-              <div className="dash-health-row">
-                <Activity size={16} />
-                <span>PBX: {telephony.status === "connected" ? "✅ Connected" : "❌ Disconnected"}</span>
-              </div>
-              <div className="dash-health-row">
-                <span className="muted">Last sync:</span>
-                <span>{lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "—"}</span>
-              </div>
-              <div className="dash-health-row">
-                <span className="muted">API:</span>
-                <span>{pbxCombinedState.status === "success" ? "✅ OK" : pbxCombinedState.status === "error" ? "❌ Error" : "…"}</span>
-              </div>
-              <div className="dash-health-row">
-                <span className="muted">Event stream:</span>
-                <span>{telephony.status === "connected" ? "✅ AMI/ARI" : "❌ Offline"}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {isGlobal && isAdminSummary(pbxLive) && pbxLive.topTenants.length > 0 ? (
-          <DetailCard title="Top tenants by call volume today">
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Tenant ID</th>
-                    <th>Calls today</th>
-                    <th>Incoming</th>
-                    <th>Outgoing</th>
-                    <th>Active now</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pbxLive.topTenants.map((t) => (
-                    <tr key={t.tenantId}>
-                      <td className="mono">{t.tenantId}</td>
-                      <td>{t.callsToday}</td>
-                      <td>{t.incomingToday}</td>
-                      <td>{t.outgoingToday}</td>
-                      <td>{t.activeCalls}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </DetailCard>
-        ) : null}
-
-        {/* SECTION F — RAW vs DEDUPED ingestion parity (super-admin global only) */}
-        {isGlobal ? (
-          <section className="dash-section dash-ingest-panel" aria-label="Ingestion parity">
-            <div className="dash-ingest-header">
-              <h3 className="dash-section-title" style={{ margin: 0 }}>
-                Ingestion parity
-                <span className="dash-ingest-badge">Admin only</span>
-              </h3>
-              <button
-                className="dash-ingest-toggle btn ghost"
-                onClick={() => setShowIngestionPanel((v) => !v)}
-                title={showIngestionPanel ? "Collapse ingestion parity panel" : "Expand to compare Connect raw CDR leg count vs PBX-style counting"}
-              >
-                {showIngestionPanel ? "Collapse ▲" : "Expand ▼"}
-              </button>
-            </div>
-            {!showIngestionPanel ? (
-              <p className="dash-ingest-hint">
-                Validate that Connect ingests all PBX channel-leg CDR events before deduplication.
-                Shows raw leg count vs unique logical calls — use this to prove counting model parity.
-              </p>
-            ) : rawVsDedupedState.status === "loading" ? (
-              <LoadingSkeleton rows={2} />
-            ) : rawVsDedupedState.status === "error" ? (
-              <ErrorState message="Could not load ingestion parity data." />
-            ) : rawVsDedupedState.data ? (
-              <div className="dash-ingest-body">
-                <p className="dash-ingest-window">
-                  Window: <strong>{rawVsDedupedState.data.window}</strong>
-                  <span className="muted"> · as of {new Date(rawVsDedupedState.data.asOf).toLocaleTimeString()}</span>
-                </p>
-                {/* Core parity numbers */}
-                <div className="dash-ingest-grid">
-                  <div className="dash-ingest-stat">
-                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.connectRawLegTotal.toLocaleString()}</div>
-                    <div className="dash-ingest-stat-label">Connect raw legs</div>
-                    <div className="dash-ingest-stat-note">≈ PBX-style CDR row count</div>
-                  </div>
-                  <div className="dash-ingest-stat">
-                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.connectUniqueCalls.toLocaleString()}</div>
-                    <div className="dash-ingest-stat-label">Unique logical calls</div>
-                    <div className="dash-ingest-stat-note">deduped by linkedId</div>
-                  </div>
-                  <div className="dash-ingest-stat">
-                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.legsPerCall ?? "—"}×</div>
-                    <div className="dash-ingest-stat-label">Legs per call</div>
-                    <div className="dash-ingest-stat-note">raw ÷ unique</div>
-                  </div>
-                  <div className="dash-ingest-stat">
-                    <div className="dash-ingest-stat-value">{rawVsDedupedState.data.multiLegCalls.toLocaleString()}</div>
-                    <div className="dash-ingest-stat-label">Multi-leg calls</div>
-                    <div className="dash-ingest-stat-note">linkedIds with {">"}1 leg</div>
-                  </div>
-                </div>
-                {/* Direction breakdown comparison */}
-                <div className="dash-ingest-table-wrap">
-                  <table className="data-table dash-ingest-table">
-                    <thead>
-                      <tr>
-                        <th>Direction</th>
-                        <th>Raw legs</th>
-                        <th>Unique calls</th>
-                        <th>Ratio</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(["incoming", "outgoing", "internal", "unknown"] as const).map((dir) => {
-                        const legs  = rawVsDedupedState.data!.byDirection.rawLegs[dir];
-                        const calls = rawVsDedupedState.data!.byDirection.uniqueCalls[dir];
-                        const ratio = calls > 0 ? (legs / calls).toFixed(2) : "—";
-                        return (
-                          <tr key={dir}>
-                            <td><span className={`chip ${dir === "incoming" ? "success" : dir === "outgoing" ? "warning" : dir === "internal" ? "info" : ""}`}>{dir}</span></td>
-                            <td>{legs.toLocaleString()}</td>
-                            <td>{calls.toLocaleString()}</td>
-                            <td className="mono">{ratio}×</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Leg distribution */}
-                {rawVsDedupedState.data.legCountDistribution.length > 0 ? (
-                  <div className="dash-ingest-distribution">
-                    <strong>Leg count distribution:</strong>{" "}
-                    {rawVsDedupedState.data.legCountDistribution.map(({ legs, calls }) => (
-                      <span key={legs} className="dash-ingest-dist-chip">
-                        {legs} leg{legs !== 1 ? "s" : ""}: {calls.toLocaleString()} call{calls !== 1 ? "s" : ""}
+                <div className="calls-live-list">
+                  {activeCalls.calls.map((call) => (
+                    <div key={call.channelId} className="calls-live-row">
+                      <DirectionIcon direction={call.direction} size={15} />
+                      <span className="calls-live-caller">
+                        <span className="mono">{call.caller || "—"}</span>
                       </span>
-                    ))}
-                  </div>
-                ) : null}
-                {/* Top multi-leg examples */}
-                {rawVsDedupedState.data.topMultiLegExamples.length > 0 ? (
-                  <details className="dash-ingest-examples">
-                    <summary>Top multi-leg examples ({rawVsDedupedState.data.topMultiLegExamples.length} shown)</summary>
-                    <div className="table-wrap">
-                      <table className="data-table">
-                        <thead>
-                          <tr><th>linkedId</th><th>Legs</th><th>From</th><th>To</th><th>Direction</th><th>Tenant</th><th>Duration</th></tr>
-                        </thead>
-                        <tbody>
-                          {rawVsDedupedState.data.topMultiLegExamples.map((ex) => (
-                            <tr key={ex.linkedId}>
-                              <td className="mono" style={{ fontSize: "0.7rem" }}>{ex.linkedId}</td>
-                              <td><strong>{ex.rawLegs}</strong></td>
-                              <td className="mono">{ex.fromNumber || "—"}</td>
-                              <td className="mono">{ex.toNumber || "—"}</td>
-                              <td><span className={`chip ${ex.direction === "incoming" ? "success" : ex.direction === "outgoing" ? "warning" : "info"}`}>{ex.direction}</span></td>
-                              <td className="muted">{ex.tenantId?.replace("vpbx:", "") || "null"}</td>
-                              <td className="mono">{ex.durationSec}s</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <span className="calls-live-arrow">→</span>
+                      <span className="mono">{call.callee || "—"}</span>
+                      <span className={`chip ${directionClass(call.direction)}`}>{directionLabel(call.direction)}</span>
+                      <span className="chip info">{callStateLabel(call.state)}</span>
+                      <span className="mono muted">{formatDurationSec(call.durationSeconds)}</span>
                     </div>
-                  </details>
-                ) : (
-                  <p className="muted" style={{ fontSize: "0.82rem" }}>
-                    No multi-leg calls found yet — rawLegCount only accumulates for calls received after the migration was applied.
-                  </p>
-                )}
-                <p className="dash-ingest-note">
-                  <strong>Note:</strong> rawLegCount accumulates from the time migration 20260330100000 was applied.
-                  Historical rows default to 1. Full parity comparison requires calls ingested after the migration.
-                </p>
+                  ))}
+                </div>
               </div>
-            ) : null}
-          </section>
-        ) : null}
+            ) : (
+              <LiveCallsEmptyState />
+            )}
+          </div>
+        </section>
 
-        <DetailCard title="Recent activity">
-          {activity.length === 0 ? (
-            <EmptyState title="No activity yet" message="Platform events from billing, messaging, and PBX appear here." />
-          ) : (
-            <ul className="list">
-              {activity.map((item, idx) => (
-                <li key={`${item.type}-${idx}`}>
-                  <strong>{item.type}</strong>: {item.label}
-                </li>
-              ))}
-            </ul>
-          )}
-        </DetailCard>
-
-        <RoleGate allow={["TENANT_ADMIN", "SUPER_ADMIN"]}>
-          <section className="grid two">
-            <DetailCard title="Quick actions">
-              <div className="row-actions">
-                <Link className="btn ghost" href="/pbx/extensions">Extensions</Link>
-                <Link className="btn ghost" href="/apps/sms-campaigns">SMS Campaigns</Link>
-                <Link className="btn ghost" href="/contacts">Contacts</Link>
-                <Link className="btn ghost" href="/pbx/ivr">IVR Builder</Link>
-              </div>
-            </DetailCard>
-            <DetailCard title="PBX navigation">
-              <div className="row-actions">
-                <Link className="btn ghost" href="/pbx">PBX Overview</Link>
-                <Link className="btn ghost" href="/pbx/extensions">Extensions</Link>
-                <Link className="btn ghost" href="/pbx/call-reports">Call Reports</Link>
-                <Link className="btn ghost" href="/reports">Reports</Link>
-              </div>
-            </DetailCard>
-          </section>
-        </RoleGate>
       </div>
     </PermissionGate>
   );
 }
 
-function CallVolumeLineChart({ points, peak }: { points: Array<{ label: string; incoming: number; outgoing: number; internal: number }>; peak: number }) {
-  const w = 600;
-  const h = 160;
-  const pad = { top: 8, right: 8, bottom: 24, left: 8 };
-  const xScale = (i: number) => pad.left + (i / Math.max(1, points.length - 1)) * (w - pad.left - pad.right);
-  const yScale = (v: number) => h - pad.bottom - (v / peak) * (h - pad.top - pad.bottom);
-  const toPath = (getVal: (p: typeof points[0]) => number) =>
-    points.map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(i)} ${yScale(getVal(p))}`).join(" ");
+// ── New exploration widgets ──────────────────────────────────────────────────
+
+// ── Call Flow Pipeline ────────────────────────────────────────────────────────
+function CallFlowWidget({
+  incoming, answered, missed, outgoing, loading,
+}: {
+  incoming: number | null; answered: number; missed: number | null;
+  outgoing: number | null; loading: boolean;
+}) {
+  const steps = [
+    { icon: <PhoneCall size={18} />, label: "Incoming", value: incoming, color: "var(--dash-incoming)", note: "PSTN & SIP calls" },
+    { icon: <GitMerge size={18} />, label: "IVR / Routing", value: null, color: "var(--dash-outgoing)", note: "Auto-attendant" },
+    { icon: <ListOrdered size={18} />, label: "Queue", value: null, color: "var(--dash-internal)", note: "Waiting + answered" },
+    { icon: <Users size={18} />, label: "Extension", value: null, color: "#a78bfa", note: "Agent pickup" },
+    { icon: <CheckCircle2 size={18} />, label: "Outcome", value: null, color: "var(--dash-incoming)", note: null, outcome: { answered, missed: missed ?? 0 } },
+  ];
+
   return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="dash-line-chart">
-      <path d={toPath((p) => p.incoming)} fill="none" stroke="var(--dash-incoming)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d={toPath((p) => p.outgoing)} fill="none" stroke="var(--dash-outgoing)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d={toPath((p) => p.internal)} fill="none" stroke="var(--dash-internal)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <div className="dash-flow-card">
+      <div className="dash-flow-header">
+        <Workflow size={16} className="dash-flow-icon" />
+        <span className="dash-flow-title">Call flow pipeline</span>
+        <span className="dash-flow-sub">Today's inbound journey</span>
+      </div>
+      <div className="dash-flow-track">
+        {steps.map((step, i) => (
+          <div key={i} className="dash-flow-step-wrap">
+            <div className="dash-flow-step" style={{ "--flow-color": step.color } as React.CSSProperties}>
+              <div className="dash-flow-step-icon" style={{ color: step.color }}>{step.icon}</div>
+              <div className="dash-flow-step-body">
+                <span className="dash-flow-step-label">{step.label}</span>
+                {loading ? (
+                  <span className="dash-flow-step-val dash-flow-step-val--loading">…</span>
+                ) : step.outcome ? (
+                  <span className="dash-flow-step-val">
+                    <span className="dash-flow-outcome-ok">{step.outcome.answered} ✓</span>
+                    {" "}
+                    <span className="dash-flow-outcome-miss">{step.outcome.missed} ✗</span>
+                  </span>
+                ) : step.value !== null ? (
+                  <span className="dash-flow-step-val">{step.value.toLocaleString()}</span>
+                ) : (
+                  <span className="dash-flow-step-val dash-flow-step-val--shell">—</span>
+                )}
+                {step.note ? <span className="dash-flow-step-note">{step.note}</span> : null}
+              </div>
+            </div>
+            {i < steps.length - 1 && <div className="dash-flow-arrow">›</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Activity Heatmap ──────────────────────────────────────────────────────────
+function ActivityHeatmapCard({ points, loading }: { points: Array<{ label: string; incoming: number; outgoing: number; internal: number; missed?: number }>; loading: boolean }) {
+  const cells = points.map((p) => ({
+    label: p.label,
+    total: p.incoming + p.outgoing + p.internal,
+  }));
+  const peak = Math.max(1, ...cells.map((c) => c.total));
+  const [hov, setHov] = useState<{ label: string; total: number } | null>(null);
+
+  return (
+    <div className="dash-heatmap-card">
+      <div className="dash-flow-header">
+        <Activity size={16} className="dash-flow-icon" />
+        <span className="dash-flow-title">Activity heatmap</span>
+        <span className="dash-flow-sub">Call volume across the day</span>
+        {hov && <span className="dash-heatmap-tooltip">{hov.label} · {hov.total} calls</span>}
+      </div>
+      {loading ? (
+        <div className="dash-heatmap-grid dash-heatmap-grid--loading">
+          {Array.from({ length: 24 }).map((_, i) => (
+            <div key={i} className="dash-heatmap-cell dash-heatmap-cell--skeleton" />
+          ))}
+        </div>
+      ) : cells.length === 0 ? (
+        <div className="dash-support-empty">No traffic data available yet</div>
+      ) : (
+        <div className="dash-heatmap-grid" style={{ "--cell-count": cells.length } as React.CSSProperties}>
+          {cells.map((c, i) => {
+            const intensity = c.total / peak;
+            return (
+              <div
+                key={i}
+                className="dash-heatmap-cell"
+                style={{
+                  "--intensity": intensity,
+                  opacity: 0.15 + intensity * 0.85,
+                  background: intensity > 0.7
+                    ? "var(--dash-incoming)"
+                    : intensity > 0.4
+                    ? "var(--dash-outgoing)"
+                    : intensity > 0.1
+                    ? "var(--dash-internal)"
+                    : "var(--console-panel-soft)",
+                } as React.CSSProperties}
+                onMouseEnter={() => setHov(c)}
+                onMouseLeave={() => setHov(null)}
+                title={`${c.label}: ${c.total} calls`}
+              />
+            );
+          })}
+        </div>
+      )}
+      <div className="dash-heatmap-legend">
+        <span className="dash-heatmap-legend-label">Low</span>
+        <span className="dash-heatmap-legend-bar" />
+        <span className="dash-heatmap-legend-label">High</span>
+      </div>
+    </div>
+  );
+}
+
+// ── System Status Card ─────────────────────────────────────────────────────────
+function SystemStatusCard({ isConnected }: { isConnected: boolean }) {
+  const items = [
+    { label: "AMI / Telephony", ok: isConnected, icon: isConnected ? <Wifi size={13} /> : <WifiOff size={13} /> },
+    { label: "API Gateway", ok: true, icon: <Radio size={13} /> },
+    { label: "Event Processing", ok: true, icon: <Activity size={13} /> },
+  ];
+  const allOk = items.every((i) => i.ok);
+  return (
+    <div className="dash-status-card">
+      <div className="dash-status-header">
+        <span className={`dash-status-orb ${allOk ? "ok" : "warn"}`} />
+        <span className="dash-status-title">System health</span>
+      </div>
+      {items.map((item) => (
+        <div key={item.label} className={`dash-status-row ${item.ok ? "ok" : "warn"}`}>
+          <span className="dash-status-row-icon">{item.icon}</span>
+          <span className="dash-status-row-label">{item.label}</span>
+          <span className={`dash-status-row-pill ${item.ok ? "ok" : "warn"}`}>{item.ok ? "OK" : "Down"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Time Condition Card ────────────────────────────────────────────────────────
+function TimeConditionCard() {
+  const now = new Date();
+  const h = now.getHours();
+  const isBusinessHours = h >= 8 && h < 18;
+  const dayOfWeek = now.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const mode = isWeekend ? "weekend" : isBusinessHours ? "open" : "after-hours";
+  const modeLabel = mode === "open" ? "Open" : mode === "weekend" ? "Weekend" : "After Hours";
+  const modeColor = mode === "open" ? "var(--console-success)" : "var(--console-warning)";
+  return (
+    <div className="dash-timecond-card">
+      <div className="dash-status-header">
+        <Clock size={14} style={{ color: modeColor }} />
+        <span className="dash-status-title">Business hours</span>
+      </div>
+      <div className="dash-timecond-status" style={{ color: modeColor }}>{modeLabel}</div>
+      <div className="dash-timecond-note">
+        {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} local · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dayOfWeek]}
+      </div>
+    </div>
+  );
+}
+
+// ── Extension Presence Grid ───────────────────────────────────────────────────
+function ExtensionPresenceGrid() {
+  const PLACEHOLDER_EXTS = [
+    { ext: "101", name: "Alice M.", status: "available" },
+    { ext: "102", name: "Bob K.",   status: "on-call"   },
+    { ext: "103", name: "Carol T.", status: "available" },
+    { ext: "104", name: "Dan W.",   status: "offline"   },
+    { ext: "105", name: "Eve S.",   status: "on-call"   },
+    { ext: "106", name: "Frank L.", status: "available" },
+    { ext: "107", name: "Grace H.", status: "ringing"   },
+    { ext: "108", name: "Hank J.",  status: "offline"   },
+    { ext: "109", name: "Iris P.",  status: "available" },
+    { ext: "110", name: "Jake R.",  status: "on-call"   },
+    { ext: "111", name: "Kim T.",   status: "available" },
+    { ext: "112", name: "Leo V.",   status: "offline"   },
+  ];
+  const STATUS: Record<string, { label: string; color: string }> = {
+    "available": { label: "Available", color: "var(--console-success)" },
+    "on-call":   { label: "On Call",   color: "var(--dash-outgoing)"   },
+    "ringing":   { label: "Ringing",   color: "var(--console-warning)" },
+    "offline":   { label: "Offline",   color: "var(--console-muted)"   },
+  };
+  return (
+    <div className="dash-presence-grid">
+      {PLACEHOLDER_EXTS.map((e) => {
+        const s = STATUS[e.status];
+        const initials = e.name.split(" ").map((p) => p[0]).join("").toUpperCase();
+        return (
+          <div key={e.ext} className={`dash-presence-card dash-presence-card--${e.status}`}>
+            <div className="dash-presence-avatar">
+              {initials}
+              <span className="dash-presence-dot" style={{ background: s.color }} />
+            </div>
+            <div className="dash-presence-info">
+              <span className="dash-presence-name">{e.name}</span>
+              <span className="dash-presence-ext">Ext. {e.ext}</span>
+            </div>
+            <span className="dash-presence-status" style={{ color: s.color }}>{s.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Queue Analytics Card ──────────────────────────────────────────────────────
+function QueueAnalyticsCard() {
+  const metrics = [
+    { label: "Waiting now",   value: "—", sub: "in queue" },
+    { label: "Avg wait time", value: "—", sub: "seconds" },
+    { label: "Answered",      value: "—", sub: "today" },
+    { label: "Abandoned",     value: "—", sub: "today" },
+  ];
+  return (
+    <div className="dash-ops-card">
+      <div className="dash-ops-header">
+        <ListOrdered size={15} className="dash-ops-icon" />
+        <span className="dash-ops-title">Queue analytics</span>
+      </div>
+      <div className="dash-ops-note">Live queue data — wire up to connect queue API</div>
+      <div className="dash-ops-metrics">
+        {metrics.map((m) => (
+          <div key={m.label} className="dash-ops-metric">
+            <span className="dash-ops-metric-val">{m.value}</span>
+            <span className="dash-ops-metric-label">{m.label}</span>
+            <span className="dash-ops-metric-sub">{m.sub}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── IVR Analytics Card ────────────────────────────────────────────────────────
+function IvrAnalyticsCard() {
+  const options = [
+    { label: "Option 1 — Sales",    pct: 42, color: "var(--dash-outgoing)"  },
+    { label: "Option 2 — Support",  pct: 31, color: "var(--dash-internal)"  },
+    { label: "Option 3 — Billing",  pct: 18, color: "#a78bfa"               },
+    { label: "Option 0 — Operator", pct: 9,  color: "var(--console-muted)"  },
+  ];
+  return (
+    <div className="dash-ops-card">
+      <div className="dash-ops-header">
+        <GitMerge size={15} className="dash-ops-icon" />
+        <span className="dash-ops-title">IVR analytics</span>
+      </div>
+      <div className="dash-ops-note">Menu option distribution · shell preview</div>
+      <div className="dash-ivr-bars">
+        {options.map((o) => (
+          <div key={o.label} className="dash-ivr-bar-row">
+            <span className="dash-ivr-bar-label">{o.label}</span>
+            <div className="dash-ivr-bar-track">
+              <div
+                className="dash-ivr-bar-fill"
+                style={{ width: `${o.pct}%`, background: o.color }}
+              />
+            </div>
+            <span className="dash-ivr-bar-pct">{o.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Voicemail Snapshot Card ───────────────────────────────────────────────────
+function VoicemailCard() {
+  return (
+    <div className="dash-ops-card">
+      <div className="dash-ops-header">
+        <Voicemail size={15} className="dash-ops-icon" />
+        <span className="dash-ops-title">Voicemail</span>
+      </div>
+      <div className="dash-voicemail-empty">
+        <Voicemail size={28} className="dash-voicemail-icon" />
+        <p className="dash-voicemail-msg">No unread voicemails</p>
+        <span className="dash-ops-note">Connect voicemail API to see messages here</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Recordings Panel ──────────────────────────────────────────────────────────
+function RecordingsCard() {
+  return (
+    <div className="dash-records-card">
+      <div className="dash-records-header">
+        <Mic size={15} className="dash-ops-icon" />
+        <span className="dash-ops-title">Recent recordings</span>
+      </div>
+      <div className="dash-records-empty">
+        <Mic size={30} className="dash-voicemail-icon" />
+        <p className="dash-voicemail-msg">No recent recordings</p>
+        <span className="dash-ops-note">Completed recorded calls appear here</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Billing Snapshot Card ─────────────────────────────────────────────────────
+function BillingSnapshotCard() {
+  const bars = [
+    { label: "Voice minutes", used: 0, total: 1000, color: "var(--dash-outgoing)" },
+    { label: "SMS messages",  used: 0, total: 500,  color: "var(--dash-internal)" },
+    { label: "Data (MB)",     used: 0, total: 2000, color: "#a78bfa"              },
+  ];
+  return (
+    <div className="dash-records-card">
+      <div className="dash-records-header">
+        <CreditCard size={15} className="dash-ops-icon" />
+        <span className="dash-ops-title">Usage &amp; billing</span>
+        <span className="dash-ops-note" style={{ marginLeft: "auto", fontSize: "11px" }}>Month-to-date</span>
+      </div>
+      <div className="dash-billing-bars">
+        {bars.map((b) => (
+          <div key={b.label} className="dash-billing-row">
+            <div className="dash-billing-row-top">
+              <span className="dash-billing-label">{b.label}</span>
+              <span className="dash-billing-val">{b.used.toLocaleString()} / {b.total.toLocaleString()}</span>
+            </div>
+            <div className="dash-billing-track">
+              <div
+                className="dash-billing-fill"
+                style={{ width: `${Math.max(2, b.total > 0 ? (b.used / b.total) * 100 : 0)}%`, background: b.color }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="dash-ops-note" style={{ paddingTop: 8 }}>Connect billing API to populate real usage data</div>
+    </div>
+  );
+}
+
+// ── Sub-components ───────────────────────────────────────────────────────────
+
+function LegendItem({ color, label, value }: { color: string; label: string; value: number | null }) {
+  return (
+    <span className="dash-legend-item">
+      <span className="dash-legend-swatch" style={{ background: color }} />
+      <span className="dash-legend-label">{label}</span>
+      <strong className="dash-legend-value">{value ?? "--"}</strong>
+    </span>
+  );
+}
+
+function KpiCard({
+  label, value, meta, variant, delay,
+}: {
+  label: string; value: number | null; meta: string;
+  variant: "active" | "incoming" | "outgoing" | "internal" | "missed" | "default";
+  delay: number;
+}) {
+  return (
+    <article
+      className={`dash-kpi2 dash-kpi2--${variant}`}
+      style={{ "--kpi-delay": `${delay}ms` } as React.CSSProperties}
+    >
+      <div className="dash-kpi2-accent" />
+      <div className="dash-kpi2-body">
+        <div className="dash-kpi2-label">{label}</div>
+        <div className="dash-kpi2-value">{value !== null ? value.toLocaleString() : "—"}</div>
+        <div className="dash-kpi2-meta">{meta}</div>
+      </div>
+    </article>
+  );
+}
+
+function CallMixCard({
+  incoming, outgoing, internal, loading,
+}: {
+  incoming: number | null; outgoing: number | null; internal: number | null; loading: boolean;
+}) {
+  const hasData = incoming !== null && outgoing !== null && internal !== null;
+  const total   = (incoming ?? 0) + (outgoing ?? 0) + (internal ?? 0);
+  const segments = hasData && total > 0 ? [
+    { value: incoming ?? 0, color: "var(--dash-incoming)", label: "Incoming" },
+    { value: outgoing ?? 0, color: "var(--dash-outgoing)", label: "Outgoing" },
+    { value: internal ?? 0, color: "var(--dash-internal)", label: "Internal" },
+  ] : [];
+
+  return (
+    <div className="dash-support-card">
+      <div className="dash-support-header">
+        <h4 className="dash-support-title">Call mix</h4>
+        <span className="dash-support-sub">Direction breakdown today</span>
+      </div>
+      {loading ? (
+        <LoadingSkeleton rows={2} />
+      ) : segments.length === 0 ? (
+        <p className="dash-support-empty">No calls yet today</p>
+      ) : (
+        <div className="dash-donut-layout">
+          <DonutRing segments={segments} cx={60} cy={60} outerR={54} innerR={36} size={120} />
+          <div className="dash-donut-legend">
+            {segments.map((s) => (
+              <div key={s.label} className="dash-donut-legend-row">
+                <span className="dash-donut-swatch" style={{ background: s.color }} />
+                <span className="dash-donut-legend-label">{s.label}</span>
+                <span className="dash-donut-legend-val">{s.value.toLocaleString()}</span>
+                <span className="dash-donut-legend-pct">{Math.round(s.value / total * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnswerRateCard({
+  rate, answered, missed, loading,
+}: {
+  rate: number | null; answered: number | null; missed: number | null; loading: boolean;
+}) {
+  const hasData = rate !== null;
+  const segments = hasData ? [
+    { value: answered ?? 0, color: "var(--dash-incoming)", label: "Answered" },
+    { value: missed ?? 0,   color: "var(--dash-missed)",   label: "Missed"   },
+  ] : [];
+
+  return (
+    <div className="dash-support-card">
+      <div className="dash-support-header">
+        <h4 className="dash-support-title">Answer rate</h4>
+        <span className="dash-support-sub">Answered vs missed today</span>
+      </div>
+      {loading ? (
+        <LoadingSkeleton rows={2} />
+      ) : !hasData ? (
+        <p className="dash-support-empty">No calls yet today</p>
+      ) : (
+        <div className="dash-donut-layout">
+          <div className="dash-rate-ring-wrap">
+            <DonutRing segments={segments} cx={60} cy={60} outerR={54} innerR={36} size={120} />
+            <div className="dash-rate-center">
+              <span className="dash-rate-pct">{rate}%</span>
+            </div>
+          </div>
+          <div className="dash-donut-legend">
+            <div className="dash-donut-legend-row">
+              <span className="dash-donut-swatch" style={{ background: "var(--dash-incoming)" }} />
+              <span className="dash-donut-legend-label">Answered</span>
+              <span className="dash-donut-legend-val">{(answered ?? 0).toLocaleString()}</span>
+            </div>
+            <div className="dash-donut-legend-row">
+              <span className="dash-donut-swatch" style={{ background: "var(--dash-missed)" }} />
+              <span className="dash-donut-legend-label">Missed</span>
+              <span className="dash-donut-legend-val">{(missed ?? 0).toLocaleString()}</span>
+            </div>
+            <div className="dash-rate-tagline">
+              {(rate ?? 0) >= 90
+                ? "Excellent answer rate"
+                : (rate ?? 0) >= 75
+                ? "Good answer rate"
+                : "Needs attention"}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveCallsEmptyState() {
+  return (
+    <div className="dash-live-empty">
+      <div className="dash-live-empty-ring">
+        <Phone size={22} className="dash-live-empty-icon" />
+      </div>
+      <p className="dash-live-empty-title">All quiet</p>
+      <p className="dash-live-empty-sub">No active calls right now. Live updates are on.</p>
+    </div>
+  );
+}
+
+function ChartEmptyState() {
+  return (
+    <div className="dash-chart-empty">
+      <p className="dash-chart-empty-text">No call data yet today</p>
+      <p className="dash-chart-empty-sub">Completed calls appear here after they are ingested.</p>
+    </div>
+  );
+}
+
+// ── Smart Insight ─────────────────────────────────────────────────────────────
+
+type InsightData = {
+  headline: string;
+  body: string;
+  bigNum: string;
+  bigLabel: string;
+  accent: "green" | "blue" | "amber" | "red" | "purple";
+  Icon: React.ElementType;
+};
+
+function deriveInsight({
+  incoming, outgoing, internal, missed, answerRate, totalCalls, kpisReady,
+}: {
+  incoming: number | null; outgoing: number | null; internal: number | null;
+  missed: number | null; answerRate: number | null; totalCalls: number; kpisReady: boolean;
+}): InsightData | null {
+  if (!kpisReady || totalCalls === 0) return null;
+
+  const rate    = answerRate ?? 0;
+  const missed_ = missed ?? 0;
+  const in_     = incoming ?? 0;
+  const out_    = outgoing ?? 0;
+  const int_    = internal ?? 0;
+
+  if (rate >= 95) {
+    return {
+      headline: "Outstanding answer rate",
+      body: `${rate}% of all calls handled today — your team is crushing it.`,
+      bigNum: `${rate}%`, bigLabel: "Answered",
+      accent: "green", Icon: ShieldCheck,
+    };
+  }
+  if (rate >= 80) {
+    return {
+      headline: "Strong performance today",
+      body: `${rate}% answered. ${missed_} call${missed_ === 1 ? "" : "s"} went unanswered — well within range.`,
+      bigNum: `${rate}%`, bigLabel: "Answer rate",
+      accent: "blue", Icon: TrendingUp,
+    };
+  }
+  if (rate < 80 && missed_ > 0) {
+    return {
+      headline: "Missed calls need attention",
+      body: `${missed_} of ${totalCalls} call${totalCalls === 1 ? "" : "s"} went unanswered — ${rate}% answer rate today.`,
+      bigNum: `${missed_}`, bigLabel: "Missed today",
+      accent: "amber", Icon: AlertTriangle,
+    };
+  }
+  if (in_ > (out_ + int_) * 1.5) {
+    return {
+      headline: "Heavy inbound traffic",
+      body: `${in_} incoming vs ${out_} outgoing — inbound is dominating today's volume.`,
+      bigNum: `${in_}`, bigLabel: "Inbound calls",
+      accent: "blue", Icon: TrendingUp,
+    };
+  }
+  return {
+    headline: "Balanced call activity",
+    body: `${in_} incoming · ${out_} outgoing · ${int_} internal today.`,
+    bigNum: `${totalCalls}`, bigLabel: "Total calls",
+    accent: "purple", Icon: BarChart3,
+  };
+}
+
+function SmartInsightCard({ insight, loading }: { insight: InsightData | null; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="dash-insight-card dash-insight-card--loading">
+        <LoadingSkeleton rows={3} />
+      </div>
+    );
+  }
+  if (!insight) {
+    return (
+      <div className="dash-insight-card dash-insight-card--empty">
+        <BarChart3 size={28} className="dash-insight-empty-icon" />
+        <p className="dash-insight-headline">Awaiting today&apos;s data</p>
+        <p className="dash-insight-body">Insights appear once call activity is recorded.</p>
+      </div>
+    );
+  }
+  const { headline, body, bigNum, bigLabel, accent, Icon } = insight;
+  return (
+    <div className={`dash-insight-card dash-insight-card--${accent}`}>
+      <div className="dash-insight-bg" />
+      <div className="dash-insight-icon-wrap">
+        <Icon size={18} />
+      </div>
+      <div className="dash-insight-big-stat">
+        <span className="dash-insight-big-num">{bigNum}</span>
+        <span className="dash-insight-big-label">{bigLabel}</span>
+      </div>
+      <p className="dash-insight-headline">{headline}</p>
+      <p className="dash-insight-body">{body}</p>
+    </div>
+  );
+}
+
+// ── Call Outcomes ─────────────────────────────────────────────────────────────
+
+function CallOutcomesCard({
+  incoming, outgoing, internal, missed, loading,
+}: {
+  incoming: number | null; outgoing: number | null; internal: number | null;
+  missed: number | null; loading: boolean;
+}) {
+  const answeredIn = Math.max(0, (incoming ?? 0) - (missed ?? 0));
+  const segments = [
+    { label: "Answered",  value: answeredIn,       color: "var(--dash-incoming)" },
+    { label: "Outgoing",  value: outgoing ?? 0,    color: "var(--dash-outgoing)" },
+    { label: "Internal",  value: internal ?? 0,    color: "var(--dash-internal)" },
+    { label: "Missed",    value: missed ?? 0,      color: "var(--dash-missed)"   },
+  ];
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const hasData = total > 0;
+
+  return (
+    <div className="dash-outcomes-card">
+      <div className="dash-outcomes-header">
+        <h4 className="dash-outcomes-title">Call outcomes</h4>
+        <span className="dash-outcomes-sub">Breakdown today</span>
+      </div>
+      {loading ? (
+        <LoadingSkeleton rows={3} />
+      ) : !hasData ? (
+        <p className="dash-support-empty">No call data yet today</p>
+      ) : (
+        <>
+          <div className="dash-stacked-bar">
+            {segments.filter((s) => s.value > 0).map((s, i) => (
+              <div
+                key={i}
+                className="dash-stacked-seg"
+                style={{ width: `${(s.value / total * 100).toFixed(1)}%`, background: s.color, animationDelay: `${i * 80}ms` }}
+                title={`${s.label}: ${s.value}`}
+              />
+            ))}
+          </div>
+          <div className="dash-outcomes-legend">
+            {segments.map((s, i) => (
+              <div key={i} className="dash-outcomes-row">
+                <span className="dash-outcomes-swatch" style={{ background: s.color }} />
+                <span className="dash-outcomes-label">{s.label}</span>
+                <span className="dash-outcomes-val">{s.value.toLocaleString()}</span>
+                {total > 0 && (
+                  <span className="dash-outcomes-pct">{Math.round(s.value / total * 100)}%</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Traffic Snapshot ──────────────────────────────────────────────────────────
+
+function TrafficSnapshotCard({
+  incoming, outgoing, internal, missed, loading,
+}: {
+  incoming: number | null; outgoing: number | null; internal: number | null;
+  missed: number | null; loading: boolean;
+}) {
+  const rows = [
+    { label: "Incoming", value: incoming ?? 0, color: "var(--dash-incoming)" },
+    { label: "Outgoing", value: outgoing ?? 0, color: "var(--dash-outgoing)" },
+    { label: "Internal", value: internal ?? 0, color: "var(--dash-internal)" },
+    { label: "Missed",   value: missed ?? 0,   color: "var(--dash-missed)"   },
+  ].sort((a, b) => b.value - a.value);
+  const peak    = Math.max(1, rows[0].value);
+  const hasData = rows.some((r) => r.value > 0);
+
+  return (
+    <div className="dash-snapshot-card">
+      <div className="dash-outcomes-header">
+        <h4 className="dash-outcomes-title">Traffic snapshot</h4>
+        <span className="dash-outcomes-sub">Ranked by volume</span>
+      </div>
+      {loading ? (
+        <LoadingSkeleton rows={3} />
+      ) : !hasData ? (
+        <p className="dash-support-empty">No call data yet today</p>
+      ) : (
+        <div className="dash-snapshot-rows">
+          {rows.map((row, i) => (
+            <div key={row.label} className="dash-snapshot-row" style={{ animationDelay: `${i * 70}ms` }}>
+              <span className="dash-snapshot-rank">{i + 1}</span>
+              <div className="dash-snapshot-mid">
+                <div className="dash-snapshot-top">
+                  <span className="dash-snapshot-label">{row.label}</span>
+                  <span className="dash-snapshot-val">{row.value.toLocaleString()}</span>
+                </div>
+                <div className="dash-snapshot-track">
+                  <div
+                    className="dash-snapshot-fill"
+                    style={{
+                      width: `${(row.value / peak * 100).toFixed(1)}%`,
+                      background: row.color,
+                      animationDelay: `${i * 70 + 100}ms`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Donut ring ────────────────────────────────────────────────────────────────
+
+type DonutSegment = { value: number; color: string; label: string };
+
+function polarXY(cx: number, cy: number, r: number, deg: number): [number, number] {
+  const rad = (deg - 90) * (Math.PI / 180);
+  return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+}
+
+function donutArcPath(
+  cx: number, cy: number, outerR: number, innerR: number,
+  startDeg: number, endDeg: number,
+): string {
+  const sweep = endDeg - startDeg;
+  if (sweep >= 359.9) {
+    return [
+      `M ${cx} ${cy - outerR}`,
+      `A ${outerR} ${outerR} 0 1 1 ${cx - 0.01} ${cy - outerR} Z`,
+    ].join(" ");
+  }
+  const [ox1, oy1] = polarXY(cx, cy, outerR, startDeg);
+  const [ox2, oy2] = polarXY(cx, cy, outerR, endDeg);
+  const [ix1, iy1] = polarXY(cx, cy, innerR, endDeg);
+  const [ix2, iy2] = polarXY(cx, cy, innerR, startDeg);
+  const large = sweep > 180 ? 1 : 0;
+  return [
+    `M ${ox1.toFixed(2)} ${oy1.toFixed(2)}`,
+    `A ${outerR} ${outerR} 0 ${large} 1 ${ox2.toFixed(2)} ${oy2.toFixed(2)}`,
+    `L ${ix1.toFixed(2)} ${iy1.toFixed(2)}`,
+    `A ${innerR} ${innerR} 0 ${large} 0 ${ix2.toFixed(2)} ${iy2.toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
+
+function DonutRing({
+  segments, cx, cy, outerR, innerR, size,
+}: {
+  segments: DonutSegment[]; cx: number; cy: number; outerR: number; innerR: number; size: number;
+}) {
+  const total = segments.reduce((s, seg) => s + seg.value, 0);
+  if (total === 0) return null;
+
+  let angle = 0;
+  const GAP = segments.length > 1 ? 2 : 0;
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="dash-donut-svg">
+      {segments.map((seg, idx) => {
+        const sweep = (seg.value / total) * (360 - GAP * segments.length);
+        const start = angle + GAP / 2;
+        const end   = start + sweep;
+        angle       = end + GAP / 2;
+        return (
+          <path
+            key={idx}
+            d={donutArcPath(cx, cy, outerR, innerR, start, end)}
+            fill={seg.color}
+            opacity="0.9"
+            className="dash-donut-arc"
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Hero Chart ────────────────────────────────────────────────────────────────
+
+type ChartPoint = { label: string; incoming: number; outgoing: number; internal: number; missed?: number };
+
+function smoothCurve(pts: [number, number][]): string {
+  if (pts.length < 2) return pts.length === 1 ? `M ${pts[0][0]} ${pts[0][1]}` : "";
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+function smoothArea(pts: [number, number][], baseY: number): string {
+  if (pts.length === 0) return "";
+  return `${smoothCurve(pts)} L ${pts[pts.length - 1][0].toFixed(1)} ${baseY.toFixed(1)} L ${pts[0][0].toFixed(1)} ${baseY.toFixed(1)} Z`;
+}
+
+function CallVolumeChart({ points }: { points: ChartPoint[] }) {
+  const [hovIdx, setHovIdx] = useState<number | null>(null);
+
+  const W   = 900;
+  const H   = 300;
+  const PAD = { top: 24, right: 24, bottom: 48, left: 48 };
+  const iW  = W - PAD.left - PAD.right;
+  const iH  = H - PAD.top  - PAD.bottom;
+  const bY  = PAD.top + iH;
+
+  const peak = Math.max(1, ...points.flatMap((p) => [p.incoming, p.outgoing, p.internal]));
+  const yMax = (() => {
+    const raw = peak * 1.2;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    return Math.ceil(raw / mag) * mag;
+  })();
+
+  const xOf = (i: number) => PAD.left + (i / Math.max(1, points.length - 1)) * iW;
+  const yOf = (v: number) => PAD.top  + iH - (v / yMax) * iH;
+
+  const inPts:  [number, number][] = points.map((p, i) => [xOf(i), yOf(p.incoming)]);
+  const outPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.outgoing)]);
+  const intPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.internal)]);
+
+  const maxLabels = 10;
+  const step      = Math.max(1, Math.floor(points.length / maxLabels));
+  const xLabels   = points
+    .map((p, i) => ({ label: p.label, i }))
+    .filter(({ i }) => i % step === 0 || i === points.length - 1);
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({
+    v: Math.round(yMax * f),
+    y: yOf(yMax * f),
+  }));
+
+  const hov = hovIdx !== null ? points[hovIdx] : null;
+  const hovX = hovIdx !== null ? xOf(hovIdx) : null;
+
+  // Tooltip: flip to left when in the right third
+  const tooltipLeft = hovIdx !== null && hovIdx > points.length * 0.65;
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width;
+    const svgX  = relX * W;
+    const idx   = Math.round((svgX - PAD.left) / iW * (points.length - 1));
+    setHovIdx(Math.max(0, Math.min(points.length - 1, idx)));
+  };
+
+  return (
+    <svg
+      width="100%" height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      className="dash-hero-svg"
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setHovIdx(null)}
+      role="img"
+      aria-label="Call activity chart"
+    >
+      <defs>
+        <linearGradient id="hg-in"  x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="var(--dash-incoming)" stopOpacity="0.30" />
+          <stop offset="100%" stopColor="var(--dash-incoming)" stopOpacity="0.00" />
+        </linearGradient>
+        <linearGradient id="hg-out" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="var(--dash-outgoing)" stopOpacity="0.22" />
+          <stop offset="100%" stopColor="var(--dash-outgoing)" stopOpacity="0.00" />
+        </linearGradient>
+        <linearGradient id="hg-int" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="var(--dash-internal)" stopOpacity="0.18" />
+          <stop offset="100%" stopColor="var(--dash-internal)" stopOpacity="0.00" />
+        </linearGradient>
+        <clipPath id="hg-clip">
+          <rect x={PAD.left} y={0} height={H} className="hg-clip-rect" style={{ width: iW }} />
+        </clipPath>
+      </defs>
+
+      {/* Grid lines */}
+      {yTicks.map(({ v, y }) => (
+        <g key={v}>
+          <line x1={PAD.left} y1={y} x2={W - PAD.right} y2={y}
+            stroke="currentColor" strokeOpacity="0.07" strokeWidth="1" strokeDasharray="4 3" />
+          <text x={PAD.left - 8} y={y} textAnchor="end" dominantBaseline="middle"
+            fill="currentColor" fillOpacity="0.4" fontSize="11" fontFamily="var(--font-mono, monospace)">
+            {v}
+          </text>
+        </g>
+      ))}
+
+      {/* Baseline */}
+      <line x1={PAD.left} y1={bY} x2={W - PAD.right} y2={bY}
+        stroke="currentColor" strokeOpacity="0.15" strokeWidth="1" />
+
+      {/* X labels */}
+      {xLabels.map(({ label, i }) => (
+        <text key={i} x={xOf(i)} y={bY + 18} textAnchor="middle"
+          fill="currentColor" fillOpacity="0.45" fontSize="11" fontFamily="var(--font-mono, monospace)">
+          {label}
+        </text>
+      ))}
+
+      {/* Area fills */}
+      <g clipPath="url(#hg-clip)">
+        <path d={smoothArea(inPts,  bY)} fill="url(#hg-in)"  className="hg-area" />
+        <path d={smoothArea(outPts, bY)} fill="url(#hg-out)" className="hg-area hg-area--2" />
+        <path d={smoothArea(intPts, bY)} fill="url(#hg-int)" className="hg-area hg-area--3" />
+      </g>
+
+      {/* Lines */}
+      <g clipPath="url(#hg-clip)">
+        <path d={smoothCurve(inPts)}  fill="none" stroke="var(--dash-incoming)" strokeWidth="2.5"
+          strokeLinecap="round" strokeLinejoin="round"
+          pathLength="1" className="hg-line hg-line--1" />
+        <path d={smoothCurve(outPts)} fill="none" stroke="var(--dash-outgoing)" strokeWidth="2.5"
+          strokeLinecap="round" strokeLinejoin="round"
+          pathLength="1" className="hg-line hg-line--2" />
+        <path d={smoothCurve(intPts)} fill="none" stroke="var(--dash-internal)" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"
+          pathLength="1" className="hg-line hg-line--3" />
+      </g>
+
+      {/* Hover crosshair */}
+      {hovX !== null && hov !== null && (
+        <g>
+          <line x1={hovX} y1={PAD.top} x2={hovX} y2={bY}
+            stroke="currentColor" strokeOpacity="0.2" strokeWidth="1" strokeDasharray="4 3" />
+
+          {/* Intersection dots */}
+          <circle cx={hovX} cy={yOf(hov.incoming)} r="4" fill="var(--dash-incoming)" />
+          <circle cx={hovX} cy={yOf(hov.outgoing)} r="4" fill="var(--dash-outgoing)" />
+          <circle cx={hovX} cy={yOf(hov.internal)} r="4" fill="var(--dash-internal)" />
+
+          {/* Tooltip box */}
+          {(() => {
+            const tx = tooltipLeft ? hovX - 130 : hovX + 12;
+            const ty = PAD.top + 8;
+            return (
+              <g>
+                <rect x={tx} y={ty} width="118" height="80" rx="8"
+                  fill="var(--dash-tooltip-bg, #1a2535)" opacity="0.95"
+                  stroke="currentColor" strokeOpacity="0.12" strokeWidth="1" />
+                <text x={tx + 10} y={ty + 18} fill="currentColor" fillOpacity="0.7" fontSize="11"
+                  fontFamily="var(--font-mono, monospace)">{hov.label}</text>
+                <circle cx={tx + 12} cy={ty + 34} r="4" fill="var(--dash-incoming)" />
+                <text x={tx + 22} y={ty + 38} fill="currentColor" fillOpacity="0.9" fontSize="12"
+                  fontFamily="var(--font-sans, sans-serif)">{hov.incoming}</text>
+                <circle cx={tx + 12} cy={ty + 52} r="4" fill="var(--dash-outgoing)" />
+                <text x={tx + 22} y={ty + 56} fill="currentColor" fillOpacity="0.9" fontSize="12"
+                  fontFamily="var(--font-sans, sans-serif)">{hov.outgoing}</text>
+                <circle cx={tx + 12} cy={ty + 70} r="4" fill="var(--dash-internal)" />
+                <text x={tx + 22} y={ty + 74} fill="currentColor" fillOpacity="0.9" fontSize="12"
+                  fontFamily="var(--font-sans, sans-serif)">{hov.internal}</text>
+              </g>
+            );
+          })()}
+        </g>
+      )}
     </svg>
   );
 }

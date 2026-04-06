@@ -12,7 +12,12 @@ const log = childLogger("AriBridgedActivePoller");
 
 const POLL_MS = 1000;
 
-function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[], resolver?: TenantResolver): NormalizedCall[] {
+function bridgeRowsToNormalizedCalls(
+  rows: BridgedActiveCallRow[],
+  resolver?: TenantResolver,
+  firstSeenAt?: Map<string, string>,
+  callerIdNumCache?: Map<string, string>,
+): NormalizedCall[] {
   const now = new Date().toISOString();
   return rows.map((b) => {
     const callerRaw = b.caller === "—" ? "" : b.caller;
@@ -22,30 +27,93 @@ function bridgeRowsToNormalizedCalls(rows: BridgedActiveCallRow[], resolver?: Te
       callerRaw.replace(/\D/g, "") || callerRaw,
     );
     const calleeRaw = b.callee === "—" ? "" : b.callee;
+
+    // Resolve the DID from priority sources:
+    // 1. CALLERID(num) channel variable on T{n} extension channel (most reliable for VitalPBX).
+    //    VitalPBX sets this to the originally-dialed DID on the internal extension leg.
+    // 2. connected.number from the trunk channel (calledNumber from ARI static data).
+    // 3. dialplanExten if 7+ digits.
+    // 4. callee label fallback.
+    const tnChannelDid = (() => {
+      if (!callerIdNumCache) return "";
+      for (let i = 0; i < b.channelNames.length; i++) {
+        const name = b.channelNames[i] ?? "";
+        const id = b.channelIds[i] ?? "";
+        if (/^PJSIP\/T\d+_/i.test(name) && id && callerIdNumCache.has(id)) {
+          return callerIdNumCache.get(id) ?? "";
+        }
+      }
+      return "";
+    })();
+    const calledDigits = tnChannelDid || (b.calledNumber ?? "").replace(/\D/g, "");
+    const dialedDigits = (b.dialplanExten ?? "").replace(/\D/g, "");
+    const calleeDigits = calleeRaw.replace(/\D/g, "");
+    const toNumberForResolver =
+      calledDigits.length >= 7
+        ? calledDigits
+        : dialedDigits.length >= 7
+          ? dialedDigits
+          : calleeDigits.length >= 7
+            ? calleeDigits
+            : calleeDigits || calleeRaw || undefined;
+
+    // Prefer T{n} extension channel (gives direct T-code → UUID resolution).
+    // Fall back to the first available PJSIP channel — its name contains the tenant slug
+    // (e.g. PJSIP/344022_gesheft-XXXX) which TenantResolver uses via resolveBySlug().
+    const tnChannel = b.channelNames.find((n) => /^PJSIP\/T\d+_/i.test(n));
+    const channelHint = tnChannel ?? b.channelNames.find((n) => n.startsWith("PJSIP/")) ?? undefined;
+
     const tres =
       resolver?.resolveDetails({
         context: b.dialplanContext ?? "",
         exten: b.dialplanExten ?? "",
         callerIdNum: callerRaw.replace(/\D/g, "") || callerRaw,
-        toNumber: calleeRaw.replace(/\D/g, "") || calleeRaw || undefined,
+        toNumber: toNumberForResolver,
         fromNumber: callerRaw.replace(/\D/g, "") || callerRaw || undefined,
+        channel: channelHint,
       }) ?? null;
+
+    // For the displayed "to" field use a priority chain:
+    // 1. calledNumber (connected.number on trunk) — most reliable DID source for inbound.
+    // 2. dialplanExten when it looks like a DID (7+ digits) and call is inbound.
+    // 3. callee label when it already looks like a DID (7+ digits).
+    // 4. callee label for non-inbound calls (extension or external number).
+    // 5. Fallback: reverse-lookup the tenant's first registered inbound DID from the
+    //    Ombutel cache — this handles cases where ARI data doesn't expose the DID.
+    const calleeLabel = b.callee === "—" ? null : (b.callee || null);
+    let toField: string | null =
+      direction === "inbound" && calledDigits.length >= 7
+        ? calledDigits
+        : direction === "inbound" && dialedDigits.length >= 7
+          ? dialedDigits
+          : calleeLabel ?? (dialedDigits.length > 0 ? dialedDigits : null);
+
+    // DID fallback: if toField is still empty or looks like an extension (< 7 digits),
+    // look up the tenant's first inbound DID from the Ombutel DID cache.
+    const toDigits = (toField ?? "").replace(/\D/g, "");
+    if (direction === "inbound" && toDigits.length < 7) {
+      const fallbackDid = resolver?.getInboundDid(tres?.tenantId ?? null) ?? null;
+      if (fallbackDid) toField = fallbackDid;
+    }
+
+
     const metaSource = b.sourceKind === "bridge" ? "ari_bridge" : "ari_orphan_leg";
     return {
       id: b.sourceKind === "bridge" ? `bridge:${b.bridgeId}` : b.bridgeId,
       linkedId: b.bridgeId,
       tenantId: tres?.tenantId ?? null,
+      tenantName: tres?.tenantName ?? null,
       direction,
       state: "up" as const,
       from: b.caller === "—" ? null : b.caller,
-      to: b.callee === "—" ? null : b.callee,
+      to: toField,
       connectedLine: null,
       channels: [],
       bridgeIds: b.sourceKind === "bridge" ? [b.bridgeId] : [],
       extensions: [],
       queueId: null,
       trunk: null,
-      startedAt: now,
+      startedAt: firstSeenAt?.get(b.bridgeId) ?? now,
       answeredAt: now,
       endedAt: null,
       durationSec: 0,
@@ -69,6 +137,14 @@ export class AriBridgedActivePoller extends EventEmitter {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private last: BridgedActiveResult | null = null;
+  /** Preserves the first-seen timestamp for each bridgeId across polls so duration counts up correctly. */
+  private firstSeenAt = new Map<string, string>();
+  /**
+   * Cache of CALLERID(num) keyed by ARI channel ID.
+   * Fetched once per new channel, purged when the channel is no longer active.
+   * For inbound VitalPBX calls, the T{n}_ext extension channel carries the DID in CALLERID(num).
+   */
+  private callerIdNumCache = new Map<string, string>();
 
   constructor(
     private readonly ari: AriClient,
@@ -98,7 +174,7 @@ export class AriBridgedActivePoller extends EventEmitter {
 
   getCallsForSnapshot(): NormalizedCall[] {
     if (!this.last) return [];
-    return bridgeRowsToNormalizedCalls(this.last.bridges, this.tenantResolver);
+    return bridgeRowsToNormalizedCalls(this.last.bridges, this.tenantResolver, this.firstSeenAt, this.callerIdNumCache);
   }
 
   getActiveCallCount(): number {
@@ -143,6 +219,45 @@ export class AriBridgedActivePoller extends EventEmitter {
       ]);
       const result = computeBridgedActiveCalls(bridges, channels);
       this.last = result;
+
+      // Maintain firstSeenAt: stamp new bridges, purge gone ones.
+      const now = new Date().toISOString();
+      const currentIds = new Set(result.bridges.map((b) => b.bridgeId));
+      for (const [id] of this.firstSeenAt) {
+        if (!currentIds.has(id)) this.firstSeenAt.delete(id);
+      }
+      for (const b of result.bridges) {
+        if (!this.firstSeenAt.has(b.bridgeId)) this.firstSeenAt.set(b.bridgeId, now);
+      }
+
+      // Fetch CALLERID(num) for extension channels (PJSIP/T{n}_) to get the inbound DID.
+      // VitalPBX sets CALLERID(num) on the internal extension channel to the originally-dialed DID.
+      // Cache by channel ID so we only fetch once per channel lifetime.
+      const activeChannelIds = new Set<string>();
+      const varFetches: Promise<void>[] = [];
+      for (const b of result.bridges) {
+        for (let i = 0; i < b.channelNames.length; i++) {
+          const name = b.channelNames[i] ?? "";
+          const id = b.channelIds[i] ?? "";
+          if (!id) continue;
+          activeChannelIds.add(id);
+          // Only fetch for extension channels (T{n}_) that we haven't cached yet.
+          if (/^PJSIP\/T\d+_/i.test(name) && !this.callerIdNumCache.has(id)) {
+            varFetches.push(
+              this.ari.getChannelVariable(id, "CALLERID(num)").then((val) => {
+                if (val && /^\d{7,}$/.test(val.trim())) {
+                  this.callerIdNumCache.set(id, val.trim());
+                }
+              })
+            );
+          }
+        }
+      }
+      // Purge cache entries for channels no longer active.
+      for (const [cid] of this.callerIdNumCache) {
+        if (!activeChannelIds.has(cid)) this.callerIdNumCache.delete(cid);
+      }
+      if (varFetches.length > 0) await Promise.all(varFetches);
 
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ verification: result.verification }, "ari_bridged_active_verify_poll");

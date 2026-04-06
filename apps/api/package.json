@@ -11,6 +11,7 @@
     "pbx:diagnose-by-name": "tsx scripts/pbx-diagnose-by-tenant-name.ts",
     "pbx:link-tenant": "tsx scripts/link-tenant-to-pbx.ts",
     "pbx:link-all-tenants": "tsx scripts/link-all-tenants-to-pbx.ts",
+    "pbx:set-ombu-mysql": "tsx scripts/set-ombu-mysql-and-sync-dids.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "echo lint-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",

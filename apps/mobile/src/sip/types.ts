@@ -2,7 +2,8 @@ import type { CallState, ProvisioningBundle, SipRegistrationState } from "../typ
 
 export type SipEvents = {
   onRegistrationState?: (state: SipRegistrationState) => void;
-  onIncomingCall?: () => void;
+  /** Fires when an incoming call arrives. `callerNumber` is the remote party. */
+  onIncomingCall?: (callerNumber: string) => void;
   onCallState?: (state: CallState) => void;
   onError?: (message: string) => void;
 };
@@ -25,6 +26,8 @@ export type SipClient = {
   hangup: () => Promise<void>;
   setMute: (mute: boolean) => void;
   setSpeaker: (speakerOn: boolean) => void;
+  hold: () => void;
+  unhold: () => void;
   sendDtmf: (digit: string) => void;
   setEvents: (events: SipEvents) => void;
 };

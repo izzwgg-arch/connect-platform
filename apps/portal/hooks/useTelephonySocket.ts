@@ -10,7 +10,7 @@ import type {
   TelephonyEventEnvelope,
 } from "../types/liveCall";
 
-export type TelephonySocketStatus = "idle" | "connecting" | "connected" | "disconnected" | "error";
+export type TelephonySocketStatus = "idle" | "connecting" | "connected" | "disconnected" | "error" | "failed";
 
 export interface TelephonySocketState {
   status: TelephonySocketStatus;
@@ -23,6 +23,7 @@ export interface TelephonySocketState {
 
 const MIN_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
+const MAX_RECONNECT_ATTEMPTS = 20;
 
 // Next.js replaces NEXT_PUBLIC_* references at build time. Access via string
 // indexing so TypeScript doesn't complain about the unknown key in strict mode.
@@ -55,6 +56,7 @@ export function useTelephonySocket(): TelephonySocketState {
   const backoffRef = useRef(MIN_BACKOFF_MS);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
+  const attemptsRef = useRef(0);
 
   const applySnapshot = useCallback((snap: TelephonySnapshot) => {
     setCalls(new Map(snap.calls.map((c) => [c.id, c])));
@@ -152,6 +154,7 @@ export function useTelephonySocket(): TelephonySocketState {
 
     ws.onopen = () => {
       backoffRef.current = MIN_BACKOFF_MS;
+      attemptsRef.current = 0;
       setStatus("connected");
     };
 
@@ -166,6 +169,11 @@ export function useTelephonySocket(): TelephonySocketState {
     ws.onclose = () => {
       wsRef.current = null;
       if (stoppedRef.current) return;
+      if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        setStatus("failed");
+        return;
+      }
+      attemptsRef.current += 1;
       setStatus("disconnected");
       const delay = backoffRef.current;
       backoffRef.current = Math.min(delay * 2, MAX_BACKOFF_MS);
@@ -175,6 +183,7 @@ export function useTelephonySocket(): TelephonySocketState {
 
   useEffect(() => {
     stoppedRef.current = false;
+    attemptsRef.current = 0;
     connect();
 
     return () => {

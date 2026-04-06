@@ -20,18 +20,35 @@ function titleFromPath(pathname: string): string {
 export function PageShell({ children, banners }: { children: ReactNode; banners?: ReactNode }) {
   const pathname = usePathname();
   const { can } = useAppContext();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const visibleItems = useMemo(() => navItems.filter((item) => can(item.permission)), [can]);
 
   return (
     <div className="console-shell">
-      <SidebarNav items={visibleItems} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
-      <div className="console-workspace">
-        <Topbar title={titleFromPath(pathname)} onToggleNav={() => setMobileNavOpen((v) => !v)} />
-        {banners ? <div className="workspace-banners">{banners}</div> : null}
-        <main className="console-content">{children}</main>
+      {/* Fixed header — always on top, never moves */}
+      <Topbar title={titleFromPath(pathname)} onToggleNav={() => setNavOpen((v) => !v)} />
+
+      {/* Body below header: drawer + content side by side */}
+      <div className="console-body">
+        <SidebarNav
+          items={visibleItems}
+          mobileOpen={navOpen}
+          onCloseMobile={() => setNavOpen(false)}
+        />
+        <div className="console-workspace">
+          {banners ? <div className="workspace-banners">{banners}</div> : null}
+          <main className="console-content">{children}</main>
+        </div>
       </div>
-      {mobileNavOpen ? <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} /> : null}
+
+      {/* Mobile backdrop only — hidden on desktop via CSS */}
+      {navOpen ? (
+        <button
+          className="nav-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -121,7 +121,17 @@ export async function syncInboundDidsFromOmbutelMysql(
 
   const [dirRows, links] = await Promise.all([
     db.pbxTenantDirectory.findMany({ where: { pbxInstanceId } }),
-    db.tenantPbxLink.findMany({ where: { pbxInstanceId, status: "LINKED" } }),
+    // Include ERROR-status links when pbxTenantId is explicitly set — CDR sync failures
+    // must not break DID → Connect tenant routing (they are independent concerns).
+    db.tenantPbxLink.findMany({
+      where: {
+        pbxInstanceId,
+        OR: [
+          { status: "LINKED" },
+          { status: "ERROR", pbxTenantId: { not: null } },
+        ],
+      },
+    }),
   ]);
   const dirByVital = new Map(dirRows.map((r) => [r.vitalTenantId.trim(), r]));
   const connectByVital = new Map<string, string>();

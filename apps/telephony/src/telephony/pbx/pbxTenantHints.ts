@@ -82,7 +82,10 @@ export function extractPbxTenantHintsFromChannel(channel: string): PbxTenantHint
   }
   const numSlug = /^PJSIP\/(\d+)_([^/-]+)-/i.exec(ch);
   if (numSlug?.[1]) {
-    return { vitalTenantId: numSlug[1] };
+    // numSlug[2] is the tenant slug (e.g. "gesheft" from PJSIP/344022_gesheft-000062fc).
+    // The numeric part (344022) is the SIP peer registration ID, not the VitalPBX tenant ID.
+    const s = numSlug[2] ? String(numSlug[2]).trim() : undefined;
+    return { vitalTenantId: numSlug[1], ...(s ? { slug: s } : {}) };
   }
   return {};
 }

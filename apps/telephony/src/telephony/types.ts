@@ -7,9 +7,13 @@ export interface NormalizedCall {
   id: string;
   linkedId: string;
   tenantId: string | null;
+  /** Human-readable Connect tenant name; populated when resolved via Ombutel DID cache. */
+  tenantName: string | null;
   direction: CallDirection;
   state: CallState;
   from: string | null;
+  /** Caller name (CNAM) from AMI CallerIDName. Null when unavailable or generic. */
+  fromName: string | null;
   to: string | null;
   connectedLine: string | null;
   channels: string[];

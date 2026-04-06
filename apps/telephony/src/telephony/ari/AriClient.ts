@@ -92,6 +92,23 @@ export class AriClient extends EventEmitter {
     return this.rest<AriEndpoint[]>("GET", "/ari/endpoints");
   }
 
+  /**
+   * Fetch a channel variable (e.g. CALLERID(num)) via ARI.
+   * Returns the value string, or null if the channel/variable doesn't exist.
+   */
+  async getChannelVariable(channelId: string, varName: string): Promise<string | null> {
+    try {
+      const result = await this.rest<{ value: string }>(
+        "GET",
+        `/ari/channels/${encodeURIComponent(channelId)}/variable`,
+        { variable: varName },
+      );
+      return result?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async hangupChannel(channelId: string, reason = "normal"): Promise<void> {
     await this.rest<void>("DELETE", `/ari/channels/${encodeURIComponent(channelId)}`, {
       reason,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Bell } from "lucide-react";
 import { StatusChip } from "./StatusChip";
 
 const notifications = [
@@ -13,7 +14,7 @@ export function NotificationPanel() {
   return (
     <div className="menu-wrap">
       <button className="icon-btn" onClick={() => setOpen((v) => !v)} title="Notifications">
-        NT
+        <Bell size={16} />
       </button>
       {open ? (
         <div className="dropdown-panel">

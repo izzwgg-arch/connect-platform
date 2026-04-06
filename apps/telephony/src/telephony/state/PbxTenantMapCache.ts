@@ -15,6 +15,7 @@ export type PbxDidMapEntry = {
   vitalTenantId: string;
   tenantCode: string;
   connectTenantId: string | null;
+  tenantName: string | null;
 };
 
 /**
@@ -23,6 +24,10 @@ export type PbxDidMapEntry = {
 export class PbxTenantMapCache {
   private entries: PbxTenantMapEntry[] = [];
   private didByE164 = new Map<string, PbxDidMapEntry>();
+  /** Reverse map: Connect tenant UUID → sorted list of inbound DID e164 strings for that tenant. */
+  private didsByConnectId = new Map<string, string[]>();
+  /** Slug → Connect tenant UUID (e.g. "gesheft" → "cmnlgnumu0001p9g6xyl1pbdd"). */
+  private slugToConnectId = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -71,10 +76,38 @@ export class PbxTenantMapCache {
       if (Array.isArray(body.didEntries)) {
         for (const d of body.didEntries) {
           const k = (d.e164 || "").trim();
-          if (k) nextDid.set(k, d);
+          if (k) nextDid.set(k, { ...d, tenantName: d.tenantName ?? null });
         }
         this.didByE164 = nextDid;
+        // Build reverse index: connectTenantId → e164[]
+        const rev = new Map<string, string[]>();
+        for (const [e164, entry] of nextDid) {
+          if (!entry.connectTenantId) continue;
+          const list = rev.get(entry.connectTenantId) ?? [];
+          list.push(e164);
+          rev.set(entry.connectTenantId, list);
+        }
+        this.didsByConnectId = rev;
         log.debug({ didCount: nextDid.size }, "pbx-tenant-map DID entries refreshed");
+
+        // Build slug → UUID map from directory entries (using DID fallback for UUID lookup).
+        const slugMap = new Map<string, string>();
+        for (const e of this.entries) {
+          if (!e.tenantSlug) continue;
+          let uuid = e.connectTenantId ?? null;
+          if (!uuid) {
+            const code = e.tenantCode?.trim().toUpperCase();
+            const vid = e.vitalTenantId;
+            for (const [, did] of nextDid) {
+              if (!did.connectTenantId) continue;
+              if (code && did.tenantCode?.trim().toUpperCase() === code) { uuid = did.connectTenantId; break; }
+              if (vid && did.vitalTenantId === vid) { uuid = did.connectTenantId; break; }
+            }
+          }
+          if (uuid) slugMap.set(e.tenantSlug.toLowerCase(), uuid);
+        }
+        this.slugToConnectId = slugMap;
+        log.debug({ slugCount: slugMap.size }, "pbx-tenant-map slug index built");
       } else {
         this.didByE164 = new Map();
       }
@@ -91,11 +124,55 @@ export class PbxTenantMapCache {
   }): string | null {
     const code = hints.tenantCode?.trim().toUpperCase();
     const vid = hints.vitalTenantId?.trim() || hints.dialplanT?.trim();
+    // Primary: directory entries (may have null connectTenantId when TenantPbxLink is missing)
     for (const e of this.entries) {
       if (code && e.tenantCode.toUpperCase() === code && e.connectTenantId) return e.connectTenantId;
       if (vid && e.vitalTenantId === vid && e.connectTenantId) return e.connectTenantId;
     }
+    // Fallback: DID entries always carry connectTenantId + vitalTenantId + tenantCode.
+    // This covers the common case where TenantPbxLink rows are missing but DIDs are linked.
+    if (code || vid) {
+      for (const [, entry] of this.didByE164) {
+        if (!entry.connectTenantId) continue;
+        if (code && entry.tenantCode?.trim().toUpperCase() === code) return entry.connectTenantId;
+        if (vid && entry.vitalTenantId === vid) return entry.connectTenantId;
+      }
+    }
     return null;
+  }
+
+  /** Returns the first inbound DID e164 for the given Connect tenant UUID, or null if not found. */
+  getFirstDidForTenant(connectTenantId: string): string | null {
+    const dids = this.didsByConnectId.get(connectTenantId);
+    return dids?.[0] ?? null;
+  }
+
+  /** Resolve Connect UUID by tenant slug (e.g. "gesheft" → UUID).
+   * Tries exact match first, then normalized match (strip non-alpha, lowercase),
+   * then prefix match to handle truncated SIP peer names (e.g. "comfortcont" → "comfort_control").
+   */
+  resolveBySlug(slug: string): string | null {
+    if (!slug) return null;
+    // 1. Exact lowercase match.
+    const exact = this.slugToConnectId.get(slug.toLowerCase());
+    if (exact) return exact;
+    // 2. Normalized: strip non-alphanumeric, lowercase.
+    const norm = slug.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!norm) return null;
+    for (const [mapSlug, uuid] of this.slugToConnectId) {
+      const mapNorm = mapSlug.toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Exact normalized match, or the channel slug is a prefix of the directory slug (truncated names).
+      if (mapNorm === norm || mapNorm.startsWith(norm)) return uuid;
+    }
+    return null;
+  }
+
+  /** Returns the tenant name for a given Connect tenant UUID (sourced from didEntries). */
+  getTenantName(connectTenantId: string): string | null {
+    const dids = this.didsByConnectId.get(connectTenantId);
+    if (!dids) return null;
+    const first = this.didByE164.get(dids[0]!);
+    return first?.tenantName ?? null;
   }
 
   /** Ombutel-synced inbound DID → tenant (higher priority than context/trunk hints in TenantResolver). */
@@ -103,6 +180,7 @@ export class PbxTenantMapCache {
     tenantId: string | null;
     pbxVitalTenantId: string | null;
     pbxTenantCode: string | null;
+    tenantName: string | null;
   } | null {
     const e164 = normalizeInboundDidDigits(rawPhone);
     if (!e164) return null;
@@ -112,6 +190,7 @@ export class PbxTenantMapCache {
       tenantId: row.connectTenantId,
       pbxVitalTenantId: row.vitalTenantId,
       pbxTenantCode: row.tenantCode?.trim().toUpperCase() || null,
+      tenantName: row.tenantName ?? null,
     };
   }
 }

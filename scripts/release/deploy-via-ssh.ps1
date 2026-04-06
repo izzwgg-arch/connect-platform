@@ -15,7 +15,7 @@ Write-Host "[deploy-via-ssh] tag=$tag sshTarget=$sshTarget key=$sshKey"
 $status = git status --porcelain
 if ($status) {
   git add -A
-  git commit -m "Deploy: KPI today timezone + PBX_TIMEZONE and release script"
+  git commit -m "Deploy: release $tag"
   Write-Host "[deploy-via-ssh] committed"
 } else {
   Write-Host "[deploy-via-ssh] working tree clean, no commit"
