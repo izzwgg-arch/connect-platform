@@ -1,8 +1,16 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
-import { Alert, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   getMediaTestStatus,
@@ -33,8 +41,6 @@ import {
 } from "../notifications/backgroundCallTask";
 
 // ─── Notification handler ─────────────────────────────────────────────────────
-// Allows the system to display the notification even when the app is open so
-// the user still sees the heads-up banner if they're in a different screen.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -43,26 +49,47 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type CallReadiness = {
+  notificationPermission: "granted" | "denied" | "undetermined";
+  pushTokenRegistered: boolean;
+  /** Android: whether we believe battery optimization may interfere */
+  batteryOptimizationWarning: boolean;
+  /** True only when all hard requirements are met */
+  isFullyReady: boolean;
+};
+
 type NotificationsState = {
   expoPushToken: string | null;
   incomingInvite: CallInvite | null;
   clearIncomingInvite: () => void;
   runMediaTest: () => Promise<void>;
-  /** Whether the device has battery optimization enabled (Android only) */
-  batteryOptimizationEnabled: boolean;
-  /** Opens Android battery optimization settings for this app */
+  callReadiness: CallReadiness;
   openBatteryOptimizationSettings: () => Promise<void>;
+  requestNotificationPermission: () => Promise<void>;
 };
 
-const NotificationsCtx = createContext<NotificationsState | undefined>(undefined);
+const NotificationsCtx = createContext<NotificationsState | undefined>(
+  undefined,
+);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Safe JSON.parse — returns null on any error. */
+function safeParse(raw: string | null): any {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 async function getExpoToken(): Promise<string | null> {
   if (!Device.isDevice) return null;
   const perm = await Notifications.getPermissionsAsync();
-  if (perm.status !== "granted") {
-    const req = await Notifications.requestPermissionsAsync();
-    if (req.status !== "granted") return null;
-  }
+  if (perm.status !== "granted") return null;
   const projectId =
     process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
     Constants.expoConfig?.extra?.easProjectId;
@@ -72,9 +99,6 @@ async function getExpoToken(): Promise<string | null> {
   return token.data || null;
 }
 
-// ─── Android high-importance notification channel ────────────────────────────
-// Created programmatically to guarantee it exists on the first run, even
-// before the plugin-config channel is applied.
 async function ensureCallChannel() {
   if (Platform.OS !== "android") return;
   try {
@@ -88,16 +112,17 @@ async function ensureCallChannel() {
       enableLights: true,
       lightColor: "#22c55e",
       showBadge: false,
-      // bypassDnd is not supported in expo-notifications JS API; the plugin
-      // manifest config handles the channel-level flags instead.
     });
   } catch {
-    // Non-fatal — the plugin-configured channel is the primary path
+    // Non-fatal — plugin-configured channel is the primary path
   }
 }
 
 function payloadToInvite(
-  data: Extract<MobilePushPayload, { type: "INCOMING_CALL" }>,
+  data: Extract<MobilePushPayload, { type: "INCOMING_CALL" }> & {
+    _pushReceivedAt?: number;
+    _storedAt?: number;
+  },
 ): CallInvite {
   return {
     id: data.inviteId,
@@ -113,59 +138,30 @@ function payloadToInvite(
     status: "PENDING",
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 45_000).toISOString(),
-  };
+    // Carry timing data so latency can be computed at answer time
+    _pushReceivedAt: data._pushReceivedAt || data._storedAt || Date.now(),
+  } as CallInvite & { _pushReceivedAt: number };
 }
 
-async function dismissIncomingInvite(
-  sip: ReturnType<typeof useSip>,
-  invite: CallInvite,
-) {
-  endNativeCall(invite.id);
-  await sip
-    .rejectIncomingInvite({
-      fromNumber: invite.fromNumber,
-      toExtension: invite.toExtension,
-      pbxCallId: invite.pbxCallId,
-      sipCallTarget: invite.sipCallTarget,
-    })
-    .catch(() => false);
-}
-
-// ─── Battery optimization helpers ────────────────────────────────────────────
-
-async function checkBatteryOptimizationEnabled(): Promise<boolean> {
-  if (Platform.OS !== "android") return false;
-  try {
-    // expo-intent-launcher doesn't expose a direct check, but we can infer it
-    // from the absence of the IGNORE_BATTERY_OPTIMIZATIONS permission being
-    // granted. On Android 6+ the OS tracks this per-app.
-    // We use a best-effort check: if the device is real and Android,
-    // we conservatively assume optimization may be on unless the user has
-    // explicitly whitelisted the app.
-    // A more precise check would require a native module.
-    return Device.isDevice && Platform.OS === "android";
-  } catch {
-    return false;
-  }
+/** Returns true if the invite is already past its expiry. */
+function isExpired(invite: CallInvite): boolean {
+  if (!invite.expiresAt) return false;
+  return Date.now() > new Date(invite.expiresAt).getTime();
 }
 
 async function openBatteryOptimizationSettings(): Promise<void> {
   if (Platform.OS !== "android") return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const IntentLauncher = require("expo-intent-launcher");
-    // Try to open the specific app's battery optimization page first
-    await IntentLauncher.startActivityAsync(
+    const IL = require("expo-intent-launcher");
+    await IL.startActivityAsync(
       "android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
       { data: "package:com.connectcommunications.mobile" },
     ).catch(() =>
-      // Fallback: open general battery optimization list
-      IntentLauncher.startActivityAsync(
-        IntentLauncher.ActivityAction.IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
-      ),
+      IL.startActivityAsync(IL.ActivityAction.IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
     );
   } catch {
-    // IntentLauncher not available / activity not found
+    // ignore
   }
 }
 
@@ -178,17 +174,91 @@ export function NotificationsProvider({
 }) {
   const { token } = useAuth();
   const sip = useSip();
+
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<CallInvite | null>(null);
-  const [batteryOptimizationEnabled, setBatteryOptimizationEnabled] =
-    useState(false);
+  const [callReadiness, setCallReadiness] = useState<CallReadiness>({
+    notificationPermission: "undetermined",
+    pushTokenRegistered: false,
+    batteryOptimizationWarning: Platform.OS === "android" && !!Device.isDevice,
+    isFullyReady: false,
+  });
+
   const deviceIdRef = useRef<string | null>(null);
   const diagSessionIdRef = useRef<string | null>(null);
   const lastRegStateRef = useRef<string>("idle");
   const lastCallStateRef = useRef<string>("idle");
 
+  // Tracks inviteId currently shown to prevent duplicates
+  const shownInviteIdRef = useRef<string | null>(null);
+  // Holds the 45-second stale-invite auto-expire timer
+  const inviteExpireTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Timing anchors — filled from different sources, used to build latency chain
+  const timingsRef = useRef<Record<string, number>>({});
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  const clearExpireTimer = useCallback(() => {
+    if (inviteExpireTimerRef.current !== null) {
+      clearTimeout(inviteExpireTimerRef.current);
+      inviteExpireTimerRef.current = null;
+    }
+  }, []);
+
+  /** Set the active invite with duplicate guard and restart the 45s expire timer. */
+  const safeSetInvite = useCallback(
+    (invite: CallInvite | null) => {
+      clearExpireTimer();
+      if (invite === null) {
+        shownInviteIdRef.current = null;
+        setIncomingInvite(null);
+        return;
+      }
+      // Duplicate guard: don't replace an invite with itself
+      if (shownInviteIdRef.current === invite.id) {
+        console.log("[Notif] Duplicate invite ignored:", invite.id);
+        return;
+      }
+      shownInviteIdRef.current = invite.id;
+      setIncomingInvite(invite);
+
+      // Auto-expire: if the call is never answered by 47s (2s buffer beyond TTL),
+      // clean up the invite so the UI doesn't get stuck.
+      inviteExpireTimerRef.current = setTimeout(() => {
+        setIncomingInvite((prev) => {
+          if (prev?.id !== invite.id) return prev; // already changed
+          endNativeCall(invite.id);
+          AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+          shownInviteIdRef.current = null;
+          return null;
+        });
+      }, 47_000);
+    },
+    [clearExpireTimer],
+  );
+
+  // ── Notification permission request ───────────────────────────────────────
+
+  const requestNotificationPermission = useCallback(async () => {
+    const result = await Notifications.requestPermissionsAsync();
+    const granted = result.status === "granted";
+    setCallReadiness((prev) => ({
+      ...prev,
+      notificationPermission: result.status as CallReadiness["notificationPermission"],
+      isFullyReady: granted && prev.pushTokenRegistered,
+    }));
+    if (!granted) {
+      Alert.alert(
+        "Notifications required",
+        "Connect needs notification permission to show incoming call alerts.\n\nPlease enable it in Android Settings → Apps → Connect → Notifications.",
+        [{ text: "OK" }],
+      );
+    }
+  }, []);
+
   // ── runMediaTest ──────────────────────────────────────────────────────────
-  const runMediaTest = React.useCallback(async () => {
+
+  const runMediaTest = useCallback(async () => {
     if (!token) return;
     const status = await getMediaTestStatus(token).catch(() => null);
     if (!status?.mediaReliabilityGateEnabled) return;
@@ -221,19 +291,45 @@ export function NotificationsProvider({
     }
   }, [token, sip.registrationState]);
 
-  // ── Answer flow helper ────────────────────────────────────────────────────
-  // Shared logic for answering via CallKeep native UI (answer button tap) or
-  // in-app button. Also handles cold-start where incomingInvite may be null.
-  const handleAcceptInvite = React.useCallback(
+  // ── Answer invite (shared path for native CallKeep + in-app button) ───────
+
+  const handleAcceptInvite = useCallback(
     async (invite: CallInvite, callId: string) => {
       if (!token) return;
+
+      // ── Expiry check ──────────────────────────────────────────────────────
+      if (isExpired(invite)) {
+        console.log("[Notif] Invite expired, cannot answer:", invite.id);
+        Alert.alert(
+          "Call ended",
+          "This call is no longer available — the caller may have hung up.",
+        );
+        safeSetInvite(null);
+        endNativeCall(callId);
+        AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+        return;
+      }
+
+      // ── Timing: record answer-tap timestamp ───────────────────────────────
+      const answerTappedAt = Date.now();
+      const pushReceivedAt =
+        (invite as any)._pushReceivedAt ||
+        timingsRef.current[`push_${invite.id}`] ||
+        answerTappedAt;
+      timingsRef.current[`answer_${invite.id}`] = answerTappedAt;
 
       const sid = diagSessionIdRef.current;
       if (sid) {
         postVoiceDiagEvent(token, {
           sessionId: sid,
           type: "ANSWER_TAPPED",
-          payload: { action: "ACCEPT", inviteId: invite.id },
+          payload: {
+            action: "ACCEPT",
+            inviteId: invite.id,
+            pushReceivedAt,
+            answerTappedAt,
+            pushToAnswerMs: answerTappedAt - pushReceivedAt,
+          },
         }).catch(() => undefined);
       }
 
@@ -245,36 +341,29 @@ export function NotificationsProvider({
       ).catch(() => null);
 
       if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
-        if (resp?.code === "TURN_REQUIRED_NOT_VERIFIED") {
+        const reason = resp?.code || "unknown";
+        if (reason === "TURN_REQUIRED_NOT_VERIFIED") {
           Alert.alert(
             "TURN not verified",
             "TURN not verified. Ask admin to test TURN in the portal.",
           );
-          await respondInvite(
-            token,
-            invite.id,
-            "DECLINE",
-            deviceIdRef.current || undefined,
-          ).catch(() => undefined);
-        }
-        if (resp?.code === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
+          await respondInvite(token, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+        } else if (reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
           Alert.alert(
             "Media test required",
             "Media reliability gate requires a recent passing media test.",
           );
-          await respondInvite(
-            token,
-            invite.id,
-            "DECLINE",
-            deviceIdRef.current || undefined,
-          ).catch(() => undefined);
+          await respondInvite(token, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+        } else if (reason === "INVITE_EXPIRED" || reason === "INVITE_NOT_FOUND") {
+          Alert.alert("Call ended", "This call is no longer available.");
         }
-        setIncomingInvite(null);
+        safeSetInvite(null);
         endNativeCall(callId);
+        AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
         return;
       }
 
-      // Bring app to foreground if answering from native CallKeep screen
+      // Bring app to foreground if answering via native CallKeep screen
       bringAppToForeground();
 
       await sip.register().catch(() => undefined);
@@ -291,79 +380,100 @@ export function NotificationsProvider({
         .catch(() => false);
 
       if (!answered) {
-        setIncomingInvite(null);
+        Alert.alert(
+          "Answer failed",
+          "Could not connect the call. The call may have already ended.",
+        );
+        safeSetInvite(null);
         endNativeCall(callId);
         return;
       }
 
-      // Clear the stored pending invite from the background task cache
+      // Log SIP-join timing
+      const sipJoinedAt = Date.now();
+      if (sid) {
+        postVoiceDiagEvent(token, {
+          sessionId: sid,
+          type: "CALL_CONNECTED",
+          payload: {
+            inviteId: invite.id,
+            sipJoinedAt,
+            pushReceivedAt,
+            answerTappedAt,
+            pushToJoinMs: sipJoinedAt - pushReceivedAt,
+            answerToJoinMs: sipJoinedAt - answerTappedAt,
+          },
+        }).catch(() => undefined);
+      }
+
       AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
-      setIncomingInvite(null);
+      safeSetInvite(null);
     },
-    [token, sip],
+    [token, sip, safeSetInvite],
   );
 
-  // ── CallKeep native actions ───────────────────────────────────────────────
+  // ── CallKeep native action subscriptions ─────────────────────────────────
+
   useEffect(() => {
     setupNativeCalling().then(async () => {
-      // ── Consume initial events (fired before listeners attached) ────────
-      // This is the critical path for: background task showed CallKeep UI
-      // → user tapped Answer → Android launched app cold → events fired
-      // before React mounted. We drain the buffer here and handle them.
+      // Drain any events that fired before React mounted (cold-start answer)
       const initialEvents = await consumeInitialCallKeepEvents();
 
       for (const evt of initialEvents) {
         if (evt.type === "answer") {
-          // Fetch invite from API since incomingInvite state isn't loaded yet
-          const pending = token
-            ? await getPendingInvites(token).catch(() => [])
-            : [];
-          // Also check AsyncStorage cache from background task
-          const cachedRaw = await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null);
-          const cached = cachedRaw ? (() => { try { return JSON.parse(cachedRaw); } catch { return null; } })() : null;
-
+          const pending = token ? await getPendingInvites(token).catch(() => []) : [];
+          const cached = safeParse(
+            await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
+          );
           let invite: CallInvite | null =
             pending.length > 0 ? (pending[0] as CallInvite) : null;
-
-          if (!invite && cached && cached.inviteId === evt.callUUID) {
-            invite = payloadToInvite(cached as any);
+          if (!invite && cached?.inviteId === evt.callUUID) {
+            invite = payloadToInvite(cached);
           }
-
           if (invite) {
-            setIncomingInvite(invite);
+            safeSetInvite(invite);
             await handleAcceptInvite(invite, evt.callUUID);
           } else {
             endNativeCall(evt.callUUID);
           }
         } else if (evt.type === "end") {
-          // User declined from native UI before app was open
-          const cachedRaw = await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null);
-          const cached = cachedRaw ? (() => { try { return JSON.parse(cachedRaw); } catch { return null; } })() : null;
-          if (cached && token) {
+          const cached = safeParse(
+            await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
+          );
+          if (cached?.inviteId && token) {
             await respondInvite(token, cached.inviteId, "DECLINE").catch(() => undefined);
           }
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           endNativeCall(evt.callUUID);
+          safeSetInvite(null);
         }
       }
     }).catch(() => undefined);
 
     const unsubNative = subscribeNativeCallActions({
       onAnswer: async (callId) => {
-        // Live (post-mount) answer — use state if available, otherwise fetch
         let invite = incomingInvite;
 
+        // If invite not yet in state (app just foregrounded), wait briefly then try
         if (!invite && token) {
-          // App may have just foregrounded; give state a moment to populate
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise<void>((r) => setTimeout(r, 400));
           invite = incomingInvite;
         }
 
+        // Still no invite — fetch from API or AsyncStorage cache
         if (!invite && token) {
           const pending = await getPendingInvites(token).catch(() => []);
           if (pending.length > 0) {
             invite = pending[0] as CallInvite;
-            setIncomingInvite(invite);
+            safeSetInvite(invite);
+          } else {
+            const cached = safeParse(
+              await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
+            );
+            if (cached?.inviteId === callId || cached?.inviteId) {
+              invite = payloadToInvite(cached);
+              safeSetInvite(invite);
+            }
           }
         }
 
@@ -377,15 +487,23 @@ export function NotificationsProvider({
 
       onEnd: async (callId) => {
         const invite = incomingInvite;
-        if (!token || !invite) {
-          // No invite in state — try cached invite from background task
-          const cachedRaw = await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null);
-          const cached = cachedRaw ? (() => { try { return JSON.parse(cachedRaw); } catch { return null; } })() : null;
-          if (cached && token) {
+
+        if (!token) {
+          endNativeCall(callId);
+          return;
+        }
+
+        if (!invite) {
+          // No invite in state — try cache (background task set it)
+          const cached = safeParse(
+            await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
+          );
+          if (cached?.inviteId) {
             await respondInvite(token, cached.inviteId, "DECLINE").catch(() => undefined);
           }
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           endNativeCall(callId);
+          safeSetInvite(null);
           return;
         }
 
@@ -398,47 +516,75 @@ export function NotificationsProvider({
           }).catch(() => undefined);
         }
 
-        await respondInvite(
-          token,
-          invite.id,
-          "DECLINE",
-          deviceIdRef.current || undefined,
-        ).catch(() => undefined);
-        await sip
-          .rejectIncomingInvite({
-            fromNumber: invite.fromNumber,
-            toExtension: invite.toExtension,
-            pbxCallId: invite.pbxCallId,
-            sipCallTarget: invite.sipCallTarget,
-          })
-          .catch(() => false);
-        setIncomingInvite(null);
+        await respondInvite(token, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+        await sip.rejectIncomingInvite({
+          fromNumber: invite.fromNumber,
+          toExtension: invite.toExtension,
+          pbxCallId: invite.pbxCallId,
+          sipCallTarget: invite.sipCallTarget,
+        }).catch(() => false);
+
+        AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+        safeSetInvite(null);
         endNativeCall(callId);
       },
     });
 
-    return () => {
-      unsubNative();
-    };
+    return () => { unsubNative(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, incomingInvite, sip, handleAcceptInvite]);
+  }, [token, incomingInvite, sip, handleAcceptInvite, safeSetInvite]);
 
-  // ── Main init: token, push, diag session, pending invites ─────────────────
+  // ── Main init: permissions, push token, diag session, pending invites ─────
+
   useEffect(() => {
     if (!token) return;
-
     let mounted = true;
     let currentToken: string | null = null;
 
-    // Battery optimization warning (Android only, shown once per session)
-    checkBatteryOptimizationEnabled().then((enabled) => {
-      if (mounted) setBatteryOptimizationEnabled(enabled);
-    });
-
     (async () => {
-      // Ensure high-importance call channel exists before any push arrives
       await ensureCallChannel();
 
+      // ── Check & request notification permission ─────────────────────────
+      const permResult = await Notifications.getPermissionsAsync().catch(() => null);
+      const permStatus = permResult?.status ?? "undetermined";
+
+      if (permStatus !== "granted") {
+        // Request immediately — do not defer. Users need this for call alerts.
+        const req = await Notifications.requestPermissionsAsync().catch(() => null);
+        const granted = req?.status === "granted";
+        if (!granted && mounted) {
+          // Show guidance on first denial
+          const alreadyPrompted = await AsyncStorage.getItem(
+            "connect_notif_permission_prompted",
+          ).catch(() => null);
+          if (!alreadyPrompted) {
+            await AsyncStorage.setItem(
+              "connect_notif_permission_prompted",
+              "1",
+            ).catch(() => {});
+            Alert.alert(
+              "Allow notifications for incoming calls",
+              'Connect needs notification permission to ring when you receive a call.\n\nGo to Settings → Apps → Connect → Notifications and enable them.',
+              [{ text: "OK" }],
+            );
+          }
+        }
+        if (mounted) {
+          setCallReadiness((prev) => ({
+            ...prev,
+            notificationPermission: (req?.status ?? "undetermined") as CallReadiness["notificationPermission"],
+          }));
+        }
+      } else {
+        if (mounted) {
+          setCallReadiness((prev) => ({
+            ...prev,
+            notificationPermission: "granted",
+          }));
+        }
+      }
+
+      // ── Get push token ────────────────────────────────────────────────────
       currentToken = await getExpoToken();
       if (!mounted) return;
       setExpoPushToken(currentToken);
@@ -450,8 +596,17 @@ export function NotificationsProvider({
           deviceName: Device.modelName || `${Platform.OS}-device`,
         }).catch(() => null);
         if (reg?.id) deviceIdRef.current = String(reg.id);
+
+        if (mounted) {
+          setCallReadiness((prev) => ({
+            ...prev,
+            pushTokenRegistered: true,
+            isFullyReady: prev.notificationPermission === "granted",
+          }));
+        }
       }
 
+      // ── Start diag session ────────────────────────────────────────────────
       const session = await startVoiceDiagSession(token, {
         sessionId: diagSessionIdRef.current || undefined,
         platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
@@ -460,62 +615,73 @@ export function NotificationsProvider({
         lastRegState: sip.registrationState,
         lastCallState: sip.callState,
       }).catch(() => null);
-      if (session?.sessionId) {
+
+      if (session?.sessionId && mounted) {
         diagSessionIdRef.current = String(session.sessionId);
-        // Persist for screens that need it outside the provider (e.g. IncomingCallScreen)
         AsyncStorage.setItem("connect_diag_session_id", diagSessionIdRef.current).catch(() => {});
       }
 
-      // ── Submit deferred APP_WAKE events from background task ─────────────
-      // The background task can't post to the API (no auth token), so it
-      // stores events in AsyncStorage. We flush them here.
+      // ── Flush deferred APP_WAKE events from background task ───────────────
       const wakeRaw = await AsyncStorage.getItem(BG_WAKE_EVENTS_KEY).catch(() => null);
       if (wakeRaw && diagSessionIdRef.current) {
-        const wakeEvents: any[] = (() => { try { return JSON.parse(wakeRaw); } catch { return []; } })();
+        const wakeEvents: any[] = safeParse(wakeRaw) ?? [];
         for (const evt of wakeEvents) {
           await postVoiceDiagEvent(token, {
             sessionId: diagSessionIdRef.current!,
             type: "PUSH_RECEIVED",
-            payload: { source: "background_task_wake", inviteId: evt.inviteId, at: evt.at },
+            payload: {
+              source: "background_task_wake",
+              inviteId: evt.inviteId,
+              bgWakeAt: evt.at,
+            },
           }).catch(() => undefined);
+          // Stash timing for latency computation
+          if (evt.inviteId) {
+            timingsRef.current[`push_${evt.inviteId}`] = evt.at;
+          }
         }
         AsyncStorage.removeItem(BG_WAKE_EVENTS_KEY).catch(() => {});
       }
 
       runMediaTest().catch(() => undefined);
 
-      // ── Check for invite cached by background task ────────────────────────
-      // When the background task ran while app was killed, it stored the
-      // invite in AsyncStorage. Read it here for instant cold-start display
-      // without waiting for the API round-trip.
+      // ── Check AsyncStorage invite cache (written by background task) ──────
       const cachedRaw = await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null);
       if (cachedRaw && mounted) {
-        const cached = (() => { try { return JSON.parse(cachedRaw); } catch { return null; } })();
+        const cached = safeParse(cachedRaw);
         const age = cached?._storedAt ? Date.now() - cached._storedAt : Infinity;
-        // Only use cached invite if it's less than 45 seconds old (invite TTL)
+
         if (cached?.type === "INCOMING_CALL" && age < 45_000) {
           const invite = payloadToInvite(cached);
-          setIncomingInvite(invite);
+          safeSetInvite(invite);
           showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+
           if (diagSessionIdRef.current) {
             postVoiceDiagEvent(token, {
               sessionId: diagSessionIdRef.current,
               type: "INCOMING_INVITE",
-              payload: { inviteId: invite.id, source: "cold_start_cache" },
+              payload: {
+                inviteId: invite.id,
+                source: "cold_start_cache",
+                pushReceivedAt: cached._pushReceivedAt,
+                cacheAgeMs: age,
+              },
             }).catch(() => undefined);
           }
-        } else {
-          // Stale — clean up
+        } else if (age >= 45_000) {
+          // Stale — remove so the screen doesn't show a dead call
+          console.log("[Notif] Stale cached invite removed, age:", age);
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
         }
       }
 
-      // ── Fetch server-side pending invites as authoritative source ─────────
+      // ── Authoritative pending invite check from server ────────────────────
       const pending = await getPendingInvites(token).catch(() => []);
       if (pending.length > 0 && mounted) {
         const invite = pending[0] as CallInvite;
-        setIncomingInvite(invite);
+        safeSetInvite(invite);
         showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+
         if (diagSessionIdRef.current) {
           postVoiceDiagEvent(token, {
             sessionId: diagSessionIdRef.current,
@@ -526,32 +692,40 @@ export function NotificationsProvider({
       }
     })();
 
-    // ── Foreground notification listener ────────────────────────────────────
+    // ── Foreground push listener ──────────────────────────────────────────
+
     const pushSub = Notifications.addNotificationReceivedListener((evt) => {
       const data = evt.request.content.data as MobilePushPayload;
+      const now = Date.now();
 
       if (data?.type === "INCOMING_CALL") {
-        const invite = payloadToInvite(data);
-        setIncomingInvite(invite);
+        const invite = payloadToInvite({ ...data, _pushReceivedAt: now } as any);
+        timingsRef.current[`push_${invite.id}`] = now;
+
+        // Sequential call cleanup: if there's already a different invite showing,
+        // dismiss the old one first before replacing with the new one.
+        setIncomingInvite((prev) => {
+          if (prev && prev.id !== invite.id) {
+            endNativeCall(prev.id);
+            AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+          }
+          return prev; // safeSetInvite handles the actual set
+        });
+
+        safeSetInvite(invite);
         showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
 
         const sid = diagSessionIdRef.current;
         if (sid && token) {
-          // Telemetry: push received in foreground/background
           postVoiceDiagEvent(token, {
             sessionId: sid,
             type: "PUSH_RECEIVED",
-            payload: {
-              inviteId: invite.id,
-              fromNumber: invite.fromNumber,
-              source: "foreground_listener",
-            },
+            payload: { inviteId: invite.id, fromNumber: invite.fromNumber, source: "foreground_listener", pushReceivedAt: now },
           }).catch(() => undefined);
-
           postVoiceDiagEvent(token, {
             sessionId: sid,
             type: "INCOMING_INVITE",
-            payload: { inviteId: invite.id, fromNumber: invite.fromNumber },
+            payload: { inviteId: invite.id, fromNumber: invite.fromNumber, pushReceivedAt: now },
           }).catch(() => undefined);
         }
         return;
@@ -560,29 +734,33 @@ export function NotificationsProvider({
       if (data?.type === "INVITE_CLAIMED" || data?.type === "INVITE_CANCELED") {
         setIncomingInvite((prev) => {
           if (!prev || prev.id !== data.inviteId) return prev;
-          dismissIncomingInvite(sip, prev).catch(() => undefined);
+          endNativeCall(prev.id);
+          AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           if (data.type === "INVITE_CANCELED") {
             Alert.alert("Call ended", "The caller hung up.");
           }
+          clearExpireTimer();
+          shownInviteIdRef.current = null;
           return null;
         });
-        AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
       }
     });
 
-    // ── Notification response listener (user tapped system tray notification) ─
+    // ── Notification response listener (system tray tap) ─────────────────
+
     const responseSub = Notifications.addNotificationResponseReceivedListener(
       (evt) => {
         const data = evt.notification.request.content.data as MobilePushPayload;
         if (data?.type !== "INCOMING_CALL") return;
-        // Restore invite if not already set (cold-start tap)
-        setIncomingInvite((prev) => prev || payloadToInvite(data));
+        const now = Date.now();
+        const invite = payloadToInvite({ ...data, _pushReceivedAt: now } as any);
+        safeSetInvite(invite);
         const sid = diagSessionIdRef.current;
         if (sid && token) {
           postVoiceDiagEvent(token, {
             sessionId: sid,
             type: "PUSH_RECEIVED",
-            payload: { inviteId: data.inviteId, source: "notification_tap" },
+            payload: { inviteId: data.inviteId, source: "notification_tap", pushReceivedAt: now },
           }).catch(() => undefined);
         }
       },
@@ -590,6 +768,7 @@ export function NotificationsProvider({
 
     return () => {
       mounted = false;
+      clearExpireTimer();
       pushSub.remove();
       responseSub.remove();
       if (token && currentToken) {
@@ -599,7 +778,25 @@ export function NotificationsProvider({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // ── Re-check permissions when app comes back to foreground ────────────────
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (state) => {
+      if (state !== "active") return;
+      const perm = await Notifications.getPermissionsAsync().catch(() => null);
+      if (!perm) return;
+      const granted = perm.status === "granted";
+      setCallReadiness((prev) => ({
+        ...prev,
+        notificationPermission: perm.status as CallReadiness["notificationPermission"],
+        isFullyReady: granted && prev.pushTokenRegistered,
+      }));
+    });
+    return () => sub.remove();
+  }, []);
+
   // ── Registration / call state telemetry ───────────────────────────────────
+
   useEffect(() => {
     if (!token || !diagSessionIdRef.current) return;
     const sid = diagSessionIdRef.current;
@@ -614,7 +811,7 @@ export function NotificationsProvider({
         postVoiceDiagEvent(token, { sessionId: sid, type: "SIP_UNREGISTER", payload: { state: sip.registrationState } }).catch(() => undefined);
         postVoiceDiagEvent(token, { sessionId: sid, type: "WS_DISCONNECTED", payload: { state: sip.registrationState } }).catch(() => undefined);
       } else if (String(sip.registrationState).toLowerCase().includes("fail")) {
-        postVoiceDiagEvent(token, { sessionId: sid, type: "ERROR", payload: { code: "SIP_REGISTER_FAILED", state: sip.registrationState } }).catch(() => undefined);
+        postVoiceDiagEvent(token, { sessionId: sid, type: "ERROR", payload: { code: "SIP_REGISTER_FAILED" } }).catch(() => undefined);
         postVoiceDiagEvent(token, { sessionId: sid, type: "WS_RECONNECT", payload: { state: sip.registrationState } }).catch(() => undefined);
       }
       lastRegStateRef.current = sip.registrationState;
@@ -629,6 +826,7 @@ export function NotificationsProvider({
   }, [token, sip.registrationState, sip.callState]);
 
   // ── Session heartbeat ──────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!token || !diagSessionIdRef.current) return;
     const sid = diagSessionIdRef.current;
@@ -642,16 +840,19 @@ export function NotificationsProvider({
     return () => clearInterval(t);
   }, [token, sip.registrationState, sip.callState]);
 
+  // ─────────────────────────────────────────────────────────────────────────
+
   const value = useMemo(
     () => ({
       expoPushToken,
       incomingInvite,
-      clearIncomingInvite: () => setIncomingInvite(null),
+      clearIncomingInvite: () => safeSetInvite(null),
       runMediaTest,
-      batteryOptimizationEnabled,
+      callReadiness,
       openBatteryOptimizationSettings,
+      requestNotificationPermission,
     }),
-    [expoPushToken, incomingInvite, runMediaTest, batteryOptimizationEnabled],
+    [expoPushToken, incomingInvite, runMediaTest, callReadiness, safeSetInvite, requestNotificationPermission],
   );
 
   return (

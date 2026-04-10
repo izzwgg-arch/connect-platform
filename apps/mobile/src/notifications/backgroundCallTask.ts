@@ -32,11 +32,21 @@ export const BACKGROUND_NOTIFICATION_TASK = 'CONNECT_BACKGROUND_NOTIFICATION';
 export const PENDING_CALL_STORAGE_KEY = 'connect_pending_call_invite';
 
 /**
- * AsyncStorage key used to record that the background task woke the app
- * so NotificationsContext can emit a PUSH_RECEIVED telemetry event after
- * it has an auth token.
+ * AsyncStorage key used to record wake events (push received while terminated)
+ * so NotificationsContext can emit PUSH_RECEIVED telemetry once it has an
+ * auth token.
  */
 export const BG_WAKE_EVENTS_KEY = 'connect_bg_wake_events';
+
+/** Safe JSON.parse that never throws — returns null on any error. */
+function safeParse(raw: string | null): any {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 // ─── Task definition ──────────────────────────────────────────────────────────
 // Must be called at module level — TaskManager requires this to run before the
@@ -49,7 +59,6 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
   }
 
   try {
-    // expo-notifications passes the notification inside `data.notification`
     const notification = (data as any)?.notification as Notifications.Notification | undefined;
     const payload = notification?.request?.content?.data as Record<string, any> | undefined;
 
@@ -58,34 +67,57 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
     const now = Date.now();
 
     if (payload.type === 'INCOMING_CALL') {
-      // ── Persist invite data ───────────────────────────────────────────────
-      // Stored before showing CallKeep UI so the foreground app can read it
-      // synchronously on cold start without hitting the API first.
+      const inviteId = String(payload.inviteId || '');
+      if (!inviteId) return;
+
+      // ── Duplicate guard ───────────────────────────────────────────────────
+      // If the same inviteId is already stored and recent, skip calling
+      // displayIncomingCall again. This prevents a retry push (FCM may retry
+      // unacknowledged high-priority messages) from showing two native call UIs.
+      const existing = safeParse(await AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null));
+      const existingAge = existing?._storedAt ? now - existing._storedAt : Infinity;
+      const isDuplicate = existing?.inviteId === inviteId && existingAge < 45_000;
+
+      if (isDuplicate) {
+        console.log('[BGTask] Duplicate push for invite', inviteId, '— skipping displayIncomingCall');
+        return;
+      }
+
+      // ── Persist invite data with timing ──────────────────────────────────
       await AsyncStorage.setItem(
         PENDING_CALL_STORAGE_KEY,
-        JSON.stringify({ ...payload, _storedAt: now }),
+        JSON.stringify({
+          ...payload,
+          _storedAt: now,
+          _pushReceivedAt: now,   // Timing anchor: when push was received
+        }),
       ).catch(() => {});
 
       // ── Record wake event for deferred telemetry ──────────────────────────
-      const wakeRaw = await AsyncStorage.getItem(BG_WAKE_EVENTS_KEY).catch(() => null);
-      const wakeEvents: any[] = wakeRaw ? JSON.parse(wakeRaw).catch?.(() => []) ?? [] : [];
-      wakeEvents.push({
+      // We can't POST to the API here (no auth token in headless context), so
+      // we accumulate wake events in AsyncStorage and flush them in
+      // NotificationsContext once it has a token.
+      const prevWakeRaw = await AsyncStorage.getItem(BG_WAKE_EVENTS_KEY).catch(() => null);
+      const prevWakeEvents: any[] = safeParse(prevWakeRaw) ?? [];
+      prevWakeEvents.push({
         type: 'APP_WAKE',
-        inviteId: payload.inviteId,
+        inviteId,
         at: now,
       });
-      await AsyncStorage.setItem(BG_WAKE_EVENTS_KEY, JSON.stringify(wakeEvents.slice(-10))).catch(() => {});
+      await AsyncStorage.setItem(
+        BG_WAKE_EVENTS_KEY,
+        JSON.stringify(prevWakeEvents.slice(-10)),
+      ).catch(() => {});
 
       // ── Show native incoming-call screen via Android Telecom API ──────────
       // CallKeep.displayIncomingCall uses TelecomManager.addNewIncomingCall()
       // which fires a full-screen intent even when the app is fully killed.
-      // The phone account was registered the first time the user opened the
-      // app; subsequent background calls don't need UI for setup().
+      // The phone account persists from the first time the user opened the app;
+      // setup() here is a fast no-op if the account is already registered.
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const RNCallKeep = require('react-native-callkeep').default;
 
-        // Re-setup in background context (fast no-op if account already registered)
         await RNCallKeep.setup({
           ios: { appName: 'Connect Communications', supportsVideo: false },
           android: {
@@ -105,26 +137,33 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
 
         // displayIncomingCall(uuid, handle, localizedCallerName, handleType, hasVideo)
         RNCallKeep.displayIncomingCall(
-          payload.inviteId,
+          inviteId,
           payload.fromDisplay || payload.fromNumber || 'Unknown',
           payload.fromDisplay || payload.fromNumber || 'Unknown',
           'number',
           false,
         );
 
-        console.log('[BGTask] displayIncomingCall fired for invite:', payload.inviteId);
+        // Record the exact timestamp CallKeep was shown for latency tracking
+        await AsyncStorage.mergeItem(
+          PENDING_CALL_STORAGE_KEY,
+          JSON.stringify({ _callkeepShownAt: Date.now() }),
+        ).catch(() => {});
+
+        console.log('[BGTask] displayIncomingCall fired for invite:', inviteId);
       } catch (callkeepErr) {
         console.warn('[BGTask] CallKeep displayIncomingCall failed:', callkeepErr);
-        // CallKeep failed — the system notification is still visible in the
-        // notification tray as a fallback (we always send title+body in push).
+        // Fallback: the system notification is still visible in the tray.
+        // User can tap it to open the app, which picks up the invite via
+        // AsyncStorage cache or getPendingInvites().
       }
 
     } else if (payload.type === 'INVITE_CANCELED' || payload.type === 'INVITE_CLAIMED') {
-      // ── Cancel the native call screen if it's showing ────────────────────
+      // ── Cancel native call screen ─────────────────────────────────────────
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const RNCallKeep = require('react-native-callkeep').default;
-        RNCallKeep.endCall(payload.inviteId);
+        RNCallKeep.endCall(String(payload.inviteId || ''));
       } catch {}
 
       // Remove cached invite so cold-start doesn't resurrect a dead call
@@ -138,10 +177,7 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
 // ─── Register the task with expo-notifications ────────────────────────────────
 // This tells expo-notifications to run BACKGROUND_NOTIFICATION_TASK whenever
 // a notification arrives and the app is in the background or killed.
-// Called here (module level) rather than inside a React component so it
-// executes exactly once during the headless JS context setup.
 Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK).catch((e) => {
-  // Throws if the task is already registered (safe to ignore on subsequent boots)
   if (!String(e?.message).includes('already registered')) {
     console.warn('[BGTask] registerTaskAsync failed:', e?.message);
   }

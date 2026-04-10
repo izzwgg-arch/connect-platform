@@ -15,7 +15,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
-import { useIncomingNotifications } from '../context/NotificationsContext';
+import { useIncomingNotifications, type CallReadiness } from '../context/NotificationsContext';
 import { Avatar } from '../components/ui/Avatar';
 import { HeaderBar } from '../components/HeaderBar';
 import { getVoiceExtension } from '../api/client';
@@ -104,7 +104,11 @@ export function SettingsScreen() {
   const { colors, mode, setMode, isDark } = useTheme();
   const { token, logout } = useAuth();
   const sip = useSip();
-  const { batteryOptimizationEnabled, openBatteryOptimizationSettings } = useIncomingNotifications();
+  const {
+    callReadiness,
+    openBatteryOptimizationSettings,
+    requestNotificationPermission,
+  } = useIncomingNotifications();
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
 
@@ -276,53 +280,138 @@ export function SettingsScreen() {
           />
         </SectionCard>
 
-        {/* Incoming calls reliability — Android only */}
+        {/* ── Call Readiness — Android only ─────────────────────────────── */}
         {Platform.OS === 'android' && (
           <>
-            <SectionHeader title="Incoming Calls" />
+            <SectionHeader title="Incoming Call Readiness" />
+
+            {/* Overall status banner */}
+            <View style={[
+              styles.readinessBanner,
+              {
+                backgroundColor: callReadiness.isFullyReady
+                  ? (isDark ? 'rgba(34,197,94,0.12)' : 'rgba(34,197,94,0.08)')
+                  : (isDark ? 'rgba(234,179,8,0.12)' : 'rgba(234,179,8,0.08)'),
+                borderColor: callReadiness.isFullyReady
+                  ? 'rgba(34,197,94,0.3)'
+                  : 'rgba(234,179,8,0.3)',
+              },
+            ]}>
+              <Ionicons
+                name={callReadiness.isFullyReady ? 'checkmark-circle' : 'warning'}
+                size={20}
+                color={callReadiness.isFullyReady ? colors.success : colors.warning}
+              />
+              <Text style={[typography.body, {
+                color: callReadiness.isFullyReady ? colors.success : colors.warning,
+                marginLeft: 10,
+                flex: 1,
+              }]}>
+                {callReadiness.isFullyReady
+                  ? 'Ready — calls will ring even when app is closed'
+                  : 'Action needed — incoming calls may not ring reliably'}
+              </Text>
+            </View>
+
             <SectionCard>
+              {/* 1. Notification permission */}
               <SettingRow
-                icon="battery-charging-outline"
-                label="Battery Optimization"
-                subtitle="Disable to ensure calls ring when app is closed"
-                iconColor={batteryOptimizationEnabled ? colors.warning : colors.success}
-                onPress={() => {
-                  Alert.alert(
-                    'Disable Battery Optimization',
-                    'Android may delay incoming call notifications when battery optimization is enabled for Connect.\n\nFor reliable ringing, go to Battery → Battery Optimization → Connect → Don\'t optimize.',
-                    [
-                      { text: 'Later', style: 'cancel' },
-                      {
-                        text: 'Open Settings',
-                        onPress: openBatteryOptimizationSettings,
-                      },
-                    ],
-                  );
-                }}
+                icon="notifications-outline"
+                label="Notification Permission"
+                subtitle={
+                  callReadiness.notificationPermission === 'granted'
+                    ? 'Granted — call alerts will appear'
+                    : 'Not granted — calls will not ring'
+                }
+                iconColor={callReadiness.notificationPermission === 'granted' ? colors.success : colors.danger}
+                onPress={callReadiness.notificationPermission !== 'granted' ? requestNotificationPermission : undefined}
                 rightElement={
-                  <View style={[styles.statusChip, { backgroundColor: batteryOptimizationEnabled ? colors.warningMuted : colors.successMuted }]}>
-                    <Text style={[typography.labelSm, { color: batteryOptimizationEnabled ? colors.warning : colors.success }]}>
-                      {batteryOptimizationEnabled ? 'May block' : 'Check'}
+                  <View style={[styles.statusChip, {
+                    backgroundColor: callReadiness.notificationPermission === 'granted'
+                      ? colors.successMuted : colors.dangerMuted,
+                  }]}>
+                    <Text style={[typography.labelSm, {
+                      color: callReadiness.notificationPermission === 'granted'
+                        ? colors.success : colors.danger,
+                    }]}>
+                      {callReadiness.notificationPermission === 'granted' ? '✓ Granted' : '✗ Denied'}
                     </Text>
                   </View>
                 }
               />
+
+              {/* 2. Push token registered */}
               <SettingRow
-                icon="notifications-circle-outline"
-                label="Notification Permissions"
-                subtitle="Required for incoming call alerts"
-                iconColor={colors.primary}
-                onPress={async () => {
-                  const { status } = await import('expo-notifications').then(m => m.getPermissionsAsync());
-                  if (status !== 'granted') {
-                    Alert.alert(
-                      'Enable Notifications',
-                      'Connect needs notification permission to show incoming call alerts. Please enable it in Android Settings → Apps → Connect → Notifications.',
-                    );
-                  } else {
-                    Alert.alert('Notifications enabled', 'Notifications are properly enabled for Connect.');
-                  }
+                icon="cloud-outline"
+                label="Push Token"
+                subtitle={
+                  callReadiness.pushTokenRegistered
+                    ? 'Registered — server can reach this device'
+                    : 'Not registered — sign out and back in'
+                }
+                iconColor={callReadiness.pushTokenRegistered ? colors.success : colors.danger}
+                rightElement={
+                  <View style={[styles.statusChip, {
+                    backgroundColor: callReadiness.pushTokenRegistered
+                      ? colors.successMuted : colors.dangerMuted,
+                  }]}>
+                    <Text style={[typography.labelSm, {
+                      color: callReadiness.pushTokenRegistered ? colors.success : colors.danger,
+                    }]}>
+                      {callReadiness.pushTokenRegistered ? '✓ OK' : '✗ Missing'}
+                    </Text>
+                  </View>
+                }
+              />
+
+              {/* 3. Battery optimization */}
+              <SettingRow
+                icon="battery-half-outline"
+                label="Battery Optimization"
+                subtitle="Disable for Connect to ensure calls ring when app is closed"
+                iconColor={colors.warning}
+                onPress={() => {
+                  Alert.alert(
+                    'Disable Battery Optimization',
+                    'Android may kill background tasks for Connect when battery optimization is on, preventing incoming calls from ringing.\n\nTap "Open Settings" and set Connect to "Don\'t optimize".',
+                    [
+                      { text: 'Later', style: 'cancel' },
+                      { text: 'Open Settings', onPress: openBatteryOptimizationSettings },
+                    ],
+                  );
                 }}
+                rightElement={
+                  <View style={[styles.statusChip, { backgroundColor: colors.warningMuted }]}>
+                    <Text style={[typography.labelSm, { color: colors.warning }]}>
+                      ⚠ Check
+                    </Text>
+                  </View>
+                }
+              />
+
+              {/* 4. SIP registration */}
+              <SettingRow
+                icon="wifi-outline"
+                label="SIP Registration"
+                subtitle={
+                  sip.registrationState === 'registered'
+                    ? 'Connected to PBX'
+                    : 'Not connected — check network or re-register'
+                }
+                iconColor={sip.registrationState === 'registered' ? colors.success : colors.danger}
+                onPress={sip.registrationState !== 'registered' ? () => sip.register() : undefined}
+                rightElement={
+                  <View style={[styles.statusChip, {
+                    backgroundColor: sip.registrationState === 'registered'
+                      ? colors.successMuted : colors.dangerMuted,
+                  }]}>
+                    <Text style={[typography.labelSm, {
+                      color: sip.registrationState === 'registered' ? colors.success : colors.danger,
+                    }]}>
+                      {sip.registrationState === 'registered' ? '✓ OK' : '✗ Offline'}
+                    </Text>
+                  </View>
+                }
               />
             </SectionCard>
           </>
@@ -403,5 +492,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
+  },
+  readinessBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
   },
 });

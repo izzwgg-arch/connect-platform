@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,8 @@ import { respondInvite, postVoiceDiagEvent } from '../../api/client';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 
+const INVITE_TTL_S = 45; // seconds before invite expires
+
 const { width } = Dimensions.get('window');
 
 export function IncomingCallScreen() {
@@ -26,6 +28,8 @@ export function IncomingCallScreen() {
   const sip = useSip();
   const { incomingInvite, clearIncomingInvite } = useIncomingNotifications();
   const insets = useSafeAreaInsets();
+  // Remaining-time countdown (seconds until invite expires)
+  const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL_S);
 
   // Animations
   const ring1 = useRef(new Animated.Value(1)).current;
@@ -39,21 +43,51 @@ export function IncomingCallScreen() {
   const answerScale = useRef(new Animated.Value(1)).current;
   const declineScale = useRef(new Animated.Value(1)).current;
 
-  // ── UI_SHOWN telemetry ────────────────────────────────────────────────────
-  // Fires once when the in-app incoming call screen mounts. Combined with
-  // PUSH_RECEIVED we can compute "push → UI visible" latency in the Ops Center.
+  // ── UI_SHOWN telemetry + countdown timer ─────────────────────────────────
+
   useEffect(() => {
-    if (!token || !incomingInvite) return;
-    AsyncStorage.getItem('connect_diag_session_id').catch(() => null).then((sid) => {
-      if (!sid) return;
-      postVoiceDiagEvent(token, {
-        sessionId: sid,
-        type: 'UI_SHOWN',
-        payload: { inviteId: incomingInvite.id, screen: 'IncomingCallScreen' },
-      }).catch(() => undefined);
-    });
+    if (!incomingInvite) return;
+
+    const uiShownAt = Date.now();
+    const pushReceivedAt = (incomingInvite as any)._pushReceivedAt as number | undefined;
+
+    // Post UI_SHOWN event with latency data
+    if (token) {
+      AsyncStorage.getItem('connect_diag_session_id').catch(() => null).then((sid) => {
+        if (!sid) return;
+        postVoiceDiagEvent(token, {
+          sessionId: sid,
+          type: 'UI_SHOWN',
+          payload: {
+            inviteId: incomingInvite.id,
+            screen: 'IncomingCallScreen',
+            uiShownAt,
+            pushReceivedAt,
+            pushToUiMs: pushReceivedAt ? uiShownAt - pushReceivedAt : null,
+          },
+        }).catch(() => undefined);
+      });
+    }
+
+    // ── Countdown timer ─────────────────────────────────────────────────────
+    // Compute seconds remaining from the invite's expiresAt timestamp.
+    // Updates every second so the user knows how long they have to answer.
+    const computeLeft = () => {
+      if (!incomingInvite.expiresAt) return INVITE_TTL_S;
+      const ms = new Date(incomingInvite.expiresAt).getTime() - Date.now();
+      return Math.max(0, Math.ceil(ms / 1000));
+    };
+
+    setSecondsLeft(computeLeft());
+    const interval = setInterval(() => {
+      const left = computeLeft();
+      setSecondsLeft(left);
+      if (left <= 0) clearInterval(interval);
+    }, 1000);
+
+    return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [incomingInvite?.id]);
 
   useEffect(() => {
     // Content entrance
@@ -224,6 +258,16 @@ export function IncomingCallScreen() {
           </View>
         ) : null}
 
+        {/* Expiry countdown — shows when 10s or less remain */}
+        {secondsLeft <= 10 && secondsLeft > 0 && (
+          <View style={styles.countdownPill}>
+            <Ionicons name="time-outline" size={11} color="rgba(251,191,36,0.9)" style={{ marginRight: 3 }} />
+            <Text style={[typography.caption, { color: 'rgba(251,191,36,0.9)', fontWeight: '700' }]}>
+              {secondsLeft}s
+            </Text>
+          </View>
+        )}
+
         {/* Spacer */}
         <View style={{ flex: 1 }} />
 
@@ -302,6 +346,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 4,
     marginTop: 10,
+  },
+  countdownPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(120,53,15,0.45)',
+    borderColor: 'rgba(251,191,36,0.3)',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginTop: 8,
   },
   actions: {
     flexDirection: 'row',
