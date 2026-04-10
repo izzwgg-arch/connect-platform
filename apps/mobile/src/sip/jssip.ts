@@ -298,7 +298,10 @@ export class JsSipClient implements SipClient {
         mediaConstraints: VOICE_AUDIO_CONSTRAINTS,
         pcConfig: this.ua._configuration?.pcConfig ?? {},
       });
-      this.bindSession(this.session);
+      // NOTE: do NOT call bindSession here — ua.call() fires newRTCSession
+      // synchronously, which already calls bindSession. Calling it again here
+      // would double-attach all event listeners, causing confirmed/ended/failed
+      // to fire twice and every state update to run twice.
       console.log('[SIP] INVITE sent');
     } catch (e: any) {
       stopAllTelephonyAudio().catch(() => undefined);
@@ -446,14 +449,8 @@ export class JsSipClient implements SipClient {
       } catch { /* ignore */ }
       if (audioRoute) snapshot.audioRoute = audioRoute;
 
-      // Network type
-      try {
-        const NetInfo = require("@react-native-community/netinfo");
-        if (NetInfo?.fetch) {
-          const state = await NetInfo.fetch();
-          if (state?.type) snapshot.networkType = state.type;
-        }
-      } catch { /* ignore */ }
+      // Network type — @react-native-community/netinfo is optional telemetry,
+      // omitted here to avoid a require(undefined) crash if not bundled.
 
       // WebRTC stats
       try {
@@ -511,13 +508,8 @@ export class JsSipClient implements SipClient {
       const { Platform } = require("react-native");
       deviceModel = Platform.OS === "android" ? `Android ${Platform.Version}` : `iOS ${Platform.Version}`;
     } catch { /* ignore */ }
-    try {
-      const NetInfo = require("@react-native-community/netinfo");
-      if (NetInfo?.fetch) {
-        const state = await NetInfo.fetch();
-        networkType = state?.type || null;
-      }
-    } catch { /* netinfo may not be available */ }
+    // Network type via @react-native-community/netinfo omitted —
+    // package is not in the bundle; omitting prevents require(undefined) crash.
 
     const report: Record<string, unknown> = {
       platform: "ANDROID",
