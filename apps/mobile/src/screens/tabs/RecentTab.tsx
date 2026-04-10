@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +22,18 @@ import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 
+function isInboundCall(call: CallRecord): boolean {
+  const d = call.direction?.toLowerCase();
+  return d === 'inbound' || d === 'incoming';
+}
+
+function isMissedCall(call: CallRecord): boolean {
+  if (call.disposition === 'missed') return true;
+  if (call.disposition === 'busy') return true;
+  // Fallback: inbound with zero talk time
+  return isInboundCall(call) && call.durationSec === 0 && !call.disposition;
+}
+
 function formatDuration(sec: number): string {
   if (sec <= 0) return '—';
   const m = Math.floor(sec / 60);
@@ -35,10 +48,13 @@ function formatTimestamp(iso: string): string {
     const now = new Date();
     const diffMs = now.getTime() - d.getTime();
     const diffH = diffMs / 3600000;
-    if (diffH < 1) return `${Math.round(diffMs / 60000)}m ago`;
+    if (diffH < 1) {
+      const mins = Math.round(diffMs / 60000);
+      return mins <= 0 ? 'Just now' : `${mins}m ago`;
+    }
     if (diffH < 24) return `${Math.floor(diffH)}h ago`;
     if (diffH < 48) return 'Yesterday';
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   } catch {
     return '';
   }
@@ -47,52 +63,55 @@ function formatTimestamp(iso: string): string {
 function CallRow({ call, onCall }: { call: CallRecord; onCall: (number: string) => void }) {
   const { colors } = useTheme();
 
-  const isInbound = call.direction === 'inbound' || call.direction === 'INBOUND';
-  const isMissed = call.durationSec === 0 && isInbound;
-  const displayNumber = isInbound ? call.fromNumber : call.toNumber;
-  const displayName = displayNumber; // Would resolve from contacts in production
+  const inbound = isInboundCall(call);
+  const missed = isMissedCall(call);
+  const displayNumber = inbound ? call.fromNumber : call.toNumber;
+  const displayName = call.fromName && call.fromName !== call.fromNumber
+    ? call.fromName
+    : displayNumber || '—';
 
-  const iconName = isMissed
-    ? 'call-outline'
-    : isInbound
-    ? 'call-outline'
-    : 'call-outline';
-
-  const iconColor = isMissed
-    ? colors.danger
-    : isInbound
-    ? colors.success
-    : colors.primary;
-
-  const arrowIcon = isInbound ? 'arrow-down-outline' : 'arrow-up-outline';
+  const arrowIcon: any = inbound ? 'arrow-down-outline' : 'arrow-up-outline';
+  const rowColor = missed ? colors.danger : inbound ? colors.success : colors.primary;
 
   return (
     <TouchableOpacity
       style={[styles.row, { borderBottomColor: colors.borderSubtle }]}
       activeOpacity={0.7}
+      onPress={() => onCall(displayNumber)}
     >
-      <Avatar name={displayName} size="md" />
+      <View style={[styles.iconBubble, { backgroundColor: rowColor + '18' }]}>
+        <Ionicons name={arrowIcon} size={16} color={rowColor} />
+      </View>
+
       <View style={styles.rowInfo}>
-        <View style={styles.nameRow}>
-          <Ionicons name={arrowIcon as any} size={12} color={iconColor} style={{ marginRight: 4 }} />
-          <Text style={[typography.labelLg, { color: isMissed ? colors.danger : colors.text }]} numberOfLines={1}>
-            {displayName}
-          </Text>
-        </View>
+        <Text
+          style={[typography.labelLg, { color: missed ? colors.danger : colors.text }]}
+          numberOfLines={1}
+        >
+          {displayName}
+        </Text>
         <View style={styles.metaRow}>
           <Text style={[typography.caption, { color: colors.textTertiary }]}>
             {formatTimestamp(call.startedAt)}
           </Text>
           {call.durationSec > 0 && (
-            <Text style={[typography.caption, { color: colors.textTertiary, marginLeft: 8 }]}>
-              • {formatDuration(call.durationSec)}
+            <Text style={[typography.caption, { color: colors.textTertiary, marginLeft: 6 }]}>
+              · {formatDuration(call.durationSec)}
             </Text>
           )}
-          {isMissed && (
-            <Text style={[typography.caption, { color: colors.danger, marginLeft: 8 }]}>• Missed</Text>
+          {missed && (
+            <Text style={[typography.caption, { color: colors.danger, marginLeft: 6 }]}>
+              · Missed
+            </Text>
+          )}
+          {call.disposition === 'busy' && !missed && (
+            <Text style={[typography.caption, { color: colors.warning, marginLeft: 6 }]}>
+              · Busy
+            </Text>
           )}
         </View>
       </View>
+
       <TouchableOpacity
         style={[styles.callBtn, { backgroundColor: colors.primaryMuted, borderColor: colors.primary + '30' }]}
         onPress={() => onCall(displayNumber)}
@@ -112,32 +131,49 @@ export function RecentTab() {
 
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'missed'>('all');
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (isRefresh = false) => {
+      if (!token) return;
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+      try {
+        const data = await getCallHistory(token);
+        setCalls(data);
+      } catch (e: any) {
+        setError(e?.message || 'Failed to load call history');
+        setCalls([]);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [token],
+  );
 
   useFocusEffect(
     useCallback(() => {
-      if (!token) return;
-      setLoading(true);
-      getCallHistory(token)
-        .then((data) => setCalls(data))
-        .catch(() => setCalls([]))
-        .finally(() => setLoading(false));
-    }, [token])
+      load(false);
+    }, [load]),
   );
 
   const handleCall = (number: string) => {
+    if (!number) return;
     if (sip.registrationState === 'registered') {
       sip.dial(number);
     }
   };
 
   const filtered = calls.filter((c) => {
-    if (filter === 'missed') {
-      const isInbound = c.direction === 'inbound' || c.direction === 'INBOUND';
-      return isInbound && c.durationSec === 0;
-    }
+    if (filter === 'missed') return isMissedCall(c);
     return true;
   });
+
+  const missedCount = calls.filter(isMissedCall).length;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
@@ -158,12 +194,14 @@ export function RecentTab() {
             onPress={() => setFilter(f)}
             activeOpacity={0.75}
           >
-            {f === 'missed' && (
-              <View style={[styles.filterDot, { backgroundColor: filter === f ? '#fff' : colors.danger }]} />
-            )}
             <Text style={[typography.labelSm, { color: filter === f ? '#fff' : colors.textSecondary }]}>
               {f === 'all' ? 'All' : 'Missed'}
             </Text>
+            {f === 'missed' && missedCount > 0 && (
+              <View style={[styles.badge, { backgroundColor: filter === f ? 'rgba(255,255,255,0.3)' : colors.danger }]}>
+                <Text style={styles.badgeText}>{missedCount > 99 ? '99+' : missedCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         ))}
       </View>
@@ -175,11 +213,21 @@ export function RecentTab() {
             Loading call history…
           </Text>
         </View>
+      ) : error ? (
+        <EmptyState
+          icon="alert-circle-outline"
+          title="Could not load calls"
+          subtitle={error}
+        />
       ) : filtered.length === 0 ? (
         <EmptyState
           icon="time-outline"
-          title="No recent calls"
-          subtitle={filter === 'missed' ? 'No missed calls found.' : 'Your call history will appear here.'}
+          title={filter === 'missed' ? 'No missed calls' : 'No recent calls'}
+          subtitle={
+            filter === 'missed'
+              ? 'All your calls were answered.'
+              : 'Your call history will appear here after your first call.'
+          }
         />
       ) : (
         <FlatList
@@ -187,6 +235,14 @@ export function RecentTab() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <CallRow call={item} onCall={handleCall} />}
           contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load(true)}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
         />
       )}
     </View>
@@ -209,18 +265,37 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1,
-    gap: 5,
+    gap: 6,
   },
-  filterDot: { width: 6, height: 6, borderRadius: 3 },
+  badge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing['4'],
-    paddingVertical: 12,
+    paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  rowInfo: { flex: 1, marginLeft: 12 },
-  nameRow: { flexDirection: 'row', alignItems: 'center' },
+  iconBubble: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  rowInfo: { flex: 1 },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
   callBtn: {
     width: 36,
@@ -229,6 +304,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
+    marginLeft: 8,
   },
   loadingArea: {
     flex: 1,

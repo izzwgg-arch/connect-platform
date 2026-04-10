@@ -34,12 +34,14 @@ export type ProvisioningBundle = {
 
 export type CallRecord = {
   id: string;
-  direction: string;
+  linkedId?: string | null;
+  direction: string; // "inbound" | "outbound" | "internal" | "unknown"
   fromNumber: string;
+  fromName?: string | null;
   toNumber: string;
   startedAt: string;
   durationSec: number;
-  disposition?: string;
+  disposition?: string; // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
 };
 
 export type CallInvite = {

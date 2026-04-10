@@ -43,7 +43,7 @@ export async function resetSipPassword(token: string): Promise<{ sipPassword: st
 }
 
 export async function getCallHistory(token: string): Promise<CallRecord[]> {
-  const res = await fetch(`${API_BASE}/voice/calls`, {
+  const res = await fetch(`${API_BASE}/voice/me/calls`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   const json = await parseJson(res);
@@ -241,5 +241,23 @@ export async function postCallQualityReport(token: string, report: Record<string
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "CQR_FAILED");
   return json;
+}
+
+export async function postCallQualityPing(token: string, snapshot: Record<string, unknown>) {
+  const res = await fetch(`${API_BASE}/voice/diag/call-quality-ping`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(snapshot),
+  });
+  // Non-fatal — don't throw on error
+  return res.ok;
+}
+
+export async function clearCallQualityPing(token: string) {
+  await fetch(`${API_BASE}/voice/diag/call-quality-ping/clear`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({}),
+  }).catch(() => {});
 }
 

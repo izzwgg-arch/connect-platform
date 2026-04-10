@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,15 +9,16 @@ import {
   Alert,
   Platform,
   PermissionsAndroid,
+  Pressable,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSip } from '../../context/SipContext';
 import { useTheme } from '../../context/ThemeContext';
 import { typography } from '../../theme/typography';
-import { spacing, radius } from '../../theme/spacing';
+import { spacing } from '../../theme/spacing';
+import { playDtmfTone } from '../../audio/telephonyAudio';
 
 const { width } = Dimensions.get('window');
 
@@ -36,55 +37,107 @@ const KEYS = [
   { digit: '#', sub: '' },
 ];
 
-function DialKey({ digit, sub, onPress, onLongPress }: {
+// Key size: 3 keys per row with comfortable gutters
+const PAD_H_PADDING = spacing['6'] as number ?? 24;
+const KEY_GAP = 14;
+const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
+
+function DialKey({
+  digit,
+  sub,
+  onPress,
+  onLongPress,
+  disabled,
+}: {
   digit: string;
   sub: string;
   onPress: (d: string) => void;
   onLongPress?: (d: string) => void;
+  disabled?: boolean;
 }) {
   const { colors, isDark } = useTheme();
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const opacityAnim = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: 0.90,
+        useNativeDriver: true,
+        speed: 40,
+        bounciness: 0,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 0.75,
+        duration: 60,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scaleAnim, opacityAnim]);
+
+  const handlePressOut = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        speed: 20,
+        bounciness: 6,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scaleAnim, opacityAnim]);
 
   const handlePress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    Animated.sequence([
-      Animated.timing(scaleAnim, { toValue: 0.88, duration: 70, useNativeDriver: true }),
-      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 8 }),
-    ]).start();
     onPress(digit);
   };
 
   const handleLongPress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    onLongPress?.(digit);
+    if (onLongPress) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      onLongPress(digit);
+    }
   };
 
-  const KEY_SIZE = Math.floor((width - spacing['8'] * 2 - spacing['5'] * 2) / 3);
+  const keyBg = isDark
+    ? 'rgba(255, 255, 255, 0.07)'
+    : 'rgba(0, 0, 0, 0.04)';
+  const keyBorder = isDark
+    ? 'rgba(255, 255, 255, 0.09)'
+    : 'rgba(0, 0, 0, 0.07)';
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-      <TouchableOpacity
-        onPress={handlePress}
-        onLongPress={handleLongPress}
-        activeOpacity={0.75}
+    <Pressable
+      onPress={handlePress}
+      onLongPress={handleLongPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      disabled={disabled}
+      hitSlop={4}
+    >
+      <Animated.View
         style={[
           styles.key,
           {
             width: KEY_SIZE,
-            height: KEY_SIZE * 0.78,
-            backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : colors.surfaceElevated,
-            borderColor: isDark ? 'rgba(255,255,255,0.06)' : colors.border,
+            height: KEY_SIZE * 0.74,
+            backgroundColor: keyBg,
+            borderColor: keyBorder,
+            transform: [{ scale: scaleAnim }],
+            opacity: opacityAnim,
           },
         ]}
       >
-        <Text style={[typography.dialpadKey as any, { color: colors.text }]}>{digit}</Text>
+        <Text style={[styles.keyDigit, { color: colors.text }]}>{digit}</Text>
         {sub ? (
-          <Text style={[typography.dialpadSub as any, { color: colors.textTertiary, marginTop: 1 }]}>
-            {sub}
-          </Text>
+          <Text style={[styles.keySub, { color: colors.textTertiary }]}>{sub}</Text>
         ) : null}
-      </TouchableOpacity>
-    </Animated.View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -102,6 +155,7 @@ export function KeypadTab() {
     sip.callState === 'ended';
 
   const handleKey = (digit: string) => {
+    playDtmfTone(digit);
     if (callActive) {
       sip.sendDtmf(digit);
     } else {
@@ -110,9 +164,8 @@ export function KeypadTab() {
   };
 
   const handleLongPress = (digit: string) => {
-    if (digit === '0') setNumber((prev) => prev + '+');
-    if (digit === '1') {
-      // Voicemail shortcut
+    if (digit === '0') {
+      setNumber((prev) => (prev.endsWith('+') ? prev : prev.slice(0, -1) + '+'));
     }
   };
 
@@ -121,15 +174,36 @@ export function KeypadTab() {
     setNumber((prev) => prev.slice(0, -1));
   };
 
+  const handleLongBackspace = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setNumber('');
+  };
+
   const handleDial = async () => {
-    const target = number.trim();
-    if (!target) return;
+    // Last-dialed redial: if input is empty, fill + dial last number
+    if (!number.trim()) {
+      const last = sip.lastDialed;
+      if (!last) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+        return;
+      }
+      setNumber(last);
+      // Small delay so user sees the number fill before the call starts
+      setTimeout(() => doCall(last), 150);
+      return;
+    }
+    await doCall(number.trim());
+  };
+
+  const doCall = async (target: string) => {
     if (sip.registrationState !== 'registered') {
-      Alert.alert('Not Registered', 'The softphone is not registered. Please check your connection in Settings.');
+      Alert.alert(
+        'Not Registered',
+        'The softphone is not registered. Please check your connection in Settings.',
+      );
       return;
     }
 
-    // Request microphone permission before dialing (Android)
     if (Platform.OS === 'android') {
       try {
         const granted = await PermissionsAndroid.request(
@@ -164,131 +238,182 @@ export function KeypadTab() {
   };
 
   const handleHangup = async () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     await sip.hangup();
   };
 
   // Format display number nicely
   const formatDisplay = (n: string): string => {
+    if (!n) return '';
+    // Extension (1–5 digits) — show raw
+    if (n.length <= 5 && /^\d+$/.test(n)) return n;
     const digits = n.replace(/\D/g, '');
     if (digits.length <= 3) return digits;
     if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-    if (digits.length <= 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-    return n; // For non-NANP or ext numbers, show as-is
+    if (digits.length <= 10)
+      return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+    return n;
   };
 
-  const isExtension = number.length > 0 && number.length <= 5 && /^\d+$/.test(number);
-  const displayValue = isExtension ? number : formatDisplay(number);
-
+  const displayValue = formatDisplay(number);
   const registered = sip.registrationState === 'registered';
-  const KEY_SIZE = Math.floor((width - spacing['8'] * 2 - spacing['5'] * 2) / 3);
+
+  // Hint text when input is empty
+  const hintText = sip.lastDialed
+    ? `Tap  to redial ${sip.lastDialed}`
+    : 'Enter a number to call';
+
+  const callButtonDisabled = callActive
+    ? false
+    : dialing;
+
+  const callButtonColor = callActive
+    ? colors.callRed
+    : registered
+    ? colors.callGreen
+    : colors.textTertiary;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Display area */}
-      <View style={[styles.displayArea, { paddingTop: insets.top + 20 }]}>
-        <Text
-          style={[
-            styles.displayText,
-            {
-              color: colors.text,
-              fontSize: displayValue.length > 12 ? 28 : displayValue.length > 8 ? 34 : 40,
-            },
-          ]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-        >
-          {displayValue || ' '}
-        </Text>
 
-        {/* Status indicator */}
-        <View style={styles.statusRow}>
-          <View style={[styles.statusDot, { backgroundColor: registered ? colors.success : colors.danger }]} />
-          <Text style={[typography.caption, { color: colors.textSecondary }]}>
-            {registered ? 'Ready' : 'Not registered'}
+      {/* ── Display Area ── */}
+      <View style={[styles.displayArea, { paddingTop: insets.top + 16 }]}>
+
+        {/* Number input */}
+        <View style={styles.numberRow}>
+          <Text
+            style={[
+              styles.displayText,
+              {
+                color: colors.text,
+                fontSize:
+                  displayValue.length > 14
+                    ? 24
+                    : displayValue.length > 10
+                    ? 30
+                    : displayValue.length > 6
+                    ? 36
+                    : 44,
+              },
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
+            {displayValue || ' '}
           </Text>
-          {sip.lastError && !callActive && (
-            <Text style={[typography.caption, { color: colors.danger, marginLeft: 8 }]} numberOfLines={1}>
-              • {sip.lastError}
-            </Text>
+
+          {/* Backspace button — inline with display */}
+          {number.length > 0 && (
+            <Pressable
+              onPress={handleBackspace}
+              onLongPress={handleLongBackspace}
+              delayLongPress={500}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              style={styles.backspaceBtn}
+            >
+              <Ionicons name="backspace-outline" size={26} color={colors.textSecondary} />
+            </Pressable>
           )}
-          {callActive && (
-            <Text style={[typography.caption, { color: colors.warning, marginLeft: 8 }]}>
-              •{' '}
-              {sip.callState === 'connected'
+        </View>
+
+        {/* Hint / status */}
+        {!callActive && !number && (
+          <Text
+            style={[styles.hintText, { color: colors.textTertiary }]}
+            numberOfLines={1}
+          >
+            {hintText}
+          </Text>
+        )}
+
+        {/* SIP registration status pill */}
+        <View style={[
+          styles.statusPill,
+          {
+            backgroundColor: registered
+              ? (isDark ? 'rgba(46,125,50,0.22)' : 'rgba(46,125,50,0.10)')
+              : (isDark ? 'rgba(183,28,28,0.22)' : 'rgba(183,28,28,0.10)'),
+          },
+        ]}>
+          <View style={[styles.statusDot, { backgroundColor: registered ? colors.callGreen : colors.danger }]} />
+          <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]}>
+            {callActive
+              ? sip.callState === 'connected'
                 ? 'On Call'
                 : sip.callState === 'dialing'
                 ? 'Calling…'
                 : sip.callState === 'ringing'
-                ? 'Ringing…'
-                : 'Ending…'}
+                ? 'Incoming…'
+                : 'Ending…'
+              : registered
+              ? 'Ready'
+              : 'Not registered'}
+          </Text>
+          {sip.lastError && !callActive && (
+            <Text style={[styles.statusText, { color: colors.danger, marginLeft: 6 }]} numberOfLines={1}>
+              · {sip.lastError}
             </Text>
           )}
         </View>
       </View>
 
-      {/* Keypad */}
-      <View style={[styles.keypad, { paddingHorizontal: spacing['8'] }]}>
-        {/* Keys in rows of 3 */}
+      {/* ── Keypad Grid ── */}
+      <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING }]}>
         <View style={styles.keyGrid}>
           {KEYS.map(({ digit, sub }) => (
-            <View key={digit} style={styles.keyWrapper}>
-              <DialKey digit={digit} sub={sub} onPress={handleKey} onLongPress={handleLongPress} />
-            </View>
+            <DialKey
+              key={digit}
+              digit={digit}
+              sub={sub}
+              onPress={handleKey}
+              onLongPress={handleLongPress}
+              disabled={dialing}
+            />
           ))}
         </View>
 
-        {/* Bottom row: clear, call, backspace */}
-        <View style={[styles.bottomRow, { paddingHorizontal: 0 }]}>
-          {/* Clear */}
-          {number.length > 0 ? (
-            <TouchableOpacity
-              style={[styles.clearBtn, { width: KEY_SIZE * 0.6, height: KEY_SIZE * 0.6 }]}
-              onPress={() => setNumber('')}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="close-circle-outline" size={28} color={colors.textTertiary} />
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: KEY_SIZE * 0.6 }} />
-          )}
+        {/* ── Action Row ── */}
+        <View style={styles.actionRow}>
 
-          {/* Call / Hangup */}
+          {/* Left spacer / clear all */}
+          <View style={styles.actionSide}>
+            {number.length > 1 && (
+              <TouchableOpacity
+                onPress={() => setNumber('')}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={[styles.ghostBtn, { borderColor: colors.border }]}
+              >
+                <Ionicons name="close" size={20} color={colors.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Call / Hangup button */}
           <TouchableOpacity
             style={[
               styles.callBtn,
               {
-                backgroundColor: callActive ? colors.callRed : registered ? colors.callGreen : colors.textTertiary,
-                shadowColor: callActive ? colors.callRed : colors.callGreen,
+                backgroundColor: callButtonColor,
+                shadowColor: callButtonColor,
               },
             ]}
             onPress={callActive ? handleHangup : handleDial}
-            activeOpacity={0.85}
-            disabled={!callActive && !number.trim()}
+            activeOpacity={0.82}
+            disabled={callButtonDisabled}
           >
             <Ionicons
-              name="call"
-              size={28}
+              name={callActive ? 'call' : 'call'}
+              size={30}
               color="#fff"
-              style={callActive ? { transform: [{ rotate: '135deg' }] } : {}}
+              style={callActive ? { transform: [{ rotate: '135deg' }] } : undefined}
             />
           </TouchableOpacity>
 
-          {/* Backspace */}
-          {number.length > 0 ? (
-            <TouchableOpacity
-              style={[styles.clearBtn, { width: KEY_SIZE * 0.6, height: KEY_SIZE * 0.6 }]}
-              onPress={handleBackspace}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="backspace-outline" size={24} color={colors.textTertiary} />
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: KEY_SIZE * 0.6 }} />
-          )}
+          {/* Right spacer (balanced) */}
+          <View style={styles.actionSide} />
         </View>
       </View>
 
-      {/* Bottom safe padding */}
       <View style={{ height: insets.bottom + 90 }} />
     </View>
   );
@@ -296,28 +421,56 @@ export function KeypadTab() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+
+  // ── Display ──────────────────────────────────────────
   displayArea: {
     alignItems: 'center',
-    paddingHorizontal: spacing['8'],
-    paddingBottom: spacing['6'],
+    paddingHorizontal: PAD_H_PADDING,
+    paddingBottom: spacing['4'] as number ?? 16,
+  },
+  numberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 60,
+    width: '100%',
+    gap: 8,
   },
   displayText: {
     fontWeight: '300',
-    letterSpacing: 2,
+    letterSpacing: 1.5,
     textAlign: 'center',
-    minHeight: 52,
+    flex: 1,
   },
-  statusRow: {
+  backspaceBtn: {
+    padding: 4,
+  },
+  hintText: {
+    fontSize: 13,
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    marginTop: 10,
+    gap: 6,
   },
   statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: 6,
   },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+
+  // ── Keys ─────────────────────────────────────────────
   keypad: {
     flex: 1,
     justifyContent: 'center',
@@ -326,39 +479,58 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: spacing['5'],
-  },
-  keyWrapper: {
-    width: '33.33%',
-    alignItems: 'center',
-    marginBottom: spacing['3'],
+    rowGap: KEY_GAP,
+    columnGap: KEY_GAP,
+    marginBottom: spacing['6'] as number ?? 24,
   },
   key: {
-    borderRadius: radius['2xl'],
+    borderRadius: 18,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bottomRow: {
+  keyDigit: {
+    fontSize: 26,
+    fontWeight: '400',
+    letterSpacing: 0.5,
+    lineHeight: 30,
+  },
+  keySub: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.8,
+    marginTop: 1,
+  },
+
+  // ── Action Row ───────────────────────────────────────
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing['4'],
+    paddingHorizontal: 4,
   },
-  clearBtn: {
+  actionSide: {
+    width: 52,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 100,
+  },
+  ghostBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   callBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 10,
   },
 });

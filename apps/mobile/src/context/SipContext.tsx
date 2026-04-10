@@ -7,6 +7,7 @@ import type { CallState, ProvisioningBundle, SipRegistrationState } from "../typ
 import { useAuth } from "./AuthContext";
 
 const PROVISION_KEY = "cc_mobile_provision";
+const LAST_DIALED_KEY = "cc_mobile_last_dialed";
 
 type SipState = {
   registrationState: SipRegistrationState;
@@ -17,6 +18,8 @@ type SipState = {
   onHold: boolean;
   hasProvisioning: boolean;
   lastError: string | null;
+  /** Last number the user dialed outbound — persisted across restarts */
+  lastDialed: string | null;
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: () => Promise<void>;
   unregister: () => Promise<void>;
@@ -52,6 +55,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const [onHold, setOnHold] = useState(false);
   const [hasProvisioning, setHasProvisioning] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [lastDialed, setLastDialed] = useState<string | null>(null);
 
   // Auto-reset callState from 'ended' back to 'idle' after a brief pause
   // so the ended-call screen can show a farewell state before dismissing.
@@ -102,6 +106,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     });
 
     (async () => {
+      // Load last-dialed number
+      const savedLastDialed = await SecureStore.getItemAsync(LAST_DIALED_KEY).catch(() => null);
+      if (savedLastDialed) setLastDialed(savedLastDialed);
+
       const raw = await SecureStore.getItemAsync(PROVISION_KEY);
       if (!raw) return;
       try {
@@ -139,6 +147,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       onHold,
       hasProvisioning,
       lastError,
+      lastDialed,
 
       saveProvisioning: async (bundle) => {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
@@ -161,6 +170,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       dial: async (target) => {
         setRemoteParty(target);
         setLastError(null);
+        // Persist last dialed number for "redial" feature
+        setLastDialed(target);
+        SecureStore.setItemAsync(LAST_DIALED_KEY, target).catch(() => {});
         await clientRef.current.dial(target);
       },
 
@@ -206,7 +218,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         clientRef.current.sendDtmf(digit);
       },
     }),
-    [registrationState, callState, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError],
+    [registrationState, callState, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed],
   );
 
   return <SipContext.Provider value={value}>{children}</SipContext.Provider>;
