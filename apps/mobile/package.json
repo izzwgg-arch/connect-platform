@@ -33,6 +33,7 @@
     "expo-secure-store": "^13.0.2",
     "expo-status-bar": "^1.12.1",
     "jssip": "^3.10.1",
+    "react-native-incall-manager": "^4.0.0",
     "react": "18.2.0",
     "react-native": "0.74.5",
     "react-native-callkeep": "^4.3.13",

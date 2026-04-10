@@ -198,7 +198,12 @@ export class JsSipClient implements SipClient {
     session.on("confirmed", () => {
       console.log('[SIP] Call confirmed (connected)');
       stopAllTelephonyAudio().catch(() => undefined);
+      // Start InCallManager in audio mode — this sets Android AudioManager to
+      // MODE_IN_COMMUNICATION which routes audio to the earpiece by default.
       ICM.start("audio");
+      // Belt-and-suspenders: explicitly route to earpiece after a short settle
+      // delay so MODE_IN_COMMUNICATION is fully active before we set routing.
+      setTimeout(() => ICM.routeToEarpiece(), 150);
       if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.events.onCallState?.("connected");
       this.startLivePing(session);
@@ -283,9 +288,10 @@ export class JsSipClient implements SipClient {
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
-    // Start US ringback immediately (before "progress" arrives from PBX)
+    // Start US ringback immediately (before "progress" arrives from PBX).
+    // ICM.start() is called in the "confirmed" handler so InCallManager's
+    // MODE_IN_COMMUNICATION doesn't conflict with expo-av ringback playback.
     initAudioSession().then(() => startRingback()).catch(() => undefined);
-    ICM.start("audio");
     try {
       this.session = this.ua.call(dest, {
         mediaConstraints: VOICE_AUDIO_CONSTRAINTS,
@@ -306,6 +312,7 @@ export class JsSipClient implements SipClient {
   async answer() {
     stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on answer
     ICM.start("audio");
+    setTimeout(() => ICM.routeToEarpiece(), 150);
     this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
   }
 
@@ -317,6 +324,7 @@ export class JsSipClient implements SipClient {
         this.session = session;
         stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone
         ICM.start("audio");
+        setTimeout(() => ICM.routeToEarpiece(), 150);
         session.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
         return true;
       }

@@ -53,11 +53,19 @@ const config: ExpoConfig = {
   version: '1.0.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
-  backgroundColor: '#090e18',
+  backgroundColor: '#040810',
+
+  // ── App icon (1024×1024, no rounded corners — OS clips to shape) ──────────
+  icon: './assets/icon.png',
+
+  // ── Native splash — shown by Expo before JS bundle is ready ───────────────
+  // The in-app SplashScreen component takes over immediately after JS loads.
   splash: {
-    backgroundColor: '#090e18',
-    resizeMode: 'contain',
+    image: './assets/splash.png',
+    backgroundColor: '#040810',
+    resizeMode: 'cover',
   },
+
   ios: {
     supportsTablet: false,
     bundleIdentifier: 'com.connectcommunications.mobile',
@@ -69,12 +77,20 @@ const config: ExpoConfig = {
   },
   android: {
     package: 'com.connectcommunications.mobile',
-    backgroundColor: '#090e18',
+    backgroundColor: '#040810',
+    // Adaptive icon: foreground is the icon image, background is the gradient base colour.
+    // This gives proper Android 8+ adaptive icon behaviour (circle, squircle, etc).
+    adaptiveIcon: {
+      foregroundImage: './assets/adaptive-icon.png',
+      backgroundColor: '#1d4ed8',
+    },
     minSdkVersion: 24,
       permissions: [
         'CAMERA',
         'RECORD_AUDIO',
         'MODIFY_AUDIO_SETTINGS',
+        'BLUETOOTH',
+        'BLUETOOTH_CONNECT',
         'POST_NOTIFICATIONS',
         'FOREGROUND_SERVICE',
         'VIBRATE',

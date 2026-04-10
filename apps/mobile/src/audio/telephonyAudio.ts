@@ -11,6 +11,7 @@
  */
 
 import { Audio } from "expo-av";
+import { Platform } from "react-native";
 
 // ─── PCM WAV generation ───────────────────────────────────────────────────────
 
@@ -162,20 +163,32 @@ let ringtoneSound: Audio.Sound | null = null;
 let ringtoneTimer: ReturnType<typeof setTimeout> | null = null;
 let ringtoneStopped = false;
 
-/** Set up the audio session for telephony (call audio + BT mic on iOS). */
+/**
+ * Set up the audio session for telephony.
+ *
+ * iOS: configure the AVAudioSession so the mic, silent-mode playback, and
+ *   background audio all work correctly for VoIP calls.
+ *
+ * Android: intentionally skipped — InCallManager owns the AudioManager mode
+ *   on Android. Calling setAudioModeAsync here would override InCallManager's
+ *   MODE_IN_COMMUNICATION setting and route call audio to the speakerphone
+ *   instead of the earpiece.
+ */
 export async function initAudioSession() {
+  if (Platform.OS !== "ios") return;
   try {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,       // Required for call mic + Bluetooth on iOS
       playsInSilentModeIOS: true,     // Always play even in silent mode
       staysActiveInBackground: true,  // Keep audio active during a call
-      shouldDuckAndroid: false,       // Don't duck — we own the audio focus
+      shouldDuckAndroid: false,
     });
   } catch { /* non-fatal */ }
 }
 
-/** Restore default audio session after a call ends. */
+/** Restore default audio session after a call ends (iOS only). */
 export async function restoreAudioSession() {
+  if (Platform.OS !== "ios") return;
   try {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
