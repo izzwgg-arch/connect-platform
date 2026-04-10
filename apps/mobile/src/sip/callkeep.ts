@@ -64,32 +64,24 @@ export function subscribeNativeCallActions(params: {
 
 /**
  * Returns any CallKeep events that fired before listeners were attached.
- * Critical for the cold-start scenario where the user taps "Answer" in the
- * native CallKeep UI (shown by the background task), then Android brings the
- * app to the foreground. By the time React has mounted the provider and wired
- * subscribeNativeCallActions, the "answerCall" event has already fired.
  *
- * Call this once after setupNativeCalling() in NotificationsContext.
+ * NOTE: react-native-callkeep's native getInitialEvents() has a bug
+ * (ObjectAlreadyConsumedException — WritableNativeArray consumed twice) that
+ * causes a FATAL native crash on every cold start. We do NOT call that method.
+ *
+ * Instead, cold-start answer handling is done entirely through:
+ *   1. AsyncStorage PENDING_CALL_STORAGE_KEY  (written by backgroundCallTask)
+ *   2. getPendingInvites() API call
+ * Both are performed in NotificationsContext immediately after setupNativeCalling().
+ * The live subscribeNativeCallActions listeners pick up any answer/end events
+ * that fire after React mounts, so no pre-mount buffering is needed.
  */
 export async function consumeInitialCallKeepEvents(): Promise<
   Array<{ type: "answer" | "end"; callUUID: string }>
 > {
-  try {
-    // react-native-callkeep buffers events fired before any JS listener was
-    // attached and exposes them via getInitialEvents().
-    const raw: any[] = await (RNCallKeep as any).getInitialEvents?.() ?? [];
-    // Drain the buffer so events don't re-fire on the next mount
-    (RNCallKeep as any).clearInitialEvents?.();
-    return raw.flatMap((e) => {
-      const uuid: string = e?.callUUID ?? e?.data?.callUUID ?? "";
-      if (!uuid) return [];
-      if (e.name === "answerCall") return [{ type: "answer" as const, callUUID: uuid }];
-      if (e.name === "endCall") return [{ type: "end" as const, callUUID: uuid }];
-      return [];
-    });
-  } catch {
-    return [];
-  }
+  // Intentionally returns empty — see note above.
+  // Do NOT call RNCallKeep.getInitialEvents() here.
+  return [];
 }
 
 /**
