@@ -288,9 +288,10 @@ export class JsSipClient implements SipClient {
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
-    // Start US ringback immediately (before "progress" arrives from PBX).
-    // ICM.start() is called in the "confirmed" handler so InCallManager's
-    // MODE_IN_COMMUNICATION doesn't conflict with expo-av ringback playback.
+    // Start InCallManager early so there is always a matching stop() later.
+    // On Android this sets MODE_IN_COMMUNICATION; expo-av ringback audio will
+    // play through the earpiece, which is correct behaviour for a VoIP call.
+    ICM.start("audio");
     initAudioSession().then(() => startRingback()).catch(() => undefined);
     try {
       this.session = this.ua.call(dest, {

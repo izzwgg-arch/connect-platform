@@ -157,11 +157,11 @@ async function playLooping(uri: string, volume = 1.0): Promise<Audio.Sound | nul
 
 let ringbackSound: Audio.Sound | null = null;
 let ringbackTimer: ReturnType<typeof setTimeout> | null = null;
-let ringbackStopped = false;
+let ringbackStopped = true; // true = not playing; false = currently playing
 
 let ringtoneSound: Audio.Sound | null = null;
 let ringtoneTimer: ReturnType<typeof setTimeout> | null = null;
-let ringtoneStopped = false;
+let ringtoneStopped = true; // true = not playing; false = currently playing
 
 /**
  * Set up the audio session for telephony.
