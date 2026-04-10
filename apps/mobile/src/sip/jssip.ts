@@ -28,9 +28,9 @@ const ICM = {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
-      // ringback: '' — we manage all tones ourselves; auto: true lets the OS
-      // handle Bluetooth headset routing automatically when speaker=false.
-      m.start({ media, ringback: "", auto: true });
+      // ringback: '' — we supply our own tones.
+      // Do NOT pass auto:true — it auto-routes to speakerphone on Android.
+      m.start({ media, ringback: "" });
     } catch { /* module not linked */ }
   },
   stop() {

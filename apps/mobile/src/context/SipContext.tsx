@@ -185,10 +185,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
     })();
 
-    const sub = AppState.addEventListener("change", async (state) => {
-      if (state === "active") {
+    const sub = AppState.addEventListener("change", async (nextState) => {
+      if (nextState === "active") {
         const raw = await SecureStore.getItemAsync(PROVISION_KEY).catch(() => null);
         if (!raw) return;
+        // Force a fresh re-register; jssip.register() tears down any broken UA first
         await clientRef.current.register().catch(() => undefined);
       }
     });
@@ -275,36 +276,28 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       cycleAudioRoute: () => {
-        // Cycle: earpiece → speaker → bluetooth → earpiece
-        // Bluetooth step is attempted; if no BT headset, it stays on earpiece
-        const cycle: AudioRoute[] = ["earpiece", "speaker", "bluetooth"];
-        const currentIdx = cycle.indexOf(audioRoute);
-        const next = cycle[(currentIdx + 1) % cycle.length];
+        // Simple cycle: earpiece ↔ speaker
+        // Bluetooth is handled automatically by the OS when speaker=false
+        // and a BT headset is connected — we reflect this in the label/icon.
         try {
           const ICMModule = require("react-native-incall-manager").default;
-          if (next === "speaker") {
+          if (audioRoute === "earpiece" || audioRoute === "bluetooth") {
+            // Switch to loudspeaker
             ICMModule.setSpeakerphoneOn(true);
             setSpeakerOn(true);
-          } else if (next === "bluetooth") {
-            ICMModule.setSpeakerphoneOn(false);
-            if (typeof ICMModule.chooseAudioRoute === "function") {
-              ICMModule.chooseAudioRoute("BLUETOOTH");
-            }
-            setSpeakerOn(false);
+            setAudioRoute("speaker");
           } else {
+            // Switch back to earpiece/BT
             ICMModule.setSpeakerphoneOn(false);
-            if (typeof ICMModule.chooseAudioRoute === "function") {
-              ICMModule.chooseAudioRoute("EARPIECE");
-            }
             setSpeakerOn(false);
+            setAudioRoute("earpiece");
           }
-          setAudioRoute(next);
         } catch {
-          // InCallManager not linked — fall back to simple toggle
-          const next2 = !speakerOn;
-          clientRef.current.setSpeaker(next2);
-          setSpeakerOn(next2);
-          setAudioRoute(next2 ? "speaker" : "earpiece");
+          // InCallManager not linked — simple toggle
+          const next = !speakerOn;
+          clientRef.current.setSpeaker(next);
+          setSpeakerOn(next);
+          setAudioRoute(next ? "speaker" : "earpiece");
         }
       },
 
