@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Switch,
   Alert,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +15,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
+import { useIncomingNotifications } from '../context/NotificationsContext';
 import { Avatar } from '../components/ui/Avatar';
 import { HeaderBar } from '../components/HeaderBar';
 import { getVoiceExtension } from '../api/client';
@@ -102,6 +104,7 @@ export function SettingsScreen() {
   const { colors, mode, setMode, isDark } = useTheme();
   const { token, logout } = useAuth();
   const sip = useSip();
+  const { batteryOptimizationEnabled, openBatteryOptimizationSettings } = useIncomingNotifications();
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
 
@@ -273,6 +276,58 @@ export function SettingsScreen() {
           />
         </SectionCard>
 
+        {/* Incoming calls reliability — Android only */}
+        {Platform.OS === 'android' && (
+          <>
+            <SectionHeader title="Incoming Calls" />
+            <SectionCard>
+              <SettingRow
+                icon="battery-charging-outline"
+                label="Battery Optimization"
+                subtitle="Disable to ensure calls ring when app is closed"
+                iconColor={batteryOptimizationEnabled ? colors.warning : colors.success}
+                onPress={() => {
+                  Alert.alert(
+                    'Disable Battery Optimization',
+                    'Android may delay incoming call notifications when battery optimization is enabled for Connect.\n\nFor reliable ringing, go to Battery → Battery Optimization → Connect → Don\'t optimize.',
+                    [
+                      { text: 'Later', style: 'cancel' },
+                      {
+                        text: 'Open Settings',
+                        onPress: openBatteryOptimizationSettings,
+                      },
+                    ],
+                  );
+                }}
+                rightElement={
+                  <View style={[styles.statusChip, { backgroundColor: batteryOptimizationEnabled ? colors.warningMuted : colors.successMuted }]}>
+                    <Text style={[typography.labelSm, { color: batteryOptimizationEnabled ? colors.warning : colors.success }]}>
+                      {batteryOptimizationEnabled ? 'May block' : 'Check'}
+                    </Text>
+                  </View>
+                }
+              />
+              <SettingRow
+                icon="notifications-circle-outline"
+                label="Notification Permissions"
+                subtitle="Required for incoming call alerts"
+                iconColor={colors.primary}
+                onPress={async () => {
+                  const { status } = await import('expo-notifications').then(m => m.getPermissionsAsync());
+                  if (status !== 'granted') {
+                    Alert.alert(
+                      'Enable Notifications',
+                      'Connect needs notification permission to show incoming call alerts. Please enable it in Android Settings → Apps → Connect → Notifications.',
+                    );
+                  } else {
+                    Alert.alert('Notifications enabled', 'Notifications are properly enabled for Connect.');
+                  }
+                }}
+              />
+            </SectionCard>
+          </>
+        )}
+
         {/* Danger zone */}
         <SectionHeader title="Account" />
         <SectionCard>
@@ -343,5 +398,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     maxWidth: '40%',
+  },
+  statusChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
 });

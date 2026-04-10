@@ -98,6 +98,10 @@ const config: ExpoConfig = {
         'MANAGE_OWN_CALLS',
         'READ_PHONE_STATE',
         'FOREGROUND_SERVICE_PHONE_CALL',
+        // Allows CallKeep to restore state after device reboot
+        'RECEIVE_BOOT_COMPLETED',
+        // Required by expo-task-manager for background processing
+        'WAKE_LOCK',
       ],
   },
   extra: {
@@ -113,7 +117,33 @@ const config: ExpoConfig = {
   plugins: [
     withCallKeepManifest,
     'expo-secure-store',
-    'expo-notifications',
+    [
+      'expo-notifications',
+      {
+        // Notification icon shown in the Android status bar — monochrome white PNG.
+        // Falls back to the app icon if this asset doesn't exist.
+        icon: './assets/notification-icon.png',
+        color: '#1d4ed8',
+        // Pre-configure the high-importance Telecom/call channel so it exists
+        // even before the JS runtime calls setNotificationChannelAsync().
+        // This matters for the first push arriving on a fresh install.
+        androidChannels: [
+          {
+            name: 'Incoming Calls',
+            importance: 5, // IMPORTANCE_HIGH (MAX on Android)
+            vibrationPattern: [0, 500, 200, 500],
+            lockScreenVisibility: 1, // VISIBILITY_PUBLIC — shown on lock screen
+            enableVibrate: true,
+            enableLights: true,
+            lightColor: '#22c55e',
+            showBadge: false,
+            id: 'connect-calls',
+            sound: 'default',
+            bypassDnd: false,
+          },
+        ],
+      },
+    ],
     'expo-dev-client',
     [
       'expo-camera',

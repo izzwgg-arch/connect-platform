@@ -177,7 +177,7 @@ export async function heartbeatVoiceDiagSession(token: string, input: {
 
 export async function postVoiceDiagEvent(token: string, input: {
   sessionId: string;
-  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR" | "MEDIA_TEST_RUN";
+  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR" | "MEDIA_TEST_RUN" | "PUSH_RECEIVED" | "UI_SHOWN";
   payload?: any;
 }) {
   const res = await fetch(`${API_BASE}/voice/diag/event`, {

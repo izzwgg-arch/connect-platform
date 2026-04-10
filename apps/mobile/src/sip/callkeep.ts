@@ -61,3 +61,45 @@ export function subscribeNativeCallActions(params: {
     try { endSub.remove(); } catch {}
   };
 }
+
+/**
+ * Returns any CallKeep events that fired before listeners were attached.
+ * Critical for the cold-start scenario where the user taps "Answer" in the
+ * native CallKeep UI (shown by the background task), then Android brings the
+ * app to the foreground. By the time React has mounted the provider and wired
+ * subscribeNativeCallActions, the "answerCall" event has already fired.
+ *
+ * Call this once after setupNativeCalling() in NotificationsContext.
+ */
+export async function consumeInitialCallKeepEvents(): Promise<
+  Array<{ type: "answer" | "end"; callUUID: string }>
+> {
+  try {
+    // react-native-callkeep buffers events fired before any JS listener was
+    // attached and exposes them via getInitialEvents().
+    const raw: any[] = await (RNCallKeep as any).getInitialEvents?.() ?? [];
+    // Drain the buffer so events don't re-fire on the next mount
+    (RNCallKeep as any).clearInitialEvents?.();
+    return raw.flatMap((e) => {
+      const uuid: string = e?.callUUID ?? e?.data?.callUUID ?? "";
+      if (!uuid) return [];
+      if (e.name === "answerCall") return [{ type: "answer" as const, callUUID: uuid }];
+      if (e.name === "endCall") return [{ type: "end" as const, callUUID: uuid }];
+      return [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Bring the app to the foreground — useful after the user taps Answer in
+ * the native CallKeep screen while the app was in the background.
+ */
+export function bringAppToForeground() {
+  try {
+    (RNCallKeep as any).backToForeground?.();
+  } catch {
+    // ignore
+  }
+}

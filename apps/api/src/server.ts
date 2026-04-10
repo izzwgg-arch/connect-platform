@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import bcrypt from "bcryptjs";
@@ -193,10 +194,35 @@ const pbxWsEndpoint: string | null = process.env.PBX_WS_ENDPOINT?.trim() || null
 const pbxHostEnv: string = (process.env.PBX_HOST || "209.145.60.79").trim();
 const stunServerEnv: string = (process.env.STUN_SERVER || "stun:stun.l.google.com:19302").trim();
 const turnServerEnv: string | null = process.env.TURN_SERVER?.trim() || null;
+// TURN_AUTH_SECRET enables HMAC time-limited credentials (use-auth-secret mode).
+// Falls back to static TURN_USERNAME / TURN_PASSWORD for legacy compatibility.
+const turnAuthSecretEnv: string | null = process.env.TURN_AUTH_SECRET?.trim() || null;
 const turnUsernameEnv: string | null = process.env.TURN_USERNAME?.trim() || null;
 const turnPasswordEnv: string | null = process.env.TURN_PASSWORD?.trim() || null;
+// Credential TTL in seconds (default 24 h). Short enough to limit abuse window.
+const TURN_CRED_TTL_SECS = Number(process.env.TURN_CRED_TTL_SECS || 86400);
+
+/**
+ * Generate short-lived HMAC TURN credentials compatible with CoTURN
+ * `use-auth-secret` mode (RFC 8489 / coturn convention).
+ *
+ * username = "<expiry_unix_ts>"
+ * password = base64( HMAC-SHA1( shared_secret, username ) )
+ *
+ * These credentials are time-limited: CoTURN rejects them once the
+ * embedded timestamp has passed, so a stolen credential pair expires
+ * automatically without any server-side revocation.
+ */
+function generateTurnCredentials(secret: string, ttlSecs = TURN_CRED_TTL_SECS): { username: string; credential: string } {
+  const expiry = Math.floor(Date.now() / 1000) + ttlSecs;
+  const username = String(expiry);
+  const password = createHmac("sha1", secret).update(username).digest("base64");
+  return { username, credential: password };
+}
 
 // Build the canonical env-sourced ICE server list.
+// When TURN_AUTH_SECRET is set, HMAC credentials are generated fresh on every
+// call so ICE configs delivered to clients always have unexpired credentials.
 // Tenant DB values override this when present (see resolveWebrtcConfig).
 function buildEnvIceServers(): Array<{ urls: string; username?: string; credential?: string }> {
   const servers: Array<{ urls: string; username?: string; credential?: string }> = [
@@ -209,13 +235,24 @@ function buildEnvIceServers(): Array<{ urls: string; username?: string; credenti
       ? turnServerEnv
       : `turn:${turnServerEnv}:3478`;
     const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
-    if (turnUsernameEnv) entry.username = turnUsernameEnv;
-    if (turnPasswordEnv) entry.credential = turnPasswordEnv;
+    if (turnAuthSecretEnv) {
+      // HMAC mode: fresh time-limited credentials
+      const { username, credential } = generateTurnCredentials(turnAuthSecretEnv);
+      entry.username = username;
+      entry.credential = credential;
+    } else {
+      // Legacy static credentials
+      if (turnUsernameEnv) entry.username = turnUsernameEnv;
+      if (turnPasswordEnv) entry.credential = turnPasswordEnv;
+    }
     servers.push(entry);
   }
   return servers;
 }
 
+// NOTE: DEFAULT_ICE_SERVERS is intentionally kept for backward compat but
+// callers that need fresh HMAC credentials must call buildEnvIceServers()
+// directly rather than reading this cached value.
 const DEFAULT_ICE_SERVERS = buildEnvIceServers();
 
 function getEnvSolaConfig(): SolaCardknoxConfig {
@@ -1888,12 +1925,23 @@ async function sendPushToUserDevices(input: {
         ? "This call has ended."
         : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
+  const isIncomingCall = input.payload.type === "INCOMING_CALL";
+
   const messages = filtered.map((d) => ({
     to: d.expoPushToken,
     sound: "default",
     title,
     body,
-    data: input.payload
+    data: input.payload,
+    // High-priority FCM ensures Android wakes the device immediately for calls.
+    // Normal priority is fine for informational pushes (claimed, canceled, missed).
+    priority: isIncomingCall ? "high" : "default",
+    // Route call notifications to the high-importance Telecom-backed channel so
+    // Android shows a heads-up / full-screen intent rather than a silent badge.
+    channelId: isIncomingCall ? "connect-calls" : undefined,
+    // ttl=45s matches the invite expiry — there is no value in delivering a
+    // stale incoming-call push after the invite has already expired.
+    ttl: isIncomingCall ? 45 : undefined,
   }));
 
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -2635,6 +2683,122 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
 app.get("/health", async () => ({ ok: true }));
 
+// ── Prometheus metrics ────────────────────────────────────────────────────────
+const apiRegistry = new Registry();
+apiRegistry.setDefaultLabels({ service: "api" });
+collectDefaultMetrics({ register: apiRegistry });
+
+const apiRequestDuration = new Histogram({
+  name: "connect_api_request_duration_seconds",
+  help: "HTTP request duration for the Connect API",
+  labelNames: ["method", "route", "status"] as const,
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  registers: [apiRegistry],
+});
+
+const callQualityTotal = new Counter({
+  name: "connect_call_quality_reports_total",
+  help: "Total call quality reports received from clients",
+  labelNames: ["grade", "platform"] as const,
+  registers: [apiRegistry],
+});
+
+const callQualityRcaTotal = new Counter({
+  name: "connect_call_quality_rca_total",
+  help: "RCA primary causes from call quality reports",
+  labelNames: ["cause"] as const,
+  registers: [apiRegistry],
+});
+
+const webrtcSessionsActive = new Gauge({
+  name: "connect_webrtc_sessions_active",
+  help: "Approximate count of active WebRTC sessions (from live call store)",
+  registers: [apiRegistry],
+});
+
+const iceFailuresTotal = new Counter({
+  name: "connect_ice_failures_total",
+  help: "ICE connection failures reported via call quality reports",
+  registers: [apiRegistry],
+});
+
+const rateLimitHitsTotal = new Counter({
+  name: "connect_rate_limit_hits_total",
+  help: "Total HTTP 429 responses (rate limit hits)",
+  labelNames: ["endpoint"] as const,
+  registers: [apiRegistry],
+});
+
+const loginFailuresTotal = new Counter({
+  name: "connect_login_failures_total",
+  help: "Total failed login attempts",
+  labelNames: ["reason"] as const, // "bad_password" | "not_found" | "rate_limit"
+  registers: [apiRegistry],
+});
+
+const loginSuccessTotal = new Counter({
+  name: "connect_login_success_total",
+  help: "Total successful logins",
+  registers: [apiRegistry],
+});
+
+const provisioningFailuresTotal = new Counter({
+  name: "connect_provisioning_failures_total",
+  help: "Total PBX provisioning failures",
+  labelNames: ["step"] as const,
+  registers: [apiRegistry],
+});
+
+const sipRegistrationsTotal = new Counter({
+  name: "connect_sip_registrations_total",
+  help: "SIP registration events reported via quality sessions",
+  labelNames: ["result"] as const, // "registered" | "failed" | "unregistered"
+  registers: [apiRegistry],
+});
+
+const turnConfiguredGauge = new Gauge({
+  name: "connect_turn_configured",
+  help: "1 if a TURN server is configured for at least one tenant, 0 otherwise",
+  registers: [apiRegistry],
+});
+
+// Check TURN config status at startup and every 5m
+async function refreshTurnGauge() {
+  try {
+    const count = await db.turnConfig.count();
+    turnConfiguredGauge.set(count > 0 ? 1 : 0);
+  } catch { /* DB not ready yet */ }
+}
+refreshTurnGauge();
+setInterval(refreshTurnGauge, 300_000);
+
+// Refresh session gauge every 30s from the live call store
+setInterval(() => {
+  liveCallCleanup();
+  webrtcSessionsActive.set(liveCallStore.size);
+}, 30_000);
+
+// Fastify add-content-type-parser hook for Prometheus text format
+app.addHook("onRequest", async (req, reply) => {
+  (req as any)._metricsStart = Date.now();
+});
+app.addHook("onResponse", async (req, reply) => {
+  const start = (req as any)._metricsStart;
+  if (start) {
+    const route = (req.routeOptions as any)?.url ?? req.url?.split("?")[0] ?? "unknown";
+    const status = String(reply.statusCode);
+    apiRequestDuration.labels(req.method, route, status).observe((Date.now() - start) / 1000);
+    if (reply.statusCode === 429) {
+      rateLimitHitsTotal.labels(route).inc();
+    }
+  }
+});
+
+app.get("/metrics", async (req, reply) => {
+  const body = await apiRegistry.metrics();
+  reply.header("Content-Type", apiRegistry.contentType).send(body);
+});
+
 const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
 
 app.post("/auth/signup", async (req, reply) => {
@@ -2679,10 +2843,19 @@ app.post("/auth/login", async (req, reply) => {
   const emailKey = input.email.toLowerCase();
   if (!checkBillingRateLimit(`login:${emailKey}`, 10, 15 * 60 * 1000)) {
     app.log.warn({ email: emailKey, ip: req.ip, endpoint: "/auth/login" }, "rate_limit_login");
+    loginFailuresTotal.labels("rate_limit").inc();
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
   const user = await db.user.findUnique({ where: { email: input.email } });
-  if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) return reply.status(401).send({ error: "invalid_credentials" });
+  if (!user) {
+    loginFailuresTotal.labels("not_found").inc();
+    return reply.status(401).send({ error: "invalid_credentials" });
+  }
+  if (!(await bcrypt.compare(input.password, user.passwordHash))) {
+    loginFailuresTotal.labels("bad_password").inc();
+    return reply.status(401).send({ error: "invalid_credentials" });
+  }
+  loginSuccessTotal.inc();
   const token = await reply.jwtSign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role });
   return { token };
 });
@@ -2845,6 +3018,8 @@ app.addHook("preHandler", async (req, reply) => {
         "/webhooks/whatsapp/meta",
         "/webhooks/whatsapp/twilio/status"
       ].includes(path)
+    || path === "/metrics"
+    || path.endsWith("/metrics")
   ) return;
   try {
     await req.jwtVerify();
@@ -5586,6 +5761,77 @@ app.get("/voice/calls", async (req, reply) => {
   return db.callRecord.findMany({ where: { tenantId: admin.tenantId }, orderBy: { startedAt: "desc" }, take: 200 });
 });
 
+/**
+ * GET /voice/me/calls
+ * Mobile-friendly call history. Works for ANY authenticated user (no admin required).
+ * Queries ConnectCdr (authoritative CDR source) for the user's tenant, newest first.
+ * Normalises direction to mobile expected values: "inbound" / "outbound" / "internal".
+ * Falls back to legacy CallRecord table if ConnectCdr has no rows for the tenant.
+ */
+app.get("/voice/me/calls", async (req, reply) => {
+  let user: JwtUser;
+  try { user = getUser(req); } catch { return reply.status(401).send({ error: "Unauthorized" }); }
+  if (!user?.tenantId) return reply.status(403).send({ error: "No tenant associated with this account" });
+
+  const normaliseDirection = (dir: string): string => {
+    if (dir === "incoming") return "inbound";
+    if (dir === "outgoing") return "outbound";
+    return dir; // "internal" | "unknown" pass through
+  };
+
+  // Primary source: ConnectCdr (authoritative, populated by telephony ingest)
+  const cdrRows = await db.connectCdr.findMany({
+    where: { tenantId: user.tenantId },
+    orderBy: { startedAt: "desc" },
+    take: 150,
+    select: {
+      id: true,
+      linkedId: true,
+      direction: true,
+      fromNumber: true,
+      fromName: true,
+      toNumber: true,
+      startedAt: true,
+      talkSec: true,
+      durationSec: true,
+      disposition: true,
+    },
+  });
+
+  if (cdrRows.length > 0) {
+    return cdrRows.map((r) => ({
+      id: r.id,
+      linkedId: r.linkedId,
+      direction: normaliseDirection(r.direction),
+      fromNumber: r.fromNumber ?? "",
+      fromName: r.fromName ?? null,
+      toNumber: r.toNumber ?? "",
+      startedAt: r.startedAt.toISOString(),
+      durationSec: r.talkSec > 0 ? r.talkSec : r.durationSec,
+      disposition: r.disposition,
+    }));
+  }
+
+  // Fallback: legacy CallRecord table
+  const legacyRows = await db.callRecord.findMany({
+    where: { tenantId: user.tenantId },
+    orderBy: { startedAt: "desc" },
+    take: 150,
+  });
+
+  return legacyRows.map((r) => ({
+    id: r.id,
+    linkedId: null,
+    direction: normaliseDirection(r.direction),
+    fromNumber: r.fromNumber,
+    fromName: null,
+    toNumber: r.toNumber,
+    startedAt: r.startedAt instanceof Date ? r.startedAt.toISOString() : String(r.startedAt),
+    durationSec: r.durationSec,
+    disposition: r.disposition ?? (r.durationSec > 0 ? "answered" : "missed"),
+  }));
+});
+
 app.get("/voice/provisioning", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
@@ -5716,7 +5962,7 @@ app.post("/voice/diag/event", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
     sessionId: z.string(),
-    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN"]),
+    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN", "PUSH_RECEIVED", "UI_SHOWN"]),
     payload: z.any().optional()
   }).parse(req.body || {});
 
@@ -5811,6 +6057,48 @@ app.get("/voice/diag/sessions/:id/events", async (req, reply) => {
   return db.voiceDiagEvent.findMany({ where: { tenantId: admin.tenantId, sessionId: id }, orderBy: { createdAt: "desc" }, take: 500 });
 });
 
+
+// ── Live Call Telemetry Store ────────────────────────────────────────────────
+// In-memory store for mid-call quality pings. Keys by userId. TTL = 60 s.
+// This gives the Audio Intelligence dashboard a real-time live calls view
+// without requiring a persistent WebSocket from the admin.
+
+interface LiveCallSnapshot {
+  userId: string;
+  tenantId: string;
+  userEmail?: string;
+  platform: string;
+  direction: string;
+  durationMs: number;
+  candidateType: string | null;
+  isUsingRelay: boolean;
+  rttMs: number | null;
+  jitterMs: number | null;
+  packetsLost: number | null;
+  packetsReceived: number | null;
+  packetsSent: number | null;
+  bytesReceived: number | null;
+  bytesSent: number | null;
+  bitrateKbps: number | null;
+  audioLevel: number | null;
+  audioCodec: string | null;
+  networkType: string | null;
+  qualityGrade: string;
+  ts: number; // wall-clock ms when this snapshot was written
+}
+
+const liveCallStore = new Map<string, LiveCallSnapshot>();
+const LIVE_CALL_TTL_MS = 60_000; // snapshot older than 60 s = call ended
+
+function liveCallCleanup() {
+  const cutoff = Date.now() - LIVE_CALL_TTL_MS;
+  for (const [k, v] of liveCallStore.entries()) {
+    if (v.ts < cutoff) liveCallStore.delete(k);
+  }
+}
+
+// Periodic cleanup every 30 s
+setInterval(liveCallCleanup, 30_000);
 
 // ── Root Cause Analysis Engine ───────────────────────────────────────────────
 // Produces structured RCA for every degraded/bad call from captured telemetry.
@@ -6052,6 +6340,14 @@ app.post("/voice/diag/call-quality-report", async (req, reply) => {
     payload.rca = computeCallRca(payload);
   }
 
+  // ── Prometheus metrics ───────────────────────────────────────────────────
+  callQualityTotal.labels(grade, String(input.platform ?? "WEB")).inc();
+  if (payload.rca) {
+    const rca = payload.rca as CallRca;
+    callQualityRcaTotal.labels(rca.primaryCause).inc();
+    if (rca.primaryCause === "ICE_failure") iceFailuresTotal.inc();
+  }
+
   if (grade === "poor" || grade === "failed") {
     const rca = payload.rca as CallRca | undefined;
     app.log.warn({
@@ -6100,6 +6396,102 @@ app.post("/voice/diag/call-quality-report", async (req, reply) => {
   });
 
   return { ok: true, eventId: event.id, qualityGrade: payload.qualityGrade, rca: payload.rca || null };
+});
+
+
+// ── Live Call Ping — mid-call telemetry ───────────────────────────────────────
+// Clients POST this every ~10 s during an active call. Stored in memory only.
+app.post("/voice/diag/call-quality-ping", async (req, reply) => {
+  const user = getUser(req);
+  // Light rate limit: 12/min per user (one every 5 s max)
+  if (!checkBillingRateLimit(`cqp:${user.sub}`, 12, 60_000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const input = z.object({
+    platform: z.string().max(16).optional(),
+    durationMs: z.number().nonnegative().optional(),
+    direction: z.string().max(16).optional(),
+    candidateType: z.string().max(16).optional().nullable(),
+    isUsingRelay: z.boolean().optional(),
+    rttMs: z.number().nonnegative().max(60_000).optional().nullable(),
+    jitterMs: z.number().nonnegative().max(10_000).optional().nullable(),
+    packetsLost: z.number().nonnegative().optional().nullable(),
+    packetsReceived: z.number().nonnegative().optional().nullable(),
+    packetsSent: z.number().nonnegative().optional().nullable(),
+    bytesReceived: z.number().nonnegative().optional().nullable(),
+    bytesSent: z.number().nonnegative().optional().nullable(),
+    bitrateKbps: z.number().nonnegative().optional().nullable(),
+    audioLevel: z.number().min(0).max(1).optional().nullable(),
+    audioCodec: z.string().max(32).optional().nullable(),
+    networkType: z.string().max(24).optional().nullable(),
+    qualityGrade: z.string().max(16).optional(),
+  }).parse(req.body);
+
+  const snap: LiveCallSnapshot = {
+    userId: user.sub,
+    tenantId: user.tenantId,
+    platform: input.platform || "WEB",
+    direction: input.direction || "outbound",
+    durationMs: input.durationMs ?? 0,
+    candidateType: input.candidateType ?? null,
+    isUsingRelay: input.isUsingRelay ?? false,
+    rttMs: input.rttMs ?? null,
+    jitterMs: input.jitterMs ?? null,
+    packetsLost: input.packetsLost ?? null,
+    packetsReceived: input.packetsReceived ?? null,
+    packetsSent: input.packetsSent ?? null,
+    bytesReceived: input.bytesReceived ?? null,
+    bytesSent: input.bytesSent ?? null,
+    bitrateKbps: input.bitrateKbps ?? null,
+    audioLevel: input.audioLevel ?? null,
+    audioCodec: input.audioCodec ?? null,
+    networkType: input.networkType ?? null,
+    qualityGrade: input.qualityGrade || "unknown",
+    ts: Date.now(),
+  };
+
+  liveCallStore.set(user.sub, snap);
+  return { ok: true };
+});
+
+// ── Clear live call on hangup ─────────────────────────────────────────────────
+app.post("/voice/diag/call-quality-ping/clear", async (req, reply) => {
+  const user = getUser(req);
+  liveCallStore.delete(user.sub);
+  return { ok: true };
+});
+
+// ── Admin: Live calls view ────────────────────────────────────────────────────
+app.get("/admin/voice/quality/live", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  liveCallCleanup();
+
+  const calls = [...liveCallStore.values()];
+  if (calls.length === 0) return [];
+
+  // Enrich with user emails
+  const userIds = [...new Set(calls.map((c) => c.userId))];
+  const users = userIds.length
+    ? await db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true } })
+    : [];
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+
+  // Enrich with tenant names
+  const tenantIds = [...new Set(calls.map((c) => c.tenantId))];
+  const tenants = tenantIds.length
+    ? await db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } })
+    : [];
+  const nameById = new Map(tenants.map((t) => [t.id, t.name]));
+
+  return calls.map((c) => ({
+    ...c,
+    userEmail: emailById.get(c.userId) || c.userId,
+    tenantName: nameById.get(c.tenantId) || c.tenantId,
+    ageMs: Date.now() - c.ts,
+  }));
 });
 
 
@@ -7017,6 +7409,1245 @@ app.get("/admin/voice/diag/tenants", async (req, reply) => {
   }));
 });
 
+
+// ── Call Timeline: search sessions by email / userId / sessionId ─────────────
+app.get("/admin/voice/diag/timeline", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = z.object({ q: z.string().min(1).max(100) }).parse(req.query || {});
+  const term = q.q.trim();
+
+  // Resolve userId(s) from the search term
+  let userIds: string[] = [];
+  let sessionIds: string[] = [];
+
+  // If looks like a session CUID
+  if (/^c[a-z0-9]{20,}$/i.test(term)) {
+    sessionIds = [term];
+  } else if (term.includes("@")) {
+    // Email lookup
+    const user = await db.user.findFirst({ where: { email: { contains: term } }, select: { id: true } });
+    if (user) userIds = [user.id];
+  } else {
+    // Try as userId
+    userIds = [term];
+  }
+
+  const where: Record<string, unknown> = {};
+  if (sessionIds.length) where.id = { in: sessionIds };
+  else if (userIds.length) where.userId = { in: userIds };
+  else return { sessions: [] };
+
+  const sessions = await db.voiceClientSession.findMany({
+    where,
+    orderBy: { startedAt: "desc" },
+    take: 20,
+    include: {
+      events: { orderBy: { createdAt: "asc" }, take: 200 },
+      user: { select: { email: true } },
+    },
+  });
+
+  return {
+    sessions: sessions.map((s) => ({
+      id: s.id,
+      userId: s.userId,
+      userEmail: (s as any).user?.email ?? s.userId,
+      platform: s.platform,
+      startedAt: s.startedAt.toISOString(),
+      endedAt: s.endedAt?.toISOString() ?? null,
+      lastRegState: s.lastRegState,
+      lastCallState: s.lastCallState,
+      iceHasTurn: s.iceHasTurn,
+      events: ((s as any).events ?? []).map((e: any) => ({
+        id: e.id,
+        type: e.type,
+        createdAt: e.createdAt.toISOString(),
+        payload: e.payload as Record<string, unknown>,
+      })),
+    })),
+  };
+});
+
+// ── AI Diagnostics: plain-English explanation of a session ───────────────────
+app.post("/admin/voice/diag/explain", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({ sessionId: z.string().min(1).max(100) }).parse(req.body || {});
+
+  const session = await db.voiceClientSession.findUnique({
+    where: { id: input.sessionId },
+    include: { events: { orderBy: { createdAt: "asc" }, take: 200 } },
+  });
+
+  if (!session) return reply.status(404).send({ error: "Session not found" });
+
+  const events = (session as any).events as Array<{ type: string; createdAt: Date; payload: unknown }>;
+
+  // Pull the most recent quality report (may have RCA inside)
+  const qualityEvent = [...events].reverse().find((e) => e.type === "CALL_QUALITY_REPORT");
+  const qp = qualityEvent ? (qualityEvent.payload as Record<string, unknown>) : null;
+  const rca = qp?.rca as Record<string, unknown> | undefined;
+
+  // Gather signal facts
+  const hasIceFailure = events.some((e) => e.type === "ICE_SELECTED_PAIR") === false
+    && events.some((e) => e.type === "CALL_CONNECTED") === false
+    && events.some((e) => e.type === "INCOMING_INVITE") === true;
+  const callConnected = events.some((e) => e.type === "CALL_CONNECTED");
+  const callEnded = events.some((e) => e.type === "CALL_ENDED");
+  const wsDisconnected = events.some((e) => e.type === "WS_DISCONNECTED");
+  const errorEvents = events.filter((e) => e.type === "ERROR");
+  const grade = qp ? String(qp.qualityGrade ?? "") : null;
+  const hasTurn = session.iceHasTurn;
+  const isRelay = qp?.isUsingRelay === true;
+  const rttMs = typeof qp?.rttMs === "number" ? qp.rttMs : null;
+  const jitterMs = typeof qp?.jitterMs === "number" ? qp.jitterMs : null;
+  const packetsLost = typeof qp?.packetsLost === "number" ? qp.packetsLost : null;
+  const remoteAudioReceiving = qp?.remoteAudioReceiving !== false;
+  const answeredCount = events.filter((e) => e.type === "ANSWER_TAPPED").length;
+  const platform = session.platform;
+
+  // Build plain-English explanation from evidence
+  type Explanation = {
+    summary: string;
+    whatHappened: string;
+    likelyCause: string;
+    suggestedFix: string;
+    confidence: string;
+    grade: string | null;
+  };
+
+  function explain(): Explanation {
+    const cause = rca?.primaryCause as string | undefined;
+    const confidence = String(rca?.confidence ?? "LOW");
+    const suggestion = rca?.suggestedAction as string | undefined;
+
+    const fixMap: Record<string, string> = {
+      enable_TURN_relay: "Configure a TURN server in Voice → Settings → WebRTC. TURN is required for callers behind strict NAT or corporate firewalls.",
+      adjust_PBX_NAT_config: "Check the PBX NAT/RTP settings and ensure externip/localnet are configured correctly.",
+      avoid_Bluetooth_on_device: "The user should avoid Bluetooth headsets for calls, or ensure the Bluetooth audio profile is correct.",
+      improve_network: "The caller should move to a better network connection (WiFi vs cellular, or closer to the router).",
+      investigate_firewall: "Check firewall rules — UDP ports 10000–20000 may be blocked. Try adding a TURN server with TCP on port 443.",
+      investigate_PBX_media_path: "Check the PBX RTP engine settings, especially if the call goes through a trunk with different codecs.",
+      check_codec_config: "Verify the PBX is set to prefer Opus for WebRTC calls.",
+      check_client_network: "The caller may have poor internet connectivity. Advise them to switch networks.",
+      none: "No specific action required — monitor for recurrence.",
+    };
+
+    const fixText = suggestion ? (fixMap[suggestion] ?? suggestion.replace(/_/g, " ")) : "No specific fix identified — review the event timeline for clues.";
+
+    // Override causes for special cases
+    if (!callConnected && answeredCount > 0) {
+      return {
+        summary: "Call was answered but never connected",
+        whatHappened: `The user tapped Answer ${answeredCount} time(s) but the call never reached a connected state. ${wsDisconnected ? "The SIP WebSocket also disconnected during the session." : ""}`,
+        likelyCause: hasTurn
+          ? "ICE negotiation likely stalled — media could not be established even with TURN. This may be a PBX media path or firewall issue."
+          : "No TURN server is configured. ICE could not find a viable media path through the caller's NAT. The call rang but audio was never established.",
+        suggestedFix: hasTurn
+          ? "Check firewall/UDP ports on the TURN server and verify PBX RTP engine settings."
+          : "Configure a TURN server in Voice → Settings → WebRTC.",
+        confidence: hasTurn ? "MEDIUM" : "HIGH",
+        grade,
+      };
+    }
+
+    if (errorEvents.length > 0 && !callConnected) {
+      const errMsg = String((errorEvents[0].payload as Record<string, unknown>)?.message ?? "unknown error");
+      return {
+        summary: "Session ended with error before call connected",
+        whatHappened: `The session encountered ${errorEvents.length} error(s). Most recent: "${errMsg}". The call did not reach a connected state.`,
+        likelyCause: errMsg.toLowerCase().includes("ice") || errMsg.toLowerCase().includes("candidate")
+          ? "ICE negotiation failed — the browser and PBX could not establish a media path."
+          : errMsg.toLowerCase().includes("register") || errMsg.toLowerCase().includes("sip")
+          ? "SIP registration failed, preventing the call from proceeding."
+          : "An application error occurred during call setup.",
+        suggestedFix: fixText,
+        confidence: "MEDIUM",
+        grade,
+      };
+    }
+
+    if (cause === "ICE_failure") {
+      return {
+        summary: "Call failed — ICE connection could not be established",
+        whatHappened: `The WebRTC ICE negotiation failed. This means the browser and the PBX could not find a media path to exchange audio. ${hasTurn ? "TURN was configured but still failed." : "No TURN relay was available."}`,
+        likelyCause: hasTurn
+          ? "TURN is configured but ICE still failed — the TURN server or PBX firewall may be blocking the media path."
+          : "No TURN server is configured. The browser is behind NAT and cannot reach the PBX directly.",
+        suggestedFix: hasTurn ? "Verify TURN server UDP/TCP ports (3478, 5349, 443) are open. Check TURN credentials." : "Configure a TURN relay server in Voice → Settings → WebRTC.",
+        confidence: "HIGH",
+        grade,
+      };
+    }
+
+    if (cause === "TURN_missing") {
+      return {
+        summary: `Audio quality degraded — no TURN relay used`,
+        whatHappened: `The call connected but quality was ${grade ?? "degraded"}. ${rttMs !== null ? `RTT was ${rttMs}ms` : ""}${jitterMs !== null ? `, jitter ${jitterMs}ms` : ""}. The call used a direct ICE path without TURN relay.`,
+        likelyCause: "The caller is behind NAT and the direct ICE path introduced high latency or packet loss. Using TURN relay would route audio through the server and stabilize the connection.",
+        suggestedFix: "Enable and configure a TURN server for this tenant. This is the single most impactful fix for audio quality over remote networks.",
+        confidence: "HIGH",
+        grade,
+      };
+    }
+
+    if (cause === "one_way_audio" || !remoteAudioReceiving) {
+      return {
+        summary: "One-way audio — remote party could not be heard",
+        whatHappened: `The call connected but no incoming audio was received${packetsLost !== null ? ` (${packetsLost} packets lost)` : ""}. The caller's browser was transmitting but not receiving.`,
+        likelyCause: isRelay
+          ? "RTP is going through TURN but no audio is arriving. This may be a PBX media path or codec mismatch issue."
+          : "No TURN relay — the outbound RTP stream may be reaching the PBX but the return path is blocked by NAT.",
+        suggestedFix: isRelay ? "Check the PBX RTP engine and Opus codec configuration." : "Configure a TURN relay server to ensure bidirectional RTP flow.",
+        confidence: packetsLost === 0 ? "HIGH" : "MEDIUM",
+        grade,
+      };
+    }
+
+    if (cause === "high_jitter" || (jitterMs !== null && jitterMs > 50)) {
+      return {
+        summary: `Audio choppy — high jitter (${jitterMs}ms)`,
+        whatHappened: `The call connected and audio flowed, but jitter was ${jitterMs}ms (normal is <20ms). This typically causes choppy, robotic, or breaking audio.`,
+        likelyCause: platform === "IOS" || platform === "ANDROID"
+          ? "The mobile device may have been on a poor cellular or WiFi signal, causing variable packet delivery."
+          : "Network instability on the caller's internet connection — possibly WiFi interference or a congested link.",
+        suggestedFix: "Advise the caller to use a stable wired or strong WiFi connection. Consider enabling TURN with TCP on port 443 as a fallback.",
+        confidence: (jitterMs ?? 0) > 80 ? "HIGH" : "MEDIUM",
+        grade,
+      };
+    }
+
+    if (cause === "packet_loss" || (packetsLost !== null && packetsLost > 20)) {
+      return {
+        summary: `Audio quality poor — significant packet loss (${packetsLost} packets)`,
+        whatHappened: `${packetsLost} audio packets were lost during the call. This causes audible gaps, clicks, and distortion.`,
+        likelyCause: isRelay
+          ? "Packet loss is occurring despite TURN relay — the caller's internet connection may have quality issues."
+          : "Network congestion or an unstable path. Without TURN relay, the RTP path traverses multiple NAT hops.",
+        suggestedFix: isRelay ? "Advise the caller to improve their network connection." : "Enable TURN relay to take the RTP path through a stable server.",
+        confidence: "HIGH",
+        grade,
+      };
+    }
+
+    if (wsDisconnected && !callConnected) {
+      return {
+        summary: "SIP WebSocket disconnected before call could connect",
+        whatHappened: "The SIP WebSocket connection dropped during the session. This prevented call signaling from completing.",
+        likelyCause: "Network interruption, proxy timeout, or PBX WebSocket server instability.",
+        suggestedFix: "Check the PBX WSS transport on port 8089. Verify nginx proxy_read_timeout is not set too low for SIP keep-alives.",
+        confidence: "MEDIUM",
+        grade,
+      };
+    }
+
+    if (callConnected && callEnded && (grade === "excellent" || grade === "good")) {
+      return {
+        summary: "Call completed successfully with good quality",
+        whatHappened: `The call was established and completed normally. ${rttMs !== null ? `RTT: ${rttMs}ms` : ""}${jitterMs !== null ? `, jitter: ${jitterMs}ms` : ""}. ${isRelay ? "TURN relay was used." : "Direct ICE path was used."}`,
+        likelyCause: "No issues detected in this session.",
+        suggestedFix: "No action required.",
+        confidence: "HIGH",
+        grade,
+      };
+    }
+
+    // Generic fallback
+    return {
+      summary: `Session ended — quality: ${grade ?? "unknown"}`,
+      whatHappened: `The session had ${events.length} events. Call ${callConnected ? "connected" : "did not connect"}${callEnded ? " and ended normally" : ""}. ${errorEvents.length > 0 ? `${errorEvents.length} error(s) occurred.` : ""}`,
+      likelyCause: cause ? `The RCA engine identified: ${cause.replace(/_/g, " ")} (${confidence} confidence).` : "Not enough data to determine the root cause automatically. Review the event timeline above.",
+      suggestedFix: fixText,
+      confidence,
+      grade,
+    };
+  }
+
+  return explain();
+});
+
+// ── Incident Center ──────────────────────────────────────────────────────────
+// Detects and surfaces platform issues in plain English for non-technical operators.
+// ── Healing log proxy (admin-only, from telephony service) ────────────────────
+app.get("/admin/healing/log", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const telephonyBase = process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003";
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    const res = await fetch(`${telephonyBase}/healing/log?maxAgeMs=${24 * 60 * 60 * 1000}`, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+    if (res.ok) return reply.send(await res.json());
+    return reply.send([]);
+  } catch { return reply.send([]); }
+});
+
+// ── Ops Center — comprehensive single-call data endpoint ───────────────────────
+app.get("/admin/ops-center", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const nowMs = Date.now();
+  const since24h = new Date(nowMs - 24 * 60 * 60 * 1000);
+  const since1h = new Date(nowMs - 60 * 60 * 1000);
+  const telephonyBase = process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003";
+
+  async function tfetch(path: string, ms = 2500) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(`${telephonyBase}${path}`, { signal: ctrl.signal });
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+    finally { clearTimeout(t); }
+  }
+
+  // ── Parallel data fetching ──────────────────────────────────────────────────
+  const [
+    cdrRows,
+    diagRows,
+    tenantRows,
+    turnCnt,
+    telephonyHealth,
+    healingLog,
+  ] = await Promise.all([
+    db.connectCdr.findMany({
+      where: { startedAt: { gte: since24h } },
+      select: { tenantId: true, direction: true, disposition: true, startedAt: true, durationSec: true, talkSec: true },
+    }).catch(() => [] as { tenantId: string | null; direction: string; disposition: string; startedAt: Date; durationSec: number; talkSec: number }[]),
+
+    db.voiceDiagEvent.findMany({
+      where: { createdAt: { gte: since24h }, type: "CALL_QUALITY_REPORT" as any },
+      select: { tenantId: true, createdAt: true, payload: true },
+      orderBy: { createdAt: "desc" },
+      take: 400,
+    }).catch(() => [] as { tenantId: string; createdAt: Date; payload: unknown }[]),
+
+    db.tenant.findMany({ select: { id: true, name: true } }).catch(() => [] as { id: string; name: string }[]),
+    db.turnConfig.count().catch(() => 0),
+    tfetch("/health") as Promise<null | { status: string; ami: { connected: boolean; lastEventAt: string | null; lastError: string | null }; ari: { restHealthy: boolean; lastError: string | null }; activeCalls: number; activeExtensions: number; activeQueues: number; uptimeSec: number }>,
+    tfetch(`/healing/log?maxAgeMs=${24 * 60 * 60 * 1000}`) as Promise<null | Array<{ id: string; type: string; status: string; plainEnglish: string; description: string; triggeredAt: string; resolvedAt: string | null; automated: boolean }>>,
+  ]);
+
+  // ── Tenant name map ────────────────────────────────────────────────────────
+  // CDR.tenantId is either a cuid (linked Connect tenant) or "vpbx:{slug}" (unlinked PBX tenant).
+  // Build a map that handles both: cuid→name from DB, vpbx:slug→prettified-slug as fallback.
+  const tenantMap = new Map<string, string>(tenantRows.map((t) => [t.id, t.name]));
+  const resolveTenantName = (tid: string | null | undefined): string => {
+    if (!tid) return "Unknown";
+    if (tenantMap.has(tid)) return tenantMap.get(tid)!;
+    // vpbx:{slug} format: show prettified slug as display name
+    if (tid.startsWith("vpbx:")) {
+      const slug = tid.slice(5).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      return slug || tid;
+    }
+    return tid;
+  };
+
+  // ── CDR processing ─────────────────────────────────────────────────────────
+  // CDR dispositions are stored lowercase: "answered", "missed", "canceled", "failed", "unknown"
+  type CdrRow = typeof cdrRows[number];
+  const totalCdrs = cdrRows.length;
+  const answeredCdrs = cdrRows.filter((r) => r.disposition === "answered").length;
+  const failedCdrs = cdrRows.filter((r) => r.disposition === "failed").length;
+  const missedCdrs = cdrRows.filter((r) => r.disposition === "missed").length;
+  const canceledCdrs = cdrRows.filter((r) => r.disposition === "canceled").length;
+  const avgDuration = totalCdrs > 0
+    ? Math.round(cdrRows.filter((r) => r.talkSec > 0).reduce((s, r) => s + r.talkSec, 0) / Math.max(answeredCdrs, 1))
+    : 0;
+
+  const dirCounts = { inbound: 0, outbound: 0, internal: 0, unknown: 0 };
+  for (const r of cdrRows) {
+    const d = (r.direction ?? "unknown") as keyof typeof dirCounts;
+    if (d in dirCounts) dirCounts[d]++;
+    else dirCounts.unknown++;
+  }
+
+  // Hourly buckets for last 24h (24 buckets)
+  const hourlyBuckets: { hour: string; total: number; failed: number; missed: number }[] = [];
+  for (let i = 23; i >= 0; i--) {
+    const bucketStart = new Date(nowMs - (i + 1) * 3600_000);
+    const bucketEnd = new Date(nowMs - i * 3600_000);
+    const rows = cdrRows.filter((r) => r.startedAt >= bucketStart && r.startedAt < bucketEnd);
+    hourlyBuckets.push({
+      hour: bucketStart.toISOString(),
+      total: rows.length,
+      failed: rows.filter((r) => r.disposition === "failed" || r.disposition === "canceled").length,
+      missed: rows.filter((r) => r.disposition === "missed").length,
+    });
+  }
+
+  // ── Diag processing ────────────────────────────────────────────────────────
+  // NOTE: The WebRTC client stores the field as 'iceConnectionState' (matching the RTCPeerConnection API).
+  // 'iceState' was the incorrect field name used in early dev; it is always null.
+  type DiagPayload = {
+    qualityGrade?: string;
+    iceConnectionState?: string; // correct field — maps to RTCPeerConnection.iceConnectionState
+    isUsingRelay?: boolean;
+    rttMs?: number | null;
+    jitterMs?: number | null;
+    packetsLost?: number;
+    candidateType?: string;
+    rca?: { primaryCause?: string; confidence?: number; suggestedAction?: string };
+  };
+
+  const diagPayloads = diagRows.map((d) => ({ tenantId: d.tenantId, createdAt: d.createdAt, p: (d.payload ?? {}) as DiagPayload }));
+  const iceFailures = diagPayloads.filter((d) => d.p.iceConnectionState === "failed").length;
+  const relayCount = diagPayloads.filter((d) => d.p.isUsingRelay === true).length;
+  const directCount = diagPayloads.filter((d) => d.p.isUsingRelay === false).length;
+  const poorQuality = diagPayloads.filter((d) => {
+    const g = (d.p.qualityGrade ?? "").toLowerCase();
+    return g === "poor" || g === "fair";
+  }).length;
+  const gradeCounts = { excellent: 0, good: 0, fair: 0, poor: 0 };
+  for (const d of diagPayloads) {
+    const g = (d.p.qualityGrade ?? "").toLowerCase() as keyof typeof gradeCounts;
+    if (g in gradeCounts) gradeCounts[g]++;
+  }
+  const rtts = diagPayloads.map((d) => d.p.rttMs).filter((v): v is number => typeof v === "number" && v > 0);
+  const jitters = diagPayloads.map((d) => d.p.jitterMs).filter((v): v is number => typeof v === "number" && v > 0);
+  const avgRtt = rtts.length ? Math.round(rtts.reduce((s, v) => s + v, 0) / rtts.length) : null;
+  const avgJitter = jitters.length ? Math.round(jitters.reduce((s, v) => s + v, 0) / jitters.length) : null;
+
+  // ICE failures per hour (last 24 buckets)
+  const icePerHour: { hour: string; count: number }[] = [];
+  for (let i = 23; i >= 0; i--) {
+    const bStart = new Date(nowMs - (i + 1) * 3600_000);
+    const bEnd = new Date(nowMs - i * 3600_000);
+    icePerHour.push({
+      hour: bStart.toISOString(),
+      count: diagPayloads.filter((d) => d.p.iceConnectionState === "failed" && d.createdAt >= bStart && d.createdAt < bEnd).length,
+    });
+  }
+
+  // ── Tenant health ──────────────────────────────────────────────────────────
+  type TenantHealthRow = {
+    tenantId: string; tenantName: string; status: "good" | "warning" | "critical";
+    activeCalls: number; failedCalls: number; missedCalls: number; totalCalls: number;
+    audioIssues: number; lastIncident: string | null;
+  };
+
+  const tenantCdrMap = new Map<string, CdrRow[]>();
+  for (const r of cdrRows) {
+    const tid = r.tenantId ?? "unknown";
+    if (!tenantCdrMap.has(tid)) tenantCdrMap.set(tid, []);
+    tenantCdrMap.get(tid)!.push(r);
+  }
+  const tenantDiagMap = new Map<string, DiagPayload[]>();
+  for (const d of diagPayloads) {
+    if (!tenantDiagMap.has(d.tenantId)) tenantDiagMap.set(d.tenantId, []);
+    tenantDiagMap.get(d.tenantId)!.push(d.p);
+  }
+
+  const allTenantIds = new Set([...tenantCdrMap.keys(), ...tenantDiagMap.keys()].filter((t) => t !== "unknown"));
+  const tenantHealth: TenantHealthRow[] = [];
+  for (const tid of allTenantIds) {
+    const cdrs = tenantCdrMap.get(tid) ?? [];
+    const diags = tenantDiagMap.get(tid) ?? [];
+    const failed = cdrs.filter((r) => r.disposition === "failed").length;
+    const canceled = cdrs.filter((r) => r.disposition === "canceled").length;
+    const missed = cdrs.filter((r) => r.disposition === "missed").length;
+    const audioIssues = diags.filter((d) => (d.iceConnectionState === "failed") || (d.qualityGrade ?? "").toLowerCase() === "poor").length;
+    const failureRate = cdrs.length > 0 ? (failed + canceled) / cdrs.length : 0;
+    let status: "good" | "warning" | "critical" = "good";
+    if (failureRate > 0.2 || audioIssues > 3) status = "critical";
+    else if (failureRate > 0.08 || audioIssues > 0 || missed > 3) status = "warning";
+    const lastCdr = cdrs.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0];
+    tenantHealth.push({
+      tenantId: tid,
+      tenantName: resolveTenantName(tid),
+      status,
+      activeCalls: 0, // will be enriched from telephony if possible
+      failedCalls: failed,
+      missedCalls: missed,
+      totalCalls: cdrs.length,
+      audioIssues,
+      lastIncident: (failed > 0 || audioIssues > 0) ? (lastCdr?.startedAt.toISOString() ?? null) : null,
+    });
+  }
+  tenantHealth.sort((a, b) => {
+    const sev = { critical: 3, warning: 2, good: 1 };
+    return (sev[b.status] - sev[a.status]) || (b.failedCalls + b.audioIssues) - (a.failedCalls + a.audioIssues);
+  });
+
+  // ── Global health ──────────────────────────────────────────────────────────
+  const dbOk = tenantRows.length >= 0; // If we got here, DB is ok
+  const apiOk = true;
+  const amiOk = telephonyHealth?.ami?.connected ?? false;
+  const ariOk = telephonyHealth?.ari?.restHealthy ?? false;
+  const pbxOk = telephonyHealth?.status === "ok";
+  const turnOk = turnCnt > 0;
+  const iceFailureRate = diagPayloads.length > 0 ? iceFailures / diagPayloads.length : 0;
+  const webrtcStatus = iceFailureRate > 0.2 ? "critical" : iceFailureRate > 0.05 ? "warning" : "ok";
+
+  const globalHealth = {
+    api: { status: "ok" as const, label: "Connect API", lastIncident: null },
+    database: { status: (dbOk ? "ok" : "down") as "ok" | "down", label: "Database", lastIncident: null },
+    pbx: {
+      status: (pbxOk ? "ok" : telephonyHealth ? "degraded" : "unknown") as "ok" | "degraded" | "down" | "unknown",
+      label: "PBX",
+      lastIncident: telephonyHealth?.ami?.lastError ?? null,
+    },
+    ami: {
+      status: (amiOk ? "ok" : telephonyHealth ? "down" : "unknown") as "ok" | "down" | "unknown",
+      label: "AMI",
+      lastIncident: telephonyHealth?.ami?.lastEventAt ?? null,
+      lastError: telephonyHealth?.ami?.lastError ?? null,
+    },
+    ari: {
+      status: (ariOk ? "ok" : telephonyHealth ? "down" : "unknown") as "ok" | "down" | "unknown",
+      label: "ARI",
+      lastIncident: null,
+      lastError: telephonyHealth?.ari?.lastError ?? null,
+    },
+    sbc: { status: "unknown" as const, label: "SBC", lastIncident: null },
+    turn: {
+      status: (turnOk ? "ok" : "missing") as "ok" | "missing",
+      label: "TURN",
+      lastIncident: turnOk ? null : "No TURN server configured",
+    },
+    workers: { status: "ok" as const, label: "Workers", lastIncident: null },
+    webrtc: {
+      status: webrtcStatus as "ok" | "warning" | "critical",
+      label: "WebRTC",
+      lastIncident: iceFailures > 0 ? `${iceFailures} ICE failure(s) in 24h` : null,
+      iceFailures24h: iceFailures,
+    },
+  };
+
+  // ── Live incidents ─────────────────────────────────────────────────────────
+  type OpsIncident = {
+    id: string; title: string; severity: "critical" | "warning" | "info";
+    tenantId: string | null; tenantName: string | null;
+    affectedExtension: string | null; affectedUser: string | null;
+    firstSeen: string; lastSeen: string;
+    status: "active" | "recovering" | "resolved";
+    healingStatus: "none" | "attempted" | "succeeded" | "failed";
+    likelyCause: string; suggestedAction: string;
+    callCount: number; category: string;
+  };
+
+  const incidents: OpsIncident[] = [];
+
+  if (!amiOk && telephonyHealth) {
+    incidents.push({
+      id: "ami-down", title: "PBX Connection Lost", severity: "critical",
+      tenantId: null, tenantName: null, affectedExtension: null, affectedUser: null,
+      firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(),
+      status: "active", healingStatus: "attempted",
+      likelyCause: "AMI connection to PBX dropped. " + (telephonyHealth.ami?.lastError ?? ""),
+      suggestedAction: "Check PBX server is running and AMI credentials are correct.",
+      callCount: 0, category: "connectivity",
+    });
+  }
+
+  if (!turnOk) {
+    incidents.push({
+      id: "turn-missing", title: "No TURN Relay Configured", severity: "warning",
+      tenantId: null, tenantName: null, affectedExtension: null, affectedUser: null,
+      firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(),
+      status: "active", healingStatus: "none",
+      likelyCause: "No TURN server is configured. Remote callers on strict NAT cannot establish audio.",
+      suggestedAction: "Configure a TURN server in Voice → Settings → WebRTC.",
+      callCount: iceFailures, category: "audio",
+    });
+  }
+
+  if (iceFailures > 0) {
+    const affectedTenantIds = [...new Set(diagPayloads.filter((d) => d.p.iceConnectionState === "failed").map((d) => d.tenantId))];
+    incidents.push({
+      id: "ice-failures",
+      title: "Audio Connection Failures",
+      severity: iceFailures > 5 ? "critical" : "warning",
+      tenantId: affectedTenantIds[0] ?? null,
+      tenantName: affectedTenantIds[0] ? resolveTenantName(affectedTenantIds[0]) : null,
+      affectedExtension: null, affectedUser: null,
+      firstSeen: since24h.toISOString(), lastSeen: new Date().toISOString(),
+      status: iceFailures > 5 ? "active" : "recovering",
+      healingStatus: "none",
+      likelyCause: `${iceFailures} call(s) failed ICE negotiation — audio could not be established. ${!turnOk ? "No TURN server is configured." : "TURN is configured but ICE still failing — check firewall."}`,
+      suggestedAction: !turnOk ? "Configure TURN server." : "Check that TURN UDP/TCP ports are open.",
+      callCount: iceFailures, category: "audio",
+    });
+  }
+
+  if (failedCdrs > 0 && failedCdrs / Math.max(totalCdrs, 1) > 0.08) {
+    incidents.push({
+      id: "call-failures",
+      title: "Elevated Call Failure Rate",
+      severity: failedCdrs / totalCdrs > 0.2 ? "critical" : "warning",
+      tenantId: null, tenantName: null, affectedExtension: null, affectedUser: null,
+      firstSeen: since24h.toISOString(), lastSeen: new Date().toISOString(),
+      status: "active", healingStatus: "none",
+      likelyCause: `${failedCdrs} of ${totalCdrs} calls failed today (${Math.round(failedCdrs / totalCdrs * 100)}% failure rate). Likely a trunk or routing issue.`,
+      suggestedAction: "Review PBX → Trunks. Check outbound routes. Inspect recent failed CDRs.",
+      callCount: failedCdrs, category: "calls",
+    });
+  }
+
+  // Add healing actions as "resolved" incidents
+  if (healingLog) {
+    for (const action of (healingLog as any[]).filter((a: any) => a.status === "succeeded").slice(0, 3)) {
+      incidents.push({
+        id: `healed-${action.id}`,
+        title: "Auto-Recovery Completed",
+        severity: "info",
+        tenantId: null, tenantName: null, affectedExtension: null, affectedUser: null,
+        firstSeen: action.triggeredAt, lastSeen: action.resolvedAt ?? action.triggeredAt,
+        status: "resolved", healingStatus: "succeeded",
+        likelyCause: action.description,
+        suggestedAction: "No action required — system recovered automatically.",
+        callCount: 0, category: "system",
+      });
+    }
+  }
+
+  // Sort: critical first, then warning, then info
+  const sevOrder = { critical: 3, warning: 2, info: 1 };
+  incidents.sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity]);
+
+  // ── AI Summary ─────────────────────────────────────────────────────────────
+  const criticalCount = incidents.filter((i) => i.severity === "critical").length;
+  const warningCount = incidents.filter((i) => i.severity === "warning").length;
+  const affectedTenantNames = [...new Set(
+    incidents.map((i) => i.tenantName).filter(Boolean) as string[]
+  )].slice(0, 3);
+
+  let whatHappening: string;
+  let whoAffected: string;
+  let likelyCause: string;
+  let recommendation: string;
+
+  if (criticalCount === 0 && warningCount === 0) {
+    whatHappening = `All systems are operating normally. ${totalCdrs} calls processed in the last 24 hours with a ${totalCdrs > 0 ? Math.round(answeredCdrs / totalCdrs * 100) : 100}% answer rate.`;
+    whoAffected = "No tenants are experiencing issues.";
+    likelyCause = "No issues detected.";
+    recommendation = "Continue monitoring. Consider configuring a TURN server if you have remote users.";
+  } else {
+    const mainIssue = incidents.find((i) => i.severity === "critical") ?? incidents[0];
+    whatHappening = criticalCount > 0
+      ? `${criticalCount} critical issue${criticalCount > 1 ? "s" : ""} require immediate attention. ${mainIssue.title}: ${mainIssue.likelyCause.slice(0, 120)}.`
+      : `${warningCount} warning${warningCount > 1 ? "s" : ""} detected. ${mainIssue.title}: ${mainIssue.likelyCause.slice(0, 120)}.`;
+    whoAffected = affectedTenantNames.length > 0
+      ? `${affectedTenantNames.join(", ")} — and potentially any user making calls right now.`
+      : `All users may be affected. ${iceFailures > 0 ? `${iceFailures} calls experienced audio failures.` : ""} ${failedCdrs > 0 ? `${failedCdrs} calls failed to connect today.` : ""}`.trim();
+    likelyCause = mainIssue.likelyCause;
+    recommendation = mainIssue.suggestedAction;
+  }
+
+  // ── Incident timeline ──────────────────────────────────────────────────────
+  type TimelineEvent = {
+    id: string; eventType: string; description: string;
+    tenantName: string | null; timestamp: string; severity: "critical" | "warning" | "info";
+    automated: boolean;
+  };
+
+  const timelineEvents: TimelineEvent[] = [];
+
+  // Recent call failures
+  const recentFailed = cdrRows.filter((r) => r.disposition?.toUpperCase() === "FAILED")
+    .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime()).slice(0, 10);
+  for (const r of recentFailed) {
+    timelineEvents.push({
+      id: `cdr-fail-${r.startedAt.getTime()}`,
+      eventType: "call_failed",
+      description: `Call failed (${r.direction ?? "unknown"} — ${r.disposition})`,
+      tenantName: r.tenantId ? resolveTenantName(r.tenantId) : null,
+      timestamp: r.startedAt.toISOString(),
+      severity: "warning",
+      automated: false,
+    });
+  }
+
+  // ICE failures
+  const recentIceFail = diagPayloads.filter((d) => d.p.iceConnectionState === "failed")
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5);
+  for (const d of recentIceFail) {
+    timelineEvents.push({
+      id: `ice-${d.createdAt.getTime()}`,
+      eventType: "ice_failure",
+      description: "ICE negotiation failed — audio could not connect",
+      tenantName: resolveTenantName(d.tenantId),
+      timestamp: d.createdAt.toISOString(),
+      severity: "warning",
+      automated: false,
+    });
+  }
+
+  // Healing actions
+  if (healingLog) {
+    for (const action of (healingLog as any[]).slice(0, 15)) {
+      timelineEvents.push({
+        id: `heal-${action.id}`,
+        eventType: action.status === "succeeded" ? "healing_succeeded" : action.status === "failed" ? "healing_failed" : "healing_attempted",
+        description: action.plainEnglish,
+        tenantName: null,
+        timestamp: action.triggeredAt,
+        severity: action.status === "failed" ? "warning" : "info",
+        automated: true,
+      });
+    }
+  }
+
+  // Sort timeline by time desc, take top 30
+  timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const timeline = timelineEvents.slice(0, 30);
+
+  reply.send({
+    timestamp: new Date().toISOString(),
+    globalHealth,
+    incidents,
+    aiSummary: {
+      whatHappening,
+      whoAffected,
+      likelyCause,
+      recommendation,
+      generatedAt: new Date().toISOString(),
+    },
+    callAnalytics: {
+      activeCalls: telephonyHealth?.activeCalls ?? 0,
+      totalToday: totalCdrs,
+      answeredToday: answeredCdrs,
+      failedToday: failedCdrs,
+      missedToday: missedCdrs,
+      canceledToday: canceledCdrs,
+      avgDurationSec: avgDuration,
+      failureRate: totalCdrs > 0 ? Math.round((failedCdrs + canceledCdrs) / totalCdrs * 100) : 0,
+      byDirection: dirCounts,
+      hourlyBuckets,
+    },
+    mediaAnalytics: {
+      iceFailures24h: iceFailures,
+      relayCount,
+      directCount,
+      poorQuality,
+      gradeCounts,
+      icePerHour,
+      avgRttMs: avgRtt,
+      avgJitterMs: avgJitter,
+      totalReports: diagPayloads.length,
+    },
+    pbxSignaling: {
+      amiConnected: telephonyHealth?.ami?.connected ?? false,
+      ariConnected: telephonyHealth?.ari?.restHealthy ?? false,
+      activeExtensions: telephonyHealth?.activeExtensions ?? 0,
+      activeQueues: telephonyHealth?.activeQueues ?? 0,
+      activeCalls: telephonyHealth?.activeCalls ?? 0,
+      uptimeSec: telephonyHealth?.uptimeSec ?? 0,
+      lastAmiEventAt: telephonyHealth?.ami?.lastEventAt ?? null,
+      lastAmiError: telephonyHealth?.ami?.lastError ?? null,
+    },
+    security: {
+      turnMissing: !turnOk,
+      iceFailures24h: iceFailures,
+      note: "For detailed security metrics (login failures, rate limits), visit the Security & Abuse Grafana dashboard.",
+    },
+    tenantHealth: tenantHealth.slice(0, 30),
+    timeline,
+    healingLog: (healingLog ?? []) as any[],
+    meta: {
+      totalTenants: allTenantIds.size,
+      dbOk,
+      telephonyReachable: !!telephonyHealth,
+    },
+  });
+});
+
+app.get("/admin/incidents", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const now = Date.now();
+  const since2h = new Date(now - 2 * 60 * 60 * 1000);
+  const since24h = new Date(now - 24 * 60 * 60 * 1000);
+
+  // ── 1. Fetch system health from telephony service ─────────────────────────
+  type TelephonyHealthResp = {
+    status: "ok" | "degraded" | "down";
+    ami: { connected: boolean; lastEventAt: string | null; lastError: string | null };
+    ari: { restHealthy: boolean; lastError: string | null };
+    activeCalls: number;
+    uptimeSec: number;
+  };
+
+  let telephonyHealth: TelephonyHealthResp | null = null;
+  let telephonyError: string | null = null;
+  try {
+    const telephonyBase = process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003";
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch(`${telephonyBase}/health`, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+    if (res.ok) telephonyHealth = await res.json() as TelephonyHealthResp;
+    else telephonyError = `HTTP ${res.status}`;
+  } catch (err) {
+    telephonyError = (err as Error)?.name === "AbortError" ? "timeout" : String((err as Error)?.message ?? err);
+  }
+
+  // ── 2. Check TURN config ──────────────────────────────────────────────────
+  const turnCount = await db.turnConfig.count({ where: { enabled: true } }).catch(() => 0);
+
+  // ── 3. Quality issues in last 2h grouped by tenant + cause ────────────────
+  const recentBadEvents = await db.voiceDiagEvent.findMany({
+    where: {
+      createdAt: { gte: since2h },
+      type: "CALL_QUALITY_REPORT",
+    },
+    select: {
+      id: true, tenantId: true, userId: true, createdAt: true, payload: true,
+      tenant: { select: { name: true } },
+      user: { select: { email: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 500,
+  });
+
+  const badEvents = recentBadEvents.filter((e) => {
+    const p = e.payload as Record<string, unknown>;
+    const grade = String(p["qualityGrade"] ?? "");
+    return grade === "poor" || grade === "failed";
+  });
+
+  // Group by tenant + root cause
+  const groupMap = new Map<string, {
+    tenantId: string; tenantName: string; cause: string;
+    count: number; lastSeenAt: Date; userEmails: Set<string>;
+    samples: Array<{ grade: string; rttMs: number | null; jitterMs: number | null; isUsingRelay: boolean }>;
+  }>();
+
+  for (const ev of badEvents) {
+    const p = ev.payload as Record<string, unknown>;
+    const rca = p["rca"] as Record<string, unknown> | undefined;
+    const cause = String(rca?.["primaryCause"] ?? "unknown");
+    const key = `${ev.tenantId}::${cause}`;
+    const existing = groupMap.get(key);
+    if (existing) {
+      existing.count++;
+      if (ev.createdAt > existing.lastSeenAt) existing.lastSeenAt = ev.createdAt;
+      existing.userEmails.add((ev as any).user?.email ?? ev.userId);
+      existing.samples.push({ grade: String(p["qualityGrade"] ?? ""), rttMs: typeof p["rttMs"] === "number" ? p["rttMs"] : null, jitterMs: typeof p["jitterMs"] === "number" ? p["jitterMs"] : null, isUsingRelay: p["isUsingRelay"] === true });
+    } else {
+      groupMap.set(key, {
+        tenantId: ev.tenantId,
+        tenantName: (ev as any).tenant?.name ?? ev.tenantId,
+        cause,
+        count: 1,
+        lastSeenAt: ev.createdAt,
+        userEmails: new Set([(ev as any).user?.email ?? ev.userId]),
+        samples: [{ grade: String(p["qualityGrade"] ?? ""), rttMs: typeof p["rttMs"] === "number" ? p["rttMs"] : null, jitterMs: typeof p["jitterMs"] === "number" ? p["jitterMs"] : null, isUsingRelay: p["isUsingRelay"] === true }],
+      });
+    }
+  }
+
+  // ── 4. CDR health (from live store) ──────────────────────────────────────
+  const recentCdrAttempts = await db.connectCdr.count({ where: { createdAt: { gte: new Date(now - 30 * 60 * 1000) } } }).catch(() => -1);
+
+  // ── 5. Build incident list ────────────────────────────────────────────────
+  type Incident = {
+    id: string;
+    severity: "critical" | "warning" | "info";
+    category: "system" | "audio" | "connectivity" | "security";
+    title: string;
+    description: string;
+    affectedTenant: string | null;
+    affectedUsers: number;
+    likelyCause: string;
+    suggestedAction: string;
+    startedAt: string;
+    callCount: number;
+    drillDownPath: string | null;
+  };
+
+  const incidents: Incident[] = [];
+
+  // System health incidents
+  if (!telephonyHealth || telephonyError) {
+    incidents.push({
+      id: "sys-telephony-down",
+      severity: "critical",
+      category: "system",
+      title: "Telephony Service Unreachable",
+      description: "The telephony service is not responding. Live call events are not being processed. New calls may not appear in the dashboard.",
+      affectedTenant: null,
+      affectedUsers: 0,
+      likelyCause: telephonyError === "timeout" ? "The telephony container may have crashed or is starting up." : `Service error: ${telephonyError}`,
+      suggestedAction: "Restart the telephony container: docker restart app-telephony-1. Check logs: docker logs app-telephony-1 --tail 50",
+      startedAt: new Date().toISOString(),
+      callCount: 0,
+      drillDownPath: null,
+    });
+  } else if (telephonyHealth.status === "down" || !telephonyHealth.ami.connected) {
+    incidents.push({
+      id: "sys-pbx-ami-down",
+      severity: "critical",
+      category: "connectivity",
+      title: "PBX Connection Lost",
+      description: "The Connect platform has lost its connection to the PBX phone system. Live call data is unavailable. Existing calls are unaffected, but no new call events are being received.",
+      affectedTenant: null,
+      affectedUsers: 0,
+      likelyCause: telephonyHealth.ami.lastError
+        ? `AMI connection error: ${telephonyHealth.ami.lastError}`
+        : "The PBX may be unreachable or the AMI credentials may have changed.",
+      suggestedAction: "Check that the PBX is online and reachable. Verify AMI credentials in the telephony service configuration.",
+      startedAt: new Date().toISOString(),
+      callCount: 0,
+      drillDownPath: null,
+    });
+  } else if (telephonyHealth.status === "degraded" || !telephonyHealth.ari.restHealthy) {
+    incidents.push({
+      id: "sys-pbx-ari-degraded",
+      severity: "warning",
+      category: "connectivity",
+      title: "PBX REST API Unreachable",
+      description: "The PBX ARI (REST API) is unreachable. Call bridging and active call polling may be affected, but live call events from AMI are still flowing.",
+      affectedTenant: null,
+      affectedUsers: 0,
+      likelyCause: telephonyHealth.ari.lastError ?? "ARI endpoint may be disabled or the port is blocked.",
+      suggestedAction: "Verify ARI is enabled on the PBX (port 8088). Check firewall rules between the Connect server and PBX.",
+      startedAt: new Date().toISOString(),
+      callCount: 0,
+      drillDownPath: null,
+    });
+  }
+
+  if (turnCount === 0) {
+    const missedTurnCount = badEvents.filter((e) => {
+      const p = e.payload as Record<string, unknown>;
+      const rca = p["rca"] as Record<string, unknown> | undefined;
+      return rca?.["primaryCause"] === "TURN_missing" || p["isUsingRelay"] === false;
+    }).length;
+    if (missedTurnCount > 0 || badEvents.length > 2) {
+      incidents.push({
+        id: "sys-turn-missing",
+        severity: "warning",
+        category: "audio",
+        title: "No TURN Server Configured",
+        description: `No TURN relay server is configured. ${missedTurnCount > 0 ? `${missedTurnCount} recent calls had audio issues likely caused by missing TURN.` : "Callers on remote networks or behind strict NAT may experience no audio or one-way audio."}`,
+        affectedTenant: null,
+        affectedUsers: 0,
+        likelyCause: "WebRTC media requires TURN relay when the caller is behind strict NAT or a corporate firewall. Without TURN, audio fails silently.",
+        suggestedAction: "Go to Settings → Voice → WebRTC and configure a TURN server. Contact your hosting provider or use a service like Twilio Network Traversal or coturn.",
+        startedAt: new Date().toISOString(),
+        callCount: missedTurnCount,
+        drillDownPath: null,
+      });
+    }
+  }
+
+  // CDR gap detection
+  if (recentCdrAttempts === 0) {
+    incidents.push({
+      id: "sys-cdr-gap",
+      severity: "warning",
+      category: "system",
+      title: "No Call Records in Last 30 Minutes",
+      description: "No completed call records have been stored in the last 30 minutes. This may mean calls are not completing, the CDR pipeline has an error, or there genuinely have been no calls.",
+      affectedTenant: null,
+      affectedUsers: 0,
+      likelyCause: "Either no calls have occurred, or the CDR ingest pipeline between the telephony service and API is failing.",
+      suggestedAction: "Check CDR stats: curl http://localhost:3003/cdr-stats. Check telephony logs for CDR ingest errors.",
+      startedAt: new Date().toISOString(),
+      callCount: 0,
+      drillDownPath: null,
+    });
+  }
+
+  // Audio quality incidents per tenant
+  const CAUSE_PLAIN: Record<string, { title: string; description: (count: number, tenant: string, noTurn: boolean) => string; cause: string; action: string }> = {
+    ICE_failure: {
+      title: "WebRTC Audio Connection Failures",
+      description: (n, t, noTurn) => `${n} call(s) failed to establish audio for ${t}. ${noTurn ? "No TURN server is configured, which is the most likely cause." : "ICE negotiation failed even with TURN — a firewall may be blocking the media path."}`,
+      cause: "ICE (network traversal) negotiation failed, preventing audio from being established.",
+      action: "Configure a TURN relay server. If TURN is already configured, check that UDP/TCP ports are open on the TURN server.",
+    },
+    TURN_missing: {
+      title: "Audio Issues — No Relay Server",
+      description: (n, t, _) => `${n} call(s) had poor audio quality for ${t} because no TURN relay was used. Callers on strict NAT or remote networks cannot reach the PBX directly.`,
+      cause: "Calls are routing audio directly without a TURN relay. This works on local networks but fails for remote callers.",
+      action: "Configure a TURN server in Voice → Settings → WebRTC.",
+    },
+    one_way_audio: {
+      title: "One-Way Audio Reported",
+      description: (n, t, _) => `${n} call(s) for ${t} had one-way audio — one party could not hear the other.`,
+      cause: "The RTP audio stream is only flowing one direction. Usually caused by NAT or firewall asymmetry.",
+      action: "Enable TURN relay and ensure the PBX externip/localnet configuration is correct.",
+    },
+    packet_loss: {
+      title: "Audio Quality — High Packet Loss",
+      description: (n, t, _) => `${n} call(s) for ${t} had significant packet loss, causing choppy or broken audio.`,
+      cause: "Audio packets are being dropped in the network between the caller and the PBX.",
+      action: "TURN relay can help stabilize the media path. Advise users on poor connections to switch to wired or stronger WiFi.",
+    },
+    high_jitter: {
+      title: "Audio Quality — Network Jitter",
+      description: (n, t, _) => `${n} call(s) for ${t} had high jitter (irregular packet timing), causing robotic or choppy audio.`,
+      cause: "Network congestion or unstable WiFi/cellular causing inconsistent audio packet delivery.",
+      action: "Recommend users move to a more stable network. Consider enabling TURN with TCP on port 443 as a fallback.",
+    },
+    high_latency: {
+      title: "Audio Quality — High Latency",
+      description: (n, t, _) => `${n} call(s) for ${t} had high latency (round-trip > 300ms), causing noticeable audio delay.`,
+      cause: "Long network path between the caller and the PBX/TURN server. May be geographic distance or routing issue.",
+      action: "Consider deploying a TURN server closer to the users' region.",
+    },
+    unknown: {
+      title: "Audio Quality Issues (Unknown Cause)",
+      description: (n, t, _) => `${n} call(s) for ${t} were reported as poor quality. The root cause could not be determined automatically.`,
+      cause: "Multiple possible causes — review the call timeline for specific events.",
+      action: "Use Admin → Call Timeline to drill into individual sessions.",
+    },
+  };
+
+  for (const [, group] of groupMap) {
+    if (group.count < 1) continue;
+    const hasTurn = turnCount > 0;
+    const template = CAUSE_PLAIN[group.cause] ?? CAUSE_PLAIN["unknown"];
+    const severity: Incident["severity"] =
+      group.cause === "ICE_failure" ? "critical" :
+      group.count >= 5 ? "warning" :
+      "info";
+
+    incidents.push({
+      id: `audio-${group.tenantId}-${group.cause}`,
+      severity,
+      category: "audio",
+      title: template.title,
+      description: template.description(group.count, group.tenantName, !hasTurn),
+      affectedTenant: group.tenantName,
+      affectedUsers: group.userEmails.size,
+      likelyCause: template.cause,
+      suggestedAction: template.action,
+      startedAt: (() => {
+        const minEvent = badEvents.filter((e) => {
+          const p = e.payload as Record<string, unknown>;
+          const rca = p["rca"] as Record<string, unknown> | undefined;
+          return e.tenantId === group.tenantId && String(rca?.["primaryCause"] ?? "unknown") === group.cause;
+        }).reduce((min, e) => e.createdAt < min ? e.createdAt : min, group.lastSeenAt);
+        return minEvent.toISOString();
+      })(),
+      callCount: group.count,
+      drillDownPath: `/admin/audio-intelligence`,
+    });
+  }
+
+  // Sort: critical first, then by call count
+  incidents.sort((a, b) => {
+    const sev = { critical: 0, warning: 1, info: 2 };
+    if (sev[a.severity] !== sev[b.severity]) return sev[a.severity] - sev[b.severity];
+    return b.callCount - a.callCount;
+  });
+
+  const criticalCount = incidents.filter((i) => i.severity === "critical").length;
+  const warningCount = incidents.filter((i) => i.severity === "warning").length;
+  const affectedTenants = new Set(incidents.filter((i) => i.affectedTenant).map((i) => i.affectedTenant)).size;
+
+  return {
+    timestamp: new Date().toISOString(),
+    health: {
+      api: "ok",
+      telephony: telephonyHealth?.status ?? "unknown",
+      pbxAmi: telephonyHealth?.ami.connected ? "connected" : "disconnected",
+      pbxAri: telephonyHealth?.ari.restHealthy ? "reachable" : "unreachable",
+      activeCalls: telephonyHealth?.activeCalls ?? 0,
+      turnConfigured: turnCount > 0,
+      uptimeSec: telephonyHealth?.uptimeSec ?? 0,
+    },
+    incidents,
+    summary: {
+      criticalCount,
+      warningCount,
+      infoCount: incidents.filter((i) => i.severity === "info").length,
+      affectedTenants,
+      totalCalls24h: await db.connectCdr.count({ where: { createdAt: { gte: since24h } } }).catch(() => 0),
+    },
+  };
+});
+
+// ── Tenant health endpoint (tenant-scoped, accessible to ADMIN+) ──────────────
+app.get("/voice/health", async (req, reply) => {
+  const user = getUser(req);
+  if (!user) return reply.status(401).send({ error: "unauthorized" });
+
+  const tenantId = user.tenantId;
+  const now = Date.now();
+  const startOfDay = new Date(new Date().setHours(0, 0, 0, 0));
+  const since2h = new Date(now - 2 * 60 * 60 * 1000);
+  const since24h = new Date(now - 24 * 60 * 60 * 1000);
+
+  type HealthStatus = "good" | "warning" | "critical";
+
+  // ── CDR stats for today ────────────────────────────────────────────────────
+  const [totalToday, answeredToday, missedToday, failedToday] = await Promise.all([
+    db.connectCdr.count({ where: { tenantId, createdAt: { gte: startOfDay } } }).catch(() => 0),
+    db.connectCdr.count({ where: { tenantId, createdAt: { gte: startOfDay }, disposition: "answered" } }).catch(() => 0),
+    db.connectCdr.count({ where: { tenantId, createdAt: { gte: startOfDay }, disposition: "missed" } }).catch(() => 0),
+    db.connectCdr.count({ where: { tenantId, createdAt: { gte: startOfDay }, disposition: { in: ["failed", "canceled"] } } }).catch(() => 0),
+  ]);
+
+  // ── Audio quality from VoiceDiagEvent (last 24h) ───────────────────────────
+  // Quality data is stored in payload JSON, not as direct columns.
+  const recentDiagRaw = await db.voiceDiagEvent.findMany({
+    where: { tenantId, createdAt: { gte: since24h }, type: "CALL_QUALITY_REPORT" as any },
+    select: { createdAt: true, payload: true },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  }).catch(() => [] as { createdAt: Date; payload: unknown }[]);
+
+  type DiagP = { qualityGrade?: string; iceConnectionState?: string; rca?: { primaryCause?: string } };
+  const recentDiag = recentDiagRaw.map((d) => (d.payload ?? {}) as DiagP);
+
+  const gradeCounts: Record<string, number> = { excellent: 0, good: 0, fair: 0, poor: 0 };
+  for (const d of recentDiag) {
+    const g = (d.qualityGrade ?? "").toLowerCase();
+    if (g in gradeCounts) gradeCounts[g]++;
+  }
+  const totalGraded = Object.values(gradeCounts).reduce((a, b) => a + b, 0);
+  const qualityScore = totalGraded === 0 ? 100 :
+    Math.round(
+      (gradeCounts.excellent * 100 + gradeCounts.good * 80 + gradeCounts.fair * 50 + gradeCounts.poor * 10) /
+      totalGraded
+    );
+  const qualityLabel =
+    qualityScore >= 85 ? "Excellent" :
+    qualityScore >= 70 ? "Good" :
+    qualityScore >= 50 ? "Fair" : "Poor";
+
+  const iceFailures = recentDiag.filter((d) => d.iceConnectionState === "failed").length;
+  const poorCalls = gradeCounts.poor + gradeCounts.fair;
+
+  // ── Gather healing actions for this tenant (from telephony service) ─────────
+  type HealingAction = { id: string; type: string; status: string; plainEnglish: string; triggeredAt: string };
+  let healingActions: HealingAction[] = [];
+  try {
+    const telephonyBase = process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003";
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    const hRes = await fetch(`${telephonyBase}/healing/log?maxAgeMs=${24 * 60 * 60 * 1000}`, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+    if (hRes.ok) healingActions = (await hRes.json() as HealingAction[]).slice(0, 10);
+  } catch { /* non-fatal */ }
+
+  // ── Derive health status ───────────────────────────────────────────────────
+  const failureRate = totalToday > 0 ? failedToday / totalToday : 0;
+  let status: HealthStatus = "good";
+  let statusMessage = "All systems normal. Calls are connecting and audio is clear.";
+
+  if (failureRate > 0.2 || iceFailures > 3) {
+    status = "critical";
+    statusMessage = iceFailures > 3
+      ? `Audio connection failures detected (${iceFailures} ICE failures in the last 24 hours). Calls may have poor or no audio.`
+      : `High call failure rate — ${Math.round(failureRate * 100)}% of today's calls failed. Check your PBX trunks.`;
+  } else if (failureRate > 0.08 || poorCalls > 2 || iceFailures > 0) {
+    status = "warning";
+    statusMessage = iceFailures > 0
+      ? `Some audio quality issues detected today (${iceFailures} audio connection problems). Most calls are working normally.`
+      : `A small number of calls failed today (${failedToday} out of ${totalToday}). This may be normal.`;
+  }
+
+  // ── Build incident list ────────────────────────────────────────────────────
+  type TenantIncident = {
+    id: string;
+    severity: "critical" | "warning" | "info";
+    title: string;
+    description: string;
+    cause: string;
+    suggestedAction: string;
+    affectedCount: number;
+    detectedAt: string;
+    autoResolved: boolean;
+  };
+  const incidents: TenantIncident[] = [];
+
+  if (iceFailures > 0) {
+    incidents.push({
+      id: "ice-failures",
+      severity: iceFailures > 3 ? "critical" : "warning",
+      title: "Audio Connection Issues",
+      description: `${iceFailures} call(s) in the last 24 hours failed to establish a clear audio path. Affected users may have experienced no audio or one-way audio.`,
+      cause: "The system could not establish a direct audio path between the caller and the PBX. This is usually caused by strict firewall rules or missing TURN relay configuration.",
+      suggestedAction: "Check Voice Settings → WebRTC and ensure a TURN server is configured. If the issue persists, contact your network administrator.",
+      affectedCount: iceFailures,
+      detectedAt: recentDiagRaw.find((_, i) => recentDiag[i]?.iceConnectionState === "failed")?.createdAt.toISOString() ?? new Date().toISOString(),
+      autoResolved: false,
+    });
+  }
+
+  if (failedToday > 0) {
+    incidents.push({
+      id: "call-failures",
+      severity: failureRate > 0.15 ? "critical" : "warning",
+      title: "Call Failures Today",
+      description: `${failedToday} out of ${totalToday} calls today ended in failure. ${failureRate > 0.15 ? "This is unusually high and needs attention." : "This is slightly above normal."}`,
+      cause: "Calls failed before connecting. This could be caused by a PBX trunk being offline, an incorrectly configured dial plan, or a network issue.",
+      suggestedAction: "Review the Call History page to identify affected numbers and times. Check PBX → Trunks for any offline or erroring trunks.",
+      affectedCount: failedToday,
+      detectedAt: startOfDay.toISOString(),
+      autoResolved: false,
+    });
+  }
+
+  if (poorCalls > 0 && iceFailures === 0) {
+    incidents.push({
+      id: "poor-quality",
+      severity: poorCalls > 5 ? "warning" : "info",
+      title: "Some Calls Had Poor Audio Quality",
+      description: `${poorCalls} call(s) in the last 24 hours received a poor or fair audio quality rating. Affected users may have noticed choppy or unclear audio.`,
+      cause: "Audio quality issues can be caused by packet loss, high network jitter, or insufficient bandwidth.",
+      suggestedAction: "Ask affected users to check their internet connection. If issues are widespread, contact your internet provider.",
+      affectedCount: poorCalls,
+      detectedAt: since24h.toISOString(),
+      autoResolved: false,
+    });
+  }
+
+  for (const action of healingActions.filter((a) => a.status === "succeeded")) {
+    incidents.push({
+      id: `healed-${action.id}`,
+      severity: "info",
+      title: "System Auto-Recovery",
+      description: action.plainEnglish,
+      cause: "An automatic recovery action was performed by the system.",
+      suggestedAction: "No action required — the system recovered automatically.",
+      affectedCount: 0,
+      detectedAt: action.triggeredAt,
+      autoResolved: true,
+    });
+  }
+
+  // ── Suggested actions ──────────────────────────────────────────────────────
+  const suggestedActions: string[] = [];
+  if (status === "good" && incidents.length === 0) {
+    suggestedActions.push("Everything looks good. No action needed.");
+  }
+  if (iceFailures > 0) suggestedActions.push("Configure a TURN relay server for remote callers (Voice → Settings → WebRTC).");
+  if (failureRate > 0.08) suggestedActions.push("Review failed calls in Call History to identify patterns.");
+  if (poorCalls > 3) suggestedActions.push("Check internet connection quality for affected users.");
+
+  reply.send({
+    tenantId,
+    status,
+    statusMessage,
+    callsToday: {
+      total: totalToday,
+      answered: answeredToday,
+      missed: missedToday,
+      failed: failedToday,
+      failureRate: totalToday > 0 ? Math.round(failureRate * 100) : 0,
+    },
+    audioQuality: {
+      score: qualityScore,
+      label: qualityLabel,
+      gradeCounts,
+      issueCount: poorCalls + iceFailures,
+      iceFailures,
+    },
+    incidents,
+    healingActions: healingActions.slice(0, 5),
+    suggestedActions,
+    lastUpdated: new Date().toISOString(),
+  });
+});
 
 app.post("/mobile/devices/register", async (req, reply) => {
   const user = getUser(req);
@@ -14925,7 +16556,13 @@ const port = Number(process.env.PORT || 3001);
     );
   } else {
     app.log.info(
-      { turnServer: turnServerEnv, turnUsername: turnUsernameEnv ? "(set)" : "(not set)", turnPassword: turnPasswordEnv ? "(set)" : "(not set)" },
+      {
+        turnServer: turnServerEnv,
+        authMode: turnAuthSecretEnv ? "hmac-use-auth-secret" : "static-credentials",
+        turnAuthSecret: turnAuthSecretEnv ? "(set)" : "(not set)",
+        turnUsername: !turnAuthSecretEnv && turnUsernameEnv ? "(set)" : "(not set — using hmac)",
+        turnPassword: !turnAuthSecretEnv && turnPasswordEnv ? "(set)" : "(not set — using hmac)",
+      },
       "TURN server configured"
     );
   }

@@ -14,7 +14,8 @@ import * as Haptics from 'expo-haptics';
 import { useIncomingNotifications } from '../../context/NotificationsContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
-import { respondInvite } from '../../api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { respondInvite, postVoiceDiagEvent } from '../../api/client';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 
@@ -37,6 +38,22 @@ export function IncomingCallScreen() {
   const contentSlide = useRef(new Animated.Value(30)).current;
   const answerScale = useRef(new Animated.Value(1)).current;
   const declineScale = useRef(new Animated.Value(1)).current;
+
+  // ── UI_SHOWN telemetry ────────────────────────────────────────────────────
+  // Fires once when the in-app incoming call screen mounts. Combined with
+  // PUSH_RECEIVED we can compute "push → UI visible" latency in the Ops Center.
+  useEffect(() => {
+    if (!token || !incomingInvite) return;
+    AsyncStorage.getItem('connect_diag_session_id').catch(() => null).then((sid) => {
+      if (!sid) return;
+      postVoiceDiagEvent(token, {
+        sessionId: sid,
+        type: 'UI_SHOWN',
+        payload: { inviteId: incomingInvite.id, screen: 'IncomingCallScreen' },
+      }).catch(() => undefined);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // Content entrance
