@@ -18,6 +18,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HeaderBar } from '../../components/HeaderBar';
 import { getCallHistory } from '../../api/client';
+import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
@@ -137,29 +138,61 @@ export function RecentTab() {
 
   const load = useCallback(
     async (isRefresh = false) => {
-      if (!token) return;
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       setError(null);
-      try {
-        const data = await getCallHistory(token);
-        setCalls(data);
-      } catch (e: any) {
-        setError(e?.message || 'Failed to load call history');
-        setCalls([]);
-      } finally {
+
+      // 1. Show local history immediately (no network needed)
+      const local = await loadLocalCallHistory();
+      if (local.length > 0) {
+        setCalls(local);
+        // Only show loading spinner if we have nothing local to show yet
         setLoading(false);
-        setRefreshing(false);
       }
+
+      // 2. Fetch from server and merge
+      if (token) {
+        try {
+          const remote = await getCallHistory(token);
+          if (remote.length > 0) {
+            const merged = mergeCallRecords(remote, local);
+            setCalls(merged);
+          } else if (local.length === 0) {
+            // Both empty — no error, just empty state
+            setCalls([]);
+          }
+        } catch {
+          // API failed — local history is still shown, no error shown
+          if (local.length === 0) {
+            setError('Could not load call history from server.');
+          }
+        }
+      }
+
+      setLoading(false);
+      setRefreshing(false);
     },
     [token],
   );
 
+  // Reload every time this tab gains focus (catches calls that just ended)
   useFocusEffect(
     useCallback(() => {
       load(false);
     }, [load]),
   );
+
+  // Also reload 3 seconds after a call ends (gives the append a moment to settle)
+  const { callState } = useSip();
+  const prevCallRef = useRef(callState);
+  useEffect(() => {
+    const prev = prevCallRef.current;
+    prevCallRef.current = callState;
+    if (callState === 'idle' && (prev === 'ended' || prev === 'connected')) {
+      const t = setTimeout(() => load(false), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [callState, load]);
 
   const handleCall = (number: string) => {
     if (!number) return;

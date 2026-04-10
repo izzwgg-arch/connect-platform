@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useNavigation } from '@react-navigation/native';
+import { playDtmfTone } from '../../audio/telephonyAudio';
 import { useSip } from '../../context/SipContext';
 import { useTheme } from '../../context/ThemeContext';
 import { CallTimer } from '../../components/call/CallTimer';
@@ -106,7 +106,6 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
 
 export function ActiveCallScreen() {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation<any>();
   const sip = useSip();
   const { isDark } = useTheme();
 
@@ -174,17 +173,9 @@ export function ActiveCallScreen() {
     }
   }, [inProgress]);
 
-  // ── Auto-dismiss when call goes fully idle ──────────────────────────────────
-  useEffect(() => {
-    if (callState === 'idle') {
-      const t = setTimeout(() => {
-        try {
-          if (navigation.canGoBack()) navigation.goBack();
-        } catch {}
-      }, 300);
-      return () => clearTimeout(t);
-    }
-  }, [callState, navigation]);
+  // Auto-dismiss is handled by RootNavigator which removes this screen from
+  // the stack when isCallActive becomes false (on 'idle'). Calling goBack()
+  // here races with that and causes a crash — do nothing.
 
   // ── Status label ────────────────────────────────────────────────────────────
 
@@ -207,8 +198,9 @@ export function ActiveCallScreen() {
 
   const handleDtmf = (digit: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    playDtmfTone(digit); // Local DTMF tone feedback
     setDtmfInput((p) => p + digit);
-    sip.sendDtmf(digit);
+    sip.sendDtmf(digit); // SIP DTMF signal to PBX
   };
 
   const handleHangup = async () => {
@@ -223,8 +215,22 @@ export function ActiveCallScreen() {
 
   const handleSpeaker = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    sip.toggleSpeaker();
+    sip.cycleAudioRoute();
   };
+
+  // Icon and label for the dynamic audio route button
+  const audioRouteIcon =
+    sip.audioRoute === 'speaker'
+      ? 'volume-high'
+      : sip.audioRoute === 'bluetooth'
+      ? 'bluetooth'
+      : 'volume-medium';
+  const audioRouteLabel =
+    sip.audioRoute === 'speaker'
+      ? 'Speaker'
+      : sip.audioRoute === 'bluetooth'
+      ? 'Bluetooth'
+      : 'Earpiece';
 
   const handleHold = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -310,10 +316,10 @@ export function ActiveCallScreen() {
               danger={sip.muted}
             />
             <CtrlBtn
-              icon={sip.speakerOn ? 'volume-high' : 'volume-medium'}
-              label="Speaker"
+              icon={audioRouteIcon}
+              label={audioRouteLabel}
               onPress={handleSpeaker}
-              active={sip.speakerOn}
+              active={sip.audioRoute !== 'earpiece'}
             />
             <CtrlBtn
               icon="keypad"

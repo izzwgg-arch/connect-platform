@@ -1,5 +1,14 @@
 import type { SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
+import { registerGlobals as registerWebRTCGlobals } from "react-native-webrtc";
+import JsSIP from "jssip";
+import {
+  startRingback,
+  startRingtone,
+  stopAllTelephonyAudio,
+  initAudioSession,
+  restoreAudioSession,
+} from "../audio/telephonyAudio";
 
 // Voice-optimised audio constraints — same profile as the browser softphone.
 const VOICE_AUDIO_CONSTRAINTS = {
@@ -19,7 +28,9 @@ const ICM = {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
-      m.start({ media });
+      // ringback: '' — we manage all tones ourselves; auto: true lets the OS
+      // handle Bluetooth headset routing automatically when speaker=false.
+      m.start({ media, ringback: "", auto: true });
     } catch { /* module not linked */ }
   },
   stop() {
@@ -34,7 +45,31 @@ const ICM = {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
       m.setSpeakerphoneOn(on);
+      // When speaker=false: Android routes to Bluetooth headset if one is
+      // connected, otherwise earpiece — this is the expected behaviour.
     } catch { /* module not linked */ }
+  },
+  /** Explicitly route audio to a Bluetooth headset (Android only). */
+  routeToBluetooth() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("react-native-incall-manager").default;
+      if (typeof m.chooseAudioRoute === "function") {
+        m.chooseAudioRoute("BLUETOOTH");
+      }
+    } catch { /* ignore */ }
+  },
+  /** Explicitly route audio to earpiece. */
+  routeToEarpiece() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("react-native-incall-manager").default;
+      if (typeof m.chooseAudioRoute === "function") {
+        m.chooseAudioRoute("EARPIECE");
+      } else {
+        m.setSpeakerphoneOn(false);
+      }
+    } catch { /* ignore */ }
   },
 };
 
@@ -72,17 +107,15 @@ export class JsSipClient implements SipClient {
     this.events.onRegistrationState?.("registering");
     console.log('[SIP] Registering to', this.bundle.sipDomain, 'via', this.bundle.sipWsUrl);
 
-    // Register WebRTC globals lazily (not at startup — avoids native crash on launch)
+    // Register WebRTC globals (static import — avoids Metro bundler hoisting issues)
     try {
-      const { registerGlobals } = await import('react-native-webrtc');
-      registerGlobals();
-      console.log('[SIP] WebRTC globals registered');
+      registerWebRTCGlobals();
+      console.log('[SIP] WebRTC globals registered OK');
     } catch (e) {
-      console.warn('[SIP] WebRTC registerGlobals failed:', e);
+      console.warn('[SIP] WebRTC registerGlobals() failed:', e);
     }
 
-    const JsSIP = (await import("jssip")).default as any;
-    const socket = new JsSIP.WebSocketInterface(this.bundle.sipWsUrl);
+    const socket = new (JsSIP as any).WebSocketInterface(this.bundle.sipWsUrl);
 
     const iceServers = this.bundle.iceServers?.length
       ? this.bundle.iceServers
@@ -111,7 +144,7 @@ export class JsSipClient implements SipClient {
       uaConfig.outbound_proxy_set = this.bundle.outboundProxy;
     }
 
-    this.ua = new JsSIP.UA(uaConfig);
+    this.ua = new (JsSIP as any).UA(uaConfig);
 
     this.ua.on("registered", () => {
       console.log('[SIP] Registered successfully');
@@ -138,6 +171,8 @@ export class JsSipClient implements SipClient {
         this.incomingSessions.push(e.session);
         this.events.onIncomingCall?.(callerNumber);
         this.events.onCallState?.("ringing");
+        // Play incoming ringtone
+        initAudioSession().then(() => startRingtone()).catch(() => undefined);
       }
       this.bindSession(this.session);
     });
@@ -155,10 +190,14 @@ export class JsSipClient implements SipClient {
       const code = e?.response?.status_code;
       console.log('[SIP] Call progress, status:', code);
       this.events.onCallState?.("ringing");
+      // Ringback is already started in dial() — do NOT restart here.
+      // Repeated progress events would interrupt the 4s silence cadence and
+      // turn the ringback into a continuous tone.
     });
 
     session.on("confirmed", () => {
       console.log('[SIP] Call confirmed (connected)');
+      stopAllTelephonyAudio().catch(() => undefined);
       ICM.start("audio");
       if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.events.onCallState?.("connected");
@@ -168,9 +207,11 @@ export class JsSipClient implements SipClient {
     session.on("ended", (e: any) => {
       const cause = e?.cause || "normal";
       console.log('[SIP] Call ended, cause:', cause);
+      stopAllTelephonyAudio().catch(() => undefined);
       this.stopLivePing();
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
+      restoreAudioSession().catch(() => undefined);
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
@@ -181,9 +222,11 @@ export class JsSipClient implements SipClient {
       const code = e?.response?.status_code;
       const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
       console.warn('[SIP] Call failed:', msg);
+      stopAllTelephonyAudio().catch(() => undefined);
       this.stopLivePing();
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       ICM.stop();
+      restoreAudioSession().catch(() => undefined);
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
       if (this.session === session) this.session = null;
       this.events.onCallState?.("ended");
@@ -240,6 +283,8 @@ export class JsSipClient implements SipClient {
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
+    // Start US ringback immediately (before "progress" arrives from PBX)
+    initAudioSession().then(() => startRingback()).catch(() => undefined);
     ICM.start("audio");
     try {
       this.session = this.ua.call(dest, {
@@ -249,6 +294,7 @@ export class JsSipClient implements SipClient {
       this.bindSession(this.session);
       console.log('[SIP] INVITE sent');
     } catch (e: any) {
+      stopAllTelephonyAudio().catch(() => undefined);
       ICM.stop();
       const msg = e?.message || "dial failed";
       console.error('[SIP] Dial error:', msg);
@@ -258,6 +304,7 @@ export class JsSipClient implements SipClient {
   }
 
   async answer() {
+    stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on answer
     ICM.start("audio");
     this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
   }
@@ -268,6 +315,7 @@ export class JsSipClient implements SipClient {
       const session = this.findIncoming(match);
       if (session) {
         this.session = session;
+        stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone
         ICM.start("audio");
         session.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
         return true;
@@ -280,6 +328,7 @@ export class JsSipClient implements SipClient {
   async rejectIncoming(match?: SipMatch): Promise<boolean> {
     const session = this.findIncoming(match);
     if (!session) return false;
+    stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on reject
     try {
       session.terminate?.();
     } catch {}
@@ -290,15 +339,23 @@ export class JsSipClient implements SipClient {
 
   async hangup() {
     console.log('[SIP] Hanging up');
+    stopAllTelephonyAudio().catch(() => undefined);
     this.stopLivePing();
     await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});
     ICM.stop();
+    restoreAudioSession().catch(() => undefined);
     try {
       this.session?.terminate?.();
     } catch (e) {
       console.warn('[SIP] Hangup error:', e);
     }
-    this.events.onCallState?.("ended");
+    // onCallState("ended") will be fired by the session "ended"/"failed" event.
+    // Only fire it directly here if session terminate doesn't produce an event.
+    setTimeout(() => {
+      if (this.session === null) {
+        this.events.onCallState?.("ended");
+      }
+    }, 500);
   }
 
   setMute(mute: boolean) {

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -147,6 +147,21 @@ export function KeypadTab() {
   const insets = useSafeAreaInsets();
   const [number, setNumber] = useState('');
   const [dialing, setDialing] = useState(false);
+  // Two-tap redial: first tap fills the last-dialed number, second tap calls it
+  const [redialFilled, setRedialFilled] = useState(false);
+  const prevCallStateRef = useRef(sip.callState);
+
+  // Clear number when call ends and return to idle
+  useEffect(() => {
+    const prev = prevCallStateRef.current;
+    prevCallStateRef.current = sip.callState;
+    const wasInCall =
+      prev === 'connected' || prev === 'dialing' || prev === 'ringing' || prev === 'ended';
+    if (sip.callState === 'idle' && wasInCall) {
+      setNumber('');
+      setRedialFilled(false);
+    }
+  }, [sip.callState]);
 
   const callActive =
     sip.callState === 'connected' ||
@@ -160,6 +175,7 @@ export function KeypadTab() {
       sip.sendDtmf(digit);
     } else {
       setNumber((prev) => prev + digit);
+      setRedialFilled(false); // Manual typing cancels redial mode
     }
   };
 
@@ -172,27 +188,31 @@ export function KeypadTab() {
   const handleBackspace = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     setNumber((prev) => prev.slice(0, -1));
+    setRedialFilled(false);
   };
 
   const handleLongBackspace = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setNumber('');
+    setRedialFilled(false);
   };
 
   const handleDial = async () => {
-    // Last-dialed redial: if input is empty, fill + dial last number
-    if (!number.trim()) {
+    const target = number.trim();
+
+    // Two-tap redial: first tap fills last-dialed number, second tap calls
+    if (!target) {
       const last = sip.lastDialed;
       if (!last) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
         return;
       }
       setNumber(last);
-      // Small delay so user sees the number fill before the call starts
-      setTimeout(() => doCall(last), 150);
-      return;
+      setRedialFilled(true);
+      return; // Wait for second tap
     }
-    await doCall(number.trim());
+
+    await doCall(target);
   };
 
   const doCall = async (target: string) => {
@@ -258,10 +278,8 @@ export function KeypadTab() {
   const displayValue = formatDisplay(number);
   const registered = sip.registrationState === 'registered';
 
-  // Hint text when input is empty
-  const hintText = sip.lastDialed
-    ? `Tap  to redial ${sip.lastDialed}`
-    : 'Enter a number to call';
+  // When redialFilled, show a subtle "tap to call" cue under the number
+  const subHint = redialFilled ? 'Tap call to dial' : null;
 
   const callButtonDisabled = callActive
     ? false
@@ -316,13 +334,10 @@ export function KeypadTab() {
           )}
         </View>
 
-        {/* Hint / status */}
-        {!callActive && !number && (
-          <Text
-            style={[styles.hintText, { color: colors.textTertiary }]}
-            numberOfLines={1}
-          >
-            {hintText}
+        {/* Redial cue — only shown after first tap auto-filled the number */}
+        {subHint && (
+          <Text style={[styles.hintText, { color: colors.textTertiary }]} numberOfLines={1}>
+            {subHint}
           </Text>
         )}
 
