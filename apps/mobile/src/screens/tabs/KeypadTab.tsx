@@ -37,10 +37,11 @@ const KEYS = [
   { digit: '#', sub: '' },
 ];
 
-// Key size: 3 keys per row with comfortable gutters
+// Key size: 3 keys per row with comfortable gutters.
+// Scaled to ~88% of the maximum possible size for better one-handed ergonomics.
 const PAD_H_PADDING = spacing['6'] as number ?? 24;
-const KEY_GAP = 14;
-const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
+const KEY_GAP = 12;
+const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3 * 0.88);
 
 function DialKey({
   digit,
@@ -295,7 +296,7 @@ export function KeypadTab() {
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
 
       {/* ── Display Area ── */}
-      <View style={[styles.displayArea, { paddingTop: insets.top + 16 }]}>
+      <View style={[styles.displayArea, { paddingTop: insets.top + 8 }]}>
 
         {/* Number input */}
         <View style={styles.numberRow}>
@@ -372,8 +373,11 @@ export function KeypadTab() {
         </View>
       </View>
 
+      {/* Flex spacer — pushes the entire keypad block down toward the bottom nav */}
+      <View style={styles.spacer} />
+
       {/* ── Keypad Grid ── */}
-      <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING }]}>
+      <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING, paddingBottom: insets.bottom + 16 }]}>
         <View style={styles.keyGrid}>
           {KEYS.map(({ digit, sub }) => (
             <DialKey
@@ -428,8 +432,6 @@ export function KeypadTab() {
           <View style={styles.actionSide} />
         </View>
       </View>
-
-      <View style={{ height: insets.bottom + 90 }} />
     </View>
   );
 }
@@ -441,13 +443,13 @@ const styles = StyleSheet.create({
   displayArea: {
     alignItems: 'center',
     paddingHorizontal: PAD_H_PADDING,
-    paddingBottom: spacing['4'] as number ?? 16,
+    paddingBottom: 10,
   },
   numberRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 60,
+    minHeight: 52,
     width: '100%',
     gap: 8,
   },
@@ -461,7 +463,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   hintText: {
-    fontSize: 13,
+    fontSize: 12,
     marginTop: 2,
     letterSpacing: 0.2,
   },
@@ -471,7 +473,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
-    marginTop: 10,
+    marginTop: 8,
     gap: 6,
   },
   statusDot: {
@@ -485,10 +487,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
+  // Flexible spacer — absorbs all free vertical space and pushes the keypad
+  // block down toward the bottom navigation bar for ergonomic thumb reach.
+  spacer: {
+    flex: 1,
+    minHeight: 8,
+  },
+
   // ── Keys ─────────────────────────────────────────────
   keypad: {
-    flex: 1,
-    justifyContent: 'center',
+    // No flex — size is determined by content; spacer above handles positioning
   },
   keyGrid: {
     flexDirection: 'row',
@@ -496,22 +504,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     rowGap: KEY_GAP,
     columnGap: KEY_GAP,
-    marginBottom: spacing['6'] as number ?? 24,
+    marginBottom: 18,
   },
   key: {
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyDigit: {
-    fontSize: 26,
+    fontSize: 23,
     fontWeight: '400',
     letterSpacing: 0.5,
-    lineHeight: 30,
+    lineHeight: 27,
   },
   keySub: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     letterSpacing: 1.8,
     marginTop: 1,
@@ -530,22 +538,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   ghostBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   callBtn: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 6 },
+    shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 10,
+    shadowRadius: 14,
+    elevation: 9,
   },
 });
