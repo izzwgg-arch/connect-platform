@@ -72,6 +72,13 @@ type NotificationsState = {
   expoPushToken: string | null;
   incomingInvite: CallInvite | null;
   clearIncomingInvite: () => void;
+  /**
+   * Single, guarded path to answer an incoming call. Both the notification
+   * deep-link handler and IncomingCallScreen should use this — it has the
+   * in-flight dedup guard so the invite is claimed exactly once.
+   */
+  answerIncomingCall: (invite: CallInvite) => Promise<void>;
+  declineIncomingCall: (invite: CallInvite | null) => Promise<void>;
   runMediaTest: () => Promise<void>;
   callReadiness: CallReadiness;
   openBatteryOptimizationSettings: () => Promise<void>;
@@ -654,9 +661,10 @@ export function NotificationsProvider({
 
         console.log("[Notif] SIP registered, waiting for PBX readiness...");
 
-        // Give the PBX a brief chance to fork the still-ringing call to the
-        // newly registered mobile endpoint before we claim the invite.
-        await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+        // Give Asterisk time to propagate the new SIP registration before
+        // we claim the invite and trigger an AMI Redirect. Too short = PBX
+        // redirects before the endpoint is reachable and the call dies.
+        await new Promise<void>((resolve) => setTimeout(resolve, 2500));
 
         console.log("[Notif] Claiming invite:", invite.id, "pbxCallId:", invite.pbxCallId, "sipCallTarget:", invite.sipCallTarget);
         const resp = await respondInvite(
@@ -1422,13 +1430,17 @@ export function NotificationsProvider({
       expoPushToken,
       incomingInvite,
       clearIncomingInvite: () => safeSetInvite(null),
+      answerIncomingCall: (invite: CallInvite) =>
+        handleAcceptInvite(invite, invite.id, { skipBringToForeground: false }),
+      declineIncomingCall: (invite: CallInvite | null) =>
+        handleDeclineInvite(invite, invite?.id || ""),
       runMediaTest,
       callReadiness,
       openBatteryOptimizationSettings,
       requestNotificationPermission,
       retryPushTokenRegistration,
     }),
-    [expoPushToken, incomingInvite, runMediaTest, callReadiness, safeSetInvite, requestNotificationPermission, retryPushTokenRegistration],
+    [expoPushToken, incomingInvite, runMediaTest, callReadiness, safeSetInvite, handleAcceptInvite, handleDeclineInvite, requestNotificationPermission, retryPushTokenRegistration],
   );
 
   return (
