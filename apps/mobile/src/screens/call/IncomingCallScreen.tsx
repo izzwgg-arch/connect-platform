@@ -158,24 +158,18 @@ export function IncomingCallScreen() {
     Animated.timing(answerScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
 
     try {
-      // Cold-start: SipProvider may still be loading the provisioning bundle.
-      const provWaitStart = Date.now();
-      while (!sip.hasProvisioning && Date.now() - provWaitStart < 6000) {
-        await new Promise<void>((r) => setTimeout(r, 300));
-      }
-      console.log('[IncomingCall] Provisioning ready:', sip.hasProvisioning, 'waited', Date.now() - provWaitStart, 'ms');
-
       let registered = false;
-      for (let attempt = 1; attempt <= 3 && !registered; attempt++) {
+      for (let attempt = 1; attempt <= 4 && !registered; attempt++) {
         if (attempt > 1) {
           console.log('[IncomingCall] SIP register retry', attempt);
-          await new Promise<void>((r) => setTimeout(r, 2000));
+          await new Promise<void>((r) => setTimeout(r, 1500));
         }
         registered = await sip.register().then(() => true).catch((e) => {
           console.warn('[IncomingCall] SIP register attempt', attempt, 'failed:', e?.message || e);
           return false;
         });
       }
+      console.log('[IncomingCall] SIP register result:', registered ? 'OK' : 'FAILED');
 
       if (!registered) {
         console.warn('[IncomingCall] All SIP register attempts failed');
@@ -186,7 +180,7 @@ export function IncomingCallScreen() {
         return;
       }
 
-      console.log('[IncomingCall] SIP registered, claiming invite...');
+      console.log('[IncomingCall] SIP registered, claiming invite...', 'pbxCallId:', incomingInvite.pbxCallId, 'sipCallTarget:', incomingInvite.sipCallTarget);
       await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
       const resp = await respondInvite(token, incomingInvite.id, 'ACCEPT').catch(() => null);

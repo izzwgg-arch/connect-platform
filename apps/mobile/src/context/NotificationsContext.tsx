@@ -626,25 +626,21 @@ export function NotificationsProvider({
           }).catch(() => undefined);
         }
 
-        // Cold-start: SipProvider may still be loading the provisioning bundle
-        // from SecureStore. Poll for up to 6 s before attempting registration.
-        const provWaitStart = Date.now();
-        while (!sip.hasProvisioning && Date.now() - provWaitStart < 6000) {
-          await new Promise<void>((r) => setTimeout(r, 300));
-        }
-        console.log("[Notif] Provisioning ready:", sip.hasProvisioning, "waited", Date.now() - provWaitStart, "ms");
-
+        // Retry SIP registration up to 4 times with 1.5 s gaps.  On cold start
+        // the first attempt may fail with "Missing provisioning bundle" because
+        // SipProvider hasn't loaded SecureStore yet — subsequent retries succeed.
         let registered = false;
-        for (let attempt = 1; attempt <= 3 && !registered; attempt++) {
+        for (let attempt = 1; attempt <= 4 && !registered; attempt++) {
           if (attempt > 1) {
             console.log("[Notif] SIP register retry", attempt);
-            await new Promise<void>((r) => setTimeout(r, 2000));
+            await new Promise<void>((r) => setTimeout(r, 1500));
           }
           registered = await sip.register().then(() => true).catch((e) => {
             console.warn("[Notif] SIP register attempt", attempt, "failed:", e?.message || e);
             return false;
           });
         }
+        console.log("[Notif] SIP register result:", registered ? "OK" : "FAILED");
 
         if (!registered) {
           console.warn("[Notif] All SIP register attempts failed for invite:", invite.id);
@@ -662,15 +658,25 @@ export function NotificationsProvider({
         // newly registered mobile endpoint before we claim the invite.
         await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
+        console.log("[Notif] Claiming invite:", invite.id, "pbxCallId:", invite.pbxCallId, "sipCallTarget:", invite.sipCallTarget);
         const resp = await respondInvite(
           token,
           invite.id,
           "ACCEPT",
           deviceIdRef.current || undefined,
         ).catch(() => null);
+        console.log("[Notif] respondInvite result:", resp?.code, resp?.status);
 
         if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
           const reason = resp?.code || "unknown";
+
+          // Another handler (e.g. IncomingCallScreen) already claimed this
+          // invite — do NOT clear the invite state or the active screen.
+          if (reason === "INVITE_ALREADY_HANDLED" && resp?.status === "ACCEPTED") {
+            console.log("[Notif] Invite already claimed by another handler, leaving screen active");
+            return;
+          }
+
           if (reason === "TURN_REQUIRED_NOT_VERIFIED") {
             Alert.alert(
               "TURN not verified",
