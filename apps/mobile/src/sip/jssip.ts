@@ -79,6 +79,7 @@ export class JsSipClient implements SipClient {
   private ua: any = null;
   private session: any = null;
   private incomingSessions: any[] = [];
+  private registerPromise: Promise<void> | null = null;
   private callStartedAt: number | null = null;
   private callDirection: "outbound" | "inbound" = "outbound";
   private livePingInterval: ReturnType<typeof setInterval> | null = null;
@@ -97,6 +98,25 @@ export class JsSipClient implements SipClient {
 
   async register() {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
+
+    if (this.registerPromise) {
+      return this.registerPromise;
+    }
+
+    // If already registered and an incoming call is pending, do not tear down
+    // the UA — stopping it would terminate the pending SIP INVITE.
+    if (this.ua && this.incomingSessions.length > 0) {
+      console.log('[SIP] Skipping re-register — incoming session in progress');
+      return;
+    }
+
+    // If the UA is already registered and connected, skip the expensive
+    // stop/restart cycle. A UA that is registered responds correctly to
+    // incoming INVITEs without needing a fresh connection.
+    if (this.ua && this.ua.isRegistered?.()) {
+      console.log('[SIP] Already registered, skipping re-register');
+      return;
+    }
 
     // Tear down any existing UA before creating a new one
     if (this.ua) {
@@ -146,18 +166,36 @@ export class JsSipClient implements SipClient {
 
     this.ua = new (JsSIP as any).UA(uaConfig);
 
-    this.ua.on("registered", () => {
-      console.log('[SIP] Registered successfully');
-      this.events.onRegistrationState?.("registered");
-    });
+    this.registerPromise = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = (cb: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        this.registerPromise = null;
+        cb();
+      };
+      const timeoutId = setTimeout(() => {
+        const msg = "SIP registration timed out";
+        console.warn("[SIP] Registration timeout");
+        settle(() => reject(new Error(msg)));
+      }, 20_000);
 
-    this.ua.on("registrationFailed", (e: any) => {
-      const code = e?.response?.status_code;
-      const cause = e?.cause || "unknown";
-      const msg = code ? `SIP reg failed (${code}): ${cause}` : `SIP reg failed: ${cause}`;
-      console.warn('[SIP] Registration failed:', msg);
-      this.events.onRegistrationState?.("failed");
-      this.events.onError?.(msg);
+      this.ua.on("registered", () => {
+        console.log('[SIP] Registered successfully');
+        this.events.onRegistrationState?.("registered");
+        settle(() => resolve());
+      });
+
+      this.ua.on("registrationFailed", (e: any) => {
+        const code = e?.response?.status_code;
+        const cause = e?.cause || "unknown";
+        const msg = code ? `SIP reg failed (${code}): ${cause}` : `SIP reg failed: ${cause}`;
+        console.warn('[SIP] Registration failed:', msg);
+        this.events.onRegistrationState?.("failed");
+        this.events.onError?.(msg);
+        settle(() => reject(new Error(msg)));
+      });
     });
 
     this.ua.on("newRTCSession", (e: any) => {
@@ -183,6 +221,7 @@ export class JsSipClient implements SipClient {
 
     this.ua.start();
     console.log('[SIP] UA started');
+    return this.registerPromise;
   }
 
   private bindSession(session: any) {
@@ -261,7 +300,22 @@ export class JsSipClient implements SipClient {
     const targetFrom = this.normalizeNumber(match.fromNumber || "");
     if (targetFrom && from && !from.endsWith(targetFrom) && !targetFrom.endsWith(from)) return false;
     const to = String(this.getSessionTo(session));
-    if (match.toExtension && to && to !== String(match.toExtension)) return false;
+    const toExt = String(match.toExtension || "");
+    if (toExt && to) {
+      // VitalPBX multi-tenant SIP usernames come in several formats:
+      //   "103_1"  → extension 103, device index 1  (sipUsername format)
+      //   "T2_103" → tenant T2, extension 103        (authUsername prefix format)
+      // The push invite always stores just the short extension ("103").
+      // Accept the match if:
+      //   - exact match:           "103"    === "103"  ✓
+      //   - starts with ext + "_": "103_1"  starts with "103_"  ✓
+      //   - ends with "_" + ext:   "T2_103" ends with  "_103"   ✓
+      const matches =
+        to === toExt ||
+        to.startsWith(toExt + "_") ||
+        to.endsWith("_" + toExt);
+      if (!matches) return false;
+    }
     return true;
   }
 

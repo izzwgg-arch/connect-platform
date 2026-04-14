@@ -45,12 +45,21 @@ const isProdProfile = profile === 'production';
 const requestedVoiceSimulate = String(process.env.EXPO_PUBLIC_VOICE_SIMULATE || 'false').toLowerCase() === 'true';
 const voiceSimulate = isProdProfile ? false : requestedVoiceSimulate;
 const logLevel = (process.env.EXPO_PUBLIC_LOG_LEVEL || (isProdProfile ? 'warn' : profile === 'preview' ? 'info' : 'debug')).toLowerCase();
+const easProjectId = '53c72ced-180c-4885-a3ff-7d5da5717ead';
+const appVersion = '1.0.0';
 
 const config: ExpoConfig = {
   name: 'Connect',
   slug: 'connect-mobile',
   owner: 'izz8457s-organization',
-  version: '1.0.0',
+  version: appVersion,
+  runtimeVersion: appVersion,
+  updates: {
+    enabled: true,
+    url: `https://u.expo.dev/${easProjectId}`,
+    checkAutomatically: 'ON_LOAD',
+    fallbackToCacheTimeout: 0,
+  },
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   backgroundColor: '#040810',
@@ -78,6 +87,10 @@ const config: ExpoConfig = {
   android: {
     package: 'com.connectcommunications.mobile',
     backgroundColor: '#040810',
+    // google-services.json provides the Firebase/FCM configuration used by
+    // expo-notifications to obtain Expo push tokens on Android.
+    // Without this, Firebase fails to initialize ("Default FirebaseApp is not initialized").
+    googleServicesFile: './google-services.json',
     // Adaptive icon: foreground is the icon image, background is the gradient base colour.
     // This gives proper Android 8+ adaptive icon behaviour (circle, squircle, etc).
     adaptiveIcon: {
@@ -102,6 +115,10 @@ const config: ExpoConfig = {
         'RECEIVE_BOOT_COMPLETED',
         // Required by expo-task-manager for background processing
         'WAKE_LOCK',
+        // Required for the battery optimization settings intent
+        // (android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).
+        // Without this declaration Android rejects the intent with SecurityException.
+        'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
       ],
   },
   extra: {
@@ -109,14 +126,16 @@ const config: ExpoConfig = {
     voiceSimulate,
     logLevel,
     buildProfile: profile,
-    easProjectId: '53c72ced-180c-4885-a3ff-7d5da5717ead',
+    easProjectId,
     eas: {
-      projectId: '53c72ced-180c-4885-a3ff-7d5da5717ead',
+      projectId: easProjectId,
     },
   },
   plugins: [
     withCallKeepManifest,
+    './plugins/withIncomingCallService',
     'expo-secure-store',
+    'expo-task-manager',
     [
       'expo-notifications',
       {

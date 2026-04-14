@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -16,6 +17,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { respondInvite, postVoiceDiagEvent } from '../../api/client';
+import { startRingtone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 
@@ -90,6 +92,14 @@ export function IncomingCallScreen() {
   }, [incomingInvite?.id]);
 
   useEffect(() => {
+    if (!incomingInvite) return;
+    startRingtone().catch(() => undefined);
+    return () => {
+      stopAllTelephonyAudio().catch(() => undefined);
+    };
+  }, [incomingInvite?.id]);
+
+  useEffect(() => {
     // Content entrance
     Animated.parallel([
       Animated.timing(contentFade, { toValue: 1, duration: 400, useNativeDriver: true }),
@@ -143,24 +153,71 @@ export function IncomingCallScreen() {
   const handleAnswer = async () => {
     if (!token || !incomingInvite) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+    stopAllTelephonyAudio().catch(() => undefined);
 
     Animated.timing(answerScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
 
     try {
-      const resp = await respondInvite(token, incomingInvite.id, 'ACCEPT').catch(() => null);
-      if (resp?.code !== 'INVITE_CLAIMED_OK') {
-        clearIncomingInvite();
+      // Cold-start: SipProvider may still be loading the provisioning bundle.
+      const provWaitStart = Date.now();
+      while (!sip.hasProvisioning && Date.now() - provWaitStart < 6000) {
+        await new Promise<void>((r) => setTimeout(r, 300));
+      }
+      console.log('[IncomingCall] Provisioning ready:', sip.hasProvisioning, 'waited', Date.now() - provWaitStart, 'ms');
+
+      let registered = false;
+      for (let attempt = 1; attempt <= 3 && !registered; attempt++) {
+        if (attempt > 1) {
+          console.log('[IncomingCall] SIP register retry', attempt);
+          await new Promise<void>((r) => setTimeout(r, 2000));
+        }
+        registered = await sip.register().then(() => true).catch((e) => {
+          console.warn('[IncomingCall] SIP register attempt', attempt, 'failed:', e?.message || e);
+          return false;
+        });
+      }
+
+      if (!registered) {
+        console.warn('[IncomingCall] All SIP register attempts failed');
+        Alert.alert(
+          'Answer failed',
+          'The app could not reconnect to the phone system in time. Please try again.',
+        );
         return;
       }
-      await sip.register().catch(() => undefined);
-      await sip.answerIncomingInvite({
+
+      console.log('[IncomingCall] SIP registered, claiming invite...');
+      await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+
+      const resp = await respondInvite(token, incomingInvite.id, 'ACCEPT').catch(() => null);
+      console.log('[IncomingCall] respondInvite result:', resp?.code);
+      if (resp?.code !== 'INVITE_CLAIMED_OK') {
+        clearIncomingInvite();
+        if (resp?.code === 'INVITE_EXPIRED' || resp?.code === 'INVITE_NOT_FOUND') {
+          Alert.alert('Call ended', 'This call is no longer available.');
+        }
+        return;
+      }
+
+      console.log('[IncomingCall] Invite claimed, waiting for SIP INVITE...');
+      const answered = await sip.answerIncomingInvite({
         fromNumber: incomingInvite.fromNumber,
         toExtension: incomingInvite.toExtension,
         pbxCallId: incomingInvite.pbxCallId,
         sipCallTarget: incomingInvite.sipCallTarget,
-      }, 5000).catch(() => false);
+      }, 20000).catch(() => false);
+      console.log('[IncomingCall] answerIncomingInvite result:', answered);
+      if (!answered) {
+        clearIncomingInvite();
+        Alert.alert(
+          'Answer failed',
+          'The incoming call was no longer available when the app connected.',
+        );
+        return;
+      }
       clearIncomingInvite();
-    } catch {
+    } catch (e) {
+      console.error('[IncomingCall] handleAnswer error:', e);
       clearIncomingInvite();
     }
   };
@@ -168,6 +225,7 @@ export function IncomingCallScreen() {
   const handleDecline = async () => {
     if (!token || !incomingInvite) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    stopAllTelephonyAudio().catch(() => undefined);
 
     Animated.timing(declineScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
 
@@ -184,6 +242,10 @@ export function IncomingCallScreen() {
   const callerName = incomingInvite?.fromDisplay || incomingInvite?.fromNumber || 'Unknown';
   const callerNumber = incomingInvite?.fromNumber || '';
   const toExt = incomingInvite?.toExtension || '';
+
+  if (!incomingInvite) {
+    return null;
+  }
 
   const initials = callerName
     .split(' ')
