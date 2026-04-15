@@ -90,6 +90,14 @@ export class CallStateStore extends EventEmitter {
     return linkedId ? this.calls.get(linkedId) : undefined;
   }
 
+  /** Returns true if any channelIndex entry points to this callId (i.e. the call has a live Asterisk channel). */
+  hasLiveChannelIndex(callId: string): boolean {
+    for (const lid of this.channelIndex.values()) {
+      if (lid === callId) return true;
+    }
+    return false;
+  }
+
   /** For diagnostics: raw channel count, derived active count, overcount warning, optional per-call summary. */
   getDiagnostics(): {
     rawChannelCount: number;
@@ -334,6 +342,16 @@ export class CallStateStore extends EventEmitter {
 
     if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
     if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
+    if (params.context) call.metadata["lastContext"] = params.context;
+    // Only store a real extension — never let helper/catch-all entries like "s" or "h"
+    // overwrite a previously stored extension (e.g. "103").  The first Newchannel event
+    // for the originating leg carries the dialled number; subsequent ringing-device legs
+    // use "s" which is useless for an AMI Redirect back into the dialplan.
+    if (params.exten && params.exten !== "s" && params.exten !== "h") {
+      call.metadata["lastExten"] = params.exten;
+    } else if (!call.metadata["lastExten"] && params.exten) {
+      call.metadata["lastExten"] = params.exten;
+    }
 
     // Upgrade tenantId/tenantName when newly resolved (e.g. trunk Newchannel fires after internal leg)
     if (!call.tenantId && params.tenantId) {
@@ -899,6 +917,64 @@ export class CallStateStore extends EventEmitter {
       call.endedAt = new Date().toISOString();
       this.emitCallRemove(id);
       this.scheduleEvict(id);
+    }
+  }
+
+  /**
+   * Force-evict a zombie/stale call from the store regardless of channel state.
+   * Returns the call's channel strings so the caller can issue AMI Hangup for each.
+   * Safe to call even if the call is already gone.
+   */
+  forceEvictZombie(callId: string, reason: string): { channels: string[]; uniqueIds: string[] } {
+    const call = this.calls.get(callId);
+    if (!call) return { channels: [], uniqueIds: [] };
+
+    const channels = [...call.channels];
+
+    // Collect uniqueIds that map to this call (for AMI Hangup by uniqueid)
+    const uniqueIds: string[] = [];
+    for (const [uid, lid] of this.channelIndex) {
+      if (lid === callId) uniqueIds.push(uid);
+    }
+
+    call.state = "hungup";
+    call.endedAt = new Date().toISOString();
+    call.metadata["staleEvictReason"] = reason;
+
+    log.warn(
+      { callId, channels, uniqueIds, reason },
+      "live_call: zombie_force_evicted",
+    );
+
+    this.emitCallRemove(callId);
+    this.scheduleEvict(callId);
+
+    return { channels, uniqueIds };
+  }
+
+  /**
+   * Start a background timer that periodically runs stale/ghost cleanup.
+   * This ensures ghosts are removed even when no new WS clients connect.
+   */
+  private staleCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  startPeriodicStaleCleanup(intervalMs = 60_000): void {
+    if (this.staleCleanupTimer) return;
+    this.staleCleanupTimer = setInterval(() => {
+      try {
+        this.runStaleCleanup();
+      } catch (err) {
+        log.error({ err }, "live_call: periodic_stale_cleanup_error");
+      }
+    }, intervalMs);
+    if (this.staleCleanupTimer.unref) this.staleCleanupTimer.unref();
+    log.info({ intervalMs }, "live_call: periodic_stale_cleanup_started");
+  }
+
+  stopPeriodicStaleCleanup(): void {
+    if (this.staleCleanupTimer) {
+      clearInterval(this.staleCleanupTimer);
+      this.staleCleanupTimer = null;
     }
   }
 
