@@ -387,6 +387,22 @@ export default function CallsPage() {
               })}
             </div>
           </section>
+        ) : telephony.status === "connected" ? (
+          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+            <div className="calls-live-header">
+              <span className="calls-live-dot idle" />
+              <h3 className="calls-live-title">Live calls</h3>
+              <span className="calls-live-idle-label">No active calls right now</span>
+            </div>
+          </section>
+        ) : telephony.status === "failed" ? (
+          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+            <div className="calls-live-header">
+              <span className="calls-live-dot error" />
+              <h3 className="calls-live-title">Live calls</h3>
+              <span className="calls-live-idle-label">Connection lost — refresh the page to reconnect</span>
+            </div>
+          </section>
         ) : null}
 
         {/* ── Filters ── */}

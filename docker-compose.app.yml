@@ -25,7 +25,10 @@ services:
       # STUN server — used as fallback ICE when tenant has no custom ICE servers
       STUN_SERVER: ${STUN_SERVER:-stun:stun.l.google.com:19302}
       # TURN server — set in .env.platform for production audio behind strict NAT
+      # TURN_AUTH_SECRET enables HMAC time-limited credentials (use-auth-secret mode, recommended).
+      # If set, TURN_USERNAME and TURN_PASSWORD are ignored.
       TURN_SERVER: ${TURN_SERVER:-}
+      TURN_AUTH_SECRET: ${TURN_AUTH_SECRET:-}
       TURN_USERNAME: ${TURN_USERNAME:-}
       TURN_PASSWORD: ${TURN_PASSWORD:-}
       # Internal URL for /voice/webrtc/health to fetch AMI/ARI status from telephony service
@@ -140,6 +143,7 @@ services:
       PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-wss://209.145.60.79:8089/ws}
       STUN_SERVER: ${STUN_SERVER:-stun:stun.l.google.com:19302}
       TURN_SERVER: ${TURN_SERVER:-}
+      TURN_AUTH_SECRET: ${TURN_AUTH_SECRET:-}
       TURN_USERNAME: ${TURN_USERNAME:-}
       TURN_PASSWORD: ${TURN_PASSWORD:-}
       PBX_WEBHOOK_VERIFY_MODE: ${PBX_WEBHOOK_VERIFY_MODE:-token}

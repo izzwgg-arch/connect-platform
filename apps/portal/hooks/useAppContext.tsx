@@ -37,11 +37,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
     if (stored === "dark" || stored === "light") setThemeState(stored);
-    const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
-    if (storedScope === "GLOBAL" || storedScope === "TENANT") setAdminScopeState(storedScope);
-    const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
+
     const jwt = readJwtPayload();
-    if (jwt?.role) setRole(mapBackendRole(jwt.role));
+    const resolvedRole = jwt?.role ? mapBackendRole(jwt.role) : "SUPER_ADMIN";
+
+    const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
+    const scopeMigrated = typeof window !== "undefined" ? localStorage.getItem("cc-scope-migrated") : null;
+
+    if (resolvedRole === "SUPER_ADMIN" && !scopeMigrated && storedScope === "TENANT") {
+      // One-time migration: SUPER_ADMINs who had the old "TENANT" default stored
+      // are reset to GLOBAL so they see all tenant calls by default.
+      // A deliberate tenant selection after this will re-store "TENANT" and set the migrated flag.
+      setAdminScopeState("GLOBAL");
+      localStorage.setItem("cc-admin-scope", "GLOBAL");
+      localStorage.setItem("cc-scope-migrated", "1");
+    } else if (storedScope === "GLOBAL" || storedScope === "TENANT") {
+      setAdminScopeState(storedScope);
+    } else if (resolvedRole === "SUPER_ADMIN") {
+      // No scope stored yet — default SUPER_ADMIN to GLOBAL.
+      setAdminScopeState("GLOBAL");
+    }
+
+    if (jwt?.role) setRole(resolvedRole);
+    const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
     const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
     setTenantId(resolvedTenantId);
   }, []);
@@ -118,7 +136,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTheme: setThemeState,
       setTenantId,
       setRole,
-      setAdminScope: setAdminScopeState
+      setAdminScope: (scope: AdminScope) => {
+        // Mark migration done so future explicit tenant selections are respected.
+        if (typeof window !== "undefined") localStorage.setItem("cc-scope-migrated", "1");
+        setAdminScopeState(scope);
+      }
     }),
     [adminScope, role, tenant, tenantId, tenants, theme, user]
   );

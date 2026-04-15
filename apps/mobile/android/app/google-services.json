@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "853620654316",
+    "project_id": "connect-app-23d4f",
+    "storage_bucket": "connect-app-23d4f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853620654316:android:e58da6098966ab5675e5c9",
+        "android_client_info": {
+          "package_name": "com.connectcommunications.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrF-WnPybBglOMkvsMv9eNqQL7m5vOlLw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

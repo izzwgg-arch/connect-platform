@@ -35,7 +35,7 @@ services:
       - --foreground
       - --log-level=6
       - --listen-ng=0.0.0.0:2223
-      - --interface=eth0
+      - --interface=${RTPENGINE_PUBLIC_IP:-45.14.194.179}!eth0
       - --port-min=30000
       - --port-max=40000
       - --table=0

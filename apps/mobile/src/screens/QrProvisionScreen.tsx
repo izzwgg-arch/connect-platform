@@ -20,6 +20,7 @@ function parseLegacyBundle(parsed: any): ProvisioningBundle {
   const sipDomain = parsed.sipDomain || parsed.provisioning?.sipDomain;
   const iceServers = parsed.iceServers || parsed.provisioning?.iceServers || [];
   const dtmfMode = parsed.dtmfMode || parsed.provisioning?.dtmfMode || "RFC2833";
+  const authUsername = parsed.authUsername || parsed.provisioning?.authUsername || null;
 
   if (!sipUsername || !sipPassword || !sipWsUrl || !sipDomain) {
     throw new Error("Invalid provisioning QR payload");
@@ -27,6 +28,7 @@ function parseLegacyBundle(parsed: any): ProvisioningBundle {
 
   return {
     sipUsername,
+    authUsername: authUsername || sipUsername,
     sipPassword,
     sipWsUrl,
     sipDomain,

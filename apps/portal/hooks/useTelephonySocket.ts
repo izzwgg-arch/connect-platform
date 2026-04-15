@@ -59,6 +59,10 @@ export function useTelephonySocket(): TelephonySocketState {
   const attemptsRef = useRef(0);
 
   const applySnapshot = useCallback((snap: TelephonySnapshot) => {
+    console.log("[PIPE:5a/6] WS snapshot received", {
+      callCount: snap.calls.length,
+      calls: snap.calls.map((c) => ({ id: c.id, state: c.state, tenantId: c.tenantId, from: c.from, to: c.to })),
+    });
     setCalls(new Map(snap.calls.map((c) => [c.id, c])));
     setExtensions(new Map(snap.extensions.map((e) => [e.extension, e])));
     setQueues(new Map(snap.queues.map((q) => [q.queueName, q])));
@@ -82,6 +86,10 @@ export function useTelephonySocket(): TelephonySocketState {
 
         case "telephony.call.upsert": {
           const call = envelope.data as LiveCall;
+          console.log("[PIPE:5b/6] WS callUpsert received", {
+            id: call.id, state: call.state, tenantId: call.tenantId,
+            tenantName: call.tenantName, from: call.from, to: call.to,
+          });
           setCalls((prev: Map<string, LiveCall>) => {
             const next = new Map(prev);
             next.set(call.id, call);
@@ -92,6 +100,7 @@ export function useTelephonySocket(): TelephonySocketState {
 
         case "telephony.call.remove": {
           const { callId } = envelope.data as { callId: string };
+          console.log("[PIPE:5c/6] WS callRemove received", { callId });
           setCalls((prev: Map<string, LiveCall>) => {
             const next = new Map(prev);
             next.delete(callId);

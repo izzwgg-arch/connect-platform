@@ -14,6 +14,7 @@ import { Alert, AppState, Linking, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   getMediaTestStatus,
+  getMobileInviteAnswerStatus,
   getPendingInvites,
   heartbeatVoiceDiagSession,
   postVoiceDiagEvent,
@@ -71,6 +72,11 @@ export type CallReadiness = {
 type NotificationsState = {
   expoPushToken: string | null;
   incomingInvite: CallInvite | null;
+  incomingCallUiState: {
+    phase: "idle" | "incoming" | "connecting" | "failed";
+    inviteId: string | null;
+    error: string | null;
+  };
   clearIncomingInvite: () => void;
   /**
    * Single, guarded path to answer an incoming call. Both the notification
@@ -86,6 +92,23 @@ type NotificationsState = {
   /** Re-attempt push token registration (useful when the first attempt failed). */
   retryPushTokenRegistration: () => Promise<void>;
 };
+
+type AnswerFlowEventType =
+  | "INCOMING_PUSH_RECEIVED"
+  | "CALLKEEP_UI_SHOWN"
+  | "CALLKEEP_ANSWER_TAPPED"
+  | "APP_FOREGROUNDED_FROM_CALL"
+  | "INVITE_RESTORED"
+  | "INVITE_RESTORE_FAILED"
+  | "SIP_ANSWER_REQUESTED"
+  | "SIP_ANSWER_SENT"
+  | "SIP_ANSWER_CONFIRMED"
+  | "SIP_ANSWER_FAILED"
+  | "PBX_CALL_ANSWERED"
+  | "PBX_STILL_RINGING_AFTER_ANSWER"
+  | "ANSWER_DESYNC_DETECTED"
+  | "UI_SWITCHED_TO_CONNECTING"
+  | "UI_SWITCHED_TO_ACTIVE";
 
 const NotificationsCtx = createContext<NotificationsState | undefined>(
   undefined,
@@ -398,6 +421,11 @@ export function NotificationsProvider({
 
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<CallInvite | null>(null);
+  const [incomingCallUiState, setIncomingCallUiState] = useState<NotificationsState["incomingCallUiState"]>({
+    phase: "idle",
+    inviteId: null,
+    error: null,
+  });
   const [callReadiness, setCallReadiness] = useState<CallReadiness>({
     notificationPermission: "undetermined",
     pushTokenRegistered: false,
@@ -426,6 +454,70 @@ export function NotificationsProvider({
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  const emitAnswerFlowEvent = useCallback(
+    (
+      type: AnswerFlowEventType,
+      invite: Pick<CallInvite, "id" | "pbxCallId" | "toExtension"> | null,
+      extra?: Record<string, unknown>,
+    ) => {
+      const payload = {
+        inviteId: invite?.id || null,
+        callId: invite?.pbxCallId || null,
+        extension: invite?.toExtension || null,
+        timestamp: new Date().toISOString(),
+        ...extra,
+      };
+      console.log(`[ANSWER_FLOW] ${type}`, JSON.stringify(payload));
+    },
+    [],
+  );
+
+  const setIncomingUiPhase = useCallback(
+    (
+      phase: NotificationsState["incomingCallUiState"]["phase"],
+      invite: Pick<CallInvite, "id" | "pbxCallId" | "toExtension"> | null,
+      error: string | null = null,
+    ) => {
+      setIncomingCallUiState({
+        phase,
+        inviteId: invite?.id || null,
+        error,
+      });
+    },
+    [],
+  );
+
+  const waitForPbxAnswer = useCallback(
+    async (invite: CallInvite, timeoutMs = 15_000) => {
+      if (!token || !invite.id) {
+        return { answered: false, answeredAt: null as string | null, state: null as string | null, activeChannels: [] as string[] };
+      }
+
+      const until = Date.now() + Math.max(2_000, timeoutMs);
+      while (Date.now() < until) {
+        const status = await getMobileInviteAnswerStatus(token, invite.id).catch(() => null);
+        if (status?.pbxAnswered) {
+          return {
+            answered: true,
+            answeredAt: status.answeredAt,
+            state: status.telephonyState,
+            activeChannels: status.activeChannels,
+          };
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      }
+
+      const finalStatus = await getMobileInviteAnswerStatus(token, invite.id).catch(() => null);
+      return {
+        answered: !!finalStatus?.pbxAnswered,
+        answeredAt: finalStatus?.answeredAt ?? null,
+        state: finalStatus?.telephonyState ?? null,
+        activeChannels: finalStatus?.activeChannels ?? [],
+      };
+    },
+    [token],
+  );
+
   const clearExpireTimer = useCallback(() => {
     if (inviteExpireTimerRef.current !== null) {
       clearTimeout(inviteExpireTimerRef.current);
@@ -441,6 +533,7 @@ export function NotificationsProvider({
         shownInviteIdRef.current = null;
         handledIncomingActionKeysRef.current.clear();
         setIncomingInvite(null);
+        setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
         return;
       }
       // Duplicate guard: don't replace an invite with itself
@@ -450,6 +543,11 @@ export function NotificationsProvider({
       }
       shownInviteIdRef.current = invite.id;
       setIncomingInvite(invite);
+      setIncomingCallUiState((prev) =>
+        prev.inviteId === invite.id && prev.phase === "connecting"
+          ? prev
+          : { phase: "incoming", inviteId: invite.id, error: null },
+      );
 
       // Auto-expire: if the call is never answered by 47s (2s buffer beyond TTL),
       // clean up the invite so the UI doesn't get stuck.
@@ -459,6 +557,7 @@ export function NotificationsProvider({
           endNativeCall(invite.id);
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           shownInviteIdRef.current = null;
+          setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
           return null;
         });
       }, 47_000);
@@ -632,6 +731,8 @@ export function NotificationsProvider({
             },
           }).catch(() => undefined);
         }
+        emitAnswerFlowEvent("UI_SWITCHED_TO_CONNECTING", invite);
+        setIncomingUiPhase("connecting", invite, null);
 
         // Retry SIP registration up to 4 times with 1.5 s gaps.  On cold start
         // the first attempt may fail with "Missing provisioning bundle" because
@@ -651,6 +752,14 @@ export function NotificationsProvider({
 
         if (!registered) {
           console.warn("[Notif] All SIP register attempts failed for invite:", invite.id);
+          emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
+            reason: "sip_register_failed",
+          });
+          setIncomingUiPhase(
+            "failed",
+            invite,
+            "The app could not reconnect to the phone system in time.",
+          );
           Alert.alert(
             "Answer failed",
             "The app could not reconnect to the phone system in time. Please try again.",
@@ -700,6 +809,11 @@ export function NotificationsProvider({
           } else if (reason === "INVITE_EXPIRED" || reason === "INVITE_NOT_FOUND") {
             Alert.alert("Call ended", "This call is no longer available.");
           }
+          setIncomingUiPhase(
+            reason === "INVITE_EXPIRED" || reason === "INVITE_NOT_FOUND" ? "failed" : "incoming",
+            invite,
+            `respond_invite_failed:${reason}`,
+          );
           safeSetInvite(null);
           endNativeCall(callId);
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
@@ -714,30 +828,90 @@ export function NotificationsProvider({
         // backToForeground again from that path causes a second launcher-style
         // restart on Samsung, which looks like a flicker loop.
         if (!options?.skipBringToForeground && AppState.currentState !== "active") {
+          emitAnswerFlowEvent("APP_FOREGROUNDED_FROM_CALL", invite, { source: "callkeep_bridge" });
           bringAppToForeground();
         }
 
+        emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite);
+        const pbxAnswerPromise = waitForPbxAnswer(invite, 20_000);
         const answered = await sip
           .answerIncomingInvite(
             {
+              inviteId: invite.id,
               fromNumber: invite.fromNumber,
               toExtension: invite.toExtension,
               pbxCallId: invite.pbxCallId,
               sipCallTarget: invite.sipCallTarget,
             },
             20000,
+            (event) => {
+              if (event.phase === "sent") {
+                emitAnswerFlowEvent("SIP_ANSWER_SENT", invite, {
+                  traceAt: new Date(event.timestamp).toISOString(),
+                });
+                return;
+              }
+              if (event.phase === "confirmed") {
+                emitAnswerFlowEvent("SIP_ANSWER_CONFIRMED", invite, {
+                  traceAt: new Date(event.timestamp).toISOString(),
+                });
+                return;
+              }
+              emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
+                traceAt: new Date(event.timestamp).toISOString(),
+                code: event.code ?? null,
+                reason: event.reason ?? null,
+                message: event.message ?? null,
+              });
+            },
           )
           .catch(() => false);
 
         if (!answered) {
+          setIncomingUiPhase(
+            "failed",
+            invite,
+            "Could not connect the call. The call may have already ended.",
+          );
           Alert.alert(
             "Answer failed",
             "Could not connect the call. The call may have already ended.",
           );
-          safeSetInvite(null);
           endNativeCall(callId);
           return;
         }
+
+        const pbxAnswer = await pbxAnswerPromise;
+        if (!pbxAnswer.answered) {
+          emitAnswerFlowEvent("PBX_STILL_RINGING_AFTER_ANSWER", invite, {
+            telephonyState: pbxAnswer.state,
+            activeChannels: pbxAnswer.activeChannels,
+          });
+          emitAnswerFlowEvent("ANSWER_DESYNC_DETECTED", invite, {
+            telephonyState: pbxAnswer.state,
+            activeChannels: pbxAnswer.activeChannels,
+          });
+          setIncomingUiPhase(
+            "failed",
+            invite,
+            "The phone system never confirmed the answer. The caller is still ringing.",
+          );
+          Alert.alert(
+            "Answer failed",
+            "The phone system never confirmed the answer. The caller is still ringing.",
+          );
+          endNativeCall(callId);
+          return;
+        }
+
+        emitAnswerFlowEvent("PBX_CALL_ANSWERED", invite, {
+          answeredAt: pbxAnswer.answeredAt,
+          telephonyState: pbxAnswer.state,
+          activeChannels: pbxAnswer.activeChannels,
+        });
+        emitAnswerFlowEvent("UI_SWITCHED_TO_ACTIVE", invite, {
+          answeredAt: pbxAnswer.answeredAt,
+        });
 
         // Log SIP-join timing
         const sipJoinedAt = Date.now();
@@ -757,12 +931,13 @@ export function NotificationsProvider({
         }
 
         AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+        setIncomingUiPhase("idle", null, null);
         safeSetInvite(null);
       } finally {
         inviteActionInFlightRef.current.delete(acceptKey);
       }
     },
-    [token, sip, safeSetInvite],
+    [token, sip, safeSetInvite, emitAnswerFlowEvent, setIncomingUiPhase, waitForPbxAnswer],
   );
 
   const resolveInviteForAction = useCallback(
@@ -797,9 +972,24 @@ export function NotificationsProvider({
         }
       }
 
+      if (invite) {
+        emitAnswerFlowEvent("INVITE_RESTORED", invite, {
+          source:
+            incomingInvite && (!callId || incomingInvite.id === callId)
+              ? "memory"
+              : fallbackInvite?.id === invite.id
+              ? "fallback"
+              : "cache_or_api",
+        });
+      } else {
+        emitAnswerFlowEvent("INVITE_RESTORE_FAILED", fallbackInvite || null, {
+          requestedInviteId: callId || null,
+        });
+      }
+
       return invite;
     },
-    [incomingInvite, safeSetInvite, token],
+    [emitAnswerFlowEvent, incomingInvite, safeSetInvite, token],
   );
 
   const handleDeclineInvite = useCallback(
@@ -918,6 +1108,7 @@ export function NotificationsProvider({
           return;
         }
 
+        emitAnswerFlowEvent("CALLKEEP_ANSWER_TAPPED", invite, { source: "native_callkeep" });
         await handleAcceptInvite(invite, callId);
       },
 
@@ -929,7 +1120,7 @@ export function NotificationsProvider({
 
     return () => { unsubNative(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, handleAcceptInvite, handleDeclineInvite, resolveInviteForAction, safeSetInvite]);
+  }, [token, emitAnswerFlowEvent, handleAcceptInvite, handleDeclineInvite, resolveInviteForAction, safeSetInvite]);
 
   // ── Native notification deep-link actions ──────────────────────────────────
 
@@ -994,6 +1185,8 @@ export function NotificationsProvider({
 
       if (action === "answer") {
         if (invite) {
+          emitAnswerFlowEvent("CALLKEEP_ANSWER_TAPPED", invite, { source: "deep_link" });
+          emitAnswerFlowEvent("APP_FOREGROUNDED_FROM_CALL", invite, { source: "deep_link" });
           await handleAcceptInvite(invite, inviteId, {
             skipBringToForeground: true,
           });
@@ -1138,15 +1331,24 @@ export function NotificationsProvider({
       if (wakeRaw && diagSessionIdRef.current) {
         const wakeEvents: any[] = safeParse(wakeRaw) ?? [];
         for (const evt of wakeEvents) {
-          await postVoiceDiagEvent(token, {
-            sessionId: diagSessionIdRef.current!,
-            type: "PUSH_RECEIVED",
-            payload: {
-              source: "background_task_wake",
-              inviteId: evt.inviteId,
+          const inviteMeta = evt?.inviteId
+            ? {
+                id: String(evt.inviteId),
+                pbxCallId: evt?.pbxCallId ? String(evt.pbxCallId) : null,
+                toExtension: evt?.toExtension ? String(evt.toExtension) : "",
+              }
+            : null;
+          if (evt?.type === "CALLKEEP_UI_SHOWN") {
+            emitAnswerFlowEvent("CALLKEEP_UI_SHOWN", inviteMeta, {
+              source: evt?.source || "background_task",
               bgWakeAt: evt.at,
-            },
-          }).catch(() => undefined);
+            });
+          } else {
+            emitAnswerFlowEvent("INCOMING_PUSH_RECEIVED", inviteMeta, {
+              source: "background_task_wake",
+              bgWakeAt: evt.at,
+            });
+          }
           // Stash timing for latency computation
           if (evt.inviteId) {
             timingsRef.current[`push_${evt.inviteId}`] = evt.at;
@@ -1268,6 +1470,10 @@ export function NotificationsProvider({
         console.log("[CALL_INCOMING] foreground push listener: INCOMING_CALL inviteId=", (data as any).inviteId || (data as any).callId);
         const invite = payloadToInvite({ ...data, _pushReceivedAt: now } as any);
         timingsRef.current[`push_${invite.id}`] = now;
+        emitAnswerFlowEvent("INCOMING_PUSH_RECEIVED", invite, {
+          source: "foreground_listener",
+          pushReceivedAt: now,
+        });
 
         // Sequential call cleanup: if there's already a different invite showing,
         // dismiss the old one first before replacing with the new one.
@@ -1342,7 +1548,7 @@ export function NotificationsProvider({
       responseSub.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, emitAnswerFlowEvent]);
 
   // ── Re-check permissions + push token when app comes back to foreground ───
 
@@ -1429,6 +1635,7 @@ export function NotificationsProvider({
     () => ({
       expoPushToken,
       incomingInvite,
+      incomingCallUiState,
       clearIncomingInvite: () => safeSetInvite(null),
       answerIncomingCall: (invite: CallInvite) =>
         handleAcceptInvite(invite, invite.id, { skipBringToForeground: false }),
@@ -1440,7 +1647,7 @@ export function NotificationsProvider({
       requestNotificationPermission,
       retryPushTokenRegistration,
     }),
-    [expoPushToken, incomingInvite, runMediaTest, callReadiness, safeSetInvite, handleAcceptInvite, handleDeclineInvite, requestNotificationPermission, retryPushTokenRegistration],
+    [expoPushToken, incomingInvite, incomingCallUiState, runMediaTest, callReadiness, safeSetInvite, handleAcceptInvite, handleDeclineInvite, requestNotificationPermission, retryPushTokenRegistration],
   );
 
   return (

@@ -2437,11 +2437,27 @@ table tr:hover {
   border-radius: 50%;
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
+.calls-live-dot.idle {
+  background: var(--console-muted);
+  animation: none;
+  opacity: 0.5;
+}
+.calls-live-dot.error {
+  background: var(--console-danger, #ef4444);
+  animation: none;
+}
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: 0.5; transform: scale(0.8); }
 }
 .calls-live-title { font-size: 13px; font-weight: 600; margin: 0; }
+.calls-live-idle-label {
+  font-size: 12px;
+  color: var(--console-muted);
+  font-style: italic;
+  margin-left: 4px;
+}
+.calls-live-idle .calls-live-header { margin-bottom: 0; }
 .calls-live-count {
   font-size: 11px; font-weight: 600;
   background: var(--console-success);

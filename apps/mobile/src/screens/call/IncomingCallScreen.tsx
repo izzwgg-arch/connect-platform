@@ -6,6 +6,7 @@ import {
   Animated,
   Dimensions,
   TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,7 +26,7 @@ const { width } = Dimensions.get('window');
 
 export function IncomingCallScreen() {
   const { token } = useAuth();
-  const { incomingInvite, clearIncomingInvite, answerIncomingCall, declineIncomingCall } = useIncomingNotifications();
+  const { incomingInvite, incomingCallUiState, clearIncomingInvite, answerIncomingCall, declineIncomingCall } = useIncomingNotifications();
   const insets = useSafeAreaInsets();
   // Remaining-time countdown (seconds until invite expires)
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL_S);
@@ -148,7 +149,7 @@ export function IncomingCallScreen() {
   }, []);
 
   const handleAnswer = async () => {
-    if (!token || !incomingInvite) return;
+    if (!token || !incomingInvite || incomingCallUiState.phase === 'connecting') return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
     stopAllTelephonyAudio().catch(() => undefined);
     Animated.timing(answerScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
@@ -169,6 +170,8 @@ export function IncomingCallScreen() {
   const callerName = incomingInvite?.fromDisplay || incomingInvite?.fromNumber || 'Unknown';
   const callerNumber = incomingInvite?.fromNumber || '';
   const toExt = incomingInvite?.toExtension || '';
+  const isConnecting = incomingCallUiState.phase === 'connecting' && incomingCallUiState.inviteId === incomingInvite?.id;
+  const hasFailure = incomingCallUiState.phase === 'failed' && incomingCallUiState.inviteId === incomingInvite?.id;
 
   if (!incomingInvite) {
     return null;
@@ -219,7 +222,7 @@ export function IncomingCallScreen() {
       >
         {/* Label */}
         <Text style={[typography.label, { color: 'rgba(34,197,94,0.9)', letterSpacing: 3 }]}>
-          INCOMING CALL
+          {isConnecting ? 'CONNECTING…' : hasFailure ? 'ANSWER FAILED' : 'INCOMING CALL'}
         </Text>
 
         {/* Avatar */}
@@ -243,6 +246,24 @@ export function IncomingCallScreen() {
             <Ionicons name="call-outline" size={12} color="rgba(136,153,187,0.7)" style={{ marginRight: 4 }} />
             <Text style={[typography.caption, { color: 'rgba(136,153,187,0.7)' }]}>
               Ext {toExt}
+            </Text>
+          </View>
+        ) : null}
+
+        {isConnecting ? (
+          <View style={styles.statusPill}>
+            <ActivityIndicator size="small" color="#93c5fd" />
+            <Text style={[typography.caption, styles.statusPillText]}>
+              Waiting for PBX + SIP answer confirmation
+            </Text>
+          </View>
+        ) : null}
+
+        {hasFailure && incomingCallUiState.error ? (
+          <View style={[styles.statusPill, styles.statusPillError]}>
+            <Ionicons name="alert-circle-outline" size={14} color="#fca5a5" />
+            <Text style={[typography.caption, styles.statusPillErrorText]}>
+              {incomingCallUiState.error}
             </Text>
           </View>
         ) : null}
@@ -275,11 +296,11 @@ export function IncomingCallScreen() {
           {/* Answer */}
           <View style={styles.actionItem}>
             <Animated.View style={{ transform: [{ scale: answerScale }] }}>
-              <TouchableOpacity style={styles.answerBtn} onPress={handleAnswer} activeOpacity={0.8}>
+              <TouchableOpacity style={[styles.answerBtn, isConnecting && styles.answerBtnDisabled]} onPress={handleAnswer} activeOpacity={0.8} disabled={isConnecting}>
                 <Ionicons name="call" size={30} color="#fff" />
               </TouchableOpacity>
             </Animated.View>
-            <Text style={styles.actionLabel}>Answer</Text>
+            <Text style={styles.actionLabel}>{isConnecting ? 'Connecting…' : 'Answer'}</Text>
           </View>
         </View>
       </Animated.View>
@@ -336,6 +357,28 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     marginTop: 10,
   },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(30,45,71,0.75)',
+    borderColor: 'rgba(147,197,253,0.25)',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginTop: 12,
+  },
+  statusPillError: {
+    backgroundColor: 'rgba(127,29,29,0.5)',
+    borderColor: 'rgba(252,165,165,0.22)',
+  },
+  statusPillText: {
+    color: 'rgba(191,219,254,0.95)',
+  },
+  statusPillErrorText: {
+    color: 'rgba(254,202,202,0.95)',
+  },
   countdownPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -382,6 +425,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 12,
     elevation: 10,
+  },
+  answerBtnDisabled: {
+    opacity: 0.7,
   },
   actionLabel: {
     color: 'rgba(240,244,255,0.7)',

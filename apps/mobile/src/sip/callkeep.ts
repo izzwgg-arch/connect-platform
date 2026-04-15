@@ -13,12 +13,7 @@ export async function setupNativeCalling() {
       alertTitle: "Phone account permission",
       alertDescription: "This app needs phone account access to show incoming call UI.",
       cancelButton: "Cancel",
-      okButton: "ok",
-      foregroundService: {
-        channelId: "connect-calls",
-        channelName: "Incoming calls",
-        notificationTitle: "Connect call service"
-      }
+      okButton: "ok"
     }
   };
   try {
@@ -31,10 +26,12 @@ export async function setupNativeCalling() {
 }
 
 export function showIncomingNativeCall(callId: string, from: string) {
+  console.log("[CALL_INCOMING] showIncomingNativeCall (foreground) callId=", callId, "from=", from);
   try {
     RNCallKeep.displayIncomingCall(callId, from, from, "number", false);
-  } catch {
-    // fallback UI handles non-native case
+    console.log("[CALL_INCOMING] showIncomingNativeCall: displayIncomingCall returned");
+  } catch (e) {
+    console.error("[CALL_INCOMING] showIncomingNativeCall FAILED:", e);
   }
 }
 

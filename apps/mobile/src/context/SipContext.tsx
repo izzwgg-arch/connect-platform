@@ -4,7 +4,8 @@ import * as SecureStore from "expo-secure-store";
 import { createSipClient } from "../sip";
 import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from "../api/client";
 import { appendCallRecord } from "../storage/callHistory";
-import type { CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
+import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
+import type { SipAnswerTraceEvent } from "../sip/types";
 import { useAuth } from "./AuthContext";
 
 const PROVISION_KEY = "cc_mobile_provision";
@@ -15,6 +16,7 @@ type AudioRoute = "earpiece" | "speaker" | "bluetooth";
 type SipState = {
   registrationState: SipRegistrationState;
   callState: CallState;
+  callDirection: CallDirection;
   remoteParty: string | null;
   muted: boolean;
   speakerOn: boolean;
@@ -31,10 +33,12 @@ type SipState = {
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;
   answerIncomingInvite: (
-    match: { fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
+    match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
     timeoutMs?: number,
+    onTrace?: (event: SipAnswerTraceEvent) => void,
   ) => Promise<boolean>;
   rejectIncomingInvite: (match?: {
+    inviteId?: string | null;
     fromNumber?: string | null;
     toExtension?: string | null;
     pbxCallId?: string | null;
@@ -56,6 +60,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const clientRef = useRef(createSipClient());
   const [registrationState, setRegistrationState] = useState<SipRegistrationState>("idle");
   const [callState, setCallState] = useState<CallState>("idle");
+  const [callDirection, setCallDirection] = useState<CallDirection>(null);
   const [remoteParty, setRemoteParty] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
@@ -77,6 +82,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // so the ended-call screen can show a farewell state before dismissing.
   useEffect(() => {
     if (callState === "ended") {
+      setCallDirection(null);
       setOnHold(false);
       setMuted(false);
       setAudioRoute("earpiece");
@@ -151,6 +157,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
       onIncomingCall: (callerNumber: string) => {
         const party = callerNumber || "Unknown";
+        setCallDirection("inbound");
         setRemoteParty(party);
         callInfoRef.current = {
           direction: "inbound",
@@ -203,6 +210,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       registrationState,
       callState,
       remoteParty,
+      callDirection,
       muted,
       speakerOn,
       onHold,
@@ -230,6 +238,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       dial: async (target) => {
+        setCallDirection("outbound");
         setRemoteParty(target);
         setLastError(null);
         // Persist last dialed number for "redial" feature
@@ -250,8 +259,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         await clientRef.current.answer();
       },
 
-      answerIncomingInvite: async (match, timeoutMs = 5000) => {
-        return clientRef.current.answerIncoming(match, timeoutMs);
+      answerIncomingInvite: async (match, timeoutMs = 5000, onTrace) => {
+        setCallDirection("inbound");
+        return clientRef.current.answerIncoming(match, timeoutMs, onTrace);
       },
 
       rejectIncomingInvite: async (match) => {
@@ -316,7 +326,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registrationState, callState, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute],
+    [registrationState, callState, callDirection, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute],
   );
 
   return <SipContext.Provider value={value}>{children}</SipContext.Provider>;

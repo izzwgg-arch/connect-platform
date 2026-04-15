@@ -12,6 +12,7 @@
 
 import { Audio } from "expo-av";
 import { Platform } from "react-native";
+import { getMobileIncomingRingtone } from "./ringtonePreferences";
 
 // ─── PCM WAV generation ───────────────────────────────────────────────────────
 
@@ -123,10 +124,10 @@ function getDtmfWav(digit: string): string | null {
 
 // ─── Sound player helpers ─────────────────────────────────────────────────────
 
-async function playOnce(uri: string, volume = 1.0): Promise<Audio.Sound | null> {
+async function playOnce(source: any, volume = 1.0): Promise<Audio.Sound | null> {
   try {
     const { sound } = await Audio.Sound.createAsync(
-      { uri },
+      typeof source === "string" ? { uri: source } : source,
       { shouldPlay: true, volume, isLooping: false },
     );
     // Auto-unload when done
@@ -141,10 +142,10 @@ async function playOnce(uri: string, volume = 1.0): Promise<Audio.Sound | null> 
   }
 }
 
-async function playLooping(uri: string, volume = 1.0): Promise<Audio.Sound | null> {
+async function playLooping(source: any, volume = 1.0): Promise<Audio.Sound | null> {
   try {
     const { sound } = await Audio.Sound.createAsync(
-      { uri },
+      typeof source === "string" ? { uri: source } : source,
       { shouldPlay: true, volume, isLooping: true },
     );
     return sound;
@@ -162,6 +163,7 @@ let ringbackStopped = true; // true = not playing; false = currently playing
 let ringtoneSound: Audio.Sound | null = null;
 let ringtoneTimer: ReturnType<typeof setTimeout> | null = null;
 let ringtoneStopped = true; // true = not playing; false = currently playing
+const CONNECT_DEFAULT_RINGTONE_SOURCE = require("../../assets/connect-default-ringtone.mp4");
 
 /**
  * Set up the audio session for telephony.
@@ -263,6 +265,12 @@ export async function startRingback() {
 export async function startRingtone() {
   await stopAllTelephonyAudio();
   ringtoneStopped = false;
+  const ringtonePreference = await getMobileIncomingRingtone();
+
+  if (ringtonePreference === "connect-default") {
+    ringtoneSound = await playLooping(CONNECT_DEFAULT_RINGTONE_SOURCE as any, 0.95);
+    return;
+  }
 
   async function cycle() {
     if (ringtoneStopped) return;

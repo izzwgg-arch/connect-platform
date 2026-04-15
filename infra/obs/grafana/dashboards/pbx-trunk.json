@@ -1,0 +1,148 @@
+{
+  "uid": "connect-pbx",
+  "title": "Connect — PBX & Trunk Health",
+  "description": "PBX AMI/ARI connectivity, active extensions, call states, and CDR pipeline health",
+  "tags": ["connect", "pbx"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "PBX AMI",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DISCONNECTED", "color": "red" }, "1": { "text": "CONNECTED", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{ "expr": "connect_ami_connected", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "PBX ARI",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "UNREACHABLE", "color": "orange" }, "1": { "text": "REACHABLE", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "orange" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{ "expr": "connect_ari_connected", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Active Calls",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "connect_active_calls", "legendFormat": "" }]
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Active Extensions",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "expr": "connect_active_extensions", "legendFormat": "" }]
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Active Queues",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "expr": "connect_active_queues", "legendFormat": "" }]
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "CDR Success Rate",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 0.95, "color": "orange" }, { "value": 0.99, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr": "rate(connect_cdr_posts_total{status=\"ok\"}[5m]) / (rate(connect_cdr_posts_total[5m]) + 0.001)",
+        "legendFormat": ""
+      }]
+    },
+
+    {
+      "id": 7, "type": "timeseries", "title": "PBX Connectivity Status",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1, "custom": { "lineWidth": 2, "fillOpacity": 20 } } },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "connect_ami_connected", "legendFormat": "AMI (0=disconnected, 1=connected)" },
+        { "expr": "connect_ari_connected", "legendFormat": "ARI (0=unreachable, 1=reachable)" }
+      ]
+    },
+
+    {
+      "id": 8, "type": "timeseries", "title": "Active Calls by Direction",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 12 } } },
+      "targets": [
+        { "expr": "connect_active_calls_by_direction{direction=\"inbound\"}", "legendFormat": "Inbound" },
+        { "expr": "connect_active_calls_by_direction{direction=\"outbound\"}", "legendFormat": "Outbound" },
+        { "expr": "connect_active_calls_by_direction{direction=\"internal\"}", "legendFormat": "Internal" }
+      ]
+    },
+
+    {
+      "id": 9, "type": "timeseries", "title": "Call Completion Rate",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "rate(connect_calls_total{disposition=\"answered\"}[5m]) * 60", "legendFormat": "Answered" },
+        { "expr": "rate(connect_calls_total{disposition=\"missed\"}[5m]) * 60", "legendFormat": "Missed" },
+        { "expr": "rate(connect_calls_total{disposition=\"failed\"}[5m]) * 60", "legendFormat": "Failed" },
+        { "expr": "rate(connect_calls_total{disposition=\"busy\"}[5m]) * 60", "legendFormat": "Busy" }
+      ]
+    },
+
+    {
+      "id": 10, "type": "timeseries", "title": "CDR Pipeline Health",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "targets": [
+        { "expr": "rate(connect_cdr_posts_total{status=\"ok\"}[5m]) * 60", "legendFormat": "CDR OK" },
+        { "expr": "rate(connect_cdr_posts_total{status=\"error\"}[5m]) * 60", "legendFormat": "CDR Error" },
+        { "expr": "rate(connect_cdr_posts_total{status=\"timeout\"}[5m]) * 60", "legendFormat": "CDR Timeout" }
+      ]
+    },
+
+    {
+      "id": 11, "type": "logs", "title": "PBX & CDR Logs",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "dedupStrategy": "none", "showLabels": true, "showTime": true, "sortOrder": "Descending" },
+      "targets": [{
+        "expr": "{platform=\"connect\", service=\"telephony\"} |= \"ami\" or \"ari\" or \"cdr\" or \"AMI\" or \"ARI\"",
+        "legendFormat": ""
+      }]
+    }
+
+  ]
+}

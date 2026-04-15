@@ -9,3 +9,6 @@ web-build
 connect-release.pfx
 connect-release.keystore
 credentials.json
+# NOTE: google-services.json is intentionally tracked so EAS Build can embed
+# it into the APK during the build. The API key in this file is a low-risk
+# Android client key — the actual security is enforced by Firebase Security Rules.

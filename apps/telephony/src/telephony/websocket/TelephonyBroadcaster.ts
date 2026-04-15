@@ -44,12 +44,24 @@ export class TelephonyBroadcaster {
     this.callStore.on("callUpsert", (call: NormalizedCall) => {
       // Only broadcast active (non-hungup) calls.
       if (call.state === "hungup") return;
-      if (env.ENABLE_TELEPHONY_DEBUG) {
-        log.debug(
-          { callId: call.id, from: call.from, to: call.to, tenantId: call.tenantId, tenantName: call.tenantName },
-          "live_call: ws_upsert",
-        );
-      }
+
+      const clientCount = this.socket.clientCount();
+      const matchingClients = this.socket.countMatchingClients(tenantFilter(call.tenantId));
+      // Always log at info so we can trace every broadcast
+      log.info(
+        {
+          callId: call.id,
+          state: call.state,
+          from: call.from,
+          to: call.to,
+          tenantId: call.tenantId,
+          tenantName: call.tenantName,
+          totalWsClients: clientCount,
+          matchingWsClients: matchingClients,
+        },
+        "PIPE[4/6]: broadcasting callUpsert to WS clients",
+      );
+
       this.socket.broadcast(
         "telephony.call.upsert",
         normalizeCallForClient(call),

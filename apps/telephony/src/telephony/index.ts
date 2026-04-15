@@ -16,8 +16,11 @@ import { SnapshotService } from "./services/SnapshotService";
 import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
+import { MobilePushNotifier } from "./services/MobilePushNotifier";
 import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
+import { HealingEngine } from "./services/HealingEngine";
+import * as metrics from "../metrics";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
 
@@ -57,9 +60,38 @@ export function createTelephonyModule(server: http.Server) {
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
   const cdrNotifier = new CdrNotifier();
+  // Mobile push notifier: fires an Expo push when an inbound call rings at an extension.
+  const mobilePushNotifier = new MobilePushNotifier();
   callStore.on("callUpsert", (call) => {
+    // Mobile push must run on every upsert so it can retry once the extension is resolved.
+    mobilePushNotifier.notify(call);
+    // ── Metrics: active call gauge ─────────────────────────────────────────
+    const ACTIVE_STATES = new Set(["ringing", "dialing", "up", "held"]);
+    const allCalls = callStore.getActive();
+    metrics.activeCalls.set(allCalls.length);
+    const byCounts = { inbound: 0, outbound: 0, internal: 0, unknown: 0 };
+    for (const c of allCalls) {
+      const d = c.direction as keyof typeof byCounts;
+      if (d in byCounts) byCounts[d]++;
+      else byCounts.unknown++;
+    }
+    for (const [dir, count] of Object.entries(byCounts)) {
+      metrics.activeCallsByDirection.labels(dir).set(count);
+    }
+
+    // ── Metrics: completed call counters ───────────────────────────────────
     if (call.state === "hungup") {
       cdrNotifier.notify(call);
+      // Count completed calls — direction resolved by CDR notifier; use raw here
+      const dir = call.direction ?? "unknown";
+      const disp = call.answeredAt ? "answered" : "missed";
+      metrics.callsTotal.labels(dir, disp).inc();
+      metrics.callDurationSeconds.labels(dir).observe(call.durationSec ?? 0);
+      if (call.answeredAt && call.endedAt) {
+        const talkSec = Math.max(0,
+          (new Date(call.endedAt).getTime() - new Date(call.answeredAt).getTime()) / 1000);
+        metrics.callTalkSeconds.labels(dir).observe(talkSec);
+      }
     }
   });
   const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService);
@@ -72,16 +104,38 @@ export function createTelephonyModule(server: http.Server) {
     healthService,
   );
   const ariActions = new AriActions(ari);
+  const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);
+
+  // ── Periodic metrics refresh (every 5 s) ─────────────────────────────────
+  let _metricsInterval: ReturnType<typeof setInterval> | null = null;
+
+  function refreshMetrics() {
+    const health = healthService.getHealth();
+    metrics.amiConnected.set(health.ami.connected ? 1 : 0);
+    metrics.ariConnected.set(health.ari.restHealthy ? 1 : 0);
+    metrics.activeExtensions.set(health.activeExtensions);
+    metrics.activeQueues.set(health.activeQueues);
+    // Active calls also refreshed here as a safety net
+    const allCalls = callStore.getActive();
+    metrics.activeCalls.set(allCalls.length);
+  }
 
   function start() {
     log.info("Starting telephony module");
     ami.start();
     ari.start();
     ariBridgedPoller.start();
+    healingEngine.start();
+    // Run stale ghost cleanup every 60 s so zombies are evicted even when no new WS clients connect
+    callStore.startPeriodicStaleCleanup(60_000);
+    _metricsInterval = setInterval(refreshMetrics, 5_000);
   }
 
   function stop() {
     log.info("Stopping telephony module");
+    if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
+    callStore.stopPeriodicStaleCleanup();
+    healingEngine.stop();
     pbxMapCache.stop();
     broadcaster.stop();
     ariBridgedPoller.stop();
@@ -103,6 +157,7 @@ export function createTelephonyModule(server: http.Server) {
     callStore,
     extStore,
     queueStore,
+    healingEngine,
     start,
     stop,
   };

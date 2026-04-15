@@ -1,0 +1,120 @@
+{
+  "uid": "connect-tenants",
+  "title": "Connect — Tenant Health",
+  "description": "Per-tenant call quality, audio issues, active users, and call volumes",
+  "tags": ["connect", "tenants"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "Poor/Failed Reports (2h)",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "orange" }, { "value": 5, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_call_quality_reports_total{grade=~\"poor|failed\"}[2h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "ICE Failures (2h)",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_ice_failures_total[2h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "TURN Relay Configured",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "NO TURN", "color": "red" }, "1": { "text": "CONFIGURED", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{ "expr": "connect_turn_configured", "legendFormat": "" }]
+    },
+
+    {
+      "id": 4, "type": "timeseries", "title": "Quality Grade Distribution Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15, "stacking": { "mode": "percent" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Excellent" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#16a34a" } }] },
+          { "matcher": { "id": "byName", "options": "Good" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#2563eb" } }] },
+          { "matcher": { "id": "byName", "options": "Fair" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d97706" } }] },
+          { "matcher": { "id": "byName", "options": "Poor" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#dc2626" } }] },
+          { "matcher": { "id": "byName", "options": "Failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#7f1d1d" } }] }
+        ]
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"excellent\"}[10m]) * 60", "legendFormat": "Excellent" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"good\"}[10m]) * 60", "legendFormat": "Good" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"fair\"}[10m]) * 60", "legendFormat": "Fair" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"poor\"}[10m]) * 60", "legendFormat": "Poor" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"failed\"}[10m]) * 60", "legendFormat": "Failed" }
+      ]
+    },
+
+    {
+      "id": 5, "type": "table", "title": "Root Cause Breakdown (24h)",
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "sortBy": [{ "displayName": "Value", "desc": true }] },
+      "targets": [
+        { "expr": "increase(connect_call_quality_rca_total[24h]) > 0", "legendFormat": "{{cause}}", "instant": true }
+      ],
+      "transformations": [{ "id": "labelsToFields", "options": {} }, { "id": "sortBy", "options": { "fields": [{ "displayName": "Value", "desc": true }] } }]
+    },
+
+    {
+      "id": 6, "type": "timeseries", "title": "ICE & One-Way Audio Issues",
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "increase(connect_ice_failures_total[10m])", "legendFormat": "ICE Failures" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"one_way_audio\"}[10m])", "legendFormat": "One-Way Audio" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"TURN_missing\"}[10m])", "legendFormat": "TURN Missing" }
+      ]
+    },
+
+    {
+      "id": 7, "type": "logs", "title": "Call Quality Issues (Loki)",
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "dedupStrategy": "none", "showLabels": true, "showTime": true, "sortOrder": "Descending" },
+      "targets": [{
+        "expr": "{platform=\"connect\", service=~\"api|telephony\"} |= \"call_quality_degraded\" or \"cdr: skipped\" or \"cdr: ingest failed\"",
+        "legendFormat": ""
+      }]
+    }
+
+  ]
+}

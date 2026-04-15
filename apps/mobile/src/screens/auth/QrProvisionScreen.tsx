@@ -93,6 +93,7 @@ export function QrProvisionScreen() {
 
       await sip.saveProvisioning({
         sipUsername: provisioning.sipUsername,
+        authUsername: provisioning.authUsername || provisioning.sipUsername,
         sipPassword,
         sipWsUrl: provisioning.sipWsUrl,
         sipDomain: provisioning.sipDomain,

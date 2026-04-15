@@ -1,0 +1,165 @@
+{
+  "uid": "connect-audio",
+  "title": "Connect — Audio Quality & WebRTC",
+  "description": "WebRTC call quality grades, ICE health, TURN usage, RCA breakdown, and live call diagnostics",
+  "tags": ["connect", "audio", "webrtc"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "ICE Failures (last 1h)",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "orange" }, { "value": 5, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_ice_failures_total[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "Poor Quality Calls (last 1h)",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "orange" }, { "value": 5, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_call_quality_reports_total{grade=~\"poor|failed\"}[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Quality Reports (last 1h)",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "value" },
+      "targets": [{ "expr": "increase(connect_call_quality_reports_total[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Active WebRTC Sessions",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "connect_webrtc_sessions_active", "legendFormat": "" }]
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "TURN Relay Rate",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 0.5, "color": "orange" }, { "value": 0.8, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr": "rate(connect_call_quality_reports_total{grade=\"excellent\"}[5m]) / (rate(connect_call_quality_reports_total[5m]) + 0.001)",
+        "legendFormat": ""
+      }]
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "Excellent Quality Rate",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 0.7, "color": "orange" }, { "value": 0.9, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr": "rate(connect_call_quality_reports_total{grade=~\"excellent|good\"}[15m]) / (rate(connect_call_quality_reports_total[15m]) + 0.001)",
+        "legendFormat": ""
+      }]
+    },
+
+    {
+      "id": 7, "type": "timeseries", "title": "Call Quality Grade Distribution",
+      "gridPos": { "x": 0, "y": 4, "w": 14, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15, "stacking": { "mode": "normal" } } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"excellent\"}[5m]) * 60", "legendFormat": "Excellent" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"good\"}[5m]) * 60", "legendFormat": "Good" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"fair\"}[5m]) * 60", "legendFormat": "Fair" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"poor\"}[5m]) * 60", "legendFormat": "Poor" },
+        { "expr": "rate(connect_call_quality_reports_total{grade=\"failed\"}[5m]) * 60", "legendFormat": "Failed" }
+      ]
+    },
+
+    {
+      "id": 8, "type": "piechart", "title": "RCA Root Cause Breakdown",
+      "gridPos": { "x": 14, "y": 4, "w": 10, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "tooltip": { "mode": "single" }, "legend": { "displayMode": "table", "values": ["value", "percent"] } },
+      "targets": [
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"TURN_missing\"}[6h])", "legendFormat": "TURN missing" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"ICE_failure\"}[6h])", "legendFormat": "ICE failure" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"one_way_audio\"}[6h])", "legendFormat": "One-way audio" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"packet_loss\"}[6h])", "legendFormat": "Packet loss" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"high_jitter\"}[6h])", "legendFormat": "High jitter" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"high_latency\"}[6h])", "legendFormat": "High latency" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"network_instability\"}[6h])", "legendFormat": "Network instability" },
+        { "expr": "increase(connect_call_quality_rca_total{cause=\"unknown\"}[6h])", "legendFormat": "Unknown" }
+      ]
+    },
+
+    {
+      "id": 9, "type": "timeseries", "title": "ICE Failures Over Time",
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        }
+      },
+      "targets": [{ "expr": "increase(connect_ice_failures_total[5m])", "legendFormat": "ICE Failures / 5m" }]
+    },
+
+    {
+      "id": 10, "type": "timeseries", "title": "Quality by Platform (Web vs Mobile)",
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "targets": [
+        { "expr": "rate(connect_call_quality_reports_total{platform=\"WEB\",grade=~\"poor|failed\"}[5m]) * 60", "legendFormat": "Web — Poor/Failed" },
+        { "expr": "rate(connect_call_quality_reports_total{platform=\"IOS\",grade=~\"poor|failed\"}[5m]) * 60", "legendFormat": "iOS — Poor/Failed" },
+        { "expr": "rate(connect_call_quality_reports_total{platform=\"ANDROID\",grade=~\"poor|failed\"}[5m]) * 60", "legendFormat": "Android — Poor/Failed" }
+      ]
+    },
+
+    {
+      "id": 11, "type": "logs", "title": "Audio / ICE Error Logs",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "dedupStrategy": "none", "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+      "targets": [{
+        "expr": "{platform=\"connect\"} |= \"call_quality_degraded\" or \"ICE_FAILED\" or \"one_way_audio\" or \"audio_autoplay\" or \"peerconnection_FAILED\"",
+        "legendFormat": ""
+      }]
+    }
+
+  ]
+}

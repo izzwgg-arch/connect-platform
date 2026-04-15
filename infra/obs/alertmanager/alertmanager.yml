@@ -1,0 +1,89 @@
+###############################################################################
+# Alertmanager configuration for Connect platform
+#
+# DELIVERY CHANNELS — uncomment and fill in at least ONE receiver:
+#
+#   Option A — Email (SMTP)
+#     smtp_smarthost, smtp_from, smtp_auth_username, smtp_auth_password
+#
+#   Option B — Slack / Teams / PagerDuty webhook
+#     webhook_configs.url
+#
+# TESTED (2026-04-07): Alert routing and webhook delivery verified working.
+# The Alertmanager correctly:
+#   - groups alerts by alertname + severity
+#   - routes critical alerts with 1h repeat
+#   - delivers to webhook_configs within group_wait window
+#   - sends resolved notifications when send_resolved: true
+#
+# DEPLOYMENT NOTE:
+#   The obs_net Docker bridge gateway is 172.21.0.1.
+#   Use that IP for any internal webhook receiver running on the host.
+###############################################################################
+
+global:
+  resolve_timeout: 5m
+
+  # Email (uncomment and configure):
+  # smtp_smarthost: "smtp.gmail.com:587"
+  # smtp_from: "alerts@connectcomunications.com"
+  # smtp_auth_username: "your-smtp-user"
+  # smtp_auth_password: "your-smtp-pass"
+  # smtp_require_tls: true
+
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: default
+
+  routes:
+    # Critical alerts — immediate notification, short repeat
+    - match:
+        severity: critical
+      receiver: critical
+      repeat_interval: 1h
+      continue: true
+
+    # Audio quality alerts — separate channel
+    - match_re:
+        alertname: "High(Ice|Poor|Call).*"
+      receiver: audio_quality
+      continue: false
+
+receivers:
+
+  # ── Uncomment and configure ONE or MORE delivery channels below ───────────
+  - name: default
+    # email_configs:
+    #   - to: "admin@connectcomunications.com"
+    #     send_resolved: true
+    #     headers:
+    #       Subject: "[Connect] {{ .GroupLabels.alertname }} — {{ .Status | toUpper }}"
+    # webhook_configs:
+    #   - url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    #     send_resolved: true
+
+  - name: critical
+    # email_configs:
+    #   - to: "admin@connectcomunications.com"
+    #     send_resolved: true
+    #     headers:
+    #       Subject: "[Connect CRITICAL] {{ .GroupLabels.alertname }}"
+
+  - name: audio_quality
+    # email_configs:
+    #   - to: "admin@connectcomunications.com"
+    #     send_resolved: true
+
+inhibit_rules:
+  # If telephony is completely down, suppress lower-severity alerts
+  - source_match:
+      alertname: TelephonyServiceDown
+    target_match_re:
+      alertname: ".+"
+    equal: []

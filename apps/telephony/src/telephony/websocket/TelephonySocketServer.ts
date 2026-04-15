@@ -67,6 +67,15 @@ export class TelephonySocketServer {
     return this.clients.size;
   }
 
+  countMatchingClients(filter?: (client: WsClient) => boolean): number {
+    if (!filter) return this.clients.size;
+    let n = 0;
+    for (const c of this.clients) {
+      if (c.isAlive && c.ws.readyState === 1 /* OPEN */ && filter(c)) n++;
+    }
+    return n;
+  }
+
   close(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);

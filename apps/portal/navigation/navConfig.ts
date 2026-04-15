@@ -13,6 +13,7 @@ export const navItems: NavItem[] = [
   { href: "/dashboard/presence", label: "Extension Presence",icon: "EP", section: "dashboard", permission: "can_view_live_calls" },
   { href: "/team",               label: "Team Directory",    icon: "TM", section: "dashboard", permission: "can_view_team" },
   { href: "/calls",              label: "Call History",      icon: "CL", section: "dashboard", permission: "can_view_calls" },
+  { href: "/calls/health",       label: "System Health",     icon: "SH", section: "dashboard", permission: "can_view_calls" },
   { href: "/voicemail",          label: "Voicemail",         icon: "VM", section: "dashboard", permission: "can_view_voicemail" },
   { href: "/sms",                label: "SMS Inbox",         icon: "SM", section: "dashboard", permission: "can_view_sms" },
   { href: "/chat",               label: "Chat",              icon: "CH", section: "dashboard", permission: "can_view_chat" },
@@ -40,6 +41,7 @@ export const navItems: NavItem[] = [
   { href: "/reports/cdr",         label: "CDR",               icon: "CD", section: "reports", permission: "can_view_reports" },
   { href: "/reports/queues",      label: "Queue Reports",     icon: "QR", section: "reports", permission: "can_view_reports" },
   { href: "/reports/performance", label: "Agent Performance", icon: "AP", section: "reports", permission: "can_view_reports" },
+  { href: "/reports/call-quality",label: "Call Quality RCA", icon: "QA", section: "reports", permission: "can_manage_global_settings" },
 
   { href: "/settings",             label: "Tenant Settings",  icon: "TS", section: "settings", permission: "can_view_settings" },
   { href: "/settings/voice",       label: "Voice Settings",   icon: "VS", section: "settings", permission: "can_view_settings" },
@@ -56,6 +58,10 @@ export const navItems: NavItem[] = [
   { href: "/admin/permissions",  label: "Permissions",        icon: "PM", section: "admin", permission: "can_manage_global_settings" },
   { href: "/admin/billing",      label: "Admin Billing",      icon: "AB", section: "admin", permission: "can_view_admin" },
   { href: "/admin/cdr-tenant-map", label: "CDR Tenant Map",  icon: "CM", section: "admin", permission: "can_view_admin" },
+  { href: "/admin/ops-center",           label: "Ops Center",         icon: "OC", section: "admin", permission: "can_manage_global_settings" },
+  { href: "/admin/incidents",           label: "Incident Center",    icon: "IC", section: "admin", permission: "can_manage_global_settings" },
+  { href: "/admin/audio-intelligence", label: "Audio Intelligence", icon: "AI", section: "admin", permission: "can_manage_global_settings" },
+  { href: "/admin/call-timeline",      label: "Call Timeline",      icon: "CT", section: "admin", permission: "can_manage_global_settings" },
 
   { href: "/billing",            label: "Billing Overview",   icon: "BL", section: "billing", permission: "can_view_reports" },
   { href: "/billing/invoices",   label: "Invoices",           icon: "IN", section: "billing", permission: "can_view_reports" },

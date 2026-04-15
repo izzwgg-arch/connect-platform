@@ -100,6 +100,23 @@ export async function respondInvite(token: string, inviteId: string, action: "AC
   return json;
 }
 
+export async function getMobileInviteAnswerStatus(token: string, inviteId: string) {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/${inviteId}/answer-status`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_ANSWER_STATUS_FAILED");
+  return json as {
+    inviteId: string;
+    linkedId: string | null;
+    inviteStatus: string;
+    pbxAnswered: boolean;
+    answeredAt: string | null;
+    telephonyState: string | null;
+    activeChannels: string[];
+  };
+}
+
 
 
 export async function redeemMobileProvisioningToken(token: string, input: { token: string; deviceInfo?: any; apiBaseUrl?: string }) {
@@ -177,7 +194,40 @@ export async function heartbeatVoiceDiagSession(token: string, input: {
 
 export async function postVoiceDiagEvent(token: string, input: {
   sessionId: string;
-  type: "SESSION_START" | "SESSION_HEARTBEAT" | "SIP_REGISTER" | "SIP_UNREGISTER" | "WS_CONNECTED" | "WS_DISCONNECTED" | "WS_RECONNECT" | "ICE_GATHERING" | "ICE_SELECTED_PAIR" | "TURN_TEST_RESULT" | "INCOMING_INVITE" | "ANSWER_TAPPED" | "CALL_CONNECTED" | "CALL_ENDED" | "ERROR" | "MEDIA_TEST_RUN" | "PUSH_RECEIVED" | "UI_SHOWN";
+  type:
+    | "SESSION_START"
+    | "SESSION_HEARTBEAT"
+    | "SIP_REGISTER"
+    | "SIP_UNREGISTER"
+    | "WS_CONNECTED"
+    | "WS_DISCONNECTED"
+    | "WS_RECONNECT"
+    | "ICE_GATHERING"
+    | "ICE_SELECTED_PAIR"
+    | "TURN_TEST_RESULT"
+    | "INCOMING_INVITE"
+    | "ANSWER_TAPPED"
+    | "CALL_CONNECTED"
+    | "CALL_ENDED"
+    | "ERROR"
+    | "MEDIA_TEST_RUN"
+    | "PUSH_RECEIVED"
+    | "UI_SHOWN"
+    | "INCOMING_PUSH_RECEIVED"
+    | "CALLKEEP_UI_SHOWN"
+    | "CALLKEEP_ANSWER_TAPPED"
+    | "APP_FOREGROUNDED_FROM_CALL"
+    | "INVITE_RESTORED"
+    | "INVITE_RESTORE_FAILED"
+    | "SIP_ANSWER_REQUESTED"
+    | "SIP_ANSWER_SENT"
+    | "SIP_ANSWER_CONFIRMED"
+    | "SIP_ANSWER_FAILED"
+    | "PBX_CALL_ANSWERED"
+    | "PBX_STILL_RINGING_AFTER_ANSWER"
+    | "ANSWER_DESYNC_DETECTED"
+    | "UI_SWITCHED_TO_CONNECTING"
+    | "UI_SWITCHED_TO_ACTIVE";
   payload?: any;
 }) {
   const res = await fetch(`${API_BASE}/voice/diag/event`, {

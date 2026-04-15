@@ -1,0 +1,118 @@
+groups:
+
+  - name: connect_platform_security
+    interval: 60s
+    rules:
+
+      - alert: BruteForceLoginAttempt
+        expr: rate(connect_login_failures_total[5m]) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Elevated login failure rate"
+          description: "Login failures are occurring at {{ $value | humanize }}/s. This may indicate a brute-force attack. Check source IPs in logs."
+          runbook: "Review /auth/login logs in Loki for the source IPs and block if needed."
+
+      - alert: HighRateLimitHits
+        expr: rate(connect_rate_limit_hits_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High rate of HTTP 429 responses"
+          description: "{{ $value | humanize }} requests/s are being rate-limited. A client may be flooding the API."
+          runbook: "Check Loki for the source endpoint and IP address."
+
+  - name: connect_platform_health
+    interval: 30s
+    rules:
+
+      - alert: TurnNotConfigured
+        expr: connect_turn_configured == 0
+        for: 0m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No TURN server configured"
+          description: "No active TURN configuration exists. WebRTC callers behind NAT will experience audio failures. This is a required production configuration."
+          runbook: "Go to Admin → Settings → Voice → WebRTC and configure a TURN server."
+
+      - alert: HighLoginFailureRate
+        expr: increase(connect_login_failures_total[1h]) > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "More than 50 login failures in the last hour"
+          description: "{{ $value | humanize }} login failures in 1 hour. May indicate a credential stuffing or brute force attack."
+
+      - alert: ApiHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(connect_api_request_duration_seconds_bucket[5m])
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "API p95 latency above 2 seconds"
+          description: "95th percentile API response time is {{ $value | humanize }}s. Users may experience slow page loads."
+          runbook: "Check the database and API service logs for slow queries or errors."
+
+      - alert: NoCdrActivity
+        expr: increase(connect_cdr_posts_total{status="ok"}[30m]) == 0 and hour() >= 8 and hour() < 22
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No CDR records have been ingested in 30 minutes"
+          description: "No call records have been posted to the database during business hours. The CDR pipeline may be broken or there have genuinely been no calls."
+          runbook: "Run: curl http://localhost:3003/cdr-stats to check the telephony CDR counters."
+
+  - name: connect_platform_resources
+    interval: 60s
+    rules:
+
+      - alert: HighCpuUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Service {{ $labels.service }} CPU usage >80%"
+          description: "{{ $labels.service }} has been using >80% CPU for 10 minutes. May impact call processing."
+
+      - alert: HighHeapUsage
+        # V8 heap ratio > 0.9 sustained for 15m AND absolute heap > 300MB
+        # Short-lived spikes are normal (V8 GCs before expanding heap).
+        # 15m sustained at >90% with large heap indicates a real leak.
+        expr: |
+          (nodejs_heap_size_used_bytes / nodejs_heap_size_total_bytes > 0.9)
+          and
+          (nodejs_heap_size_used_bytes > 300 * 1024 * 1024)
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Sustained high heap in {{ $labels.service }} ({{ $value | humanizePercentage }})"
+          description: "{{ $labels.service }} heap is {{ $value | humanizePercentage }} full for 15+ minutes and exceeds 300MB. May indicate a memory leak. Consider restart if growing."
+          runbook: "Check for unbounded caches or event listener leaks. Restart if heap keeps growing."
+
+      - alert: GcPauseHigh
+        expr: rate(nodejs_gc_duration_seconds_sum[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High GC pause time in {{ $labels.service }}"
+          description: "Garbage collection is consuming >10% of runtime. May cause event loop delays."

@@ -9,10 +9,19 @@ export type SipEvents = {
 };
 
 export type SipMatch = {
+  inviteId?: string | null;
   fromNumber?: string | null;
   toExtension?: string | null;
   pbxCallId?: string | null;
   sipCallTarget?: string | null;
+};
+
+export type SipAnswerTraceEvent = {
+  phase: "sent" | "confirmed" | "failed";
+  timestamp: number;
+  code?: number | null;
+  reason?: string | null;
+  message?: string | null;
 };
 
 export type SipClient = {
@@ -21,7 +30,11 @@ export type SipClient = {
   unregister: () => Promise<void>;
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;
-  answerIncoming: (match?: SipMatch, timeoutMs?: number) => Promise<boolean>;
+  answerIncoming: (
+    match?: SipMatch,
+    timeoutMs?: number,
+    onTrace?: (event: SipAnswerTraceEvent) => void,
+  ) => Promise<boolean>;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;
   hangup: () => Promise<void>;
   setMute: (mute: boolean) => void;

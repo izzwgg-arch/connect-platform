@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useSipPhone } from "../../../hooks/useSipPhone";
+import {
+  DEFAULT_WEB_RINGTONE_ID,
+  WEB_RINGTONE_OPTIONS,
+  getWebIncomingRingtone,
+  setWebIncomingRingtone,
+  type WebRingtoneId,
+} from "../../../hooks/telephonyAudioPreferences";
 import { QRPairingModal } from "../../../components/QRPairingModal";
 import { apiGet, apiPatch, apiPost } from "../../../services/apiClient";
 
@@ -347,11 +354,14 @@ function AudioTab() {
   const [testPlaying, setTestPlaying] = useState(false);
   const [micTesting, setMicTesting] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
+  const [incomingRingtone, setIncomingRingtoneId] =
+    useState<WebRingtoneId>(DEFAULT_WEB_RINGTONE_ID);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number>(0);
 
   useEffect(() => {
+    setIncomingRingtoneId(getWebIncomingRingtone());
     navigator.mediaDevices?.enumerateDevices().then((devices) => {
       setMicDevices(devices.filter((d) => d.kind === "audioinput"));
       setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
@@ -466,14 +476,35 @@ function AudioTab() {
       {/* Ring tone */}
       <section>
         <h3 style={{ fontSize: 14, fontWeight: 650, marginBottom: 14, color: "var(--text-dim)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Ringtone</h3>
-        <div>
-          <label className="label">Ringtone Device</label>
-          <select className="select">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <label className="label">Incoming Ringtone</label>
+            <select
+              className="select"
+              value={incomingRingtone}
+              onChange={(e) => {
+                const next = e.target.value as WebRingtoneId;
+                setWebIncomingRingtone(next);
+                setIncomingRingtoneId(next);
+              }}
+            >
+              {WEB_RINGTONE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+            Connect Default uses the bundled Connect ringtone. Classic Ring keeps the legacy generated tone.
+          </div>
+          <div>
+            <label className="label">Ringtone Device</label>
+            <select className="select">
             <option>Same as Speaker</option>
             {speakerDevices.map((d) => (
               <option key={d.deviceId} value={d.deviceId}>{d.label || "Speaker"}</option>
             ))}
-          </select>
+            </select>
+          </div>
         </div>
       </section>
 

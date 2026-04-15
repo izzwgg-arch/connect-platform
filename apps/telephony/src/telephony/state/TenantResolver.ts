@@ -89,6 +89,22 @@ export class TenantResolver {
           tenantName: this.mapCache.getTenantName(connectId),
         };
       }
+
+      // 2b. Slug-based fallback — resolves outbound/internal calls whose channel name
+      //     contains a tenant slug (e.g. PJSIP/344022_gesheft-XXX → "gesheft") but whose
+      //     DID map and T-number don't match. This covers cases where PbxTenantLink entries
+      //     have null connectTenantId but DID entries carry the slug↔UUID mapping.
+      if (hints.slug) {
+        const slugId = this.mapCache.resolveBySlug(hints.slug);
+        if (slugId) {
+          return {
+            tenantId: slugId,
+            pbxVitalTenantId: hints.vitalTenantId ?? null,
+            pbxTenantCode: hints.tenantCode ?? null,
+            tenantName: this.mapCache.getTenantName(slugId),
+          };
+        }
+      }
     }
 
     // 3. Explicit admin-configured context map.

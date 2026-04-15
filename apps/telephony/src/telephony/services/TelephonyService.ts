@@ -113,9 +113,7 @@ export class TelephonyService {
         const isHelper = isHelperChannel(typed.channel);
         const linkedIdEmpty = !(typed.linkedid ?? "").trim();
         if (linkedIdEmpty && isHelper) {
-          if (env.ENABLE_TELEPHONY_DEBUG) {
-            log.debug({ channel: typed.channel }, "live_call: helper_channel_skipped_no_linkedid");
-          }
+          log.debug({ channel: typed.channel }, "PIPE: helper_channel_skipped (no linkedid)");
           break;
         }
         const tres = this.resolver.resolveDetails({
@@ -126,12 +124,23 @@ export class TelephonyService {
           toNumber: typed.exten,
           fromNumber: typed.callerIDNum,
         });
-        if (env.ENABLE_TELEPHONY_DEBUG) {
-          log.debug(
-            { linkedId, channel: typed.channel, tenantId: tres.tenantId, resolved: tres.tenantId != null },
-            tres.tenantId != null ? "live_call: tenant_resolved" : "live_call: tenant_unresolved",
-          );
-        }
+        // Always log at info so we can trace every call even without debug mode
+        log.info(
+          {
+            event: typed.event,
+            linkedId,
+            channel: typed.channel,
+            context: typed.context,
+            exten: typed.exten,
+            callerIDNum: typed.callerIDNum,
+            tenantId: tres.tenantId,
+            tenantName: tres.tenantName,
+            pbxCode: tres.pbxTenantCode,
+          },
+          tres.tenantId != null
+            ? "PIPE[1/6]: channel_received tenant_resolved"
+            : "PIPE[1/6]: channel_received tenant_UNRESOLVED",
+        );
         const direction = inferLiveCallDirection(typed.context, typed.exten, typed.callerIDNum);
         this.calls.upsertFromNewchannel({
           linkedId,
@@ -150,10 +159,6 @@ export class TelephonyService {
           pbxTenantCode: tres.pbxTenantCode,
           direction,
         });
-        log.debug(
-          { linkedId, channel: typed.channel },
-          typed.event,
-        );
         break;
       }
 
@@ -411,6 +416,43 @@ export class TelephonyService {
     });
     log.info({ channel: params.channel, dest: params.exten }, "AMI Redirect sent");
     return actionId;
+  }
+
+  async requeueLiveCallToDialplan(params: {
+    linkedId: string;
+    fallbackExten?: string;
+    fallbackContext?: string;
+  }): Promise<{ actionId: string; channel: string; exten: string; context: string }> {
+    const call = this.calls.getById(params.linkedId);
+    if (!call || call.state === "hungup") {
+      throw new Error(`active call not found for linkedId=${params.linkedId}`);
+    }
+
+    const channel = call.channels.find((name) => !isHelperChannel(name));
+    if (!channel) {
+      throw new Error(`no redirectable channel found for linkedId=${params.linkedId}`);
+    }
+
+    const context =
+      (typeof call.metadata["lastContext"] === "string" && call.metadata["lastContext"]) ||
+      params.fallbackContext ||
+      "";
+    const exten =
+      (typeof call.metadata["lastExten"] === "string" && call.metadata["lastExten"]) ||
+      params.fallbackExten ||
+      "";
+
+    if (!context || !exten) {
+      throw new Error(`missing dialplan target for linkedId=${params.linkedId}`);
+    }
+
+    const actionId = await this.redirectChannel({
+      channel,
+      exten,
+      context,
+    });
+    log.info({ linkedId: params.linkedId, channel, exten, context, actionId }, "AMI mobile invite requeue sent");
+    return { actionId, channel, exten, context };
   }
 }
 

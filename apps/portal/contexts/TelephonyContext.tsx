@@ -25,8 +25,18 @@ export function TelephonyProvider({ children }: { children: ReactNode }) {
     const queueList = [...socket.queues.values()];
 
     const callsByTenant = (tenantId: string | null): LiveCall[] => {
-      if (tenantId === null) return activeCalls; // master: all calls
-      return activeCalls.filter((c) => c.tenantId === tenantId); // tenant: only that tenant (exclude unresolved)
+      if (tenantId === null) {
+        if (activeCalls.length > 0) {
+          console.log("[PIPE:6/6] callsByTenant(GLOBAL) →", activeCalls.length, "calls", activeCalls.map((c) => ({ id: c.id, tenantId: c.tenantId, state: c.state })));
+        }
+        return activeCalls;
+      }
+      const filtered = activeCalls.filter((c) => c.tenantId === tenantId);
+      const dropped = activeCalls.filter((c) => c.tenantId !== tenantId);
+      if (activeCalls.length > 0) {
+        console.log("[PIPE:6/6] callsByTenant(" + tenantId + ") →", filtered.length, "shown,", dropped.length, "dropped", dropped.map((c) => ({ id: c.id, tenantId: c.tenantId })));
+      }
+      return filtered;
     };
 
     return {

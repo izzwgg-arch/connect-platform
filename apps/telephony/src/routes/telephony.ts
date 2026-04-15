@@ -11,6 +11,12 @@ export function registerTelephonyRoutes(
   telephony: TelephonyModule,
 ): void {
   router.use((req, res, next) => {
+    const isInternalRoute = req.path.startsWith("/telephony/internal/");
+    if ((isInternalRoute && isInternalRouteAuthorized(req)) || hasValidInternalSecret(req)) {
+      res.locals["jwtPayload"] = { tenantId: null, scope: "internal" };
+      next();
+      return;
+    }
     const token =
       extractBearerToken(req.headers.authorization) ??
       (req.query["token"] as string | undefined) ??
@@ -42,6 +48,54 @@ export function registerTelephonyRoutes(
       calls = calls.filter((c) => c.tenantId === tenantId);
     }
     res.json(calls.map(normalizeCallForClient));
+  });
+
+  // Diagnostic endpoint: full unfiltered call store state — no tenant filtering.
+  // Returns every call in the store (any state), raw AMI data, and what each
+  // WS client would see. Requires valid JWT (any role).
+  router.get("/telephony/diag", (_req, res) => {
+    const allCalls = telephony.callStore.getAll();
+    const activeCalls = telephony.callStore.getActive();
+    const diag = telephony.callStore.getDiagnostics();
+    const pbxMap = telephony.pbxTenantMapCache?.getEntries?.() ?? [];
+
+    const callDetail = allCalls.map((c) => ({
+      id: c.id,
+      linkedId: c.linkedId,
+      state: c.state,
+      tenantId: c.tenantId,
+      tenantName: c.tenantName,
+      direction: c.direction,
+      from: c.from,
+      to: c.to,
+      channels: c.channels,
+      startedAt: c.startedAt,
+      answeredAt: c.answeredAt,
+      endedAt: c.endedAt,
+      isActive: activeCalls.some((a) => a.id === c.id),
+      activeFilterReasons: (() => {
+        const reasons: string[] = [];
+        if (c.state === "hungup") reasons.push("state=hungup");
+        const { isLocalOnlyCall, hasValidChannel } = require("../telephony/normalizers/normalizeCallEvent") as typeof import("../telephony/normalizers/normalizeCallEvent");
+        if (isLocalOnlyCall(c)) reasons.push("local_only");
+        if (!hasValidChannel(c)) reasons.push("no_valid_channel");
+        return reasons;
+      })(),
+    }));
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      totalCallsInStore: allCalls.length,
+      activeCallCount: activeCalls.length,
+      unresolvedTenantCount: activeCalls.filter((c) => !c.tenantId).length,
+      storeStats: {
+        rawChannelCount: diag.rawChannelCount,
+        hungupRetainedCount: diag.hungupRetainedCount,
+      },
+      calls: callDetail,
+      pbxMapEntryCount: pbxMap.length,
+      pbxMapLinkedCount: pbxMap.filter((e: { connectTenantId: string | null }) => e.connectTenantId).length,
+    });
   });
 
   router.get("/telephony/extensions", (_req, res) => {
@@ -95,6 +149,71 @@ export function registerTelephonyRoutes(
     }
   });
 
+  router.post("/telephony/internal/mobile-invites/requeue", async (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { linkedId, exten, context } = req.body as {
+      linkedId?: unknown;
+      exten?: unknown;
+      context?: unknown;
+    };
+
+    if (typeof linkedId !== "string" || !linkedId) {
+      res.status(400).json({ error: "linkedId is required" });
+      return;
+    }
+
+    try {
+      const result = await telephony.telephonyService.requeueLiveCallToDialplan({
+        linkedId,
+        fallbackExten: typeof exten === "string" ? exten : undefined,
+        fallbackContext: typeof context === "string" ? context : undefined,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(503).json({ error: msg });
+    }
+  });
+
+  router.get("/telephony/internal/mobile-invites/status/:linkedId", (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const linkedId = String(req.params["linkedId"] || "").trim();
+    if (!linkedId) {
+      res.status(400).json({ error: "linkedId is required" });
+      return;
+    }
+
+    const call = telephony.callStore.getById(linkedId);
+    if (!call) {
+      res.json({
+        ok: true,
+        linkedId,
+        exists: false,
+        state: null,
+        answeredAt: null,
+        channels: [],
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      linkedId,
+      exists: true,
+      state: call.state,
+      answeredAt: call.answeredAt,
+      channels: [...call.channels],
+    });
+  });
+
   router.delete(
     "/telephony/calls/:channelId/hangup",
     async (req: Request, res: Response) => {
@@ -110,6 +229,77 @@ export function registerTelephonyRoutes(
         const msg = err instanceof Error ? err.message : String(err);
         res.status(503).json({ error: msg });
       }
+    },
+  );
+
+  /**
+   * POST /telephony/calls/stale-hangup-for-extension
+   *
+   * Called by the portal ~10 s after the user presses hangup if the call still appears active
+   * in the telephony WebSocket. Finds any live call matching the extension (and optionally tenant)
+   * and force-evicts it from the store + sends AMI Hangup for each channel.
+   *
+   * This is the portal's last-resort safeguard: if JsSIP sent BYE but the PBX never delivered
+   * the AMI Hangup event, this clears the orphaned row.
+   */
+  router.post(
+    "/telephony/calls/stale-hangup-for-extension",
+    async (req: Request, res: Response) => {
+      const tenantId = getTenantId(res);
+      const { extension, hangupAt } = req.body as { extension?: unknown; hangupAt?: unknown };
+
+      if (typeof extension !== "string" || !extension) {
+        res.status(400).json({ error: "extension is required" });
+        return;
+      }
+
+      const hangupTs = typeof hangupAt === "string" ? new Date(hangupAt).getTime() : 0;
+
+      const activeCalls = telephony.callStore.getActive().filter((c) => {
+        if (tenantId && c.tenantId && c.tenantId !== tenantId) return false;
+        // Match if either `from` or `to` contains the extension
+        const matchesExt =
+          (c.from && (c.from === extension || c.from.endsWith(`/${extension}`))) ||
+          (c.to && (c.to === extension || c.to.endsWith(`/${extension}`)));
+        if (!matchesExt) return false;
+        // Only evict if the call started before or around the stated hangup time
+        if (hangupTs > 0 && c.startedAt) {
+          const startedMs = new Date(c.startedAt).getTime();
+          // Must have started at least 2 s before the hangup timestamp
+          if (startedMs > hangupTs - 2_000) return false;
+        }
+        return true;
+      });
+
+      if (activeCalls.length === 0) {
+        res.json({ cleared: 0, message: "No matching active calls found (already gone)" });
+        return;
+      }
+
+      const results: Array<{ callId: string; channels: string[]; hangupSent: boolean }> = [];
+
+      for (const call of activeCalls) {
+        const evicted = telephony.callStore.forceEvictZombie(
+          call.id,
+          `stale-report from portal extension=${extension}`,
+        );
+
+        let hangupSent = false;
+        const targets = evicted.uniqueIds.length > 0 ? evicted.uniqueIds : evicted.channels;
+        for (const target of targets) {
+          try {
+            await telephony.telephonyService.hangupChannel(target);
+            hangupSent = true;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            res.locals["log"]?.warn?.({ callId: call.id, target, err: msg }, "stale-hangup: AMI error");
+          }
+        }
+
+        results.push({ callId: call.id, channels: evicted.channels, hangupSent });
+      }
+
+      res.json({ cleared: results.length, calls: results });
     },
   );
 
@@ -157,4 +347,17 @@ function isStringRecord(v: unknown): v is Record<string, string> {
     !Array.isArray(v) &&
     Object.values(v).every((x) => typeof x === "string")
   );
+}
+
+function hasValidInternalSecret(req: Request): boolean {
+  const configured = (env.CDR_INGEST_SECRET || "").trim();
+  const incoming = String(req.headers["x-cdr-secret"] || "").trim();
+  if (!configured || !incoming) return false;
+  return incoming === configured;
+}
+
+function isInternalRouteAuthorized(req: Request): boolean {
+  const configured = (env.CDR_INGEST_SECRET || "").trim();
+  if (!configured) return true;
+  return hasValidInternalSecret(req);
 }

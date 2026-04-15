@@ -1887,6 +1887,88 @@ type MobilePushPayload =
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string };
 
+/** Android FCM `data` map values must be strings — Expo forwards to FCM. */
+function fcmDataStrings(data: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined || v === null) continue;
+    out[k] = typeof v === "string" ? v : JSON.stringify(v);
+  }
+  return out;
+}
+
+async function requestTelephonyInviteRequeue(input: {
+  inviteId: string;
+  linkedId?: string | null;
+  exten?: string | null;
+}): Promise<void> {
+  const linkedId = String(input.linkedId || "").trim();
+  if (!linkedId) return;
+
+  const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const secret = String(process.env.CDR_INGEST_SECRET || "").trim();
+  if (secret) headers["x-cdr-secret"] = secret;
+
+  const res = await fetch(`${telephonyBase}/telephony/internal/mobile-invites/requeue`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      linkedId,
+      exten: input.exten || undefined,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telephony requeue failed (${res.status}): ${body || "no body"}`);
+  }
+}
+
+async function requestTelephonyInviteStatus(input: {
+  linkedId?: string | null;
+}): Promise<{
+  linkedId: string | null;
+  exists: boolean;
+  state: string | null;
+  answeredAt: string | null;
+  channels: string[];
+}> {
+  const linkedId = String(input.linkedId || "").trim();
+  if (!linkedId) {
+    return {
+      linkedId: null,
+      exists: false,
+      state: null,
+      answeredAt: null,
+      channels: [],
+    };
+  }
+
+  const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const headers: Record<string, string> = {};
+  const secret = String(process.env.CDR_INGEST_SECRET || "").trim();
+  if (secret) headers["x-cdr-secret"] = secret;
+
+  const res = await fetch(`${telephonyBase}/telephony/internal/mobile-invites/status/${encodeURIComponent(linkedId)}`, {
+    headers,
+  });
+
+  const body = await res.text().catch(() => "");
+  const json = body ? JSON.parse(body) : {};
+  if (!res.ok) {
+    throw new Error(`telephony status failed (${res.status}): ${body || "no body"}`);
+  }
+
+  return {
+    linkedId,
+    exists: !!json?.exists,
+    state: typeof json?.state === "string" ? json.state : null,
+    answeredAt: typeof json?.answeredAt === "string" ? json.answeredAt : null,
+    channels: Array.isArray(json?.channels) ? json.channels.map((v: unknown) => String(v)) : [],
+  };
+}
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
@@ -1927,31 +2009,67 @@ async function sendPushToUserDevices(input: {
 
   const isIncomingCall = input.payload.type === "INCOMING_CALL";
 
-  const messages = filtered.map((d) => ({
-    to: d.expoPushToken,
-    sound: "default",
-    title,
-    body,
-    data: input.payload,
-    // High-priority FCM ensures Android wakes the device immediately for calls.
-    // Normal priority is fine for informational pushes (claimed, canceled, missed).
-    priority: isIncomingCall ? "high" : "default",
-    // Route call notifications to the high-importance Telecom-backed channel so
-    // Android shows a heads-up / full-screen intent rather than a silent badge.
-    channelId: isIncomingCall ? "connect-calls" : undefined,
-    // ttl=45s matches the invite expiry — there is no value in delivering a
-    // stale incoming-call push after the invite has already expired.
-    ttl: isIncomingCall ? 45 : undefined,
-  }));
+  const messages = filtered.map((d) => {
+    if (isIncomingCall) {
+      const p = input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL" }>;
+      // Strict data-only: no title/body/sound/channelId — avoids FCM "notification"
+      // messages that skip app JS and never run CallKeep from the background task.
+      const data = fcmDataStrings({
+        type: p.type,
+        inviteId: p.inviteId,
+        callId: p.inviteId,
+        from: p.fromNumber,
+        fromNumber: p.fromNumber,
+        fromDisplay: p.fromDisplay ?? "",
+        toExtension: p.toExtension,
+        tenantId: p.tenantId,
+        timestamp: p.timestamp,
+        pbxCallId: p.pbxCallId ?? "",
+        sipCallTarget: p.sipCallTarget ?? "",
+        pbxSipUsername: p.pbxSipUsername ?? "",
+      });
+      app.log.info(
+        {
+          mobilePush: "INCOMING_CALL_DATA_ONLY",
+          dataKeys: Object.keys(data),
+          inviteId: p.inviteId,
+          tokenTail: String(d.expoPushToken).slice(-12),
+        },
+        "mobile-push: outgoing INCOMING_CALL (data-only, high priority)",
+      );
+      return {
+        to: d.expoPushToken,
+        priority: "high" as const,
+        ttl: 45,
+        data,
+      };
+    }
+    return {
+      to: d.expoPushToken,
+      sound: "default",
+      title,
+      body,
+      data: fcmDataStrings({ ...(input.payload as object) }),
+      priority: "default" as const,
+      channelId: "connect-calls",
+    };
+  });
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (mobilePushAccessToken) headers.authorization = `Bearer ${mobilePushAccessToken}`;
 
-  await fetch("https://exp.host/--/api/v2/push/send", {
+  const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers,
     body: JSON.stringify(messages)
   });
+  const expoBody = await expoRes.json().catch(() => null);
+  const expoErrors = (expoBody?.data ?? []).filter((r: any) => r?.status === "error");
+  if (expoErrors.length) {
+    app.log.warn({ expoErrors, payload: input.payload }, "mobile-push: expo reported errors");
+  } else {
+    app.log.info({ expoStatus: expoRes.status, tokens: filtered.length }, "mobile-push: expo accepted");
+  }
 
   await db.auditLog.create({
     data: {
@@ -2116,6 +2234,10 @@ async function resolveInviteByPbxEvent(evt: NormalizedWirePbxEvent, target: { te
   return null;
 }
 
+function isLikelyInternalExtension(value: string | null | undefined): boolean {
+  return /^\d{2,6}$/.test(String(value || "").trim());
+}
+
 async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WEBHOOK" | "POLL") {
   const target = await resolvePbxEventTarget(evt);
 
@@ -2202,6 +2324,16 @@ async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WE
   if (!invite) return { ok: true, skipped: true };
 
   if (evt.state === "ANSWERED") {
+    // Internal extension-to-extension calls can emit ANSWERED as soon as the
+    // caller leg is up, before the mobile target has actually claimed the invite.
+    if (isLikelyInternalExtension(evt.fromNumber) && isLikelyInternalExtension(evt.toExtension)) {
+      app.log.info(
+        { inviteId: invite.id, pbxCallId: evt.pbxCallId, fromNumber: evt.fromNumber, toExtension: evt.toExtension },
+        "pbx answered ignored for internal mobile invite",
+      );
+      return { ok: true, inviteId: invite.id, status: invite.status, skipped: true, reason: "INTERNAL_ANSWER_IGNORED" };
+    }
+
     if (invite.status !== "PENDING") return { ok: true, inviteId: invite.id, status: invite.status, skipped: true };
 
     const now = new Date();
@@ -3000,6 +3132,8 @@ app.addHook("preHandler", async (req, reply) => {
     path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
   const isInternalCdrIngestPath =
     path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
+  const isInternalMobileRingPath =
+    path === "/internal/mobile-ring-notify" || path.endsWith("/internal/mobile-ring-notify");
   const isInternalTelephonyPath =
     path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
   if (
@@ -3007,6 +3141,7 @@ app.addHook("preHandler", async (req, reply) => {
     || path.startsWith("/billing/invoices/pay/")
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
+    || isInternalMobileRingPath
     || isInternalTelephonyPath
     || [
         "/health",
@@ -8679,6 +8814,20 @@ app.post("/mobile/devices/register", async (req, reply) => {
     }
   });
 
+  // Remove any OLD device registrations for this user that have a different
+  // push token. A user's phone gets a new token after each APK reinstall, so
+  // old tokens pile up and cause "answered on another device" false-positives
+  // (both tokens get the push, the first claim triggers an INVITE_CLAIMED
+  // notification to the "other" device which is the same physical phone).
+  // We keep only the registration we just upserted.
+  await db.mobileDevice.deleteMany({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      expoPushToken: { not: input.expoPushToken },
+    },
+  });
+
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
   return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
 });
@@ -8730,6 +8879,10 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   }
 
   if (existing.status !== "PENDING") {
+    app.log.info(
+      { inviteId: existing.id, action, status: existing.status, pbxCallId: existing.pbxCallId, toExtension: existing.toExtension },
+      "mobile-call-invite: respond skipped because invite is no longer pending",
+    );
     return { ok: false, code: "INVITE_ALREADY_HANDLED", status: existing.status, inviteId: existing.id };
   }
 
@@ -8787,7 +8940,33 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
     if (claimed.updated === 0 || !claimed.latest) {
       const latestStatus = claimed.latest?.status || "UNKNOWN";
       const code = latestStatus === "EXPIRED" ? "INVITE_EXPIRED" : "INVITE_ALREADY_HANDLED";
+      app.log.info(
+        { inviteId: existing.id, action, latestStatus, pbxCallId: existing.pbxCallId, toExtension: existing.toExtension },
+        "mobile-call-invite: accept lost race before claim completed",
+      );
       return { ok: false, code, status: latestStatus, inviteId: existing.id };
+    }
+
+    try {
+      await requestTelephonyInviteRequeue({
+        inviteId: existing.id,
+        linkedId: existing.pbxCallId,
+        exten: existing.toExtension,
+      });
+      app.log.info(
+        { inviteId: existing.id, linkedId: existing.pbxCallId, toExtension: existing.toExtension },
+        "mobile-call-invite: telephony requeue requested",
+      );
+    } catch (err) {
+      app.log.warn(
+        {
+          inviteId: existing.id,
+          linkedId: existing.pbxCallId,
+          toExtension: existing.toExtension,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "mobile-call-invite: telephony requeue failed",
+      );
     }
 
     await sendPushToUserDevices({
@@ -8820,6 +8999,46 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_CALL_INVITE_DECLINE", entityType: "CallInvite", entityId: existing.id });
   return { ok: true, code: "INVITE_DECLINED_OK", status: "DECLINED", inviteId: existing.id };
+});
+
+app.get("/mobile/call-invites/:id/answer-status", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+
+  const invite = await db.callInvite.findFirst({
+    where: { id, tenantId: user.tenantId, userId: user.sub },
+    select: {
+      id: true,
+      pbxCallId: true,
+      status: true,
+      toExtension: true,
+    },
+  });
+
+  if (!invite) {
+    return reply.status(404).send({ error: "INVITE_NOT_FOUND" });
+  }
+
+  const telephony = await requestTelephonyInviteStatus({ linkedId: invite.pbxCallId }).catch((err) => ({
+    linkedId: invite.pbxCallId || null,
+    exists: false,
+    state: null,
+    answeredAt: null,
+    channels: [],
+    error: err instanceof Error ? err.message : String(err),
+  }));
+
+  return {
+    inviteId: invite.id,
+    linkedId: invite.pbxCallId || null,
+    inviteStatus: invite.status,
+    extension: invite.toExtension,
+    pbxAnswered: !!telephony.answeredAt,
+    answeredAt: telephony.answeredAt,
+    telephonyState: telephony.state,
+    activeChannels: telephony.channels,
+    telephonyLookupError: "error" in telephony ? telephony.error : null,
+  };
 });
 
 app.post("/mobile/call-invites/test", async (req, reply) => {
@@ -12310,6 +12529,167 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     app.log.error({ linkedId: d.linkedId, err: err?.message }, "cdr-ingest: db error");
     return reply.code(500).send({ error: "db_error" });
   }
+});
+
+// Internal: telephony service POSTs when an inbound call rings at an extension.
+// Creates a CallInvite and sends an Expo push to the owner's mobile devices.
+// Secured by the same CDR_INGEST_SECRET shared header.
+app.post("/internal/mobile-ring-notify", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/mobile-ring-notify" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/mobile-ring-notify" }, "rate_limit_internal_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  const input = z.object({
+    linkedId: z.string().min(1),
+    toExtension: z.string().min(1),
+    fromNumber: z.string().nullable().optional(),
+    fromDisplay: z.string().nullable().optional(),
+    connectTenantId: z.string().nullable().optional(),
+    pbxVitalTenantId: z.string().nullable().optional(),
+  }).parse(req.body || {});
+
+  app.log.info(
+    { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId },
+    "mobile-ring-notify: received"
+  );
+
+  // ── Resolve the extension owner ──────────────────────────────────────────────
+  // Fast path: use the Connect tenantId the telephony service already resolved.
+  let target: { tenantId: string; userId: string; extensionId: string | null; sipDomain: string | null } | null = null;
+
+  if (input.connectTenantId) {
+    const ext = await db.extension.findFirst({
+      where: {
+        tenantId: input.connectTenantId,
+        extNumber: input.toExtension,
+        status: "ACTIVE",
+        ownerUserId: { not: null },
+      },
+      include: {
+        pbxLink: true,
+        tenant: { select: { sipDomain: true } },
+      },
+    });
+    if (ext?.ownerUserId) {
+      target = {
+        tenantId: ext.tenantId,
+        userId: ext.ownerUserId,
+        extensionId: ext.id,
+        sipDomain: ext.tenant?.sipDomain ?? null,
+      };
+    }
+  }
+
+  // Fallback: use the existing pbxTenantId-based resolver.
+  if (!target) {
+    const fakeEvt: NormalizedWirePbxEvent = {
+      eventType: "telephony-ring",
+      state: "RINGING",
+      pbxCallId: input.linkedId,
+      toExtension: input.toExtension,
+      fromNumber: input.fromNumber || "unknown",
+      fromDisplay: input.fromDisplay || undefined,
+      timestamp: new Date().toISOString(),
+      pbxTenantId: input.pbxVitalTenantId || undefined,
+    };
+    const resolved = await resolvePbxEventTarget(fakeEvt);
+    if (resolved) {
+      target = { tenantId: resolved.tenantId, userId: resolved.userId, extensionId: resolved.extensionId, sipDomain: resolved.sipDomain ?? null };
+    }
+  }
+
+  if (!target) {
+    app.log.warn(
+      { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId },
+      "mobile-ring-notify: extension owner not found — no push sent"
+    );
+    return { ok: false, reason: "TARGET_NOT_FOUND" };
+  }
+
+  // ── Upsert CallInvite (unique on tenantId+pbxCallId) ─────────────────────────
+  const existingInvite = await db.callInvite.findFirst({
+    where: { tenantId: target.tenantId, pbxCallId: input.linkedId },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (existingInvite && existingInvite.status === "PENDING" && existingInvite.expiresAt > new Date()) {
+    app.log.info({ inviteId: existingInvite.id }, "mobile-ring-notify: invite already active — skipping");
+    return { ok: true, deduped: true, inviteId: existingInvite.id };
+  }
+
+  const invite = existingInvite
+    ? await db.callInvite.update({
+        where: { id: existingInvite.id },
+        data: {
+          userId: target.userId,
+          extensionId: target.extensionId,
+          fromNumber: input.fromNumber || "unknown",
+          fromDisplay: input.fromDisplay ?? null,
+          toExtension: input.toExtension,
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 45_000),
+          acceptedAt: null,
+          declinedAt: null,
+          canceledAt: null,
+          acceptedByDeviceId: null,
+        },
+      })
+    : await db.callInvite.create({
+        data: {
+          tenantId: target.tenantId,
+          userId: target.userId,
+          extensionId: target.extensionId,
+          pbxCallId: input.linkedId,
+          fromNumber: input.fromNumber || "unknown",
+          fromDisplay: input.fromDisplay ?? null,
+          toExtension: input.toExtension,
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 45_000),
+        },
+      });
+
+  // ── Send Expo push to all registered devices for this user ───────────────────
+  const push = await sendPushToUserDevices({
+    tenantId: target.tenantId,
+    userId: target.userId,
+    payload: {
+      type: "INCOMING_CALL",
+      inviteId: invite.id,
+      fromNumber: invite.fromNumber,
+      fromDisplay: invite.fromDisplay,
+      toExtension: invite.toExtension,
+      pbxCallId: invite.pbxCallId,
+      sipCallTarget: invite.sipCallTarget,
+      pbxSipUsername: invite.pbxSipUsername,
+      tenantId: target.tenantId,
+      timestamp: new Date().toISOString(),
+    },
+  });
+
+  app.log.info(
+    { inviteId: invite.id, tenantId: target.tenantId, userId: target.userId, push },
+    "mobile-ring-notify: push sent"
+  );
+
+  await audit({
+    tenantId: target.tenantId,
+    action: "PBX_CALL_INVITE_TELEPHONY",
+    entityType: "CallInvite",
+    entityId: invite.id,
+    actorUserId: target.userId,
+  });
+
+  return { ok: true, inviteId: invite.id, push };
 });
 
 // Internal: telephony service pulls PBX tenant → Connect tenant map (same auth as cdr-ingest).

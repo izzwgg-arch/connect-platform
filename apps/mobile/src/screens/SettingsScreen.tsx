@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  Switch,
   Alert,
   Platform,
 } from 'react-native';
@@ -19,6 +18,13 @@ import { useIncomingNotifications, type CallReadiness } from '../context/Notific
 import { Avatar } from '../components/ui/Avatar';
 import { HeaderBar } from '../components/HeaderBar';
 import { getVoiceExtension } from '../api/client';
+import {
+  DEFAULT_MOBILE_RINGTONE_ID,
+  getMobileIncomingRingtone,
+  getMobileIncomingRingtoneLabel,
+  setMobileIncomingRingtone,
+  type MobileRingtoneId,
+} from '../audio/ringtonePreferences';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
@@ -108,7 +114,29 @@ export function SettingsScreen() {
     callReadiness,
     openBatteryOptimizationSettings,
     requestNotificationPermission,
+    retryPushTokenRegistration,
   } = useIncomingNotifications();
+
+  const [retryingPushToken, setRetryingPushToken] = useState(false);
+  const [batterySettingsOpened, setBatterySettingsOpened] = useState(false);
+  const [incomingRingtone, setIncomingRingtoneId] =
+    useState<MobileRingtoneId>(DEFAULT_MOBILE_RINGTONE_ID);
+
+  const handleRetryPushToken = async () => {
+    setRetryingPushToken(true);
+    try {
+      await retryPushTokenRegistration();
+    } finally {
+      setRetryingPushToken(false);
+    }
+  };
+
+  const handleOpenBatterySettings = async () => {
+    setBatterySettingsOpened(false);
+    await openBatteryOptimizationSettings();
+    // App returned from settings — show brief confirmation
+    setBatterySettingsOpened(true);
+  };
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
 
@@ -118,6 +146,7 @@ export function SettingsScreen() {
     useCallback(() => {
       if (!token) return;
       getVoiceExtension(token).then(setVoice).catch(() => {});
+      getMobileIncomingRingtone().then(setIncomingRingtoneId).catch(() => {});
     }, [token])
   );
 
@@ -148,6 +177,14 @@ export function SettingsScreen() {
       system: 'dark',
     };
     setMode(next[mode] ?? 'dark');
+  };
+
+  const handleCycleIncomingRingtone = async () => {
+    const options: MobileRingtoneId[] = ['connect-default', 'classic'];
+    const currentIndex = options.indexOf(incomingRingtone);
+    const nextId = options[(currentIndex + 1 + options.length) % options.length];
+    await setMobileIncomingRingtone(nextId);
+    setIncomingRingtoneId(nextId);
   };
 
   return (
@@ -280,6 +317,17 @@ export function SettingsScreen() {
           />
         </SectionCard>
 
+        <SectionHeader title="Call Audio" />
+        <SectionCard>
+          <SettingRow
+            icon="musical-notes-outline"
+            label="Incoming Ringtone"
+            subtitle="Default is your Connect ringtone. Tap to switch."
+            value={getMobileIncomingRingtoneLabel(incomingRingtone)}
+            onPress={handleCycleIncomingRingtone}
+          />
+        </SectionCard>
+
         {/* ── Call Readiness — Android only ─────────────────────────────── */}
         {Platform.OS === 'android' && (
           <>
@@ -347,18 +395,37 @@ export function SettingsScreen() {
                 subtitle={
                   callReadiness.pushTokenRegistered
                     ? 'Registered — server can reach this device'
-                    : 'Not registered — sign out and back in'
+                    : retryingPushToken
+                      ? 'Registering…'
+                      : callReadiness.pushTokenError
+                        ? `Error: ${callReadiness.pushTokenError}`
+                        : 'Not registered — tap to retry'
                 }
-                iconColor={callReadiness.pushTokenRegistered ? colors.success : colors.danger}
+                iconColor={
+                  callReadiness.pushTokenRegistered
+                    ? colors.success
+                    : retryingPushToken
+                      ? colors.warning
+                      : colors.danger
+                }
+                onPress={!callReadiness.pushTokenRegistered && !retryingPushToken ? handleRetryPushToken : undefined}
+                disabled={retryingPushToken}
                 rightElement={
                   <View style={[styles.statusChip, {
                     backgroundColor: callReadiness.pushTokenRegistered
-                      ? colors.successMuted : colors.dangerMuted,
+                      ? colors.successMuted
+                      : retryingPushToken
+                        ? colors.warningMuted
+                        : colors.dangerMuted,
                   }]}>
                     <Text style={[typography.labelSm, {
-                      color: callReadiness.pushTokenRegistered ? colors.success : colors.danger,
+                      color: callReadiness.pushTokenRegistered
+                        ? colors.success
+                        : retryingPushToken
+                          ? colors.warning
+                          : colors.danger,
                     }]}>
-                      {callReadiness.pushTokenRegistered ? '✓ OK' : '✗ Missing'}
+                      {callReadiness.pushTokenRegistered ? '✓ OK' : retryingPushToken ? '…' : '✗ Missing'}
                     </Text>
                   </View>
                 }
@@ -368,22 +435,21 @@ export function SettingsScreen() {
               <SettingRow
                 icon="battery-half-outline"
                 label="Battery Optimization"
-                subtitle="Disable for Connect to ensure calls ring when app is closed"
-                iconColor={colors.warning}
-                onPress={() => {
-                  Alert.alert(
-                    'Disable Battery Optimization',
-                    'Android may kill background tasks for Connect when battery optimization is on, preventing incoming calls from ringing.\n\nTap "Open Settings" and set Connect to "Don\'t optimize".',
-                    [
-                      { text: 'Later', style: 'cancel' },
-                      { text: 'Open Settings', onPress: openBatteryOptimizationSettings },
-                    ],
-                  );
-                }}
+                subtitle={
+                  batterySettingsOpened
+                    ? "Settings opened — find Connect and set to 'Don\'t optimize'"
+                    : "Tap to open battery optimization settings"
+                }
+                iconColor={batterySettingsOpened ? colors.success : colors.warning}
+                onPress={handleOpenBatterySettings}
                 rightElement={
-                  <View style={[styles.statusChip, { backgroundColor: colors.warningMuted }]}>
-                    <Text style={[typography.labelSm, { color: colors.warning }]}>
-                      ⚠ Check
+                  <View style={[styles.statusChip, {
+                    backgroundColor: batterySettingsOpened ? colors.successMuted : colors.warningMuted,
+                  }]}>
+                    <Text style={[typography.labelSm, {
+                      color: batterySettingsOpened ? colors.success : colors.warning,
+                    }]}>
+                      {batterySettingsOpened ? '↩ Back' : '⚠ Check'}
                     </Text>
                   </View>
                 }

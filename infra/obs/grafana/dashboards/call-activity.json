@@ -1,0 +1,141 @@
+{
+  "uid": "connect-calls",
+  "title": "Connect — Call Activity",
+  "description": "Call volumes, directions, durations, dispositions, and CDR pipeline health",
+  "tags": ["connect", "calls"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "Calls Today",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "increase(connect_calls_total[24h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "Answered Today",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "increase(connect_calls_total{disposition=\"answered\"}[24h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Missed Today",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "increase(connect_calls_total{disposition=\"missed\"}[24h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Failed Today",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } } },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "increase(connect_calls_total{disposition=\"failed\"}[24h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Avg Talk Time",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "expr": "rate(connect_call_talk_seconds_sum[1h]) / rate(connect_call_talk_seconds_count[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "CDR Success Rate",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 0.95, "color": "orange" }, { "value": 0.99, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr": "rate(connect_cdr_posts_total{status=\"ok\"}[5m]) / (rate(connect_cdr_posts_total[5m]) + 0.001)",
+        "legendFormat": ""
+      }]
+    },
+
+    {
+      "id": 7, "type": "timeseries", "title": "Call Volume Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 16, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 12 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(connect_calls_total{direction=\"inbound\"}[5m]) * 60", "legendFormat": "Inbound" },
+        { "expr": "rate(connect_calls_total{direction=\"outbound\"}[5m]) * 60", "legendFormat": "Outbound" },
+        { "expr": "rate(connect_calls_total{direction=\"internal\"}[5m]) * 60", "legendFormat": "Internal" }
+      ]
+    },
+
+    {
+      "id": 8, "type": "piechart", "title": "Calls by Direction (24h)",
+      "gridPos": { "x": 16, "y": 4, "w": 8, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "tooltip": { "mode": "single" }, "legend": { "displayMode": "table", "values": ["value", "percent"] } },
+      "targets": [
+        { "expr": "increase(connect_calls_total{direction=\"inbound\"}[24h])", "legendFormat": "Inbound" },
+        { "expr": "increase(connect_calls_total{direction=\"outbound\"}[24h])", "legendFormat": "Outbound" },
+        { "expr": "increase(connect_calls_total{direction=\"internal\"}[24h])", "legendFormat": "Internal" }
+      ]
+    },
+
+    {
+      "id": 9, "type": "timeseries", "title": "Call Failure Rate",
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 0.1, "color": "orange" }, { "value": 0.2, "color": "red" }] }, "custom": { "lineWidth": 2 } }
+      },
+      "targets": [{
+        "expr": "rate(connect_calls_total{disposition=\"failed\"}[5m]) / (rate(connect_calls_total[5m]) + 0.001)",
+        "legendFormat": "Failure Rate"
+      }]
+    },
+
+    {
+      "id": 10, "type": "heatmap", "title": "Call Duration Distribution",
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "calculate": false, "color": { "scheme": "Spectral", "reverse": false } },
+      "targets": [{
+        "expr": "rate(connect_call_duration_seconds_bucket[5m])",
+        "legendFormat": "{{le}}",
+        "format": "heatmap"
+      }]
+    },
+
+    {
+      "id": 11, "type": "timeseries", "title": "CDR Pipeline — Posts per Minute",
+      "gridPos": { "x": 0, "y": 21, "w": 24, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list" } },
+      "targets": [
+        { "expr": "rate(connect_cdr_posts_total{status=\"ok\"}[5m]) * 60", "legendFormat": "OK" },
+        { "expr": "rate(connect_cdr_posts_total{status=\"error\"}[5m]) * 60", "legendFormat": "Error" },
+        { "expr": "rate(connect_cdr_posts_total{status=\"timeout\"}[5m]) * 60", "legendFormat": "Timeout" },
+        { "expr": "rate(connect_cdr_posts_total{status=\"skipped\"}[5m]) * 60", "legendFormat": "Skipped" }
+      ]
+    }
+
+  ]
+}

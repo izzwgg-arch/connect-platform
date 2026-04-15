@@ -1,0 +1,174 @@
+{
+  "uid": "connect-system",
+  "title": "Connect — System Overview",
+  "description": "Platform health at a glance: service status, PBX connectivity, resource usage",
+  "tags": ["connect", "system"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "API Service",
+      "gridPos": { "x": 0, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "expr": "up{job=\"connect_api\"}", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "Telephony Service",
+      "gridPos": { "x": 3, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "expr": "up{job=\"connect_telephony\"}", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "PBX AMI",
+      "gridPos": { "x": 6, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DISCONNECTED", "color": "red" }, "1": { "text": "CONNECTED", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "expr": "connect_ami_connected", "legendFormat": "" }]
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "PBX ARI",
+      "gridPos": { "x": 9, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "UNREACHABLE", "color": "orange" }, "1": { "text": "REACHABLE", "color": "green" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "orange" }, { "value": 1, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "expr": "connect_ari_connected", "legendFormat": "" }]
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Active Calls",
+      "gridPos": { "x": 12, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "blue" }, { "value": 50, "color": "orange" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [{ "expr": "connect_active_calls", "legendFormat": "Active Calls" }]
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "Active WebRTC Sessions",
+      "gridPos": { "x": 15, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "blue" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "connect_webrtc_sessions_active", "legendFormat": "WebRTC Sessions" }]
+    },
+
+    {
+      "id": 7, "type": "timeseries", "title": "Active Calls Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list" } },
+      "targets": [
+        { "expr": "connect_active_calls", "legendFormat": "Total Active" },
+        { "expr": "connect_active_calls_by_direction{direction=\"inbound\"}", "legendFormat": "Inbound" },
+        { "expr": "connect_active_calls_by_direction{direction=\"outbound\"}", "legendFormat": "Outbound" },
+        { "expr": "connect_active_calls_by_direction{direction=\"internal\"}", "legendFormat": "Internal" }
+      ]
+    },
+
+    {
+      "id": 8, "type": "timeseries", "title": "Calls per Minute",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list" } },
+      "targets": [
+        { "expr": "rate(connect_calls_total[5m]) * 60", "legendFormat": "{{direction}} / {{disposition}}" }
+      ]
+    },
+
+    {
+      "id": 9, "type": "timeseries", "title": "Telephony Memory Usage",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "targets": [
+        { "expr": "process_resident_memory_bytes{service=\"telephony\"}", "legendFormat": "RSS (telephony)" },
+        { "expr": "process_resident_memory_bytes{service=\"api\"}", "legendFormat": "RSS (api)" }
+      ]
+    },
+
+    {
+      "id": 10, "type": "timeseries", "title": "Node.js Event Loop Lag",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 0.1, "color": "orange" }, { "value": 0.5, "color": "red" }] }, "custom": { "lineWidth": 2 } }
+      },
+      "targets": [
+        { "expr": "nodejs_eventloop_lag_seconds{service=\"telephony\"}", "legendFormat": "Telephony" },
+        { "expr": "nodejs_eventloop_lag_seconds{service=\"api\"}", "legendFormat": "API" }
+      ]
+    },
+
+    {
+      "id": 11, "type": "logs", "title": "Recent Errors",
+      "gridPos": { "x": 0, "y": 19, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "targets": [
+        { "expr": "{platform=\"connect\", level=~\"error|fatal\"}", "legendFormat": "" }
+      ]
+    }
+
+  ]
+}

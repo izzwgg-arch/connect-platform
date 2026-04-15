@@ -1,4 +1,4 @@
-import type { SipClient, SipEvents, SipMatch } from "./types";
+import type { SipAnswerTraceEvent, SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 import { registerGlobals as registerWebRTCGlobals } from "react-native-webrtc";
 import JsSIP from "jssip";
@@ -376,7 +376,11 @@ export class JsSipClient implements SipClient {
     this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
   }
 
-  async answerIncoming(match?: SipMatch, timeoutMs = 5000): Promise<boolean> {
+  async answerIncoming(
+    match?: SipMatch,
+    timeoutMs = 5000,
+    onTrace?: (event: SipAnswerTraceEvent) => void,
+  ): Promise<boolean> {
     const until = Date.now() + Math.max(500, timeoutMs);
     while (Date.now() < until) {
       const session = this.findIncoming(match);
@@ -400,6 +404,7 @@ export class JsSipClient implements SipClient {
 
           session.once?.("confirmed", () => {
             console.log("[SIP] answerIncoming: session confirmed");
+            onTrace?.({ phase: "confirmed", timestamp: Date.now() });
             cleanup();
             resolve(true);
           });
@@ -407,11 +412,24 @@ export class JsSipClient implements SipClient {
             const cause = e?.cause || "unknown";
             const code = e?.response?.status_code;
             console.warn("[SIP] answerIncoming: session failed:", code || cause);
+            onTrace?.({
+              phase: "failed",
+              timestamp: Date.now(),
+              code: typeof code === "number" ? code : null,
+              reason: String(cause || "unknown"),
+              message: code ? `failed:${code}` : String(cause || "unknown"),
+            });
             cleanup();
             resolve(false);
           });
           session.once?.("ended", () => {
             console.log("[SIP] answerIncoming: session ended before confirmed");
+            onTrace?.({
+              phase: "failed",
+              timestamp: Date.now(),
+              reason: "ended_before_confirmed",
+              message: "ended_before_confirmed",
+            });
             cleanup();
             resolve(false);
           });
@@ -419,8 +437,15 @@ export class JsSipClient implements SipClient {
           try {
             console.log("[SIP] answerIncoming: calling session.answer()");
             session.answer({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+            onTrace?.({ phase: "sent", timestamp: Date.now() });
           } catch (e: any) {
             console.error("[SIP] answerIncoming: session.answer() threw:", e?.message || e);
+            onTrace?.({
+              phase: "failed",
+              timestamp: Date.now(),
+              reason: "answer_threw",
+              message: e?.message || String(e),
+            });
             cleanup();
             resolve(false);
           }
@@ -430,6 +455,12 @@ export class JsSipClient implements SipClient {
       }
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
+    onTrace?.({
+      phase: "failed",
+      timestamp: Date.now(),
+      reason: "session_not_found_timeout",
+      message: "session_not_found_timeout",
+    });
     return false;
   }
 

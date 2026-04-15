@@ -6,6 +6,9 @@ import type { HealthService } from "./HealthService";
 import { normalizeCallForClient, isLocalOnlyCall, hasValidChannel } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
+import { childLogger } from "../../logging/logger";
+
+const log = childLogger("SnapshotService");
 
 export class SnapshotService {
   constructor(
@@ -20,9 +23,10 @@ export class SnapshotService {
     this.calls.runStaleCleanup();
 
     // Use AMI-tracked active calls for live call list (DID-based tenant resolution).
-    let calls = this.calls.getActive().filter(
+    const allActive = this.calls.getActive().filter(
       (c) => !isLocalOnlyCall(c) && hasValidChannel(c),
     );
+    let calls = allActive;
     let exts = this.extensions.getAll();
     let qs = this.queues.getAll();
 
@@ -32,6 +36,18 @@ export class SnapshotService {
       exts = exts.filter((e) => e.tenantId === tenantId);
       qs = qs.filter((q) => q.tenantId === tenantId);
     }
+
+    log.info(
+      {
+        forTenantId: tenantId ?? "GLOBAL",
+        totalActiveCalls: allActive.length,
+        callsInSnapshot: calls.length,
+        droppedByTenantFilter: allActive.length - calls.length,
+        callIds: calls.map((c) => c.id),
+        droppedCallTenants: allActive.filter((c) => !calls.includes(c)).map((c) => ({ id: c.id, tenantId: c.tenantId })),
+      },
+      "PIPE[3/6]: snapshot built",
+    );
 
     return {
       calls: calls.map(normalizeCallForClient),

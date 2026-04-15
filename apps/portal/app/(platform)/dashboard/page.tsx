@@ -72,8 +72,9 @@ export default function DashboardPage() {
   const { adminScope, tenantId: contextTenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
   const telephony = useTelephony();
-  const tenantId = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
-  const liveCalls = telephony.callsByTenant(isGlobal ? null : tenantId);
+  // Use reactive contextTenantId from AppContext (not direct localStorage read) so the
+  // live-call list updates correctly when the user switches tenants via TenantSwitcher.
+  const liveCalls = telephony.callsByTenant(isGlobal ? null : contextTenantId);
 
   // ── Refresh ticks ──
   const [combinedTick, setCombinedTick] = useState(0);
@@ -109,12 +110,12 @@ export default function DashboardPage() {
 
   const kpiParam = (() => {
     const params = new URLSearchParams({ source: "connect", mode: "canonical" });
-    if (!isGlobal && tenantId) params.set("tenantId", tenantId);
+    if (!isGlobal && contextTenantId) params.set("tenantId", contextTenantId);
     return `?${params.toString()}`;
   })();
   const connectKpisState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiParam}`),
-    [adminScope, tenantId, kpiTick]
+    [adminScope, contextTenantId, kpiTick]
   );
 
   const trafficState = useAsyncResource<DashboardCallTraffic>(

@@ -1,4 +1,4 @@
-import type { SipClient, SipEvents, SipMatch } from "./types";
+import type { SipAnswerTraceEvent, SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 
 export class SimulatedSipClient implements SipClient {
@@ -34,7 +34,14 @@ export class SimulatedSipClient implements SipClient {
     this.events.onCallState?.("connected");
   }
 
-  async answerIncoming(_match?: SipMatch, _timeoutMs = 5000): Promise<boolean> {
+  async answerIncoming(
+    _match?: SipMatch,
+    _timeoutMs = 5000,
+    onTrace?: (event: SipAnswerTraceEvent) => void,
+  ): Promise<boolean> {
+    const now = Date.now();
+    onTrace?.({ phase: "sent", timestamp: now });
+    onTrace?.({ phase: "confirmed", timestamp: now + 10 });
     this.events.onCallState?.("connected");
     return true;
   }

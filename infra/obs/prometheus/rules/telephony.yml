@@ -1,0 +1,187 @@
+groups:
+
+  - name: connect_telephony
+    interval: 30s
+    rules:
+
+      # ── Service availability ──────────────────────────────────────────────
+
+      - alert: TelephonyServiceDown
+        expr: up{job="connect_telephony"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Connect telephony service is DOWN"
+          description: "The telephony service ({{ $labels.instance }}) has been unreachable for over 1 minute. Call events are not being processed."
+          runbook: "Restart the telephony container: docker restart app-telephony-1"
+
+      - alert: ApiServiceDown
+        expr: up{job="connect_api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Connect API service is DOWN"
+          description: "The API service ({{ $labels.instance }}) has been unreachable for over 1 minute."
+          runbook: "Restart the API container: docker restart app-api-1"
+
+      # ── PBX connectivity ──────────────────────────────────────────────────
+
+      - alert: PbxAmiDisconnected
+        expr: connect_ami_connected == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "PBX AMI connection lost"
+          description: "AMI (Asterisk Manager Interface) has been disconnected for more than 2 minutes. Live call events are not being received. Calls may show as stuck."
+          runbook: "Check PBX host reachability and AMI credentials. Check telephony logs: docker logs app-telephony-1 --tail 100"
+
+      - alert: PbxAriUnreachable
+        expr: connect_ari_connected == 0
+        for: 3m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "PBX ARI REST endpoint unreachable"
+          description: "ARI REST has been unreachable for 3 minutes. Active call bridging and media control may be degraded."
+          runbook: "Verify ARI is enabled on the PBX and port 8088 is accessible."
+
+      # ── Call activity ─────────────────────────────────────────────────────
+
+      - alert: NoActiveCalls
+        expr: connect_active_calls == 0 and hour() >= 8 and hour() < 20
+        for: 30m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No active calls during business hours"
+          description: "No calls have been active for 30 minutes during business hours. This may be expected on quiet days, or may indicate the PBX is not routing calls."
+
+      - alert: HighActiveCalls
+        expr: connect_active_calls > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Unusually high number of active calls"
+          description: "{{ $value }} calls are currently active. Verify this is expected traffic and not a routing loop."
+
+      # ── Call failures ─────────────────────────────────────────────────────
+
+      - alert: HighCallFailureRate
+        expr: |
+          rate(connect_calls_total{disposition="failed"}[5m]) /
+          (rate(connect_calls_total[5m]) + 0.001) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High call failure rate (>15%)"
+          description: "{{ $value | humanizePercentage }} of calls are failing. Check PBX trunks and SIP configuration."
+
+      # ── CDR pipeline ──────────────────────────────────────────────────────
+
+      - alert: CdrIngestErrors
+        expr: rate(connect_cdr_posts_total{status="error"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "CDR ingest is failing"
+          description: "CDR records are failing to POST to the API. Call history may be incomplete."
+          runbook: "Check API health and connectivity between telephony and API containers."
+
+      # ── Zombie / stale call watchdog ─────────────────────────────────────
+
+      - alert: ZombieCallDetected
+        expr: increase(connect_zombie_calls_detected_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Zombie/stale call detected"
+          description: "{{ $value }} zombie call(s) detected in the last 5 minutes. A call remained active in the PBX after the user hung up. Billing accuracy and dashboard trust are affected. Category: {{ $labels.category }}."
+          runbook: "Check telephony logs: docker logs app-telephony-1 --tail 200 | grep zombie. The self-healing engine will attempt auto-cleanup. If repeated, check AMI Hangup delivery from the PBX."
+
+      - alert: ZombieCallAutoHealFailed
+        expr: increase(connect_zombie_call_cleanup_failures_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Zombie call auto-cleanup FAILED"
+          description: "The self-healing engine detected a zombie call but could NOT force-hang it up via AMI. The call remains active on the PBX. Manual intervention required."
+          runbook: "1. Check AMI connectivity: connect_ami_connected metric. 2. Manually hang up via Asterisk CLI: core show channels, then channel request hangup <channel>. 3. Check telephony logs for AMI send errors."
+
+      - alert: RepeatedZombieCallsFromSameExtension
+        expr: increase(connect_zombie_calls_detected_total[30m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Repeated zombie calls detected — possible systemic issue"
+          description: "More than 3 zombie calls were detected in the last 30 minutes. This may indicate a systemic issue with AMI Hangup event delivery or SIP session teardown."
+          runbook: "Check PBX AMI event log for missing Hangup events. Verify SIP BYE/CANCEL is being sent correctly by the WebRTC client. Check journalctl for asterisk AMI errors."
+
+      # ── Resource usage ────────────────────────────────────────────────────
+
+      - alert: HighMemoryUsage
+        expr: |
+          process_resident_memory_bytes{service="telephony"} > 512 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Telephony service memory usage high (>512MB)"
+          description: "Memory usage has been above 512MB for 10 minutes. May indicate a memory leak."
+
+      - alert: HighEventLoopLag
+        expr: nodejs_eventloop_lag_seconds{service="telephony"} > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Node.js event loop lag >500ms in telephony service"
+          description: "High event loop lag may cause delayed call event processing and missed AMI events."
+
+  - name: connect_audio_quality
+    interval: 60s
+    rules:
+
+      - alert: HighIceFailureRate
+        expr: rate(connect_ice_failures_total[10m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Elevated ICE connection failures"
+          description: "ICE failures are occurring at {{ $value | humanize }} per second. WebRTC callers may experience no audio. Check TURN server configuration."
+          runbook: "Verify TURN server is reachable. Check tenant ICE server settings in admin console."
+
+      - alert: HighPoorCallQualityRate
+        expr: |
+          rate(connect_call_quality_reports_total{grade="poor"}[15m]) +
+          rate(connect_call_quality_reports_total{grade="failed"}[15m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Sustained poor audio quality across calls"
+          description: "Multiple calls are reporting poor quality. Common causes: missing TURN relay, network issues, PBX media path problem."

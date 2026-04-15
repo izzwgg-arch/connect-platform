@@ -1,8 +1,19 @@
 import type { Router, Request } from "express";
 import type { TelephonyModule } from "../telephony";
 import { getCdrStats, resetCdrStats } from "../telephony/services/CdrNotifier";
+import { getMetrics, CONTENT_TYPE } from "../metrics";
 
 export function registerHealthRoutes(router: Router, telephony: TelephonyModule): void {
+  // ── Prometheus metrics ────────────────────────────────────────────────────
+  router.get("/metrics", async (_req, res) => {
+    try {
+      const body = await getMetrics();
+      res.set("Content-Type", CONTENT_TYPE).send(body);
+    } catch (err) {
+      res.status(500).send(String(err));
+    }
+  });
+
   router.get("/health", (_req, res) => {
     const health = telephony.healthService.getHealth();
     const statusCode = health.status === "down" ? 503 : 200;
@@ -23,6 +34,17 @@ export function registerHealthRoutes(router: Router, telephony: TelephonyModule)
   router.delete("/cdr-stats", (_req, res) => {
     resetCdrStats();
     res.json({ ok: true, message: "CDR stats counters reset" });
+  });
+
+  // ── Self-Healing Engine endpoints ─────────────────────────────────────────
+
+  router.get("/healing/status", (_req, res) => {
+    res.json(telephony.healingEngine.getStatus());
+  });
+
+  router.get("/healing/log", (req, res) => {
+    const maxAgeMs = req.query["maxAgeMs"] ? Number(req.query["maxAgeMs"]) : 60 * 60 * 1000;
+    res.json(telephony.healingEngine.getRecentActions(maxAgeMs));
   });
 
   /**

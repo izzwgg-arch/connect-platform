@@ -1,0 +1,107 @@
+{
+  "uid": "connect-security",
+  "title": "Connect — Security & Abuse",
+  "description": "Login failures, rate limiting, brute-force signals, and authentication anomalies",
+  "tags": ["connect", "security"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1, "type": "stat", "title": "Login Failures (1h)",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 5, "color": "orange" }, { "value": 20, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_login_failures_total[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "Rate Limit Hits (1h)",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 10, "color": "orange" }, { "value": 50, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [{ "expr": "increase(connect_rate_limit_hits_total[1h])", "legendFormat": "" }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Login Success Rate",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 0.5, "color": "orange" }, { "value": 0.9, "color": "green" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr": "rate(connect_login_success_total[15m]) / (rate(connect_login_success_total[15m]) + rate(connect_login_failures_total[15m]) + 0.001)",
+        "legendFormat": ""
+      }]
+    },
+
+    {
+      "id": 4, "type": "timeseries", "title": "Login Failures Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list" } },
+      "targets": [
+        { "expr": "rate(connect_login_failures_total{reason=\"bad_password\"}[5m]) * 60", "legendFormat": "Bad password" },
+        { "expr": "rate(connect_login_failures_total{reason=\"not_found\"}[5m]) * 60", "legendFormat": "User not found" },
+        { "expr": "rate(connect_login_failures_total{reason=\"rate_limit\"}[5m]) * 60", "legendFormat": "Rate limited" }
+      ]
+    },
+
+    {
+      "id": 5, "type": "timeseries", "title": "Rate Limit Hits by Endpoint",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [{
+        "expr": "rate(connect_rate_limit_hits_total[5m]) * 60",
+        "legendFormat": "{{endpoint}}"
+      }]
+    },
+
+    {
+      "id": 6, "type": "timeseries", "title": "Login Success vs Failure",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "cpm", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "targets": [
+        { "expr": "rate(connect_login_success_total[5m]) * 60", "legendFormat": "Successful logins" },
+        { "expr": "rate(connect_login_failures_total[5m]) * 60", "legendFormat": "Failed logins" }
+      ]
+    },
+
+    {
+      "id": 7, "type": "logs", "title": "Security Events Log (Loki)",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 9 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "dedupStrategy": "none", "showLabels": true, "showTime": true, "sortOrder": "Descending" },
+      "targets": [{
+        "expr": "{platform=\"connect\"} |= \"rate_limit\" or \"invalid_credentials\" or \"unauthorized\" or \"rate_limit_login\" or \"brute\"",
+        "legendFormat": ""
+      }]
+    }
+
+  ]
+}

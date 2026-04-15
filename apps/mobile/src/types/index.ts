@@ -88,7 +88,12 @@ export type InviteCanceledPushPayload = {
 
 export type IncomingCallPushPayload = {
   type: "INCOMING_CALL";
+  /** Primary id — FCM payloads may use `callId` instead; normalize in app. */
   inviteId: string;
+  /** Alias for `inviteId` when push uses minimal FCM data map. */
+  callId?: string;
+  /** Alias for `fromNumber` when push uses minimal FCM data map. */
+  from?: string;
   pbxCallId?: string | null;
   fromNumber: string;
   fromDisplay?: string | null;
@@ -103,3 +108,4 @@ export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPaylo
 
 export type SipRegistrationState = "idle" | "registering" | "registered" | "failed";
 export type CallState = "idle" | "dialing" | "ringing" | "connected" | "ended";
+export type CallDirection = "inbound" | "outbound" | null;
