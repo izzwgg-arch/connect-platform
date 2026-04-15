@@ -205,7 +205,9 @@ export class JsSipClient implements SipClient {
       if (e.originator === "remote") {
         this.callDirection = "inbound";
         const callerNumber = this.getSessionFrom(e.session);
-        console.log('[SIP] Incoming call from:', callerNumber);
+        const toUser = this.getSessionTo(e.session);
+        console.log('[SIP] Incoming SIP INVITE — from:', callerNumber, '| to:', toUser,
+          '| incomingSessions before:', this.incomingSessions.length);
         this.incomingSessions.push(e.session);
         this.events.onIncomingCall?.(callerNumber);
         this.events.onCallState?.("ringing");
@@ -380,11 +382,51 @@ export class JsSipClient implements SipClient {
       const session = this.findIncoming(match);
       if (session) {
         this.session = session;
-        stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone
+        stopAllTelephonyAudio().catch(() => undefined);
         ICM.start("audio");
         setTimeout(() => ICM.routeToEarpiece(), 150);
-        session.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
-        return true;
+
+        // Wait for the session to be confirmed OR failed/ended before returning.
+        // Previously we returned `true` immediately, which meant a silent failure
+        // in getUserMedia or ICE left the app stuck on an unanswered "ringing" screen.
+        const confirmed = await new Promise<boolean>((resolve) => {
+          const ANSWER_TIMEOUT_MS = Math.max(500, until - Date.now());
+          const answerTimer = setTimeout(() => {
+            console.warn("[SIP] answerIncoming: confirmation timeout after", ANSWER_TIMEOUT_MS, "ms");
+            resolve(false);
+          }, ANSWER_TIMEOUT_MS);
+
+          const cleanup = () => clearTimeout(answerTimer);
+
+          session.once?.("confirmed", () => {
+            console.log("[SIP] answerIncoming: session confirmed");
+            cleanup();
+            resolve(true);
+          });
+          session.once?.("failed", (e: any) => {
+            const cause = e?.cause || "unknown";
+            const code = e?.response?.status_code;
+            console.warn("[SIP] answerIncoming: session failed:", code || cause);
+            cleanup();
+            resolve(false);
+          });
+          session.once?.("ended", () => {
+            console.log("[SIP] answerIncoming: session ended before confirmed");
+            cleanup();
+            resolve(false);
+          });
+
+          try {
+            console.log("[SIP] answerIncoming: calling session.answer()");
+            session.answer({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+          } catch (e: any) {
+            console.error("[SIP] answerIncoming: session.answer() threw:", e?.message || e);
+            cleanup();
+            resolve(false);
+          }
+        });
+
+        return confirmed;
       }
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
