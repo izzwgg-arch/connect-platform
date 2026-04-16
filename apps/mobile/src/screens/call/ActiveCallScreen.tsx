@@ -9,12 +9,15 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { clearAndroidLockScreenCallPresentation } from '../../sip/callkeep';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { playDtmfTone } from '../../audio/telephonyAudio';
+import { playDtmfTone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
 import { useSip } from '../../context/SipContext';
+import { useIncomingNotifications } from '../../context/NotificationsContext';
+import { logCallFlow } from '../../debug/callFlowDebug';
 import { useTheme } from '../../context/ThemeContext';
 import { CallTimer } from '../../components/call/CallTimer';
 import { typography } from '../../theme/typography';
@@ -107,6 +110,7 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
 export function ActiveCallScreen() {
   const insets = useSafeAreaInsets();
   const sip = useSip();
+  const incomingNotif = useIncomingNotifications();
   const { isDark } = useTheme();
 
   const [showDtmf, setShowDtmf] = useState(false);
@@ -116,7 +120,14 @@ export function ActiveCallScreen() {
   const isConnected = callState === 'connected';
   const isDialing = callState === 'dialing';
   const isRinging = callState === 'ringing';
-  const isEnded = callState === 'ended' || callState === 'idle';
+  // Only show "ended" UI once the call has actually been active.
+  // Without this guard, the screen flashes "CALL ENDED" on mount because
+  // callState starts as 'idle' before the SIP answer completes.
+  const hasBeenActiveRef = useRef(false);
+  if (!hasBeenActiveRef.current && (isConnected || isDialing || isRinging)) {
+    hasBeenActiveRef.current = true;
+  }
+  const isEnded = hasBeenActiveRef.current && (callState === 'ended' || callState === 'idle');
   const inProgress = isDialing || isRinging;
 
   // Derive a display name and number from remoteParty
@@ -173,6 +184,23 @@ export function ActiveCallScreen() {
     }
   }, [inProgress]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    clearAndroidLockScreenCallPresentation();
+    return () => {
+      clearAndroidLockScreenCallPresentation();
+    };
+  }, []);
+
+  useEffect(() => {
+    const inviteId =
+      incomingNotif.answerHandoffInviteIdRef.current ??
+      incomingNotif.incomingInvite?.id ??
+      incomingNotif.incomingCallUiState.inviteId ??
+      null;
+    logCallFlow('ACTIVE_CALL_SCREEN_MOUNT', { inviteId });
+  }, []);
+
   // Auto-dismiss is handled by RootNavigator which removes this screen from
   // the stack when isCallActive becomes false (on 'idle'). Calling goBack()
   // here races with that and causes a crash — do nothing.
@@ -205,6 +233,10 @@ export function ActiveCallScreen() {
 
   const handleHangup = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    stopAllTelephonyAudio().catch(() => undefined);
+    if (Platform.OS === 'android') {
+      clearAndroidLockScreenCallPresentation();
+    }
     await sip.hangup();
   };
 

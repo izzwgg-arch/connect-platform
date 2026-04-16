@@ -212,6 +212,7 @@ async function stopSound(sound: Audio.Sound | null) {
 
 /** Stop all ringing/ringback audio immediately. */
 export async function stopAllTelephonyAudio() {
+  console.log("[AUDIO] stopAllTelephonyAudio");
   ringbackStopped = true;
   if (ringbackTimer) { clearTimeout(ringbackTimer); ringbackTimer = null; }
   await stopSound(ringbackSound);
@@ -234,6 +235,7 @@ export async function stopAllTelephonyAudio() {
 export async function startRingback() {
   // Already running — do not restart; preserves the silence gap in the cadence
   if (!ringbackStopped) return;
+  console.log("[AUDIO] startRingback");
 
   // Stop any incoming ringtone but leave ringback state intact
   ringtoneStopped = true;
@@ -263,12 +265,20 @@ export async function startRingback() {
  * Loops until stopAllTelephonyAudio() is called.
  */
 export async function startRingtone() {
+  console.log("[AUDIO] startRingtone");
   await stopAllTelephonyAudio();
   ringtoneStopped = false;
   const ringtonePreference = await getMobileIncomingRingtone();
+  // Guard: stopAllTelephonyAudio() may have been called while we awaited above.
+  if (ringtoneStopped) return;
 
   if (ringtonePreference === "connect-default") {
-    ringtoneSound = await playLooping(CONNECT_DEFAULT_RINGTONE_SOURCE as any, 0.95);
+    const sound = await playLooping(CONNECT_DEFAULT_RINGTONE_SOURCE as any, 0.95);
+    if (ringtoneStopped) {
+      sound?.unloadAsync().catch(() => undefined);
+      return;
+    }
+    ringtoneSound = sound;
     return;
   }
 
