@@ -3209,6 +3209,20 @@ app.addHook("preHandler", async (req, reply) => {
     || path === "/metrics"
     || path.endsWith("/metrics")
   ) return;
+  // Allow a JWT passed via `?token=` query param (used by <audio> / download <a>
+  // tags where you can't set an Authorization header). Copy it to the header
+  // BEFORE jwtVerify so the standard auth flow still runs.
+  try {
+    const hasAuthHeader = Boolean((req.headers as any).authorization);
+    if (!hasAuthHeader) {
+      const tokenParam = (req.query as Record<string, string | undefined>)?.token;
+      if (tokenParam && typeof tokenParam === "string") {
+        (req.headers as any).authorization = `Bearer ${tokenParam}`;
+      }
+    }
+  } catch {
+    /* ignore — jwtVerify below will handle missing/bad token */
+  }
   try {
     await req.jwtVerify();
   } catch {
@@ -10283,22 +10297,45 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
 
     // Determine the Connect tenantId to query
     let queryTenantId: string | null = null;
-    if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
-      // Admin browsing a specific tenant by VitalPBX tenant id override (vpbx:...)
-      const tenantLink = await db.tenantPbxLink.findFirst({
+    // ?global=1 is sent by the portal extensions page, which handles per-tenant filtering
+    // client-side using the tenantName already present in every row. Skip backend tenant
+    // scoping entirely so the global all-extensions path runs.
+    const forceGlobal = (req.query as any)?.global === "1" && isRole(user, ["SUPER_ADMIN"]);
+    if (!forceGlobal && pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
+      // Step 1: direct match (works when TenantPbxLink.pbxTenantId was stored as the name/slug)
+      let tenantLink = await db.tenantPbxLink.findFirst({
         where: { pbxTenantId: pbxTenantOverride },
       });
+      let resolveStep = tenantLink ? "direct" : "not_found";
+      // Step 2: slug → vitalTenantId → TenantPbxLink (works when pbxTenantId was stored numerically)
+      if (!tenantLink) {
+        const dirRow = await db.pbxTenantDirectory.findFirst({
+          where: { tenantSlug: pbxTenantOverride },
+        });
+        if (dirRow?.vitalTenantId) {
+          tenantLink = await db.tenantPbxLink.findFirst({
+            where: { pbxTenantId: dirRow.vitalTenantId },
+          });
+          resolveStep = tenantLink ? "via_directory" : "not_found";
+        }
+      }
+      app.log.info(
+        { pbxTenantOverride, resolvedTenantId: tenantLink?.tenantId ?? null, resolveStep },
+        "[EXT_FILTER_API] pbxTenantOverride resolved"
+      );
       queryTenantId = tenantLink?.tenantId ?? null;
     } else if (!isRole(user, ["SUPER_ADMIN"])) {
       // Regular tenant admin — always scoped to their own tenant
       queryTenantId = user.tenantId;
     } else {
-      // Super admin: honour x-tenant-context when it is a plain Connect tenantId
-      // (sent by the portal when scope=TENANT and a specific tenant is selected).
-      // Without this, selecting a tenant in the sidebar had no effect and all
-      // extensions across every tenant were returned.
-      const tenantCtx = String((req.headers as any)["x-tenant-context"] || "").trim();
-      if (tenantCtx && !tenantCtx.startsWith("vpbx:")) {
+      // Super admin: resolve tenant scope in priority order:
+      // 1. Explicit ?tenantId= query param (sent by portal to avoid localStorage timing issues)
+      // 2. x-tenant-context header (legacy path; may lag one render behind)
+      // 3. No tenant context → fall through to the global all-extensions query below.
+      const qsTenantId = String((req.query as any)?.tenantId || "").trim();
+      const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
+      const tenantCtx = qsTenantId || headerTenantId;
+      if (tenantCtx && !tenantCtx.startsWith("vpbx:") && tenantCtx !== "local") {
         queryTenantId = tenantCtx;
       }
       // If tenantCtx is empty (scope=GLOBAL), queryTenantId stays null and the
@@ -10337,6 +10374,7 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
         pbxUserEmail: e.pbxUserEmail ?? null,
         sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
       }));
+      app.log.info({ mode: "tenant", queryTenantId, rowCount: rows.length }, "[EXT_FILTER_API] returning extensions");
       return { resource, rows, source: "connect_db" };
     }
 
@@ -10374,6 +10412,7 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
         pbxUserEmail: e.pbxUserEmail ?? null,
         sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
       }));
+      app.log.info({ mode: "global", rowCount: rows.length }, "[EXT_FILTER_API] returning extensions");
       return { resource, rows, source: "connect_db" };
     }
   }
@@ -10784,6 +10823,1650 @@ function pickRangExtension(direction: string, fromNumber: string | null | undefi
   return toExt || fromExt;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOICEMAIL — read from Connect DB only, never query PBX per request
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Parse "Name" <number> or plain number from Asterisk callerid string */
+function vmExtractCallerNumber(callerid: string): string {
+  const m = callerid.match(/<([^>]+)>/);
+  const raw = m ? m[1]! : callerid.replace(/"/g, "").trim();
+  return raw.replace(/\D/g, "");
+}
+function vmExtractCallerName(callerid: string): string {
+  const m = callerid.match(/^"([^"]+)"/);
+  return m ? m[1]! : "";
+}
+function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
+  const f = folder.toLowerCase();
+  if (f === "inbox" || f === "in") return "inbox";
+  if (f === "urgent") return "urgent";
+  return "old";
+}
+
+/** Verify CDR ingest shared secret — reused by voicemail notify endpoint */
+function verifyCdrSecret(req: any): boolean {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  if (!secret) return true; // not configured → allow (dev mode)
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (!incoming) return false;
+  const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+  const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Resolve a caller-supplied tenantId (which may be a Connect CUID or a
+ * "vpbx:{slug}" value) into the set of tenantId strings that Voicemail/CDR
+ * rows may actually be stored under. Returns null for "global" or when no
+ * id is provided.
+ *
+ * Voicemails are currently written with the Connect CUID (link.tenantId),
+ * but the portal context selector sends "vpbx:{slug}" for PBX tenants. We
+ * include both forms so the WHERE clause matches regardless of which was
+ * used when the row was ingested.
+ */
+async function resolveTenantIdFilterSet(requestedTenantId: string | null): Promise<string[] | null> {
+  if (!requestedTenantId || requestedTenantId === "global") return null;
+
+  if (requestedTenantId.startsWith("vpbx:")) {
+    const vpbxSlug = requestedTenantId.slice(5).trim();
+    const ids: string[] = [requestedTenantId];
+    let link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: vpbxSlug } });
+    if (!link) {
+      const dir = await db.pbxTenantDirectory.findFirst({ where: { tenantSlug: vpbxSlug } });
+      if (dir?.vitalTenantId) {
+        link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: dir.vitalTenantId } });
+      }
+    }
+    if (link?.tenantId) ids.push(link.tenantId);
+    return ids;
+  }
+
+  const ids: string[] = [requestedTenantId];
+  const link = await db.tenantPbxLink.findFirst({ where: { tenantId: requestedTenantId } });
+  if (link?.pbxTenantId) {
+    const dir = await db.pbxTenantDirectory.findFirst({ where: { vitalTenantId: link.pbxTenantId } });
+    if (dir?.tenantSlug) ids.push(`vpbx:${dir.tenantSlug}`);
+  }
+  return ids;
+}
+
+// ── GET /voice/voicemail ─────────────────────────────────────────────────────
+app.get("/voice/voicemail", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const q = z.object({
+    folder:    z.enum(["inbox", "old", "urgent"]).optional().default("inbox"),
+    extension: z.string().optional(),
+    tenantId:  z.string().optional(),
+    page:      z.coerce.number().int().min(1).optional().default(1),
+  }).parse(req.query || {});
+
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const isAdmin      = isRole(user, ["ADMIN"]);
+
+  // Tenant scope:
+  //   super admin → ?tenantId=global  → no tenant restriction
+  //                 ?tenantId=<id>     → restrict to that tenant (vpbx: or cuid)
+  //   others      → always their own tenant cuid
+  let tenantIdFilter: string[] | null = null;
+  if (!isSuperAdmin) {
+    if (user.tenantId) tenantIdFilter = [user.tenantId];
+  } else if (q.tenantId && q.tenantId !== "global") {
+    tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
+  }
+
+  const where: Record<string, any> = { deletedAt: null, folder: q.folder };
+  if (tenantIdFilter) {
+    where.tenantId = tenantIdFilter.length === 1
+      ? tenantIdFilter[0]
+      : { in: tenantIdFilter };
+  }
+
+  // Extension scope
+  if (q.extension && (isSuperAdmin || isAdmin)) {
+    where.extension = q.extension;
+  } else if (!isSuperAdmin && !isAdmin) {
+    // Regular users see only their own extension's mailbox
+    const userExt = await db.extension.findFirst({
+      where: { ownerUserId: user.sub, tenantId: user.tenantId ?? undefined },
+    });
+    if (!userExt) return reply.send({ voicemails: [], total: 0, page: q.page });
+    where.extension = userExt.extNumber;
+  }
+
+  app.log.info(
+    { requestedTenantId: q.tenantId ?? null, tenantIdFilter, extension: where.extension ?? null, folder: q.folder, role: user.role },
+    "[VOICEMAIL_FILTER] resolved scope",
+  );
+
+  const take = 100;
+  const skip = (q.page - 1) * take;
+
+  const [voicemails, total] = await Promise.all([
+    db.voicemail.findMany({ where, orderBy: { receivedAt: "desc" }, take, skip }),
+    db.voicemail.count({ where }),
+  ]);
+
+  return reply.send({
+    voicemails: voicemails.map((vm) => ({
+      id:          vm.id,
+      callerId:    vm.callerNumber ?? "Unknown",
+      callerName:  vm.callerName   ?? null,
+      receivedAt:  vm.receivedAt.toISOString(),
+      durationSec: vm.durationSec,
+      folder:      vm.folder as "inbox" | "old" | "urgent",
+      listened:    vm.listened,
+      extension:   vm.extension,
+      tenantId:    vm.tenantId,
+    })),
+    total,
+    page: q.page,
+  });
+});
+
+/**
+ * Enforce RBAC for a single voicemail row:
+ *   - super admin → always allowed
+ *   - tenant admin → must share tenantId (cuid OR vpbx:slug form)
+ *   - regular user → must share tenantId AND own the extension
+ * Returns true if allowed; otherwise sends a 403 and returns false.
+ */
+async function canAccessVoicemail(
+  vm: { tenantId: string | null; extension: string },
+  user: { sub: string; role?: string | null; tenantId?: string | null },
+  reply: any,
+): Promise<boolean> {
+  if (isRole(user, ["SUPER_ADMIN"])) return true;
+
+  // Tenant check — allow either direct match or cross-form (cuid ↔ vpbx:slug) match.
+  const userTenantIds = user.tenantId ? await resolveTenantIdFilterSet(user.tenantId) : null;
+  const tenantOk = vm.tenantId && (userTenantIds?.includes(vm.tenantId) ?? vm.tenantId === user.tenantId);
+  if (!tenantOk) { reply.code(403).send({ error: "forbidden" }); return false; }
+
+  if (isRole(user, ["ADMIN"])) return true;
+
+  // Regular user — must own the extension.
+  const userExt = await db.extension.findFirst({
+    where: { ownerUserId: user.sub, tenantId: user.tenantId ?? undefined },
+    select: { extNumber: true },
+  });
+  if (!userExt || userExt.extNumber !== vm.extension) {
+    reply.code(403).send({ error: "forbidden" });
+    return false;
+  }
+  return true;
+}
+
+// ── PATCH /voice/voicemail/:id — mark as listened / unlistened ───────────────
+app.patch("/voice/voicemail/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const vm = await db.voicemail.findUnique({ where: { id } });
+  if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
+  if (!(await canAccessVoicemail(vm, user, reply))) return;
+  const body = z.object({ listened: z.boolean().optional() }).parse(req.body || {});
+  const listened = body.listened ?? true;
+  await db.voicemail.update({
+    where: { id },
+    data:  { listened, readAt: listened ? (vm.readAt ?? new Date()) : null },
+  });
+  return reply.send({ ok: true });
+});
+
+// ── DELETE /voice/voicemail/:id — soft-delete + best-effort PBX delete ───────
+app.delete("/voice/voicemail/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const vm = await db.voicemail.findUnique({ where: { id } });
+  if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
+  if (!(await canAccessVoicemail(vm, user, reply))) return;
+
+  // Soft-delete in Connect DB — always succeeds regardless of PBX state
+  await db.voicemail.update({ where: { id }, data: { deletedAt: new Date() } });
+
+  // Best-effort: delete from PBX (non-fatal if PBX unavailable or unsupported)
+  if (vm.pbxExtensionId && vm.pbxFolder && vm.pbxMsgNum && vm.tenantId) {
+    try {
+      const link = await db.tenantPbxLink.findUnique({
+        where:   { tenantId: vm.tenantId },
+        include: { pbxInstance: true },
+      });
+      if (link?.pbxInstance) {
+        const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+        const pbx  = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+        await pbx.callEndpoint("voicemail.delete", {
+          tenant:     link.pbxTenantId ?? undefined,
+          pathParams: { mailbox: vm.extension, folder: vm.pbxFolder, messageName: vm.pbxMsgNum },
+        });
+      }
+    } catch (err: any) {
+      app.log.warn({ id, err: err?.message }, "voicemail: pbx delete failed — soft-delete succeeded");
+    }
+  }
+  return reply.send({ ok: true });
+});
+
+// ── Audio helper — fetches voicemail audio from PBX and streams to client ────
+async function streamVoicemailAudio(
+  vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; folder: string; readAt: Date | null },
+  reply: any,
+  asAttachment: boolean,
+): Promise<void> {
+  if (!vm.tenantId) { reply.code(503).send({ error: "audio_unavailable" }); return; }
+  const link = await db.tenantPbxLink.findUnique({
+    where:   { tenantId: vm.tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!link?.pbxInstance) { reply.code(503).send({ error: "pbx_not_linked" }); return; }
+
+  const auth    = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const folder  = vm.pbxFolder ?? vm.folder.toUpperCase();
+  const msgNum  = vm.pbxMsgNum ?? "0000001";
+  const mailbox = vm.extension;
+
+  // VitalPBX authenticates every REST call with the "app-key" header (same as
+  // call-recording playback). Bearer tokens are NOT accepted by VitalPBX.
+  const audioUrl = `${link.pbxInstance.baseUrl.replace(/\/+$/, "")}/api/v2/voicemail/${encodeURIComponent(mailbox)}/${encodeURIComponent(folder)}/${encodeURIComponent(msgNum)}`;
+  const pbxResp = await fetch(audioUrl, {
+    headers: {
+      "app-key": auth.token,
+      Accept: "audio/*, */*",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!pbxResp.ok) {
+    reply.code(503).send({ error: "audio_fetch_failed", pbxStatus: pbxResp.status });
+    return;
+  }
+
+  const contentType = pbxResp.headers.get("content-type") || "audio/wav";
+  reply.header("Content-Type", contentType);
+  reply.header("Cache-Control", "private, max-age=3600");
+  if (asAttachment) {
+    const ext = contentType.includes("mpeg") ? "mp3" : contentType.includes("ogg") ? "ogg" : "wav";
+    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${ext}"`);
+  }
+
+  // Mark as listened on first play
+  if (!vm.readAt) {
+    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
+  }
+
+  reply.send(Buffer.from(await pbxResp.arrayBuffer()));
+}
+
+// ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
+app.get("/voice/voicemail/:id/stream", async (req, reply) => {
+  // <audio> elements pass the JWT as a query param since they can't set headers.
+  // The global preHandler also copies ?token= → Authorization; this is defense-in-depth.
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam && !(req.headers as any).authorization) {
+    (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  }
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const vm = await db.voicemail.findUnique({ where: { id } });
+  if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
+  if (!(await canAccessVoicemail(vm, user, reply))) return;
+  try { return await streamVoicemailAudio(vm, reply, false); }
+  catch (err: any) {
+    app.log.warn({ id, err: err?.message }, "voicemail: stream failed");
+    return reply.code(503).send({ error: "audio_unavailable" });
+  }
+});
+
+// ── GET /voice/voicemail/:id/download ────────────────────────────────────────
+app.get("/voice/voicemail/:id/download", async (req, reply) => {
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam && !(req.headers as any).authorization) {
+    (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  }
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const vm = await db.voicemail.findUnique({ where: { id } });
+  if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
+  if (!(await canAccessVoicemail(vm, user, reply))) return;
+  try { return await streamVoicemailAudio(vm, reply, true); }
+  catch (err: any) {
+    app.log.warn({ id, err: err?.message }, "voicemail: download failed");
+    return reply.code(503).send({ error: "audio_unavailable" });
+  }
+});
+
+// ── Call recording stream/download helpers ────────────────────────────────────
+//
+// Connect stores the exact absolute filesystem path reported by the PBX AMI
+// (VarSet MIXMONITOR_FILENAME) in ConnectCdr.recordingPath at ingest time —
+// e.g. "/var/spool/asterisk/monitor/<tenant_hash>/YYYY/MM/DD/<name>.wav".
+//
+// VitalPBX serves these files over HTTPS at "<baseUrl>/monitor/<rel>" (where
+// <rel> is the part after /var/spool/asterisk/monitor/) and authenticates the
+// request with the "app-key" header.
+//
+// The Connect stream/download endpoints are the ONLY place we talk to the PBX
+// for audio — exactly one request per user click.  No polling, no scanning.
+
+/**
+ * Convert an absolute PBX recording path (or a legacy "YYYY/MM/DD/xxx.wav"
+ * relative path) into the HTTPS URL that streams the audio from VitalPBX.
+ */
+function buildRecordingUrl(pbxBaseUrl: string, recordingPath: string): string {
+  const base = pbxBaseUrl.replace(/\/+$/, "");
+  let rel = recordingPath.replace(/^\/var\/spool\/asterisk\/monitor\/+/, "");
+  rel = rel.replace(/^\/+/, "");
+  return `${base}/monitor/${rel}`;
+}
+
+/**
+ * Resolve which PbxInstance a given CDR belongs to so we can proxy the audio.
+ *
+ * Lookup priority (first non-null wins):
+ *   1. CDR.tenantId is a real Connect tenant cuid        → TenantPbxLink.tenantId    → pbxInstance
+ *   2. CDR.tenantId is "vpbx:{slug}"                     → PbxTenantDirectory.tenantSlug
+ *                                                          → vitalTenantId
+ *                                                          → TenantPbxLink.pbxTenantId → pbxInstance
+ *   3. CDR.pbxVitalTenantId / pbxTenantCode              → TenantPbxLink.pbxTenantId → pbxInstance
+ *   4. Any TenantPbxLink with status="LINKED"            → pbxInstance
+ *   5. The single enabled, non-localhost PbxInstance     → pbxInstance
+ *
+ * The last two fallbacks are safe in single-PBX deployments (every tenant's
+ * calls live on the same PBX box) and avoid 503s when TenantPbxLink rows are
+ * stuck in non-LINKED status due to unrelated sync errors.
+ */
+async function resolvePbxInstanceForCdr(
+  cdrTenantId: string | null,
+  linkedId: string,
+): Promise<{ id: string; baseUrl: string; apiAuthEncrypted: string } | null> {
+  const pick = async (where: any) => {
+    const link = await db.tenantPbxLink.findFirst({ where, include: { pbxInstance: true } });
+    return link?.pbxInstance
+      ? { id: link.pbxInstance.id, baseUrl: link.pbxInstance.baseUrl, apiAuthEncrypted: link.pbxInstance.apiAuthEncrypted }
+      : null;
+  };
+
+  if (cdrTenantId && !cdrTenantId.startsWith("vpbx:")) {
+    const hit = await pick({ tenantId: cdrTenantId });
+    if (hit) return hit;
+  }
+
+  if (cdrTenantId?.startsWith("vpbx:")) {
+    const slug = cdrTenantId.slice(5);
+    const dirRow = await db.pbxTenantDirectory.findFirst({ where: { tenantSlug: slug } });
+    if (dirRow?.vitalTenantId) {
+      const hit = await pick({ pbxTenantId: dirRow.vitalTenantId });
+      if (hit) return hit;
+    }
+  }
+
+  const cdr = await (db as any).connectCdr.findUnique({
+    where: { linkedId },
+    select: { pbxVitalTenantId: true, pbxTenantCode: true },
+  });
+  if (cdr?.pbxVitalTenantId) {
+    const hit = await pick({ pbxTenantId: cdr.pbxVitalTenantId });
+    if (hit) return hit;
+  }
+  if (cdr?.pbxTenantCode) {
+    const hit = await pick({ pbxTenantId: cdr.pbxTenantCode });
+    if (hit) return hit;
+  }
+
+  // Any currently-linked tenant (still the right PBX in single-PBX deployments).
+  const anyLinked = await pick({ status: "LINKED" });
+  if (anyLinked) return anyLinked;
+
+  // Last resort: the single enabled, non-localhost PbxInstance. In production
+  // there is exactly one real PBX; this keeps playback working while a sync
+  // error has flipped TenantPbxLink rows to ERROR.
+  const instances = await db.pbxInstance.findMany({
+    where: {
+      isEnabled: true,
+      NOT: [
+        { baseUrl: { contains: "127.0.0.1" } },
+        { baseUrl: { contains: "localhost" } },
+        { baseUrl: { contains: "sim.local" } },
+        { baseUrl: { contains: "example.com" } },
+      ],
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 1,
+    select: { id: true, baseUrl: true, apiAuthEncrypted: true },
+  });
+  return instances[0] ?? null;
+}
+
+/**
+ * Stream a call recording from PBX to the client.
+ * Enforces permissions before proxying the audio.  Makes exactly ONE outbound
+ * HTTP request to the PBX per user click (Range requests are forwarded so the
+ * <audio> element can seek without re-fetching the whole file).
+ */
+async function streamCallRecording(
+  rec: { id: string; linkedId: string; tenantId: string | null; extension: string | null; pbxFilePath: string | null; pbxFileDate: string | null; status: string },
+  user: { role?: string | null; tenantId?: string | null; extension?: string | null; id?: string },
+  reply: any,
+  asAttachment: boolean,
+): Promise<void> {
+  if (rec.status !== "ready" || !rec.pbxFilePath) {
+    reply.code(404).send({ error: "recording_not_available" });
+    return;
+  }
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin) {
+    if (rec.tenantId && user.tenantId !== rec.tenantId) {
+      reply.code(403).send({ error: "forbidden" }); return;
+    }
+    if (user.extension && rec.extension && user.extension !== rec.extension) {
+      reply.code(403).send({ error: "forbidden" }); return;
+    }
+  }
+
+  const pbxInstance = await resolvePbxInstanceForCdr(rec.tenantId, rec.linkedId);
+  if (!pbxInstance) { reply.code(503).send({ error: "pbx_not_linked" }); return; }
+
+  const auth = decryptJson<{ token: string; secret?: string | null }>(pbxInstance.apiAuthEncrypted);
+  const audioUrl = buildRecordingUrl(pbxInstance.baseUrl, rec.pbxFilePath);
+
+  const headers: Record<string, string> = {
+    "app-key": auth.token,
+    Accept: "audio/*, */*",
+  };
+  const rangeHeader = (reply.request?.headers?.range || "") as string;
+  if (rangeHeader) headers.Range = rangeHeader;
+
+  const pbxResp = await fetch(audioUrl, {
+    headers,
+    signal: AbortSignal.timeout(20_000),
+  });
+
+  if (!pbxResp.ok) {
+    app.log.warn({ linkedId: rec.linkedId, audioUrl, status: pbxResp.status }, "recording: fetch failed");
+    reply.code(pbxResp.status === 404 ? 404 : 503).send({
+      error: pbxResp.status === 404 ? "recording_file_missing" : "audio_fetch_failed",
+      pbxStatus: pbxResp.status,
+    });
+    return;
+  }
+
+  const contentType = pbxResp.headers.get("content-type") || "audio/wav";
+  const contentLength = pbxResp.headers.get("content-length");
+  const contentRange  = pbxResp.headers.get("content-range");
+
+  reply.header("Content-Type", contentType);
+  reply.header("Accept-Ranges", "bytes");
+  reply.header("Cache-Control", "private, max-age=3600");
+  if (contentLength) reply.header("Content-Length", contentLength);
+  if (contentRange)  reply.header("Content-Range", contentRange);
+  if (asAttachment) {
+    const ext = contentType.includes("mpeg") ? "mp3" : contentType.includes("ogg") ? "ogg" : "wav";
+    const safeName = (rec.pbxFilePath || rec.linkedId).split("/").pop()!.replace(/[^\w.-]/g, "_");
+    reply.header("Content-Disposition", `attachment; filename="${safeName || `recording-${rec.linkedId}.${ext}`}"`);
+  }
+
+  app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment }, "recording: access logged");
+  reply.status(pbxResp.status === 206 ? 206 : 200).send(Buffer.from(await pbxResp.arrayBuffer()));
+}
+
+// Helper: resolve a ConnectCdr row into a recording descriptor, enforcing permissions.
+// Uses ConnectCdr.recordingPath (deterministic, computed at ingest). No PBX lookup here —
+// the caller makes exactly one on-demand fetch to stream/download the file.
+async function resolveRecordingForUser(
+  linkedId: string,
+  user: { role?: string | null; tenantId?: string | null; extension?: string | null },
+  reply: any,
+): Promise<{
+  linkedId: string;
+  tenantId: string | null;
+  extension: string | null;
+  pbxFilePath: string | null;
+  pbxFileDate: string | null;
+  status: string;
+  id: string;
+} | null> {
+  const cdr = await (db as any).connectCdr.findUnique({
+    where: { linkedId },
+    select: {
+      id: true,
+      linkedId: true,
+      tenantId: true,
+      recordingPath: true,
+      fromNumber: true,
+      toNumber: true,
+      direction: true,
+    },
+  });
+  if (!cdr) { reply.code(404).send({ error: "not_found" }); return null; }
+  if (!cdr.recordingPath) { reply.code(404).send({ error: "recording_not_available" }); return null; }
+
+  const digits = (s: string | null | undefined) => String(s ?? "").replace(/\D/g, "");
+  const rawExt = cdr.direction === "outgoing" ? digits(cdr.fromNumber) : digits(cdr.toNumber);
+  const extension = /^\d{2,6}$/.test(rawExt) ? rawExt : null;
+
+  return {
+    id: cdr.id,
+    linkedId: cdr.linkedId,
+    tenantId: cdr.tenantId,
+    extension,
+    // Full absolute PBX path (e.g. /var/spool/asterisk/monitor/<hash>/YYYY/MM/DD/<name>.wav).
+    // buildRecordingUrl strips the monitor prefix when constructing the HTTPS URL.
+    pbxFilePath: cdr.recordingPath,
+    pbxFileDate: null,
+    status: "ready",
+  };
+}
+
+// ── GET /voice/recording/:linkedId/stream ─────────────────────────────────────
+app.get("/voice/recording/:linkedId/stream", async (req, reply) => {
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam) (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { linkedId } = req.params as { linkedId: string };
+  const rec = await resolveRecordingForUser(linkedId, user, reply);
+  if (!rec) return;
+  try { return await streamCallRecording(rec, user, reply, false); }
+  catch (err: any) {
+    app.log.warn({ linkedId, err: err?.message }, "recording: stream failed");
+    return reply.code(503).send({ error: "audio_unavailable" });
+  }
+});
+
+// ── GET /voice/recording/:linkedId/download ───────────────────────────────────
+app.get("/voice/recording/:linkedId/download", async (req, reply) => {
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam) (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { linkedId } = req.params as { linkedId: string };
+  const rec = await resolveRecordingForUser(linkedId, user, reply);
+  if (!rec) return;
+  try { return await streamCallRecording(rec, user, reply, true); }
+  catch (err: any) {
+    app.log.warn({ linkedId, err: err?.message }, "recording: download failed");
+    return reply.code(503).send({ error: "audio_unavailable" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IVR ROUTING — OPTION A
+// Connect manages routing profiles, schedules, and overrides.  Runtime state
+// is published to Asterisk AstDB via the telephony service.
+// VitalPBX custom contexts read AstDB at call time (zero latency, no HTTP).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function canManageIvr(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+/** Normalise a tenant name to a safe AstDB family slug: lowercase, a-z0-9_ only. */
+function toIvrSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/** AstDB family for a tenant slug. */
+function ivrFamily(slug: string): string {
+  return `connect/t_${slug}`;
+}
+
+/** Compute the current routing mode from a schedule config + override state. */
+function computeCurrentMode(
+  config: { timezone: string; businessHoursRules: any; holidayDates: any },
+  override: { isActive: boolean; expiresAt: Date | null } | null,
+  now: Date = new Date(),
+): "business" | "afterhours" | "holiday" | "override" {
+  // 1. Manual override (check expiry)
+  if (override?.isActive && (!override.expiresAt || override.expiresAt > now)) return "override";
+
+  // 2. Holiday check — compare "YYYY-MM-DD" in tenant timezone
+  const tz = config.timezone || "UTC";
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(now); // "YYYY-MM-DD"
+  const holidays: string[] = Array.isArray(config.holidayDates) ? config.holidayDates : [];
+  if (holidays.includes(localDate)) return "holiday";
+
+  // 3. Weekly business hours
+  const rules: Array<{ day: number; open: string; close: string }> =
+    Array.isArray(config.businessHoursRules) ? config.businessHoursRules : [];
+  const localDow = Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" })
+    .formatToParts(now).find((p) => p.type === "weekday")?.value
+    ? new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "narrow" })
+        .format(now)
+    : "0"); // fallback
+  // Use numeric day-of-week (0=Sun…6=Sat)
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const dowStr = parts.find((p) => p.type === "weekday")?.value ?? "";
+  const DOW_MAP: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = DOW_MAP[dowStr] ?? now.getDay();
+  const hourStr  = parts.find((p) => p.type === "hour")?.value ?? "0";
+  const minStr   = parts.find((p) => p.type === "minute")?.value ?? "0";
+  const minuteOfDay = parseInt(hourStr, 10) * 60 + parseInt(minStr, 10);
+  const parseHHMM = (s: string) => {
+    const [h, m] = s.split(":").map(Number);
+    return (h ?? 0) * 60 + (m ?? 0);
+  };
+  const rule = rules.find((r) => r.day === dow);
+  if (rule && minuteOfDay >= parseHHMM(rule.open) && minuteOfDay < parseHHMM(rule.close)) return "business";
+
+  return "afterhours";
+}
+
+/** Build the full set of AstDB key-value pairs for a publish. */
+function buildIvrKeys(
+  slug: string,
+  mode: string,
+  profiles: { type: string; pbxDestination: string }[],
+  override: { expiresAt: Date | null } | null,
+): Array<{ family: string; key: string; value: string }> {
+  const fam = ivrFamily(slug);
+  const byType = new Map(profiles.map((p) => [p.type, p.pbxDestination]));
+  return [
+    { family: fam, key: "mode",             value: mode },
+    { family: fam, key: "dest_business",    value: byType.get("business_hours")    ?? "" },
+    { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")       ?? "" },
+    { family: fam, key: "dest_holiday",     value: byType.get("holiday")           ?? "" },
+    { family: fam, key: "dest_override",    value: byType.get("manual_override") ?? byType.get("emergency") ?? "" },
+    { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(override.expiresAt.getTime() / 1000)) : "0" },
+  ];
+}
+
+/** Resolve (or derive) the IVR slug for a tenant. Uses the tenant's name. */
+async function getIvrSlugForTenant(tenantId: string): Promise<string> {
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+  return toIvrSlug(tenant?.name ?? tenantId);
+}
+
+/** Call the telephony service to write keys to AstDB. */
+async function publishToAstDb(
+  tenantSlug: string,
+  keys: Array<{ family: string; key: string; value: string }>,
+): Promise<void> {
+  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret ? { "x-cdr-secret": secret } : {}),
+    },
+    body: JSON.stringify({ tenantSlug, keys }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`telephony ivr-publish failed: ${resp.status} ${body}`);
+  }
+}
+
+/** Scope-check: ensure the requesting user can act on the given tenantId. */
+function assertIvrTenantAccess(user: JwtUser, tenantId: string): void {
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin && user.tenantId !== tenantId) {
+    throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+  }
+}
+
+// ── GET /voice/ivr/route-profiles ─────────────────────────────────────────────
+app.get("/voice/ivr/route-profiles", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const profiles = await (db as any).ivrRouteProfile.findMany({
+    where: { tenantId: tid, isActive: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return reply.send({ profiles });
+});
+
+// ── POST /voice/ivr/route-profiles ────────────────────────────────────────────
+app.post("/voice/ivr/route-profiles", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const body = z.object({
+    tenantId:       z.string(),
+    name:           z.string().min(1).max(100),
+    type:           z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]),
+    pbxDestination: z.string().min(1).max(200),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  assertIvrTenantAccess(user, d.tenantId);
+  const profile = await (db as any).ivrRouteProfile.create({
+    data: { tenantId: d.tenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true, createdBy: (user as any).id ?? null },
+  });
+  return reply.code(201).send({ profile });
+});
+
+// ── PATCH /voice/ivr/route-profiles/:id ──────────────────────────────────────
+app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).ivrRouteProfile.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "not_found" });
+  assertIvrTenantAccess(user, existing.tenantId);
+  const body = z.object({
+    name:           z.string().min(1).max(100).optional(),
+    pbxDestination: z.string().min(1).max(200).optional(),
+    type:           z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]).optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const updated = await (db as any).ivrRouteProfile.update({ where: { id }, data: body.data });
+  return reply.send({ profile: updated });
+});
+
+// ── DELETE /voice/ivr/route-profiles/:id ─────────────────────────────────────
+app.delete("/voice/ivr/route-profiles/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).ivrRouteProfile.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "not_found" });
+  assertIvrTenantAccess(user, existing.tenantId);
+  await (db as any).ivrRouteProfile.update({ where: { id }, data: { isActive: false } });
+  return reply.send({ ok: true });
+});
+
+// ── GET /voice/ivr/schedule ───────────────────────────────────────────────────
+app.get("/voice/ivr/schedule", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const schedule = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } });
+  return reply.send({ schedule: schedule ?? null });
+});
+
+// ── PUT /voice/ivr/schedule ───────────────────────────────────────────────────
+app.put("/voice/ivr/schedule", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const body = z.object({
+    tenantId:            z.string(),
+    timezone:            z.string().default("America/New_York"),
+    businessHoursRules:  z.array(z.object({ day: z.number().int().min(0).max(6), open: z.string(), close: z.string() })).default([]),
+    holidayDates:        z.array(z.string()).default([]),
+    defaultProfileId:    z.string().nullable().optional(),
+    afterHoursProfileId: z.string().nullable().optional(),
+    holidayProfileId:    z.string().nullable().optional(),
+    isActive:            z.boolean().default(true),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  assertIvrTenantAccess(user, d.tenantId);
+  const schedule = await (db as any).ivrScheduleConfig.upsert({
+    where: { tenantId: d.tenantId },
+    create: {
+      tenantId: d.tenantId, timezone: d.timezone,
+      businessHoursRules: d.businessHoursRules, holidayDates: d.holidayDates,
+      defaultProfileId: d.defaultProfileId ?? null,
+      afterHoursProfileId: d.afterHoursProfileId ?? null,
+      holidayProfileId: d.holidayProfileId ?? null,
+      isActive: d.isActive,
+    },
+    update: {
+      timezone: d.timezone,
+      businessHoursRules: d.businessHoursRules, holidayDates: d.holidayDates,
+      defaultProfileId: d.defaultProfileId ?? null,
+      afterHoursProfileId: d.afterHoursProfileId ?? null,
+      holidayProfileId: d.holidayProfileId ?? null,
+      isActive: d.isActive,
+    },
+  });
+  return reply.send({ schedule });
+});
+
+// ── GET /voice/ivr/override ───────────────────────────────────────────────────
+app.get("/voice/ivr/override", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: tid } });
+  return reply.send({ override: override ?? null });
+});
+
+// ── POST /voice/ivr/override/activate ────────────────────────────────────────
+app.post("/voice/ivr/override/activate", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const body = z.object({
+    tenantId:  z.string(),
+    profileId: z.string(),
+    reason:    z.string().optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const d = body.data;
+  assertIvrTenantAccess(user, d.tenantId);
+  const profile = await (db as any).ivrRouteProfile.findUnique({ where: { id: d.profileId } });
+  if (!profile || profile.tenantId !== d.tenantId) return reply.code(404).send({ error: "profile_not_found" });
+  const override = await (db as any).ivrOverrideState.upsert({
+    where: { tenantId: d.tenantId },
+    create: {
+      tenantId: d.tenantId, isActive: true, profileId: d.profileId,
+      reason: d.reason ?? null, expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+      activatedAt: new Date(), activatedBy: (user as any).id ?? null,
+      deactivatedAt: null, deactivatedBy: null,
+    },
+    update: {
+      isActive: true, profileId: d.profileId, reason: d.reason ?? null,
+      expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+      activatedAt: new Date(), activatedBy: (user as any).id ?? null,
+      deactivatedAt: null, deactivatedBy: null,
+    },
+  });
+  return reply.send({ override });
+});
+
+// ── POST /voice/ivr/override/deactivate ──────────────────────────────────────
+app.post("/voice/ivr/override/deactivate", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  assertIvrTenantAccess(user, body.data.tenantId);
+  const override = await (db as any).ivrOverrideState.upsert({
+    where: { tenantId: body.data.tenantId },
+    create: { tenantId: body.data.tenantId, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+    update: { isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+  });
+  return reply.send({ override });
+});
+
+// ── GET /voice/ivr/preview ────────────────────────────────────────────────────
+// Returns what mode would be active right now (or at an optional timestamp).
+// Does NOT write anything to AstDB.
+app.get("/voice/ivr/preview", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({
+    tenantId: z.string().optional(),
+    at:       z.string().optional(),
+  }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const [schedule, override] = await Promise.all([
+    (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } }),
+    (db as any).ivrOverrideState.findUnique({ where: { tenantId: tid } }),
+  ]);
+  if (!schedule) return reply.send({ mode: "business", reason: "no_schedule_configured" });
+  const atTime = q.at ? new Date(q.at) : new Date();
+  const mode = computeCurrentMode(schedule, override, atTime);
+  return reply.send({ mode, at: atTime.toISOString() });
+});
+
+// ── GET /voice/ivr/publish-history ────────────────────────────────────────────
+app.get("/voice/ivr/publish-history", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const records = await (db as any).ivrPublishRecord.findMany({
+    where: { tenantId: tid },
+    orderBy: { publishedAt: "desc" },
+    take: q.limit,
+  });
+  return reply.send({ records });
+});
+
+// ── POST /voice/ivr/publish ───────────────────────────────────────────────────
+// Computes the current mode, writes all AstDB keys, and logs the publish.
+app.post("/voice/ivr/publish", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const { tenantId } = body.data;
+  assertIvrTenantAccess(user, tenantId);
+
+  const [schedule, override, profiles] = await Promise.all([
+    (db as any).ivrScheduleConfig.findUnique({ where: { tenantId } }),
+    (db as any).ivrOverrideState.findUnique({ where: { tenantId } }),
+    (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
+  ]);
+
+  const mode = schedule ? computeCurrentMode(schedule, override) : "business";
+  const slug = await getIvrSlugForTenant(tenantId);
+  const keys = buildIvrKeys(slug, mode, profiles, override);
+
+  const record = await (db as any).ivrPublishRecord.create({
+    data: { tenantId, publishedBy: (user as any).id ?? "unknown", mode, keysWritten: keys, previousKeys: [], status: "pending", isRollback: false },
+  });
+
+  try {
+    await publishToAstDb(slug, keys);
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    app.log.info({ tenantId, slug, mode, keysWritten: keys.length }, "ivr: publish success");
+    return reply.send({ ok: true, mode, slug, keysWritten: keys.length, recordId: record.id });
+  } catch (err: any) {
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
+    app.log.warn({ tenantId, err: err?.message }, "ivr: publish failed");
+    return reply.code(503).send({ error: "publish_failed", detail: err?.message });
+  }
+});
+
+// ── POST /voice/ivr/rollback/:publishId ──────────────────────────────────────
+// Replays previousKeys from a past publish record to restore prior routing.
+app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { publishId } = req.params as { publishId: string };
+  const target = await (db as any).ivrPublishRecord.findUnique({ where: { id: publishId } });
+  if (!target) return reply.code(404).send({ error: "publish_record_not_found" });
+  assertIvrTenantAccess(user, target.tenantId);
+
+  const prevKeys: Array<{ family: string; key: string; value: string }> = Array.isArray(target.keysWritten) ? target.keysWritten : [];
+  if (prevKeys.length === 0) return reply.code(409).send({ error: "no_previous_keys_to_restore" });
+
+  const slug = await getIvrSlugForTenant(target.tenantId);
+  const record = await (db as any).ivrPublishRecord.create({
+    data: {
+      tenantId: target.tenantId, publishedBy: (user as any).id ?? "unknown",
+      mode: target.mode, keysWritten: prevKeys, previousKeys: [], status: "pending", isRollback: true,
+    },
+  });
+
+  try {
+    await publishToAstDb(slug, prevKeys);
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    return reply.send({ ok: true, rolledBackTo: publishId, recordId: record.id });
+  } catch (err: any) {
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
+    return reply.code(503).send({ error: "rollback_failed", detail: err?.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOLD PROFILE SCHEDULING — OPTION A  (formerly "MOH Scheduling")
+//
+// Unified control plane for Music-On-Hold class + hold announcements.
+// Connect owns Hold Profiles (MOH class + announcement config), schedules,
+// and overrides.  Runtime state is published to Asterisk AstDB via the
+// telephony service.  VitalPBX reads AstDB at hold/queue time.
+//
+// AstDB keys per tenant (family: connect/t_{slug}):
+//   active_moh_class           — VitalPBX MOH class name string
+//   hold_mode                  — current routing mode label (weekly/holiday/override/…)
+//   hold_announcement_enabled  — "1" | "0"
+//   hold_announcement_ref      — VitalPBX recording name (empty = none)
+//   hold_announcement_interval — seconds between playbacks (default "30")
+//   intro_announcement_ref     — one-time intro recording on hold entry (empty = none)
+//
+// Immediate publish paths:
+//   POST /voice/moh/publish           → publishes immediately
+//   POST /voice/moh/override/activate → publishes immediately after state change
+//   POST /voice/moh/override/deactivate → publishes immediately after state change
+// Worker runs every 1 minute as a reconciliation/safety-net loop only.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function canManageMoh(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+/** Full shape of a Hold Profile as needed for AstDB key construction. */
+type HoldProfileData = {
+  id: string;
+  vitalPbxMohClassName: string;
+  holdAnnouncementEnabled: boolean;
+  holdAnnouncementRef: string | null;
+  holdAnnouncementIntervalSec: number;
+  introAnnouncementRef: string | null;
+};
+
+/** Scope-check: ensure the requesting user can act on the given tenantId for MOH. */
+function assertMohTenantAccess(user: JwtUser, tenantId: string): void {
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin && user.tenantId !== tenantId) {
+    throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+  }
+}
+
+/** Slug for AstDB family — same derivation as IVR. */
+async function getMohSlugForTenant(tenantId: string): Promise<string> {
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+  return (tenant?.name ?? tenantId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/** Build all 6 AstDB key-value pairs for a Hold Profile publish. */
+function buildMohKeys(
+  slug: string,
+  profile: HoldProfileData,
+  mode: string,
+): Array<{ family: string; key: string; value: string }> {
+  const fam = `connect/t_${slug}`;
+  return [
+    { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
+    { family: fam, key: "hold_mode",                  value: mode },
+    { family: fam, key: "hold_announcement_enabled",  value: profile.holdAnnouncementEnabled ? "1" : "0" },
+    { family: fam, key: "hold_announcement_ref",      value: profile.holdAnnouncementRef ?? "" },
+    { family: fam, key: "hold_announcement_interval", value: String(profile.holdAnnouncementIntervalSec ?? 30) },
+    { family: fam, key: "intro_announcement_ref",     value: profile.introAnnouncementRef ?? "" },
+  ];
+}
+
+/** Compute the effective Hold Profile for a tenant (at now or a given time).
+ *  Priority: manual override → one_time rules → holiday rules → weekly rules → after-hours default → default.
+ *  profileMap: Map<profileId, HoldProfileData> */
+function computeCurrentMohProfile(
+  config: { timezone: string; defaultProfileId: string | null; afterHoursProfileId: string | null; holidayProfileId: string | null },
+  rules: Array<{ ruleType: string; weekday: number | null; startTime: string | null; endTime: string | null; startAt: Date | null; endAt: Date | null; priority: number; isActive: boolean; profileId: string }>,
+  override: { isActive: boolean; expiresAt: Date | null; profileId: string | null } | null,
+  profileMap: Map<string, HoldProfileData>,
+  now: Date = new Date(),
+): { profile: HoldProfileData | null; mode: string } {
+  // 1. Manual override
+  if (override?.isActive && override.profileId && (!override.expiresAt || new Date(override.expiresAt) > now)) {
+    const p = profileMap.get(override.profileId);
+    if (p) return { profile: p, mode: "override" };
+  }
+
+  const tz = config.timezone || "UTC";
+  const activeRules = rules.filter((r) => r.isActive);
+
+  // 2. One-time date-range rules
+  const oneTime = activeRules
+    .filter((r) => r.ruleType === "one_time" && r.startAt && r.endAt && new Date(r.startAt) <= now && new Date(r.endAt) > now)
+    .sort((a, b) => b.priority - a.priority);
+  if (oneTime.length > 0) {
+    const p = profileMap.get(oneTime[0].profileId);
+    if (p) return { profile: p, mode: "one_time" };
+  }
+
+  // 3. Holiday rules
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const holidayRules = activeRules
+    .filter((r) => r.ruleType === "holiday" && r.startTime === localDate)
+    .sort((a, b) => b.priority - a.priority);
+  if (holidayRules.length > 0) {
+    const p = profileMap.get(holidayRules[0].profileId);
+    if (p) return { profile: p, mode: "holiday" };
+  }
+
+  // 4. Weekly time-window rules
+  const dtParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const DOW_MAP: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = DOW_MAP[dtParts.find((pt) => pt.type === "weekday")?.value ?? ""] ?? now.getDay();
+  const hh = parseInt(dtParts.find((pt) => pt.type === "hour")?.value ?? "0", 10);
+  const mm = parseInt(dtParts.find((pt) => pt.type === "minute")?.value ?? "0", 10);
+  const mofDay = hh * 60 + mm;
+  const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+
+  const weekly = activeRules
+    .filter((r) => r.ruleType === "weekly" && r.weekday === dow && r.startTime && r.endTime && mofDay >= toMin(r.startTime) && mofDay < toMin(r.endTime))
+    .sort((a, b) => b.priority - a.priority);
+  if (weekly.length > 0) {
+    const p = profileMap.get(weekly[0].profileId);
+    if (p) return { profile: p, mode: "weekly" };
+  }
+
+  // 5. After-hours fallback
+  if (config.afterHoursProfileId) {
+    const p = profileMap.get(config.afterHoursProfileId);
+    if (p) return { profile: p, mode: "afterhours" };
+  }
+
+  // 6. Default
+  if (config.defaultProfileId) {
+    const p = profileMap.get(config.defaultProfileId);
+    if (p) return { profile: p, mode: "default" };
+  }
+
+  return { profile: null, mode: "none" };
+}
+
+/** Call the telephony service to write MOH/hold keys to AstDB. Reuses the IVR publish endpoint. */
+async function publishMohToAstDb(
+  tenantSlug: string,
+  keys: Array<{ family: string; key: string; value: string }>,
+): Promise<void> {
+  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret ? { "x-cdr-secret": secret } : {}),
+    },
+    body: JSON.stringify({ tenantSlug, keys }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`telephony moh-publish failed: ${resp.status} ${body}`);
+  }
+}
+
+/** Shared publish helper — loads state, computes effective profile, writes AstDB, logs record.
+ *  Called by explicit publish, override activate/deactivate, and rollback paths.
+ *  Throws on error (caller must handle). */
+async function doMohPublish(
+  tenantId: string,
+  publishedBy: string,
+  source: string,
+): Promise<{ profile: HoldProfileData; mode: string; slug: string; recordId: string }> {
+  const [config, rulesRaw, overrideRaw, profilesRaw, lastPublish] = await Promise.all([
+    (db as any).mohScheduleConfig.findUnique({ where: { tenantId } }),
+    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId }, isActive: true } }),
+    (db as any).mohOverrideState.findUnique({ where: { tenantId } }),
+    (db as any).mohProfile.findMany({ where: { tenantId, isActive: true } }),
+    (db as any).mohPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" } }),
+  ]);
+
+  if (!config) throw Object.assign(new Error("no_schedule_configured"), { statusCode: 409 });
+
+  const profileMap = new Map<string, HoldProfileData>(
+    (profilesRaw as any[]).map((p: any) => [p.id, {
+      id: p.id,
+      vitalPbxMohClassName: p.vitalPbxMohClassName,
+      holdAnnouncementEnabled: Boolean(p.holdAnnouncementEnabled),
+      holdAnnouncementRef: p.holdAnnouncementRef ?? null,
+      holdAnnouncementIntervalSec: p.holdAnnouncementIntervalSec ?? 30,
+      introAnnouncementRef: p.introAnnouncementRef ?? null,
+    }]),
+  );
+
+  const { profile, mode } = computeCurrentMohProfile(config, rulesRaw, overrideRaw, profileMap);
+  if (!profile) throw Object.assign(new Error("no_hold_profile_resolved"), { statusCode: 409 });
+
+  const slug = await getMohSlugForTenant(tenantId);
+  const keys = buildMohKeys(slug, profile, mode);
+  const previousMohClass = lastPublish?.newMohClass ?? null;
+  // Use last publish's keysWritten as the "previous snapshot" for rollback
+  const previousKeysSnapshot: any[] = Array.isArray(lastPublish?.keysWritten) ? lastPublish.keysWritten : [];
+
+  const record = await (db as any).mohPublishRecord.create({
+    data: { tenantId, publishedBy, source, previousMohClass, newMohClass: profile.vitalPbxMohClassName, keysWritten: keys, previousKeysSnapshot, status: "pending", isRollback: false },
+  });
+
+  await publishMohToAstDb(slug, keys);
+  await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+
+  // Update last-published state cache (used by reconciliation worker)
+  await (db as any).mohLastPublishedState.upsert({
+    where: { tenantId },
+    create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode },
+    update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date() },
+  });
+
+  return { profile, mode, slug, recordId: record.id };
+}
+
+// ── GET /voice/moh/profiles ───────────────────────────────────────────────────
+app.get("/voice/moh/profiles", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const profiles = await (db as any).mohProfile.findMany({
+    where: { tenantId: tid, isActive: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return reply.send({ profiles });
+});
+
+// ── POST /voice/moh/profiles ──────────────────────────────────────────────────
+app.post("/voice/moh/profiles", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:                    z.string(),
+    name:                        z.string().min(1).max(100),
+    type:                        z.enum(["default", "business_hours", "after_hours", "holiday", "campaign", "emergency", "custom"]),
+    vitalPbxMohClassName:        z.string().min(1).max(100),
+    holdAnnouncementEnabled:     z.boolean().default(false),
+    holdAnnouncementRef:         z.string().max(200).nullable().optional(),
+    holdAnnouncementIntervalSec: z.number().int().min(10).max(3600).default(30),
+    introAnnouncementRef:        z.string().max(200).nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  assertMohTenantAccess(user, body.data.tenantId);
+  const profile = await (db as any).mohProfile.create({
+    data: { ...body.data, holdAnnouncementRef: body.data.holdAnnouncementRef ?? null, introAnnouncementRef: body.data.introAnnouncementRef ?? null, isActive: true, createdBy: (user as any).id ?? null },
+  });
+  return reply.code(201).send({ profile });
+});
+
+// ── PATCH /voice/moh/profiles/:id ────────────────────────────────────────────
+app.patch("/voice/moh/profiles/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).mohProfile.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "not_found" });
+  assertMohTenantAccess(user, existing.tenantId);
+  const body = z.object({
+    name:                        z.string().min(1).max(100).optional(),
+    type:                        z.enum(["default", "business_hours", "after_hours", "holiday", "campaign", "emergency", "custom"]).optional(),
+    vitalPbxMohClassName:        z.string().min(1).max(100).optional(),
+    holdAnnouncementEnabled:     z.boolean().optional(),
+    holdAnnouncementRef:         z.string().max(200).nullable().optional(),
+    holdAnnouncementIntervalSec: z.number().int().min(10).max(3600).optional(),
+    introAnnouncementRef:        z.string().max(200).nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const updated = await (db as any).mohProfile.update({ where: { id }, data: { ...body.data, updatedBy: (user as any).id ?? null } });
+  return reply.send({ profile: updated });
+});
+
+// ── DELETE /voice/moh/profiles/:id ───────────────────────────────────────────
+app.delete("/voice/moh/profiles/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).mohProfile.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "not_found" });
+  assertMohTenantAccess(user, existing.tenantId);
+  await (db as any).mohProfile.update({ where: { id }, data: { isActive: false } });
+  return reply.send({ ok: true });
+});
+
+// ── GET /voice/moh/schedule ───────────────────────────────────────────────────
+app.get("/voice/moh/schedule", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const schedule = await (db as any).mohScheduleConfig.findUnique({
+    where: { tenantId: tid },
+    include: { rules: { where: { isActive: true }, orderBy: [{ ruleType: "asc" }, { priority: "desc" }] } },
+  });
+  return reply.send({ schedule: schedule ?? null });
+});
+
+// ── PUT /voice/moh/schedule ───────────────────────────────────────────────────
+app.put("/voice/moh/schedule", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:            z.string(),
+    timezone:            z.string().default("America/New_York"),
+    defaultProfileId:    z.string().nullable().optional(),
+    afterHoursProfileId: z.string().nullable().optional(),
+    holidayProfileId:    z.string().nullable().optional(),
+    isActive:            z.boolean().default(true),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  assertMohTenantAccess(user, d.tenantId);
+  const schedule = await (db as any).mohScheduleConfig.upsert({
+    where: { tenantId: d.tenantId },
+    create: { tenantId: d.tenantId, timezone: d.timezone, defaultProfileId: d.defaultProfileId ?? null, afterHoursProfileId: d.afterHoursProfileId ?? null, holidayProfileId: d.holidayProfileId ?? null, isActive: d.isActive },
+    update: { timezone: d.timezone, defaultProfileId: d.defaultProfileId ?? null, afterHoursProfileId: d.afterHoursProfileId ?? null, holidayProfileId: d.holidayProfileId ?? null, isActive: d.isActive },
+  });
+  return reply.send({ schedule });
+});
+
+// ── POST /voice/moh/schedule/rules ────────────────────────────────────────────
+app.post("/voice/moh/schedule/rules", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:  z.string(),
+    scheduleId: z.string(),
+    profileId:  z.string(),
+    ruleType:   z.enum(["weekly", "holiday", "one_time"]),
+    weekday:    z.number().int().min(0).max(6).nullable().optional(),
+    startTime:  z.string().nullable().optional(),
+    endTime:    z.string().nullable().optional(),
+    startAt:    z.string().datetime().nullable().optional(),
+    endAt:      z.string().datetime().nullable().optional(),
+    priority:   z.number().int().default(0),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  assertMohTenantAccess(user, d.tenantId);
+  // Verify schedule belongs to tenant
+  const schedule = await (db as any).mohScheduleConfig.findUnique({ where: { id: d.scheduleId } });
+  if (!schedule || schedule.tenantId !== d.tenantId) return reply.code(404).send({ error: "schedule_not_found" });
+  const rule = await (db as any).mohScheduleRule.create({
+    data: {
+      scheduleId: d.scheduleId, profileId: d.profileId, ruleType: d.ruleType,
+      weekday: d.weekday ?? null, startTime: d.startTime ?? null, endTime: d.endTime ?? null,
+      startAt: d.startAt ? new Date(d.startAt) : null, endAt: d.endAt ? new Date(d.endAt) : null,
+      priority: d.priority, isActive: true,
+    },
+  });
+  return reply.code(201).send({ rule });
+});
+
+// ── DELETE /voice/moh/schedule/rules/:id ─────────────────────────────────────
+app.delete("/voice/moh/schedule/rules/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const rule = await (db as any).mohScheduleRule.findUnique({ where: { id }, include: { schedule: true } });
+  if (!rule) return reply.code(404).send({ error: "not_found" });
+  assertMohTenantAccess(user, rule.schedule.tenantId);
+  await (db as any).mohScheduleRule.update({ where: { id }, data: { isActive: false } });
+  return reply.send({ ok: true });
+});
+
+// ── GET /voice/moh/override ───────────────────────────────────────────────────
+app.get("/voice/moh/override", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const override = await (db as any).mohOverrideState.findUnique({
+    where: { tenantId: tid },
+    include: { profile: { select: { name: true, vitalPbxMohClassName: true } } },
+  });
+  return reply.send({ override: override ?? null });
+});
+
+// ── POST /voice/moh/override/activate ────────────────────────────────────────
+// Saves the override AND immediately publishes to AstDB (no waiting for worker).
+app.post("/voice/moh/override/activate", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:  z.string(),
+    profileId: z.string(),
+    reason:    z.string().optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const d = body.data;
+  assertMohTenantAccess(user, d.tenantId);
+  const profile = await (db as any).mohProfile.findUnique({ where: { id: d.profileId } });
+  if (!profile || profile.tenantId !== d.tenantId) return reply.code(404).send({ error: "profile_not_found" });
+  const override = await (db as any).mohOverrideState.upsert({
+    where: { tenantId: d.tenantId },
+    create: {
+      tenantId: d.tenantId, isActive: true, profileId: d.profileId,
+      reason: d.reason ?? null, expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+      activatedAt: new Date(), activatedBy: (user as any).id ?? null,
+      deactivatedAt: null, deactivatedBy: null,
+    },
+    update: {
+      isActive: true, profileId: d.profileId, reason: d.reason ?? null,
+      expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+      activatedAt: new Date(), activatedBy: (user as any).id ?? null,
+      deactivatedAt: null, deactivatedBy: null,
+    },
+  });
+  // Immediate publish — no waiting for the 1-minute worker cycle
+  let publishResult: { mohClass: string; mode: string } | null = null;
+  let publishError: string | null = null;
+  try {
+    const r = await doMohPublish(d.tenantId, (user as any).id ?? "unknown", "override");
+    publishResult = { mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+    app.log.info({ tenantId: d.tenantId, ...publishResult }, "moh override: activated + published immediately");
+  } catch (pubErr: any) {
+    publishError = pubErr?.message ?? "publish failed";
+    app.log.warn({ tenantId: d.tenantId, err: publishError }, "moh override: activated but immediate publish failed (worker will reconcile)");
+  }
+  return reply.send({ override, publishResult, publishError });
+});
+
+// ── POST /voice/moh/override/deactivate ──────────────────────────────────────
+// Clears the override AND immediately publishes the schedule-derived state to AstDB.
+app.post("/voice/moh/override/deactivate", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  assertMohTenantAccess(user, body.data.tenantId);
+  const override = await (db as any).mohOverrideState.upsert({
+    where: { tenantId: body.data.tenantId },
+    create: { tenantId: body.data.tenantId, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+    update: { isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+  });
+  // Immediate publish back to schedule-derived state
+  let publishResult: { mohClass: string; mode: string } | null = null;
+  let publishError: string | null = null;
+  try {
+    const r = await doMohPublish(body.data.tenantId, (user as any).id ?? "unknown", "override");
+    publishResult = { mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+    app.log.info({ tenantId: body.data.tenantId, ...publishResult }, "moh override: deactivated + published immediately");
+  } catch (pubErr: any) {
+    publishError = pubErr?.message ?? "publish failed";
+    app.log.warn({ tenantId: body.data.tenantId, err: publishError }, "moh override: deactivated but immediate publish failed (worker will reconcile)");
+  }
+  return reply.send({ override, publishResult, publishError });
+});
+
+// ── GET /voice/moh/preview ────────────────────────────────────────────────────
+// Returns the effective Hold Profile (and full runtime state) right now or at a given time.
+// Does NOT write anything to AstDB.
+app.get("/voice/moh/preview", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional(), at: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+
+  const [config, rulesRaw, overrideRaw, profilesRaw, lastState] = await Promise.all([
+    (db as any).mohScheduleConfig.findUnique({ where: { tenantId: tid } }),
+    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId: tid }, isActive: true } }),
+    (db as any).mohOverrideState.findUnique({ where: { tenantId: tid } }),
+    (db as any).mohProfile.findMany({ where: { tenantId: tid, isActive: true } }),
+    (db as any).mohLastPublishedState.findUnique({ where: { tenantId: tid } }),
+  ]);
+
+  if (!config) return reply.send({ profile: null, mode: "no_schedule_configured", at: new Date().toISOString(), lastPublished: lastState ?? null });
+
+  const profileMap = new Map<string, HoldProfileData>(
+    (profilesRaw as any[]).map((p: any) => [p.id, {
+      id: p.id, vitalPbxMohClassName: p.vitalPbxMohClassName,
+      holdAnnouncementEnabled: Boolean(p.holdAnnouncementEnabled),
+      holdAnnouncementRef: p.holdAnnouncementRef ?? null,
+      holdAnnouncementIntervalSec: p.holdAnnouncementIntervalSec ?? 30,
+      introAnnouncementRef: p.introAnnouncementRef ?? null,
+    }]),
+  );
+
+  const atTime = q.at ? new Date(q.at) : new Date();
+  const { profile, mode } = computeCurrentMohProfile(config, rulesRaw, overrideRaw, profileMap, atTime);
+  return reply.send({ profile, mode, mohClass: profile?.vitalPbxMohClassName ?? null, at: atTime.toISOString(), lastPublished: lastState ?? null });
+});
+
+// ── GET /voice/moh/publish-history ───────────────────────────────────────────
+app.get("/voice/moh/publish-history", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const records = await (db as any).mohPublishRecord.findMany({
+    where: { tenantId: tid },
+    orderBy: { publishedAt: "desc" },
+    take: q.limit,
+  });
+  return reply.send({ records });
+});
+
+// ── POST /voice/moh/publish ───────────────────────────────────────────────────
+// Immediately computes effective Hold Profile and writes all 6 AstDB keys.
+app.post("/voice/moh/publish", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const { tenantId } = body.data;
+  assertMohTenantAccess(user, tenantId);
+  try {
+    const r = await doMohPublish(tenantId, (user as any).id ?? "unknown", "manual");
+    app.log.info({ tenantId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug }, "moh: publish success");
+    return reply.send({ ok: true, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug, recordId: r.recordId, profile: r.profile });
+  } catch (err: any) {
+    const code = (err as any).statusCode;
+    if (code === 409) return reply.code(409).send({ error: err.message });
+    app.log.warn({ tenantId, err: err?.message }, "moh: publish failed");
+    return reply.code(503).send({ error: "publish_failed", detail: err?.message });
+  }
+});
+
+// ── POST /voice/moh/rollback/:publishId ──────────────────────────────────────
+// Restores the AstDB state to what it was BEFORE the target publish record.
+// Replays previousKeysSnapshot (full 6-key snapshot stored at publish time).
+app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const { publishId } = req.params as { publishId: string };
+  const target = await (db as any).mohPublishRecord.findUnique({ where: { id: publishId } });
+  if (!target) return reply.code(404).send({ error: "publish_record_not_found" });
+  assertMohTenantAccess(user, target.tenantId);
+
+  const slug = await getMohSlugForTenant(target.tenantId);
+  const prevSnapshot: Array<{ family: string; key: string; value: string }> =
+    Array.isArray(target.previousKeysSnapshot) && target.previousKeysSnapshot.length > 0
+      ? target.previousKeysSnapshot
+      : null as any;
+
+  // Fallback for old records without previousKeysSnapshot: restore using previousMohClass minimal keys
+  let restoreKeys: Array<{ family: string; key: string; value: string }>;
+  let restoredClass: string;
+  if (prevSnapshot) {
+    restoreKeys = prevSnapshot;
+    restoredClass = prevSnapshot.find((k) => k.key === "active_moh_class")?.value ?? target.previousMohClass ?? "";
+  } else if (target.previousMohClass) {
+    const fam = `connect/t_${slug}`;
+    restoredClass = target.previousMohClass;
+    restoreKeys = [
+      { family: fam, key: "active_moh_class",           value: target.previousMohClass },
+      { family: fam, key: "hold_mode",                  value: "rollback" },
+      { family: fam, key: "hold_announcement_enabled",  value: "0" },
+      { family: fam, key: "hold_announcement_ref",      value: "" },
+      { family: fam, key: "hold_announcement_interval", value: "30" },
+      { family: fam, key: "intro_announcement_ref",     value: "" },
+    ];
+  } else {
+    return reply.code(409).send({ error: "no_previous_state_to_restore" });
+  }
+
+  const record = await (db as any).mohPublishRecord.create({
+    data: {
+      tenantId: target.tenantId, publishedBy: (user as any).id ?? "unknown",
+      source: "rollback", previousMohClass: target.newMohClass, newMohClass: restoredClass,
+      keysWritten: restoreKeys, previousKeysSnapshot: Array.isArray(target.keysWritten) ? target.keysWritten : [],
+      status: "pending", isRollback: true,
+    },
+  });
+
+  try {
+    await publishMohToAstDb(slug, restoreKeys);
+    await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    await (db as any).mohLastPublishedState.upsert({
+      where: { tenantId: target.tenantId },
+      create: { tenantId: target.tenantId, mohClass: restoredClass, holdMode: "rollback" },
+      update: { mohClass: restoredClass, holdMode: "rollback", publishedAt: new Date() },
+    });
+    return reply.send({ ok: true, restoredMohClass: restoredClass, recordId: record.id });
+  } catch (err: any) {
+    await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
+    return reply.code(503).send({ error: "rollback_failed", detail: err?.message });
+  }
+});
+
+// ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──
+// Called by the telephony service on AMI MessageWaiting events.
+app.post("/internal/voicemail-notify", async (req, reply) => {
+  if (!verifyCdrSecret(req)) return reply.code(403).send({ error: "forbidden" });
+
+  const body = z.object({
+    mailbox: z.string().min(1),
+    context: z.string().optional().default("default"),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+  const { mailbox } = body.data;
+
+  // Resolve extension + tenant
+  const ext = await db.extension.findFirst({
+    where:   { extNumber: mailbox, status: "ACTIVE" },
+    include: { pbxLink: true },
+  });
+  if (!ext?.pbxLink?.pbxExtensionId) {
+    app.log.debug({ mailbox }, "voicemail-notify: extension not found — skipping");
+    return reply.send({ ok: true, synced: false, reason: "extension_not_found" });
+  }
+
+  try {
+    const link = await db.tenantPbxLink.findUnique({
+      where:   { tenantId: ext.tenantId },
+      include: { pbxInstance: true },
+    });
+    if (!link?.pbxInstance) return reply.send({ ok: true, synced: false, reason: "no_pbx_link" });
+
+    const auth    = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+    const pbx     = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+    const records = await pbx.getExtensionVoicemailRecords(ext.pbxLink.pbxExtensionId, link.pbxTenantId ?? undefined);
+
+    let upserted = 0;
+    for (const rec of records) {
+      const origtime = String(rec.origtime ?? rec.orig_time ?? "");
+      if (!origtime || origtime === "0") continue;
+      const rawCallerid  = String(rec.callerid ?? rec.caller_id ?? "");
+      const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
+      const callerDigits = (callerNumber ?? "").slice(-10);
+      const msgId        = `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`;
+      const rawFolder    = String(rec.folder ?? "INBOX");
+      const folder       = vmNormalizeFolder(rawFolder);
+      const pbxMsgNum    = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? "");
+
+      await db.voicemail.upsert({
+        where:  { pbxMessageId: msgId },
+        create: {
+          pbxMessageId:  msgId,
+          tenantId:      link.tenantId,
+          extension:     ext.extNumber,
+          pbxExtensionId: ext.pbxLink!.pbxExtensionId,
+          callerNumber,
+          callerName:    vmExtractCallerName(rawCallerid) || null,
+          durationSec:   parseInt(String(rec.duration ?? "0"), 10) || 0,
+          folder,
+          pbxFolder:     rawFolder,
+          pbxMsgNum,
+          listened:      folder !== "inbox",
+          receivedAt:    new Date(parseInt(origtime, 10) * 1000),
+        },
+        update: { folder, pbxFolder: rawFolder, pbxMsgNum, listened: folder !== "inbox" },
+      });
+      upserted++;
+    }
+
+    app.log.info({ mailbox, upserted }, "voicemail-notify: sync complete");
+    return reply.send({ ok: true, synced: true, upserted });
+  } catch (err: any) {
+    app.log.warn({ mailbox, err: err?.message }, "voicemail-notify: sync failed");
+    return reply.code(500).send({ error: "sync_failed" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+
 app.get("/calls/history", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -10794,15 +12477,62 @@ app.get("/calls/history", async (req, reply) => {
     endDate: z.string().optional(),
     direction: z.enum(["all", "incoming", "outgoing", "internal"]).optional().default("all"),
     status: z.enum(["all", "answered", "missed", "canceled", "failed"]).optional().default("all"),
+    hasRecording: z.enum(["all", "yes", "no"]).optional().default("all"),
     search: z.string().optional(),
     page: z.coerce.number().int().min(1).optional().default(1),
     pageSize: z.coerce.number().int().min(10).max(200).optional().default(100),
   }).parse(req.query || {});
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const scopeTenantId = isSuperAdmin
-    ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
-    : user.tenantId ?? null;
+  const requestedTenantId = query.tenantId && query.tenantId !== "global" ? query.tenantId : null;
+
+  // Build the set of tenantId values to filter by.
+  // null = global / no restriction.
+  // string[] = must match one of these values (handles CDRs stored in multiple formats).
+  //
+  // KEY INSIGHT: CDR rows are stored with tenantId = "vpbx:{slug}" (e.g. "vpbx:gesheft").
+  // The old code resolved vpbx: IDs to Connect cuids, then filtered by the cuid — which
+  // never matched anything because CDRs don't have cuids. Fix: use the vpbx: slug directly
+  // as the filter value, and also include any resolved cuid for the rare rows that have it.
+  let tenantIdFilter: string[] | null = null;
+
+  if (!isSuperAdmin) {
+    // Non-super-admins: always scoped to their own tenant cuid.
+    if (user.tenantId) tenantIdFilter = [user.tenantId];
+  } else if (requestedTenantId) {
+    if (requestedTenantId.startsWith("vpbx:")) {
+      // CDR rows use "vpbx:{slug}" as their tenantId — include it directly.
+      const vpbxSlug = requestedTenantId.slice(5).trim();
+      const ids: string[] = [requestedTenantId];
+
+      // Also include the linked Connect tenant cuid (for the rare CDRs written with the real cuid).
+      let link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: vpbxSlug } });
+      if (!link) {
+        const dir = await db.pbxTenantDirectory.findFirst({ where: { tenantSlug: vpbxSlug } });
+        if (dir?.vitalTenantId) {
+          link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: dir.vitalTenantId } });
+        }
+      }
+      if (link?.tenantId) ids.push(link.tenantId);
+      tenantIdFilter = ids;
+    } else {
+      // Real Connect cuid requested (non-vpbx tenant or regular admin).
+      // Also find the vpbx: slug so CDRs stored in that format are included.
+      const ids: string[] = [requestedTenantId];
+      const link = await db.tenantPbxLink.findFirst({ where: { tenantId: requestedTenantId } });
+      if (link?.pbxTenantId) {
+        const dir = await db.pbxTenantDirectory.findFirst({ where: { vitalTenantId: link.pbxTenantId } });
+        if (dir?.tenantSlug) ids.push(`vpbx:${dir.tenantSlug}`);
+      }
+      tenantIdFilter = ids;
+    }
+    app.log.info(
+      { requestedTenantId, tenantIdFilter, mode: "TENANT" },
+      "[CALL_HISTORY_FILTER] resolved tenant scope"
+    );
+  } else {
+    app.log.info({ mode: "GLOBAL" }, "[CALL_HISTORY_FILTER] resolved tenant scope");
+  }
 
   const { dayStartUtc, dayEndUtc } = computePbxLocalDayRangeUtc();
   const startAt = query.startDate ? new Date(query.startDate) : dayStartUtc;
@@ -10813,7 +12543,11 @@ app.get("/calls/history", async (req, reply) => {
 
   const where: any = {
     startedAt: { gte: startAt, lt: endAt },
-    ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
+    ...(tenantIdFilter
+      ? tenantIdFilter.length === 1
+        ? { tenantId: tenantIdFilter[0] }
+        : { tenantId: { in: tenantIdFilter } }
+      : {}),
   };
 
   if (query.direction !== "all") where.direction = query.direction;
@@ -10824,6 +12558,10 @@ app.get("/calls/history", async (req, reply) => {
     else if (query.status === "failed") where.disposition = "failed";
     else if (query.status === "missed") where.disposition = { in: ["missed", "busy", "no answer", "no_answer"] };
   }
+
+  // hasRecording filter — was parsed but previously never applied to the query.
+  if (query.hasRecording === "yes") where.recordingPath = { not: null };
+  else if (query.hasRecording === "no") where.recordingPath = null;
 
   const normalizedSearch = String(query.search || "").trim();
   if (normalizedSearch) {
@@ -10863,6 +12601,7 @@ app.get("/calls/history", async (req, reply) => {
         tenantResolutionSource: true,
         queueId: true,
         hangupCause: true,
+        recordingPath: true,
       },
     }),
     db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
@@ -10906,6 +12645,9 @@ app.get("/calls/history", async (req, reply) => {
       select: { phoneNumber: true, tenantId: true },
     })
     : [];
+  // Recording availability comes directly from ConnectCdr.recordingPath (deterministic,
+  // set at ingest). No PBX lookup, no CallRecording table — the stream endpoint will
+  // 404 on user click if the file is not actually on the PBX.
   const extensionTenantByExt = new Map<string, string>();
   for (const e of extensions) {
     if (!extensionTenantByExt.has(e.extNumber)) extensionTenantByExt.set(e.extNumber, e.tenantId);
@@ -11319,6 +13061,8 @@ app.get("/calls/history", async (req, reply) => {
       journeySummary: outcome.journeySummary,
       finalOutcomeReason: outcome.finalOutcomeReason,
       journeySteps: outcome.journeySteps,
+      recordingAvailable: !!r.recordingPath,
+      recordingPath: r.recordingPath ?? null,
     };
   });
 
@@ -11335,7 +13079,7 @@ app.get("/calls/history", async (req, reply) => {
       endIso: endAt.toISOString(),
       timezone: process.env.PBX_TIMEZONE?.trim() || "UTC",
     },
-    scope: scopeTenantId ? "tenant" : "global",
+    scope: tenantIdFilter ? "tenant" : "global",
     totalsByDirection: {
       incoming,
       outgoing,
@@ -12848,6 +14592,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     accountCode: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
     pbxTenantCode: z.string().nullable().optional(),
+    recordingAbsPath: z.string().nullable().optional(),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -12932,6 +14677,20 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
 
   const lastDcontext = mergedDcx.length > 0 ? mergedDcx[mergedDcx.length - 1]! : d.dcontext ?? null;
 
+  // Recording path: telephony captures MIXMONITOR_FILENAME from AMI (fires around
+  // MixMonitor() in the VitalPBX dialplan) and includes the absolute filesystem
+  // path on the PBX in the ingest payload.  We store it verbatim — no
+  // computation, no PBX query, no directory scan.  On user click to play/
+  // download, the stream endpoint turns it into an "<baseUrl>/monitor/<rel>"
+  // HTTPS request to VitalPBX.  Null when the call was not recorded.
+  const recordingPath: string | null =
+    typeof (d as any).recordingAbsPath === "string" &&
+    (d as any).recordingAbsPath.trim().length > 0 &&
+    d.disposition === "answered" &&
+    d.talkSec >= 1
+      ? String((d as any).recordingAbsPath).trim()
+      : null;
+
   try {
     await db.connectCdr.upsert({
       where: { linkedId: d.linkedId },
@@ -12957,6 +14716,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         dcontextsSeen: mergedDcx,
         channelsSeen: mergedCh,
         isForwarded: isForwardedLeg,
+        recordingPath,
         rawLegCount: 1,
       },
       update: {
@@ -12977,6 +14737,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         dcontext:    lastDcontext ?? undefined,
         dcontextsSeen: mergedDcx,
         channelsSeen: mergedCh,
+        ...(recordingPath ? { recordingPath } : {}),
         rawLegCount: { increment: 1 },
       },
     });

@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+﻿import { randomUUID } from "crypto";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
@@ -11,7 +11,8 @@ import {
   VoipMsCredentials,
   VoipMsSmsProvider,
   SolaCardknoxAdapter,
-  WirePbxClient
+  WirePbxClient,
+  VitalPbxClient,
 } from "@connect/integrations";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -295,33 +296,72 @@ async function sendPushToUserDevices(input: {
     return { queued: devices.length, simulated: true };
   }
 
-  const title = input.payload.type === "INCOMING_CALL"
-    ? "Incoming call"
-    : input.payload.type === "INVITE_CANCELED"
-      ? "Call ended"
-      : "Missed call";
-  const body = input.payload.type === "INCOMING_CALL"
-    ? `Call from ${input.payload.fromNumber}`
-    : input.payload.type === "INVITE_CANCELED"
-      ? "This call has ended."
-      : `Missed call from ${input.payload.fromNumber}`;
-
+  // CRITICAL: All call-control pushes (INCOMING_CALL, INVITE_CANCELED,
+  // MISSED_CALL) MUST wake the native FirebaseMessagingService on cold-killed
+  // apps so we can stop the ringtone started by INCOMING_CALL. When the push
+  // includes `title`/`body`/`sound`/`channelId`, Expo produces an FCM
+  // "notification message" which Android's FCM SDK displays directly WITHOUT
+  // invoking onMessageReceived â€” so our handleCallTerminationNative never runs
+  // and the ringtone keeps playing until the 45s native watchdog fires.
+  //
+  // All FCM data values MUST be strings (Firebase spec). Expo silently
+  // promotes the push to a notification message if values fail to serialize,
+  // so we stringify every field explicitly.
+  const stringifiedData: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input.payload)) {
+    if (v === undefined || v === null) continue;
+    stringifiedData[k] = typeof v === "string" ? v : JSON.stringify(v);
+  }
   const messages = devices.map((d) => ({
     to: d.expoPushToken,
-    sound: "default",
-    title,
-    body,
-    data: input.payload
+    priority: "high" as const,
+    ttl: 45,
+    data: stringifiedData,
   }));
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (expoPushAccessToken) headers.authorization = `Bearer ${expoPushAccessToken}`;
 
-  await fetch("https://exp.host/--/api/v2/push/send", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(messages)
-  });
+  console.info(
+    "[CALL_TIMELINE]",
+    JSON.stringify({
+      callTimeline: true,
+      stage: "PUSH_SEND",
+      ts: new Date().toISOString(),
+      source: "worker",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      inviteId: input.payload.inviteId,
+      payloadType: input.payload.type,
+      deviceCount: messages.length,
+      toExtension: input.payload.type === "INCOMING_CALL" ? input.payload.toExtension : null
+    })
+  );
+
+  try {
+    const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(messages)
+    });
+    const expoBody = await expoRes.json().catch(() => null);
+    console.info(
+      "[CALL_TIMELINE]",
+      JSON.stringify({
+        callTimeline: true,
+        stage: "PUSH_EXPO_RESPONSE",
+        ts: new Date().toISOString(),
+        source: "worker",
+        inviteId: input.payload.inviteId,
+        payloadType: input.payload.type,
+        expoStatus: expoRes.status,
+        expoBody,
+        requestSample: messages[0]
+      })
+    );
+  } catch (err: any) {
+    console.error("[CALL_TIMELINE] push send failed", err?.message || err);
+  }
 
   await db.auditLog.create({
     data: {
@@ -347,6 +387,8 @@ function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "
 
 async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED" | "CANCELED") {
   if (!invite?.pbxCallId) return;
+
+  // Legacy table write (kept for backward-compat with any existing queries on callRecord).
   await db.callRecord.upsert({
     where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
     create: {
@@ -357,9 +399,42 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
       toNumber: invite.toExtension,
       startedAt: invite.createdAt || new Date(),
       durationSec: 0,
-      disposition
+      disposition,
     },
-    update: { disposition }
+    update: { disposition },
+  }).catch((e: any) => {
+    console.warn("[worker] callRecord upsert failed for missed invite", invite.pbxCallId, e?.message);
+  });
+
+  // Authoritative table write: ensure missed/canceled calls also appear in connectCdr
+  // so they are counted by the dashboard KPI endpoint (which only reads connectCdr).
+  // Uses pbxCallId as the linkedId â€” matches what the telephony service would use if
+  // the AMI CDR event fires, so this is an idempotent upsert (no duplicate if both paths run).
+  const now = new Date();
+  const startedAt = invite.createdAt ? new Date(invite.createdAt) : now;
+  await db.connectCdr.upsert({
+    where: { linkedId: String(invite.pbxCallId) },
+    create: {
+      linkedId:    String(invite.pbxCallId),
+      tenantId:    invite.tenantId ?? null,
+      fromNumber:  invite.fromNumber ?? null,
+      fromName:    invite.callerName ?? null,
+      toNumber:    invite.toExtension ?? null,
+      direction:   "incoming",
+      disposition: disposition === "MISSED" ? "missed" : "canceled",
+      startedAt,
+      answeredAt:  null,
+      endedAt:     now,
+      durationSec: 0,
+      talkSec:     0,
+      rawLegCount: 1,
+    },
+    update: {
+      // Only update disposition if it gets more specific (missed > canceled).
+      disposition: disposition === "MISSED" ? "missed" : undefined,
+    },
+  }).catch((e: any) => {
+    console.warn("[worker] connectCdr upsert failed for missed invite", invite.pbxCallId, e?.message);
   });
 }
 
@@ -1095,6 +1170,220 @@ worker.on("failed", (job, err) => console.error(`sms job failed: ${job?.id} -> $
 
 console.log("SMS worker started");
 
+// â”€â”€ Voicemail sync helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function getVitalPbxClientForWorker(input: { baseUrl: string; token: string; secret?: string | null }) {
+  return new VitalPbxClient({
+    baseUrl: input.baseUrl,
+    apiToken: input.token,
+    apiSecret: input.secret || undefined,
+    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+  });
+}
+
+function vmExtractCallerNumber(callerid: string): string {
+  const match = callerid.match(/<([^>]+)>/);
+  const raw = match ? match[1]! : callerid.replace(/"/g, "").trim();
+  return raw.replace(/\D/g, "");
+}
+
+function vmExtractCallerName(callerid: string): string {
+  const match = callerid.match(/^"([^"]+)"/);
+  return match ? match[1]! : "";
+}
+
+function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
+  const f = folder.toLowerCase();
+  if (f === "inbox" || f === "in") return "inbox";
+  if (f === "urgent") return "urgent";
+  return "old";
+}
+
+let _voicemailSyncRunning = false;
+
+async function runVoicemailSyncCycle(): Promise<void> {
+  if (_voicemailSyncRunning) return;
+  _voicemailSyncRunning = true;
+  try {
+    const links: any[] = await db.tenantPbxLink.findMany({
+      where: { status: "LINKED" },
+      include: { pbxInstance: true } as any,
+    } as any);
+
+    for (const link of links) {
+      if (!link?.pbxInstance) continue;
+      try {
+        const auth = decryptJson<{ token: string; secret?: string | null }>(link.pbxInstance.apiAuthEncrypted);
+        const pbx = getVitalPbxClientForWorker({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret || null });
+
+        const extensions: any[] = await db.extension.findMany({
+          where: { tenantId: link.tenantId, status: "ACTIVE" } as any,
+          include: { pbxLink: true } as any,
+        } as any);
+
+        for (const ext of extensions) {
+          const pbxExtId: string | undefined = ext.pbxLink?.pbxExtensionId;
+          if (!pbxExtId) continue;
+          try {
+            const records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
+            for (const rec of records) {
+              const origtime = String(rec.origtime ?? rec.orig_time ?? "");
+              if (!origtime || origtime === "0") continue;
+              const rawCallerid = String(rec.callerid ?? rec.caller_id ?? "");
+              const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
+              const callerName = vmExtractCallerName(rawCallerid) || null;
+              const callerDigits = (callerNumber ?? "").slice(-10);
+              const msgId = `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`;
+              const rawFolder = String(rec.folder ?? "INBOX");
+              const folder = vmNormalizeFolder(rawFolder);
+              const listened = folder !== "inbox";
+              const pbxMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? "");
+
+              await (db as any).voicemail.upsert({
+                where: { pbxMessageId: msgId },
+                create: {
+                  pbxMessageId: msgId,
+                  tenantId: link.tenantId,
+                  extension: ext.extNumber,
+                  pbxExtensionId: pbxExtId,
+                  callerNumber,
+                  callerName,
+                  durationSec: parseInt(String(rec.duration ?? "0"), 10) || 0,
+                  folder,
+                  pbxFolder: rawFolder,
+                  pbxMsgNum,
+                  listened,
+                  receivedAt: new Date(parseInt(origtime, 10) * 1000),
+                },
+                update: {
+                  folder,
+                  pbxFolder: rawFolder,
+                  pbxMsgNum,
+                  listened,
+                },
+              });
+            }
+          } catch (extErr: any) {
+            console.warn(`voicemail sync ext ${ext.extNumber} (tenant ${link.tenantId}): ${extErr?.message}`);
+          }
+        }
+      } catch (tenantErr: any) {
+        console.error(`voicemail sync tenant ${link.tenantId}: ${tenantErr?.message}`);
+      }
+    }
+  } finally {
+    _voicemailSyncRunning = false;
+  }
+}
+
+// â”€â”€â”€ IVR Routing â€” Option A: schedule-based auto-publish â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Runs every 5 minutes.  For every tenant with an active IvrScheduleConfig,
+// computes the intended routing mode (business/afterhours/holiday/override) and,
+// if the mode has changed since the last publish (or >1 h has passed), writes
+// the new state to Asterisk AstDB via the telephony service HTTP endpoint.
+// NO PBX API calls; NO SSH; NO file mutations.
+
+function ivrToIvrSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function ivrComputeMode(
+  config: { timezone: string; businessHoursRules: any; holidayDates: any },
+  override: { isActive: boolean; expiresAt: Date | null } | null,
+  now: Date = new Date(),
+): "business" | "afterhours" | "holiday" | "override" {
+  if (override?.isActive && (!override.expiresAt || override.expiresAt > now)) return "override";
+  const tz = config.timezone || "UTC";
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const holidays: string[] = Array.isArray(config.holidayDates) ? config.holidayDates : [];
+  if (holidays.includes(localDate)) return "holiday";
+  const rules: Array<{ day: number; open: string; close: string }> = Array.isArray(config.businessHoursRules) ? config.businessHoursRules : [];
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const DOW_MAP: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = DOW_MAP[parts.find((p) => p.type === "weekday")?.value ?? ""] ?? now.getDay();
+  const hourStr = parts.find((p) => p.type === "hour")?.value ?? "0";
+  const minStr  = parts.find((p) => p.type === "minute")?.value ?? "0";
+  const minuteOfDay = parseInt(hourStr, 10) * 60 + parseInt(minStr, 10);
+  const parseHHMM = (s: string) => { const [h, m] = s.split(":").map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+  const rule = rules.find((r) => r.day === dow);
+  if (rule && minuteOfDay >= parseHHMM(rule.open) && minuteOfDay < parseHHMM(rule.close)) return "business";
+  return "afterhours";
+}
+
+let _ivrScheduleRunning = false;
+async function runIvrScheduleCycle(): Promise<void> {
+  if (_ivrScheduleRunning) return;
+  _ivrScheduleRunning = true;
+  try {
+    const schedules: any[] = await (db as any).ivrScheduleConfig.findMany({
+      where: { isActive: true },
+      include: { tenant: { select: { name: true } } },
+    });
+    if (schedules.length === 0) return;
+
+    const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+    const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    for (const sched of schedules) {
+      try {
+        const tenantId: string = sched.tenantId;
+        const slug = ivrToIvrSlug(sched.tenant?.name ?? tenantId);
+        const fam = `connect/t_${slug}`;
+
+        const [override, profiles, lastPublish] = await Promise.all([
+          (db as any).ivrOverrideState.findUnique({ where: { tenantId } }),
+          (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
+          (db as any).ivrPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" } }),
+        ]);
+
+        const mode = ivrComputeMode(sched, override, now);
+        const lastMode = lastPublish?.mode ?? null;
+        const lastAt: Date | null = lastPublish?.publishedAt ?? null;
+        const stale = !lastAt || lastAt < oneHourAgo;
+        if (mode === lastMode && !stale) continue;
+
+        const byType = new Map((profiles as any[]).map((p: any) => [p.type, p.pbxDestination]));
+        const keys = [
+          { family: fam, key: "mode",             value: mode },
+          { family: fam, key: "dest_business",    value: byType.get("business_hours")  ?? "" },
+          { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")     ?? "" },
+          { family: fam, key: "dest_holiday",     value: byType.get("holiday")         ?? "" },
+          { family: fam, key: "dest_override",    value: byType.get("manual_override") ?? byType.get("emergency") ?? "" },
+          { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(new Date(override.expiresAt).getTime() / 1000)) : "0" },
+        ];
+
+        const record: any = await (db as any).ivrPublishRecord.create({
+          data: { tenantId, publishedBy: "system", mode, keysWritten: keys, previousKeys: [], status: "pending", isRollback: false },
+        });
+
+        try {
+          const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(secret ? { "x-cdr-secret": secret } : {}) },
+            body: JSON.stringify({ tenantSlug: slug, keys }),
+            signal: AbortSignal.timeout(8_000),
+          });
+          if (!resp.ok) throw new Error(`ivr-publish HTTP ${resp.status}`);
+          await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+          console.log(`ivr schedule: published mode=${mode} for tenant ${tenantId} (slug=${slug})`);
+        } catch (pubErr: any) {
+          await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: pubErr?.message } });
+          console.error(`ivr schedule: publish failed for tenant ${tenantId}: ${pubErr?.message}`);
+        }
+      } catch (tenantErr: any) {
+        console.error(`ivr schedule: error for schedule ${sched.id}: ${tenantErr?.message}`);
+      }
+    }
+  } finally {
+    _ivrScheduleRunning = false;
+  }
+}
+
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
 setInterval(() => {
   runDunningCycle().catch((err) => console.error("dunning cycle failed", err?.message || err));
 }, 60 * 60 * 1000);
@@ -1111,7 +1400,7 @@ setInterval(() => {
 
 setInterval(() => {
   runCallInviteExpiryCycle().catch((err) => console.error("call invite expiry failed", err?.message || err));
-}, 30 * 1000);
+}, 5 * 1000);
 
 setInterval(() => {
   runPbxActiveCallPollCycle().catch((err) => console.error("pbx active call poll failed", err?.message || err));
@@ -1135,5 +1424,175 @@ runTurnValidationMaintenanceCycle().catch((err) => console.error("initial turn v
 runMediaReliabilityMaintenanceCycle().catch((err) => console.error("initial media reliability maintenance failed", err?.message || err));
 runPbxActiveCallPollCycle().catch((err) => console.error("initial pbx active call poll failed", err?.message || err));
 
+// Voicemail polling is a *fallback* for missed AMI MessageWaiting events.
+// Per product spec the fallback should run every 30–60s. The AMI event path
+// (telephony → /internal/voicemail-notify) is the primary near-realtime path.
+// _voicemailSyncRunning guards against overlap if a cycle runs long.
+setInterval(() => {
+  runVoicemailSyncCycle().catch((err) => console.error("voicemail sync failed", err?.message || err));
+}, 60 * 1000);
+
 runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", err?.message || err));
 runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed", err?.message || err));
+runVoicemailSyncCycle().catch((err) => console.error("initial voicemail sync failed", err?.message || err));
+
+
+setInterval(() => {
+  runIvrScheduleCycle().catch((err) => console.error("ivr schedule cycle failed", err?.message || err));
+}, 5 * 60 * 1000);
+
+runIvrScheduleCycle().catch((err) => console.error("initial ivr schedule cycle failed", err?.message || err));
+
+// â”€â”€â”€ Hold Profile Scheduling â€” Option A: reconciliation/transition cycle â”€â”€â”€â”€â”€â”€
+// ROLE: This worker is a RECONCILIATION AND TRANSITION DETECTOR only.
+//   â€¢ Immediate publish is handled by API endpoints (override activate/deactivate, explicit publish).
+//   â€¢ This worker detects schedule-boundary transitions that happen at known times (e.g.
+//     09:00 business hours start) and publishes if the computed mode differs from last published.
+//   â€¢ Also repairs drift (e.g. telephony was unreachable during an API publish attempt).
+//
+// FREQUENCY: Runs every 60 seconds. Max delay for a schedule transition = 60 seconds.
+//
+// SKIP OPTIMIZATION: Each tenant's MohLastPublishedState row caches (mohClass, holdMode).
+//   The worker skips tenants where the computed class/mode matches the cached last publish.
+//   This avoids redundant AstDB writes on every cycle when nothing has changed.
+
+type WorkerHoldProfile = {
+  id: string;
+  vitalPbxMohClassName: string;
+  holdAnnouncementEnabled: boolean;
+  holdAnnouncementRef: string | null;
+  holdAnnouncementIntervalSec: number;
+  introAnnouncementRef: string | null;
+};
+
+function workerComputeHoldProfile(
+  config: { timezone: string; defaultProfileId: string | null; afterHoursProfileId: string | null; holidayProfileId: string | null },
+  rules: Array<{ ruleType: string; weekday: number | null; startTime: string | null; endTime: string | null; startAt: Date | null; endAt: Date | null; priority: number; isActive: boolean; profileId: string }>,
+  override: { isActive: boolean; expiresAt: Date | null; profileId: string | null } | null,
+  profileMap: Map<string, WorkerHoldProfile>,
+  now: Date = new Date(),
+): { profile: WorkerHoldProfile | null; mode: string } {
+  // 1. Manual override
+  if (override?.isActive && override.profileId && (!override.expiresAt || new Date(override.expiresAt) > now)) {
+    const p = profileMap.get(override.profileId);
+    if (p) return { profile: p, mode: "override" };
+  }
+  const tz = config.timezone || "UTC";
+  const active = rules.filter((r) => r.isActive);
+  // 2. One-time
+  const oneTime = active.filter((r) => r.ruleType === "one_time" && r.startAt && r.endAt && new Date(r.startAt) <= now && new Date(r.endAt) > now).sort((a, b) => b.priority - a.priority);
+  if (oneTime.length > 0) { const p = profileMap.get(oneTime[0].profileId); if (p) return { profile: p, mode: "one_time" }; }
+  // 3. Holiday
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const holiday = active.filter((r) => r.ruleType === "holiday" && r.startTime === localDate).sort((a, b) => b.priority - a.priority);
+  if (holiday.length > 0) { const p = profileMap.get(holiday[0].profileId); if (p) return { profile: p, mode: "holiday" }; }
+  // 4. Weekly
+  const dtParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = DOW[dtParts.find((p) => p.type === "weekday")?.value ?? ""] ?? now.getDay();
+  const hh = parseInt(dtParts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const mm = parseInt(dtParts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  const mofDay = hh * 60 + mm;
+  const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+  const weekly = active.filter((r) => r.ruleType === "weekly" && r.weekday === dow && r.startTime && r.endTime && mofDay >= toMin(r.startTime) && mofDay < toMin(r.endTime)).sort((a, b) => b.priority - a.priority);
+  if (weekly.length > 0) { const p = profileMap.get(weekly[0].profileId); if (p) return { profile: p, mode: "weekly" }; }
+  // 5. After-hours fallback
+  if (config.afterHoursProfileId) { const p = profileMap.get(config.afterHoursProfileId); if (p) return { profile: p, mode: "afterhours" }; }
+  // 6. Default
+  if (config.defaultProfileId) { const p = profileMap.get(config.defaultProfileId); if (p) return { profile: p, mode: "default" }; }
+  return { profile: null, mode: "none" };
+}
+
+let _mohReconcileRunning = false;
+async function runMohScheduleCycle(): Promise<void> {
+  if (_mohReconcileRunning) return;
+  _mohReconcileRunning = true;
+  try {
+    const schedules: any[] = await (db as any).mohScheduleConfig.findMany({
+      where: { isActive: true },
+      include: { tenant: { select: { name: true } } },
+    });
+    if (schedules.length === 0) return;
+
+    const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+    const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+    const now = new Date();
+
+    for (const sched of schedules) {
+      try {
+        const tenantId: string = sched.tenantId;
+        const slug = (sched.tenant?.name ?? tenantId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        const fam = `connect/t_${slug}`;
+
+        const [rules, override, profilesRaw, lastState] = await Promise.all([
+          (db as any).mohScheduleRule.findMany({ where: { scheduleId: sched.id, isActive: true } }),
+          (db as any).mohOverrideState.findUnique({ where: { tenantId } }),
+          (db as any).mohProfile.findMany({ where: { tenantId, isActive: true } }),
+          (db as any).mohLastPublishedState.findUnique({ where: { tenantId } }),
+        ]);
+
+        const profileMap = new Map<string, WorkerHoldProfile>(
+          (profilesRaw as any[]).map((p: any) => [p.id, {
+            id: p.id, vitalPbxMohClassName: p.vitalPbxMohClassName,
+            holdAnnouncementEnabled: Boolean(p.holdAnnouncementEnabled),
+            holdAnnouncementRef: p.holdAnnouncementRef ?? null,
+            holdAnnouncementIntervalSec: p.holdAnnouncementIntervalSec ?? 30,
+            introAnnouncementRef: p.introAnnouncementRef ?? null,
+          }]),
+        );
+
+        const { profile, mode } = workerComputeHoldProfile(sched, rules, override, profileMap, now);
+        if (!profile) continue;
+
+        // Skip if last published state matches â€” no drift, no transition
+        const lastClass = lastState?.mohClass ?? null;
+        const lastMode  = lastState?.holdMode ?? null;
+        if (profile.vitalPbxMohClassName === lastClass && mode === lastMode) continue;
+
+        const keys = [
+          { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
+          { family: fam, key: "hold_mode",                  value: mode },
+          { family: fam, key: "hold_announcement_enabled",  value: profile.holdAnnouncementEnabled ? "1" : "0" },
+          { family: fam, key: "hold_announcement_ref",      value: profile.holdAnnouncementRef ?? "" },
+          { family: fam, key: "hold_announcement_interval", value: String(profile.holdAnnouncementIntervalSec ?? 30) },
+          { family: fam, key: "intro_announcement_ref",     value: profile.introAnnouncementRef ?? "" },
+        ];
+
+        const record: any = await (db as any).mohPublishRecord.create({
+          data: { tenantId, publishedBy: "system", source: "reconciliation", previousMohClass: lastClass, newMohClass: profile.vitalPbxMohClassName, keysWritten: keys, previousKeysSnapshot: [], status: "pending", isRollback: false },
+        });
+
+        try {
+          const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(secret ? { "x-cdr-secret": secret } : {}) },
+            body: JSON.stringify({ tenantSlug: slug, keys }),
+            signal: AbortSignal.timeout(8_000),
+          });
+          if (!resp.ok) throw new Error(`moh reconcile HTTP ${resp.status}`);
+          await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+          await (db as any).mohLastPublishedState.upsert({
+            where: { tenantId },
+            create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode },
+            update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date() },
+          });
+          console.log(`moh reconcile: published class=${profile.vitalPbxMohClassName} mode=${mode} for tenant ${tenantId}`);
+        } catch (pubErr: any) {
+          await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: pubErr?.message } });
+          console.error(`moh reconcile: publish failed for tenant ${tenantId}: ${pubErr?.message}`);
+        }
+      } catch (tenantErr: any) {
+        console.error(`moh reconcile: error for schedule ${sched.id}: ${tenantErr?.message}`);
+      }
+    }
+  } finally {
+    _mohReconcileRunning = false;
+  }
+}
+
+// 1-minute reconciliation cycle â€” catches schedule transitions + repairs drift
+setInterval(() => {
+  runMohScheduleCycle().catch((err) => console.error("moh reconcile cycle failed", err?.message || err));
+}, 60 * 1000);
+
+runMohScheduleCycle().catch((err) => console.error("initial moh reconcile cycle failed", err?.message || err));
