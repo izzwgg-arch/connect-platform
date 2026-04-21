@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -24,63 +24,11 @@ import { postVoiceDiagEvent } from '../../api/client';
 import { typography } from '../../theme/typography';
 import { logCallFlow } from '../../debug/callFlowDebug';
 import { spacing } from '../../theme/spacing';
+import { findCallModalNavigator } from '../../navigation/callStackNav';
 
 const INVITE_TTL_S = 45; // seconds before invite expires
 
 const { width } = Dimensions.get('window');
-
-/**
- * Shown while an answered call handoff is in progress (invite cleared,
- * SIP still connecting). Keeps the screen non-blank and drives navigation
- * to ActiveCall — critical for lock-screen answers where TabsWrapper may
- * fire its nav effect slightly late.
- */
-function AnswerHandoffConnecting({ insets, nav }: { insets: any; nav: any }) {
-  const spinAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.timing(spinAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
-    ).start();
-  }, []);
-
-  // Drive navigation to ActiveCall from within this screen so lock-screen
-  // answers don't get stuck on a blank view if TabsWrapper fires late.
-  useEffect(() => {
-    let retries = 0;
-    const tryNavigate = () => {
-      try {
-        const parent = nav.getParent?.() ?? nav;
-        const routeName = parent.getCurrentRoute?.()?.name;
-        if (routeName !== 'ActiveCall') {
-          parent.navigate('ActiveCall');
-        }
-      } catch {
-        if (retries < 5) {
-          retries++;
-          setTimeout(tryNavigate, 200);
-        }
-      }
-    };
-    tryNavigate();
-  }, [nav]);
-
-  const spin = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: insets.top }}>
-      <Animated.View style={{ transform: [{ rotate: spin }], marginBottom: 20 }}>
-        <Ionicons name="call" size={48} color="#22c55e" />
-      </Animated.View>
-      <Text style={{ color: '#f0f4ff', fontSize: 18, fontWeight: '600', marginBottom: 8 }}>
-        Connecting…
-      </Text>
-      <Text style={{ color: 'rgba(136,153,187,0.7)', fontSize: 14 }}>
-        Answering your call
-      </Text>
-    </View>
-  );
-}
 
 export function IncomingCallScreen() {
   const { token } = useAuth();
@@ -285,6 +233,38 @@ export function IncomingCallScreen() {
   const toExt = displayInvite?.toExtension || '';
   const inAnswerHandoff =
     !!displayInvite?.id && answerHandoffInviteIdRef.current === displayInvite.id;
+
+  // After answer, invite is cleared asynchronously but this modal may still be
+  // visible for a frame. Jump to ActiveCall immediately — no extra "Connecting"
+  // screen (ActiveCall already shows CONNECTING… while SIP attaches).
+  useLayoutEffect(() => {
+    if (!inAnswerHandoff) return;
+    let cancelled = false;
+    let retries = 0;
+    const tryNavigate = () => {
+      if (cancelled) return;
+      let onActive = false;
+      try {
+        const stackNav = findCallModalNavigator(nav) ?? nav;
+        const routeName = stackNav.getCurrentRoute?.()?.name;
+        if (routeName !== 'ActiveCall') {
+          stackNav.navigate('ActiveCall');
+        }
+        onActive = stackNav.getCurrentRoute?.()?.name === 'ActiveCall';
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled && !onActive && retries < 15) {
+        retries += 1;
+        setTimeout(tryNavigate, 45);
+      }
+    };
+    tryNavigate();
+    return () => {
+      cancelled = true;
+    };
+  }, [inAnswerHandoff, nav, answerHandoffTick]);
+
   const isConnecting =
     (incomingCallUiState.phase === 'connecting' && incomingCallUiState.inviteId === displayInvite?.id) ||
     inAnswerHandoff;
@@ -314,15 +294,9 @@ export function IncomingCallScreen() {
   }
 
   // Answer-from-notification: invite is cleared immediately while SIP connects.
-  // Show a "Connecting…" screen and ensure we navigate to ActiveCall.
-  // Using a blank view here caused a permanent blank screen when navigation
-  // fired before the ActiveCall screen was ready (especially from lock screen).
+  // Keep a flat background only — ActiveCall is pushed on the same tick (above).
   if (inAnswerHandoff) {
-    return (
-      <LinearGradient colors={['#090e18', '#0a1128', '#0e1830']} style={styles.container}>
-        <AnswerHandoffConnecting insets={insets} nav={nav} />
-      </LinearGradient>
-    );
+    return <View style={[styles.container, { backgroundColor: '#040810' }]} />;
   }
 
   const initials = callerName

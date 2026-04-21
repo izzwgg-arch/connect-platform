@@ -2008,6 +2008,22 @@ async function sendPushToUserDevices(input: {
         : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
   const isIncomingCall = input.payload.type === "INCOMING_CALL";
+  // INVITE_CANCELED / INVITE_CLAIMED / MISSED_CALL MUST wake the native
+  // FirebaseMessagingService on a cold-killed app so it can stop the ringtone
+  // started by the prior INCOMING_CALL push. If we send them as Expo
+  // notification messages (sound/title/body/channelId/priority=default), Android
+  // delivers them via the system notification tray without invoking
+  // onMessageReceived — the ringtone then plays forever until the user taps the
+  // stale incoming-call notification.
+  //
+  // Fix: send these as strict data-only, priority=high pushes — identical to
+  // the INCOMING_CALL path — so the FCM data payload always lands in
+  // IncomingCallFirebaseService.onMessageReceived → handleCallTerminationNative
+  // → dismissIncomingCallUi → stopIncomingCallRingtone regardless of app state.
+  const isCallTerminationPush =
+    input.payload.type === "INVITE_CANCELED" ||
+    input.payload.type === "INVITE_CLAIMED" ||
+    input.payload.type === "MISSED_CALL";
 
   const messages = filtered.map((d) => {
     if (isIncomingCall) {
@@ -2044,6 +2060,24 @@ async function sendPushToUserDevices(input: {
         data,
       };
     }
+    if (isCallTerminationPush) {
+      const data = fcmDataStrings({ ...(input.payload as object) });
+      app.log.info(
+        {
+          mobilePush: "CALL_TERMINATION_DATA_ONLY",
+          payloadType: input.payload.type,
+          inviteId: input.payload.inviteId,
+          tokenTail: String(d.expoPushToken).slice(-12),
+        },
+        "mobile-push: outgoing call-termination (data-only, high priority)",
+      );
+      return {
+        to: d.expoPushToken,
+        priority: "high" as const,
+        ttl: 45,
+        data,
+      };
+    }
     return {
       to: d.expoPushToken,
       sound: "default",
@@ -2057,6 +2091,25 @@ async function sendPushToUserDevices(input: {
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (mobilePushAccessToken) headers.authorization = `Bearer ${mobilePushAccessToken}`;
+
+  app.log.info(
+    {
+      callTimeline: true,
+      stage: "PUSH_SEND",
+      ts: new Date().toISOString(),
+      source: "api",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      inviteId: input.payload.inviteId,
+      payloadType: input.payload.type,
+      deviceCount: messages.length,
+      toExtension:
+        input.payload.type === "INCOMING_CALL" || input.payload.type === "MISSED_CALL"
+          ? (input.payload as { toExtension?: string }).toExtension
+          : null
+    },
+    "[CALL_TIMELINE] PUSH_SEND"
+  );
 
   const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
@@ -5760,7 +5813,7 @@ app.post("/voice/me/reset-sip-password", async (req, reply) => {
 app.post("/voice/mobile-provisioning/token", async (req, reply) => {
   const user = getUser(req);
 
-  if (!checkBillingRateLimit(`mobile-provisioning-token:${user.sub}`, 20, 60 * 60 * 1000)) {
+  if (!checkBillingRateLimit(`mobile-provisioning-token:${user.sub}`, 200, 60 * 60 * 1000)) {
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
 
@@ -7804,6 +7857,397 @@ app.post("/admin/voice/diag/explain", async (req, reply) => {
   return explain();
 });
 
+// ════════════════════════════════════════════════════════════════════════════════
+// CALL FLIGHT RECORDER
+// Mobile uploads a full structured call timeline (one session per call).
+// Admin panel queries and diagnoses sessions.
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Mobile upload: POST /mobile/flight-recorder/upload ───────────────────────
+app.post("/mobile/flight-recorder/upload", async (req, reply) => {
+  const auth = await requireAuth(req, reply);
+  if (!auth) return;
+
+  const body = req.body as { session?: unknown; stats?: unknown };
+  if (!body?.session || typeof body.session !== "object") {
+    return reply.status(400).send({ error: "Missing session" });
+  }
+
+  const session = body.session as Record<string, unknown>;
+  const stats = (body.stats ?? {}) as Record<string, unknown>;
+
+  // Validate required fields
+  const sessionId = String(session.id || "").slice(0, 64);
+  if (!sessionId) return reply.status(400).send({ error: "Missing session.id" });
+
+  const inviteId = session.inviteId ? String(session.inviteId).slice(0, 128) : null;
+  const pbxCallId = session.pbxCallId ? String(session.pbxCallId).slice(0, 128) : null;
+  const linkedId = session.linkedId ? String(session.linkedId).slice(0, 128) : null;
+  const meta = (session.meta ?? {}) as Record<string, unknown>;
+  const events = Array.isArray(session.events) ? session.events.slice(0, 200) : [];
+
+  const startedAt = session.startedAt
+    ? new Date(String(session.startedAt))
+    : new Date();
+  const endedAt = session.endedAt ? new Date(String(session.endedAt)) : null;
+
+  try {
+    await db.callFlightSession.upsert({
+      where: { id: sessionId },
+      update: {
+        inviteId: inviteId ?? undefined,
+        pbxCallId: pbxCallId ?? undefined,
+        linkedId: linkedId ?? undefined,
+        endedAt: endedAt ?? undefined,
+        result: session.result ? String(session.result) : undefined,
+        uiMode: session.uiMode ? String(session.uiMode) : undefined,
+        events: events as any,
+        hadRingtone: Boolean(stats.hadRingtone),
+        hadBlankScreen: Boolean(stats.hadBlankScreen),
+        hadAppRestart: Boolean(stats.hadAppRestart),
+        hadFullScreen: Boolean(stats.hadFullScreen),
+        answerDelayMs: typeof stats.answerDelayMs === "number" ? stats.answerDelayMs : undefined,
+        sipConnectMs: typeof stats.sipConnectMs === "number" ? stats.sipConnectMs : undefined,
+        pushToUiMs: typeof stats.pushToUiMs === "number" ? stats.pushToUiMs : undefined,
+        warningFlags: Array.isArray(stats.warningFlags) ? stats.warningFlags.map(String) : [],
+        uploadedAt: new Date(),
+      },
+      create: {
+        id: sessionId,
+        inviteId,
+        pbxCallId,
+        linkedId,
+        tenantId: auth.tenantId || null,
+        userId: auth.userId || null,
+        deviceId: meta.deviceId ? String(meta.deviceId) : null,
+        extension: meta.extension ? String(meta.extension) : null,
+        fromNumber: meta.fromNumber ? String(meta.fromNumber) : null,
+        platform: meta.platform ? String(meta.platform) : "ANDROID",
+        appVersion: meta.appVersion ? String(meta.appVersion) : null,
+        networkType: meta.networkType ? String(meta.networkType) : null,
+        startedAt,
+        endedAt,
+        result: session.result ? String(session.result) : null,
+        uiMode: session.uiMode ? String(session.uiMode) : null,
+        events: events as any,
+        hadRingtone: Boolean(stats.hadRingtone),
+        hadBlankScreen: Boolean(stats.hadBlankScreen),
+        hadAppRestart: Boolean(stats.hadAppRestart),
+        hadFullScreen: Boolean(stats.hadFullScreen),
+        answerDelayMs: typeof stats.answerDelayMs === "number" ? stats.answerDelayMs : null,
+        sipConnectMs: typeof stats.sipConnectMs === "number" ? stats.sipConnectMs : null,
+        pushToUiMs: typeof stats.pushToUiMs === "number" ? stats.pushToUiMs : null,
+        warningFlags: Array.isArray(stats.warningFlags) ? stats.warningFlags.map(String) : [],
+      },
+    });
+    return reply.send({ ok: true });
+  } catch (e) {
+    // DB may not have the table yet (migration pending) — fail silently
+    console.error("[FLIGHT_RECORDER] upload failed:", (e as Error)?.message);
+    return reply.send({ ok: false, note: "stored_locally" });
+  }
+});
+
+// ── Admin list/search: GET /admin/call-flight/sessions ───────────────────────
+app.get("/admin/call-flight/sessions", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = req.query as Record<string, string>;
+  const inviteId = q.inviteId || null;
+  const pbxCallId = q.pbxCallId || null;
+  const userId = q.userId || null;
+  const tenantId = q.tenantId || null;
+  const result = q.result || null;
+  const searchTerm = q.q || null;
+  const limit = Math.min(parseInt(q.limit || "50", 10), 200);
+  const offset = parseInt(q.offset || "0", 10);
+
+  const where: Record<string, unknown> = {};
+  if (inviteId) where.inviteId = inviteId;
+  if (pbxCallId) where.pbxCallId = pbxCallId;
+  if (userId) where.userId = userId;
+  if (tenantId) where.tenantId = tenantId;
+  if (result) where.result = result;
+  if (searchTerm) {
+    // Loose search across inviteId, pbxCallId, fromNumber, extension, userId
+    (where as any).OR = [
+      { inviteId: { contains: searchTerm, mode: "insensitive" } },
+      { pbxCallId: { contains: searchTerm, mode: "insensitive" } },
+      { fromNumber: { contains: searchTerm } },
+      { extension: { contains: searchTerm } },
+      { userId: { contains: searchTerm } },
+    ];
+  }
+
+  try {
+    const [sessions, total] = await Promise.all([
+      (db as any).callFlightSession.findMany({
+        where,
+        orderBy: { uploadedAt: "desc" },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true,
+          inviteId: true,
+          pbxCallId: true,
+          linkedId: true,
+          tenantId: true,
+          userId: true,
+          extension: true,
+          fromNumber: true,
+          platform: true,
+          appVersion: true,
+          result: true,
+          uiMode: true,
+          startedAt: true,
+          endedAt: true,
+          uploadedAt: true,
+          hadRingtone: true,
+          hadBlankScreen: true,
+          hadAppRestart: true,
+          hadFullScreen: true,
+          answerDelayMs: true,
+          sipConnectMs: true,
+          pushToUiMs: true,
+          warningFlags: true,
+          aiSummary: true,
+        },
+      }),
+      (db as any).callFlightSession.count({ where }),
+    ]);
+    return reply.send({ sessions, total, limit, offset });
+  } catch (e) {
+    console.error("[FLIGHT_RECORDER] list failed:", (e as Error)?.message);
+    return reply.send({ sessions: [], total: 0, limit, offset });
+  }
+});
+
+// ── Admin session detail: GET /admin/call-flight/sessions/:id ────────────────
+app.get("/admin/call-flight/sessions/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+
+  try {
+    const session = await (db as any).callFlightSession.findUnique({ where: { id } });
+    if (!session) return reply.status(404).send({ error: "Session not found" });
+    return reply.send({ session });
+  } catch (e) {
+    console.error("[FLIGHT_RECORDER] get failed:", (e as Error)?.message);
+    return reply.status(500).send({ error: "Failed to load session" });
+  }
+});
+
+// ── Admin AI explain: POST /admin/call-flight/sessions/:id/explain ───────────
+app.post("/admin/call-flight/sessions/:id/explain", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+
+  try {
+    const row = await (db as any).callFlightSession.findUnique({ where: { id } });
+    if (!row) return reply.status(404).send({ error: "Session not found" });
+
+    // Return cached AI summary if available
+    if (row.aiSummary) return reply.send(row.aiSummary);
+
+    const session = row as Record<string, unknown>;
+    const events: Array<Record<string, unknown>> = Array.isArray(session.events)
+      ? (session.events as Array<Record<string, unknown>>)
+      : [];
+
+    const byStage = (stage: string) => events.find(e => String(e.stage) === stage);
+    const hasStage = (stage: string) => events.some(e => String(e.stage) === stage);
+
+    const pushReceived = byStage('PUSH_RECEIVED_BG') ?? byStage('PUSH_RECEIVED_FG');
+    const incomingShown = byStage('INCOMING_SCREEN_SHOWN') ?? byStage('FULL_SCREEN_INCOMING_SHOWN') ?? byStage('FLOATING_BANNER_SHOWN');
+    const answerTapped = byStage('ANSWER_TAPPED');
+    const sipStart = byStage('SIP_ANSWER_START');
+    const sipConnected = byStage('SIP_CONNECTED') ?? byStage('CALL_CONNECTED');
+    const callEnded = byStage('CALL_ENDED');
+    const ringtoneStart = byStage('RINGTONE_START');
+    const blankScreen = byStage('BLANK_SCREEN_DETECTED');
+    const appRestart = byStage('APP_REMOUNT_DETECTED') ?? byStage('SPLASH_SHOWN_AFTER_CALL');
+
+    const result = String(session.result ?? "unknown");
+    const warningFlags = Array.isArray(session.warningFlags) ? session.warningFlags : [];
+    const answerDelayMs = session.answerDelayMs as number | null;
+    const sipConnectMs = session.sipConnectMs as number | null;
+    const pushToUiMs = session.pushToUiMs as number | null;
+
+    function ms(a?: Record<string, unknown> | null, b?: Record<string, unknown> | null): number | null {
+      if (!a?.tsMs || !b?.tsMs) return null;
+      return Number(b.tsMs) - Number(a.tsMs);
+    }
+
+    function fmtMs(v: number | null): string {
+      if (v === null) return "unknown";
+      if (v < 1000) return `${v}ms`;
+      return `${(v / 1000).toFixed(1)}s`;
+    }
+
+    // Build plain-English diagnosis
+    type FlightExplain = {
+      summary: string;
+      whatHappened: string;
+      likelyCause: string;
+      suggestedFix: string;
+      confidence: string;
+      grade: string | null;
+      warnings: string[];
+      timeline: string;
+    };
+
+    function buildExplain(): FlightExplain {
+      const warnings = warningFlags.map((f: unknown) => String(f));
+      const timeline: string[] = [];
+
+      if (pushReceived) timeline.push(`Push received (BG=${pushReceived.category === 'PUSH' ? 'yes' : 'no'})`);
+      if (incomingShown) timeline.push(`Incoming UI shown ${pushToUiMs !== null ? `(${fmtMs(pushToUiMs)} after push)` : ""}`);
+      if (ringtoneStart) timeline.push("Ringtone started");
+      else if (result !== "missed" && result !== "missed_no_push") timeline.push("⚠ Ringtone did NOT start");
+      if (answerTapped) timeline.push("Answer tapped");
+      if (sipStart) timeline.push(`SIP answer initiated`);
+      if (sipConnected) timeline.push(`SIP connected ${sipConnectMs !== null ? `(${fmtMs(sipConnectMs)} after answer)` : ""}`);
+      if (callEnded) timeline.push(`Call ended`);
+      if (blankScreen) timeline.push("⚠ Blank screen detected");
+      if (appRestart) timeline.push("⚠ App restarted/remounted after call");
+
+      // Result-specific explanation
+      if (result === "answered" && sipConnected) {
+        const grade = answerDelayMs !== null && answerDelayMs < 2000 ? "good"
+          : answerDelayMs !== null && answerDelayMs < 4000 ? "fair" : "poor";
+        return {
+          summary: `Call answered successfully${answerDelayMs !== null ? ` in ${fmtMs(answerDelayMs)}` : ""}`,
+          whatHappened: `Push was received, incoming UI appeared, the user tapped Answer, and SIP connected${sipConnectMs !== null ? ` in ${fmtMs(sipConnectMs)}` : ""}. ${warnings.length > 0 ? `Warnings: ${warnings.join(", ")}.` : ""}`,
+          likelyCause: warnings.length > 0 ? `Some UX issues were detected: ${warnings.join(", ")}` : "No issues detected — normal call flow.",
+          suggestedFix: warnings.includes("ANSWER_DELAY_HIGH") ? "Investigate SIP registration timing — the SIP UA may need to re-register before answering." : "None — call succeeded normally.",
+          confidence: "HIGH",
+          grade,
+          warnings,
+          timeline: timeline.join(" → "),
+        };
+      }
+
+      if (result === "declined") {
+        return {
+          summary: "Call declined by user",
+          whatHappened: "The incoming call was shown correctly. The user tapped Decline.",
+          likelyCause: "User action — not an error.",
+          suggestedFix: "None.",
+          confidence: "HIGH",
+          grade: null,
+          warnings,
+          timeline: timeline.join(" → "),
+        };
+      }
+
+      if (result === "missed" || result === "unknown") {
+        if (!incomingShown && pushReceived) {
+          return {
+            summary: "Push received but incoming UI never shown",
+            whatHappened: "The FCM push was delivered to the device but the incoming call screen was never displayed.",
+            likelyCause: "The app may not have been able to display the full-screen incoming UI. This can be caused by missing USE_FULL_SCREEN_INTENT permission on Android 14+, battery optimization killing the app, or the FCM data message arriving too late.",
+            suggestedFix: "Ensure USE_FULL_SCREEN_INTENT and FOREGROUND_SERVICE_PHONE_CALL permissions are granted. Ask the user to disable battery optimization for the app.",
+            confidence: "HIGH",
+            grade: null,
+            warnings,
+            timeline: timeline.join(" → "),
+          };
+        }
+        if (!pushReceived) {
+          return {
+            summary: "No push received — call missed silently",
+            whatHappened: "No push received event was recorded. The call was either never pushed to this device, or the push was delivered before the app's background task could record it.",
+            likelyCause: "Push delivery failure, device offline, or FCM token mismatch.",
+            suggestedFix: "Check the worker CALL_TIMELINE logs for PUSH_SEND to this device. Verify the device has a valid FCM push token registered.",
+            confidence: "MEDIUM",
+            grade: null,
+            warnings,
+            timeline: timeline.join(" → "),
+          };
+        }
+      }
+
+      if (!sipConnected && answerTapped) {
+        return {
+          summary: "Call answered but SIP did not connect",
+          whatHappened: `Answer was tapped but SIP ${sipStart ? "answer was initiated yet" : "answer was never started"} and never reached the connected state.${warnings.includes("SIP_REGISTER_FAILED") ? " SIP registration failed." : ""}`,
+          likelyCause: warnings.includes("SIP_REGISTER_FAILED")
+            ? "SIP registration failed when attempting to answer. This may indicate the SIP provisioning bundle is missing or the SIP domain is unreachable."
+            : "SIP answer timed out or failed. The SIP session may have ended before the 200 OK was sent.",
+          suggestedFix: "Check SIP registration logs. Ensure the SIP WS URL is reachable and credentials are valid. Look for SIP 4xx/5xx error codes in the timeline.",
+          confidence: "HIGH",
+          grade: "poor",
+          warnings,
+          timeline: timeline.join(" → "),
+        };
+      }
+
+      return {
+        summary: `Call ended with result: ${result}`,
+        whatHappened: `${events.length} events were recorded. ${warnings.length > 0 ? `Warnings: ${warnings.join(", ")}.` : "No warnings detected."}`,
+        likelyCause: "Review the full event timeline for details.",
+        suggestedFix: "Check the event timeline for missing stages.",
+        confidence: "LOW",
+        grade: null,
+        warnings,
+        timeline: timeline.join(" → "),
+      };
+    }
+
+    const explanation = buildExplain();
+
+    // Cache the AI summary
+    try {
+      await (db as any).callFlightSession.update({
+        where: { id },
+        data: { aiSummary: explanation as any },
+      });
+    } catch {
+      // Non-fatal
+    }
+
+    return reply.send(explanation);
+  } catch (e) {
+    console.error("[FLIGHT_RECORDER] explain failed:", (e as Error)?.message);
+    return reply.status(500).send({ error: "Failed to generate explanation" });
+  }
+});
+
+// ── Admin: GET /admin/call-flight/stats ───────────────────────────────────────
+app.get("/admin/call-flight/stats", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const q = req.query as Record<string, string>;
+  const tenantId = q.tenantId || null;
+  const since = q.since ? new Date(q.since) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  try {
+    const where: Record<string, unknown> = { uploadedAt: { gte: since } };
+    if (tenantId) where.tenantId = tenantId;
+
+    const [total, answered, failed, missed, withWarnings, withBlank, withRestart] = await Promise.all([
+      (db as any).callFlightSession.count({ where }),
+      (db as any).callFlightSession.count({ where: { ...where, result: "answered" } }),
+      (db as any).callFlightSession.count({ where: { ...where, result: "failed" } }),
+      (db as any).callFlightSession.count({ where: { ...where, result: "missed" } }),
+      (db as any).callFlightSession.count({ where: { ...where, warningFlags: { isEmpty: false } } }),
+      (db as any).callFlightSession.count({ where: { ...where, hadBlankScreen: true } }),
+      (db as any).callFlightSession.count({ where: { ...where, hadAppRestart: true } }),
+    ]);
+
+    return reply.send({ total, answered, failed, missed, withWarnings, withBlank, withRestart, since: since.toISOString() });
+  } catch (e) {
+    console.error("[FLIGHT_RECORDER] stats failed:", (e as Error)?.message);
+    return reply.send({ total: 0, answered: 0, failed: 0, missed: 0, withWarnings: 0, withBlank: 0, withRestart: 0, since: since.toISOString() });
+  }
+});
+
 // ── Incident Center ──────────────────────────────────────────────────────────
 // Detects and surfaces platform issues in plain English for non-technical operators.
 // ── Healing log proxy (admin-only, from telephony service) ────────────────────
@@ -8857,6 +9301,88 @@ app.get("/mobile/call-invites/pending", async (req, reply) => {
   return db.callInvite.findMany({ where: { tenantId: user.tenantId, userId: user.sub, status: "PENDING", expiresAt: { gte: new Date() } }, orderBy: { createdAt: "desc" }, take: 20 });
 });
 
+// === MULTI-CALL ================================================================
+// Returns the current user's live call stack: ACCEPTED (1, the "active") and
+// HELD (0..N, the hold stack ordered by stackOrder DESC so index 0 is the
+// most-recently-held). Used by the mobile + web CallSessionManager on cold
+// boot / reconnect to rehydrate state rather than trusting purely client-side
+// session maps which are lost across app restarts.
+app.get("/mobile/call-invites/active", async (req, reply) => {
+  const user = getUser(req);
+  if (!checkBillingRateLimit(`call-invites-active:${user.sub}`, 120, 60 * 1000)) {
+    app.log.warn({ userId: user.sub, tenantId: user.tenantId, endpoint: "/mobile/call-invites/active" }, "rate_limit_call_invites_active");
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const rows = await db.callInvite.findMany({
+    where: { tenantId: user.tenantId, userId: user.sub, status: { in: ["ACCEPTED", "HELD"] } },
+    orderBy: [{ status: "asc" }, { stackOrder: "desc" }, { createdAt: "desc" }],
+    take: 10,
+  });
+  const active = rows.find((r) => r.status === "ACCEPTED") ?? null;
+  const held = rows.filter((r) => r.status === "HELD");
+  return { active, held };
+});
+
+// Mark an ACCEPTED invite as HELD. Client-initiated (user pressed Hold, or a
+// sibling call was answered). We do NOT talk to the PBX here — hold is a
+// client-side SIP re-INVITE (sendonly) owned by JsSIP on the device. This
+// endpoint just records the multi-call stack state so other devices / web
+// / reconnect hydration see the authoritative LIFO order.
+app.post("/mobile/call-invites/:id/hold", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+  if (!checkBillingRateLimit(`call-invites-hold:${user.sub}`, 60, 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const invite = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
+  if (!invite) return reply.status(404).send({ error: "INVITE_NOT_FOUND" });
+  if (invite.status !== "ACCEPTED" && invite.status !== "HELD") {
+    return reply.status(409).send({ error: "INVALID_STATE", status: invite.status });
+  }
+  // Top-of-stack = max(stackOrder) + 1 among the user's HELD invites.
+  const top = await db.callInvite.aggregate({
+    where: { userId: user.sub, tenantId: user.tenantId, status: "HELD" },
+    _max: { stackOrder: true },
+  });
+  const nextOrder = (top._max.stackOrder ?? 0) + 1;
+  const updated = await db.callInvite.update({
+    where: { id: invite.id },
+    data: { status: "HELD", heldAt: new Date(), stackOrder: nextOrder },
+  });
+  app.log.info(
+    { multicall: "HOLD", inviteId: invite.id, userId: user.sub, stackOrder: nextOrder },
+    "[MULTICALL_BACKEND] invite_held",
+  );
+  return updated;
+});
+
+// Mark a HELD invite as ACCEPTED (resume) and clear its stackOrder. The client
+// is responsible for ensuring only one ACCEPTED invite exists per user at a
+// time; this endpoint does not enforce that (the client's hold() on the prior
+// active must happen first).
+app.post("/mobile/call-invites/:id/resume", async (req, reply) => {
+  const user = getUser(req);
+  const { id } = req.params as { id: string };
+  if (!checkBillingRateLimit(`call-invites-resume:${user.sub}`, 60, 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const invite = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
+  if (!invite) return reply.status(404).send({ error: "INVITE_NOT_FOUND" });
+  if (invite.status !== "HELD" && invite.status !== "ACCEPTED") {
+    return reply.status(409).send({ error: "INVALID_STATE", status: invite.status });
+  }
+  const updated = await db.callInvite.update({
+    where: { id: invite.id },
+    data: { status: "ACCEPTED", resumedAt: new Date(), stackOrder: null },
+  });
+  app.log.info(
+    { multicall: "RESUME", inviteId: invite.id, userId: user.sub },
+    "[MULTICALL_BACKEND] invite_resumed",
+  );
+  return updated;
+});
+// === END MULTI-CALL ============================================================
+
 app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   const user = getUser(req);
   if (!checkBillingRateLimit(`call-invite-respond:${user.sub}`, 20, 60 * 1000)) {
@@ -8892,6 +9418,20 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
   }
 
   if (action === "ACCEPT") {
+    app.log.info(
+      {
+        callTimeline: true,
+        stage: "MOBILE_INVITE_ACCEPT_REQUEST",
+        ts: new Date().toISOString(),
+        inviteId: existing.id,
+        tenantId: user.tenantId,
+        userId: user.sub,
+        toExtension: existing.toExtension,
+        pbxCallId: existing.pbxCallId,
+        deviceId: activeDevice?.id ?? null
+      },
+      "[CALL_TIMELINE] MOBILE_INVITE_ACCEPT_REQUEST"
+    );
     const tenant = await db.tenant.findUnique({
       where: { id: user.tenantId },
       select: {
@@ -9744,13 +10284,25 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
     // Determine the Connect tenantId to query
     let queryTenantId: string | null = null;
     if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
-      // Admin browsing a specific tenant by vitalTenantId override
+      // Admin browsing a specific tenant by VitalPBX tenant id override (vpbx:...)
       const tenantLink = await db.tenantPbxLink.findFirst({
         where: { pbxTenantId: pbxTenantOverride },
       });
       queryTenantId = tenantLink?.tenantId ?? null;
     } else if (!isRole(user, ["SUPER_ADMIN"])) {
+      // Regular tenant admin — always scoped to their own tenant
       queryTenantId = user.tenantId;
+    } else {
+      // Super admin: honour x-tenant-context when it is a plain Connect tenantId
+      // (sent by the portal when scope=TENANT and a specific tenant is selected).
+      // Without this, selecting a tenant in the sidebar had no effect and all
+      // extensions across every tenant were returned.
+      const tenantCtx = String((req.headers as any)["x-tenant-context"] || "").trim();
+      if (tenantCtx && !tenantCtx.startsWith("vpbx:")) {
+        queryTenantId = tenantCtx;
+      }
+      // If tenantCtx is empty (scope=GLOBAL), queryTenantId stays null and the
+      // super-admin global fallback below returns all extensions.
     }
 
     if (queryTenantId) {
@@ -9788,7 +10340,7 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
       return { resource, rows, source: "connect_db" };
     }
 
-    // Super admin without tenant override — return all extensions across all tenants
+    // Super admin in GLOBAL scope (no x-tenant-context header) — return all extensions
     if (isRole(user, ["SUPER_ADMIN"])) {
       const dbExts = await db.extension.findMany({
         where: { status: "ACTIVE" },
@@ -12303,6 +12855,9 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     return reply.code(400).send({ error: "invalid payload", issues: parsed.error.issues });
   }
   const d = parsed.data;
+  // Detect forwarded call legs: the telephony service (CdrNotifier) appends ":out" or ":outN"
+  // when it emits the outbound PSTN leg of a find-me/follow-me / call-forwarding scenario.
+  const isForwardedLeg = /:out\d*$/.test(d.linkedId);
 
   const existing = await db.connectCdr.findUnique({ where: { linkedId: d.linkedId } });
   const newDcx = [...(d.dcontexts || []).map((s) => String(s).trim()), d.dcontext ? String(d.dcontext).trim() : ""].filter(Boolean);
@@ -12401,6 +12956,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         dcontext:    lastDcontext,
         dcontextsSeen: mergedDcx,
         channelsSeen: mergedCh,
+        isForwarded: isForwardedLeg,
         rawLegCount: 1,
       },
       update: {
@@ -12502,6 +13058,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
               dcontext:               outCtx,
               dcontextsSeen:          [outCtx],
               channelsSeen:           mergedCh,
+              isForwarded:            true,
               rawLegCount:            0,
             },
             update: {
@@ -12551,17 +13108,64 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
 
   const input = z.object({
     linkedId: z.string().min(1),
-    toExtension: z.string().min(1),
+    toExtension: z.string().min(0).optional().default(""),
     fromNumber: z.string().nullable().optional(),
     fromDisplay: z.string().nullable().optional(),
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
+    state: z.enum(["ringing", "hungup"]).optional(),
   }).parse(req.body || {});
 
   app.log.info(
-    { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId },
+    { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId, state: input.state || "ringing" },
     "mobile-ring-notify: received"
   );
+
+  // ── Hangup fast-path: cancel any PENDING invite for this pbxCallId and push
+  // INVITE_CANCELED so the native ringtone stops immediately on the device.
+  if (input.state === "hungup") {
+    const pending = await db.callInvite.findMany({
+      where: {
+        pbxCallId: input.linkedId,
+        status: "PENDING",
+      },
+    });
+    if (!pending.length) {
+      app.log.info({ linkedId: input.linkedId }, "mobile-ring-notify: hangup — no pending invites");
+      return { ok: true, hungup: true, canceled: 0 };
+    }
+    const nowIso = new Date().toISOString();
+    let canceled = 0;
+    for (const inv of pending) {
+      await db.callInvite.update({
+        where: { id: inv.id },
+        data: { status: "CANCELED", canceledAt: new Date() },
+      });
+      canceled += 1;
+      try {
+        await sendPushToUserDevices({
+          tenantId: inv.tenantId,
+          userId: inv.userId,
+          payload: {
+            type: "INVITE_CANCELED",
+            inviteId: inv.id,
+            pbxCallId: inv.pbxCallId,
+            reason: "pbx_hangup",
+            tenantId: inv.tenantId,
+            timestamp: nowIso,
+          },
+        });
+      } catch (err: any) {
+        app.log.warn({ err: err?.message, inviteId: inv.id }, "mobile-ring-notify: hangup push failed");
+      }
+    }
+    app.log.info({ linkedId: input.linkedId, canceled }, "mobile-ring-notify: hangup — invites canceled + push sent");
+    return { ok: true, hungup: true, canceled };
+  }
+
+  if (!input.toExtension) {
+    return reply.code(400).send({ error: "toExtension required for ringing state" });
+  }
 
   // ── Resolve the extension owner ──────────────────────────────────────────────
   // Fast path: use the Connect tenantId the telephony service already resolved.
@@ -13340,17 +13944,21 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
     const baseWhere = { ...tenantClause, startedAt: timeWhere };
 
-    const [incoming, outgoing, internal, missed, total] = await Promise.all([
+    const [incoming, outgoing, internal, missed, total, outgoingForwarded] = await Promise.all([
       db.connectCdr.count({ where: { ...baseWhere, direction: "incoming" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "internal" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "incoming", disposition: "missed" } }),
       db.connectCdr.count({ where: baseWhere }),
+      // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
+      // These are real outgoing legs but originate from an inbound call — surfaced separately so
+      // the dashboard can show "outgoing direct" vs "outgoing forwarded" without breaking totals.
+      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing", isForwarded: true } }),
     ]);
 
     // Canonical mode: direction is authoritative at ingest (callDirectionPolicy + merged dcontexts).
     // No SQL-time reclassification — avoids dashboard drift vs call history.
-    let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number } | null = null;
+    let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number; outgoingForwarded: number } | null = null;
     if (query.mode === "canonical") {
       canonicalCounts = {
         incoming: Number(incoming),
@@ -13358,12 +13966,15 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
         internal: Number(internal),
         missed: Number(missed),
         total: Number(total),
+        outgoingForwarded: Number(outgoingForwarded),
       };
     }
 
     const base = {
       incomingToday: incoming,
       outgoingToday: outgoing,
+      outgoingForwardedToday: outgoingForwarded,
+      outgoingDirectToday: Number(outgoing) - Number(outgoingForwarded),
       internalToday: internal,
       missedToday: missed,
       callsToday: total,
@@ -13386,6 +13997,8 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
         outgoingToday: canonicalCounts.outgoing,
         internalToday: canonicalCounts.internal,
         missedToday:   canonicalCounts.missed,
+        outgoingForwardedToday: canonicalCounts.outgoingForwarded,
+        outgoingDirectToday: canonicalCounts.outgoing - canonicalCounts.outgoingForwarded,
       });
     }
 
@@ -13774,63 +14387,85 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   if (!user) return;
   const query = z.object({
     scope: z.enum(["GLOBAL", "TENANT"]).optional(),
-    windowMinutes: z.coerce.number().int().min(15).max(1440).optional()
+    windowMinutes: z.coerce.number().int().min(15).max(1440).optional(),
+    // Super-admin may pass tenantId to scope a tenant view (mirrors call-kpis behaviour).
+    tenantId: z.string().optional(),
   }).parse(req.query || {});
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   const scope = query.scope === "GLOBAL" && isSuperAdmin ? "GLOBAL" : "TENANT";
+
+  // Resolve the effective tenant: super-admin can pass an explicit tenantId param;
+  // regular users always use their own tenant from the JWT.
+  const scopeTenantId: string | null = isSuperAdmin
+    ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
+    : (user.tenantId ?? null);
+
   const windowMinutes = query.windowMinutes || 1440;
   const bucketMinutes = windowMinutes >= 720 ? 30 : windowMinutes >= 180 ? 15 : 5;
   const bucketCount = Math.max(1, Math.ceil(windowMinutes / bucketMinutes));
   const nowMs = Date.now();
   const sinceMs = nowMs - windowMinutes * 60 * 1000;
-  const cacheKey = `${scope}:${scope === "TENANT" ? user.tenantId : "all"}:${windowMinutes}`;
+
+  // Cache key includes the resolved tenantId so different scoped views don't bleed into each other.
+  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${windowMinutes}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
   if (cached && nowMs - cached.at < 120_000) return cached.payload;
 
-  const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
-  let dbSourceRows = 0;
-  let connectCdrSourceRows = 0;
-  let rawRowsSeen = 0;
-  let parsedRowsSeen = 0;
-  const dbCallRows = await db.callRecord.findMany({
-    where: scope === "GLOBAL" && isSuperAdmin
-      ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
-      : { tenantId: user.tenantId, startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } },
-    orderBy: { startedAt: "desc" },
-    take: 5000
-  });
-  for (const row of dbCallRows) {
-    const ts = row.startedAt.getTime();
-    if (!Number.isFinite(ts)) continue;
-    normalizedRows.push({
-      ts,
-      direction: normalizeCallDirection({ direction: row.direction })
-    });
-  }
-  dbSourceRows = normalizedRows.length;
+  const timeRange = { gte: new Date(sinceMs), lte: new Date(nowMs) };
+  // For global super-admin scope: no tenant filter. Otherwise filter to resolved tenant.
+  const tenantFilter = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
+    ? {}
+    : { tenantId: scopeTenantId };
 
-  // Second source: ConnectCdr (AMI / telephony ingest) — never VitalPBX REST cdr.list.
-  if (normalizedRows.length === 0) {
+  const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
+  let connectCdrSourceRows = 0;
+  let legacyCallRecordRows = 0;
+
+  try {
+    // ── Primary source: ConnectCdr ──────────────────────────────────────────
+    // ConnectCdr is the authoritative store for all PBX/AMI calls (populated by
+    // /internal/cdr-ingest). Query it unconditionally — never gate it behind
+    // CallRecord being empty, because CallRecord is a legacy supplemental table
+    // and may contain stale rows from earlier periods.
     const connectRows = await db.connectCdr.findMany({
-      where:
-        scope === "GLOBAL" && isSuperAdmin
-          ? { startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } }
-          : { tenantId: user.tenantId, startedAt: { gte: new Date(sinceMs), lte: new Date(nowMs) } },
+      where: { ...tenantFilter, startedAt: timeRange },
       select: { startedAt: true, direction: true },
       orderBy: { startedAt: "desc" },
-      take: 5000
+      take: 5000,
     });
     connectCdrSourceRows = connectRows.length;
     for (const row of connectRows) {
       const ts = row.startedAt.getTime();
       if (!Number.isFinite(ts)) continue;
-      normalizedRows.push({
-        ts,
-        direction: normalizeCallDirection({ direction: row.direction })
-      });
-      parsedRowsSeen += 1;
+      normalizedRows.push({ ts, direction: normalizeCallDirection({ direction: row.direction }) });
     }
+
+    // ── Supplemental legacy source: CallRecord ──────────────────────────────
+    // Only add CallRecord rows when ConnectCdr has no data, to cover any legacy
+    // calls that pre-date CDR ingest being fully wired up.
+    if (connectCdrSourceRows === 0) {
+      const legacyWhere = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
+        ? { startedAt: timeRange }
+        : { tenantId: scopeTenantId, startedAt: timeRange };
+      const legacyRows = await db.callRecord.findMany({
+        where: legacyWhere,
+        orderBy: { startedAt: "desc" },
+        take: 5000,
+      });
+      legacyCallRecordRows = legacyRows.length;
+      for (const row of legacyRows) {
+        const ts = row.startedAt.getTime();
+        if (!Number.isFinite(ts)) continue;
+        normalizedRows.push({ ts, direction: normalizeCallDirection({ direction: row.direction }) });
+      }
+    }
+  } catch (err: any) {
+    app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
+    // Return stale cache rather than a broken empty response.
+    const stale = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
+    if (stale) return { ...stale.payload, stale: true };
+    return reply.code(500).send({ error: "db_error" });
   }
 
   const points = Array.from({ length: bucketCount }).map((_, idx) => {
@@ -13839,7 +14474,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       label: `${String(bucketTs.getHours()).padStart(2, "0")}:${String(bucketTs.getMinutes()).padStart(2, "0")}`,
       incoming: 0,
       outgoing: 0,
-      internal: 0
+      internal: 0,
     };
   });
 
@@ -13865,26 +14500,29 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       incoming,
       outgoing,
       internal,
-      activeNow: normalizedRows.filter((row) => row.ts >= nowMs - 5 * 60 * 1000).length
+      activeNow: normalizedRows.filter((row) => row.ts >= nowMs - 5 * 60 * 1000).length,
     },
     points,
-    updatedAt: new Date(nowMs).toISOString()
+    updatedAt: new Date(nowMs).toISOString(),
   };
+
   app.log.info(
     {
       scope,
       role: user.role,
-      tenantId: user.tenantId,
-      dbSourceRows,
+      tenantId: scopeTenantId,
       connectCdrSourceRows,
-      rawRowsSeen,
-      parsedRowsSeen,
+      legacyCallRecordRows,
       rowCount: normalizedRows.length,
-      totals: payload.totals
+      totals: payload.totals,
     },
-    "dashboard_call_traffic"
+    "dashboard_call_traffic",
   );
-  DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs, payload });
+
+  // Don't cache empty results longer than 30 s — a 0-row result is likely transient
+  // (ingest lag, cold start) and should not persist in the cache for the full 2 min TTL.
+  const cacheTtlMs = normalizedRows.length === 0 ? 30_000 : 120_000;
+  DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs - (120_000 - cacheTtlMs), payload });
   return payload;
 });
 
@@ -16538,13 +17176,14 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
     const baseWhere = { ...tenantClause, startedAt: timeWhere };
 
     // Raw counts — as stored in DB
-    const [rawIncoming, rawOutgoing, rawInternal, rawUnknown, rawMissed, rawTotal] = await Promise.all([
+    const [rawIncoming, rawOutgoing, rawInternal, rawUnknown, rawMissed, rawTotal, rawOutgoingForwarded] = await Promise.all([
       db.connectCdr.count({ where: { ...baseWhere, direction: "incoming" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "internal" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "unknown" } }),
       db.connectCdr.count({ where: { ...baseWhere, direction: "incoming", disposition: "missed" } }),
       db.connectCdr.count({ where: baseWhere }),
+      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing", isForwarded: true } }),
     ]);
 
     // Canonical counts — direction-corrected via SQL CASE
@@ -16629,6 +17268,8 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
       raw: {
         incoming: rawIncoming,
         outgoing: rawOutgoing,
+        outgoingForwarded: rawOutgoingForwarded,
+        outgoingDirect: Number(rawOutgoing) - Number(rawOutgoingForwarded),
         internal: rawInternal,
         unknown: rawUnknown,
         missed: rawMissed,
