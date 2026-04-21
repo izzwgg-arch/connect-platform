@@ -1219,6 +1219,11 @@ async function runVoicemailSyncCycle(): Promise<void> {
 
     if (links.length === 0) return; // nothing wired up yet — silent no-op
 
+    let totalExts = 0;
+    let totalRecords = 0;
+    let totalUpserts = 0;
+    let totalErrors = 0;
+
     for (const link of links) {
       if (!link?.pbxInstance) continue;
       try {
@@ -1233,8 +1238,10 @@ async function runVoicemailSyncCycle(): Promise<void> {
         for (const ext of extensions) {
           const pbxExtId: string | undefined = ext.pbxLink?.pbxExtensionId;
           if (!pbxExtId) continue;
+          totalExts++;
           try {
             const records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
+            totalRecords += records.length;
             for (const rec of records) {
               const origtime = String(rec.origtime ?? rec.orig_time ?? "");
               if (!origtime || origtime === "0") continue;
@@ -1248,6 +1255,7 @@ async function runVoicemailSyncCycle(): Promise<void> {
               const listened = folder !== "inbox";
               const pbxMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? "");
 
+              totalUpserts++;
               await (db as any).voicemail.upsert({
                 where: { pbxMessageId: msgId },
                 create: {
@@ -1273,13 +1281,19 @@ async function runVoicemailSyncCycle(): Promise<void> {
               });
             }
           } catch (extErr: any) {
+            totalErrors++;
             console.warn(`voicemail sync ext ${ext.extNumber} (tenant ${link.tenantId}): ${extErr?.message}`);
           }
         }
       } catch (tenantErr: any) {
+        totalErrors++;
         console.error(`voicemail sync tenant ${link.tenantId}: ${tenantErr?.message}`);
       }
     }
+
+    console.log(
+      `[voicemail-sync] links=${links.length} extsChecked=${totalExts} records=${totalRecords} upserts=${totalUpserts} errors=${totalErrors}`,
+    );
   } finally {
     _voicemailSyncRunning = false;
   }

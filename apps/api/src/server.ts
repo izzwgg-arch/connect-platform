@@ -3189,6 +3189,10 @@ app.addHook("preHandler", async (req, reply) => {
     path === "/internal/mobile-ring-notify" || path.endsWith("/internal/mobile-ring-notify");
   const isInternalTelephonyPath =
     path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
+  // AMI MessageWaiting → telephony POSTs here to trigger immediate voicemail sync.
+  // Authenticated by the shared CDR_INGEST_SECRET header, not by user JWT.
+  const isInternalVoicemailNotifyPath =
+    path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
@@ -3196,6 +3200,7 @@ app.addHook("preHandler", async (req, reply) => {
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
     || isInternalTelephonyPath
+    || isInternalVoicemailNotifyPath
     || [
         "/health",
         "/auth/signup",
