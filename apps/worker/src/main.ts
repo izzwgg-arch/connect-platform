@@ -1205,10 +1205,19 @@ async function runVoicemailSyncCycle(): Promise<void> {
   if (_voicemailSyncRunning) return;
   _voicemailSyncRunning = true;
   try {
+    // We intentionally do NOT filter by status="LINKED" here. The admin tenant
+    // refresh cron sets status=ERROR when the /tenants.list sync fails (e.g.
+    // one bad endpoint), which should NOT stop voicemail polling. The underlying
+    // pbxInstance may still be perfectly usable. We trust isEnabled on the
+    // PbxInstance and let the per-request try/catch absorb individual failures.
+    // Matches the fallback strategy used by resolvePbxInstanceForCdr for
+    // recording playback in the API.
     const links: any[] = await db.tenantPbxLink.findMany({
-      where: { status: "LINKED" },
+      where: { pbxInstance: { isEnabled: true } } as any,
       include: { pbxInstance: true } as any,
     } as any);
+
+    if (links.length === 0) return; // nothing wired up yet — silent no-op
 
     for (const link of links) {
       if (!link?.pbxInstance) continue;
