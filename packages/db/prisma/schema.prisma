@@ -229,6 +229,7 @@ enum SbcMode {
 enum CallInviteStatus {
   PENDING
   ACCEPTED
+  HELD
   DECLINED
   EXPIRED
   CANCELED
@@ -326,6 +327,15 @@ model Tenant {
   pbxCdrCursor                  PbxCdrCursor?
   pbxJobs                       PbxJob[]
   ivrSchedules                  IvrSchedule[]
+  ivrRouteProfiles              IvrRouteProfile[]
+  ivrScheduleConfig             IvrScheduleConfig?
+  ivrOverrideState              IvrOverrideState?
+  ivrPublishRecords             IvrPublishRecord[]
+  mohProfiles                   MohProfile[]
+  mohScheduleConfig             MohScheduleConfig?
+  mohOverrideState              MohOverrideState?
+  mohPublishRecords             MohPublishRecord[]
+  mohLastPublishedState         MohLastPublishedState?
   pbxCallEvents                 PbxCallEvent[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
@@ -1170,12 +1180,39 @@ model ConnectCdr {
   dcontextsSeen Json?                     // string[] — all AMI Cdr dcontext values observed for this linkedId
   channelsSeen  Json?                     // string[] — accumulated channel names for direction evidence
   rawLegCount Int       @default(1)       // how many CDR notifications were received for this linkedId (channel-leg count)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  isForwarded     Boolean   @default(false)   // true for :out rows — inbound call automatically forwarded to an external number (find-me/follow-me)
+  recordingPath   String?                     // deterministic path "YYYY/MM/DD/<linkedId>.wav" computed at ingest; null when call is not recorded
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([tenantId, startedAt])           // per-tenant KPI queries
   @@index([startedAt])                     // global aggregate queries
   @@index([tenantId, direction, startedAt]) // typed per-tenant KPI queries
+}
+
+model Voicemail {
+  id             String    @id @default(cuid())
+  tenantId       String?                          // Connect Tenant.id; null = unresolved
+  pbxMessageId   String    @unique                // stable dedup key: "{pbxTenantId}|{ext}|{origtime}|{callerDigits10}"
+  extension      String                           // mailbox extension number (e.g. "104")
+  pbxExtensionId String?                          // VitalPBX resource ID for this extension
+  callerNumber   String?
+  callerName     String?
+  durationSec    Int       @default(0)
+  folder         String    @default("inbox")      // normalised: "inbox" | "old" | "urgent"
+  pbxFolder      String?                          // raw PBX folder (e.g. "INBOX", "Old", "Urgent")
+  pbxMsgNum      String?                          // PBX message file number (e.g. "0000001")
+  listened       Boolean   @default(false)
+  receivedAt     DateTime
+  readAt         DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@index([extension])
+  @@index([receivedAt])
+  @@index([tenantId, extension, receivedAt])
 }
 
 // Admin-configured rules that map DID or extension patterns to VitalPBX tenant slugs.
@@ -1368,6 +1405,57 @@ model VoiceDiagEvent {
   @@index([sessionId, createdAt])
 }
 
+// ─── Call Flight Recorder ────────────────────────────────────────────────────
+// One session = one call attempt on a mobile device.
+// Events are stored as a flat JSON array inside the session row for fast
+// queries; the indexed columns cover the common admin search paths.
+
+model CallFlightSession {
+  id             String   @id @default(cuid())
+  // Call identity – at least one of these will be present
+  inviteId       String?
+  pbxCallId      String?
+  linkedId       String?
+  // Auth / tenant context
+  tenantId       String?
+  userId         String?
+  deviceId       String?
+  extension      String?
+  fromNumber     String?
+  // Device context
+  platform       String   @default("ANDROID")
+  appVersion     String?
+  networkType    String?
+  // Call outcome
+  result         String?  // answered | missed | declined | failed | ended | unknown
+  uiMode         String?  // full_screen | floating | in_app
+  startedAt      DateTime
+  endedAt        DateTime?
+  uploadedAt     DateTime @default(now())
+  // Quick-access timing flags (ms)
+  answerDelayMs  Int?
+  sipConnectMs   Int?
+  pushToUiMs     Int?
+  // Boolean flags for fast filtering
+  hadRingtone    Boolean  @default(false)
+  hadBlankScreen Boolean  @default(false)
+  hadAppRestart  Boolean  @default(false)
+  hadFullScreen  Boolean  @default(false)
+  // Automatically detected problems (array of flag strings)
+  warningFlags   String[]
+  // All timeline events — full structured array stored as JSON
+  events         Json     @default("[]")
+  // Cached AI diagnosis (generated on demand, stored for reuse)
+  aiSummary      Json?
+
+  @@index([inviteId])
+  @@index([pbxCallId])
+  @@index([tenantId])
+  @@index([userId])
+  @@index([tenantId, uploadedAt])
+  @@index([result])
+}
+
 model CallInvite {
   id          String           @id @default(cuid())
   tenantId    String
@@ -1386,6 +1474,10 @@ model CallInvite {
   acceptedAt         DateTime?
   declinedAt         DateTime?
   canceledAt         DateTime?
+  heldAt             DateTime?
+  resumedAt          DateTime?
+  endedAt            DateTime?
+  stackOrder         Int?
   acceptedByDeviceId String?
   tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1397,4 +1489,237 @@ model CallInvite {
   @@index([tenantId, status, expiresAt])
   @@index([acceptedByDeviceId])
   @@index([userId, status, expiresAt])
+  @@index([userId, status, stackOrder])
+}
+
+// ─── IVR Routing — Option A ─────────────────────────────────────────────────
+// Connect manages routing control by owning route profiles, schedules, and
+// overrides.  Connect publishes small runtime state to Asterisk AstDB via AMI
+// DBPut.  VitalPBX custom contexts read those keys at call time — no HTTP calls
+// during live calls, no full PBX mutations per publish.
+
+/// A named routing destination for one mode (business hours, after hours, etc.).
+/// pbxDestination is a "context,exten,priority" string, e.g. "app-ivr,8000,1".
+model IvrRouteProfile {
+  id             String   @id @default(cuid())
+  tenantId       String
+  name           String                              // human label, e.g. "Main Business IVR"
+  type           String                              // "business_hours" | "after_hours" | "holiday" | "manual_override" | "emergency"
+  pbxDestination String                              // "context,exten,priority" written to AstDB
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String?                             // userId
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleDefault   IvrScheduleConfig[] @relation("ScheduleDefaultProfile")
+  scheduleAfterHrs  IvrScheduleConfig[] @relation("ScheduleAfterHoursProfile")
+  scheduleHoliday   IvrScheduleConfig[] @relation("ScheduleHolidayProfile")
+  overrideStates    IvrOverrideState[]
+
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, isActive])
+}
+
+/// Weekly business hours + holiday rules for a tenant.
+/// businessHoursRules JSON: [{ day: 0, open: "09:00", close: "17:00" }, ...]
+/// holidayDates JSON:       ["2026-12-25", "2026-01-01", ...]
+model IvrScheduleConfig {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  timezone           String   @default("America/New_York")
+  businessHoursRules Json     @default("[]")
+  holidayDates       Json     @default("[]")
+  defaultProfileId   String?                         // FK → IvrRouteProfile (business hours)
+  afterHoursProfileId String?                        // FK → IvrRouteProfile (after hours)
+  holidayProfileId   String?                         // FK → IvrRouteProfile (holidays)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultProfile  IvrRouteProfile? @relation("ScheduleDefaultProfile",   fields: [defaultProfileId],   references: [id], onDelete: SetNull)
+  afterHrsProfile IvrRouteProfile? @relation("ScheduleAfterHoursProfile", fields: [afterHoursProfileId], references: [id], onDelete: SetNull)
+  holidayProfile  IvrRouteProfile? @relation("ScheduleHolidayProfile",   fields: [holidayProfileId],   references: [id], onDelete: SetNull)
+}
+
+/// Current manual override state for a tenant (one row per tenant).
+/// isActive=true means calls are routed to the override profile right now.
+model IvrOverrideState {
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  isActive        Boolean   @default(false)
+  profileId       String?                             // FK → IvrRouteProfile
+  reason          String?
+  expiresAt       DateTime?                           // null = manual until explicitly cleared
+  activatedAt     DateTime?
+  activatedBy     String?                             // userId
+  deactivatedAt   DateTime?
+  deactivatedBy   String?                             // userId
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile IvrRouteProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+}
+
+/// Audit log for every AstDB publish (manual or automatic).
+/// keysWritten / previousKeys store [{family,key,value}] arrays for rollback.
+model IvrPublishRecord {
+  id          String   @id @default(cuid())
+  tenantId    String
+  publishedBy String                                  // userId or "system"
+  publishedAt DateTime @default(now())
+  mode        String                                  // "business" | "afterhours" | "holiday" | "override"
+  keysWritten Json                                    // [{family,key,value}]
+  previousKeys Json    @default("[]")                 // snapshot before publish (for rollback)
+  status      String   @default("pending")            // "pending" | "success" | "failed"
+  error       String?
+  isRollback  Boolean  @default(false)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, publishedAt])
+  @@index([status])
+}
+
+// ─── MOH Scheduling — Option A ───────────────────────────────────────────────
+// Connect manages which VitalPBX Music-On-Hold class is active per tenant.
+// Connect owns profiles (mappings to existing VitalPBX MOH class names),
+// schedules (weekly/holiday/one-time rules), and overrides.
+// Connect publishes the effective MOH class name to Asterisk AstDB via AMI DBPut.
+// VitalPBX/Asterisk reads `connect/t_{slug}/active_moh_class` at hold/queue time
+// via Set(CHANNEL(musicclass)=${DB(...)}) — no streaming from Connect, no HTTP
+// during live calls.
+
+/// Maps a human-readable profile name to a pre-existing VitalPBX MOH class.
+/// vitalPbxMohClassName must match an existing class in VitalPBX exactly.
+/// Unified Hold Profile — controls both the MOH class and optional hold announcement.
+/// Renamed conceptually to "Hold Profile" in the UI; table/model name kept for backward compat.
+model MohProfile {
+  id                       String   @id @default(cuid())
+  tenantId                 String
+  name                     String                       // human label, e.g. "Holiday Jazz"
+  type                     String                       // "default" | "business_hours" | "after_hours" | "holiday" | "campaign" | "emergency" | "custom"
+  vitalPbxMohClassName     String                       // exact VitalPBX MOH class name
+  holdAnnouncementEnabled  Boolean  @default(false)     // whether to play a periodic hold announcement
+  holdAnnouncementRef      String?                      // VitalPBX recording/file ref for the announcement
+  holdAnnouncementIntervalSec Int   @default(30)        // seconds between announcement playbacks
+  introAnnouncementRef     String?                      // optional one-time intro played on hold entry
+  isActive                 Boolean  @default(true)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  createdBy                String?
+  updatedBy                String?
+
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleDefault       MohScheduleConfig[] @relation("MohScheduleDefault")
+  scheduleAfterHours    MohScheduleConfig[] @relation("MohScheduleAfterHours")
+  scheduleHoliday       MohScheduleConfig[] @relation("MohScheduleHoliday")
+  scheduleRules         MohScheduleRule[]
+  overrideStates        MohOverrideState[]
+
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, isActive])
+}
+
+/// Per-tenant schedule configuration: timezone and default profile slots.
+/// Detailed time rules are in MohScheduleRule (one-to-many).
+model MohScheduleConfig {
+  id                  String   @id @default(cuid())
+  tenantId            String   @unique
+  timezone            String   @default("America/New_York")
+  defaultProfileId    String?                         // FK → MohProfile (fallback when no rule matches)
+  afterHoursProfileId String?                         // FK → MohProfile (when outside business hours)
+  holidayProfileId    String?                         // FK → MohProfile (on holiday dates)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultProfile  MohProfile?  @relation("MohScheduleDefault",    fields: [defaultProfileId],    references: [id], onDelete: SetNull)
+  afterHrsProfile MohProfile?  @relation("MohScheduleAfterHours", fields: [afterHoursProfileId], references: [id], onDelete: SetNull)
+  holidayProfile  MohProfile?  @relation("MohScheduleHoliday",    fields: [holidayProfileId],    references: [id], onDelete: SetNull)
+  rules           MohScheduleRule[]
+}
+
+/// Individual time-based rule within a schedule.
+/// ruleType: "weekly" | "holiday" | "one_time"
+/// For "weekly": weekday (0=Sun…6=Sat), startTime/endTime ("HH:MM")
+/// For "holiday": date ("YYYY-MM-DD") stored in startTime, endTime ignored
+/// For "one_time": startAt/endAt (UTC timestamps) override everything
+model MohScheduleRule {
+  id         String   @id @default(cuid())
+  scheduleId String
+  profileId  String
+  ruleType   String                                   // "weekly" | "holiday" | "one_time"
+  weekday    Int?                                     // 0=Sun…6=Sat — used for "weekly"
+  startTime  String?                                  // "HH:MM" for weekly / "YYYY-MM-DD" for holiday
+  endTime    String?                                  // "HH:MM" for weekly
+  startAt    DateTime?                                // UTC — for "one_time" overrides
+  endAt      DateTime?                                // UTC — for "one_time" overrides
+  priority   Int      @default(0)                     // higher = wins on overlap
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  schedule MohScheduleConfig @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  profile  MohProfile         @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([scheduleId, isActive])
+  @@index([ruleType])
+}
+
+/// Current manual override per tenant (upsert: one row per tenant).
+/// isActive=true means all schedules are bypassed and profileId is used directly.
+model MohOverrideState {
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  isActive        Boolean   @default(false)
+  profileId       String?
+  reason          String?
+  expiresAt       DateTime?
+  activatedAt     DateTime?
+  activatedBy     String?
+  deactivatedAt   DateTime?
+  deactivatedBy   String?
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile MohProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+}
+
+/// Audit log for every Hold Profile publish (manual, override, schedule, or rollback).
+/// keysWritten stores the full set of AstDB writes (all 6 keys) for this publish.
+/// previousKeysSnapshot stores the full AstDB state before this publish — used for rollback.
+model MohPublishRecord {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  publishedBy          String                         // userId or "system"
+  publishedAt          DateTime @default(now())
+  source               String                         // "schedule" | "manual" | "override" | "rollback" | "reconciliation"
+  previousMohClass     String?                        // display only — class name before this publish
+  newMohClass          String                         // VitalPBX MOH class name written
+  keysWritten          Json                           // [{family,key,value}] — all keys written this publish
+  previousKeysSnapshot Json     @default("[]")        // full AstDB key snapshot before this publish (for rollback)
+  status               String   @default("pending")   // "pending" | "success" | "failed"
+  error                String?
+  isRollback           Boolean  @default(false)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, publishedAt])
+  @@index([status])
+}
+
+/// Per-tenant last-known publish state — cached to avoid repeated DB queries from the worker.
+/// One row per tenant; upserted on every successful publish.
+model MohLastPublishedState {
+  tenantId    String   @id
+  mohClass    String
+  holdMode    String
+  publishedAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
