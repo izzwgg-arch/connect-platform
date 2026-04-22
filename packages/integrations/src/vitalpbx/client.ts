@@ -405,8 +405,24 @@ export class VitalPbxClient {
     return unwrapData(await this.callEndpoint<any>("extensions.cdrSummary", { tenant: tenantId, pathParams: { extensionId } }));
   }
   async getExtensionVoicemailRecords(extensionId: string, tenantId?: string): Promise<any[]> {
-    const out = await this.callEndpoint<any[]>("extensions.voicemailRecords", { tenant: tenantId, pathParams: { extensionId } });
-    return Array.isArray(out.data) ? out.data : [];
+    const out = await this.callEndpoint<any>("extensions.voicemailRecords", { tenant: tenantId, pathParams: { extensionId } });
+    const data = (out as any)?.data;
+    // VitalPBX returns one of two shapes:
+    //   1. data: [ {record}, ... ]                 (older / flat)
+    //   2. data: { INBOX: [...], Old: [...], Urgent: [...] }   (current)
+    // We normalise to a flat array and tag each record with its folder.
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === "object") {
+      const flat: any[] = [];
+      for (const [folderName, recs] of Object.entries(data)) {
+        if (!Array.isArray(recs)) continue;
+        for (const rec of recs) {
+          flat.push({ ...rec, folder: rec?.folder ?? folderName });
+        }
+      }
+      return flat;
+    }
+    return [];
   }
   async createExtension(_input: Record<string, unknown>, _tenantId?: string): Promise<any> {
     throw makeVitalPbxError("VitalPBX public docs do not expose extension create endpoint", "NOT_SUPPORTED", 400, false);

@@ -1201,7 +1201,8 @@ model Voicemail {
   durationSec    Int       @default(0)
   folder         String    @default("inbox")      // normalised: "inbox" | "old" | "urgent"
   pbxFolder      String?                          // raw PBX folder (e.g. "INBOX", "Old", "Urgent")
-  pbxMsgNum      String?                          // PBX message file number (e.g. "0000001")
+  pbxMsgNum      String?                          // PBX message file basename (e.g. "msg0007")
+  pbxRecfile     String?                          // VitalPBX-relative playback path (e.g. "/static/<tok>/voicemail/<tenant>/<ext>/INBOX/msg0007.wav") — token-authenticated, no app-key needed
   listened       Boolean   @default(false)
   receivedAt     DateTime
   readAt         DateTime?

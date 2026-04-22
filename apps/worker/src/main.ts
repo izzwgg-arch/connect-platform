@@ -1243,17 +1243,35 @@ async function runVoicemailSyncCycle(): Promise<void> {
             const records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
             totalRecords += records.length;
             for (const rec of records) {
-              const origtime = String(rec.origtime ?? rec.orig_time ?? "");
+              // VitalPBX payload uses { date, clid, recfile, filename, msg_id }.
+              // Older Asterisk-voicemail dumps used { origtime, callerid, msg_num }.
+              // Accept both so future API changes don't silently drop records.
+              const origtime = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
               if (!origtime || origtime === "0") continue;
-              const rawCallerid = String(rec.callerid ?? rec.caller_id ?? "");
+              const rawCallerid = String(rec.clid ?? rec.callerid ?? rec.caller_id ?? "");
               const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
               const callerName = vmExtractCallerName(rawCallerid) || null;
               const callerDigits = (callerNumber ?? "").slice(-10);
-              const msgId = `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`;
               const rawFolder = String(rec.folder ?? "INBOX");
               const folder = vmNormalizeFolder(rawFolder);
               const listened = folder !== "inbox";
-              const pbxMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? "");
+              // Prefer VitalPBX's own stable msg_id (e.g. "1761219702-000000b2") when
+              // present; fall back to a deterministic composite so legacy responses
+              // still dedupe reliably.
+              const msgId = String(
+                rec.msg_id
+                  ?? `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`,
+              );
+              // pbxMsgNum is the bare message name ("msg0000") used by the
+              // /api/v2/voicemail/:mailbox/:folder/:messageName playback endpoint.
+              // Derive from `filename` (msg0000.txt) or `recfile` (.../msg0000.wav).
+              const filename = String(rec.filename ?? "");
+              const recfile = String(rec.recfile ?? "");
+              const fromFilename = filename.replace(/\.[^.]+$/, "");
+              const fromRecfile = recfile ? (recfile.split("/").pop() ?? "").replace(/\.[^.]+$/, "") : "";
+              const pbxMsgNum = String(
+                rec.msg_num ?? rec.msgnum ?? rec.id ?? fromFilename ?? fromRecfile ?? "",
+              );
 
               totalUpserts++;
               await (db as any).voicemail.upsert({
@@ -1269,6 +1287,7 @@ async function runVoicemailSyncCycle(): Promise<void> {
                   folder,
                   pbxFolder: rawFolder,
                   pbxMsgNum,
+                  pbxRecfile: recfile || null,
                   listened,
                   receivedAt: new Date(parseInt(origtime, 10) * 1000),
                 },
@@ -1276,6 +1295,9 @@ async function runVoicemailSyncCycle(): Promise<void> {
                   folder,
                   pbxFolder: rawFolder,
                   pbxMsgNum,
+                  // Only overwrite recfile when PBX actually returned one — avoids
+                  // nulling out a good value if a future response trims the field.
+                  ...(recfile ? { pbxRecfile: recfile } : {}),
                   listened,
                 },
               });

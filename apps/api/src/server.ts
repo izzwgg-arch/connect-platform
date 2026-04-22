@@ -11058,27 +11058,37 @@ app.delete("/voice/voicemail/:id", async (req, reply) => {
 
 // ── Audio helper — fetches voicemail audio from PBX and streams to client ────
 async function streamVoicemailAudio(
-  vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; folder: string; readAt: Date | null },
+  vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; readAt: Date | null },
   reply: any,
   asAttachment: boolean,
 ): Promise<void> {
   if (!vm.tenantId) { reply.code(503).send({ error: "audio_unavailable" }); return; }
-  const link = await db.tenantPbxLink.findUnique({
-    where:   { tenantId: vm.tenantId },
+  const link = await db.tenantPbxLink.findFirst({
+    where:   { tenantId: vm.tenantId, pbxInstance: { isEnabled: true } } as any,
     include: { pbxInstance: true },
   });
   if (!link?.pbxInstance) { reply.code(503).send({ error: "pbx_not_linked" }); return; }
 
   const auth    = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-  const folder  = vm.pbxFolder ?? vm.folder.toUpperCase();
-  const msgNum  = vm.pbxMsgNum ?? "0000001";
+  const baseUrl = link.pbxInstance.baseUrl.replace(/\/+$/, "");
   const mailbox = vm.extension;
 
-  // VitalPBX authenticates every REST call with the "app-key" header (same as
-  // call-recording playback). Bearer tokens are NOT accepted by VitalPBX.
-  const audioUrl = `${link.pbxInstance.baseUrl.replace(/\/+$/, "")}/api/v2/voicemail/${encodeURIComponent(mailbox)}/${encodeURIComponent(folder)}/${encodeURIComponent(msgNum)}`;
+  // Preferred path: VitalPBX returns a ready-to-fetch /static/<token>/... URL in
+  // voicemail_records. It embeds its own auth token so we can stream it directly
+  // without app-key/Tenant headers. `/api/v2/voicemail/:mailbox/:folder/:msg`
+  // was previously attempted but returns "501 Invalid Operation" on this PBX.
+  const recfile = vm.pbxRecfile && vm.pbxRecfile.startsWith("/") ? vm.pbxRecfile : null;
+  const audioUrl = recfile ? `${baseUrl}${recfile}` : null;
+
+  if (!audioUrl) {
+    reply.code(503).send({ error: "audio_unavailable", reason: "no_recfile" });
+    return;
+  }
+
   const pbxResp = await fetch(audioUrl, {
     headers: {
+      // recfile tokens are self-authenticating, but send app-key too in case the
+      // PBX version enforces header auth on /static for some tenants.
       "app-key": auth.token,
       Accept: "audio/*, */*",
     },
@@ -11098,7 +11108,6 @@ async function streamVoicemailAudio(
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${ext}"`);
   }
 
-  // Mark as listened on first play
   if (!vm.readAt) {
     await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
   }
@@ -12431,15 +12440,25 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
 
     let upserted = 0;
     for (const rec of records) {
-      const origtime = String(rec.origtime ?? rec.orig_time ?? "");
+      // VitalPBX: { date, clid, recfile, filename, msg_id }. Legacy: { origtime, callerid, msg_num }.
+      const origtime = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
       if (!origtime || origtime === "0") continue;
-      const rawCallerid  = String(rec.callerid ?? rec.caller_id ?? "");
+      const rawCallerid  = String(rec.clid ?? rec.callerid ?? rec.caller_id ?? "");
       const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
       const callerDigits = (callerNumber ?? "").slice(-10);
-      const msgId        = `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`;
+      const msgId        = String(
+        rec.msg_id
+          ?? `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`,
+      );
       const rawFolder    = String(rec.folder ?? "INBOX");
       const folder       = vmNormalizeFolder(rawFolder);
-      const pbxMsgNum    = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? "");
+      const filename     = String(rec.filename ?? "");
+      const recfile      = String(rec.recfile ?? "");
+      const fromFilename = filename.replace(/\.[^.]+$/, "");
+      const fromRecfile  = recfile ? (recfile.split("/").pop() ?? "").replace(/\.[^.]+$/, "") : "";
+      const pbxMsgNum    = String(
+        rec.msg_num ?? rec.msgnum ?? rec.id ?? fromFilename ?? fromRecfile ?? "",
+      );
 
       await db.voicemail.upsert({
         where:  { pbxMessageId: msgId },
@@ -12454,10 +12473,17 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           folder,
           pbxFolder:     rawFolder,
           pbxMsgNum,
+          pbxRecfile:    recfile || null,
           listened:      folder !== "inbox",
           receivedAt:    new Date(parseInt(origtime, 10) * 1000),
         },
-        update: { folder, pbxFolder: rawFolder, pbxMsgNum, listened: folder !== "inbox" },
+        update: {
+          folder,
+          pbxFolder: rawFolder,
+          pbxMsgNum,
+          ...(recfile ? { pbxRecfile: recfile } : {}),
+          listened: folder !== "inbox",
+        },
       });
       upserted++;
     }
