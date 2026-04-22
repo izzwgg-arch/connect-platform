@@ -15,8 +15,12 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Notifications from 'expo-notifications';
 import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { logCallFlow } from '../debug/callFlowDebug';
+import { flightBeginCall, flightRecord } from '../diagnostics/CallFlightRecorder';
 
 export const BACKGROUND_NOTIFICATION_TASK = 'CONNECT_BACKGROUND_NOTIFICATION';
 
@@ -113,9 +117,11 @@ function coerceDataMap(raw: Record<string, any> | undefined): Record<string, any
 
 TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
   console.log(`${LOG} BG handler fired (task=${BACKGROUND_NOTIFICATION_TASK})`);
+  logCallFlow('BACKGROUND_TASK_FIRED', { extra: { task: BACKGROUND_NOTIFICATION_TASK } });
 
   if (error) {
     console.warn(`${LOG} BG handler error from TaskManager:`, error.message);
+    logCallFlow('BACKGROUND_TASK_ERROR', { extra: { message: error.message } });
     return;
   }
 
@@ -135,7 +141,40 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
     );
 
     if (!payload) {
-      console.warn(`${LOG} push received but payload is null/empty after normalization`);
+      // FCM data wasn't accessible from the Expo notification object (common when
+      // IncomingCallFirebaseService.java handles the push first). Fall back to the
+      // native cache file the Java service writes synchronously in onMessageReceived.
+      // This avoids a 2+ second getPendingInvites() network call later.
+      console.warn(`${LOG} push received but payload is null/empty after normalization — trying native cache`);
+      const nativeFallback = await readNativeCallCache();
+      if (nativeFallback && nativeFallback.inviteId && nativeFallback.type === 'INCOMING_CALL') {
+        console.log(`${LOG} native cache recovered payload inviteId=${nativeFallback.inviteId}`);
+        // Write to AsyncStorage so resolveInviteForAction finds it instantly (no API call).
+        await AsyncStorage.setItem(
+          PENDING_CALL_STORAGE_KEY,
+          JSON.stringify({
+            inviteId: nativeFallback.inviteId,
+            callId: nativeFallback.callId || nativeFallback.inviteId,
+            pbxCallId: nativeFallback.pbxCallId || null,
+            fromNumber: nativeFallback.fromNumber || null,
+            fromDisplay: nativeFallback.fromDisplay || null,
+            toExtension: nativeFallback.toExtension || null,
+            tenantId: nativeFallback.tenantId || null,
+            pbxSipUsername: nativeFallback.pbxSipUsername || null,
+            sipCallTarget: nativeFallback.sipCallTarget || null,
+            timestamp: nativeFallback.timestamp || new Date().toISOString(),
+            _savedAt: Date.now(),
+            _source: 'native_cache_fallback',
+          }),
+        ).catch(() => {});
+        logCallFlow('BACKGROUND_TASK_PAYLOAD_RECOVERED_FROM_CACHE', {
+          inviteId: String(nativeFallback.inviteId),
+          pbxCallId: nativeFallback.pbxCallId ? String(nativeFallback.pbxCallId) : null,
+          extension: nativeFallback.toExtension ? String(nativeFallback.toExtension) : null,
+        });
+      } else {
+        console.warn(`${LOG} native cache also empty/null — cannot recover invite`);
+      }
       return;
     }
 
@@ -162,13 +201,40 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       return;
     }
 
+    logCallFlow('BACKGROUND_INCOMING_CALL_PAYLOAD_OK', {
+      inviteId,
+      pbxCallId: payload.pbxCallId ? String(payload.pbxCallId) : null,
+      extension: payload.toExtension ? String(payload.toExtension) : null,
+      extra: { nativeSkippedPath: Platform.OS === 'android' },
+    });
+
     const now = Date.now();
 
+    // Flight recorder: begin a call session from background push.
+    // _active is set synchronously so PUSH_RECEIVED_BG is never lost.
+    void flightBeginCall({
+      inviteId,
+      pbxCallId: payload.pbxCallId ? String(payload.pbxCallId) : null,
+      fromNumber: payload.fromNumber ? String(payload.fromNumber) : null,
+      extension: payload.toExtension ? String(payload.toExtension) : null,
+    });
+    flightRecord('PUSH', 'PUSH_RECEIVED_BG', {
+      inviteId,
+      pbxCallId: payload.pbxCallId ? String(payload.pbxCallId) : null,
+      payload: {
+        receivedAt: now,
+        toExtension: payload.toExtension || null,
+        fromNumber: payload.fromNumber || null,
+        pushSource: 'expo_fcm',
+        appState: 'background',
+      },
+    });
+
     // ── Check if the native Java handler already showed the call UI ───────
-    // IncomingCallFirebaseService.java writes pending_call_native.json and
-    // calls TelecomManager.addNewIncomingCall() before JS runs. If that file
-    // exists and is fresh we skip displayIncomingCall to avoid a duplicate
-    // call screen, but still write to AsyncStorage so SIP can connect.
+    // IncomingCallFirebaseService.java writes pending_call_native.json before
+    // JS runs. If it already presented the full-screen incoming UI we skip
+    // RNCallKeep to avoid a duplicate call screen, but still write to
+    // AsyncStorage so SIP can connect.
     const nativeCache = await readNativeCallCache();
     const nativeFired =
       nativeCache?._nativeCallAdded === true &&
@@ -177,7 +243,12 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       now - nativeCache._storedAt < 60_000;
 
     if (nativeFired) {
-      console.log(`${LOG} native Java handler already called TelecomManager for ${inviteId} — skipping displayIncomingCall`);
+      console.log(`${LOG} native Java handler already presented full-screen UI for ${inviteId} — skipping displayIncomingCall`);
+      flightRecord('NATIVE', 'NATIVE_INCOMING_HANDLER_ENTERED', {
+        inviteId,
+        pbxCallId: payload.pbxCallId ? String(payload.pbxCallId) : null,
+        payload: { nativeFired: true, nativeStoredAt: nativeCache?._storedAt },
+      });
     }
 
     // ── Duplicate guard (JS-only path) ────────────────────────────────────
@@ -231,6 +302,18 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       return;
     }
 
+    // Android incoming UI is owned by IncomingCallFirebaseService + the in-app
+    // screen. CallKeep.displayIncomingCall duplicated a legacy "floating" call
+    // that did not dismiss reliably when answering from the real notification.
+    if (Platform.OS === 'android') {
+      console.log(
+        `${LOG} Android: skipping CallKeep.displayIncomingCall (native/in-app incoming UI only) uuid=`,
+        inviteId,
+      );
+      await deleteNativeCallCache().catch(() => undefined);
+      return;
+    }
+
     console.log(`${LOG} CallKeep.displayIncomingCall begin uuid=`, inviteId);
 
     try {
@@ -273,8 +356,13 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       await AsyncStorage.setItem(BG_WAKE_EVENTS_KEY, JSON.stringify(wakeEvents2.slice(-10))).catch(() => {});
 
       console.log(`${LOG} CallKeep.displayIncomingCall done (native incoming UI should be visible)`);
+      logCallFlow('CALLKEEP_DISPLAY_DONE', { inviteId, extra: { platform: 'ios', source: 'background_task' } });
     } catch (callkeepErr) {
       console.error(`${LOG} CallKeep.displayIncomingCall FAILED:`, callkeepErr);
+      logCallFlow('CALLKEEP_DISPLAY_FAILED', {
+        inviteId,
+        extra: { message: callkeepErr instanceof Error ? callkeepErr.message : String(callkeepErr) },
+      });
     }
   } catch (e) {
     console.error(`${LOG} BG handler unhandled exception:`, e);

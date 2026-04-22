@@ -4,6 +4,27 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
+/** Hermes is invoked as `cmd /c <path> â€¦`; paths with spaces break. Use 8.3 short path on Windows. */
+static String windowsShortExePath(File exeOrBinary) {
+    if (!org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        return exeOrBinary.absolutePath
+    }
+    File target = exeOrBinary
+    if (!target.exists()) {
+        def withExe = new File(exeOrBinary.parentFile, exeOrBinary.name + ".exe")
+        if (withExe.exists()) target = withExe
+    }
+    if (!target.exists()) return exeOrBinary.absolutePath
+    try {
+        def proc = ["cmd", "/c", "for %I in (\"" + target.absolutePath + "\") do @echo %~sI"].execute()
+        proc.waitFor()
+        def out = proc.in.text.trim().readLines().find { it.length() > 0 && !it.startsWith("@") }
+        return (out != null && out.length() > 0) ? out : target.absolutePath
+    } catch (Throwable ignored) {
+        return target.absolutePath
+    }
+}
+
 static def versionToNumber(major, minor, patch) {
   return patch * 100 + minor * 10000 + major * 1000000
 }
@@ -31,8 +52,12 @@ def rnVersion = getRNVersion()
  */
 react {
     entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
-    reactNativeDir = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
-    hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/hermesc"
+    def reactNativeHome = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
+    reactNativeDir = reactNativeHome
+    def hermesFile = new File(reactNativeHome, "sdks/hermesc/win64-bin/hermesc")
+    hermesCommand = org.gradle.internal.os.OperatingSystem.current().isWindows()
+        ? windowsShortExePath(hermesFile)
+        : (reactNativeHome.absolutePath + "/sdks/hermesc/%OS-BIN%/hermesc")
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
 
     // Use Expo CLI to bundle the app, this ensures the Metro config
@@ -114,8 +139,11 @@ android {
         applicationId 'com.connectcommunications.mobile'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        // Ship script sets SHIP_VERSION_CODE / SHIP_BUILD_ID so adb install -r always picks up new APKs.
+        def shipVc = System.getenv("SHIP_VERSION_CODE")
+        def shipId = System.getenv("SHIP_BUILD_ID")
+        versionCode ((shipVc != null && !shipVc.isEmpty()) ? shipVc.toInteger() : 1)
+        versionName ((shipId != null && !shipId.isEmpty()) ? ("1.0.0+" + shipId) : "1.0.0")
     }
     signingConfigs {
         debug {
@@ -206,3 +234,4 @@ if (rnVersion < versionToNumber(0, 75, 0)) {
 }
 
 apply plugin: 'com.google.gms.google-services'
+

@@ -121,7 +121,37 @@ export type SipPhoneActions = {
   transfer: (target: string) => void;
   dialpadInput: string;
   setDialpadInput: React.Dispatch<React.SetStateAction<string>>;
+  // ── Multi-call (additive — single-call accessors above still work) ───────
+  /** All SIP sessions on this UA: active, held, ringing. */
+  sessions: MultiCallSession[];
+  /** Active session id (same as the one driving callState). */
+  activeSessionId: string | null;
+  /** Held session ids in LIFO order — index 0 resumes first on hangup. */
+  heldSessionIds: string[];
+  /** Ringing inbound sessions (call-waiting) — empty when idle. */
+  ringingSessionIds: string[];
+  /** Answer a specific ringing session (puts any currently active on hold). */
+  answerSession: (id: string) => void;
+  /** Hold a specific session. */
+  holdSession: (id: string) => void;
+  /** Resume a specific held session (puts the currently active session on hold). */
+  resumeSession: (id: string) => void;
+  /** Hang up a specific session (active or held) without touching the others. */
+  hangupSession: (id: string) => void;
+  /** Atomic swap: put active on hold, resume the given held session. */
+  swapToSession: (id: string) => void;
 };
+
+/** Multi-call session snapshot for UI. */
+export interface MultiCallSession {
+  id: string;
+  remoteParty: string;
+  direction: "inbound" | "outbound";
+  state: "ringing" | "dialing" | "connected" | "held" | "ending";
+  onHold: boolean;
+  isActive: boolean;
+  startedAt: number;
+}
 
 type VoiceExtension = {
   extensionNumber: string;
@@ -350,6 +380,123 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   const uaRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sessionRef = useRef<any>(null);
+  // ── Multi-call bookkeeping ──────────────────────────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessionsByIdRef = useRef<Map<string, any>>(new Map());
+  const sessionMetaRef = useRef<Map<string, MultiCallSession>>(new Map());
+  const [sessions, setSessions] = useState<MultiCallSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [heldSessionIds, setHeldSessionIds] = useState<string[]>([]);
+  const [ringingSessionIds, setRingingSessionIds] = useState<string[]>([]);
+  /** Unique id counter for sessions that JsSIP doesn't expose a stable id on. */
+  const sessionIdCounterRef = useRef<number>(0);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const MAX_CONCURRENT_SESSIONS_WEB = 5;
+
+  function getOrAssignSessionId(s: unknown): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sess = s as any;
+    if (sess.__mcId && typeof sess.__mcId === "string") return sess.__mcId;
+    const id =
+      (typeof sess.id === "string" && sess.id) ||
+      `mc-${++sessionIdCounterRef.current}-${Date.now()}`;
+    sess.__mcId = id;
+    return id;
+  }
+
+  function publishMultiCallState() {
+    const all = Array.from(sessionMetaRef.current.values()).sort(
+      (a, b) => a.startedAt - b.startedAt,
+    );
+    setSessions(all);
+    setHeldSessionIds(all.filter((x) => x.onHold).map((x) => x.id));
+    setRingingSessionIds(
+      all.filter((x) => x.state === "ringing" && x.direction === "inbound").map((x) => x.id),
+    );
+    const activeId = all.find((x) => x.isActive)?.id ?? null;
+    activeSessionIdRef.current = activeId;
+    setActiveSessionId(activeId);
+    console.log(
+      `[MULTICALL_STATE] web active=${activeId} held=[${all
+        .filter((x) => x.onHold)
+        .map((x) => x.id)
+        .join(",")}] ringing=[${all
+        .filter((x) => x.state === "ringing")
+        .map((x) => x.id)
+        .join(",")}]`,
+    );
+  }
+
+  function registerSessionMeta(
+    id: string,
+    patch: Partial<MultiCallSession> & Pick<MultiCallSession, "remoteParty" | "direction">,
+  ) {
+    const existing = sessionMetaRef.current.get(id);
+    const meta: MultiCallSession = {
+      id,
+      remoteParty: patch.remoteParty,
+      direction: patch.direction,
+      state: patch.state ?? existing?.state ?? "ringing",
+      onHold: patch.onHold ?? existing?.onHold ?? false,
+      isActive: patch.isActive ?? existing?.isActive ?? false,
+      startedAt: existing?.startedAt ?? Date.now(),
+    };
+    sessionMetaRef.current.set(id, meta);
+    publishMultiCallState();
+  }
+
+  function patchSessionMeta(id: string, patch: Partial<MultiCallSession>) {
+    const existing = sessionMetaRef.current.get(id);
+    if (!existing) return;
+    sessionMetaRef.current.set(id, { ...existing, ...patch });
+    publishMultiCallState();
+  }
+
+  function removeSessionMeta(id: string) {
+    const removed = sessionMetaRef.current.get(id);
+    sessionMetaRef.current.delete(id);
+    sessionsByIdRef.current.delete(id);
+
+    if (removed?.isActive) {
+      // LIFO restore: most-recently-held call resumes.
+      const held = Array.from(sessionMetaRef.current.values())
+        .filter((s) => s.onHold)
+        .sort((a, b) => b.startedAt - a.startedAt);
+      const next = held[0];
+      if (next) {
+        console.log(`[MULTICALL_RESUME] web restoring_next_held call=${next.id}`);
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define
+        internalUnhold(next.id);
+      }
+    }
+    publishMultiCallState();
+  }
+
+  /** Issue SIP unhold on the given session and mark it active. */
+  function internalUnhold(id: string) {
+    const s = sessionsByIdRef.current.get(id);
+    if (!s) return;
+    try {
+      s.unhold();
+    } catch (err) {
+      console.warn("[MULTICALL_RESUME] unhold threw:", err);
+    }
+    sessionRef.current = s;
+    patchSessionMeta(id, { onHold: false, isActive: true, state: "connected" });
+    // Other active sessions stay held unless user holds them explicitly.
+  }
+
+  /** Issue SIP hold on the given session and mark it held. */
+  function internalHold(id: string) {
+    const s = sessionsByIdRef.current.get(id);
+    if (!s) return;
+    try {
+      s.hold();
+    } catch (err) {
+      console.warn("[MULTICALL_HOLD] hold threw:", err);
+    }
+    patchSessionMeta(id, { onHold: true, isActive: false, state: "held" });
+  }
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const wiredPeerConnectionsRef = useRef<WeakSet<RTCPeerConnection>>(new WeakSet());
   const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -784,17 +931,61 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
               });
             }
 
+            // Multi-call accounting: track every session the UA knows about,
+            // regardless of originator. The legacy single-call accessors below
+            // only follow the current "foreground" call via sessionRef.
+            const mcId = getOrAssignSessionId(data.session);
+            const activeCount = sessionsByIdRef.current.size;
+            if (activeCount >= MAX_CONCURRENT_SESSIONS_WEB && data.originator === "remote") {
+              console.warn(
+                `[MULTICALL] web max_concurrent_sessions_reached=${activeCount} rejecting inbound ${mcId}`,
+              );
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (data.session as any).terminate({ status_code: 486, reason_phrase: "Busy Here" });
+              } catch { /* ignore */ }
+              return;
+            }
+            sessionsByIdRef.current.set(mcId, data.session);
+
             if (data.originator === "remote") {
-              callDirectionRef.current = "inbound";
-              setCallDirection("inbound");
-              setOnHold(false);
               const party = data.request.from.display_name || data.request.from.uri.user;
-              bindSession(data.session, party);
-              setCallState("ringing");
-              setRemoteParty(party);
-              console.log("[SIP] INCOMING_CALL from:", party);
-              // Inbound: play ringtone
-              startRingtone();
+              console.log(`[MULTICALL] web incoming call=${mcId} from=${party} activeBefore=${activeSessionIdRef.current ?? "none"}`);
+              registerSessionMeta(mcId, {
+                remoteParty: party,
+                direction: "inbound",
+                state: "ringing",
+                onHold: false,
+                isActive: false,
+              });
+
+              if (!sessionRef.current || sessionRef.current.isEnded?.()) {
+                // Idle path — let the existing single-call flow drive the UI.
+                callDirectionRef.current = "inbound";
+                setCallDirection("inbound");
+                setOnHold(false);
+                bindSession(data.session, party);
+                setCallState("ringing");
+                setRemoteParty(party);
+                console.log("[SIP] INCOMING_CALL from:", party);
+                startRingtone();
+              } else {
+                // Call-waiting path — do NOT hijack the primary callState UI.
+                // Bind lightweight per-session listeners so multi-call meta is
+                // accurate; the softphone's MultiCallPanel renders the banner.
+                bindSideSession(data.session, party, mcId);
+                console.log(`[MULTICALL] web call_waiting incoming=${mcId} while active=${activeSessionIdRef.current}`);
+                startRingtone();
+              }
+            } else {
+              // Outbound — bindSession sets the meta once the session binds.
+              registerSessionMeta(mcId, {
+                remoteParty: String(data.session.remote_identity?.uri?.user ?? ""),
+                direction: "outbound",
+                state: "dialing",
+                onHold: false,
+                isActive: true,
+              });
             }
           },
         );
@@ -1033,9 +1224,12 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   function bindSession(session: any, party: string) {
     sessionRef.current = session;
     setRemoteParty(party);
+    const mcId = getOrAssignSessionId(session);
+    patchSessionMeta(mcId, { remoteParty: party, isActive: true });
 
     session.on("progress", () => {
       setCallState("ringing");
+      patchSessionMeta(mcId, { state: "ringing" });
       // Outbound: play US ringback (440+480 Hz, 2s on / 4s off)
       if (callDirectionRef.current === "outbound") startRingback();
     });
@@ -1044,6 +1238,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
       console.log("[SIP] CALL_ACCEPTED");
       setCallState("connected");
+      patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
       if (session.connection) syncReceiversToAudio(session.connection);
     });
     session.on("confirmed", () => {
@@ -1051,7 +1246,16 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
       console.log("[SIP] CALL_ACCEPTED (confirmed)");
       setCallState("connected");
+      patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
       if (session.connection) syncReceiversToAudio(session.connection);
+    });
+    session.on("hold", () => {
+      console.log(`[MULTICALL_HOLD] web session=${mcId} hold_event`);
+      patchSessionMeta(mcId, { onHold: true, state: "held", isActive: false });
+    });
+    session.on("unhold", () => {
+      console.log(`[MULTICALL_RESUME] web session=${mcId} unhold_event`);
+      patchSessionMeta(mcId, { onHold: false, state: "connected", isActive: true });
     });
 
     session.on("ended", () => {
@@ -1060,6 +1264,9 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       // Cancel stale-hangup timer — call ended normally via SIP, no need for force cleanup
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       submitCallQualityReport("normal");
+      // Multi-call: drop from map. If this was the active call and other
+      // sessions are held, removeSessionMeta will auto-unhold the next LIFO.
+      removeSessionMeta(mcId);
       sessionRef.current = null;
       setOnHold(false);
       setCallDirection(null);
@@ -1088,6 +1295,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       // Cancel stale-hangup timer — call failed cleanly at SIP level
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       submitCallQualityReport(e.cause || "failed");
+      removeSessionMeta(mcId);
       sessionRef.current = null;
       setOnHold(false);
       setCallDirection(null);
@@ -1116,6 +1324,39 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     if (session.connection) syncReceiversToAudio(session.connection);
   }
 
+  /**
+   * Lightweight session binding for a call-waiting inbound session while
+   * another session is already active. Only updates multi-call meta — does
+   * NOT touch the primary callState / remoteParty / sessionRef.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function bindSideSession(session: any, party: string, mcId: string) {
+    session.on("progress", () => {
+      patchSessionMeta(mcId, { state: "ringing", remoteParty: party });
+    });
+    session.on("accepted", () => {
+      // Answered via answerSession — promotion to active is handled there.
+      patchSessionMeta(mcId, { state: "connected" });
+    });
+    session.on("confirmed", () => {
+      patchSessionMeta(mcId, { state: "connected" });
+    });
+    session.on("hold", () => {
+      patchSessionMeta(mcId, { onHold: true, state: "held", isActive: false });
+    });
+    session.on("unhold", () => {
+      patchSessionMeta(mcId, { onHold: false, state: "connected", isActive: true });
+    });
+    session.on("ended", () => {
+      console.log(`[MULTICALL] web side_session_ended=${mcId}`);
+      removeSessionMeta(mcId);
+    });
+    session.on("failed", () => {
+      console.log(`[MULTICALL] web side_session_failed=${mcId}`);
+      removeSessionMeta(mcId);
+    });
+  }
+
   // ── Actions ─────────────────────────────────────────────────────────────
 
   const dial = useCallback(
@@ -1128,6 +1369,18 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       if (!domain) return;
       const normalised = target.trim();
       if (!normalised) return;
+
+      // Multi-call policy: if another session is currently active, put it on
+      // hold before starting the new outbound call.
+      const currentActive = Array.from(sessionMetaRef.current.values()).find(
+        (x) => x.isActive,
+      );
+      if (currentActive) {
+        console.log(
+          `[MULTICALL_HOLD] web auto-holding active=${currentActive.id} before outbound to ${normalised}`,
+        );
+        internalHold(currentActive.id);
+      }
 
       callDirectionRef.current = "outbound";
       setCallDirection("outbound");
@@ -1380,6 +1633,82 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
 
   // ── Blind transfer ──────────────────────────────────────────────────────────
 
+  // ── Multi-call actions ──────────────────────────────────────────────────
+
+  const answerSession = useCallback((id: string) => {
+    const s = sessionsByIdRef.current.get(id);
+    if (!s) {
+      console.warn(`[MULTICALL] answerSession: no session for id=${id}`);
+      return;
+    }
+    // Hold any currently active session before answering the new one.
+    const active = Array.from(sessionMetaRef.current.values()).find((x) => x.isActive);
+    if (active && active.id !== id) {
+      console.log(`[MULTICALL_HOLD] web holding active=${active.id} before answering ${id}`);
+      internalHold(active.id);
+    }
+    stopAllAudio();
+    navigator.mediaDevices
+      .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+      .then((localStream) => {
+        localStreamRef.current = localStream;
+        try {
+          s.answer({ mediaStream: localStream });
+          sessionRef.current = s;
+          const meta = sessionMetaRef.current.get(id);
+          if (meta) {
+            const party = meta.remoteParty;
+            setRemoteParty(party);
+            callDirectionRef.current = meta.direction;
+            setCallDirection(meta.direction);
+            setCallState("connected");
+          }
+          patchSessionMeta(id, { isActive: true, onHold: false, state: "connected" });
+        } catch (e) {
+          localStream.getTracks().forEach((t) => t.stop());
+          localStreamRef.current = null;
+          setError(e instanceof Error ? e.message : "Answer failed");
+        }
+      })
+      .catch((err) => {
+        setError(`Microphone error: ${err?.message ?? err}`);
+      });
+  }, [stopAllAudio]);
+
+  const holdSession = useCallback((id: string) => {
+    console.log(`[MULTICALL_HOLD] web explicit hold session=${id}`);
+    internalHold(id);
+  }, []);
+
+  const resumeSession = useCallback((id: string) => {
+    const active = Array.from(sessionMetaRef.current.values()).find((x) => x.isActive);
+    if (active && active.id !== id) {
+      console.log(`[MULTICALL_HOLD] web holding active=${active.id} before resuming ${id}`);
+      internalHold(active.id);
+    }
+    console.log(`[MULTICALL_RESUME] web resuming session=${id}`);
+    internalUnhold(id);
+    const meta = sessionMetaRef.current.get(id);
+    if (meta) {
+      setRemoteParty(meta.remoteParty);
+      callDirectionRef.current = meta.direction;
+      setCallDirection(meta.direction);
+      setCallState("connected");
+    }
+  }, []);
+
+  const hangupSession = useCallback((id: string) => {
+    const s = sessionsByIdRef.current.get(id);
+    if (!s) return;
+    console.log(`[MULTICALL] web hangup session=${id}`);
+    try { s.terminate(); } catch { /* already ended */ }
+    // removeSessionMeta will fire via session.on("ended") handler.
+  }, []);
+
+  const swapToSession = useCallback((id: string) => {
+    resumeSession(id);
+  }, [resumeSession]);
+
   const transfer = useCallback((target: string) => {
     if (!sessionRef.current || callState !== "connected") return;
     const domain = sessionRef.current.remote_identity?.uri?.host ?? "";
@@ -1417,5 +1746,14 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     transfer,
     dialpadInput,
     setDialpadInput,
+    sessions,
+    activeSessionId,
+    heldSessionIds,
+    ringingSessionIds,
+    answerSession,
+    holdSession,
+    resumeSession,
+    hangupSession,
+    swapToSession,
   };
 }

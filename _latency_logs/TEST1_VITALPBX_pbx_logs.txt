@@ -1,0 +1,100 @@
+﻿[2026-04-19 21:28:59] VERBOSE[4105307] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:00] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:00] VERBOSE[4105336] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:00] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:00] VERBOSE[4105369] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:02] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:02] VERBOSE[4105436] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:02] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:02] VERBOSE[4105472] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:03] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:03] VERBOSE[4105501] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:04] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:04] VERBOSE[4105534] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:05] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:05] VERBOSE[4105586] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:05] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:05] VERBOSE[4105619] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:06] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:06] VERBOSE[4105647] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:07] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:07] VERBOSE[4105680] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:08] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:08] VERBOSE[4105708] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:08] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:08] VERBOSE[4105741] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:10] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:10] VERBOSE[4105779] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:10] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:10] VERBOSE[4105812] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:11] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:11] VERBOSE[4105840] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:11] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:11] VERBOSE[4105873] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:13] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:13] VERBOSE[4105904] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:13] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:13] VERBOSE[4105937] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:14] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:14] VERBOSE[4105976] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:14] SECURITY[2428] res_security_log.c: SecurityEvent="ChallengeSent",EventTV="2026-04-19T21:29:14.872-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T2_110",SessionID="3E469DCE1292EE2C00BEB1D88A9CD0D546FAB1B0",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/50.49.206.161/8678",Challenge=""
+[2026-04-19 21:29:14] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:14] VERBOSE[4106009] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:14] SECURITY[2428] res_security_log.c: SecurityEvent="SuccessfulAuth",EventTV="2026-04-19T21:29:14.919-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T2_110",SessionID="3E469DCE1292EE2C00BEB1D88A9CD0D546FAB1B0",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/50.49.206.161/8678",UsingPassword="1"
+[2026-04-19 21:29:14] VERBOSE[2205] res_pjsip_registrar.c: Removed contact 'sip:T2_110@50.49.206.161:8678;rinstance=359D118F;x-ast-orig-host=10.158.89.5:8678' from AOR 'T2_110' due to request
+[2026-04-19 21:29:14] VERBOSE[2012] res_pjsip/pjsip_options.c: Contact T2_110/sip:T2_110@50.49.206.161:8678;rinstance=359D118F;x-ast-orig-host=10.158.89.5:8678 has been deleted
+[2026-04-19 21:29:14] VERBOSE[2012] res_pjsip/pjsip_configuration.c: Endpoint T2_110 is now Unreachable
+[2026-04-19 21:29:14] SECURITY[2428] res_security_log.c: SecurityEvent="ChallengeSent",EventTV="2026-04-19T21:29:14.973-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T2_110",SessionID="F25DC5C38BAEEEC26F20547D3C5B2A8EAF558650",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/165.227.182.9/50762",Challenge=""
+[2026-04-19 21:29:15] SECURITY[2428] res_security_log.c: SecurityEvent="SuccessfulAuth",EventTV="2026-04-19T21:29:15.006-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T2_110",SessionID="F25DC5C38BAEEEC26F20547D3C5B2A8EAF558650",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/165.227.182.9/50762",UsingPassword="1"
+[2026-04-19 21:29:15] VERBOSE[2205] res_pjsip_registrar.c: Added contact 'sip:T2_110@165.227.182.9:50762;rinstance=6B117BE7;x-ast-orig-host=10.65.13.2:50762' to AOR 'T2_110' with expiration of 3600 seconds
+[2026-04-19 21:29:15] VERBOSE[2205] res_pjsip/pjsip_configuration.c: Endpoint T2_110 is now Reachable
+[2026-04-19 21:29:15] VERBOSE[2205] res_pjsip/pjsip_options.c: Contact T2_110/sip:T2_110@165.227.182.9:50762;rinstance=6B117BE7;x-ast-orig-host=10.65.13.2:50762 is now Reachable.  RTT: 29.821 msec
+[2026-04-19 21:29:16] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:16] VERBOSE[4106037] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:16] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:16] VERBOSE[4106070] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:17] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:17] VERBOSE[4106098] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:18] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:18] VERBOSE[4106131] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:19] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:19] VERBOSE[4106169] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:19] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:19] VERBOSE[4106202] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:21] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:21] VERBOSE[4106230] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:21] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:21] VERBOSE[4106263] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:22] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:22] VERBOSE[4106291] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:23] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:23] VERBOSE[4106324] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:24] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:24] VERBOSE[4106362] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:24] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:24] VERBOSE[4106395] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:26] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:26] VERBOSE[4106423] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:26] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:26] VERBOSE[4106456] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:26] SECURITY[2428] res_security_log.c: SecurityEvent="ChallengeSent",EventTV="2026-04-19T21:29:26.578-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T18_106",SessionID="0_2091136889@192.168.0.176",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/66.250.98.40/1029",Challenge=""
+[2026-04-19 21:29:26] NOTICE[2205] res_pjsip_exten_state.c: Endpoint 'T18_106' state subscription failed: Extension '8002' does not exist in context 'T18_extension-hints' or has no associated hint
+[2026-04-19 21:29:26] SECURITY[2428] res_security_log.c: SecurityEvent="SuccessfulAuth",EventTV="2026-04-19T21:29:26.622-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T18_106",SessionID="0_2091136889@192.168.0.176",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/66.250.98.40/1029",UsingPassword="1"
+[2026-04-19 21:29:27] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:27] VERBOSE[4106484] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:27] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:27] VERBOSE[4106517] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:29] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:29] VERBOSE[4106545] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:29] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:29] VERBOSE[4106588] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:30] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:30] VERBOSE[4106616] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:30] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:30] VERBOSE[4106649] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:32] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:32] VERBOSE[4106677] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:32] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:32] VERBOSE[4106712] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:29:32] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:29:32] VERBOSE[4106738] asterisk.c: Remote UNIX connection disconnected

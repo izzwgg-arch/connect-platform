@@ -62,6 +62,26 @@ export default function AdminPage() {
           <IntegrationCard name="VoIPDNS / Provider Routing" status="Requires review" />
           <IntegrationCard name="QuickBooks & PaymentHub" status="Not connected" />
         </section>
+        <RoleGate allow={["SUPER_ADMIN"]}>
+          <section className="grid three">
+            <AdminModuleCard
+              title="Call Flight Recorder"
+              summary="Full structured event timeline for every mobile call. Search by invite, PBX ID, phone, or extension. AI-powered diagnosis per call."
+              href="/admin/call-flight"
+            />
+            <AdminModuleCard
+              title="Call Timeline (WebRTC)"
+              summary="Session-level WebRTC diagnostics, ICE/TURN analysis, and AI explanation for voice quality issues."
+              href="/admin/call-timeline"
+            />
+            <AdminModuleCard
+              title="Audio Intelligence"
+              summary="Media test results, TURN relay verification, and real-time quality scoring."
+              href="/admin/audio-intelligence"
+            />
+          </section>
+        </RoleGate>
+
         <section className="panel">
           <h3>Admin Shortcuts</h3>
           <div className="row-actions">
@@ -70,6 +90,7 @@ export default function AdminPage() {
             <Link className="btn ghost" href="/admin/pbx/events">PBX Events</Link>
             <Link className="btn ghost" href="/admin/billing">Admin Billing</Link>
             <Link className="btn ghost" href="/admin/cdr-tenant-map">CDR Tenant Mapping</Link>
+            <Link className="btn ghost" href="/admin/call-flight">Call Flight Recorder</Link>
           </div>
         </section>
       </div>

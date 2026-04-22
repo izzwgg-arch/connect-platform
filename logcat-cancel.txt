@@ -1,0 +1,869 @@
+﻿
+04-19 15:08:33.607 D/ChangeTransitionController( 2748):    ChangeInfo{a75c73b container=ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898} flags=0x0}
+04-19 15:08:33.610 D/nativeloader(22671): Load /data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L
+7c-Q-CFCp9V8zim2zB0Q==/base.apk!/lib/arm64-v8a/libturbomodulejsijni.so using class loader ns clns-10 (caller=/data/app/
+~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk!classes2.dex): ok
+04-19 15:08:33.622 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.622 D/SurfaceFlinger( 1741):        DEVICE |           97371203567619 | 00002102 | RGBA_8888    |    
+0.0    0.0 1080.0 2340.0 |    0    0 1080 2340 | 
+com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374 (2)
+04-19 15:08:33.623 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.623 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.625 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.626 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.630 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.630 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.633 I/SAMSUNGWALLET(16411): [Hint_SimpleHintProcessMonitor] isHomePackageRunning topPkgName = 
+com.connectcommunications.mobile, topClsName = com.connectcommunications.mobile.MainActivity, return false , se : false
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{ImeContainer#15 parentId=27366 
+relativeParentId=27373 z=1} 1 children}] RelativeParent to LayerHierarchy{RequestedLayerState{7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 parentId=27366} 2 children}
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{5a0f39c Splash Screen 
+com.connectcommunications.mobile#27367 z=2147483647} 1 children}] reparent to OffscreenRoot
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{5a0f39c Splash Screen 
+com.connectcommunications.mobile#27367 z=2147483647} 1 children}] RelativeParent to null
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{Splash Screen 
+com.connectcommunications.mobile$_3944#27368} no children}] reparent to OffscreenRoot
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{Splash Screen 
+com.connectcommunications.mobile$_3944#27368} no children}] RelativeParent to null
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): id=27367 Removed 5a0f39c Splash Screen 
+com.connectcommunications.mobile#27367 (184)
+04-19 15:08:33.637 I/SurfaceFlinger( 1741): id=27368 Removed Splash Screen 
+com.connectcommunications.mobile$_3944#27368 (184)
+04-19 15:08:33.638 D/SGM:FgCheckThread( 2748): getForegroundApp(), foregroundPkgName=com.connectcommunications.mobile
+04-19 15:08:33.638 D/SGM:FgCheckThread( 2748): noteStopComponent(), received pkgName: com.sec.android.app.launcher, 
+focusedPkgName: com.connectcommunications.mobile, userId: 0
+04-19 15:08:33.639 D/SGM:GameManager( 2748): identifyForegroundApp. com.connectcommunications.mobile, mCurrentUserId: 
+0, callerUserId: 0
+04-19 15:08:33.640 D/SGM:GameManager( 2748): identifyForegroundApp. com.connectcommunications.mobile, mCurrentUserId: 
+0, callerUserId: 0
+04-19 15:08:33.644 I/SAMSUNGWALLET(16411): [Hint_SimpleHintProcessMonitor] isHomePackageRunning topPkgName = 
+com.connectcommunications.mobile, topClsName = com.connectcommunications.mobile.MainActivity, return false , se : false
+04-19 15:08:33.652 D/nativeloader(22671): Load /data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L
+7c-Q-CFCp9V8zim2zB0Q==/base.apk!/lib/arm64-v8a/librnscreens.so using class loader ns clns-10 (caller=/data/app/~~rm3ZOM
+8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk!classes3.dex): ok
+04-19 15:08:33.653 I/SurfaceFlinger( 1741): destroyed 5a0f39c Splash Screen com.connectcommunications.mobile#27367 
+form LifecycleManager
+04-19 15:08:33.653 I/SurfaceFlinger( 1741): destroyed Splash Screen com.connectcommunications.mobile$_3944#27368 form 
+LifecycleManager
+04-19 15:08:33.654 I/SurfaceFlinger( 1741): id=27367 onLayerDestroyed from 
+LayerHierarchyBuilder(RequestedLayerState{5a0f39c Splash Screen com.connectcommunications.mobile#27367 !handle 
+z=2147483647})
+04-19 15:08:33.654 I/SurfaceFlinger( 1741): id=27368 onLayerDestroyed from 
+LayerHierarchyBuilder(RequestedLayerState{Splash Screen com.connectcommunications.mobile$_3944#27368 !handle})
+04-19 15:08:33.654 I/Layer   ( 1741): id=27367 Destroyed 5a0f39c Splash Screen com.connectcommunications.mobile#27367
+04-19 15:08:33.654 I/Layer   ( 1741): id=27368 Destroyed Splash Screen com.connectcommunications.mobile$_3944#27368
+04-19 15:08:33.670 I/ReactNativeJS(22671): Running "main
+04-19 15:08:33.672 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"JS_APP_MOUNT","ts":"2026-04-19T19:08
+:33.672Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null}
+04-19 15:08:33.672 I/ReactNativeJS(22671): [CALL_INCOMING] registerTaskAsync OK (CONNECT_BACKGROUND_NOTIFICATION)
+04-19 15:08:33.678 D/nativeloader(22671): Load /data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L
+7c-Q-CFCp9V8zim2zB0Q==/base.apk!/lib/arm64-v8a/libreactnativeblob.so using class loader ns clns-10 (caller=/data/app/~~
+rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk!classes2.dex): ok
+04-19 15:08:33.702 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.702 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.705 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.705 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.724 I/ReactNativeJS(22671): [CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id 
+clear
+04-19 15:08:33.724 I/ReactNativeJS(22671): [LOCK_CALL_CLEANUP] sip_idle ΓÇö clearing per-call refs so next incoming 
+call starts fresh
+04-19 15:08:33.729 D/NetdEventListenerService( 2748): DNS Requested by 114, 10557(com.connectcommunications.mobile), 
+SUCCESS, 2ms
+04-19 15:08:33.734 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.734 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:33.738 D/SurfaceFlinger( 1741):        DEVICE |           97371203567618 | 00002102 | RGBA_8888    |    
+0.0    0.0 1080.0 2340.0 |    0    0 1080 2340 | 
+com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374 (3)
+04-19 15:08:33.744 D/nativeloader(22671): Load /data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L
+7c-Q-CFCp9V8zim2zB0Q==/base.apk!/lib/arm64-v8a/libreact_featureflagsjni.so using class loader ns clns-10 (caller=/data/
+app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk!classes2.dex): ok
+04-19 15:08:33.751 I/Telecom ( 2748): TelecomServiceImpl$1: registerPhoneAccount: account=[[ ] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@RlM
+04-19 15:08:33.751 I/Telecom ( 2748): PhoneAccountRegistrar: Modify account: 
+[ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0}]: 
+TSI.rPA(ccm)@RlM
+04-19 15:08:33.752 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged - allPhoneAccounts : [[[X] 
+PhoneAccount: ComponentInfo{com.android.phone/com.android.services.telephony.TelephonyConnectionService}, 2, 
+UserHandle{0} Capabilities: SuppVideo Video Presence CallProvider MultiUser PlaceEmerg SimSub Rtt  Audio Routes: BESW 
+Schemes: tel voicemail  Extras: <MASKED> GroupId: *** SC Restrictions: [ ]], [[X] PhoneAccount: 
+ComponentInfo{com.tcx.sipphone14/com.tcx.core.tcom.TcService}, ***, UserHandle{0} Capabilities: SelfManaged 
+TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: ComponentInfo{com.google.android.gm/com.google.android.gm}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> 
+GroupId: *** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.google.android.apps.tachyon/com.google.android.apps.tachyon}, ***, UserHandle{0} Capabilities: 
+SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.tmobile.tuesdays/com.telekom.tworld.connect.notification.MyConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{cloud.vitalpbx.connect/cz.acrobits.softphone.telecom.ConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{ms.voip.softphone.android/cz.acrobits.softphone.telecom.ConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: 
+*** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]]
+04-19 15:08:33.752 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged : [[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]
+04-19 15:08:33.752 I/Telecom ( 2748): SamsungPhoneAccountListener : onPhoneAccountChanged - PhoneAccount : [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]
+04-19 15:08:33.752 I/Telecom ( 2748): CallsManager: handlePhoneAccountChanged: phoneAccount=[[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@RlM
+04-19 15:08:33.753 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.754 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.757 I/ReactNativeJS(22671): '[SIP] Registering to', 'm.connectcomunications.com', 'via', 
+'wss://m.connectcomunications.com:8089/ws'
+04-19 15:08:33.757 I/ReactNativeJS(22671): [SIP] WebRTC globals registered OK
+04-19 15:08:33.758 I/ReactNativeJS(22671): '[SIP] URI user:', '103_1', '| Auth user:', 'T2_103_1'
+04-19 15:08:33.759 I/ReactNativeJS(22671): [SIP] UA started
+04-19 15:08:33.762 I/Telecom ( 2748): TelecomServiceImpl$1: registerPhoneAccount: account=[[ ] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@RlY
+04-19 15:08:33.762 I/Telecom ( 2748): PhoneAccountRegistrar: Modify account: 
+[ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0}]: 
+TSI.rPA(ccm)@RlY
+04-19 15:08:33.762 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged - allPhoneAccounts : [[[X] 
+PhoneAccount: ComponentInfo{com.android.phone/com.android.services.telephony.TelephonyConnectionService}, 2, 
+UserHandle{0} Capabilities: SuppVideo Video Presence CallProvider MultiUser PlaceEmerg SimSub Rtt  Audio Routes: BESW 
+Schemes: tel voicemail  Extras: <MASKED> GroupId: *** SC Restrictions: [ ]], [[X] PhoneAccount: 
+ComponentInfo{com.tcx.sipphone14/com.tcx.core.tcom.TcService}, ***, UserHandle{0} Capabilities: SelfManaged 
+TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: ComponentInfo{com.google.android.gm/com.google.android.gm}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> 
+GroupId: *** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.google.android.apps.tachyon/com.google.android.apps.tachyon}, ***, UserHandle{0} Capabilities: 
+SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.tmobile.tuesdays/com.telekom.tworld.connect.notification.MyConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{cloud.vitalpbx.connect/cz.acrobits.softphone.telecom.ConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{ms.voip.softphone.android/cz.acrobits.softphone.telecom.ConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: 
+*** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]]
+04-19 15:08:33.762 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged : [[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]
+04-19 15:08:33.762 I/Telecom ( 2748): SamsungPhoneAccountListener : onPhoneAccountChanged - PhoneAccount : [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]
+04-19 15:08:33.762 I/Telecom ( 2748): CallsManager: handlePhoneAccountChanged: phoneAccount=[[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@RlY
+04-19 15:08:33.763 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.764 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.767 I/Telecom ( 2748): TelecomServiceImpl$1: registerPhoneAccount: account=[[ ] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@Rlk
+04-19 15:08:33.767 I/Telecom ( 2748): PhoneAccountRegistrar: Modify account: 
+[ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0}]: 
+TSI.rPA(ccm)@Rlk
+04-19 15:08:33.767 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged - allPhoneAccounts : [[[X] 
+PhoneAccount: ComponentInfo{com.android.phone/com.android.services.telephony.TelephonyConnectionService}, 2, 
+UserHandle{0} Capabilities: SuppVideo Video Presence CallProvider MultiUser PlaceEmerg SimSub Rtt  Audio Routes: BESW 
+Schemes: tel voicemail  Extras: <MASKED> GroupId: *** SC Restrictions: [ ]], [[X] PhoneAccount: 
+ComponentInfo{com.tcx.sipphone14/com.tcx.core.tcom.TcService}, ***, UserHandle{0} Capabilities: SelfManaged 
+TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: ComponentInfo{com.google.android.gm/com.google.android.gm}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> 
+GroupId: *** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.google.android.apps.tachyon/com.google.android.apps.tachyon}, ***, UserHandle{0} Capabilities: 
+SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.tmobile.tuesdays/com.telekom.tworld.connect.notification.MyConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{cloud.vitalpbx.connect/cz.acrobits.softphone.telecom.ConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{ms.voip.softphone.android/cz.acrobits.softphone.telecom.ConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: 
+*** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]]
+04-19 15:08:33.767 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged : [[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]
+04-19 15:08:33.767 I/Telecom ( 2748): SamsungPhoneAccountListener : onPhoneAccountChanged - PhoneAccount : [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]
+04-19 15:08:33.767 I/Telecom ( 2748): CallsManager: handlePhoneAccountChanged: phoneAccount=[[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@Rlk
+04-19 15:08:33.767 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.768 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.769 D/MdnieScenarioControlService( 2748):  packageName : com.connectcommunications.mobile    className 
+: com.connectcommunications.mobile.MainActivity
+04-19 15:08:33.771 D/NetdEventListenerService( 2748): DNS Requested by 114, 10557(com.connectcommunications.mobile), 
+SUCCESS, 1ms
+04-19 15:08:33.790 I/Telecom ( 2748): TelecomServiceImpl$1: registerPhoneAccount: account=[[ ] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@Rlw
+04-19 15:08:33.790 I/Telecom ( 2748): PhoneAccountRegistrar: Modify account: 
+[ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0}]: 
+TSI.rPA(ccm)@Rlw
+04-19 15:08:33.790 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged - allPhoneAccounts : [[[X] 
+PhoneAccount: ComponentInfo{com.android.phone/com.android.services.telephony.TelephonyConnectionService}, 2, 
+UserHandle{0} Capabilities: SuppVideo Video Presence CallProvider MultiUser PlaceEmerg SimSub Rtt  Audio Routes: BESW 
+Schemes: tel voicemail  Extras: <MASKED> GroupId: *** SC Restrictions: [ ]], [[X] PhoneAccount: 
+ComponentInfo{com.tcx.sipphone14/com.tcx.core.tcom.TcService}, ***, UserHandle{0} Capabilities: SelfManaged 
+TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: ComponentInfo{com.google.android.gm/com.google.android.gm}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> 
+GroupId: *** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.google.android.apps.tachyon/com.google.android.apps.tachyon}, ***, UserHandle{0} Capabilities: 
+SelfManaged SuppVideo Video TransactOps  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.tmobile.tuesdays/com.telekom.tworld.connect.notification.MyConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{cloud.vitalpbx.connect/cz.acrobits.softphone.telecom.ConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{ms.voip.softphone.android/cz.acrobits.softphone.telecom.ConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]], 
+[[X] PhoneAccount: ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, 
+UserHandle{0} Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: 
+*** SC Restrictions: [NONE]], [[X] PhoneAccount: 
+ComponentInfo{com.whatsapp/com.whatsapp.calling.telecom.SelfManagedConnectionService}, ***, UserHandle{0} 
+Capabilities: SelfManaged SuppVideo Video  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]]
+04-19 15:08:33.790 I/Telecom ( 2748): SamsungPhoneAccountListener : onAccountsChanged : [[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]
+04-19 15:08:33.790 I/Telecom ( 2748): SamsungPhoneAccountListener : onPhoneAccountChanged - PhoneAccount : [[X] 
+PhoneAccount: ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, 
+UserHandle{0} Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC 
+Restrictions: [NONE]]
+04-19 15:08:33.790 I/Telecom ( 2748): CallsManager: handlePhoneAccountChanged: phoneAccount=[[X] PhoneAccount: 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} 
+Capabilities: CallProvider  Audio Routes: BESW Schemes: tel  Extras: <MASKED> GroupId: *** SC Restrictions: [NONE]]: 
+TSI.rPA(ccm)@Rlw
+04-19 15:08:33.791 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.792 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:33.794 I/ReactNativeJS(22671): '[Notif] Incoming action URL queued:', 'decline', 
+'cmo651x5h0012mr4b8aa6p1es'
+04-19 15:08:33.794 I/ReactNativeJS(22671): '[Notif] Processing incoming action:', 'decline', 
+'cmo651x5h0012mr4b8aa6p1es'
+04-19 15:08:33.794 I/ReactNativeJS(22671): [LOCK_CALL] incoming_received inviteId=cmo651x5h0012mr4b8aa6p1es from=108
+04-19 15:08:33.794 D/NetdEventListenerService( 2748): DNS Requested by 114, 10557(com.connectcommunications.mobile), 
+SUCCESS, 1ms
+04-19 15:08:33.794 I/ReactNativeJS(22671): '[Notif] Duplicate invite ignored:', 'cmo651x5h0012mr4b8aa6p1es'
+04-19 15:08:33.794 I/ReactNativeJS(22671): '[ANSWER_FLOW] INVITE_RESTORED', '{"inviteId":"cmo651x5h0012mr4b8aa6p1es","c
+allId":"1776625670.85948","extension":"103","timestamp":"2026-04-19T19:08:33.794Z","source":"fallback"}'
+04-19 15:08:33.794 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INVITE_RESTORED","ts":"2026-04-19T19
+:08:33.794Z","appState":"active","inviteId":"cmo651x5h0012mr4b8aa6p1es","pbxCallId":"1776625670.85948","extension":"103
+","answerFlowType":"INVITE_RESTORED","source":"fallback"}
+04-19 15:08:33.800 I/ReactNativeJS(22671): [INVITE_POLL] started inviteId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:33.815 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INCOMING_CALL_SCREEN_MOUNT","ts":"20
+26-04-19T19:08:33.815Z","appState":"active","inviteId":"cmo651x5h0012mr4b8aa6p1es","pbxCallId":"1776625670.85948","exte
+nsion":"103","phase":"incoming"}
+04-19 15:08:33.816 I/ReactNativeJS(22671): [NATIVE_DISMISS] invoking IncomingCallUi.dismiss 
+callId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:33.816 I/ReactNativeJS(22671): [NATIVE_DISMISS] returned from IncomingCallUi.dismiss 
+callId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:33.816 I/ReactNativeJS(22671): '[ANSWER_FLOW] RINGTONE_STOPPED', '{"inviteId":"cmo651x5h0012mr4b8aa6p1es","
+callId":"1776625670.85948","extension":"103","timestamp":"2026-04-19T19:08:33.816Z","reason":"decline_tapped","at":"202
+6-04-19T19:08:33.816Z"}'
+04-19 15:08:33.816 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"RINGTONE_STOP_JS_CONTEXT","ts":"2026
+-04-19T19:08:33.816Z","appState":"active","inviteId":"cmo651x5h0012mr4b8aa6p1es","pbxCallId":"1776625670.85948","extens
+ion":"103","answerFlowType":"RINGTONE_STOPPED","reason":"decline_tapped","at":"2026-04-19T19:08:33.816Z"}
+04-19 15:08:33.816 I/ReactNativeJS(22671): '[ANSWER_FLOW] INCOMING_UI_DISMISSED', '{"inviteId":"cmo651x5h0012mr4b8aa6p1
+es","callId":"1776625670.85948","extension":"103","timestamp":"2026-04-19T19:08:33.816Z","source":"decline","reason":"d
+ecline_tapped"}'
+04-19 15:08:33.816 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INCOMING_UI_DISMISSED","ts":"2026-04
+-19T19:08:33.816Z","appState":"active","inviteId":"cmo651x5h0012mr4b8aa6p1es","pbxCallId":"1776625670.85948","extension
+":"103","answerFlowType":"INCOMING_UI_DISMISSED","source":"decline","reason":"decline_tapped"}
+04-19 15:08:33.817 D/VibratorManagerService( 2748): vibrate - uid: 10557, opPkg: com.connectcommunications.mobile, 
+effect: Mono{mEffect=Composed{segments=[Step{amplitude=0.0, frequencyHz=0.0, duration=0}, Step{amplitude=0.15686275, 
+frequencyHz=0.0, duration=40}, Step{amplitude=0.0, frequencyHz=0.0, duration=120}, Step{amplitude=0.23529412, 
+frequencyHz=0.0, duration=60}], repeat=-1, mMagnitudeType=TYPE_EXTRA}}, attrs: VibrationAttributes{mUsage=MEDIA, 
+mAudioUsage= USAGE_UNKNOWN, mFlags=0, tags=}, reason: null, token: android.os.BinderProxy@5207b86
+04-19 15:08:33.817 D/VibratorManagerService( 2748): Check AppOp mode VIBRATE for uid 10557 and package 
+com.connectcommunications.mobile returned audio=allow, op=allow
+04-19 15:08:33.817 D/VibratorManagerService( 2748): Start AppOp mode VIBRATE for uid 10557 and package 
+com.connectcommunications.mobile returned allow
+04-19 15:08:33.818 I/ReactNativeJS(22671): '[PUSH_INIT] Notification permission status:', 'granted'
+04-19 15:08:33.820 I/IncomingCallService(22671): [CALL_INCOMING] dismissed incoming ui 
+inviteId=cmo651x5h0012mr4b8aa6p1es reason=js_incoming_call_ui_dismiss
+04-19 15:08:33.827 I/ReactNativeJS(22671): '[PUSH_TOKEN] Requesting expo push token, projectId:', 
+'53c72ced-180c-4885-a3ff-7d5da5717ead'
+04-19 15:08:33.995 D/SGM:GameManager( 2748): identifyForegroundApp. com.connectcommunications.mobile, mCurrentUserId: 
+0, callerUserId: 0
+04-19 15:08:34.070 D/VibratorManagerService( 2748): Finish AppOp mode VIBRATE for uid 10557 and package 
+com.connectcommunications.mobile
+04-19 15:08:34.289 I/ReactNativeJS(22671): '[PUSH_TOKEN] Expo token received:', 'ExponentPushToken[eBfIUXBL31ZC...'
+04-19 15:08:34.289 I/ReactNativeJS(22671): '[PUSH_INIT] Push token result:', 'OK'
+04-19 15:08:34.309 I/ReactNativeJS(22671): [PUSH_INIT] Registering device with backend...
+04-19 15:08:34.537 I/ReactNativeJS(22671): [SIP] Registered successfully
+04-19 15:08:34.568 I/ReactNativeJS(22671): [INVITE_POLL] tick=1 inviteId=cmo651x5h0012mr4b8aa6p1es 
+inviteStatus=PENDING telephonyState=none pbxAnswered=false httpMs=768 elapsedMs=768
+04-19 15:08:34.578 I/ReactNativeJS(22671): [INVITE_POLL] stopped inviteId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:34.579 I/ReactNativeJS(22671): [ANSWER_FLOW] RETURNED_TO_QUICK_ACTION
+04-19 15:08:34.579 I/ReactNativeJS(22671): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"NAVIGATE_BACK_TO_QUICK","ts":"2026-0
+4-19T19:08:34.579Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"source":"returnToQuickAction
+"}
+04-19 15:08:34.593 I/ReactNativeJS(22671): [NATIVE_DISMISS] invoking IncomingCallUi.dismiss 
+callId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:34.593 I/ReactNativeJS(22671): [NATIVE_DISMISS] returned from IncomingCallUi.dismiss 
+callId=cmo651x5h0012mr4b8aa6p1es
+04-19 15:08:34.612 I/IncomingCallService(22671): [CALL_INCOMING] dismissed incoming ui 
+inviteId=cmo651x5h0012mr4b8aa6p1es reason=js_incoming_call_ui_dismiss
+04-19 15:08:34.612 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:34.616 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.connectcommunications.mobile / callingUser : UserHandle{0}
+04-19 15:08:34.737 I/SurfaceFlinger( 1741): 
+[com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374] setFrameRateCategory: 
+HighHint
+04-19 15:08:35.383 I/ReactNativeJS(22671): '[PUSH_INIT] Device registered, id:', 'cmo651dj2000rmr4bjnvmzj5m'
+04-19 15:08:36.258 V/WindowManager( 2748): Transition 2589: Set Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile} as transient-hidden-task, caller=com.android.server.wm.Task.forAllTasks:4 
+com.android.server.wm.WindowContainer.forAllTasks:2 com.android.server.wm.DisplayArea.forAllTasks:9 
+04-19 15:08:36.258 V/WindowManager( 2748): Collecting in transition 2589: Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile}, caller=com.android.server.wm.Transition$$ExternalSyntheticLambda20.test:119 
+com.android.server.wm.Task.forAllTasks:4 com.android.server.wm.WindowContainer.forAllTasks:2 
+com.android.server.wm.DisplayArea.forAllTasks:9 com.android.server.wm.Transition.setTransientLaunch:138 
+04-19 15:08:36.262 D/ActivityTaskManager( 2748): scheduleTopResumedActivityChanged, onTop=false, 
+r=ActivityRecord{256188884 u0 com.connectcommunications.mobile/.MainActivity t40898}, 
+caller=com.android.server.wm.ActivityTaskSupervisor.scheduleTopResumedActivityStateLossIfNeeded:19 
+com.android.server.wm.ActivityTaskSupervisor.endDeferResume:21 
+com.android.server.wm.WindowOrganizerController.applyTransaction:186 
+com.android.server.wm.WindowOrganizerController.applyTransaction:16 
+com.android.server.wm.WindowOrganizerController$$ExternalSyntheticLambda5.onCollectStarted:27 
+com.android.server.wm.TransitionController.startCollectOrQueue:97 
+04-19 15:08:36.262 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.263 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.270 D/SGM:GameManager( 2748): identifyForegroundApp. com.connectcommunications.mobile, mCurrentUserId: 
+0, callerUserId: 0
+04-19 15:08:36.272 I/InputDispatcher( 2748): Channel [Gesture Monitor] swipe-up is stealing input gesture for device 6 
+from [7789731 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity, [Gesture Monitor] 
+secinputdev, [Gesture Monitor] PalmMotion, [Gesture Monitor] edge-swipe]
+04-19 15:08:36.274 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.274 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.275 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.275 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.276 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.280 D/SGM:GameManager( 2748): identifyForegroundApp. com.connectcommunications.mobile, mCurrentUserId: 
+0, callerUserId: 0
+04-19 15:08:36.281 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.283 D/WindowManager( 2748): requestTransientBars: swipeTarget=Window{9705530 u0 NavigationBar0}, 
+controlTarget=Window{7789731 u0 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}, 
+canShowTransient=false, restorePositionTypes=0x3, from=com.android.server.wm.DisplayPolicy$1.onSwipeFromBottom:21 
+com.android.server.wm.SystemGesturesPointerEventListener.onPointerEvent:545 
+04-19 15:08:36.283 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.284 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.284 D/ChangeTransitionController( 2748):    ChangeInfo{b05e2b1 container=Task{c40c2c3 #40898 
+type=standard A=10557:com.connectcommunications.mobile} flags=0x4}
+04-19 15:08:36.284 V/WindowManager( 2748): Start calculating TransitionInfo based on participants: 
+{ActivityRecord{101403755 u0 com.sec.android.app.launcher/.activities.LauncherActivity t8}, Task{8aed1d8 #1 
+type=home}, TransientLaunchOverlayToken{8e4a788 token=android.os.BinderProxy@5bf972b}, Task{9da53c8 #8 type=home 
+I=com.sec.android.app.launcher/.activities.LauncherActivity}, Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile}, WallpaperWindowToken{d11f2f0 showWhenLocked=false}_<system>}
+04-19 15:08:36.284 V/WindowManager( 2748):   Final targets: [ChangeInfo{f30f835 
+container=TransientLaunchOverlayToken{8e4a788 token=android.os.BinderProxy@5bf972b} flags=0x0}, ChangeInfo{2ef3a6c 
+container=Task{8aed1d8 #1 type=home} flags=0x30}, ChangeInfo{b05e2b1 container=Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile} flags=0x4}, ChangeInfo{279a396 container=WallpaperWindowToken{d11f2f0 
+showWhenLocked=false}_<system> flags=0x0}]
+04-19 15:08:36.285 D/WindowManager( 2748): setActiveRecents, recents=Task{8aed1d8 #1 type=home}, task=Task{c40c2c3 
+#40898 type=standard A=10557:com.connectcommunications.mobile}, 
+caller=com.android.server.wm.InputMonitor.setActiveRecents:33 com.android.server.wm.Transition.onTransactionReady:1795 
+com.android.server.wm.BLASTSyncEngine$SyncGroup.finishNow:240 
+04-19 15:08:36.288 V/WindowManager( 2748):         {WCT{RemoteToken{edcae53 Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile}}} m=TO_BACK f=NONE leash=Surface(name=Task=40898)/@0x5bbac8d sb=Rect(0, 0 - 
+1080, 2340) eb=Rect(0, 0 - 1080, 2340) epz=Point(1080, 2340) d=0 taskParent=-1 inset=Rect(0, 91 - 0, 45) dim=true},
+04-19 15:08:36.289 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.289 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.290 V/WindowManager( 2748):         {WCT{RemoteToken{edcae53 Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile}}} m=TO_BACK f=NONE leash=Surface(name=Task=40898)/@0x5bbac8d sb=Rect(0, 0 - 
+1080, 2340) eb=Rect(0, 0 - 1080, 2340) epz=Point(1080, 2340) d=0 taskParent=-1 inset=Rect(0, 91 - 0, 45) dim=true},
+04-19 15:08:36.291 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.291 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.291 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.291 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.293 I/SAMSUNGWALLET(16411): [Hint_SimpleHintProcessMonitor] isHomePackageRunning topPkgName = 
+com.connectcommunications.mobile, topClsName = com.connectcommunications.mobile.MainActivity, return false , se : false
+04-19 15:08:36.295 D/WindowManager( 2748): Changing focus from Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity} to Window{4906084 u0 
+com.sec.android.app.launcher/com.sec.android.app.launcher.activities.LauncherActivity} displayId=0 
+Callers=com.android.server.wm.ActivityTaskManagerService.setLastResumedActivityUncheckLocked:264 
+com.android.server.wm.ActivityTaskManagerService.setFocusedTask:19 
+com.android.server.wm.ActivityTaskManagerService.focusTopTask:53 android.app.IActivityTaskManager$Stub.onTransact:2027 
+04-19 15:08:36.295 I/SAMSUNGWALLET(16411): [Hint_SimpleHintProcessMonitor] isHomePackageRunning topPkgName = 
+com.connectcommunications.mobile, topClsName = com.connectcommunications.mobile.MainActivity, return false , se : false
+04-19 15:08:36.296 D/WindowManager( 2748): updateSystemBarAttributes: displayId=0, focusedCanBeNavColorWin=false, 
+win=Window{4906084 u0 com.sec.android.app.launcher/com.sec.android.app.launcher.activities.LauncherActivity}, 
+navColorWin=Window{7789731 u0 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}, 
+caller=com.android.server.wm.WindowManagerService.updateFocusedWindowLocked:372 
+com.android.server.wm.ActivityTaskManagerService.setLastResumedActivityUncheckLocked:264 
+com.android.server.wm.ActivityTaskManagerService.setFocusedTask:19 
+04-19 15:08:36.305 D/SurfaceFlinger( 1741):        DEVICE |           97371203567618 | 00002102 | RGBA_8888    |    
+0.0    0.0 1080.0 2340.0 |    0    0 1080 2340 | 
+com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374 (87)
+04-19 15:08:36.321 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:36.324 D/SurfaceFlinger( 1741):        CLIENT |           97371203567618 | 00002102 | RGBA_8888    |    
+0.0   15.0 1069.0 2331.0 |    0    0 1080 2340 | 
+com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374 (87)
+04-19 15:08:36.324 D/InputDispatcher( 2748): Focus left window (0): 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity
+04-19 15:08:36.360 I/HoneySpace.AppCloseAnimationDelegate( 4661): findTargetValue [cookie--2147483648, 
+pkgName-com.connectcommunications.mobile]
+04-19 15:08:36.524 D/SurfaceFlinger( 1741):        CLIENT |           97371203567618 | 00002102 | RGBA_8888    |    
+0.0   68.0 1074.0 2171.0 |  303  612  960 1899 | 
+com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374 (87)
+04-19 15:08:36.940 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.088 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.088 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.096 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.097 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.123 D/SurfaceComposerClient( 2748): setCornerRadius ## 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 cornerRadius=0.000000
+04-19 15:08:37.168 V/WindowManager( 2748):    ChangeInfo{b05e2b1 container=Task{c40c2c3 #40898 type=standard 
+A=10557:com.connectcommunications.mobile} flags=0x4}
+04-19 15:08:37.170 I/ConnectMainActivity(22671): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 15:08:37.172 I/MediaFocusControl( 2748): abandonAudioFocus() from uid/pid 10557/22671 
+clientId=android.media.AudioManager@418b786expo.modules.av.AVManager@af43d42 
+callingPack=com.connectcommunications.mobile
+04-19 15:08:37.173 I/SurfaceFlinger( 1741): Capture layer list: 	 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374(seamlessTransition:0)
+04-19 15:08:37.174 D/RenderEngine( 1741): [SEC_SF_EFFECTS] drawLayersInternal,1483, Rendering layer 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374 at index 1
+04-19 15:08:37.174 I/ReactNativeJS(22671): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registered'
+04-19 15:08:37.177 V/WindowManager( 2748): Setting visibility of Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}: false, 
+caller=com.android.server.wm.WindowContainer.sendAppVisibilityToClients:19 
+com.android.server.wm.WindowToken.setClientVisible:48 com.android.server.wm.ActivityRecord.commitVisibility:186 
+com.android.server.wm.TransitionController.finishTransition:846 
+com.android.server.wm.WindowOrganizerController.finishTransitionInner:31 
+04-19 15:08:37.177 D/PersonaActivityHelper( 2748): token.toString()  Token{8bc8740 ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}}
+04-19 15:08:37.178 D/ChangeTransitionController( 2748):    ChangeInfo{b05e2b1 container=Task{c40c2c3 #40898 
+type=standard A=10557:com.connectcommunications.mobile} flags=0x4}
+04-19 15:08:37.181 D/SGM:FgCheckThread( 2748): notePauseComponent(), received pkgName: 
+com.connectcommunications.mobile, userId: 0
+04-19 15:08:37.186 I/SurfaceFlinger( 1741): RequestedLayer 
+[com.connectcommunications.mobile/com[...]ons.mobile.MainActivity$_22671#27374] hidden!! flag  from(0) --> to(1)
+04-19 15:08:37.204 I/WindowManager( 2748): Relayout Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}: viewVisibility=8 req=1080x2340 ty=1 d0
+04-19 15:08:37.205 I/HoneySpace.FilteredItemProvider( 4661): collect filtered items l, 
+[PK(p='com.connectcommunications.mobile', u=UserHandle{0})]
+04-19 15:08:37.209 I/HoneySpace.SuggestedItemsFacade( 4661): filteredItem : PK(p='com.connectcommunications.mobile', 
+u=UserHandle{0})
+04-19 15:08:37.210 D/VRI[MainActivity]@20da79f(22671): WindowStopped on 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity set to true
+04-19 15:08:37.216 I/HoneySpace.RecentDataListRepositoryImpl[114451591]( 4661): rawData: 
+[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], displayId=0, deskId=-1, 
+type=1, name=)]
+04-19 15:08:37.216 I/HoneySpace.RecentDataListRepositoryImpl[114451591]( 4661): visibleData: 
+[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], displayId=0, deskId=-1, 
+type=1, name=)]
+04-19 15:08:37.216 I/HoneySpace.TaskListViewModel[202278877]( 4661): recentDataState: 
+RecentDataState(recentData=[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], 
+displayId=0, deskId=-1, type=1, name=)], changeState=Load)
+04-19 15:08:37.216 I/HoneySpace.TaskListPot[64c4d84]( 4661): recentDataState: 
+RecentDataState(recentData=[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], 
+displayId=0, deskId=-1, type=1, name=)], changeState=Load)
+04-19 15:08:37.216 I/HoneySpace.RecentAdapter[fad2216]( 4661): notifyDataSetChanged, prev: Load, 
+[RecentData(items=[DefaultTaskData([#taskId 40896 : com.connectcommunications.mobile])], displayId=0, deskId=-1, 
+type=1, name=), RecentData(items=[DefaultTaskData([#taskId 40897 : com.android.server.telecom])], displayId=-1, 
+deskId=-1, type=1, name=), RecentData(items=[DefaultTaskData([#taskId 40894 : com.whatsapp])], displayId=0, deskId=-1, 
+type=1, name=)]
+04-19 15:08:37.216 I/HoneySpace.RecentAdapter[fad2216]( 4661): notifyDataSetChanged, new: Load, 
+[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], displayId=0, deskId=-1, 
+type=1, name=)]
+04-19 15:08:37.221 E/WindowManager( 2748): win=Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity} destroySurfaces: appStopped=true 
+cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 
+caller=com.android.server.wm.ActivityRecord.destroySurfaces:25 
+com.android.server.wm.ActivityRecord.activityStopped:192 
+com.android.server.wm.ActivityClientController.activityStopped:97 
+android.app.IActivityClientController$Stub.onTransact:740 com.android.server.wm.ActivityClientController.onTransact:1 
+android.os.Binder.execTransactInternal:1462 android.os.Binder.execTransact:1401 
+04-19 15:08:37.221 D/SGM:FgCheckThread( 2748): pkgName: com.connectcommunications.mobile is not in foreground
+04-19 15:08:37.221 D/SGM:FgCheckThread( 2748): noteStopComponent(), received pkgName: 
+com.connectcommunications.mobile, focusedPkgName: com.sec.android.app.launcher, userId: 0
+04-19 15:08:37.221 I/HoneySpace.TaskDataRepositoryImpl( 4661): Request icon and label, id=40898, iconAndLabel: 
+IconAndLabel(icon=android.graphics.Bitmap@14883c5, label=Connect), componentKey: 
+com.connectcommunications.mobile/.MainActivity#UserHandle{0}
+04-19 15:08:37.223 D/PkgPredictorService-SecIpmManagerServiceImpl( 2748): bg information pid:22671 uid:10557 
+pkgName:com.connectcommunications.mobile
+04-19 15:08:37.236 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{com.connectcommunications.mobile/com.co
+nnectcommunications.mobile.MainActivity$_22671#27374} no children}] reparent to OffscreenRoot
+04-19 15:08:37.236 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{com.connectcommunications.mobile/com.co
+nnectcommunications.mobile.MainActivity$_22671#27374} no children}] RelativeParent to null
+04-19 15:08:37.237 I/SurfaceFlinger( 1741): id=27374 Removed 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374 (194)
+04-19 15:08:37.253 I/SurfaceFlinger( 1741): destroyed 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374 form LifecycleManager
+04-19 15:08:37.253 I/SurfaceFlinger( 1741): id=27374 onLayerDestroyed from LayerHierarchyBuilder(RequestedLayerState{co
+m.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374 !handle})
+04-19 15:08:37.253 I/Layer   ( 1741): id=27374 Destroyed 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity$_22671#27374
+04-19 15:08:38.288 I/HoneySpace.RecentAdapter[fad2216]( 4661): notifyDataChangedOnlyDiff, Load, prev: 
+[RecentData(items=[DefaultTaskData([#taskId 40898 : com.connectcommunications.mobile])], displayId=0, deskId=-1, 
+type=1, name=)]
+04-19 15:08:38.292 I/ActivityManager( 2748): Killing 22671:com.connectcommunications.mobile/u0a557 (adj 900): remove 
+task
+04-19 15:08:38.352 I/WindowManager( 2748): WIN DEATH: Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}
+04-19 15:08:38.352 V/WindowManager( 2748): Remove Window{7789731 u0 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}: mSurfaceControl=null 
+mAnimatingExit=false mRemoveOnExit=false mHasSurface=false surfaceShowing=false animating=false app-animation=false 
+callers=com.android.server.wm.Session.binderDied:85 android.os.IBinder$DeathRecipient.binderDied:346 
+android.os.BinderProxy.sendDeathNotice:848 <bottom of call stack> <bottom of call stack> <bottom of call stack> 
+04-19 15:08:38.355 I/SurfaceFlinger( 1741): id=27370 Removed 49dd041 ActivityRecordInputSink 
+com.connectcommunications.mobile/.MainActivity#27370 (193)
+04-19 15:08:38.356 W/UsageStatsService( 2748): Unexpected activity event reported! 
+(com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity event : 23 instanceId : 146573120)
+04-19 15:08:38.356 D/SGM:FgCheckThread( 2748): pkgName: com.connectcommunications.mobile is not in foreground
+04-19 15:08:38.356 D/SGM:FgCheckThread( 2748): noteStopComponent(), received pkgName: 
+com.connectcommunications.mobile, focusedPkgName: com.sec.android.app.launcher, userId: 0
+04-19 15:08:38.369 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373} no children}] reparent to 
+OffscreenRoot
+04-19 15:08:38.369 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373} no children}] RelativeParent to 
+null
+04-19 15:08:38.370 I/SurfaceFlinger( 1741): id=27373 Removed 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 (192)
+04-19 15:08:38.386 I/SurfaceFlinger( 1741): destroyed 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 form LifecycleManager
+04-19 15:08:38.386 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}#27366} 1 children}] reparent to OffscreenRoot
+04-19 15:08:38.386 I/SurfaceFlinger( 1741): [LayerHierarchy{RequestedLayerState{ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}#27366} 1 children}] RelativeParent to null
+04-19 15:08:38.386 I/SurfaceFlinger( 1741): id=27373 onLayerDestroyed from 
+LayerHierarchyBuilder(RequestedLayerState{7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373 !handle})
+04-19 15:08:38.386 I/Layer   ( 1741): id=27373 Destroyed 7789731 
+com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#27373
+04-19 15:08:38.387 I/SurfaceFlinger( 1741): id=27366 Removed ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}#27366 (192)
+04-19 15:08:38.403 I/SurfaceFlinger( 1741): destroyed 49dd041 ActivityRecordInputSink 
+com.connectcommunications.mobile/.MainActivity#27370 form LifecycleManager
+04-19 15:08:38.403 I/SurfaceFlinger( 1741): destroyed ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}#27366 form LifecycleManager
+04-19 15:08:38.403 I/SurfaceFlinger( 1741): id=27370 onLayerDestroyed from 
+LayerHierarchyBuilder(RequestedLayerState{49dd041 ActivityRecordInputSink 
+com.connectcommunications.mobile/.MainActivity#27370 !handle z=-2147483648})
+04-19 15:08:38.403 I/SurfaceFlinger( 1741): id=27366 onLayerDestroyed from 
+LayerHierarchyBuilder(RequestedLayerState{ActivityRecord{256188884 u0 com.connectcommunications.mobile/.MainActivity 
+t40898}#27366 !handle})
+04-19 15:08:38.403 I/Layer   ( 1741): id=27370 Destroyed 49dd041 ActivityRecordInputSink 
+com.connectcommunications.mobile/.MainActivity#27370
+04-19 15:08:38.403 I/Layer   ( 1741): id=27366 Destroyed ActivityRecord{256188884 u0 
+com.connectcommunications.mobile/.MainActivity t40898}#27366
+04-19 15:08:40.386 D/PackageManager( 2748): setEnabledSetting : userId = 0 packageName = 
+com.google.android.apps.messaging cmp = 
+com.google.android.apps.messaging.shared.fcm.impl.BugleFirebaseMessagingService newState = 1 callingPackage = 
+com.google.android.apps.messaging
+04-19 15:08:46.431 I/Telecom ( 2748): SamsungTelecomServiceImpl : getPhoneAccount - accountHandle : 
+ComponentInfo{com.connectcommunications.mobile/io.wazo.callkeep.VoiceConnectionService}, ***, UserHandle{0} / 
+callingPackage : com.samsung.android.providers.contacts / callingUser : UserHandle{0}
+04-19 15:08:49.585 I/AlarmManager( 4730): setExactAndAllowWhileIdle [name: FcmRetry type: 2 triggerAtMillis: 116698288]
+04-19 15:08:49.621 I/ActivityManager( 2748): Start proc 23010:com.connectcommunications.mobile/u0a557 for broadcast 
+{com.connectcommunications.mobile/com.google.firebase.iid.FirebaseInstanceIdReceiver}
+04-19 15:08:49.621 D/DynamicHiddenApp_BGProtectManager( 2748): [SecIpm] it's a ML_TYPE_EMPTYPROCESS protected process 
+com.connectcommunications.mobile
+04-19 15:08:49.682 D/nativeloader(23010): Configuring clns-9 for other apk /system/framework/sec_camerax_impl.jar. 
+target_sdk_version=34, uses_libraries=ALL, library_path=/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.
+mobile-8L7c-Q-CFCp9V8zim2zB0Q==/lib/arm64:/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-
+CFCp9V8zim2zB0Q==/base.apk!/lib/arm64-v8a, 
+permitted_path=/data:/mnt/expand:/data/user/0/com.connectcommunications.mobile
+04-19 15:08:49.702 D/nativeloader(23010): Configuring clns-10 for other apk 
+/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk. 
+target_sdk_version=34, uses_libraries=, library_path=/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mob
+ile-8L7c-Q-CFCp9V8zim2zB0Q==/lib/arm64:/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFC
+p9V8zim2zB0Q==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.connectcommunications.mobile
+04-19 15:08:49.709 V/GraphicsEnvironment(23010): com.connectcommunications.mobile is not listed in per-application 
+setting
+04-19 15:08:49.709 V/GraphicsEnvironment(23010): com.connectcommunications.mobile is not listed in ANGLE allowlist or 
+settings, returning default
+04-19 15:08:49.723 W/SoLoader(23010): Recording new base apk path: 
+/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk
+04-19 15:08:49.741 I/IncomingCallService(23010): [CALL_INCOMING] parsed Expo body envelope, type=INCOMING_CALL
+04-19 15:08:49.741 I/IncomingCallService(23010): [CALL_INCOMING] onMessageReceived type=INCOMING_CALL 
+dataKeys=androidx.collection.MapCollections$KeySet@88813346 appDataKeys=[callId, fromDisplay, inviteId, body, type, 
+toExtension, experienceId, fromNumber, pbxCallId, scopeKey, tenantId, sipCallTarget, from, pbxSipUsername, projectId, 
+timestamp]
+04-19 15:08:49.741 I/ConnectCallFlow(23010): {"tag":"CALL_FLOW","stage":"FCM_DATA_INCOMING_CALL","ts":1776625729741,"in
+viteId":"cmo6536iy001rmr4btue5aq6a","source":"android_native","procImportance":300,"fcmType":"INCOMING_CALL"}
+04-19 15:08:49.743 W/AS.HardeningEnforcer( 2748): AudioHardening focus request for req 2 would be ignored for 
+com.connectcommunications.mobile (10557), android.media.AudioManager@ba54570com.connectcommunications.mobile.IncomingCa
+llFirebaseService$$ExternalSyntheticLambda2@526e0e9, level: partial
+04-19 15:08:49.743 I/MediaFocusControl( 2748): requestAudioFocus() from uid/pid 10557/23010 
+AA=USAGE_NOTIFICATION_RINGTONE/CONTENT_TYPE_SONIFICATION clientId=android.media.AudioManager@ba54570com.connectcommunic
+ations.mobile.IncomingCallFirebaseService$$ExternalSyntheticLambda2@526e0e9 
+callingPack=com.connectcommunications.mobile req=2 flags=0x0 sdk=34
+04-19 15:08:49.744 I/MediaFocusControl( 2748): removeFocusStackEntry client:android.media.AudioManager@ba54570com.conne
+ctcommunications.mobile.IncomingCallFirebaseService$$ExternalSyntheticLambda2@526e0e9
+04-19 15:08:49.758 V/MediaPlayerService( 2174): Create new client(402) from AttributionSourceState{pid: 23010, uid: 
+10557, deviceId: 0, packageName: com.connectcommunications.mobile, attributionTag: (null), token: 
+binder:0xb400007632983830, renouncedPermissions: [], next: []}, 
+04-19 15:08:49.759 V/MediaPlayerService( 2174): setDataSource fd=18 
+(/data/app/~~rm3ZOM8a_1s7YpMd7zm4_Q==/com.connectcommunications.mobile-8L7c-Q-CFCp9V8zim2zB0Q==/base.apk), 
+offset=129408380, length=547338
+04-19 15:08:49.769 V/NuPlayer( 2174): onMessageReceived kWhatPrepare
+04-19 15:08:49.788 I/IncomingCallService(23010): [CALL_INCOMING] native ringtone playback started (media_player)
+04-19 15:08:49.796 I/IncomingCallService(23010): [CALL_INCOMING] presentation_decision locked=false interactive=true 
+foregroundPackage=null homePackage=com.sec.android.app.launcher otherAppForeground=false fullScreen=true
+04-19 15:08:49.796 I/IncomingCallService(23010): [LOCK_CALL_NATIVE] incoming_received 
+inviteId=cmo6536iy001rmr4btue5aq6a from=108 presentation=full_screen appInForeground=false
+04-19 15:08:49.796 I/IncomingCallService(23010): [CALL_INCOMING] native handler inviteId=cmo6536iy001rmr4btue5aq6a 
+from=108
+04-19 15:08:49.798 I/IncomingCallService(23010): [CALL_INCOMING] cache file written: 
+/data/user/0/com.connectcommunications.mobile/cache/pending_call_native.json
+04-19 15:08:49.807 I/NotificationManager(23010): com.connectcommunications.mobile: notify(44176, null, 
+Notification(channel=connect-incoming-ui-v6 shortcut=null contentView=null vibrate=null sound=null defaults=0 
+flags=ONGOING_EVENT|ONLY_ALERT_ONCE|HIGH_PRIORITY color=0x00000000 category=call actions=2 vis=PUBLIC semFlags=0x0 
+semPriority=0 semMissedCount=0)) as user
+04-19 15:08:49.807 D/NotificationManager(23010): BOOTING pkg =com.connectcommunications.mobile 
+mBlockedChannelsForOverflowNoti=[]
+04-19 15:08:49.812 I/IncomingCallService(23010): [CALL_INCOMING] posted incoming call notification mode=full_screen
+04-19 15:08:49.812 D/PowerManagerService( 2748): [api] acquire WakeLock SCREEN_BRIGHT_WAKE_LOCK           
+'Connect:IncomingCallScreen' ACQUIRE_CAUSES_WAKEUP ON_AFTER_RELEASE (uid=10557 pid=23010 displayId=0 lock=2678fee)
+04-19 15:08:49.812 I/PowerManagerService( 2748): Allowing device wake-up without android.permission.TURN_SCREEN_ON for 
+com.connectcommunications.mobile
+04-19 15:08:49.813 I/IncomingCallService(23010): [CALL_INCOMING] acquired SCREEN_BRIGHT wake lock for full-screen 
+launch
+04-19 15:08:49.816 E/ActivityTaskManager( 2748): Background activity launch blocked! goo.gle/android-bal 
+[callingPackage: com.connectcommunications.mobile; callingPackageTargetSdk: 34; callingUid: 10557; callingPid: -1; 
+appSwitchState: 1; callingUidHasVisibleActivity: false; callingUidHasNonAppVisibleWindow: false; callingUidProcState: 
+SERVICE; isCallingUidPersistentSystemProcess: false; allowBalExemptionForSystemProcess: false; intent: Intent { 
+act=android.intent.action.VIEW dat=com.connectcommunications.mobile://incoming-call/... flg=0x34000000 xflg=0x4 
+pkg=com.connectcommunications.mobile cmp=com.connectcommunications.mobile/.MainActivity (has extras) }; callerApp: 
+null; balAllowedByPiCreator: BSP.ALLOW_BAL; resultIfPiCreatorAllowsBal: BAL_BLOCK; callerStartMode: 
+MODE_BACKGROUND_ACTIVITY_START_SYSTEM_DEFINED; hasRealCaller: true; isCallForResult: false; isPendingIntent: true; 
+autoOptInReason: sameUid; realCallingPackage: com.connectcommunications.mobile; realCallingPackageTargetSdk: 34; 
+realCallingUid: 10557; realCallingPid: 23010; realCallingUidHasVisibleActivity: false; 
+realCallingUidHasNonAppVisibleWindow: false; realCallingUidProcState: SERVICE; 
+isRealCallingUidPersistentSystemProcess: false; originatingPendingIntent: PendingIntentRecord{aed7197 
+com.connectcommunications.mobile startActivity (allowlist: 
+f681647:+30s0ms/0/NOTIFICATION_SERVICE/NotificationManagerService)}; realCallerApp: ProcessRecord{4f4699a 
+23010:com.connectcommunications.mobile/u0a557}; realInVisibleTask: false; balAllowedByPiSender: BSP.ALLOW_BAL; 
+resultIfPiSenderAllowsBal: BAL_BLOCK; realCallerStartMode: MODE_BACKGROUND_ACTIVITY_START_ALLOWED; 
+balRequireOptInByPendingIntentCreator: true; balDontBringExistingBackgroundTaskStackToFg: true]
+04-19 15:08:49.818 V/WindowManager( 2748): Collecting in transition 2592: ActivityRecord{54574330 u0 
+com.connectcommunications.mobile/.MainActivity, caller=com.android.server.wm.TransitionController.collect:7 
+com.android.server.wm.ActivityStarter.startActivityUnchecked:98 
+com.android.server.wm.ActivityStarter.executeRequest:3559 com.android.server.wm.ActivityStarter.execute:1752 
+com.android.server.wm.ActivityStartController.startActivityInPackage:33 
+04-19 15:08:49.818 D/ActivityTaskManager( 2748): DesktopModeLaunchParamsModifier: task=null 
+activity=ActivityRecord{54574330 u0 com.connectcommunications.mobile/.MainActivity t-1} task null, skipping
+04-19 15:08:49.818 D/ActivityTaskManager( 2748): TaskLaunchParamsModifier:task=null activity=ActivityRecord{54574330 
+u0 com.connectcommunications.mobile/.MainActivity t-1} display-from-caller=0 display-id=0 
+task-display-area-windowing-mode=1 suggested-display-area=DefaultTaskDisplayArea_d0@170809279
+04-19 15:08:49.818 D/ActivityTaskManager( 2748): DesktopModeLaunchParamsModifier: task=null 
+activity=ActivityRecord{54574330 u0 com.connectcommunications.mobile/.MainActivity t-1} task null, skipping
+04-19 15:08:49.818 D/ActivityTaskManager( 2748): TaskLaunchParamsModifier:task=null activity=ActivityRecord{54574330 
+u0 com.connectcommunications.mobile/.MainActivity t-1} display-from-caller=0 display-id=0 
+task-display-area-windowing-mode=1 suggested-display-area=DefaultTaskDisplayArea_d0@170809279 
+non-freeform-task-display-area display-area=DefaultTaskDisplayArea_d0@170809279 activity-requested-portrait 
+freeform-size-mismatch=Rect(81, 608 - 999, 1778)
+04-19 15:08:49.819 I/ActivityTaskManager( 2748): START u0 {act=android.intent.action.VIEW 
+dat=com.connectcommunications.mobile://incoming-call/... flg=0x34000000 xflg=0x4 pkg=com.connectcommunications.mobile 
+cmp=com.connectcommunications.mobile/.MainActivity (has extras)} with LAUNCH_SINGLE_TASK from uid 10557 (BAL_BLOCK) 
+result code=102
+04-19 15:08:49.819 D/ActivityManager( 2748): Received ACTIVITY intent 0xaed7197 Key{startActivity 
+pkg=com.connectcommunications.mobile intent=act=android.intent.action.VIEW 
+dat=com.connectcommunications.mobile://incoming-call/... flg=0x34000000 xflg=0x4 pkg=com.connectcommunications.mobile 
+cmp=com.connectcommunications.mobile/.MainActivity flags=0x4000000 u=0} requestCode=44176 res=0 from uid 10557
+04-19 15:08:49.820 I/IncomingCallService(23010): [LOCK_CALL_NATIVE] full_screen_intent_sent
+04-19 15:08:49.820 I/IncomingCallService(23010): [CALL_INCOMING] requested branded full-screen launch via pending 
+intent
+04-19 15:08:49.831 I/IncomingCallService(23010): [CALL_INCOMING] service onDestroy (ringtone left to 
+dismissIncomingCallUi / JS)
+04-19 15:08:50.020 D/VibratorManagerService( 2748): vibrate - uid: 1000, opPkg: android, effect: 
+Mono{mEffect=Composed{segments=[Step{amplitude=0.0, frequencyHz=0.0, duration=0}, Step{amplitude=-1.0, 
+frequencyHz=0.0, duration=350}, Step{amplitude=0.0, frequencyHz=0.0, duration=250}, Step{amplitude=-1.0, 
+frequencyHz=0.0, duration=350}], repeat=-1, mMagnitudeType=TYPE_EXTRA}}, attrs: 
+VibrationAttributes{mUsage=NOTIFICATION, mAudioUsage= USAGE_UNKNOWN, mFlags=0, tags=}, reason: Notification 
+(com.connectcommunications.mobile 10557) , token: android.os.Binder@e743367
+04-19 15:08:50.027 D/NotificationReminder( 2748): addNotificationRecord record com.connectcommunications.mobile
+04-19 15:08:50.037 I/HoneySpace.NotificationListener( 4661): onNotificationPosted com.connectcommunications.mobile: 
+0|com.connectcommunications.mobile|44176|null|10557: 0
+04-19 15:08:50.037 I/HoneySpace.BadgeDataSourceImpl( 4661): Get notification count. 
+PK(p='com.connectcommunications.mobile', u=UserHandle{0}) - forceBadgeCount: false, notification listener: 1, badge 
+provider: 0
+04-19 15:08:50.039 I/HoneySpace.PackageEventOperator( 4661): [ApplistViewModel] badge count is updated. 
+com.connectcommunications.mobile/.MainActivity#UserHandle{0}|168478 : 1
+04-19 15:08:50.042 D/{OngoingActivityController}( 3944): OnlyShownNowbar - onEntryUpdated() 
+0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.043 I/Telecom ( 2748): VoipCallMonitor: onNotificationPosted: 
+sbn=[StatusBarNotification(pkg=com.connectcommunications.mobile user=UserHandle{0} id=44176 tag=null 
+key=0|com.connectcommunications.mobile|44176|null|10557: Notification(channel=connect-incoming-ui-v6 shortcut=null 
+contentView=null vibrate=null sound=null defaults=0 flags=ONGOING_EVENT|ONLY_ALERT_ONCE|HIGH_PRIORITY|NO_DISMISS 
+color=0x00000000 category=call actions=2 vis=PUBLIC semFlags=0x1000 semPriority=0 semMissedCount=0))]
+04-19 15:08:50.046 I/NotificationPipeline( 7369): Processing new notification: 
+0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.051 I/{OngoingActivityDataHelper}( 3944): notifyUpdateItemNowbarObservers 
+NowBarItem{notiID=0|com.connectcommunications.mobile|44176|null|10557} size = 1
+04-19 15:08:50.051 I/NowBarItemManager( 3944): onNowBarItemUpdated added 
+0|com.connectcommunications.mobile|44176|null|10557, , NOTI | -1 isChargingVIEnded=false / needToFullview=true/ 
+ignoreBouncer = false
+04-19 15:08:50.051 I/BUPlugin__NotificationListener( 9528): onNotificationPosted()::sbn.getPackageName() = 
+com.connectcommunications.mobile
+04-19 15:08:50.051 I/BUPlugin__NotificationListener( 9528): Ignoring notification from com.connectcommunications.mobile
+04-19 15:08:50.060 W/Notification4Watch7_NB( 7369): NotificationBridgeCallback.onNotificationPosted-Ignored package : 
+[0] com.connectcommunications.mobile
+04-19 15:08:50.061 I/NotificationPipeline( 7369): Discarding notification: 
+0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.087 I/AppIconSolution( 3944): start to load, pkg=com.connectcommunications.mobile, bg=144-144, 
+dr=216-216, forDefault=false, density=0
+04-19 15:08:50.088 I/MultimediaHelper(17775): (Jelly)(2.2.04) isMusicRunning() : audio playing package - 
+com.connectcommunications.mobile 
+04-19 15:08:50.090 I/AppIconSolution( 3944): getIconScale, pkg=com.connectcommunications.mobile, size=216, 
+iconScale=IconScale[alpha=2, scale=0.58, isCrop=false]
+04-19 15:08:50.090 I/AppIconSolution( 3944): fromTheme2, pkg=com.connectcommunications.mobile, bg=144-144, dr=216-216, 
+tarScale=0.58, relScale=0.39396223, mask=false, isCropInTheme = false, isNight = true
+04-19 15:08:50.105 I/AppIconSolution( 3944): start to load, pkg=com.connectcommunications.mobile, bg=144-144, 
+dr=216-216, forDefault=false, density=0
+04-19 15:08:50.108 I/AppIconSolution( 3944): getIconScale, pkg=com.connectcommunications.mobile, size=216, 
+iconScale=IconScale[alpha=2, scale=0.58, isCrop=false]
+04-19 15:08:50.108 I/AppIconSolution( 3944): fromTheme2, pkg=com.connectcommunications.mobile, bg=144-144, dr=216-216, 
+tarScale=0.58, relScale=0.39396223, mask=false, isCropInTheme = false, isNight = true
+04-19 15:08:50.118 D/ExpandableNotifRow( 3944): mMaxSmallHeight different before reInflateViews mMaxSmallHeight: 216 
+mTempSmallHeight:0 0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.119 D/ExpandableNotifRow( 3944): mMaxSmallHeight different before reInflateViews mMaxSmallHeight: 216 
+mTempSmallHeight:0 0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.122 D/S.S.N.  ( 3944): entryViewBound parent :0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.139 D/InsignificantCoordinator( 3944): onHeadsUpStateChanged : 
+0|com.connectcommunications.mobile|44176|null|10557 isHeadsUP :true entry? false headsupManager? true
+04-19 15:08:50.141 I/AppIconSolution( 3944): start to load, pkg=com.connectcommunications.mobile, bg=144-144, 
+dr=216-216, forDefault=false, density=0
+04-19 15:08:50.143 I/AppIconSolution( 3944): getIconScale, pkg=com.connectcommunications.mobile, size=216, 
+iconScale=IconScale[alpha=2, scale=0.58, isCrop=false]
+04-19 15:08:50.143 I/AppIconSolution( 3944): fromTheme2, pkg=com.connectcommunications.mobile, bg=144-144, dr=216-216, 
+tarScale=0.58, relScale=0.39396223, mask=false, isCropInTheme = false, isNight = true
+04-19 15:08:50.148 I/View    ( 3944): setRequestedFrameRate frameRate=-2.0, 
+this=StatusBarIconView(slot='com.connectcommunications.mobile/0xac90' alpha=1.0 
+icon=StatusBarIcon(icon=Icon(typ=RESOURCE pkg=com.connectcommunications.mobile id=0x7f08013f) visible user=0 ) 
+visibleState=ICON iconColor=#0 staticDrawableColor=#0 decorColor=#ff1b6cf7 animationStartColor=#0 currentSetColor=#0 
+notification=StatusBarNotification(pkg=com.connectcommunications.mobile user=UserHandle{0} id=44176 tag=null 
+key=0|com.connectcommunications.mobile|44176|null|10557: Notification(channel=connect-incoming-ui-v6 shortcut=null 
+contentView=null vibrate=null sound=null defaults=0 flags=ONGOING_EVENT|ONLY_ALERT_ONCE|HIGH_PRIORITY|NO_DISMISS 
+color=0x00000000 category=call actions=2 vis=PUBLIC semFlags=0x1000 semPriority=0 semMissedCount=0))), 
+caller=com.android.systemui.statusbar.StatusBarIconView.onAttachedToWindow:6 
+android.view.View.dispatchAttachedToWindow:24320 android.view.ViewGroup.addViewInner:5582 
+android.view.ViewGroup.addView:5358 
+com.android.systemui.statusbar.phone.LegacyNotificationIconAreaControllerImpl.updateIconsForLayout:468 
+04-19 15:08:50.149 I/View    ( 3944): setRequestedFrameRate frameRate=-2.0, 
+this=StatusBarIconView(slot='com.connectcommunications.mobile/0xac90' alpha=1.0 
+icon=StatusBarIcon(icon=Icon(typ=RESOURCE pkg=com.connectcommunications.mobile id=0x7f08013f) visible user=0 ) 
+visibleState=ICON iconColor=#0 staticDrawableColor=#0 decorColor=#ff1b6cf7 animationStartColor=#0 currentSetColor=#0 
+notification=StatusBarNotification(pkg=com.connectcommunications.mobile user=UserHandle{0} id=44176 tag=null 
+key=0|com.connectcommunications.mobile|44176|null|10557: Notification(channel=connect-incoming-ui-v6 shortcut=null 
+contentView=null vibrate=null sound=null defaults=0 flags=ONGOING_EVENT|ONLY_ALERT_ONCE|HIGH_PRIORITY|NO_DISMISS 
+color=0x00000000 category=call actions=2 vis=PUBLIC semFlags=0x1000 semPriority=0 semMissedCount=0))), 
+caller=com.android.systemui.statusbar.StatusBarIconView.onAttachedToWindow:6 
+android.view.View.dispatchAttachedToWindow:24320 android.view.ViewGroup.addViewInner:5582 
+android.view.ViewGroup.addView:5358 
+com.android.systemui.statusbar.phone.LegacyNotificationIconAreaControllerImpl.updateIconsForLayout:468 
+04-19 15:08:50.160 D/NotificationContentView( 3944): entry : 0|com.connectcommunications.mobile|44176|null|10557 >>> 
+mHeadsUpChild is tall : 390 , mExpandedChild : 390
+04-19 15:08:50.161 D/ExpandableNotifRow( 3944): mMaxSmallHeight different before reInflateViews mMaxSmallHeight: 216 
+mTempSmallHeight:0 0|com.connectcommunications.mobile|44176|null|10557
+04-19 15:08:50.161 D/NotificationContentView( 3944): entry : 0|com.connectcommunications.mobile|44176|null|10557 >>> 
+mHeadsUpChild is tall : 390 , mExpandedChild : 390
+04-19 15:08:50.180 D/NotificationContentView( 3944): entry : 0|com.connectcommunications.mobile|44176|null|10557 >>> 
+mHeadsUpChild is tall : 390 , mExpandedChild : 390
+04-19 15:08:50.182 D/NotificationContentView( 3944): entry : 0|com.connectcommunications.mobile|44176|null|10557 >>> 
+mHeadsUpChild is tall : 390 , mExpandedChild : 390
+04-19 15:08:50.266 I/MultimediaHelper( 9528): (Bach)(2.3.03) isMusicRunning() : audio playing package - 
+com.connectcommunications.mobile 
+04-19 15:09:04.826 D/PowerManagerService( 2748): [api] release WakeLock SCREEN_BRIGHT_WAKE_LOCK           
+'Connect:IncomingCallScreen' ACQUIRE_CAUSES_WAKEUP ON_AFTER_RELEASE ACQ=-15s12ms (uid=10557 pid=23010 displayId=0 
+lock=2678fee)
+04-19 15:09:04.826 D/PowerManagerService( 2748): [api] applyWakeLockFlagsOnReleaseLocked : userActivityNoUpdateLocked 
+is called : SCREEN_BRIGHT_WAKE_LOCK           'Connect:IncomingCallScreen' ACQUIRE_CAUSES_WAKEUP ON_AFTER_RELEASE 
+DISABLED (uid=10557 pid=23010 displayId=0 lock=2678fee)
+
+

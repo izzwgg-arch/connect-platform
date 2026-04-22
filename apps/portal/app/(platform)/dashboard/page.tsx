@@ -118,9 +118,14 @@ export default function DashboardPage() {
     [adminScope, contextTenantId, kpiTick]
   );
 
+  const trafficParam = (() => {
+    const params = new URLSearchParams({ scope: adminScope, windowMinutes: "1440" });
+    if (!isGlobal && contextTenantId) params.set("tenantId", contextTenantId);
+    return `?${params.toString()}`;
+  })();
   const trafficState = useAsyncResource<DashboardCallTraffic>(
-    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic?scope=${adminScope}&windowMinutes=1440`),
-    [adminScope, trafficTick]
+    () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic${trafficParam}`),
+    [adminScope, contextTenantId, trafficTick]
   );
 
   // ── Derived values ──
@@ -178,13 +183,13 @@ export default function DashboardPage() {
               <div>
                 <h2 className="dash-hero-title">Call activity</h2>
                 <p className="dash-hero-sub">Today · direction-corrected</p>
-              </div>
+            </div>
               <div className="dash-hero-legend">
                 <LegendItem color="var(--dash-incoming)" label="Incoming" value={traffic?.totals?.incoming ?? null} />
                 <LegendItem color="var(--dash-outgoing)" label="Outgoing" value={traffic?.totals?.outgoing ?? null} />
                 <LegendItem color="var(--dash-internal)" label="Internal" value={traffic?.totals?.internal ?? null} />
                 <LegendItem color="var(--dash-missed)"   label="Missed"   value={missedToday} />
-              </div>
+          </div>
             </div>
             <div className="dash-hero-plot">
               {trafficState.status === "loading" ? (
@@ -194,8 +199,8 @@ export default function DashboardPage() {
               ) : (
                 <CallVolumeChart points={traffic.points} />
               )}
-            </div>
-          </div>
+              </div>
+              </div>
         </section>
 
         {/* ── KPI CARDS ── */}
@@ -220,12 +225,12 @@ export default function DashboardPage() {
             label="Missed" value={missedToday} meta="Unanswered"
             variant="missed" delay={240}
           />
-          {isGlobal && isAdminSummary(pbxLive) ? (
+            {isGlobal && isAdminSummary(pbxLive) ? (
             <KpiCard
               label="Active Tenants" value={pbxLive.activeTenantsCount} meta="With calls today"
               variant="default" delay={300}
             />
-          ) : null}
+            ) : null}
         </section>
 
         {/* ── SUPPORTING METRIC CARDS ── */}
@@ -283,7 +288,7 @@ export default function DashboardPage() {
           <div className="dash-side-stack">
             <SystemStatusCard isConnected={telephony.status === "connected"} />
             <TimeConditionCard />
-          </div>
+                      </div>
         </section>
 
         {/* ── EXTENSION PRESENCE GRID ── */}
@@ -291,7 +296,7 @@ export default function DashboardPage() {
           <div className="dash-section-hdr">
             <h3 className="dash-section-title">Extension presence</h3>
             <span className="dash-shell-badge">Preview — wire up when live</span>
-          </div>
+            </div>
           <ExtensionPresenceGrid />
         </section>
 
@@ -321,16 +326,16 @@ export default function DashboardPage() {
                     <span className="calls-live-count">{liveCalls.length}</span>
                   </div>
                   <div className="calls-live-list">
-                    {liveCalls.map((call) => {
-                      const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
+                      {liveCalls.map((call) => {
+                        const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
                       const elapsed = call.answeredAt
-                        ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
-                        : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
+                          ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
+                          : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
                       const displayTo = call.to
                         ? call.to
                         : <span style={{ fontStyle: "italic", color: "var(--console-muted)", fontSize: "0.8rem" }}>Resolving…</span>;
                       const displayTenant = call.tenantName ?? call.tenantId ?? null;
-                      return (
+                        return (
                         <div key={call.id} className="calls-live-row">
                           <DirectionIcon direction={dir} size={15} />
                           <span className="calls-live-caller">
@@ -347,8 +352,8 @@ export default function DashboardPage() {
                           ) : null}
                           <LiveCallBadge active />
                         </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
                 </div>
               ) : (
@@ -364,7 +369,7 @@ export default function DashboardPage() {
                   <span className="calls-live-count">{activeCalls.calls.length}</span>
                 </div>
                 <div className="calls-live-list">
-                  {activeCalls.calls.map((call) => (
+                    {activeCalls.calls.map((call) => (
                     <div key={call.channelId} className="calls-live-row">
                       <DirectionIcon direction={call.direction} size={15} />
                       <span className="calls-live-caller">
@@ -377,7 +382,7 @@ export default function DashboardPage() {
                       <span className="mono muted">{formatDurationSec(call.durationSeconds)}</span>
                     </div>
                   ))}
-                </div>
+              </div>
               </div>
             ) : (
               <LiveCallsEmptyState />
@@ -435,8 +440,8 @@ function CallFlowWidget({
                   <span className="dash-flow-step-val dash-flow-step-val--shell">—</span>
                 )}
                 {step.note ? <span className="dash-flow-step-note">{step.note}</span> : null}
-              </div>
-            </div>
+                </div>
+                </div>
             {i < steps.length - 1 && <div className="dash-flow-arrow">›</div>}
           </div>
         ))}
@@ -519,15 +524,15 @@ function SystemStatusCard({ isConnected }: { isConnected: boolean }) {
       <div className="dash-status-header">
         <span className={`dash-status-orb ${allOk ? "ok" : "warn"}`} />
         <span className="dash-status-title">System health</span>
-      </div>
+                  </div>
       {items.map((item) => (
         <div key={item.label} className={`dash-status-row ${item.ok ? "ok" : "warn"}`}>
           <span className="dash-status-row-icon">{item.icon}</span>
           <span className="dash-status-row-label">{item.label}</span>
           <span className={`dash-status-row-pill ${item.ok ? "ok" : "warn"}`}>{item.ok ? "OK" : "Down"}</span>
-        </div>
-      ))}
-    </div>
+                  </div>
+              ))}
+            </div>
   );
 }
 
@@ -546,12 +551,12 @@ function TimeConditionCard() {
       <div className="dash-status-header">
         <Clock size={14} style={{ color: modeColor }} />
         <span className="dash-status-title">Business hours</span>
-      </div>
+              </div>
       <div className="dash-timecond-status" style={{ color: modeColor }}>{modeLabel}</div>
       <div className="dash-timecond-note">
         {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} local · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dayOfWeek]}
-      </div>
-    </div>
+              </div>
+              </div>
   );
 }
 
@@ -587,7 +592,7 @@ function ExtensionPresenceGrid() {
             <div className="dash-presence-avatar">
               {initials}
               <span className="dash-presence-dot" style={{ background: s.color }} />
-            </div>
+              </div>
             <div className="dash-presence-info">
               <span className="dash-presence-name">{e.name}</span>
               <span className="dash-presence-ext">Ext. {e.ext}</span>
@@ -623,7 +628,7 @@ function QueueAnalyticsCard() {
             <span className="dash-ops-metric-sub">{m.sub}</span>
           </div>
         ))}
-      </div>
+            </div>
     </div>
   );
 }
@@ -641,7 +646,7 @@ function IvrAnalyticsCard() {
       <div className="dash-ops-header">
         <GitMerge size={15} className="dash-ops-icon" />
         <span className="dash-ops-title">IVR analytics</span>
-      </div>
+            </div>
       <div className="dash-ops-note">Menu option distribution · shell preview</div>
       <div className="dash-ivr-bars">
         {options.map((o) => (
@@ -652,12 +657,12 @@ function IvrAnalyticsCard() {
                 className="dash-ivr-bar-fill"
                 style={{ width: `${o.pct}%`, background: o.color }}
               />
-            </div>
+                  </div>
             <span className="dash-ivr-bar-pct">{o.pct}%</span>
-          </div>
+                  </div>
         ))}
-      </div>
-    </div>
+                  </div>
+                  </div>
   );
 }
 
@@ -668,7 +673,7 @@ function VoicemailCard() {
       <div className="dash-ops-header">
         <Voicemail size={15} className="dash-ops-icon" />
         <span className="dash-ops-title">Voicemail</span>
-      </div>
+                </div>
       <div className="dash-voicemail-empty">
         <Voicemail size={28} className="dash-voicemail-icon" />
         <p className="dash-voicemail-msg">No unread voicemails</p>
@@ -680,7 +685,7 @@ function VoicemailCard() {
 
 // ── Recordings Panel ──────────────────────────────────────────────────────────
 function RecordingsCard() {
-  return (
+                        return (
     <div className="dash-records-card">
       <div className="dash-records-header">
         <Mic size={15} className="dash-ops-icon" />
@@ -708,7 +713,7 @@ function BillingSnapshotCard() {
         <CreditCard size={15} className="dash-ops-icon" />
         <span className="dash-ops-title">Usage &amp; billing</span>
         <span className="dash-ops-note" style={{ marginLeft: "auto", fontSize: "11px" }}>Month-to-date</span>
-      </div>
+                </div>
       <div className="dash-billing-bars">
         {bars.map((b) => (
           <div key={b.label} className="dash-billing-row">
@@ -723,8 +728,8 @@ function BillingSnapshotCard() {
               />
             </div>
           </div>
-        ))}
-      </div>
+                    ))}
+                  </div>
       <div className="dash-ops-note" style={{ paddingTop: 8 }}>Connect billing API to populate real usage data</div>
     </div>
   );
@@ -799,7 +804,7 @@ function CallMixCard({
                 <span className="dash-donut-legend-pct">{Math.round(s.value / total * 100)}%</span>
               </div>
             ))}
-          </div>
+                    </div>
         </div>
       )}
     </div>
@@ -856,7 +861,7 @@ function AnswerRateCard({
           </div>
         </div>
       )}
-    </div>
+              </div>
   );
 }
 
@@ -1060,7 +1065,7 @@ function TrafficSnapshotCard({
       <div className="dash-outcomes-header">
         <h4 className="dash-outcomes-title">Traffic snapshot</h4>
         <span className="dash-outcomes-sub">Ranked by volume</span>
-      </div>
+              </div>
       {loading ? (
         <LoadingSkeleton rows={3} />
       ) : !hasData ? (
@@ -1074,7 +1079,7 @@ function TrafficSnapshotCard({
                 <div className="dash-snapshot-top">
                   <span className="dash-snapshot-label">{row.label}</span>
                   <span className="dash-snapshot-val">{row.value.toLocaleString()}</span>
-                </div>
+              </div>
                 <div className="dash-snapshot-track">
                   <div
                     className="dash-snapshot-fill"
@@ -1084,7 +1089,7 @@ function TrafficSnapshotCard({
                       animationDelay: `${i * 70 + 100}ms`,
                     }}
                   />
-                </div>
+      </div>
               </div>
             </div>
           ))}

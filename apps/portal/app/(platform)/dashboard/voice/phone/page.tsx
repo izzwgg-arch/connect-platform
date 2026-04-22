@@ -5,6 +5,7 @@ import { PageHeader } from "../../../../../components/PageHeader";
 import { PermissionGate } from "../../../../../components/PermissionGate";
 import { StatusChip } from "../../../../../components/StatusChip";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
+import { MultiCallPanel } from "../../../../../components/MultiCallPanel";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -686,6 +687,10 @@ export default function VoicePhonePage() {
             {isIncoming && <IncomingScreen phone={phone} onAnswer={phone.answer} onDecline={phone.hangup} />}
             {isActive   && <ActiveCallScreen phone={phone} timerSec={timerSec} onKey={handleKey} />}
             {isEnded    && <EndedScreen />}
+            {/* Multi-call panel — renders nothing when there are no ringing/held calls. */}
+            <div style={{ padding: "0 16px 16px 16px" }}>
+              <MultiCallPanel phone={phone} />
+            </div>
           </div>
 
           {/* ── Diagnostics ──────────────────────────────── */}

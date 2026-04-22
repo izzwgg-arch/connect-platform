@@ -115,6 +115,10 @@ export type CdrPayload = {
   accountCode: string | null;
   pbxVitalTenantId: string | null;
   pbxTenantCode: string | null;
+  // Absolute filesystem path reported by AMI when MixMonitor() was invoked.
+  // Example: /var/spool/asterisk/monitor/<tenant_hash>/YYYY/MM/DD/<name>.wav
+  // Null when the call was not recorded (no MIXMONITOR_FILENAME VarSet).
+  recordingAbsPath: string | null;
 };
 
 export class CdrNotifier {
@@ -255,6 +259,7 @@ export class CdrNotifier {
       accountCode: (call.metadata?.cdrAccountCode as string | undefined) ?? null,
       pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
       pbxTenantCode: (call.metadata?.pbxTenantCode as string | undefined) ?? null,
+      recordingAbsPath: (call.metadata?.recordingAbsPath as string | undefined) ?? null,
     };
 
     if (env.ENABLE_TELEPHONY_DEBUG) {
@@ -333,6 +338,8 @@ export class CdrNotifier {
           accountCode:      payload.accountCode,
           pbxVitalTenantId: payload.pbxVitalTenantId,
           pbxTenantCode:    payload.pbxTenantCode,
+          // Outbound leg reuses the same on-disk recording as the parent call.
+          recordingAbsPath: payload.recordingAbsPath,
         };
 
         if (env.ENABLE_TELEPHONY_DEBUG) {

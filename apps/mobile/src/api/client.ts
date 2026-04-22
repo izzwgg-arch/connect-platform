@@ -87,6 +87,44 @@ export async function getPendingInvites(token: string) {
   return Array.isArray(json) ? json : [];
 }
 
+// ---- Multi-call -----------------------------------------------------------
+// Invoked by CallSessionManager. These calls record stack-bookkeeping state
+// on the server — the actual SIP hold/unhold happens client-side via JsSIP.
+
+export async function getActiveAndHeldInvites(
+  token: string,
+): Promise<{ active: any | null; held: any[] }> {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/active`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_ACTIVE_FAILED");
+  return {
+    active: json?.active ?? null,
+    held: Array.isArray(json?.held) ? json.held : [],
+  };
+}
+
+export async function holdCallInvite(token: string, inviteId: string) {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/${inviteId}/hold`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_HOLD_FAILED");
+  return json;
+}
+
+export async function resumeCallInvite(token: string, inviteId: string) {
+  const res = await fetch(`${API_BASE}/mobile/call-invites/${inviteId}/resume`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CALL_INVITE_RESUME_FAILED");
+  return json;
+}
+
 export async function respondInvite(token: string, inviteId: string, action: "ACCEPT" | "DECLINE", deviceId?: string) {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
   if (deviceId) headers["x-mobile-device-id"] = deviceId;
@@ -309,5 +347,19 @@ export async function clearCallQualityPing(token: string) {
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({}),
   }).catch(() => {});
+}
+
+export async function uploadCallFlightSession(token: string, body: {
+  session: Record<string, unknown>;
+  stats: Record<string, unknown>;
+}) {
+  const res = await fetch(`${API_BASE}/mobile/flight-recorder/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "FLIGHT_RECORDER_UPLOAD_FAILED");
+  return json;
 }
 

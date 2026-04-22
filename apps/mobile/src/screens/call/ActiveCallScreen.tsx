@@ -17,9 +17,18 @@ import * as Haptics from 'expo-haptics';
 import { playDtmfTone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
 import { useSip } from '../../context/SipContext';
 import { useIncomingNotifications } from '../../context/NotificationsContext';
+import { useCallSessions } from '../../context/CallSessionManager';
 import { logCallFlow } from '../../debug/callFlowDebug';
+import { markCallLatency, summarizeCallLatency } from '../../debug/callLatency';
 import { useTheme } from '../../context/ThemeContext';
 import { CallTimer } from '../../components/call/CallTimer';
+// The CallWaitingBanner is a dedicated, high-visibility Answer/Decline
+// prompt that slides in when a SECOND call arrives mid-call. It sits next
+// to (not instead of) the CallsDrawer so the user ALWAYS has a one-tap
+// answer path even before they know the drawer exists.
+import { CallWaitingBanner } from './CallWaitingBanner';
+import { CallsDrawer } from './CallsDrawer';
+import { TransferModal } from './TransferModal';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 
@@ -112,32 +121,90 @@ export function ActiveCallScreen() {
   const sip = useSip();
   const incomingNotif = useIncomingNotifications();
   const { isDark } = useTheme();
+  const callSessions = useCallSessions();
 
   const [showDtmf, setShowDtmf] = useState(false);
   const [dtmfInput, setDtmfInput] = useState('');
+  const [showTransfer, setShowTransfer] = useState(false);
 
   const callState = sip.callState;
   const isConnected = callState === 'connected';
   const isDialing = callState === 'dialing';
   const isRinging = callState === 'ringing';
-  // Only show "ended" UI once the call has actually been active.
-  // Without this guard, the screen flashes "CALL ENDED" on mount because
-  // callState starts as 'idle' before the SIP answer completes.
+  // When the user just tapped Answer on the heads-up / lock screen notification,
+  // `answerHandoffInviteIdRef` is set until SIP confirms. During that window we
+  // render the active call as CONNECTED so the UI feels instantaneous — phone
+  // apps universally do this (the transient "Connecting → Ringing → Connected"
+  // micro-states are confusing when you just accepted an inbound call).
+  // Once SIP actually confirms, the ref clears and `isConnected` takes over
+  // naturally; if SIP fails, the call transitions to ended and CALL ENDED is
+  // shown (still gated by hasBeenActiveRef below).
+  const isAnswerInFlight =
+    incomingNotif.answerHandoffInviteIdRef.current !== null && !isConnected;
+  // Only show "ended" UI once the call has actually been *confirmed* by SIP.
+  // We intentionally do NOT mark hasBeenActive from isAnswerInFlight alone,
+  // because during the answer handoff SIP has not yet produced a ringing/
+  // connected transition — callState is still 'idle'. If we let
+  // hasBeenActiveRef flip true on answer-in-flight, the very next render
+  // evaluates `(callState === 'idle')` as "ended" and flashes CALL ENDED
+  // for ~1s before SIP confirms. Keeping the guard strict to real SIP
+  // transitions fixes that, and we also short-circuit `isEnded` while
+  // answer-in-flight as a belt-and-braces guard.
   const hasBeenActiveRef = useRef(false);
-  if (!hasBeenActiveRef.current && (isConnected || isDialing || isRinging)) {
+  if (
+    !hasBeenActiveRef.current &&
+    (isConnected || isDialing || isRinging)
+  ) {
     hasBeenActiveRef.current = true;
   }
-  const isEnded = hasBeenActiveRef.current && (callState === 'ended' || callState === 'idle');
-  const inProgress = isDialing || isRinging;
+  // Multi-call-aware ended detection: even if the legacy single-call
+  // `sip.callState` briefly flips to "ended"/"idle" (for example because
+  // a held sibling hung up and the SIP bridge emitted a stale global
+  // callState update), we must NOT dismiss the screen while the multi-call
+  // manager still sees a live call (active / held / connecting / dialing /
+  // ringing with SIP). Otherwise a single held-party hangup tears down
+  // everything.
+  const hasAnyLiveCall = callSessions.hasAnyOngoingCall;
+  const isEnded =
+    hasBeenActiveRef.current &&
+    !isAnswerInFlight &&
+    !hasAnyLiveCall &&
+    (callState === 'ended' || callState === 'idle');
+  // While answer-in-flight, suppress the pulse animation so the UI looks
+  // settled instead of "dialing out".
+  const inProgress = (isDialing || isRinging) && !isAnswerInFlight;
 
-  // Derive a display name and number from remoteParty
-  const rawParty = sip.remoteParty ?? '';
-  const displayName = rawParty || (isDialing ? 'Dialing…' : isRinging ? 'Ringing…' : 'Unknown');
-  const displayNumber = rawParty && rawParty !== displayName ? rawParty : '';
+  // Derive a display name and number from the currently-active multi-call
+  // session first, then SIP remoteParty, then the last-answered invite.
+  // The multi-call pointer is authoritative when the user swaps calls —
+  // SipContext only tracks one SIP session at a time and lags behind the
+  // multi-call manager when a held call is resumed.
+  // When the active call ends but a held call remains (auto-resume is off),
+  // fall back to the top-held call's caller info so the screen keeps
+  // showing who the user is about to resume instead of flashing "Connecting…"
+  // or the old active party's name.
+  const activeSession = callSessions.activeCall;
+  const topHeldSession = callSessions.heldCalls[0] ?? null;
+  const primarySession = activeSession ?? topHeldSession;
+  const multiCallParty =
+    primarySession?.remoteName?.trim() || primarySession?.remoteNumber || '';
+  const rawParty = multiCallParty || (sip.remoteParty ?? '');
+  const inviteParty = incomingNotif.answerInviteRef.current?.fromNumber ?? '';
+  const effectiveParty = rawParty || inviteParty;
+  const displayName = effectiveParty || (
+    isAnswerInFlight
+      ? ''
+      : isDialing
+      ? 'Dialing…'
+      : isRinging
+      ? 'Ringing…'
+      : 'Connecting…'
+  );
+  const displayNumber = effectiveParty && effectiveParty !== displayName ? effectiveParty : '';
 
   // Initials for avatar
-  const initials = rawParty
-    ? rawParty
+  const initials = effectiveParty
+    ? effectiveParty
         .split(/[\s-]/)
         .filter(Boolean)
         .slice(0, 2)
@@ -186,7 +253,10 @@ export function ActiveCallScreen() {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    clearAndroidLockScreenCallPresentation();
+    // Clear lock-screen flags ONLY on unmount (not on mount).
+    // Clearing on mount would hide the active call screen behind the lock screen
+    // while the call is still in progress. The flags are also cleared in handleHangup
+    // (before sip.hangup()) for immediate effect on the hangup tap.
     return () => {
       clearAndroidLockScreenCallPresentation();
     };
@@ -199,6 +269,15 @@ export function ActiveCallScreen() {
       incomingNotif.incomingCallUiState.inviteId ??
       null;
     logCallFlow('ACTIVE_CALL_SCREEN_MOUNT', { inviteId });
+    // Latency: ActiveCallScreen mount is the authoritative "call is now
+    // live to the user" moment — after this the UI is fully swapped
+    // over. We mark CALL_ACTIVE_UI and eagerly print the timeline so
+    // the engineer sees a complete "answer → audio" trace the instant
+    // the call goes live (without waiting for hangup).
+    if (inviteId) {
+      markCallLatency(inviteId, 'CALL_ACTIVE_UI');
+      summarizeCallLatency(inviteId, 'active');
+    }
   }, []);
 
   // Auto-dismiss is handled by RootNavigator which removes this screen from
@@ -207,18 +286,26 @@ export function ActiveCallScreen() {
 
   // ── Status label ────────────────────────────────────────────────────────────
 
+  // Show the hold badge when the LEGACY single-session is on hold OR when
+  // the multi-call manager has no active call but at least one held call
+  // (i.e. the active party just hung up and the previously-held party is
+  // still waiting on the line). This keeps the user oriented while they
+  // decide whether to press Resume.
+  const showingHeldOnly = !activeSession && !!topHeldSession;
+  const isHoldState = sip.onHold || showingHeldOnly;
+
   const statusLabel = (() => {
+    if (isEnded) return 'CALL ENDED';
+    if (isHoldState) return 'ON HOLD';
+    if (isAnswerInFlight || callState === 'connected') return 'CONNECTED';
     if (callState === 'dialing') return 'CALLING…';
     if (callState === 'ringing') return 'RINGING…';
-    if (sip.onHold) return 'ON HOLD';
-    if (callState === 'connected') return 'CONNECTED';
-    if (isEnded) return 'CALL ENDED';
     return 'CONNECTING…';
   })();
 
   const statusColor = isEnded
     ? 'rgba(239,68,68,0.8)'
-    : isConnected && !sip.onHold
+    : (isConnected || isAnswerInFlight) && !isHoldState
     ? 'rgba(52,211,153,0.8)'
     : 'rgba(136,153,187,0.8)';
 
@@ -233,10 +320,26 @@ export function ActiveCallScreen() {
 
   const handleHangup = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
-    stopAllTelephonyAudio().catch(() => undefined);
     if (Platform.OS === 'android') {
       clearAndroidLockScreenCallPresentation();
     }
+    // Multi-call aware hangup: hang up the active call if any; otherwise
+    // fall back to hanging up the top held call (which is the one the
+    // screen is currently representing after the original active party
+    // dropped off). Only stop shared telephony audio when no other calls
+    // remain — otherwise we'd cut audio for siblings.
+    const snapActive = callSessions.activeCall;
+    const snapHeld = callSessions.heldCalls;
+    const target = snapActive ?? snapHeld[0] ?? null;
+    if (target) {
+      const willBeLast = (snapActive ? 0 : 0) + snapHeld.length + (snapActive ? 1 : 0) <= 1;
+      if (willBeLast) {
+        stopAllTelephonyAudio().catch(() => undefined);
+      }
+      await callSessions.hangup(target.id);
+      return;
+    }
+    stopAllTelephonyAudio().catch(() => undefined);
     await sip.hangup();
   };
 
@@ -264,10 +367,67 @@ export function ActiveCallScreen() {
       ? 'Bluetooth'
       : 'Earpiece';
 
+  // Multi-call aware Hold button.
+  //
+  // Behavior:
+  //   - If an active call exists → put it on hold via the multi-call
+  //     manager (which also mirrors to the CallSession store so the
+  //     drawer reflects it immediately).
+  //   - If no call is active but a held call exists → resume the top of
+  //     the held stack. This is what powers the "2nd caller hangs up →
+  //     press Hold to return to the first caller" flow the product spec
+  //     calls for now that auto-resume is disabled.
+  //   - Fallback: toggle the legacy single-session hold so the button
+  //     still works for the classic single-call path.
   const handleHold = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    const snapActive = callSessions.activeCall;
+    const snapHeld = callSessions.heldCalls;
+    if (snapActive) {
+      callSessions.holdActive();
+      return;
+    }
+    if (snapHeld.length > 0) {
+      callSessions.resume(snapHeld[0].id);
+      return;
+    }
     sip.toggleHold();
   };
+
+  const handleTransferPress = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    setShowTransfer(true);
+  }, []);
+
+  const handleTransferSubmit = useCallback(
+    (target: string) => {
+      const activeId = callSessions.activeCall?.id;
+      if (!activeId) {
+        setShowTransfer(false);
+        return;
+      }
+      const ok = callSessions.transfer(activeId, target);
+      if (ok) {
+        // REFER is dispatched; the PBX will bridge and tear down our
+        // dialog on success. Closing the modal is enough feedback.
+        setShowTransfer(false);
+      } else {
+        setShowTransfer(false);
+      }
+    },
+    [callSessions],
+  );
+
+  // Button bindings for the bottom control grid.
+  const holdBtnActive = sip.onHold || (!callSessions.activeCall && callSessions.heldCalls.length > 0);
+  const holdBtnIcon = holdBtnActive ? 'play' : 'pause';
+  const holdBtnLabel = holdBtnActive ? 'Resume' : 'Hold';
+  const holdBtnDisabled =
+    !isConnected &&
+    !(callSessions.activeCall) &&
+    callSessions.heldCalls.length === 0;
+
+  const canTransfer = !!callSessions.activeCall;
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -291,12 +451,34 @@ export function ActiveCallScreen() {
         />
 
         {/* Hold badge */}
-        {sip.onHold && (
+        {isHoldState && (
           <View style={styles.holdPill}>
             <Ionicons name="pause" size={10} color="#f59e0b" style={{ marginRight: 4 }} />
             <Text style={styles.holdText}>ON HOLD</Text>
           </View>
         )}
+      </View>
+
+      {/* ── Multi-call overlays ── rendered as absolute positioned layers
+          above the avatar so they're never clipped by the layout stack. */}
+
+      {/* 1) Compact "N calls" drawer pill + dropdown (always on top). */}
+      <View
+        style={[styles.drawerOverlay, { top: insets.top + 10 }]}
+        pointerEvents="box-none"
+      >
+        <CallsDrawer />
+      </View>
+
+      {/* 2) High-visibility call-waiting banner: slides in from the top
+          whenever a second call rings during an active call. Gives the
+          user an instant one-tap Answer / Decline path without needing
+          to hunt for the drawer. */}
+      <View
+        style={[styles.bannerOverlay, { top: insets.top + 56 }]}
+        pointerEvents="box-none"
+      >
+        <CallWaitingBanner />
       </View>
 
       {/* ── Avatar & name ── */}
@@ -359,17 +541,17 @@ export function ActiveCallScreen() {
               onPress={() => setShowDtmf(true)}
             />
             <CtrlBtn
-              icon={sip.onHold ? 'play' : 'pause'}
-              label={sip.onHold ? 'Resume' : 'Hold'}
+              icon={holdBtnIcon}
+              label={holdBtnLabel}
               onPress={handleHold}
-              active={sip.onHold}
-              disabled={!isConnected}
+              active={holdBtnActive}
+              disabled={holdBtnDisabled}
             />
             <CtrlBtn
-              icon="swap-horizontal"
+              icon="git-network-outline"
               label="Transfer"
-              onPress={() => {}}
-              disabled
+              onPress={handleTransferPress}
+              disabled={!canTransfer}
             />
             <CtrlBtn
               icon="add"
@@ -406,6 +588,19 @@ export function ActiveCallScreen() {
           <Text style={styles.endedText}>Call ended</Text>
         </View>
       )}
+
+      {/* ── Transfer modal (blind REFER) ── */}
+      <TransferModal
+        visible={showTransfer}
+        title="Transfer call"
+        subtitle={
+          callSessions.activeCall
+            ? `Transfer ${callSessions.activeCall.remoteName || callSessions.activeCall.remoteNumber || 'this call'} to…`
+            : 'No active call to transfer'
+        }
+        onCancel={() => setShowTransfer(false)}
+        onSubmit={handleTransferSubmit}
+      />
 
       {/* ── DTMF modal ── */}
       <Modal
@@ -464,6 +659,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing['6'],
     paddingBottom: 12,
+  },
+
+  drawerOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  bannerOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 45,
   },
 
   statusText: {

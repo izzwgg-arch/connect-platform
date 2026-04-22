@@ -1,0 +1,237 @@
+﻿--------- beginning of main
+04-19 13:17:00.319 W/ReactNativeJS(14401): '[CALL_EVENT] session_failed', 'Call failed: Canceled'
+04-19 13:17:00.319 I/ReactNativeJS(14401): [AUDIO] stopAllTelephonyAudio
+04-19 13:17:00.334 I/IncomingCallService(14401): [CALL_INCOMING] native ringtone playback stopped reason=js_stop_ringtone
+04-19 13:17:00.338 I/ReactNativeJS(14401): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_CALL_STATE_ENDED","ts":"2026-04-19T17:17:00.338Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"previous":"ringing"}
+04-19 13:17:00.338 I/ReactNativeJS(14401): [NATIVE_DISMISS] stopRingtone on SIP_ENDED
+04-19 13:17:01.575 I/ReactNativeJS(14401): [ANSWER_FLOW] RETURNED_TO_QUICK_ACTION
+04-19 13:17:01.575 I/ReactNativeJS(14401): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"NAVIGATE_BACK_TO_QUICK","ts":"2026-04-19T17:17:01.575Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"source":"returnToQuickAction"}
+04-19 13:17:01.576 I/ReactNativeJS(14401): [CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id clear
+04-19 13:17:01.576 I/ReactNativeJS(14401): [LOCK_CALL_CLEANUP] sip_idle ΓÇö clearing per-call refs so next incoming call starts fresh
+04-19 13:17:04.139 I/ConnectMainActivity(14401): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:17:04.141 I/ReactNativeJS(14401): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registered'
+04-19 13:25:30.526 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onCreate intentAction=android.intent.action.MAIN data=null
+04-19 13:25:30.530 I/ConnectMainActivity(25523): [LOCK_CALL] applyIncomingCallWindowFlags showIncomingCall=false action=null inviteId=null
+04-19 13:25:30.548 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:25:31.225 I/ReactNativeJS(25523): Running "main
+04-19 13:25:31.227 I/ReactNativeJS(25523): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"JS_APP_MOUNT","ts":"2026-04-19T17:25:31.227Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null}
+04-19 13:25:31.227 I/ReactNativeJS(25523): [CALL_INCOMING] registerTaskAsync OK (CONNECT_BACKGROUND_NOTIFICATION)
+04-19 13:25:31.269 I/ReactNativeJS(25523): [CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id clear
+04-19 13:25:31.269 I/ReactNativeJS(25523): [LOCK_CALL_CLEANUP] sip_idle ΓÇö clearing per-call refs so next incoming call starts fresh
+04-19 13:25:31.356 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:25:31.362 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'idle'
+04-19 13:25:35.882 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:25:35.886 I/ReactNativeJS(25523): [CALL_RECONCILE] app_active sipState=idle uiPhase=idle ΓÇö no action
+04-19 13:25:35.887 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'active', '| sipReg=', 'idle'
+04-19 13:25:36.708 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:25:36.710 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'idle'
+04-19 13:25:40.266 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:25:40.269 I/ReactNativeJS(25523): [CALL_RECONCILE] app_active sipState=idle uiPhase=idle ΓÇö no action
+04-19 13:25:40.270 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'active', '| sipReg=', 'idle'
+04-19 13:25:41.411 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:25:41.415 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'idle'
+04-19 13:25:46.688 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:25:46.690 I/ReactNativeJS(25523): [CALL_RECONCILE] app_active sipState=idle uiPhase=idle ΓÇö no action
+04-19 13:25:46.690 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'active', '| sipReg=', 'idle'
+04-19 13:25:48.729 I/ReactNativeJS(25523): [SIP] Force re-register requested
+04-19 13:25:48.741 I/ReactNativeJS(25523): '[SIP] Registering to', 'm.connectcomunications.com', 'via', 'wss://m.connectcomunications.com:8089/ws'
+04-19 13:25:48.741 I/ReactNativeJS(25523): [SIP] WebRTC globals registered OK
+04-19 13:25:48.749 I/ReactNativeJS(25523): '[SIP] URI user:', '103_1', '| Auth user:', 'T2_103_1'
+04-19 13:25:48.751 I/ReactNativeJS(25523): [SIP] UA started
+04-19 13:25:48.752 I/ReactNativeJS(25523): '[PUSH_INIT] Notification permission status:', 'denied'
+04-19 13:25:48.765 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:25:48.769 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registering'
+04-19 13:25:49.286 I/ReactNativeJS(25523): [SIP] Registered successfully
+04-19 13:25:49.306 I/ReactNativeJS(25523): [SIP] Already registered, skipping re-register
+04-19 13:25:49.640 I/ReactNativeJS(25523): [CALL_RECONCILE] app_active sipState=idle uiPhase=idle ΓÇö no action
+04-19 13:25:49.640 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'active', '| sipReg=', 'registered'
+04-19 13:25:49.641 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:25:49.642 I/ReactNativeJS(25523): '[PUSH_INIT] Permission request result:', 'granted'
+04-19 13:25:49.660 I/ReactNativeJS(25523): [SipContext] AppState active: regState=registered needsForceRestart=false
+04-19 13:25:49.660 I/ReactNativeJS(25523): [SIP] Already registered, skipping re-register
+04-19 13:25:49.670 I/ReactNativeJS(25523): '[PUSH_TOKEN] Requesting expo push token, projectId:', '53c72ced-180c-4885-a3ff-7d5da5717ead'
+04-19 13:25:50.086 I/ReactNativeJS(25523): '[PUSH_TOKEN] Expo token received:', 'ExponentPushToken[Faf5qMHjIv9N...'
+04-19 13:25:50.086 I/ReactNativeJS(25523): '[PUSH_INIT] Push token result:', 'OK'
+04-19 13:25:50.096 I/ReactNativeJS(25523): [PUSH_INIT] Registering device with backend...
+04-19 13:25:50.382 I/ReactNativeJS(25523): '[PUSH_INIT] Device registered, id:', 'cmo61eqp401r2mr4b21yddqu9'
+04-19 13:26:01.274 I/ReactNativeJS(25523): [CALL_CLEANUP] suppressed_ids_cleared count=0
+04-19 13:26:01.274 I/ReactNativeJS(25523): [LOCK_CALL_CLEANUP] reset_complete ready_for_next_call=true
+04-19 13:26:07.151 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:26:07.154 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registered'
+04-19 13:26:12.176 W/ReactNativeJS(25523): '[SIP] UA disconnected:', undefined
+04-19 13:26:13.985 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:26:13.985 I/ReactNativeJS(25523): [CALL_RECONCILE] app_active sipState=idle uiPhase=idle ΓÇö no action
+04-19 13:26:13.986 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'active', '| sipReg=', 'registered'
+04-19 13:26:13.999 I/ReactNativeJS(25523): [SipContext] AppState active: regState=registered needsForceRestart=false
+04-19 13:26:13.999 W/ReactNativeJS(25523): '[SIP] UA disconnected:', undefined
+04-19 13:26:14.081 I/ReactNativeJS(25523): '[SIP] Registering to', 'm.connectcomunications.com', 'via', 'wss://m.connectcomunications.com:8089/ws'
+04-19 13:26:14.081 I/ReactNativeJS(25523): [SIP] WebRTC globals registered OK
+04-19 13:26:14.081 I/ReactNativeJS(25523): '[SIP] URI user:', '103_1', '| Auth user:', 'T2_103_1'
+04-19 13:26:14.082 I/ReactNativeJS(25523): [SIP] UA started
+04-19 13:26:14.595 I/ReactNativeJS(25523): [SIP] Registered successfully
+04-19 13:26:26.302 I/ReactNativeJS(25523): '[SIP] New RTC session, originator:', 'remote'
+04-19 13:26:26.303 I/ReactNativeJS(25523): '[SIP] Incoming SIP INVITE ΓÇö', '{"from":"Home","to":"te2qrmem","incomingSessionsBefore":0,"ts":1776619586303}'
+04-19 13:26:26.594 I/ReactNativeJS(25523): [SIP] Android inbound INVITE received ΓÇö leaving ringtone to native incoming-call flow
+04-19 13:26:26.595 I/ReactNativeJS(25523): [CALL_EVENT] progress status=undefined
+04-19 13:26:26.913 I/IncomingCallService(25523): [CALL_INCOMING] parsed Expo body envelope, type=INCOMING_CALL
+04-19 13:26:26.913 I/IncomingCallService(25523): [CALL_INCOMING] onMessageReceived type=INCOMING_CALL dataKeys=androidx.collection.MapCollections$KeySet@88813346 appDataKeys=[callId, fromDisplay, inviteId, body, type, toExtension, experienceId, fromNumber, pbxCallId, scopeKey, tenantId, sipCallTarget, from, pbxSipUsername, projectId, timestamp]
+04-19 13:26:27.186 I/IncomingCallService(25523): [CALL_INCOMING] native ringtone playback started (media_player)
+04-19 13:26:27.187 I/IncomingCallService(25523): [LOCK_CALL_NATIVE] incoming_received inviteId=cmo61fit601remr4bdkwp7fci from=108 presentation=foreground_js appInForeground=true
+04-19 13:26:27.187 I/IncomingCallService(25523): [CALL_INCOMING] native handler inviteId=cmo61fit601remr4bdkwp7fci from=108
+04-19 13:26:27.187 I/IncomingCallService(25523): [CALL_INCOMING] app already foregrounded; leaving incoming UI to React
+04-19 13:26:27.188 I/IncomingCallService(25523): [CALL_INCOMING] cache file written: /data/user/0/com.connectcommunications.mobile/cache/pending_call_native.json
+04-19 13:26:27.205 I/ReactNativeJS(25523): [CALL_INCOMING] BG handler fired (task=CONNECT_BACKGROUND_NOTIFICATION)
+04-19 13:26:27.205 I/ReactNativeJS(25523): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"BACKGROUND_TASK_FIRED","ts":"2026-04-19T17:26:27.205Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"task":"CONNECT_BACKGROUND_NOTIFICATION"}
+04-19 13:26:27.205 I/ReactNativeJS(25523): '[CALL_INCOMING] raw task keys:', [ 'notification' ]
+04-19 13:26:27.205 W/ReactNativeJS(25523): [CALL_INCOMING] push received but payload is null/empty after normalization ΓÇö trying native cache
+04-19 13:26:27.217 I/ReactNativeJS(25523): [CALL_INCOMING] native cache recovered payload inviteId=cmo61fit601remr4bdkwp7fci
+04-19 13:26:27.218 I/ReactNativeJS(25523): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"BACKGROUND_TASK_PAYLOAD_RECOVERED_FROM_CACHE","ts":"2026-04-19T17:26:27.218Z","appState":"active","inviteId":"cmo61fit601remr4bdkwp7fci","pbxCallId":"1776619586.85243","extension":"103"}
+04-19 13:26:40.159 I/ConnectMainActivity(25523): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:26:40.161 I/ReactNativeJS(25523): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registered'
+04-19 13:26:42.584 W/ReactNativeJS(25523): '[CALL_EVENT] session_failed', 'Call failed: Canceled'
+04-19 13:26:42.585 I/ReactNativeJS(25523): [AUDIO] stopAllTelephonyAudio
+04-19 13:26:42.595 I/IncomingCallService(25523): [CALL_INCOMING] native ringtone playback stopped reason=js_stop_ringtone
+04-19 13:26:43.034 I/ReactNativeJS(25523): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_CALL_STATE_ENDED","ts":"2026-04-19T17:26:43.034Z","appState":"background","inviteId":null,"pbxCallId":null,"extension":null,"previous":"ringing"}
+04-19 13:26:43.034 I/ReactNativeJS(25523): [NATIVE_DISMISS] stopRingtone on SIP_ENDED
+04-19 13:26:58.316 I/IncomingCallService(27121): [CALL_INCOMING] parsed Expo body envelope, type=INCOMING_CALL
+04-19 13:26:58.317 I/IncomingCallService(27121): [CALL_INCOMING] onMessageReceived type=INCOMING_CALL dataKeys=androidx.collection.MapCollections$KeySet@88813346 appDataKeys=[callId, fromDisplay, inviteId, body, type, toExtension, experienceId, fromNumber, pbxCallId, scopeKey, tenantId, sipCallTarget, from, pbxSipUsername, projectId, timestamp]
+04-19 13:26:58.385 I/IncomingCallService(27121): [CALL_INCOMING] native ringtone playback started (media_player)
+04-19 13:26:58.395 I/IncomingCallService(27121): [CALL_INCOMING] presentation_decision locked=false interactive=true foregroundPackage=null homePackage=com.sec.android.app.launcher otherAppForeground=false fullScreen=true
+04-19 13:26:58.396 I/IncomingCallService(27121): [LOCK_CALL_NATIVE] incoming_received inviteId=cmo61g6b601rqmr4blfn4ca9n from=108 presentation=full_screen appInForeground=false
+04-19 13:26:58.396 I/IncomingCallService(27121): [CALL_INCOMING] native handler inviteId=cmo61g6b601rqmr4blfn4ca9n from=108
+04-19 13:26:58.397 I/IncomingCallService(27121): [CALL_INCOMING] cache file written: /data/user/0/com.connectcommunications.mobile/cache/pending_call_native.json
+04-19 13:26:58.430 I/IncomingCallService(27121): [CALL_INCOMING] posted incoming call notification mode=full_screen
+04-19 13:26:58.432 I/IncomingCallService(27121): [CALL_INCOMING] acquired SCREEN_BRIGHT wake lock for full-screen launch
+04-19 13:26:58.442 I/IncomingCallService(27121): [LOCK_CALL_NATIVE] full_screen_intent_sent
+04-19 13:26:58.442 I/IncomingCallService(27121): [CALL_INCOMING] requested branded full-screen launch via pending intent
+04-19 13:26:58.451 I/IncomingCallService(27121): [CALL_INCOMING] service onDestroy (ringtone left to dismissIncomingCallUi / JS)
+04-19 13:27:02.011 I/ConnectMainActivity(27121): [LOCK_CALL_STATE] onCreate intentAction=android.intent.action.VIEW data=com.connectcommunications.mobile://incoming-call?action=answer&inviteId=cmo61g6b601rqmr4blfn4ca9n&callId=cmo61g6b601rqmr4blfn4ca9n&fromNumber=108&fromDisplay=Home&toExtension=103&tenantId=cmnlgnumi0000p9g6l7t1t0z7&pbxCallId=1776619616.85248&timestamp=2026-04-19T17%3A26%3A57.527Z
+04-19 13:27:02.011 I/ConnectMainActivity(27121): [LOCK_CALL] notification_action=answer inviteId=cmo61g6b601rqmr4blfn4ca9n source=onCreate
+04-19 13:27:02.011 I/IncomingCallService(27121): [CALL_INCOMING] native ringtone playback stopped reason=intent_answer:onCreate
+04-19 13:27:02.133 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61g6b601rqmr4blfn4ca9n reason=intent_answer:onCreate
+04-19 13:27:02.147 I/ConnectMainActivity(27121): [LOCK_CALL] applyIncomingCallWindowFlags showIncomingCall=false action=answer inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.154 I/ConnectMainActivity(27121): [LOCK_CALL_STATE] onResume hostActivityResumed=true
+04-19 13:27:02.466 I/ReactNativeJS(27121): Running "main
+04-19 13:27:02.468 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"JS_APP_MOUNT","ts":"2026-04-19T17:27:02.468Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null}
+04-19 13:27:02.468 I/ReactNativeJS(27121): [CALL_INCOMING] registerTaskAsync OK (CONNECT_BACKGROUND_NOTIFICATION)
+04-19 13:27:02.475 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"APP_RESTART_PENDING_INVITE_IN_STORAGE","ts":"2026-04-19T17:27:02.475Z","appState":"active","inviteId":"cmo61fit601remr4bdkwp7fci","pbxCallId":null,"extension":null,"bytes":348}
+04-19 13:27:02.523 I/ReactNativeJS(27121): [CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id clear
+04-19 13:27:02.523 I/ReactNativeJS(27121): [LOCK_CALL_CLEANUP] sip_idle ΓÇö clearing per-call refs so next incoming call starts fresh
+04-19 13:27:02.553 I/ReactNativeJS(27121): '[SIP] Registering to', 'm.connectcomunications.com', 'via', 'wss://m.connectcomunications.com:8089/ws'
+04-19 13:27:02.553 I/ReactNativeJS(27121): [SIP] WebRTC globals registered OK
+04-19 13:27:02.553 I/ReactNativeJS(27121): '[SIP] URI user:', '103_1', '| Auth user:', 'T2_103_1'
+04-19 13:27:02.554 I/ReactNativeJS(27121): [SIP] UA started
+04-19 13:27:02.588 I/ReactNativeJS(27121): '[Notif] Incoming action URL queued:', 'answer', 'cmo61g6b601rqmr4blfn4ca9n'
+04-19 13:27:02.588 I/ReactNativeJS(27121): '[Notif] Processing incoming action:', 'answer', 'cmo61g6b601rqmr4blfn4ca9n'
+04-19 13:27:02.588 I/ReactNativeJS(27121): [LOCK_CALL] incoming_received inviteId=cmo61g6b601rqmr4blfn4ca9n from=108
+04-19 13:27:02.588 I/ReactNativeJS(27121): '[Notif] Duplicate invite ignored:', 'cmo61g6b601rqmr4blfn4ca9n'
+04-19 13:27:02.588 I/ReactNativeJS(27121): '[ANSWER_FLOW] INVITE_RESTORED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:02.588Z","source":"fallback"}'
+04-19 13:27:02.588 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INVITE_RESTORED","ts":"2026-04-19T17:27:02.588Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"INVITE_RESTORED","source":"fallback"}
+04-19 13:27:02.597 I/ReactNativeJS(27121): '[ANSWER_FLOW] CALLKEEP_ANSWER_TAPPED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:02.597Z","source":"deep_link"}'
+04-19 13:27:02.597 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"ANSWER_TAPPED","ts":"2026-04-19T17:27:02.597Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"CALLKEEP_ANSWER_TAPPED","source":"deep_link"}
+04-19 13:27:02.597 I/ReactNativeJS(27121): [INVITE_POLL] started inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.608 I/ReactNativeJS(27121): '[ANSWER_FLOW] APP_FOREGROUNDED_FROM_CALL', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:02.608Z","source":"deep_link"}'
+04-19 13:27:02.608 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"APP_FOREGROUNDED_FROM_CALL","ts":"2026-04-19T17:27:02.608Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"APP_FOREGROUNDED_FROM_CALL","source":"deep_link"}
+04-19 13:27:02.608 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INCOMING_CALL_SCREEN_MOUNT","ts":"2026-04-19T17:27:02.608Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","phase":"incoming"}
+04-19 13:27:02.615 I/ReactNativeJS(27121): [ACCEPT_GUARD] passed inviteId=cmo61g6b601rqmr4blfn4ca9n acceptKey=accept:cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.615 I/ReactNativeJS(27121): [LOCK_CALL] answer_pressed inviteId=cmo61g6b601rqmr4blfn4ca9n callId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.615 I/ReactNativeJS(27121): [NATIVE_DISMISS] invoking IncomingCallUi.dismiss callId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.615 I/ReactNativeJS(27121): [NATIVE_DISMISS] returned from IncomingCallUi.dismiss callId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.615 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"ANSWER_TAPPED","ts":"2026-04-19T17:27:02.615Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","source":"handle_accept_invite"}
+04-19 13:27:02.616 I/ReactNativeJS(27121): [LOCK_CALL] answer_context appWasBackgrounded=false deviceLocked=false launchedFromIncomingCall=false answeredFromBackgroundRef=false inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.616 I/ReactNativeJS(27121): '[ANSWER_PIPELINE] START', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","answerPath":"deep_link","appState":"active","sipReg":"registering","sipLooksUnready":false,"appWasBackgrounded":false,"pushToAnswerMs":27,"ts":1776619622615}'
+04-19 13:27:02.616 I/ReactNativeJS(27121): '[ANSWER_FLOW] RINGTONE_STOPPED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:02.616Z","reason":"answer_tapped","at":"2026-04-19T17:27:02.615Z"}'
+04-19 13:27:02.616 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"RINGTONE_STOP_JS_CONTEXT","ts":"2026-04-19T17:27:02.616Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"RINGTONE_STOPPED","reason":"answer_tapped","at":"2026-04-19T17:27:02.615Z"}
+04-19 13:27:02.616 I/ReactNativeJS(27121): '[ANSWER_FLOW] INCOMING_UI_DISMISSED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:02.616Z","source":"incoming_screen","reason":"answer_tapped"}'
+04-19 13:27:02.616 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INCOMING_UI_DISMISSED","ts":"2026-04-19T17:27:02.616Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"INCOMING_UI_DISMISSED","source":"incoming_screen","reason":"answer_tapped"}
+04-19 13:27:02.624 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61g6b601rqmr4blfn4ca9n reason=js_incoming_call_ui_dismiss
+04-19 13:27:02.632 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"ACTIVE_CALL_SCREEN_MOUNT","ts":"2026-04-19T17:27:02.632Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":null,"extension":null}
+04-19 13:27:02.643 I/ReactNativeJS(27121): [INVITE_POLL] stopped inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:02.662 I/ReactNativeJS(27121): '[PUSH_INIT] Notification permission status:', 'granted'
+04-19 13:27:02.676 I/ReactNativeJS(27121): '[PUSH_TOKEN] Requesting expo push token, projectId:', '53c72ced-180c-4885-a3ff-7d5da5717ead'
+04-19 13:27:02.789 I/ReactNativeJS(27121): '[PUSH_TOKEN] Expo token received:', 'ExponentPushToken[Faf5qMHjIv9N...'
+04-19 13:27:02.789 I/ReactNativeJS(27121): '[PUSH_INIT] Push token result:', 'OK'
+04-19 13:27:02.803 I/ReactNativeJS(27121): [PUSH_INIT] Registering device with backend...
+04-19 13:27:03.015 I/ReactNativeJS(27121): [SIP] Registered successfully
+04-19 13:27:03.046 I/ReactNativeJS(27121): '[ANSWER_PIPELINE] SIP_REG', '{"result":"OK","wasAlreadyRegistered":false,"forceRestart":false,"tookMs":392,"sinceAnswerMs":431}'
+04-19 13:27:03.046 I/ReactNativeJS(27121): '[ANSWER_PIPELINE] SIP_ANSWER_START (parallel with claim)', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","sinceAnswerMs":431,"sipReg":"registering","callState":"idle"}'
+04-19 13:27:03.046 I/ReactNativeJS(27121): '[ANSWER_FLOW] SIP_ANSWER_REQUESTED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:03.046Z"}'
+04-19 13:27:03.046 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_ANSWER_START","ts":"2026-04-19T17:27:03.046Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"SIP_ANSWER_REQUESTED"}
+04-19 13:27:03.061 I/ReactNativeJS(27121): [CALL_EVENT] answer_pipeline_start at=1776619623061 timeoutMs=8000
+04-19 13:27:03.061 I/ReactNativeJS(27121): '[ANSWER_PIPELINE] CLAIM_START (parallel)', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","sinceAnswerMs":446}'
+04-19 13:27:03.419 I/ReactNativeJS(27121): '[PUSH_INIT] Device registered, id:', 'cmo61eqp401r2mr4b21yddqu9'
+04-19 13:27:03.438 I/ReactNativeJS(27121): '[SIP] New RTC session, originator:', 'remote'
+04-19 13:27:03.438 I/ReactNativeJS(27121): '[SIP] Incoming SIP INVITE ΓÇö', '{"from":"Home","to":"mubstqfv","incomingSessionsBefore":0,"ts":1776619623438}'
+04-19 13:27:03.471 I/ReactNativeJS(27121): [SIP] Android inbound INVITE received ΓÇö leaving ringtone to native incoming-call flow
+04-19 13:27:03.472 I/ReactNativeJS(27121): [CALL_EVENT] progress status=undefined
+04-19 13:27:03.472 W/ReactNativeJS(27121): '[SIP] findIncoming: using single-session fallback after match miss', '{"expectedFrom":"108","expectedToExtension":"103","inviteId":"cmo61g6b601rqmr4blfn4ca9n","session":{"from":"Home","fromUser":"108","fromDisplayName":"Home","fromNormalized":"","to":"mubstqfv","status":4,"hasAnswer":true}}'
+04-19 13:27:03.472 I/ReactNativeJS(27121): [CALL_EVENT] answer_attempt n=1 inviteAge=-377ms waited=411ms
+04-19 13:27:03.472 I/ReactNativeJS(27121): [AUDIO] stopAllTelephonyAudio
+04-19 13:27:03.473 I/ReactNativeJS(27121): [CALL_NATIVE] answer_invoked attempt=1
+04-19 13:27:03.502 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 ctor +0ms
+04-19 13:27:03.502 I/ReactNativeJS(27121): [ANSWER_PIPELINE] SIP_200OK_SENT +887ms
+04-19 13:27:03.503 I/ReactNativeJS(27121): '[ANSWER_FLOW] SIP_ANSWER_SENT', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:03.502Z","traceAt":"2026-04-19T17:27:03.502Z","sinceAnswerMs":887}'
+04-19 13:27:03.503 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_ANSWER_SENT","ts":"2026-04-19T17:27:03.503Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"SIP_ANSWER_SENT","traceAt":"2026-04-19T17:27:03.502Z","sinceAnswerMs":887}
+04-19 13:27:03.506 I/ReactNativeJS(27121): '[Notif] SIP ringing with no invite in state ΓÇö recovering from AsyncStorage inviteId=', 'cmo61fit601remr4bdkwp7fci'
+04-19 13:27:03.506 I/ReactNativeJS(27121): [LOCK_CALL] incoming_received inviteId=cmo61fit601remr4bdkwp7fci from=108
+04-19 13:27:03.529 I/ReactNativeJS(27121): [INVITE_POLL] started inviteId=cmo61fit601remr4bdkwp7fci
+04-19 13:27:03.548 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"INCOMING_CALL_SCREEN_MOUNT","ts":"2026-04-19T17:27:03.548Z","appState":"active","inviteId":"cmo61fit601remr4bdkwp7fci","pbxCallId":"1776619586.85243","extension":"103","phase":"incoming"}
+04-19 13:27:03.564 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 addTrack +62ms
+04-19 13:27:03.580 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 setRemoteDescription +16ms
+04-19 13:27:03.590 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 ontrack +10ms
+04-19 13:27:03.590 I/IncomingCallService(27121): [CALL_INCOMING] parsed Expo body envelope, type=INVITE_CLAIMED
+04-19 13:27:03.590 I/IncomingCallService(27121): [CALL_INCOMING] onMessageReceived type=INVITE_CLAIMED dataKeys=androidx.collection.MapCollections$KeySet@1f20a723 appDataKeys=[experienceId, inviteId, scopeKey, tenantId, body, title, message, type, projectId, channelId, timestamp]
+04-19 13:27:03.590 I/IncomingCallService(27121): [LOCK_CALL_CLEANUP] native_termination type=INVITE_CLAIMED inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:03.590 I/IncomingCallService(27121): [CALL_INCOMING] native termination type=INVITE_CLAIMED inviteId=cmo61g6b601rqmr4blfn4ca9n
+04-19 13:27:03.591 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61g6b601rqmr4blfn4ca9n reason=native_termination:INVITE_CLAIMED
+04-19 13:27:03.591 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 setRemoteDescription OK +1ms
+04-19 13:27:03.591 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 createAnswer +0ms
+04-19 13:27:03.594 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 setLocalDescription +3ms
+04-19 13:27:03.604 I/ReactNativeJS(27121): [CALL_INCOMING] BG handler fired (task=CONNECT_BACKGROUND_NOTIFICATION)
+04-19 13:27:03.604 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"BACKGROUND_TASK_FIRED","ts":"2026-04-19T17:27:03.604Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"task":"CONNECT_BACKGROUND_NOTIFICATION"}
+04-19 13:27:03.604 I/ReactNativeJS(27121): '[CALL_INCOMING] raw task keys:', [ 'notification' ]
+04-19 13:27:03.604 W/ReactNativeJS(27121): [CALL_INCOMING] push received but payload is null/empty after normalization ΓÇö trying native cache
+04-19 13:27:03.607 I/ReactNativeJS(27121): [AUDIO] stopAllTelephonyAudio
+04-19 13:27:03.608 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61g6b601rqmr4blfn4ca9n reason=js_incoming_call_ui_dismiss
+04-19 13:27:03.612 W/ReactNativeJS(27121): [CALL_INCOMING] native cache also empty/null ΓÇö cannot recover invite
+04-19 13:27:03.624 I/ReactNativeJS(27121): '[Notif] Stale cached invite removed, age:', Infinity
+04-19 13:27:03.629 I/ReactNativeJS(27121): '[ANSWER_PIPELINE] CLAIM_DONE', '{"code":"INVITE_CLAIMED_OK","status":"ACCEPTED","tookMs":568,"sinceAnswerMs":1014}'
+04-19 13:27:03.713 I/ReactNativeJS(27121): [INVITE_POLL] tick=1 inviteId=cmo61fit601remr4bdkwp7fci inviteStatus=PENDING telephonyState=hungup pbxAnswered=false httpMs=184 elapsedMs=184
+04-19 13:27:03.713 I/ReactNativeJS(27121): [INVITE_POLL] terminal_state inviteId=cmo61fit601remr4bdkwp7fci reason=remote_telephony_hungup
+04-19 13:27:03.713 I/ReactNativeJS(27121): [LOCK_RETURN] killAll context inviteId=cmo61fit601remr4bdkwp7fci launchedFlag=false locked=false appState=active willReturnToLockScreen=false
+04-19 13:27:03.714 I/ReactNativeJS(27121): [NATIVE_DISMISS] invoking IncomingCallUi.dismiss callId=cmo61fit601remr4bdkwp7fci
+04-19 13:27:03.714 I/ReactNativeJS(27121): [NATIVE_DISMISS] returned from IncomingCallUi.dismiss callId=cmo61fit601remr4bdkwp7fci
+04-19 13:27:03.714 I/ReactNativeJS(27121): '[ANSWER_FLOW] CALL_ENDED_UI_SHOWN', '{"inviteId":"cmo61fit601remr4bdkwp7fci","callId":"1776619586.85243","extension":"103","timestamp":"2026-04-19T17:27:03.714Z","message":"Call ended","delayMs":900,"reason":"remote_telephony_hungup"}'
+04-19 13:27:03.714 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"CALL_ENDED_SCREEN_SHOWN","ts":"2026-04-19T17:27:03.714Z","appState":"active","inviteId":"cmo61fit601remr4bdkwp7fci","pbxCallId":"1776619586.85243","extension":"103","answerFlowType":"CALL_ENDED_UI_SHOWN","message":"Call ended","delayMs":900,"reason":"remote_telephony_hungup"}
+04-19 13:27:03.722 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61fit601remr4bdkwp7fci reason=js_incoming_call_ui_dismiss
+04-19 13:27:03.723 I/IncomingCallService(27121): [CALL_INCOMING] dismissed incoming ui inviteId=cmo61fit601remr4bdkwp7fci reason=js_incoming_call_ui_dismiss
+04-19 13:27:03.731 I/ReactNativeJS(27121): [AUDIO] stopAllTelephonyAudio
+04-19 13:27:03.790 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 setLocalDescription OK +196ms
+04-19 13:27:03.824 I/ReactNativeJS(27121): '[Notif] Ignoring suppressed invite:', 'cmo61fit601remr4bdkwp7fci'
+04-19 13:27:03.969 I/ReactNativeJS(27121): [CALL_EVENT] session_confirmed
+04-19 13:27:03.969 I/ReactNativeJS(27121): [AUDIO] stopAllTelephonyAudio
+04-19 13:27:03.992 I/ReactNativeJS(27121): [CALL_EVENT] answer_confirmed attempt=1
+04-19 13:27:03.992 I/ReactNativeJS(27121): [ANSWER_PIPELINE] SIP_CONFIRMED +1377ms
+04-19 13:27:03.992 I/ReactNativeJS(27121): '[ANSWER_FLOW] SIP_ANSWER_CONFIRMED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:03.992Z","traceAt":"2026-04-19T17:27:03.992Z","sinceAnswerMs":1377}'
+04-19 13:27:03.992 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_CONNECTED","ts":"2026-04-19T17:27:03.992Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"SIP_ANSWER_CONFIRMED","traceAt":"2026-04-19T17:27:03.992Z","sinceAnswerMs":1377}
+04-19 13:27:03.994 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_CALL_STATE_CONNECTED","ts":"2026-04-19T17:27:03.994Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"previous":"ringing"}
+04-19 13:27:03.994 I/ReactNativeJS(27121): [NATIVE_DISMISS] stopRingtone on SIP_CONNECTED
+04-19 13:27:04.008 I/ReactNativeJS(27121): [CALL_EVENT] answer_pipeline_success attempts=1
+04-19 13:27:04.008 I/ReactNativeJS(27121): '[ANSWER_FLOW] UI_SWITCHED_TO_ACTIVE', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:04.008Z","answeredAt":"2026-04-19T17:27:04.008Z"}'
+04-19 13:27:04.008 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"UI_SWITCHED_TO_ACTIVE","ts":"2026-04-19T17:27:04.008Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"UI_SWITCHED_TO_ACTIVE","answeredAt":"2026-04-19T17:27:04.008Z"}
+04-19 13:27:04.021 I/ConnectMainActivity(27121): [LOCK_CALL] clearIncomingCallWindowFlags ΓÇö cleared FLAG_KEEP_SCREEN_ON
+04-19 13:27:04.666 I/ReactNativeJS(27121): '[ANSWER_FLOW] PBX_CALL_ANSWERED', '{"inviteId":"cmo61g6b601rqmr4blfn4ca9n","callId":"1776619616.85248","extension":"103","timestamp":"2026-04-19T17:27:04.666Z","answeredAt":"2026-04-19T17:27:04.454Z","telephonyState":"up","activeChannels":["PJSIP/T2_108-0000b927","PJSIP/T2_103_1-0000b92e"]}'
+04-19 13:27:04.667 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"PBX_CALL_ANSWERED","ts":"2026-04-19T17:27:04.667Z","appState":"active","inviteId":"cmo61g6b601rqmr4blfn4ca9n","pbxCallId":"1776619616.85248","extension":"103","answerFlowType":"PBX_CALL_ANSWERED","answeredAt":"2026-04-19T17:27:04.454Z","telephonyState":"up","activeChannels":["PJSIP/T2_108-0000b927","PJSIP/T2_103_1-0000b92e"]}
+04-19 13:27:09.344 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 close +6s
+04-19 13:27:09.344 I/ReactNativeJS(27121): [CALL_EVENT] session_ended cause=Terminated
+04-19 13:27:09.345 I/ReactNativeJS(27121): [AUDIO] stopAllTelephonyAudio
+04-19 13:27:09.345 I/ReactNativeJS(27121): rn-webrtc:pc:DEBUG 0 getStats +2ms
+04-19 13:27:09.394 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"SIP_CALL_STATE_ENDED","ts":"2026-04-19T17:27:09.394Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"previous":"connected"}
+04-19 13:27:09.394 I/ReactNativeJS(27121): [NATIVE_DISMISS] stopRingtone on SIP_ENDED
+04-19 13:27:10.644 I/ReactNativeJS(27121): [ANSWER_FLOW] RETURNED_TO_QUICK_ACTION
+04-19 13:27:10.644 I/ReactNativeJS(27121): [CALL_FLOW] {"tag":"CALL_FLOW","stage":"NAVIGATE_BACK_TO_QUICK","ts":"2026-04-19T17:27:10.644Z","appState":"active","inviteId":null,"pbxCallId":null,"extension":null,"source":"returnToQuickAction"}
+04-19 13:27:10.644 I/ReactNativeJS(27121): [CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id clear
+04-19 13:27:10.644 I/ReactNativeJS(27121): [LOCK_CALL_CLEANUP] sip_idle ΓÇö clearing per-call refs so next incoming call starts fresh
+04-19 13:27:12.107 I/ConnectMainActivity(27121): [LOCK_CALL_STATE] onPause hostActivityResumed=false
+04-19 13:27:12.112 I/ReactNativeJS(27121): '[SipContext] AppState changed to', 'background', '| sipReg=', 'registered'
+04-19 13:27:12.991 I/ReactNativeJS(27121): [INVITE_POLL] stopped inviteId=cmo61fit601remr4bdkwp7fci

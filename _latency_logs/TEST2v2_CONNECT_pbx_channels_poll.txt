@@ -1,0 +1,1079 @@
+---
+pid: 9896
+cwd: "C:\\dev\\projects\\Connect 2\\apps\\mobile\\android"
+command: "while ($true) { $ts = (Get-Date).ToString(\"yyyy-MM-ddTHH:mm:ss.fffK\"); $ch = ssh cursor-audit@209.145.60.79 json_channels 2>&1 | Out-String; Write-Output \"=== $ts ===\"; Write-Output $ch; Start-Sleep -Milliseconds 700 }"
+started_at: 2026-04-20T01:42:58.682Z
+running_for_ms: 415587   
+---
+=== 2026-04-19T21:42:59.314-04:00 ===
+{"generated_at":"2026-04-19T21:42:58-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365859","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"38","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"38","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:00.822-04:00 ===
+{"generated_at":"2026-04-19T21:42:59-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365860","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"39","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"39","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:02.303-04:00 ===
+{"generated_at":"2026-04-19T21:43:01-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365862","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"41","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"41","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:03.845-04:00 ===
+{"generated_at":"2026-04-19T21:43:02-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365863","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"42","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"42","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:05.377-04:00 ===
+{"generated_at":"2026-04-19T21:43:04-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365865","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"44","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"44","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:06.924-04:00 ===
+{"generated_at":"2026-04-19T21:43:06-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365866","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"46","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"46","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:08.580-04:00 ===
+{"generated_at":"2026-04-19T21:43:07-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365868","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"47","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"47","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:10.113-04:00 ===
+{"generated_at":"2026-04-19T21:43:09-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365870","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"49","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"49","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:11.660-04:00 ===
+{"generated_at":"2026-04-19T21:43:10-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365871","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"50","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"50","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:13.159-04:00 ===
+{"generated_at":"2026-04-19T21:43:12-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365873","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"52","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"52","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:14.746-04:00 ===
+{"generated_at":"2026-04-19T21:43:13-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365874","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"53","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"53","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:16.259-04:00 ===
+{"generated_at":"2026-04-19T21:43:15-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365876","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"55","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"55","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:17.777-04:00 ===
+{"generated_at":"2026-04-19T21:43:16-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365877","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"56","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"56","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:19.529-04:00 ===
+{"generated_at":"2026-04-19T21:43:18-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365879","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"58","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"58","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:21.137-04:00 ===
+{"generated_at":"2026-04-19T21:43:20-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365881","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"60","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"60","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:22.751-04:00 ===
+{"generated_at":"2026-04-19T21:43:21-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365882","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"61","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"61","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:24.391-04:00 ===
+{"generated_at":"2026-04-19T21:43:23-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365884","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"63","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"63","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:25.911-04:00 ===
+{"generated_at":"2026-04-19T21:43:24-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365885","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"65","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"64","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:27.478-04:00 ===
+{"generated_at":"2026-04-19T21:43:26-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365887","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"66","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"66","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:29.042-04:00 ===
+{"generated_at":"2026-04-19T21:43:28-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365889","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"68","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"68","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:30.653-04:00 ===
+{"generated_at":"2026-04-19T21:43:29-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365890","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"69","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"69","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:32.170-04:00 ===
+{"generated_at":"2026-04-19T21:43:31-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365892","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T8_106-0000bf11","context":"trk-29-dial","exten":"8457835038","priority":"44","state":"Up","application":"Dial","data":"PJSIP/8457835038@344022_gesheft,90,ktrb(sub-set-crm-headers^s^1)U(sub-before-bridging-call^106048d48cb4ddf6^106^8457835038^no)","callerid":"8452449666","accountcode":"","amaflags":"","duration":"3","bridged_channel":"71","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87236"},{"channel":"PJSIP/344022_gesheft-0000bf12","context":"trk-29-in","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"8457835038","accountcode":"","amaflags":"","duration":"3","bridged_channel":"71","bridged_uniqueid":"c5a197b1-8130-4ea8-9a62-6602035ca87e","uniqueid":"1776649339.87237"}]}
+
+=== 2026-04-19T21:43:33.731-04:00 ===
+{"generated_at":"2026-04-19T21:43:32-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365893","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:35.313-04:00 ===
+{"generated_at":"2026-04-19T21:43:34-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365895","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:36.902-04:00 ===
+{"generated_at":"2026-04-19T21:43:36-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365897","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:38.658-04:00 ===
+{"generated_at":"2026-04-19T21:43:37-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365898","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:40.211-04:00 ===
+{"generated_at":"2026-04-19T21:43:39-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365900","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:41.751-04:00 ===
+{"generated_at":"2026-04-19T21:43:40-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365901","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:43.273-04:00 ===
+{"generated_at":"2026-04-19T21:43:42-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365903","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:44.760-04:00 ===
+{"generated_at":"2026-04-19T21:43:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365904","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:46.285-04:00 ===
+{"generated_at":"2026-04-19T21:43:45-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365906","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:47.832-04:00 ===
+{"generated_at":"2026-04-19T21:43:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365907","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:49.406-04:00 ===
+{"generated_at":"2026-04-19T21:43:48-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365909","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:50.934-04:00 ===
+{"generated_at":"2026-04-19T21:43:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365910","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:52.470-04:00 ===
+{"generated_at":"2026-04-19T21:43:51-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365912","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:54.030-04:00 ===
+{"generated_at":"2026-04-19T21:43:53-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365913","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:55.530-04:00 ===
+{"generated_at":"2026-04-19T21:43:54-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365915","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:57.025-04:00 ===
+{"generated_at":"2026-04-19T21:43:56-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365916","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:43:58.562-04:00 ===
+{"generated_at":"2026-04-19T21:43:57-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365918","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:00.210-04:00 ===
+{"generated_at":"2026-04-19T21:43:59-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365920","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:01.710-04:00 ===
+{"generated_at":"2026-04-19T21:44:01-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365922","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:03.730-04:00 ===
+{"generated_at":"2026-04-19T21:44:02-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365923","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:05.306-04:00 ===
+{"generated_at":"2026-04-19T21:44:04-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365925","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:07.276-04:00 ===
+{"generated_at":"2026-04-19T21:44:06-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365927","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:08.834-04:00 ===
+{"generated_at":"2026-04-19T21:44:07-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365928","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:10.382-04:00 ===
+{"generated_at":"2026-04-19T21:44:09-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365930","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:11.882-04:00 ===
+{"generated_at":"2026-04-19T21:44:10-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365931","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:13.379-04:00 ===
+{"generated_at":"2026-04-19T21:44:12-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365933","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:14.895-04:00 ===
+{"generated_at":"2026-04-19T21:44:13-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365934","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:16.430-04:00 ===
+{"generated_at":"2026-04-19T21:44:15-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365936","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:17.989-04:00 ===
+{"generated_at":"2026-04-19T21:44:17-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365937","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:19.602-04:00 ===
+{"generated_at":"2026-04-19T21:44:18-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365939","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:21.173-04:00 ===
+{"generated_at":"2026-04-19T21:44:20-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365941","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:22.722-04:00 ===
+{"generated_at":"2026-04-19T21:44:21-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365942","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:24.375-04:00 ===
+{"generated_at":"2026-04-19T21:44:23-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365944","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:25.936-04:00 ===
+{"generated_at":"2026-04-19T21:44:24-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365945","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:27.479-04:00 ===
+{"generated_at":"2026-04-19T21:44:26-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365947","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:28.978-04:00 ===
+{"generated_at":"2026-04-19T21:44:27-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365948","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:30.475-04:00 ===
+{"generated_at":"2026-04-19T21:44:29-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365950","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:32.007-04:00 ===
+{"generated_at":"2026-04-19T21:44:31-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365951","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:33.533-04:00 ===
+{"generated_at":"2026-04-19T21:44:32-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365953","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:35.046-04:00 ===
+{"generated_at":"2026-04-19T21:44:34-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365954","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:36.602-04:00 ===
+{"generated_at":"2026-04-19T21:44:35-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365956","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:38.133-04:00 ===
+{"generated_at":"2026-04-19T21:44:37-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365958","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:39.677-04:00 ===
+{"generated_at":"2026-04-19T21:44:38-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365959","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:41.204-04:00 ===
+{"generated_at":"2026-04-19T21:44:40-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365961","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:42.705-04:00 ===
+{"generated_at":"2026-04-19T21:44:41-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365962","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:44.205-04:00 ===
+{"generated_at":"2026-04-19T21:44:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365964","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:45.749-04:00 ===
+{"generated_at":"2026-04-19T21:44:44-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365965","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:47.266-04:00 ===
+{"generated_at":"2026-04-19T21:44:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365967","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:48.810-04:00 ===
+{"generated_at":"2026-04-19T21:44:47-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365968","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:50.328-04:00 ===
+{"generated_at":"2026-04-19T21:44:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365970","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:51.864-04:00 ===
+{"generated_at":"2026-04-19T21:44:50-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365971","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:53.390-04:00 ===
+{"generated_at":"2026-04-19T21:44:52-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365973","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:54.890-04:00 ===
+{"generated_at":"2026-04-19T21:44:53-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365974","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:56.480-04:00 ===
+{"generated_at":"2026-04-19T21:44:55-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365976","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:57.926-04:00 ===
+{"generated_at":"2026-04-19T21:44:56-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365977","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:44:59.441-04:00 ===
+{"generated_at":"2026-04-19T21:44:58-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365979","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:00.908-04:00 ===
+{"generated_at":"2026-04-19T21:44:59-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365980","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:02.420-04:00 ===
+{"generated_at":"2026-04-19T21:45:01-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365982","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:04.230-04:00 ===
+{"generated_at":"2026-04-19T21:45:03-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365984","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:06.214-04:00 ===
+{"generated_at":"2026-04-19T21:45:05-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365986","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:07.953-04:00 ===
+{"generated_at":"2026-04-19T21:45:07-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365987","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:09.565-04:00 ===
+{"generated_at":"2026-04-19T21:45:08-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365989","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:11.180-04:00 ===
+{"generated_at":"2026-04-19T21:45:10-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365991","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:12.767-04:00 ===
+{"generated_at":"2026-04-19T21:45:11-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365992","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:14.315-04:00 ===
+{"generated_at":"2026-04-19T21:45:13-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365994","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:15.847-04:00 ===
+{"generated_at":"2026-04-19T21:45:14-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365995","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:17.366-04:00 ===
+{"generated_at":"2026-04-19T21:45:16-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365997","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:18.854-04:00 ===
+{"generated_at":"2026-04-19T21:45:17-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2365998","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:20.555-04:00 ===
+{"generated_at":"2026-04-19T21:45:19-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366000","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:22.129-04:00 ===
+{"generated_at":"2026-04-19T21:45:21-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366002","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:24.191-04:00 ===
+{"generated_at":"2026-04-19T21:45:23-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366004","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:25.853-04:00 ===
+{"generated_at":"2026-04-19T21:45:25-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366005","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:27.602-04:00 ===
+{"generated_at":"2026-04-19T21:45:26-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366007","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:29.413-04:00 ===
+{"generated_at":"2026-04-19T21:45:28-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366009","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:30.902-04:00 ===
+{"generated_at":"2026-04-19T21:45:29-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366010","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:32.423-04:00 ===
+{"generated_at":"2026-04-19T21:45:31-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366012","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:33.909-04:00 ===
+{"generated_at":"2026-04-19T21:45:32-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366013","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:35.422-04:00 ===
+{"generated_at":"2026-04-19T21:45:34-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366015","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:36.938-04:00 ===
+{"generated_at":"2026-04-19T21:45:35-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366016","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:38.483-04:00 ===
+{"generated_at":"2026-04-19T21:45:37-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366018","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:40.046-04:00 ===
+{"generated_at":"2026-04-19T21:45:39-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366019","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:41.590-04:00 ===
+{"generated_at":"2026-04-19T21:45:40-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366021","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:43.171-04:00 ===
+{"generated_at":"2026-04-19T21:45:42-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366023","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:44.683-04:00 ===
+{"generated_at":"2026-04-19T21:45:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366024","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:46.182-04:00 ===
+{"generated_at":"2026-04-19T21:45:45-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366026","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:47.737-04:00 ===
+{"generated_at":"2026-04-19T21:45:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366027","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:49.360-04:00 ===
+{"generated_at":"2026-04-19T21:45:48-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366029","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:50.864-04:00 ===
+{"generated_at":"2026-04-19T21:45:50-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366030","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:52.518-04:00 ===
+{"generated_at":"2026-04-19T21:45:51-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366032","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:54.049-04:00 ===
+{"generated_at":"2026-04-19T21:45:53-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366033","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:45:55.580-04:00 ===
+{"generated_at":"2026-04-19T21:45:54-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366035","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"1","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"1","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"1","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:45:57.124-04:00 ===
+{"generated_at":"2026-04-19T21:45:56-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366037","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:45:58.682-04:00 ===
+{"generated_at":"2026-04-19T21:45:57-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366038","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"4","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"4","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"4","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:00.166-04:00 ===
+{"generated_at":"2026-04-19T21:45:59-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366040","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:01.685-04:00 ===
+{"generated_at":"2026-04-19T21:46:00-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366041","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:03.265-04:00 ===
+{"generated_at":"2026-04-19T21:46:02-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366043","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"8","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"8","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"8","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:04.859-04:00 ===
+{"generated_at":"2026-04-19T21:46:03-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366044","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"10","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"10","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"10","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:06.433-04:00 ===
+{"generated_at":"2026-04-19T21:46:05-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366046","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"12","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"11","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"11","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:07.933-04:00 ===
+{"generated_at":"2026-04-19T21:46:06-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366047","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"13","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"13","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"13","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:09.493-04:00 ===
+{"generated_at":"2026-04-19T21:46:08-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366049","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"15","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"15","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"15","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:11.004-04:00 ===
+{"generated_at":"2026-04-19T21:46:10-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366050","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"16","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"16","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"16","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:12.536-04:00 ===
+{"generated_at":"2026-04-19T21:46:11-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366052","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"18","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"18","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"18","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:14.157-04:00 ===
+{"generated_at":"2026-04-19T21:46:13-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366054","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"19","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"19","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"19","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:15.717-04:00 ===
+{"generated_at":"2026-04-19T21:46:14-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366055","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"21","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"21","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"21","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:17.217-04:00 ===
+{"generated_at":"2026-04-19T21:46:16-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366057","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"22","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"22","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"22","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:18.818-04:00 ===
+{"generated_at":"2026-04-19T21:46:17-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366058","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"24","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"24","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"24","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:20.311-04:00 ===
+{"generated_at":"2026-04-19T21:46:19-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366060","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"25","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"25","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"25","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:21.838-04:00 ===
+{"generated_at":"2026-04-19T21:46:20-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366061","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"27","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"27","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"27","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:23.336-04:00 ===
+{"generated_at":"2026-04-19T21:46:22-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366063","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"28","bridged_uniqueid":"","uniqueid":"1776649553.87238"},{"channel":"PJSIP/T2_103-0000bf15","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"28","bridged_uniqueid":"","uniqueid":"1776649553.87240"},{"channel":"PJSIP/T2_103-0000bf14","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"28","bridged_uniqueid":"","uniqueid":"1776649553.87239"}]}
+
+=== 2026-04-19T21:46:24.856-04:00 ===
+{"generated_at":"2026-04-19T21:46:23-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366064","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"30","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:26.463-04:00 ===
+{"generated_at":"2026-04-19T21:46:25-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366066","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"32","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:27.948-04:00 ===
+{"generated_at":"2026-04-19T21:46:26-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366067","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"33","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:29.446-04:00 ===
+{"generated_at":"2026-04-19T21:46:28-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366069","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"34","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:30.915-04:00 ===
+{"generated_at":"2026-04-19T21:46:29-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366070","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"36","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:32.455-04:00 ===
+{"generated_at":"2026-04-19T21:46:31-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366072","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"38","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:33.987-04:00 ===
+{"generated_at":"2026-04-19T21:46:32-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366073","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"39","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:35.497-04:00 ===
+{"generated_at":"2026-04-19T21:46:34-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366075","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"41","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:37.010-04:00 ===
+{"generated_at":"2026-04-19T21:46:36-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366076","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"42","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:38.504-04:00 ===
+{"generated_at":"2026-04-19T21:46:37-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366078","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"44","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:40.020-04:00 ===
+{"generated_at":"2026-04-19T21:46:39-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366079","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"45","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:41.580-04:00 ===
+{"generated_at":"2026-04-19T21:46:40-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366081","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"47","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:43.176-04:00 ===
+{"generated_at":"2026-04-19T21:46:42-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366083","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"48","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:44.731-04:00 ===
+{"generated_at":"2026-04-19T21:46:43-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366084","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf13","context":"sub-vm","exten":"s","priority":"16","state":"Up","application":"VoiceMail","data":"103@a_plus_center-voicemail,u","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"50","bridged_uniqueid":"","uniqueid":"1776649553.87238"}]}
+
+=== 2026-04-19T21:46:46.228-04:00 ===
+{"generated_at":"2026-04-19T21:46:45-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366086","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:47.771-04:00 ===
+{"generated_at":"2026-04-19T21:46:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366087","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:49.299-04:00 ===
+{"generated_at":"2026-04-19T21:46:48-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366089","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:50.796-04:00 ===
+{"generated_at":"2026-04-19T21:46:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366090","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:52.298-04:00 ===
+{"generated_at":"2026-04-19T21:46:51-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366092","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:53.824-04:00 ===
+{"generated_at":"2026-04-19T21:46:52-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366093","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:55.306-04:00 ===
+{"generated_at":"2026-04-19T21:46:54-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366095","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:56.760-04:00 ===
+{"generated_at":"2026-04-19T21:46:55-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366096","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:58.270-04:00 ===
+{"generated_at":"2026-04-19T21:46:57-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366098","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:46:59.739-04:00 ===
+{"generated_at":"2026-04-19T21:46:58-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366099","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:01.220-04:00 ===
+{"generated_at":"2026-04-19T21:47:00-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366101","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:02.795-04:00 ===
+{"generated_at":"2026-04-19T21:47:01-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366102","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:04.372-04:00 ===
+{"generated_at":"2026-04-19T21:47:03-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366104","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:05.888-04:00 ===
+{"generated_at":"2026-04-19T21:47:04-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366105","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:07.447-04:00 ===
+{"generated_at":"2026-04-19T21:47:06-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366107","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:08.933-04:00 ===
+{"generated_at":"2026-04-19T21:47:07-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366108","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:10.477-04:00 ===
+{"generated_at":"2026-04-19T21:47:09-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366110","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:12.012-04:00 ===
+{"generated_at":"2026-04-19T21:47:10-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366111","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:13.501-04:00 ===
+{"generated_at":"2026-04-19T21:47:12-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366113","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:15.012-04:00 ===
+{"generated_at":"2026-04-19T21:47:13-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366114","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:16.480-04:00 ===
+{"generated_at":"2026-04-19T21:47:15-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366116","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:17.982-04:00 ===
+{"generated_at":"2026-04-19T21:47:17-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366117","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:19.517-04:00 ===
+{"generated_at":"2026-04-19T21:47:18-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366119","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:21.067-04:00 ===
+{"generated_at":"2026-04-19T21:47:20-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366120","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:22.581-04:00 ===
+{"generated_at":"2026-04-19T21:47:21-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366122","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:24.062-04:00 ===
+{"generated_at":"2026-04-19T21:47:23-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366124","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:25.685-04:00 ===
+{"generated_at":"2026-04-19T21:47:24-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366125","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:27.297-04:00 ===
+{"generated_at":"2026-04-19T21:47:26-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366127","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:28.857-04:00 ===
+{"generated_at":"2026-04-19T21:47:27-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366128","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:30.385-04:00 ===
+{"generated_at":"2026-04-19T21:47:29-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366130","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:31.921-04:00 ===
+{"generated_at":"2026-04-19T21:47:30-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366131","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:33.422-04:00 ===
+{"generated_at":"2026-04-19T21:47:32-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366133","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:34.901-04:00 ===
+{"generated_at":"2026-04-19T21:47:33-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366134","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:36.473-04:00 ===
+{"generated_at":"2026-04-19T21:47:35-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366136","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:37.969-04:00 ===
+{"generated_at":"2026-04-19T21:47:36-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366137","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:39.512-04:00 ===
+{"generated_at":"2026-04-19T21:47:38-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366139","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:41.042-04:00 ===
+{"generated_at":"2026-04-19T21:47:40-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366141","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:42.618-04:00 ===
+{"generated_at":"2026-04-19T21:47:41-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366142","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:44.166-04:00 ===
+{"generated_at":"2026-04-19T21:47:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366144","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:45.711-04:00 ===
+{"generated_at":"2026-04-19T21:47:44-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366145","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:47.253-04:00 ===
+{"generated_at":"2026-04-19T21:47:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366147","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:48.742-04:00 ===
+{"generated_at":"2026-04-19T21:47:47-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366148","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:50.251-04:00 ===
+{"generated_at":"2026-04-19T21:47:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366150","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:51.886-04:00 ===
+{"generated_at":"2026-04-19T21:47:50-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366151","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:53.501-04:00 ===
+{"generated_at":"2026-04-19T21:47:52-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366153","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:55.069-04:00 ===
+{"generated_at":"2026-04-19T21:47:54-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366155","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:56.778-04:00 ===
+{"generated_at":"2026-04-19T21:47:55-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366156","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:47:58.557-04:00 ===
+{"generated_at":"2026-04-19T21:47:57-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366158","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:00.119-04:00 ===
+{"generated_at":"2026-04-19T21:47:59-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366160","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:01.624-04:00 ===
+{"generated_at":"2026-04-19T21:48:00-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366161","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:03.662-04:00 ===
+{"generated_at":"2026-04-19T21:48:02-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366163","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:05.357-04:00 ===
+{"generated_at":"2026-04-19T21:48:04-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366165","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:07.069-04:00 ===
+{"generated_at":"2026-04-19T21:48:06-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366166","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:08.598-04:00 ===
+{"generated_at":"2026-04-19T21:48:07-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366168","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:10.105-04:00 ===
+{"generated_at":"2026-04-19T21:48:09-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366170","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:11.788-04:00 ===
+{"generated_at":"2026-04-19T21:48:10-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366171","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:13.298-04:00 ===
+{"generated_at":"2026-04-19T21:48:12-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366173","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:14.798-04:00 ===
+{"generated_at":"2026-04-19T21:48:13-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366174","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:16.291-04:00 ===
+{"generated_at":"2026-04-19T21:48:15-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366176","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:17.795-04:00 ===
+{"generated_at":"2026-04-19T21:48:16-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366177","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:19.284-04:00 ===
+{"generated_at":"2026-04-19T21:48:18-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366179","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:20.873-04:00 ===
+{"generated_at":"2026-04-19T21:48:19-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366180","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:22.371-04:00 ===
+{"generated_at":"2026-04-19T21:48:21-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366182","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:23.838-04:00 ===
+{"generated_at":"2026-04-19T21:48:22-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366183","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:25.355-04:00 ===
+{"generated_at":"2026-04-19T21:48:24-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366185","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:27.086-04:00 ===
+{"generated_at":"2026-04-19T21:48:26-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366187","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:28.691-04:00 ===
+{"generated_at":"2026-04-19T21:48:27-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366188","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:30.205-04:00 ===
+{"generated_at":"2026-04-19T21:48:29-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366190","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:31.829-04:00 ===
+{"generated_at":"2026-04-19T21:48:30-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366191","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:33.356-04:00 ===
+{"generated_at":"2026-04-19T21:48:32-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366193","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:34.852-04:00 ===
+{"generated_at":"2026-04-19T21:48:33-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366194","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:36.401-04:00 ===
+{"generated_at":"2026-04-19T21:48:35-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366196","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:38.196-04:00 ===
+{"generated_at":"2026-04-19T21:48:37-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366198","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:39.751-04:00 ===
+{"generated_at":"2026-04-19T21:48:38-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366199","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:41.279-04:00 ===
+{"generated_at":"2026-04-19T21:48:40-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366201","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:42.822-04:00 ===
+{"generated_at":"2026-04-19T21:48:41-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366202","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:44.319-04:00 ===
+{"generated_at":"2026-04-19T21:48:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366204","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:45.833-04:00 ===
+{"generated_at":"2026-04-19T21:48:44-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366205","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:47.405-04:00 ===
+{"generated_at":"2026-04-19T21:48:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366207","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:48.944-04:00 ===
+{"generated_at":"2026-04-19T21:48:47-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366208","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:50.490-04:00 ===
+{"generated_at":"2026-04-19T21:48:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366210","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:52.019-04:00 ===
+{"generated_at":"2026-04-19T21:48:51-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366211","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:53.577-04:00 ===
+{"generated_at":"2026-04-19T21:48:52-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366213","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:55.059-04:00 ===
+{"generated_at":"2026-04-19T21:48:54-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366214","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:56.609-04:00 ===
+{"generated_at":"2026-04-19T21:48:55-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366216","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:58.143-04:00 ===
+{"generated_at":"2026-04-19T21:48:57-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366218","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:48:59.660-04:00 ===
+{"generated_at":"2026-04-19T21:48:58-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366219","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:01.191-04:00 ===
+{"generated_at":"2026-04-19T21:49:00-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366221","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:02.799-04:00 ===
+{"generated_at":"2026-04-19T21:49:01-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366222","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:04.383-04:00 ===
+{"generated_at":"2026-04-19T21:49:03-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366224","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:05.938-04:00 ===
+{"generated_at":"2026-04-19T21:49:05-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366225","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"0","bridged_uniqueid":"","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103-0000bf1a","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"0","bridged_uniqueid":"","uniqueid":"1776649744.87248"},{"channel":"PJSIP/T2_103-0000bf1b","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"0","bridged_uniqueid":"","uniqueid":"1776649744.87249"}]}
+
+=== 2026-04-19T21:49:07.532-04:00 ===
+{"generated_at":"2026-04-19T21:49:06-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366227","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103-0000bf1a","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649744.87248"},{"channel":"PJSIP/T2_103-0000bf1b","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2","bridged_uniqueid":"","uniqueid":"1776649744.87249"}]}
+
+=== 2026-04-19T21:49:09.045-04:00 ===
+{"generated_at":"2026-04-19T21:49:08-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366229","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"4","bridged_uniqueid":"","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103-0000bf1a","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"3","bridged_uniqueid":"","uniqueid":"1776649744.87248"},{"channel":"PJSIP/T2_103-0000bf1b","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"3","bridged_uniqueid":"","uniqueid":"1776649744.87249"}]}
+
+=== 2026-04-19T21:49:10.776-04:00 ===
+{"generated_at":"2026-04-19T21:49:09-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366230","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103-0000bf1a","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649744.87248"},{"channel":"PJSIP/T2_103-0000bf1b","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"5","bridged_uniqueid":"","uniqueid":"1776649744.87249"}]}
+
+=== 2026-04-19T21:49:12.309-04:00 ===
+{"generated_at":"2026-04-19T21:49:11-04:00\n"
+,"raw_count_hint":4,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366232","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103-0000bf1a","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649744.87248"},{"channel":"PJSIP/T2_103-0000bf1b","context":"T2_cos-all","exten":"103","priority":"1","state":"Ringing","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"","uniqueid":"1776649744.87249"}]}
+
+=== 2026-04-19T21:49:13.807-04:00 ===
+{"generated_at":"2026-04-19T21:49:12-04:00\n"
+,"raw_count_hint":2,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366233","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Ring","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"8","bridged_uniqueid":"","uniqueid":"1776649744.87247"}]}
+
+=== 2026-04-19T21:49:15.377-04:00 ===
+{"generated_at":"2026-04-19T21:49:14-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366235","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"10","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"1","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:17.112-04:00 ===
+{"generated_at":"2026-04-19T21:49:16-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366237","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"12","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"3","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:18.699-04:00 ===
+{"generated_at":"2026-04-19T21:49:17-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366238","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"13","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"4","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:20.246-04:00 ===
+{"generated_at":"2026-04-19T21:49:19-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366240","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"15","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"6","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:21.759-04:00 ===
+{"generated_at":"2026-04-19T21:49:20-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366241","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"16","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"7","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:23.357-04:00 ===
+{"generated_at":"2026-04-19T21:49:22-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366243","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"18","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"9","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:24.884-04:00 ===
+{"generated_at":"2026-04-19T21:49:23-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366244","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"19","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"11","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:26.431-04:00 ===
+{"generated_at":"2026-04-19T21:49:25-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366246","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"21","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"12","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:27.931-04:00 ===
+{"generated_at":"2026-04-19T21:49:26-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366247","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"22","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"14","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:29.491-04:00 ===
+{"generated_at":"2026-04-19T21:49:28-04:00\n"
+,"raw_count_hint":3,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366249","bridged_uniqueid":"","uniqueid":"1774283519.8156"},{"channel":"PJSIP/T2_108-0000bf19","context":"sub-local-dialing","exten":"103","priority":"54","state":"Up","application":"Dial","data":"PJSIP/T2_103/sip:T2_103@50.49.201.253:1039;x-ast-orig-host=192.168.254.30:5060&PJSIP/T2_103/sip:T2_103@159.203.80.157:35831;rinstance=0E791D20;x-ast-orig-host=10.65.31.1:35831&PJSIP/T2_103_1/sip:luu89iij@50.49.206.161:51606;transport=ws;x-ast-orig-host=empugtq9js2b.invalid:0,30,ktrb(sub-before-connecting-call^s^1(f3df739ac62197cd^108^103^^))U(sub-before-bridging-call^f3df739ac62197cd^108^103^no)","callerid":"108","accountcode":"","amaflags":"","duration":"3","bridged_channel":"24","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649744.87247"},{"channel":"PJSIP/T2_103_1-0000bf1e","context":"T2_cos-all","exten":"","priority":"1","state":"Up","application":"AppDial","data":"(Outgoing Line)","callerid":"103","accountcode":"","amaflags":"","duration":"3","bridged_channel":"15","bridged_uniqueid":"28def9f4-18bb-46db-8a6d-7404c99ec42e","uniqueid":"1776649752.87252"}]}
+
+=== 2026-04-19T21:49:31.065-04:00 ===
+{"generated_at":"2026-04-19T21:49:30-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366251","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:32.629-04:00 ===
+{"generated_at":"2026-04-19T21:49:31-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366252","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:34.140-04:00 ===
+{"generated_at":"2026-04-19T21:49:33-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366254","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:35.637-04:00 ===
+{"generated_at":"2026-04-19T21:49:34-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366255","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:37.216-04:00 ===
+{"generated_at":"2026-04-19T21:49:36-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366257","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:38.854-04:00 ===
+{"generated_at":"2026-04-19T21:49:37-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366258","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:40.352-04:00 ===
+{"generated_at":"2026-04-19T21:49:39-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366260","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:41.979-04:00 ===
+{"generated_at":"2026-04-19T21:49:41-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366261","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:43.604-04:00 ===
+{"generated_at":"2026-04-19T21:49:43-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366264","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:46.001-04:00 ===
+{"generated_at":"2026-04-19T21:49:45-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366266","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:47.657-04:00 ===
+{"generated_at":"2026-04-19T21:49:46-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366267","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:49.186-04:00 ===
+{"generated_at":"2026-04-19T21:49:48-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366269","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:50.816-04:00 ===
+{"generated_at":"2026-04-19T21:49:49-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366270","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:52.382-04:00 ===
+{"generated_at":"2026-04-19T21:49:51-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366272","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:53.924-04:00 ===
+{"generated_at":"2026-04-19T21:49:52-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366273","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:55.490-04:00 ===
+{"generated_at":"2026-04-19T21:49:54-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366275","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+
+=== 2026-04-19T21:49:57.000-04:00 ===
+{"generated_at":"2026-04-19T21:49:55-04:00\n"
+,"raw_count_hint":1,"channels":[,{"channel":"Message/ast_msg_queue","context":"messages","exten":"3477438537","priority":"35","state":"Up","application":"Hangup","data":"","callerid":"","accountcode":"","amaflags":"","duration":"3","bridged_channel":"2366276","bridged_uniqueid":"","uniqueid":"1774283519.8156"}]}
+

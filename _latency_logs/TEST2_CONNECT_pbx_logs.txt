@@ -1,0 +1,100 @@
+﻿[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@sub-call-completion-check:5] GotoIf("PJSIP/T2_110-0000bf02", "1?end") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx_builtins.c: Goto (sub-call-completion-check,s,17)
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@sub-call-completion-check:17] Return("PJSIP/T2_110-0000bf02", "") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [h@sub-local-dialing:12] NoOp("PJSIP/T2_110-0000bf02", "Call ended") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [h@sub-local-dialing:13] Gosub("PJSIP/T2_110-0000bf02", "notify-call-hangup,s,1") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@notify-call-hangup:1] Verbose("PJSIP/T2_110-0000bf02", "0, Extension Hangup") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] app_verbose.c:  Extension Hangup
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@notify-call-hangup:2] GotoIf("PJSIP/T2_110-0000bf02", "1?:incoming") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@notify-call-hangup:3] UserEvent("PJSIP/T2_110-0000bf02", ""EXTENSIONS_SUMMARY","Data: EXT_TO_EXT,PJSIP/T2_110-0000001v,PJSIP/T2_103_1-0000bf08,LOCAL"") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@notify-call-hangup:4] Goto("PJSIP/T2_110-0000bf02", "end") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx_builtins.c: Goto (notify-call-hangup,s,7)
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [s@notify-call-hangup:7] Return("PJSIP/T2_110-0000bf02", "") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [h@sub-local-dialing:14] GosubIf("PJSIP/T2_110-0000bf02", "0?T2_end-ext-dialing-hook,s,1") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Executing [h@sub-local-dialing:15] Hangup("PJSIP/T2_110-0000bf02", "") in new stack
+[2026-04-19 21:32:45] VERBOSE[4112681][C-00005030] pbx.c: Spawn extension (sub-local-dialing, h, 15) exited non-zero on 'PJSIP/T2_110-0000bf02'
+[2026-04-19 21:32:46] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:46] VERBOSE[4115102] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:46] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:46] VERBOSE[4115135] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:47] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:47] VERBOSE[4115163] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:48] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:48] VERBOSE[4115196] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:49] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:49] VERBOSE[4115246] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:49] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:49] VERBOSE[4115279] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:49] VERBOSE[4111227][C-0000502e] res_musiconhold.c: Stopped music on hold on PJSIP/344022_gesheft-0000befd
+[2026-04-19 21:32:49] VERBOSE[4111227][C-0000502e] bridge_channel.c: Channel PJSIP/344022_gesheft-0000befd left 'simple_bridge' basic-bridge <64f88091-65ab-405e-8d74-4e0c4c500339>
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] bridge_channel.c: Channel PJSIP/T8_103-0000befc left 'simple_bridge' basic-bridge <64f88091-65ab-405e-8d74-4e0c4c500339>
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Spawn extension (trk-29-dial, 8457822037, 44) exited non-zero on 'PJSIP/T8_103-0000befc'
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:1] System("PJSIP/T8_103-0000befc", "test -e /var/spool/asterisk/monitor/106048d48cb4ddf6/2026/04/19/213058-OUT-NONE-103-8457822037-1776648658.87215.wav") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:2] ExecIf("PJSIP/T8_103-0000befc", "0?Set(CDR(recfile)=/var/spool/asterisk/monitor/106048d48cb4ddf6/2026/04/19/213058-OUT-NONE-103-8457822037-1776648658.87215.wav):") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:3] GosubIf("PJSIP/T8_103-0000befc", "0?sub-outbound-queue-call,s,1") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:4] Gosub("PJSIP/T8_103-0000befc", "dynamic-routing-out,s,1(103,8457822037,ANSWER,29)") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:1] NoOp("PJSIP/T8_103-0000befc", "Test if save on dynamic routing list") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:2] Set("PJSIP/T8_103-0000befc", "CALLER=103") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:3] Set("PJSIP/T8_103-0000befc", "CALLED=8457822037") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:4] Set("PJSIP/T8_103-0000befc", "STATUS=ANSWER") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:5] Set("PJSIP/T8_103-0000befc", "TRKID=29") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:6] Set("PJSIP/T8_103-0000befc", "ALLOW_DR=no") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:7] Set("PJSIP/T8_103-0000befc", "DYNROUTING_OMC=yes") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:8] GotoIf("PJSIP/T8_103-0000befc", "0?:comeback") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx_builtins.c: Goto (dynamic-routing-out,s,10)
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@dynamic-routing-out:10] Return("PJSIP/T8_103-0000befc", "") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:5] Gosub("PJSIP/T8_103-0000befc", "notify-trunk-hangup,s,1") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@notify-trunk-hangup:1] Verbose("PJSIP/T8_103-0000befc", "0, Trunk Hangup") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] app_verbose.c:  Trunk Hangup
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@notify-trunk-hangup:2] Set("PJSIP/T8_103-0000befc", "CALLER=PJSIP/T8_103") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@notify-trunk-hangup:3] UserEvent("PJSIP/T8_103-0000befc", ""EXTENSIONS_SUMMARY","Data: OUTBOUND,PJSIP/T8_103,8457822037,OUT"") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@notify-trunk-hangup:4] Return("PJSIP/T8_103-0000befc", "") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:6] Gosub("PJSIP/T8_103-0000befc", "sub-log-crm-call,s,1") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@sub-log-crm-call:1] NoOp("PJSIP/T8_103-0000befc", "Logging Call on CRM") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@sub-log-crm-call:2] Set("PJSIP/T8_103-0000befc", "EXTERN_NUM=8457822037") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@sub-log-crm-call:3] GotoIf("PJSIP/T8_103-0000befc", "0?:end") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx_builtins.c: Goto (sub-log-crm-call,s,6)
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [s@sub-log-crm-call:6] Return("PJSIP/T8_103-0000befc", "") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:7] GosubIf("PJSIP/T8_103-0000befc", "0?T8_end-trunk-dialing-hook,s,1") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Executing [h@trk-29-dial:8] Hangup("PJSIP/T8_103-0000befc", "") in new stack
+[2026-04-19 21:32:49] VERBOSE[4110250][C-0000502e] pbx.c: Spawn extension (trk-29-dial, h, 8) exited non-zero on 'PJSIP/T8_103-0000befc'
+[2026-04-19 21:32:51] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:51] VERBOSE[4115318] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:51] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:51] VERBOSE[4115351] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:52] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:52] VERBOSE[4115379] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:52] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:52] VERBOSE[4115412] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:54] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:54] VERBOSE[4115440] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:54] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:54] VERBOSE[4115473] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:55] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:55] VERBOSE[4115511] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:56] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:56] VERBOSE[4115544] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:57] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:57] VERBOSE[4115572] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:57] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:57] VERBOSE[4115605] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:59] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:59] VERBOSE[4115633] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:32:59] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:32:59] VERBOSE[4115666] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:00] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:00] VERBOSE[4115704] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:00] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:00] VERBOSE[4115737] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:02] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:02] VERBOSE[4115805] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:02] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:02] VERBOSE[4115838] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:04] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:04] VERBOSE[4115866] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:04] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:04] VERBOSE[4115899] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:05] VERBOSE[2013] asterisk.c: Remote UNIX connection
+[2026-04-19 21:33:05] VERBOSE[4115941] asterisk.c: Remote UNIX connection disconnected
+[2026-04-19 21:33:05] SECURITY[2428] res_security_log.c: SecurityEvent="ChallengeSent",EventTV="2026-04-19T21:33:05.584-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T3_103",SessionID="4516A8A7B61C4C4DD3DA0BB1B190765EDD39D0BC",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/167.172.251.36/49752",Challenge=""
+[2026-04-19 21:33:05] SECURITY[2428] res_security_log.c: SecurityEvent="SuccessfulAuth",EventTV="2026-04-19T21:33:05.614-0400",Severity="Informational",Service="PJSIP",EventVersion="1",AccountID="T3_103",SessionID="4516A8A7B61C4C4DD3DA0BB1B190765EDD39D0BC",LocalAddress="IPV4/UDP/209.145.60.79/5060",RemoteAddress="IPV4/UDP/167.172.251.36/49752",UsingPassword="1"

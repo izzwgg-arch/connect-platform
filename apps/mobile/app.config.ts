@@ -57,7 +57,7 @@ const config: ExpoConfig = {
   updates: {
     enabled: true,
     url: `https://u.expo.dev/${easProjectId}`,
-    checkAutomatically: 'ON_LOAD',
+    checkAutomatically: 'ON_ERROR_RECOVERY',
     fallbackToCacheTimeout: 0,
   },
   orientation: 'portrait',
@@ -127,6 +127,9 @@ const config: ExpoConfig = {
     logLevel,
     buildProfile: profile,
     easProjectId,
+    /** When true, release builds show the DBG call-flow overlay (same as __DEV__). */
+    callFlowDebugOverlay:
+      String(process.env.EXPO_PUBLIC_CALL_FLOW_DEBUG_OVERLAY || '').toLowerCase() === 'true',
     eas: {
       projectId: easProjectId,
     },

@@ -64,6 +64,18 @@ export class CallStateStore extends EventEmitter {
   // Pending eviction timers
   private evictTimers = new Map<string, NodeJS.Timeout>();
 
+  // Recording paths captured from AMI VarSet (MIXMONITOR_FILENAME / __REC_FILENAME)
+  // keyed by linkedId. VarSet frequently fires BEFORE any Newchannel event we'd
+  // track (MixMonitor runs inside a Local-channel macro whose linkedid may equal
+  // the surviving call's linkedid). We stash the path here until a matching call
+  // is upserted, then apply it — so we never lose recording metadata.
+  // Also acts as a cache so re-applies during the call's lifetime are idempotent.
+  private pendingRecordingPaths = new Map<string, string>();
+  // Evict stale pending paths after this long so the map doesn't grow unbounded
+  // for calls whose linkedid never ended up in the main store.
+  private static PENDING_REC_TTL_MS = 60 * 60 * 1000; // 1h
+  private pendingRecTimers = new Map<string, NodeJS.Timeout>();
+
   // ── Read ────────────────────────────────────────────────────────────────────
 
   getAll(): NormalizedCall[] {
@@ -404,6 +416,8 @@ export class CallStateStore extends EventEmitter {
     }
 
     this.calls.set(params.linkedId, call);
+    // Apply any recording path that arrived via VarSet before the call existed.
+    this.drainPendingRecordingPath(params.linkedId);
     this.emit("callUpsert", { ...call });
     return call;
   }
@@ -748,6 +762,92 @@ export class CallStateStore extends EventEmitter {
     }
 
     this.emit("callUpsert", { ...call });
+  }
+
+  // Called when AMI reports the MIXMONITOR_FILENAME (or equivalent) VarSet.
+  // Stores the absolute filesystem path on the PBX (e.g.
+  // /var/spool/asterisk/monitor/<tenant_hash>/YYYY/MM/DD/<name>.wav) against the
+  // linkedId so the CDR payload can include it at Hangup.
+  // Multiple VarSets may fire per call — we prefer paths that include a tenant
+  // hash directory (longer, more specific) over the initial "bare" path.
+  //
+  // If the call is not yet tracked (VarSet fires before the first Newchannel we
+  // see is normalized), we buffer the path in pendingRecordingPaths and apply
+  // it when the call gets created in upsertChannel.
+  setRecordingPath(linkedId: string, path: string): void {
+    if (!linkedId || !path) return;
+
+    const call = this.calls.get(linkedId);
+    if (!call) {
+      // Buffer until the call is tracked.
+      const pending = this.pendingRecordingPaths.get(linkedId);
+      const chosen = this.preferLongerRecordingPath(pending, path);
+      if (chosen !== pending) {
+        this.pendingRecordingPaths.set(linkedId, chosen);
+        this.armPendingRecTimer(linkedId);
+        if (env.ENABLE_TELEPHONY_DEBUG) {
+          log.debug({ linkedId, path: chosen }, "recording: pending_path_buffered");
+        }
+      }
+      return;
+    }
+
+    const existing = (call.metadata["recordingAbsPath"] as string | undefined) ?? null;
+    const chosen = this.preferLongerRecordingPath(existing, path);
+    if (chosen !== existing) {
+      call.metadata["recordingAbsPath"] = chosen;
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        log.debug({ linkedId, path: chosen }, "recording: path_set");
+      }
+    }
+  }
+
+  /** Return the "better" of two candidate paths: prefer the one with a deeper
+   *  directory (tenant-hash prefix) and discard nothing — fallback to the
+   *  non-empty one. Returns null if both are null/empty. */
+  private preferLongerRecordingPath(a: string | null | undefined, b: string | null | undefined): string | null {
+    const aa = (a ?? "").trim();
+    const bb = (b ?? "").trim();
+    if (!aa && !bb) return null;
+    if (!aa) return bb;
+    if (!bb) return aa;
+    // Prefer path with more directory segments (tenant-hash / YYYY / MM / DD / file).
+    const aSegs = aa.split("/").filter(Boolean).length;
+    const bSegs = bb.split("/").filter(Boolean).length;
+    if (bSegs > aSegs) return bb;
+    if (aSegs > bSegs) return aa;
+    // Tie break: prefer the newer one (later VarSet usually wins).
+    return bb;
+  }
+
+  private armPendingRecTimer(linkedId: string): void {
+    const existing = this.pendingRecTimers.get(linkedId);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.pendingRecordingPaths.delete(linkedId);
+      this.pendingRecTimers.delete(linkedId);
+    }, CallStateStore.PENDING_REC_TTL_MS);
+    if (typeof (t as any).unref === "function") (t as any).unref();
+    this.pendingRecTimers.set(linkedId, t);
+  }
+
+  /** Drain any buffered recording path for linkedId onto the live call (if any). */
+  private drainPendingRecordingPath(linkedId: string): void {
+    const pending = this.pendingRecordingPaths.get(linkedId);
+    if (!pending) return;
+    const call = this.calls.get(linkedId);
+    if (!call) return;
+    const existing = (call.metadata["recordingAbsPath"] as string | undefined) ?? null;
+    const chosen = this.preferLongerRecordingPath(existing, pending);
+    if (chosen && chosen !== existing) {
+      call.metadata["recordingAbsPath"] = chosen;
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        log.debug({ linkedId, path: chosen }, "recording: pending_path_applied");
+      }
+    }
+    this.pendingRecordingPaths.delete(linkedId);
+    const t = this.pendingRecTimers.get(linkedId);
+    if (t) { clearTimeout(t); this.pendingRecTimers.delete(linkedId); }
   }
 
   // Called on QueueCallerJoin

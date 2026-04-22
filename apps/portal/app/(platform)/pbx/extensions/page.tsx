@@ -10,6 +10,7 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import { SearchInput } from "../../../../components/SearchInput";
 import { StatusChip } from "../../../../components/StatusChip";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
+import { useAppContext } from "../../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import {
@@ -665,7 +666,17 @@ export default function PbxExtensionsPage() {
   const [editing, setEditing] = useState<{ id: string | null; form: ExtForm } | null>(null);
   const [assigning, setAssigning] = useState<{ id: string; extNumber: string; ownerId: string | null; hasSipPass: boolean; tenantId?: string } | null>(null);
   const [deleteError, setDeleteError] = useState("");
-  const state = useAsyncResource(() => loadPbxResource("extensions"), ["extensions", reloadKey]);
+  const { tenantId, adminScope, tenant } = useAppContext();
+  // Always load the full extension list (API receives ?global=1 and skips tenant scoping).
+  // Per-tenant filtering is done client-side below using the tenantName already present
+  // in every row — this avoids broken zero-row results caused by backend mapping mismatches.
+  const state = useAsyncResource(
+    () => {
+      console.log("[EXT_TENANT_FILTER] fetching all extensions for client-side filter. scope:", adminScope, "tenant:", tenant?.name ?? tenantId);
+      return loadPbxResource("extensions");
+    },
+    ["extensions", reloadKey],
+  );
   const telephony = useTelephony();
 
   const activeExts = useMemo(() => {
@@ -687,11 +698,21 @@ export default function PbxExtensionsPage() {
   const rows = useMemo(() => {
     if (state.status !== "success") return [];
     const q = query.trim().toLowerCase();
-    return state.data.rows.filter((row) => {
+    // When a specific tenant is selected, keep only rows whose tenantName matches.
+    // Use trimmed case-insensitive comparison — both values come from human-entered strings.
+    const selectedTenant = adminScope === "TENANT" ? (tenant?.name ?? "").trim().toLowerCase() : null;
+    const allRows = state.data.rows;
+    const filtered = allRows.filter((row) => {
+      if (selectedTenant) {
+        const rowTenant = String(row.tenantName ?? "").trim().toLowerCase();
+        if (rowTenant !== selectedTenant) return false;
+      }
       if (!q) return true;
       return Object.values(row).some((v) => String(v ?? "").toLowerCase().includes(q));
     });
-  }, [state, query]);
+    console.log("[EXT_TENANT_FILTER] total:", allRows.length, "shown:", filtered.length, "scope:", adminScope, "tenant:", tenant?.name ?? "(global)");
+    return filtered;
+  }, [state, query, adminScope, tenant]);
 
   function presenceTone(ext: string): "success" | "danger" | "warning" | "default" {
     if (activeExts.has(ext)) return "danger";

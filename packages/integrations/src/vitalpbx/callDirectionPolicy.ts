@@ -83,6 +83,24 @@ function channelSuggestsOutboundTrunk(channel: string): boolean {
   return false;
 }
 
+/**
+ * VitalPBX ring-group / queue distribution channels — indicate an inbound call being
+ * routed to extensions via a ring group or ACD queue.
+ *
+ * Patterns:
+ *   Local/{ext}@T{n}_ring-group-dial-{hex}[;n]  — ring-group leg ringing an extension
+ *   Local/{ext}@T{n}_queue-{anything}            — queue leg distributing to an agent
+ *
+ * These Local channels are created when VitalPBX distributes an inbound call to
+ * individual extensions, so their presence is strong evidence that this linkedId
+ * belongs to an inbound call.
+ */
+function channelSuggestsInboundDistribution(channel: string): boolean {
+  if (/^Local\/\d{2,6}@T\d+_ring-group-dial-/i.test(channel)) return true;
+  if (/^Local\/\d{2,6}@T\d+_queue-/i.test(channel)) return true;
+  return false;
+}
+
 export type CallDirectionEvidenceInput = {
   /** All AMI Cdr Destination Context values observed for this linkedid */
   dcontexts: string[];
@@ -122,6 +140,7 @@ export function classifyCallDirectionByEvidence(input: CallDirectionEvidenceInpu
 
   for (const ch of input.channelNames) {
     if (channelSuggestsOutboundTrunk(ch)) sawOutbound = true;
+    if (channelSuggestsInboundDistribution(ch)) sawInbound = true;
   }
 
   if (sawOutbound) return "outgoing";
@@ -132,6 +151,11 @@ export function classifyCallDirectionByEvidence(input: CallDirectionEvidenceInpu
   if (fromDigits || toDigits) {
     if (isExtension(fromDigits) && isExternal(toDigits)) return "outgoing";
     if (isExternal(fromDigits) && isExtension(toDigits)) return "incoming";
+    // Partial PSTN dial: extension originated, destination is 5–6 digits (user started
+    // dialing a 10-digit PSTN number but hung up after the area code or first few digits).
+    // These are NOT internal calls — real extensions are ≤4 digits on this system.
+    // Classify as outgoing (canceled) rather than internal.
+    if (fromDigits.length >= 2 && fromDigits.length <= 4 && toDigits.length >= 5 && toDigits.length <= 6) return "outgoing";
     if (isExtension(fromDigits) && isExtension(toDigits)) return "internal";
     // Extension dialing a local 7–9 digit number: PBX may not have expanded the number
     // to a full 10-digit PSTN number yet (e.g. 106 → 2224034 → PBX expands to 8452224034).

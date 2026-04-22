@@ -1,0 +1,2 @@
+SELECT e.id, e."extNumber", e."displayName", e."ownerUserId", u.email FROM "Extension" e LEFT JOIN "User" u ON u.id = e."ownerUserId" WHERE e."tenantId" = 'cmnlgnumi0000p9g6l7t1t0z7' ORDER BY e."extNumber";
+SELECT ci.id, ci."toExtension", ci.status, ci."pbxCallId", ci."createdAt", ci."fromNumber" FROM "CallInvite" ci WHERE ci."tenantId" = 'cmnlgnumi0000p9g6l7t1t0z7' ORDER BY ci."createdAt" DESC LIMIT 10;

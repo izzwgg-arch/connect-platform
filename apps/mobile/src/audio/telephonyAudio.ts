@@ -11,8 +11,30 @@
  */
 
 import { Audio } from "expo-av";
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 import { getMobileIncomingRingtone } from "./ringtonePreferences";
+
+/**
+ * Stop the Android native incoming-call ringtone played by
+ * IncomingCallFirebaseService. Best-effort no-op on other platforms or when
+ * the native module isn't linked (e.g. during jest). Called from
+ * stopAllTelephonyAudio so the SIP session.on('ended'/'failed') handler also
+ * silences the native MediaPlayer — without this, remote CANCEL while the
+ * phone is still ringing left the native ringtone playing until the user
+ * force-quit the app.
+ */
+function stopNativeAndroidRingtone(reason: string): void {
+  if (Platform.OS !== "android") return;
+  try {
+    const mod = (NativeModules as any)?.IncomingCallUi;
+    if (!mod) return;
+    if (typeof mod.stopRingtone === "function") {
+      mod.stopRingtone(reason ?? "stop_all_telephony_audio");
+    }
+  } catch {
+    /* ignore — native module missing or misbehaving */
+  }
+}
 
 // ─── PCM WAV generation ───────────────────────────────────────────────────────
 
@@ -163,6 +185,13 @@ let ringbackStopped = true; // true = not playing; false = currently playing
 let ringtoneSound: Audio.Sound | null = null;
 let ringtoneTimer: ReturnType<typeof setTimeout> | null = null;
 let ringtoneStopped = true; // true = not playing; false = currently playing
+// Generation counter that increments on every stopAll / startRingtone invocation.
+// Any in-flight startRingtone captures its own generation and uses it to detect
+// whether it has been superseded — protects against the race where an async
+// Audio.Sound creation resolves AFTER a stopAllTelephonyAudio (during InCallManager
+// MODE_IN_COMMUNICATION the leaked sound is silent, so the user only hears it
+// after hangup when audio mode returns to NORMAL).
+let ringtoneGeneration = 0;
 const CONNECT_DEFAULT_RINGTONE_SOURCE = require("../../assets/connect-default-ringtone.mp4");
 
 /**
@@ -213,6 +242,16 @@ async function stopSound(sound: Audio.Sound | null) {
 /** Stop all ringing/ringback audio immediately. */
 export async function stopAllTelephonyAudio() {
   console.log("[AUDIO] stopAllTelephonyAudio");
+  // Always belt-and-braces stop the native Android incoming ringtone. This is
+  // synchronous/fire-and-forget: the native module runs on its own thread.
+  // Calling this first means that even if awaiting JS sound.stop() below
+  // hangs for a frame, the MediaPlayer is already silenced. It's also the
+  // canonical chokepoint invoked by SIP session 'ended' / 'failed' callbacks
+  // so the ringtone stops the instant the remote party CANCELs.
+  stopNativeAndroidRingtone("stop_all_telephony_audio");
+  // Bump generation first so any in-flight startRingtone resolves and self-unloads
+  // the sound it was about to assign to ringtoneSound.
+  ringtoneGeneration += 1;
   ringbackStopped = true;
   if (ringbackTimer) { clearTimeout(ringbackTimer); ringbackTimer = null; }
   await stopSound(ringbackSound);
@@ -267,14 +306,21 @@ export async function startRingback() {
 export async function startRingtone() {
   console.log("[AUDIO] startRingtone");
   await stopAllTelephonyAudio();
+  // Claim a generation — any subsequent stopAllTelephonyAudio (or another
+  // startRingtone) will bump this counter and our `isSuperseded` checks below
+  // will unload whatever sound we were about to expose.
+  const myGen = ++ringtoneGeneration;
+  const isSuperseded = () => myGen !== ringtoneGeneration;
   ringtoneStopped = false;
   const ringtonePreference = await getMobileIncomingRingtone();
-  // Guard: stopAllTelephonyAudio() may have been called while we awaited above.
-  if (ringtoneStopped) return;
+  if (isSuperseded()) return;
 
   if (ringtonePreference === "connect-default") {
     const sound = await playLooping(CONNECT_DEFAULT_RINGTONE_SOURCE as any, 0.95);
-    if (ringtoneStopped) {
+    if (isSuperseded() || ringtoneStopped) {
+      // A newer stopAll / startRingtone has already superseded us. Unload the
+      // sound we just created so it doesn't leak and keep playing after hangup.
+      sound?.stopAsync().catch(() => undefined);
       sound?.unloadAsync().catch(() => undefined);
       return;
     }
@@ -283,17 +329,29 @@ export async function startRingtone() {
   }
 
   async function cycle() {
-    if (ringtoneStopped) return;
+    if (isSuperseded() || ringtoneStopped) return;
     // First ring
-    ringtoneSound = await playOnce(getRingtoneWav(), 0.85);
+    const first = await playOnce(getRingtoneWav(), 0.85);
+    if (isSuperseded() || ringtoneStopped) {
+      first?.stopAsync().catch(() => undefined);
+      first?.unloadAsync().catch(() => undefined);
+      return;
+    }
+    ringtoneSound = first;
     ringtoneTimer = setTimeout(async () => {
-      if (ringtoneStopped) return;
+      if (isSuperseded() || ringtoneStopped) return;
       await stopSound(ringtoneSound);
       ringtoneSound = null;
       // 200ms silence, then second ring
       ringtoneTimer = setTimeout(async () => {
-        if (ringtoneStopped) return;
-        ringtoneSound = await playOnce(getRingtoneWav(), 0.85);
+        if (isSuperseded() || ringtoneStopped) return;
+        const second = await playOnce(getRingtoneWav(), 0.85);
+        if (isSuperseded() || ringtoneStopped) {
+          second?.stopAsync().catch(() => undefined);
+          second?.unloadAsync().catch(() => undefined);
+          return;
+        }
+        ringtoneSound = second;
         // 3s silence, then repeat cycle
         ringtoneTimer = setTimeout(async () => {
           await stopSound(ringtoneSound);
@@ -312,4 +370,48 @@ export function playDtmfTone(digit: string): void {
   const uri = getDtmfWav(digit);
   if (!uri) return;
   playOnce(uri, 0.6).catch(() => undefined);
+}
+
+// Call-waiting beep: short, low-volume 440Hz tone played twice with a 150ms
+// gap. Mirrors the North American "Subscriber Alerting Signal (SAS)" cadence
+// — ~300ms total. Volume is deliberately soft so it's audible without
+// stepping on the active-call conversation. Safe to invoke while a SIP
+// session is active; it uses expo-av which mixes with the WebRTC audio path.
+let _callWaitingBeepWav: string | null = null;
+function getCallWaitingBeepWav(): string {
+  if (!_callWaitingBeepWav) {
+    // Single tone at 440 Hz for 120ms at low-ish amplitude.
+    _callWaitingBeepWav = buildDualToneWav(440, 440, 120, 0.25);
+  }
+  return _callWaitingBeepWav;
+}
+
+let _callWaitingBeepInFlight = false;
+export async function playCallWaitingBeep(): Promise<void> {
+  if (_callWaitingBeepInFlight) return;
+  _callWaitingBeepInFlight = true;
+  console.log("[AUDIO] playCallWaitingBeep");
+  try {
+    const uri = getCallWaitingBeepWav();
+    const first = await playOnce(uri, 0.5);
+    // Auto-unload after ~300ms (120ms tone + buffer)
+    setTimeout(async () => {
+      try { await first?.stopAsync(); } catch { /* ignore */ }
+      try { await first?.unloadAsync(); } catch { /* ignore */ }
+    }, 300);
+    // 150ms gap, then second beep
+    setTimeout(async () => {
+      const second = await playOnce(uri, 0.5);
+      setTimeout(async () => {
+        try { await second?.stopAsync(); } catch { /* ignore */ }
+        try { await second?.unloadAsync(); } catch { /* ignore */ }
+      }, 300);
+    }, 270);
+  } catch {
+    /* ignore — best-effort */
+  } finally {
+    // Release lock after the whole sequence (~700ms) so rapid double-invites
+    // don't stutter-play over themselves.
+    setTimeout(() => { _callWaitingBeepInFlight = false; }, 700);
+  }
 }

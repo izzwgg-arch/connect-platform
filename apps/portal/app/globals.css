@@ -2549,6 +2549,13 @@ table tr:hover {
 .crc-time     { font-size: 11px; color: var(--console-muted); }
 .crc-duration { font-size: 11px; font-family: var(--font-mono, monospace); color: var(--console-muted); }
 .crc-chevron  { color: var(--console-muted); flex-shrink: 0; }
+.crc-recording-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #7c3aed) 12%, transparent);
+  color: var(--accent, #7c3aed);
+  flex-shrink: 0;
+}
 
 /* ─── Pagination ─────────────────────────────────────────────────────────── */
 .calls-pagination {
@@ -2714,6 +2721,18 @@ table tr:hover {
 }
 .cdp-tech-grid dt { color: var(--console-muted); font-weight: 500; white-space: nowrap; }
 .cdp-tech-grid dd { margin: 0; word-break: break-all; }
+
+/* ─── Recording player inside detail panel ─────────────────────────────────── */
+.cdp-recording-player {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px;
+  background: var(--console-panel-soft);
+  border: 1px solid var(--console-border);
+  border-radius: 8px; margin-top: 6px;
+}
+.cdp-recording-player audio { outline: none; }
+.cdp-recording-pending {
+  font-size: 12px; color: var(--console-muted); font-style: italic; margin: 4px 0 0;
+}
 
 /* ------------------------------------------------------------------------------
    EXPLORATION DASHBOARD WIDGETS � 2026 EDITION

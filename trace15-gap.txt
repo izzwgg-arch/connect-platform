@@ -1,0 +1,120 @@
+﻿04-19 14:48:08.007 I/ScanController( 4249): onScanResult to scannerId: 3- eventType=0x1a, addressType=1, address=XX:XX:XX:XX:64:48, primaryPhy=1, secondaryPhy=0, advertisingSid=0xff, txPower=127, rssi=-69, periodicAdvInt=0x0
+04-19 14:48:08.010 I/EasySetup[11.1.22.8] (27980): IcControlService.isFoldDeviceFolded() - isFoldDevice: false, isNotFolded: false
+04-19 14:48:08.010 I/EasySetup[11.1.22.8] (27980): IcControlService.isValidBudsScanResult - connectionStatus : 64, rssi : -69
+04-19 14:48:08.010 I/EasySetup[11.1.22.8] (27980): IcControlService.receivedPacketData - isTablet: false, rssi: -69, manufacturer: 42, 09, 81, 02, 14, 15, 06, 21, 01, 49, 2c, 0c, 01, 67, 06, bc, bb, 8a, 00, 00, 00, 00, ed, 00, 00, 6c, 56, 22, 47, 74, 80, 65, 03, 0e, 00, 05, 05
+04-19 14:48:08.010 I/EasySetup[11.1.22.8] (27980): IcControlService.handleIcPacket - SKip Packet
+04-19 14:48:08.015 E/HeatmapThread( 1704): ECT Thread time in milliseconds: 1776624488
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ batteryplugType : 2
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ batteryLevel : 62  batteryTemperature : 293 
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ Heatmap currtime: 29610408
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ Heatmap prevtime: 29610388
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ Heatmap plugstarttime: 29610353
+04-19 14:48:08.018 D/HeatmapThread( 1704): !@ Heatmap prevv_dsoh_update_time: 29610323
+04-19 14:48:08.018 E/HeatmapThread( 1704): !@ CAM New BSOH: 99
+04-19 14:48:08.049 I/vendor.qti.bluetooth@1.1-ibs_handler( 1609): ProcessIbsCmd: Received IBS_SLEEP_IND: 0xFE
+04-19 14:48:08.049 D/vendor.qti.bluetooth@1.1-ibs_handler( 1609): SerialClockVote: vote for UART CLK OFF
+04-19 14:48:08.055 I/GestureDetector( 2748): handleMessage TAP
+04-19 14:48:08.055 I/GestureDetector( 2748): handleMessage TAP
+04-19 14:48:08.105 D/io_stats( 1147): !@   8,0 r 23671091 451796364 w 4074261 70968384 d 472737 55811056 f 293659 395111 iot 4261392 0 th 0 0 0 pt 0 inp 0 0 87225.220
+04-19 14:48:08.198 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1720 ) MinkIPC_QRTR_Service:351 minkipc = 0xb400007850842db0 sock = 19, client with node 1 port 6c86 went down
+04-19 14:48:08.198 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1726 ) MinkIPC_QRTR_Service:351 minkipc = 0xb4000078508405d0 sock = 26, client with node 1 port 6c86 went down
+04-19 14:48:08.200 D/vendor.qti.bluetooth@1.1-wake_lock( 1609): Release wakelock is released 
+04-19 14:48:08.201 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1720 ) MinkIPC_QRTR_Service:351 minkipc = 0xb400007850842db0 sock = 19, client with node 1 port 6c87 went down
+04-19 14:48:08.201 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1726 ) MinkIPC_QRTR_Service:351 minkipc = 0xb4000078508405d0 sock = 26, client with node 1 port 6c87 went down
+04-19 14:48:08.204 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1720 ) MinkIPC_QRTR_Service:351 minkipc = 0xb400007850842db0 sock = 19, client with node 1 port 6c88 went down
+04-19 14:48:08.205 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1726 ) MinkIPC_QRTR_Service:351 minkipc = 0xb4000078508405d0 sock = 26, client with node 1 port 6c88 went down
+04-19 14:48:08.206 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1720 ) MinkIPC_QRTR_Service:351 minkipc = 0xb400007850842db0 sock = 19, client with node 1 port 6c89 went down
+04-19 14:48:08.206 I/minksocket( 1589): MinkIPC MESSAGE: ( 1589:1726 ) MinkIPC_QRTR_Service:351 minkipc = 0xb4000078508405d0 sock = 26, client with node 1 port 6c89 went down
+04-19 14:48:08.214 D/BackgroundInstallControlService( 2748): Package event received: 0
+04-19 14:48:08.234 I/ActivityManager( 2748): Changes in 10054 8 to 15, 128 to 0
+04-19 14:48:08.276 I/ActivityManager( 2748): Changes in 10117 7 to 15, 128 to 0
+04-19 14:48:08.435 D/InputReader( 2748): Btn_touch(4): value=1 when=87225.549573
+04-19 14:48:08.435 I/InputReader( 2748): Touch event's action is 0x0 (id=6, t=0) [pCnt=1, s=0.5526 ] when=87225.549573
+04-19 14:48:08.437 I/InputDispatcher( 2748): Delivering touch to (3944): action: 0x4, f=0x0, d=0, '9705530', t=1 
+04-19 14:48:08.437 I/InputDispatcher( 2748): Delivering touch to (6539): action: 0x0, f=0x0, d=0, '5cddc90', t=1 
+04-19 14:48:08.437 I/VRI[MainActivity]@b7f698c( 6539): ViewPostIme pointer 0
+04-19 14:48:08.438 I/HoneySpace.GestureInputHandler( 4661): inputConsumers = [com.honeyspace.gesture.inputconsumer.InputConsumer$Companion$NO_OP$1@55f3794]
+04-19 14:48:08.438 I/HoneySpace.InputSession( 4661): inputConsumers = NO_OP
+04-19 14:48:08.439 I/HoneySpace.InputSession( 4661): open
+04-19 14:48:08.439 I/GestureDetector( 2748): obtain mCurrentDownEvent. id: 221620366 caller: com.android.server.wm.SystemGesturesPointerEventListener.onPointerEvent:17 com.android.server.wm.PointerEventDispatcher.onInputEvent:51 android.view.InputEventReceiver.dispatchInputEvent:392 
+04-19 14:48:08.440 I/GestureDetector( 2748): obtain mCurrentDownEvent. id: 221620366 caller: com.android.server.wm.SystemPerformancePointerEventListener.onPointerEvent:13 com.android.server.wm.PointerEventDispatcher.onInputEvent:51 android.view.InputEventReceiver.dispatchInputEvent:392 
+04-19 14:48:08.442 D/NavBarStateManager( 3944): NavBarStates(0) isBlockingGestureOnGame: false
+04-19 14:48:08.443 I/GestureDetector( 2748): obtain mCurrentMotionEventRaw. action: 2 id: 407854389
+04-19 14:48:08.444 I/GestureDetector( 2748): obtain mCurrentMotionEventRaw. action: 2 id: 407854389
+04-19 14:48:08.454 D/BackPanelController( 3944): updateArrowState: GONE -> ENTRY
+04-19 14:48:08.455 D/EdgeBackGestureHandler( 3944): setTriggerBack: triggerBack : false
+04-19 14:48:08.456 D/BackPanelController( 3944): updateArrowState: ENTRY -> ACTIVE
+04-19 14:48:08.456 D/EdgeBackGestureHandler( 3944): setTriggerBack: triggerBack : true
+04-19 14:48:08.456 D/VibratorManagerService( 2748): Canceling vibration
+04-19 14:48:08.458 D/CoreBackPreview( 2748): startBackNavigation currentTask=Task{8ed01e0 #40883 type=standard A=10555:com.connectcommunications.mobile}, topRunningActivity=ActivityRecord{162500626 u0 com.connectcommunications.mobile/.MainActivity t40883}, callbackInfo=OnBackInvokedCallbackInfo{mCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@1dad9af, mPriority=0, mIsAnimationCallback=false, mOverrideBehavior=0}, currentFocus=Window{5cddc90 u0 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}
+04-19 14:48:08.459 I/WindowManager( 2748): Relayout Window{f5270bc u0 BackPanelController}: viewVisibility=0 req=315x804 ty=2024 d0
+04-19 14:48:08.459 I/HYPER-HAL( 1631): [RequestManager.cpp]acquire(): Acquired ID : 70595268  [1634 / 10247]    HINT :      list : [TID_LOW_LATENCY / 1] [TID / 4334] [TID / 4335] [TID / 3944] [TID / 4337] 
+04-19 14:48:08.459 D/ShellBackPreview( 3944): Received backNavigationInfo:BackNavigationInfo{mType=TYPE_CALLBACK (4), mOnBackNavigationDone=android.os.RemoteCallback@510bdb2, mOnBackInvokedCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@b993103, mPrepareRemoteAnimation=false, mAnimationCallback=false, mCustomizeAnimationInfo=null}
+04-19 14:48:08.460 I/ShellBackPreview( 3944): dispatchOnBackStarted, caller=com.android.wm.shell.back.BackAnimationController.onBackNavigationInfoReceived:134 com.android.wm.shell.back.BackAnimationController.onGestureStarted:140 com.android.wm.shell.back.BackAnimationController$BackAnimationImpl$$ExternalSyntheticLambda2.run:135 
+04-19 14:48:08.460 I/SurfaceFlinger( 1741): id=26272 createSurf, flag=44004, BackPanelController$_3944#26272
+04-19 14:48:08.460 D/WindowManager( 2748): makeSurface duration=1 name=BackPanelController$_3944
+04-19 14:48:08.461 D/SurfaceComposerClient( 2748): setCornerRadius ## 5cddc90 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#26265 cornerRadius=0.000000
+04-19 14:48:08.462 D/SurfaceComposerClient( 2748): setCornerRadius ## 5cddc90 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#26265 cornerRadius=0.000000
+04-19 14:48:08.462 D/HintManagerService( 2748): SystemUI make new AppHintSession but force pause
+04-19 14:48:08.463 I/HYPER-HAL( 1631): [RequestManager.cpp]acquire(): Acquired ID : 70595268  [1634 / 10247]    HINT :      list : [TID_LOW_LATENCY / 0] [TID / 4334] [TID / 4335] [TID / 3944] [TID / 4337] 
+04-19 14:48:08.464 D/WindowManager( 2748): requestTransientBars: swipeTarget=Window{9705530 u0 NavigationBar0}, controlTarget=Window{5cddc90 u0 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity}, canShowTransient=false, restorePositionTypes=0x3, from=com.android.server.wm.DisplayPolicy$1.onSwipeFromLeft:81 com.android.server.wm.SystemGesturesPointerEventListener.onPointerEvent:561 
+04-19 14:48:08.464 I/WindowManager( 2748): Relayout hash=f5270bc, pid=3944, syncId=-1: mAttrs={(0,1361)(315x804) gr=TOP LEFT CENTER sim={adjust=pan} ty=NAVIGATION_BAR_PANEL fmt=TRANSLUCENT
+04-19 14:48:08.464 I/WindowManager( 2748):   fl=1000118
+04-19 14:48:08.464 I/WindowManager( 2748):   pfl=30200010
+04-19 14:48:08.464 I/WindowManager( 2748):   bhv=1
+04-19 14:48:08.464 I/WindowManager( 2748):   frameRateBoostOnTouch=true
+04-19 14:48:08.464 I/WindowManager( 2748):   dvrrWindowFrameRateHint=true naviIconColor=0}
+04-19 14:48:08.465 I/BufferQueueProducer( 3944): [](id:f6800000687,api:0,p:-2083221104,c:3944) setDequeueTimeout:2077252342
+04-19 14:48:08.466 I/BLASTBufferQueue_Java( 3944): new BLASTBufferQueue, mName= VRI[EdgeBackGestureHandler0]@e17c12b mNativeObject= 0xb4000075f42d0d90 caller= android.view.ViewRootImpl.updateBlastSurfaceIfNeeded:3585 android.view.ViewRootImpl.relayoutWindow:11685 android.view.ViewRootImpl.performTraversals:4804 android.view.ViewRootImpl.doTraversal:3924 android.view.ViewRootImpl$TraversalRunnable.run:12903 android.view.Choreographer$CallbackRecord.run:1901 android.view.Choreographer$CallbackRecord.run:1910 android.view.Choreographer.doCallbacks:1367 android.view.Choreographer.doFrame:1292 android.view.Choreographer$FrameDisplayEventReceiver.run:1870 
+04-19 14:48:08.467 I/BLASTBufferQueue_Java( 3944): update, w= 315 h= 804 mName = VRI[EdgeBackGestureHandler0]@e17c12b mNativeObject= 0xb4000075f42d0d90 sc.mNativeObject= 0xb4000076c3d23dd0 format= -3 caller= android.view.ViewRootImpl.updateBlastSurfaceIfNeeded:3590 android.view.ViewRootImpl.relayoutWindow:11685 android.view.ViewRootImpl.performTraversals:4804 android.view.ViewRootImpl.doTraversal:3924 android.view.ViewRootImpl$TraversalRunnable.run:12903 android.view.Choreographer$CallbackRecord.run:1901 
+04-19 14:48:08.468 I/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Relayout returned: old=(0,1475,315,2279) new=(0,1361,315,2165) relayoutAsync=false req=(315,804)0 dur=7 res=0x3 s={true 0xb40000766414fe30} ch=true seqId=0
+04-19 14:48:08.470 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): mThreadedRenderer.initialize() mSurface={isValid=true 0xb40000766414fe30} hwInitialized=true
+04-19 14:48:08.470 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): reportNextDraw android.view.ViewRootImpl.performTraversals:5443 android.view.ViewRootImpl.doTraversal:3924 android.view.ViewRootImpl$TraversalRunnable.run:12903 android.view.Choreographer$CallbackRecord.run:1901 android.view.Choreographer$CallbackRecord.run:1910 
+04-19 14:48:08.470 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Setup new sync=wmsSync-VRI[EdgeBackGestureHandler0]@e17c12b#84
+04-19 14:48:08.470 I/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Creating new active sync group VRI[EdgeBackGestureHandler0]@e17c12b#85
+04-19 14:48:08.471 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Start draw after previous draw not visible
+04-19 14:48:08.471 I/SurfaceFlinger( 1741): [BackPanelController$_3944#26272] attach to parent LayerHierarchy{RequestedLayerState{f5270bc EdgeBackGestureHandler0#95 parentId=94} 1 children}
+04-19 14:48:08.472 W/unknown:ReactNative( 6539): Can't cancel already finished gesture. Is a child View trying to start a gesture from an UP/CANCEL event?
+04-19 14:48:08.473 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): registerCallbacksForSync syncBuffer=false
+04-19 14:48:08.474 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Received frameDrawingCallback syncResult=0 frameNum=1.
+04-19 14:48:08.474 W/qdgralloc( 3944): getInterlacedFlag: getMetaData returned 3, defaulting to interlaced_flag = 0
+04-19 14:48:08.474 I/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): mWNT: t=0xb400007623fd6950 mBlastBufferQueue=0xb4000075f42d0d90 fn= 1 HdrRenderState mRenderHdrSdrRatio=1.0 caller= android.view.ViewRootImpl$12.onFrameDraw:15441 android.view.ThreadedRenderer$1.onFrameDraw:718 <bottom of call stack> 
+04-19 14:48:08.474 I/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Setting up sync and frameCommitCallback
+04-19 14:48:08.475 I/BLASTBufferQueue( 3944): [VRI[EdgeBackGestureHandler0]@e17c12b#1671](f:0,a:0,s:0) onFrameAvailable the first frame is available
+04-19 14:48:08.476 I/SurfaceComposerClient( 3944): apply transaction with the first frame. layerId: 26272, bufferData(ID: 16939351073630, frameNumber: 1)
+04-19 14:48:08.476 I/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): Received frameCommittedCallback lastAttemptedDrawFrameNum=1 didProduceBuffer=true
+04-19 14:48:08.477 D/VRI[EdgeBackGestureHandler0]@e17c12b( 3944): reportDrawFinished seqId=0
+04-19 14:48:08.477 I/SurfaceFlinger( 1741): [BackPanelController$_3944#26272] setTransactionState with the first frame. bufferData(ID: 16939351073630, frameNumber: 1)
+04-19 14:48:08.478 I/InputDispatcher( 2748): Channel [Gesture Monitor] edge-swipe is stealing input gesture for device 6 from [5cddc90 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity, [Gesture Monitor] secinputdev, [Gesture Monitor] PalmMotion, [Gesture Monitor] swipe-up]
+04-19 14:48:08.478 D/InputDispatcher( 2748): Cancel for '5cddc90': input channel stole pointer stream, m=1
+04-19 14:48:08.478 I/InputDispatcher( 2748): Delivering touch to (6539): action: 0x3, f=0x20, d=0, '5cddc90', t=1 
+04-19 14:48:08.478 W/qdgralloc( 3944): getInterlacedFlag: getMetaData returned 3, defaulting to interlaced_flag = 0
+04-19 14:48:08.479 I/HoneySpace.GestureInputHandler( 4661): reset
+04-19 14:48:08.479 D/VibratorManagerService( 2748): converted usage = TOUCH(18)
+04-19 14:48:08.479 I/HoneySpace.InputSession( 4661): close
+04-19 14:48:08.479 D/VibratorManagerService( 2748): vibrate - uid: 10053, opPkg: com.android.systemui, effect: Mono{mEffect=Composed{segments=[SemHaptic{mType=50047, mMagnitude=-1}], repeat=-1, mMagnitudeType=TYPE_TOUCH}}, attrs: VibrationAttributes{mUsage=TOUCH, mAudioUsage= USAGE_UNKNOWN, mFlags=0, tags=}, reason: null, token: android.os.BinderProxy@445143d
+04-19 14:48:08.479 D/SingleVibrationSession( 2748): semIndexVibrate : EFFECT_CLICK_GESTURE(23), repeat: -1, usage: TOUCH(18), magnitude: 4000
+04-19 14:48:08.479 D/VibratorManagerService( 2748): Starting vibrate for vibration 8030
+04-19 14:48:08.479 D/VibratorManagerService( 2748): Check AppOp mode VIBRATE for uid 10053 and package com.android.systemui returned audio=allow, op=allow
+04-19 14:48:08.479 D/VibratorManagerService( 2748): Starting vibration 8030 on thread
+04-19 14:48:08.479 D/VibratorManagerService( 2748): Start AppOp mode VIBRATE for uid 10053 and package com.android.systemui returned allow
+04-19 14:48:08.480 D/WindowManager( 2748): finishDrawingWindow: Window{f5270bc u0 BackPanelController} mDrawState=DRAW_PENDING seqId=0
+04-19 14:48:08.480 D/SurfaceComposerClient( 2748): setCornerRadius ## 5cddc90 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#26265 cornerRadius=0.000000
+04-19 14:48:08.480 D/VibrationThread( 2748): Playing vibration id 8030 StartSequentialEffectStep
+04-19 14:48:08.481 D/VibrationThread( 2748): StartSequentialEffectStep for effect #0
+04-19 14:48:08.481 D/SemHapticStep( 2748): sepIndex=23, intensity=4000, repeat=false, duration=120
+04-19 14:48:08.481 D/SemHapticStep( 2748): Turning on vibrator 0 for 120ms
+04-19 14:48:08.481 V/WindowManager( 2748): performShowLocked: mDrawState=HAS_DRAWN in Window{f5270bc u0 BackPanelController}
+04-19 14:48:08.481 D/SurfaceComposerClient( 2748): setCornerRadius ## 5cddc90 com.connectcommunications.mobile/com.connectcommunications.mobile.MainActivity#26265 cornerRadius=0.000000
+04-19 14:48:08.482 E/SecVibrator-HAL-AIDL-EXT( 1662): V_5_0: performPrebakedHapticPattern 23 : 4000 : 0
+04-19 14:48:08.483 E/SecVibrator-HAL-AIDL-CORE( 1662): HW_API: [setForceFeedbackAmplitude]amplitude: 4000
+04-19 14:48:08.489 W/qdgralloc( 3944): getInterlacedFlag: getMetaData returned 3, defaulting to interlaced_flag = 0
+04-19 14:48:08.499 D/InputReader( 2748): Btn_touch(4): value=0 when=87225.614640
+04-19 14:48:08.500 I/InputReader( 2748): Touch event's action is 0x1 (id=6, t=0) [pCnt=1, s=] when=87225.614640
+04-19 14:48:08.500 E/SecVibrator-HAL-AIDL-CORE( 1662): HW_API: [uploadForceFeedbackeffect]ioctl success ,uploaded effect with ID: 0
+04-19 14:48:08.500 E/SecVibrator-HAL-AIDL-CORE( 1662): HW_API: do_on for timeoutMs: 1000
+04-19 14:48:08.500 D/BackPanelController( 3944): updateArrowState: ACTIVE -> FLUNG
+04-19 14:48:08.500 D/EdgeBackGestureHandler( 3944): triggerBack: mBackAnimation: com.android.wm.shell.back.BackAnimationController$BackAnimationImpl@188d583, mDisplayId:0
+04-19 14:48:08.500 E/SecVibrator-HAL-AIDL-CORE( 1662): HW_API: [triggerForceFeedbackVibration]on: 1
+04-19 14:48:08.501 I/SemDvfsHyPerManager( 2748): acquire hyper - SMOOTH_SCROLL/2748@24, type = -999
+04-19 14:48:08.501 I/SemDvfsHyPerManager( 2748): acquire hyper - GESTURE_DETECTED/2748@25, type = -999

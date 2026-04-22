@@ -29,14 +29,51 @@ function isInboundCall(call: CallRecord): boolean {
 }
 
 function isMissedCall(call: CallRecord): boolean {
-  if (call.disposition === 'missed') return true;
-  if (call.disposition === 'busy') return true;
-  // Fallback: inbound with zero talk time
-  return isInboundCall(call) && call.durationSec === 0 && !call.disposition;
+  const d = normalizeDisposition(call);
+  return d === 'missed' || d === 'no_answer';
+}
+
+/**
+ * Map the raw CDR disposition strings into a small, stable set we render
+ * as tags. Handles the many server-side spellings ("NO ANSWER", "ANSWERED
+ * ELSEWHERE", "BUSY", "CANCELED" / "CANCELLED", "VOICEMAIL", etc.).
+ */
+type NormalizedDisposition =
+  | 'answered'
+  | 'answered_elsewhere'
+  | 'voicemail'
+  | 'missed'
+  | 'no_answer'
+  | 'busy'
+  | 'canceled'
+  | 'declined'
+  | 'failed'
+  | 'unknown';
+
+function normalizeDisposition(call: CallRecord): NormalizedDisposition {
+  const raw = (call.disposition || '').toString().trim().toLowerCase();
+  if (!raw) {
+    // Legacy rows w/o disposition — infer from direction + duration.
+    if (isInboundCall(call) && call.durationSec === 0) return 'missed';
+    if (!isInboundCall(call) && call.durationSec === 0) return 'canceled';
+    return call.durationSec > 0 ? 'answered' : 'unknown';
+  }
+  if (raw === 'answered' || raw === 'answer') return 'answered';
+  if (raw.includes('answered_elsewhere') || raw.includes('answered elsewhere')) {
+    return 'answered_elsewhere';
+  }
+  if (raw === 'voicemail' || raw === 'vm' || raw.includes('voicemail')) return 'voicemail';
+  if (raw === 'missed') return 'missed';
+  if (raw === 'no_answer' || raw === 'noanswer' || raw.includes('no answer')) return 'no_answer';
+  if (raw === 'busy') return 'busy';
+  if (raw === 'canceled' || raw === 'cancelled') return 'canceled';
+  if (raw === 'declined' || raw === 'rejected') return 'declined';
+  if (raw === 'failed') return 'failed';
+  return 'unknown';
 }
 
 function formatDuration(sec: number): string {
-  if (sec <= 0) return '—';
+  if (sec <= 0) return '';
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   if (m > 0) return `${m}m ${s}s`;
@@ -61,18 +98,139 @@ function formatTimestamp(iso: string): string {
   }
 }
 
+type TagSpec = { label: string; fg: string; bg: string; border: string };
+
+function tagForDisposition(
+  d: NormalizedDisposition,
+  colors: ReturnType<typeof useTheme>['colors'],
+): TagSpec {
+  // Pill palette. Low-chroma translucent fills + 1-pixel border for a
+  // muted "2026 SaaS" look; tag text uses the vivid accent so the label
+  // reads cleanly on both light and dark themes.
+  const withAlpha = (c: string, pct: number) => c + pct.toString(16).padStart(2, '0');
+
+  switch (d) {
+    case 'answered':
+      return {
+        label: 'Answered',
+        fg: colors.success,
+        bg: withAlpha(colors.success, 0x1a),
+        border: withAlpha(colors.success, 0x33),
+      };
+    case 'answered_elsewhere':
+      return {
+        label: 'Answered',
+        fg: colors.textSecondary,
+        bg: withAlpha(colors.textSecondary, 0x1a),
+        border: withAlpha(colors.textSecondary, 0x33),
+      };
+    case 'voicemail': {
+      // Theme has no dedicated "info" colour — use a stable teal so the
+      // voicemail pill reads distinct from both Answered (green) and
+      // Missed (red) on either theme.
+      const teal = '#06b6d4';
+      return {
+        label: 'Voicemail',
+        fg: teal,
+        bg: withAlpha(teal, 0x1a),
+        border: withAlpha(teal, 0x33),
+      };
+    }
+    case 'missed':
+    case 'no_answer':
+      return {
+        label: 'Missed',
+        fg: colors.danger,
+        bg: withAlpha(colors.danger, 0x1a),
+        border: withAlpha(colors.danger, 0x33),
+      };
+    case 'busy':
+      return {
+        label: 'Busy',
+        fg: colors.warning,
+        bg: withAlpha(colors.warning, 0x1a),
+        border: withAlpha(colors.warning, 0x33),
+      };
+    case 'declined':
+      return {
+        label: 'Declined',
+        fg: colors.warning,
+        bg: withAlpha(colors.warning, 0x1a),
+        border: withAlpha(colors.warning, 0x33),
+      };
+    case 'canceled':
+      return {
+        label: 'Canceled',
+        fg: colors.textTertiary,
+        bg: withAlpha(colors.textTertiary, 0x14),
+        border: withAlpha(colors.textTertiary, 0x33),
+      };
+    case 'failed':
+      return {
+        label: 'Failed',
+        fg: colors.danger,
+        bg: withAlpha(colors.danger, 0x1a),
+        border: withAlpha(colors.danger, 0x33),
+      };
+    default:
+      return {
+        label: '—',
+        fg: colors.textTertiary,
+        bg: withAlpha(colors.textTertiary, 0x14),
+        border: withAlpha(colors.textTertiary, 0x33),
+      };
+  }
+}
+
+function directionTag(
+  inbound: boolean,
+  colors: ReturnType<typeof useTheme>['colors'],
+): TagSpec {
+  const withAlpha = (c: string, pct: number) => c + pct.toString(16).padStart(2, '0');
+  if (inbound) {
+    return {
+      label: 'Inbound',
+      fg: colors.textSecondary,
+      bg: withAlpha(colors.textSecondary, 0x14),
+      border: withAlpha(colors.textSecondary, 0x26),
+    };
+  }
+  return {
+    label: 'Outbound',
+    fg: colors.primary,
+    bg: withAlpha(colors.primary, 0x1a),
+    border: withAlpha(colors.primary, 0x33),
+  };
+}
+
+function Tag({ spec }: { spec: TagSpec }) {
+  return (
+    <View
+      style={[
+        styles.tag,
+        { backgroundColor: spec.bg, borderColor: spec.border },
+      ]}
+    >
+      <Text style={[styles.tagText, { color: spec.fg }]}>{spec.label}</Text>
+    </View>
+  );
+}
+
 function CallRow({ call, onCall }: { call: CallRecord; onCall: (number: string) => void }) {
   const { colors } = useTheme();
 
   const inbound = isInboundCall(call);
-  const missed = isMissedCall(call);
+  const disposition = normalizeDisposition(call);
+  const missed = disposition === 'missed' || disposition === 'no_answer';
   const displayNumber = inbound ? call.fromNumber : call.toNumber;
-  const displayName = call.fromName && call.fromName !== call.fromNumber
-    ? call.fromName
-    : displayNumber || '—';
-
-  const arrowIcon: any = inbound ? 'arrow-down-outline' : 'arrow-up-outline';
-  const rowColor = missed ? colors.danger : inbound ? colors.success : colors.primary;
+  const displayName =
+    call.fromName && call.fromName !== call.fromNumber
+      ? call.fromName
+      : displayNumber || '—';
+  const avatarSeed = displayName || displayNumber || 'Unknown';
+  const dirSpec = directionTag(inbound, colors);
+  const dispSpec = tagForDisposition(disposition, colors);
+  const duration = formatDuration(call.durationSec);
 
   return (
     <TouchableOpacity
@@ -80,8 +238,8 @@ function CallRow({ call, onCall }: { call: CallRecord; onCall: (number: string) 
       activeOpacity={0.7}
       onPress={() => onCall(displayNumber)}
     >
-      <View style={[styles.iconBubble, { backgroundColor: rowColor + '18' }]}>
-        <Ionicons name={arrowIcon} size={16} color={rowColor} />
+      <View style={styles.avatarWrap}>
+        <Avatar name={avatarSeed} size="md" />
       </View>
 
       <View style={styles.rowInfo}>
@@ -91,30 +249,32 @@ function CallRow({ call, onCall }: { call: CallRecord; onCall: (number: string) 
         >
           {displayName}
         </Text>
+        <View style={styles.tagRow}>
+          <Tag spec={dirSpec} />
+          <Tag spec={dispSpec} />
+        </View>
         <View style={styles.metaRow}>
           <Text style={[typography.caption, { color: colors.textTertiary }]}>
             {formatTimestamp(call.startedAt)}
           </Text>
-          {call.durationSec > 0 && (
-            <Text style={[typography.caption, { color: colors.textTertiary, marginLeft: 6 }]}>
-              · {formatDuration(call.durationSec)}
-            </Text>
-          )}
-          {missed && (
-            <Text style={[typography.caption, { color: colors.danger, marginLeft: 6 }]}>
-              · Missed
-            </Text>
-          )}
-          {call.disposition === 'busy' && !missed && (
-            <Text style={[typography.caption, { color: colors.warning, marginLeft: 6 }]}>
-              · Busy
+          {!!duration && (
+            <Text
+              style={[typography.caption, { color: colors.textTertiary, marginLeft: 6 }]}
+            >
+              · {duration}
             </Text>
           )}
         </View>
       </View>
 
       <TouchableOpacity
-        style={[styles.callBtn, { backgroundColor: colors.primaryMuted, borderColor: colors.primary + '30' }]}
+        style={[
+          styles.callBtn,
+          {
+            backgroundColor: colors.primaryMuted,
+            borderColor: colors.primary + '30',
+          },
+        ]}
         onPress={() => onCall(displayNumber)}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
@@ -317,19 +477,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing['4'],
-    paddingVertical: 13,
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  iconBubble: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
+  avatarWrap: {
     marginRight: 12,
   },
-  rowInfo: { flex: 1 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
+  rowInfo: { flex: 1, minWidth: 0 },
+  tagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    gap: 6,
+  },
+  tag: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tagText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
   callBtn: {
     width: 36,
     height: 36,

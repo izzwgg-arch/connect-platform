@@ -32,6 +32,7 @@ export type MobilePushRingPayload = {
   fromDisplay: string | null;
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
+  state?: "ringing" | "hungup";
 };
 
 /**
@@ -68,9 +69,33 @@ export class MobilePushNotifier {
     // Verbose entry log so we can trace every call through the push pipeline.
     log.info({ linkedId: call.linkedId, state: call.state, dir: call.direction, exts: call.extensions, from: call.from, tenantId: call.tenantId }, "mobile-ring: notify-entry");
 
-    // Clean up de-dupe on hangup so memory doesn't grow indefinitely.
+    // Hangup path: notify API so it can mark the invite CANCELED + send an
+    // INVITE_CANCELED push. This is the ONLY real-time hangup signal we get
+    // before CDR ingest (which arrives 20–60s later), so it's critical for
+    // stopping the native ringtone the moment the caller hangs up.
     if (call.state === "hungup") {
+      const wasPushed = this.pushed.has(call.linkedId);
       this.pushed.delete(call.linkedId);
+      if (!wasPushed) return;
+      const payload: MobilePushRingPayload = {
+        linkedId: call.linkedId,
+        toExtension: "",
+        fromNumber: call.from ?? null,
+        fromDisplay: call.fromName ?? null,
+        connectTenantId: call.tenantId ?? null,
+        pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
+        state: "hungup",
+      };
+      log.info(
+        { linkedId: call.linkedId, connectTenantId: call.tenantId, from: call.from },
+        "mobile-ring: notifying API of hangup",
+      );
+      this.postAsync(payload).catch((err: unknown) => {
+        log.warn(
+          { linkedId: call.linkedId, err: (err as Error)?.message },
+          "mobile-ring: hangup notify failed",
+        );
+      });
       return;
     }
 

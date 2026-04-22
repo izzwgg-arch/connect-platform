@@ -1,13 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from './src/context/ThemeContext';
 import { AuthProvider } from './src/context/AuthContext';
 import { SipProvider } from './src/context/SipContext';
+import { CallSessionProvider } from './src/context/CallSessionManager';
 import { NotificationsProvider } from './src/context/NotificationsContext';
 import { PresenceProvider } from './src/context/PresenceContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { CallFlowDebugOverlay } from './src/debug/CallFlowDebugOverlay';
+import { ensureCallFlowAppStateHook, logCallFlowBootDiagnostics } from './src/debug/callFlowDebug';
+import { PENDING_CALL_STORAGE_KEY } from './src/notifications/backgroundCallTask';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -43,6 +48,13 @@ const styles = StyleSheet.create({
 });
 
 export default function App() {
+  useEffect(() => {
+    ensureCallFlowAppStateHook();
+    void logCallFlowBootDiagnostics(() =>
+      AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
+    );
+  }, []);
+
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
@@ -51,9 +63,12 @@ export default function App() {
             <AuthProvider>
               <PresenceProvider>
                 <SipProvider>
-                  <NotificationsProvider>
-                    <RootNavigator />
-                  </NotificationsProvider>
+                  <CallSessionProvider>
+                    <NotificationsProvider>
+                      <RootNavigator />
+                      <CallFlowDebugOverlay />
+                    </NotificationsProvider>
+                  </CallSessionProvider>
                 </SipProvider>
               </PresenceProvider>
             </AuthProvider>

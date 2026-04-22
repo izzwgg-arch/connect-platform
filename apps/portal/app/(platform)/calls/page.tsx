@@ -19,7 +19,7 @@ import {
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
   ChevronDown, ChevronRight, Clock, User, Voicemail,
   Radio, GitBranch, CheckCircle2, XCircle, AlertCircle, Info,
-  X,
+  X, Mic, Download,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -51,6 +51,9 @@ type CallHistoryRow = {
   tenantId: string | null;
   tenantName: string;
   rangExtension: string | null;
+  // Recording
+  recordingAvailable: boolean;
+  recordingPath: string | null;
   // Derived outcome fields
   answeredByType: AnsweredByType;
   humanAnswered: boolean;
@@ -100,11 +103,21 @@ function formatDuration(sec: number): string {
 function relativeTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const abs = Math.abs(ms);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (abs < 60_000) return rtf.format(-Math.round(ms / 1_000), "second");
-  if (abs < 3_600_000) return rtf.format(-Math.round(ms / 60_000), "minute");
-  if (abs < 86_400_000) return rtf.format(-Math.round(ms / 3_600_000), "hour");
-  return rtf.format(-Math.round(ms / 86_400_000), "day");
+  const suffix = ms >= 0 ? "ago" : "from now";
+  if (abs < 60_000) {
+    const value = Math.max(1, Math.round(abs / 1_000));
+    return `${value} sec${value === 1 ? "" : "s"} ${suffix}`;
+  }
+  if (abs < 3_600_000) {
+    const value = Math.max(1, Math.round(abs / 60_000));
+    return `${value} min${value === 1 ? "" : "s"} ${suffix}`;
+  }
+  if (abs < 86_400_000) {
+    const value = Math.max(1, Math.round(abs / 3_600_000));
+    return `${value} hour${value === 1 ? "" : "s"} ${suffix}`;
+  }
+  const value = Math.max(1, Math.round(abs / 86_400_000));
+  return `${value} day${value === 1 ? "" : "s"} ${suffix}`;
 }
 
 function formatAbsTime(iso: string): string {
@@ -261,6 +274,36 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
           </div>
         ) : null}
 
+        {/* Recording — shown only when recordingPath is present. Audio is fetched on-demand
+            (preload="none") so opening call details does not trigger any PBX request. */}
+        {row.recordingAvailable ? (
+          <div className="cdp-section">
+            <h4 className="cdp-section-title">
+              <Mic size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
+              Recording
+            </h4>
+            <div className="cdp-recording-player">
+              <audio
+                controls
+                preload="none"
+                style={{ width: "100%", height: 36 }}
+                src={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/stream?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
+              >
+                Your browser does not support audio playback.
+              </audio>
+              <a
+                className="btn ghost btn-sm"
+                style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}
+                href={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
+                download
+              >
+                <Download size={13} />
+                Download
+              </a>
+            </div>
+          </div>
+        ) : null}
+
         {/* Technical details (collapsed) */}
         <div className="cdp-section">
           <button
@@ -301,6 +344,7 @@ export default function CallsPage() {
   const [search, setSearch] = useState("");
   const [direction, setDirection] = useState<"all" | CallDirection>("all");
   const [status, setStatus] = useState<"all" | CallStatus>("all");
+  const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
   const [startDate, setStartDate] = useState(todayDateInput());
   const [endDate, setEndDate] = useState(todayDateInput());
   const [pageSize, setPageSize] = useState(100);
@@ -312,15 +356,16 @@ export default function CallsPage() {
     return () => clearTimeout(t);
   }, [searchDraft]);
 
-  useEffect(() => { setPage(1); }, [direction, status, startDate, endDate, adminScope, scopedTenantId]);
+  useEffect(() => { setPage(1); }, [direction, status, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
 
   const historyQuery = useMemo(() => {
     const { startIso, endIso } = toIsoRange(startDate, endDate);
     const p = new URLSearchParams({ startDate: startIso, endDate: endIso, direction, status, page: String(page), pageSize: String(pageSize) });
     if (search) p.set("search", search);
     if (scopedTenantId) p.set("tenantId", scopedTenantId);
+    if (hasRecording !== "all") p.set("hasRecording", hasRecording);
     return p.toString();
-  }, [direction, endDate, page, pageSize, scopedTenantId, search, startDate, status]);
+  }, [direction, endDate, hasRecording, page, pageSize, scopedTenantId, search, startDate, status]);
 
   const historyState = useAsyncResource<CallHistoryResponse>(
     () => apiGet<CallHistoryResponse>(`/calls/history?${historyQuery}`),
@@ -427,6 +472,11 @@ export default function CallsPage() {
             <option value="missed">Missed</option>
             <option value="canceled">Canceled</option>
           </select>
+          <select className="calls-filter-select" value={hasRecording} onChange={(e) => setHasRecording(e.target.value as typeof hasRecording)} aria-label="Recording">
+            <option value="all">All calls</option>
+            <option value="yes">Has recording</option>
+            <option value="no">No recording</option>
+          </select>
           <div className="calls-date-range">
             <input type="date" className="calls-date-input" value={startDate} onChange={(e) => setStartDate(e.target.value)} aria-label="Start date" />
             <span className="calls-date-sep">—</span>
@@ -486,7 +536,7 @@ export default function CallsPage() {
                     ) : null}
                   </div>
 
-                  {/* Right: outcome badge + time + duration */}
+                  {/* Right: outcome badge + time + duration + recording indicator */}
                   <div className="crc-meta">
                     <span className={`crc-outcome ${outcomeClass(row)}`}>
                       <OutcomeIcon row={row} />
@@ -494,6 +544,11 @@ export default function CallsPage() {
                     </span>
                     <span className="crc-time" title={formatAbsTime(row.startedAt)}>{relativeTime(row.startedAt)}</span>
                     <span className="crc-duration">{formatDuration(row.durationSec)}</span>
+                    {row.recordingAvailable ? (
+                      <span className="crc-recording-badge" title="Recording available">
+                        <Mic size={12} />
+                      </span>
+                    ) : null}
                   </div>
 
                   <ChevronRight size={14} className="crc-chevron" />

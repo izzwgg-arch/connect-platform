@@ -18,6 +18,7 @@ import type {
   AmiContactStatus,
   AmiAttendedTransfer,
   AmiBlindTransfer,
+  AmiMessageWaiting,
   TypedAmiEvent,
 } from "./AmiTypes";
 
@@ -264,6 +265,15 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         extension: g("Extension"),
         result: g("Result"),
       } satisfies AmiBlindTransfer;
+
+    case "MessageWaiting":
+      return {
+        event: "MessageWaiting",
+        mailbox: g("Mailbox"),
+        waiting: g("Waiting"),
+        new: g("New"),
+        old: g("Old"),
+      } satisfies AmiMessageWaiting;
 
     default:
       return null;

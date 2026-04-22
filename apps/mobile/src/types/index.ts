@@ -106,6 +106,12 @@ export type IncomingCallPushPayload = {
 
 export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPayload | InviteCanceledPushPayload | MissedCallPushPayload;
 
-export type SipRegistrationState = "idle" | "registering" | "registered" | "failed";
+export type SipRegistrationState =
+  | "idle"          // no registration attempt has ever happened in this process
+  | "registering"   // REGISTER request in flight
+  | "registered"    // UA registered + WebSocket connected (healthy)
+  | "disconnected"  // WebSocket dropped; UA is no longer authoritative
+  | "retrying"      // Stage 1 keep-alive manager is between backoff attempts
+  | "failed";       // terminal / auth-level failure (bad credentials, etc.)
 export type CallState = "idle" | "dialing" | "ringing" | "connected" | "ended";
 export type CallDirection = "inbound" | "outbound" | null;

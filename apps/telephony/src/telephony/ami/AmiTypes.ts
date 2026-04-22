@@ -24,7 +24,8 @@ export type AmiEventName =
   | "ContactStatus"
   | "VarSet"
   | "AttendedTransfer"
-  | "BlindTransfer";
+  | "BlindTransfer"
+  | "MessageWaiting";
 
 // Typed wrappers for the events we care about most. We keep them
 // as plain objects with string fields (AMI is always text).
@@ -247,6 +248,14 @@ export interface AmiCoreShowChannel {
   priority: string;
 }
 
+export interface AmiMessageWaiting {
+  event: "MessageWaiting";
+  mailbox: string;  // e.g. "104@default"
+  waiting: string;  // "1" if there are waiting messages
+  new: string;      // number of new (unheard) messages
+  old: string;      // number of old (heard) messages
+}
+
 // Union of all typed AMI events
 export type TypedAmiEvent =
   | AmiCoreShowChannel
@@ -266,4 +275,5 @@ export type TypedAmiEvent =
   | AmiPeerStatus
   | AmiContactStatus
   | AmiAttendedTransfer
-  | AmiBlindTransfer;
+  | AmiBlindTransfer
+  | AmiMessageWaiting;

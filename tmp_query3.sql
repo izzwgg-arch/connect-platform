@@ -1,0 +1,1 @@
+SELECT md.id, md."tenantId", t.name as tenant_name, md."userId", u.email, md.platform, (md."expoPushToken" IS NOT NULL) as has_token, md."createdAt" FROM "MobileDevice" md JOIN "Tenant" t ON t.id = md."tenantId" JOIN "User" u ON u.id = md."userId" ORDER BY md."createdAt" DESC LIMIT 10;

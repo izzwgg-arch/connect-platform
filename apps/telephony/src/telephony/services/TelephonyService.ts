@@ -94,6 +94,26 @@ export class TelephonyService {
   }
 
   private handleAmiFrame(frame: AmiFrame): void {
+    // Intercept VarSet events that carry the recording filename set by the PBX
+    // dialplan (VitalPBX sets both __REC_FILENAME and MIXMONITOR_FILENAME around
+    // the MixMonitor() invocation). The final path (with tenant-hash directory)
+    // is the one we want to keep — CallStateStore.setRecordingPath prefers the
+    // longer variant when multiple fire.
+    if (frame["Event"] === "VarSet") {
+      const variable = frame["Variable"] ?? "";
+      if (variable === "MIXMONITOR_FILENAME" || variable === "__REC_FILENAME") {
+        const linkedid = frame["Linkedid"] || frame["LinkedID"] || frame["Uniqueid"] || "";
+        const value = (frame["Value"] ?? "").trim();
+        log.info(
+          { variable, linkedid, uniqueid: frame["Uniqueid"], channel: frame["Channel"], path: value },
+          "recording: mixmonitor_varset",
+        );
+        if (linkedid && value) {
+          this.calls.setRecordingPath(linkedid, value);
+        }
+      }
+    }
+
     const typed = mapAmiFrame(frame);
     if (!typed) return;
 
@@ -360,7 +380,44 @@ export class TelephonyService {
         );
         break;
       }
+
+      case "MessageWaiting": {
+        // New voicemail deposited: trigger near-realtime sync for this mailbox.
+        // Only fire when at least one new (unheard) message arrived to avoid
+        // unnecessary API calls on "mailbox read" notifications.
+        const newCount = parseInt(typed.new, 10) || 0;
+        if (newCount > 0) {
+          const atIdx = typed.mailbox.indexOf("@");
+          const mailbox = atIdx >= 0 ? typed.mailbox.slice(0, atIdx) : typed.mailbox;
+          const context = atIdx >= 0 ? typed.mailbox.slice(atIdx + 1) : "default";
+          if (mailbox) {
+            log.info({ mailbox, context, new: typed.new }, "MessageWaiting: triggering voicemail sync");
+            this.notifyVoicemail(mailbox, context).catch((err: Error) => {
+              log.warn({ err: err?.message, mailbox }, "voicemail notify failed (non-fatal)");
+            });
+          }
+        }
+        break;
+      }
     }
+  }
+
+  /** POST to the API voicemail-notify endpoint so the API can immediately ingest
+   *  new voicemail records for the given mailbox without waiting for the next
+   *  worker poll cycle (~5 min). Uses the same CDR ingest URL + secret. */
+  private async notifyVoicemail(mailbox: string, context: string): Promise<void> {
+    const baseUrl = env.CDR_INGEST_URL?.replace(/\/internal\/cdr-ingest$/, "");
+    if (!baseUrl) return; // CDR_INGEST_URL not configured — skip silently
+    const url = `${baseUrl}/internal/voicemail-notify`;
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(env.CDR_INGEST_SECRET ? { "x-cdr-secret": env.CDR_INGEST_SECRET } : {}),
+      },
+      body: JSON.stringify({ mailbox, context }),
+      signal: AbortSignal.timeout(5000),
+    });
   }
 
   // Originate a call via AMI (no dialplan modification needed)

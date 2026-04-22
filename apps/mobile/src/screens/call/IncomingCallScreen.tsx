@@ -23,6 +23,7 @@ import { startRingtone, stopAllTelephonyAudio } from '../../audio/telephonyAudio
 import { postVoiceDiagEvent } from '../../api/client';
 import { typography } from '../../theme/typography';
 import { logCallFlow } from '../../debug/callFlowDebug';
+import { markCallLatency } from '../../debug/callLatency';
 import { spacing } from '../../theme/spacing';
 import { findCallModalNavigator } from '../../navigation/callStackNav';
 
@@ -118,31 +119,22 @@ export function IncomingCallScreen() {
 
   useEffect(() => {
     if (!incomingInvite || incomingCallUiState.phase !== 'incoming') return;
-    if (Platform.OS !== 'android') {
-      startRingtone().catch(() => undefined);
-      return () => {
-        stopAllTelephonyAudio().catch(() => undefined);
-      };
-    }
-    // Android: FCM already started native ring. Start JS tone first, then stop native
-    // so we never leave a silent gap (stop-before-start made home-screen rings inaudible).
-    let cancelled = false;
-    (async () => {
-      try {
-        await startRingtone();
-        if (cancelled) return;
-        NativeModules.IncomingCallUi?.stopRingtone?.(
-          incomingInvite?.id ?? displayInvite?.id ?? null,
-        );
-      } catch {
-        /* keep native ring if expo-av path fails */
-      }
-    })();
+    // Android path: do NOT play a JS ringtone. Native IncomingCallFirebaseService
+    // owns ringtone playback end-to-end (MediaPlayer with USAGE_NOTIFICATION_RINGTONE
+    // and a wake lock). Layering expo-av on top caused the lock-screen "double
+    // ringtone" (both native MediaPlayer and JS expo-av audible simultaneously)
+    // and left leaked Audio.Sound instances if stopAllTelephonyAudio raced with
+    // the async Audio.Sound.createAsync call. Native keeps ringing until one of:
+    //   - the user taps answer/decline on the native notification (onNewIntent)
+    //   - IncomingCallUi.dismiss is called from JS on answer/decline
+    //   - an INVITE_CLAIMED / INVITE_CANCELED FCM arrives.
+    if (Platform.OS === 'android') return;
+    if (answerHandoffInviteIdRef.current === incomingInvite.id) return;
+    startRingtone().catch(() => undefined);
     return () => {
-      cancelled = true;
       stopAllTelephonyAudio().catch(() => undefined);
     };
-  }, [incomingInvite?.id, incomingCallUiState.phase, answerHandoffTick]);
+  }, [incomingInvite?.id, incomingCallUiState.phase, answerHandoffInviteIdRef]);
 
   useEffect(() => {
     if (!displayInvite?.id) return;
@@ -152,6 +144,12 @@ export function IncomingCallScreen() {
       pbxCallId: displayInvite.pbxCallId ?? null,
       extension: displayInvite.toExtension ?? null,
       extra: { phase: incomingCallUiState.phase },
+    });
+    // Latency: first paint of the incoming-call UI. The delta from
+    // INCOMING_RECEIVED to here captures full-screen intent / navigator
+    // handoff cost.
+    markCallLatency(displayInvite.id, 'INCOMING_UI_SHOWN', {
+      phase: incomingCallUiState.phase,
     });
   }, [displayInvite?.id, incomingCallUiState.phase]);
 
@@ -207,18 +205,35 @@ export function IncomingCallScreen() {
   }, []);
 
   const handleAnswer = async () => {
-    if (!token || !incomingInvite || incomingCallUiState.phase === 'connecting') return;
+    // IMPORTANT: do NOT early-return on `!token` or phase==='connecting'.
+    // On lock-screen cold resume, `token` from useAuth() can still be null
+    // for ~50–300 ms even though SecureStore has the value. The previous
+    // early-return caused the first tap to be silently dropped and the user
+    // to tap 2–3 times. The shared answer path (handleAcceptInvite) has its
+    // own tokenRef wait (up to 4 s) and an in-flight guard keyed by
+    // inviteId, so duplicate-tap protection still works — subsequent taps
+    // become no-ops because inviteActionInFlightRef already contains the key.
+    const invite = incomingInvite ?? displayInvite;
+    if (!invite) return;
+    // Latency: record the tap the instant the touch handler fires,
+    // BEFORE any async work. This is the user-visible start of the
+    // "answer → audio" window, so it must come before haptics / audio
+    // teardown to avoid attributing that cost to business logic.
+    markCallLatency(invite.id, 'ANSWER_TAPPED', { source: 'incoming_screen' });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+    // Fire-and-forget audio stop so we don't block the UI tap handler.
     stopAllTelephonyAudio().catch(() => undefined);
     Animated.timing(answerScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
-    // Delegate entirely to the shared answer path in NotificationsContext,
-    // which has the in-flight guard preventing duplicate claims.
-    console.log('[IncomingCall] handleAnswer → delegating to answerIncomingCall');
-    await answerIncomingCall(incomingInvite).catch(() => undefined);
+    console.log('[IncomingCall] handleAnswer → delegating to answerIncomingCall (tokenReady=' + !!token + ' phase=' + incomingCallUiState.phase + ')');
+    // Do not await — the navigation handoff happens synchronously via
+    // answerHandoffInviteIdRef inside handleAcceptInvite, and awaiting here
+    // would hold the IncomingCallScreen mounted until SIP claim / register
+    // complete, delaying the visible transition to ActiveCall.
+    void answerIncomingCall(invite).catch(() => undefined);
   };
 
   const handleDecline = async () => {
-    if (!token || !incomingInvite) return;
+    if (!incomingInvite) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     stopAllTelephonyAudio().catch(() => undefined);
     Animated.timing(declineScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();

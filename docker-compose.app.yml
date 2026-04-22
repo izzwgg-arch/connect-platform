@@ -122,6 +122,7 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+    command: sh -c "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/worker dev"
     env_file:
       - /opt/connectcomms/env/.env.platform
     environment:

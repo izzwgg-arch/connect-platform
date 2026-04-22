@@ -92,7 +92,10 @@ export async function syncExtensionsFromPbx(
   };
 
   for (const td of tenantDirs) {
-    const connectTenantId = vitalToConnect.get(td.vitalTenantId) ?? null;
+    // Try numeric vitalTenantId first (canonical), then fall back to tenantSlug
+    // (handles tenants whose TenantPbxLink.pbxTenantId was stored as the name rather than numeric id)
+    const connectTenantId =
+      vitalToConnect.get(td.vitalTenantId) ?? vitalToConnect.get(td.tenantSlug) ?? null;
 
     if (!connectTenantId) {
       result.totalSkipped++;
@@ -103,7 +106,7 @@ export async function syncExtensionsFromPbx(
         extensionsFound: 0,
         extensionsUpserted: 0,
         skipped: true,
-        skipReason: "no TenantPbxLink mapping for this vitalTenantId",
+        skipReason: "no TenantPbxLink mapping for this vitalTenantId or tenantSlug",
         errors: [],
       });
       continue;

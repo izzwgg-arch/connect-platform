@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { NativeModules, Platform, StyleSheet, View } from 'react-native';
 import { CommonActions, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
@@ -15,6 +16,7 @@ import { IncomingCallScreen } from '../screens/call/IncomingCallScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { DiagnosticsScreen } from '../screens/DiagnosticsScreen';
 import { useIncomingNotifications } from '../context/NotificationsContext';
+import { useCallSessions } from '../context/CallSessionManager';
 import { logCallFlow } from '../debug/callFlowDebug';
 import { moveAppToBackground } from '../sip/callkeep';
 import type { CallDirection, CallState } from '../types';
@@ -60,8 +62,23 @@ function AuthNavigator() {
 function TabsWrapper() {
   const nav = useNavigation<any>();
   const { callState, callDirection } = useSip();
-  const { incomingInvite, incomingCallUiState, answerHandoffInviteIdRef, answerHandoffTick, answeredFromBackgroundRef } =
-    useIncomingNotifications();
+  const {
+    incomingInvite,
+    incomingCallUiState,
+    answerHandoffInviteIdRef,
+    answerHandoffTick,
+    answeredFromBackgroundRef,
+    answeredFromLockScreenRef,
+  } = useIncomingNotifications();
+  const callSessions = useCallSessions();
+  // Multi-call guard: if another call is already active, new inbound INVITEs
+  // are routed to the CallWaitingBanner inside ActiveCallScreen instead of
+  // the full-screen IncomingCallScreen.
+  // Gate the full-screen IncomingCall navigation on ANY ongoing call —
+  // active, held, still connecting, or dialing. This prevents a secondary
+  // invite from yanking the user away from the ActiveCallScreen mid-
+  // answer (the CallsDrawer takes over instead).
+  const hasMultiCallActive = callSessions.hasAnyOngoingCall;
 
   const prevCallState = useRef<CallState>(callState);
   const prevIncoming = useRef(incomingInvite);
@@ -81,6 +98,47 @@ function TabsWrapper() {
 
   const returnToQuickAction = () => {
     try {
+      // IMPORTANT ORDERING: if the call was answered from the background /
+      // lock screen, move the Android task back to background FIRST, then
+      // reset the navigation stack. Reversing these (navigate-then-move)
+      // caused the user to see QuickAction on the lock screen for a beat
+      // before the keyguard re-appeared, then have to press back to return
+      // to the lock screen. moveTaskToBack() is synchronous — the activity
+      // pauses immediately, the keyguard is revealed, and the subsequent
+      // navigation reset happens off-screen so the next time the user opens
+      // the app they land on QuickAction as expected.
+      if (answeredFromBackgroundRef.current) {
+        answeredFromBackgroundRef.current = false;
+        // We only push the Android task back to the keyguard / launcher
+        // when the call came in via the lock screen (or was surfaced via
+        // the incoming-call PendingIntent). Previously we also tried a
+        // live `isDeviceLocked()` check, but Samsung One UI flips
+        // KeyguardManager to "unlocked" the moment MainActivity surfaces
+        // over the keyguard via showWhenLocked=true — leaving the user
+        // on the app's main page after hanging up a call they picked up
+        // from the lock screen. `answeredFromLockScreenRef` is set at
+        // answer time from the authoritative `deviceLockedAtAnswer` /
+        // `launchedFromIncomingCall` flags captured before that flip
+        // happened, so it's always correct even on Samsung.
+        //
+        // Importantly, for background-but-UNLOCKED answers (e.g. heads-up
+        // on home screen) we STILL keep MainActivity resumed. That was
+        // the whole point of the original live-keyguard gate: Android 14+
+        // BAL policy quietly drops background full-screen activity
+        // starts when MainActivity is paused, which breaks the next
+        // incoming call's IncomingCallScreen. Our lock-screen ref only
+        // goes true when the user was on the lock screen at answer time,
+        // so the heads-up case correctly falls through to "keep
+        // resumed".
+        const cameFromLock = !!answeredFromLockScreenRef.current;
+        answeredFromLockScreenRef.current = false;
+        if (cameFromLock) {
+          moveAppToBackground();
+          console.log('[LOCK_CALL_CLEANUP] moveAppToBackground called before nav reset (answered from lock screen)');
+        } else {
+          console.log('[LOCK_CALL_CLEANUP] skip moveAppToBackground (not from lock screen) — keep MainActivity resumed for next incoming call');
+        }
+      }
       const stack = appStackNav();
       stack.dispatch(
         CommonActions.reset({
@@ -98,13 +156,6 @@ function TabsWrapper() {
       );
       console.log('[ANSWER_FLOW] RETURNED_TO_QUICK_ACTION');
       logCallFlow('NAVIGATE_BACK_TO_QUICK', { extra: { source: 'returnToQuickAction' } });
-
-      // If this call was answered from the background (e.g. lock screen), move the
-      // app to the background so the lock screen is shown instead of the Quick page.
-      if (answeredFromBackgroundRef.current) {
-        answeredFromBackgroundRef.current = false;
-        moveAppToBackground();
-      }
     } catch {}
   };
 
@@ -163,6 +214,13 @@ function TabsWrapper() {
       (incomingInvite && !answering) ||
       ((incomingCallUiState.phase === 'ended' || incomingCallUiState.phase === 'failed') && !answering)
     ) {
+      // Multi-call: if a call is already active, stay on ActiveCall and let
+      // the CallWaitingBanner inside it handle the waiting invite. The banner
+      // reads from CallSessionManager.ringingCalls[].
+      if (hasMultiCallActive) {
+        console.log('[MULTICALL] skip_incoming_nav — active call present, banner will handle');
+        return;
+      }
       navigateOnce('IncomingCall');
       return;
     }
@@ -177,11 +235,44 @@ function TabsWrapper() {
     callState,
     incomingCallUiState.phase,
     incomingInvite,
+    hasMultiCallActive,
     nav,
   ]);
 
-  return <TabNavigator />;
+  // If an incoming invite exists or we're in any active-call UI phase, paint a
+  // black cover over the tabs. Purpose: MainActivity resumes from the keyguard
+  // with its prior route (e.g. QuickAction) visible for ~50 ms before React-
+  // Navigation mounts IncomingCallScreen. The cover prevents that flash.
+  // IncomingCallScreen / ActiveCallScreen are fullScreen modals pushed on top
+  // of TabsWrapper, so they render above this cover — the cover only masks the
+  // tabs. pointerEvents="none" keeps taps falling through when the cover is
+  // showing alone (shouldn't happen, but it's a safety net).
+  const answering = !!answerHandoffInviteIdRef.current;
+  const coverTabs =
+    !!incomingInvite ||
+    answering ||
+    (callDirection === 'inbound' && callState === 'ringing');
+  return (
+    <>
+      <TabNavigator />
+      {coverTabs ? (
+        <View pointerEvents="none" style={styles.incomingCallCover} />
+      ) : null}
+    </>
+  );
 }
+
+const styles = StyleSheet.create({
+  incomingCallCover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    // Sit below React-Navigation's fullScreen modal (which has its own
+    // layering) but above the tabs / base stack so nothing else shows
+    // through while IncomingCallScreen mounts.
+    zIndex: 0,
+    elevation: 0,
+  },
+});
 
 function AppNavigator() {
   return (
@@ -214,7 +305,15 @@ function AppNavigator() {
       <AppStack.Screen
         name="IncomingCall"
         component={IncomingCallScreen}
-        options={{ animation: 'slide_from_bottom', presentation: 'fullScreenModal' }}
+        options={{
+          // No slide animation: the incoming-call screen must take over the
+          // entire display the instant an invite exists so the user never
+          // sees a flash of QuickAction underneath (especially on the lock
+          // screen where MainActivity resumes with its prior route visible
+          // for ~50–250 ms while JS catches up).
+          animation: 'none',
+          presentation: 'fullScreenModal',
+        }}
       />
     </AppStack.Navigator>
   );
