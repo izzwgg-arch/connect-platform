@@ -328,6 +328,7 @@ model Tenant {
   pbxJobs                       PbxJob[]
   ivrSchedules                  IvrSchedule[]
   ivrRouteProfiles              IvrRouteProfile[]
+  ivrOptionRoutes               IvrOptionRoute[]
   ivrScheduleConfig             IvrScheduleConfig?
   ivrOverrideState              IvrOverrideState?
   ivrPublishRecords             IvrPublishRecord[]
@@ -1506,7 +1507,15 @@ model IvrRouteProfile {
   tenantId       String
   name           String                              // human label, e.g. "Main Business IVR"
   type           String                              // "business_hours" | "after_hours" | "holiday" | "manual_override" | "emergency"
-  pbxDestination String                              // "context,exten,priority" written to AstDB
+  pbxDestination String                              // "context,exten,priority" written to AstDB (legacy single-dest)
+  // Optional greeting/prompt refs for the Connect-owned IVR menu. Values are
+  // VitalPBX recording names (e.g. "custom/acme_normal" — no file extension).
+  // Empty/null = dialplan plays a safe built-in fallback.
+  pbxPromptRef        String?                        // main greeting
+  pbxInvalidPromptRef String?                        // played on invalid digit, then re-prompt
+  pbxTimeoutPromptRef String?                        // played on no-digit timeout, then re-prompt
+  timeoutSeconds      Int      @default(7)           // WaitExten timeout per iteration
+  maxRetries          Int      @default(3)           // retries before falling through to default-fallback
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -1517,10 +1526,34 @@ model IvrRouteProfile {
   scheduleAfterHrs  IvrScheduleConfig[] @relation("ScheduleAfterHoursProfile")
   scheduleHoliday   IvrScheduleConfig[] @relation("ScheduleHolidayProfile")
   overrideStates    IvrOverrideState[]
+  optionRoutes      IvrOptionRoute[]
 
   @@index([tenantId])
   @@index([tenantId, type])
   @@index([tenantId, isActive])
+}
+
+/// Per-digit option routing for a tenant's IVR profile.
+/// Written to AstDB as `connect/t_<slug>/opt_<digit>/dest` + `.../type` at publish time.
+/// optionDigit uses string-safe identifiers: "0".."9", "star" (for *), "hash" (for #).
+model IvrOptionRoute {
+  id              String   @id @default(cuid())
+  tenantId        String
+  profileId       String
+  optionDigit     String                              // "0".."9" | "star" | "hash"
+  destinationType String                              // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
+  destinationRef  String                              // "context,exten,priority" | E.164 | etc.
+  label           String?                             // optional human label, e.g. "Sales"
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile IvrRouteProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, optionDigit])
+  @@index([tenantId])
+  @@index([profileId])
 }
 
 /// Weekly business hours + holiday rules for a tenant.

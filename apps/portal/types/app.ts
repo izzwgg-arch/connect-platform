@@ -26,7 +26,16 @@ export type Permission =
   | "can_manage_tenant_settings"
   | "can_manage_global_settings"
   | "can_view_apps"
-  | "can_download_apk";
+  | "can_download_apk"
+  | "can_view_ivr_routing"
+  | "can_manage_ivr_routing"
+  | "can_publish_ivr_routing"
+  | "can_override_ivr_routing"
+  | "can_manage_ivr_prompts"
+  | "can_view_moh"
+  | "can_manage_moh"
+  | "can_publish_moh"
+  | "can_override_moh";
 
 export type Presence = "AVAILABLE" | "ON_CALL" | "AWAY" | "DND" | "OFFLINE";
 

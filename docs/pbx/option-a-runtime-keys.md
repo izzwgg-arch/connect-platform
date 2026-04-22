@@ -27,6 +27,8 @@ connect/t_<tenant_slug>
 
 ## Keys
 
+### Phase 1 — single-destination routing (consumed by `[connect-tenant-router]`)
+
 | Key | Type | Allowed values | Default (if absent) | Read by |
 |-----|------|----------------|---------------------|---------|
 | `mode` | string | `business` \| `afterhours` \| `holiday` \| `override` | — (absent → fallback) | `[connect-tenant-router]` |
@@ -36,21 +38,71 @@ connect/t_<tenant_slug>
 | `dest_override` | string | `<context>,<exten>,<priority>` or `""` | `""` | `[connect-tenant-router]` when `mode=override` |
 | `override_expires` | string | unix epoch seconds (integer) or `"0"` | `"0"` | advisory only (Connect enforces expiry) |
 
-**Value format for `dest_*`:** a single string `"<context>,<exten>,<priority>"`
-suitable for direct `Goto(${DEST})`. Example: `from-did-direct,s,1`.
+### Phase 2 — per-digit IVR menu + greeting control (consumed by `[connect-tenant-ivr]`)
+
+These additional keys drive the Connect-owned IVR menu. Tenants still on
+`[connect-tenant-router]` will have them written to AstDB but ignored — no
+behavior change for existing tenants.
+
+| Key | Type | Allowed values | Default (if absent) | Read by |
+|-----|------|----------------|---------------------|---------|
+| `active_prompt` | string | VitalPBX recording ref (e.g. `custom/acme_normal`, no extension) or `""` | `""` → dialplan plays `vm-enter-num-to-call` | `[connect-tenant-ivr]` |
+| `active_prompt_invalid` | string | recording ref or `""` | `""` → skip, re-prompt immediately | `[connect-tenant-ivr]` `i` exten |
+| `active_prompt_timeout` | string | recording ref or `""` | `""` → skip, re-prompt immediately | `[connect-tenant-ivr]` WaitExten loop |
+| `timeout_seconds` | string (int) | `1`..`60` | `7` | `[connect-tenant-ivr]` WaitExten |
+| `max_retries` | string (int) | `1`..`10` | `3` | `[connect-tenant-ivr]` loop counter |
+| `opt_0/dest` .. `opt_9/dest` | string | `<context>,<exten>,<priority>` or `""` | `""` → fallback | `[connect-option-router]` |
+| `opt_star/dest` | string | same | `""` | `[connect-option-router]` when digit is `*` |
+| `opt_hash/dest` | string | same | `""` | `[connect-option-router]` when digit is `#` |
+| `opt_<digit>/type` | string | `extension` \| `queue` \| `ring_group` \| `voicemail` \| `ivr` \| `announcement` \| `external_number` \| `terminate` \| `custom` \| `""` | `""` | metadata only — not consumed by dialplan |
+
+**Fixed-size key set.** Every publish writes every digit slot (empty string
+for unused digits) so the AstDB family has a deterministic shape. This makes
+rollback/snapshot round-trips lossless across publishes that add or remove
+digit mappings.
+
+**Value format for `dest_*` and `opt_*/dest`:** a single string
+`"<context>,<exten>,<priority>"` suitable for direct `Goto(${DEST})`.
+Example: `from-did-direct,s,1`.
 
 **Why not separate context/exten/priority keys?** The dialplan uses exactly
 one `DB()` read per `Goto` — keeping them concatenated costs one read, not
 three, per call. Small but meaningful at scale.
 
+**Why `opt_star` / `opt_hash` instead of `opt_*` / `opt_#`?** Asterisk's
+AstDB tolerates most characters in key names, but `*` and `#` are historically
+fragile across AstDB/CLI tooling. The dialplan translates them in the digit
+handlers so this stays opaque to admins.
+
 ## Fallback behavior
 
-The custom context `[connect-tenant-router]` falls through to
-`[connect-default-fallback]` in any of these cases:
+### `[connect-tenant-router]` (Phase 1)
+
+Falls through to `[connect-default-fallback]` when:
 
 - `TENANT_SLUG` channel variable is empty.
 - `mode` key is missing or empty.
 - `dest_${mode}` key is missing or empty.
+
+### `[connect-tenant-ivr]` (Phase 2)
+
+Falls through to `[connect-default-fallback]` when:
+
+- `TENANT_SLUG` channel variable is empty.
+- `RETRIES` reaches `max_retries` without a valid digit.
+
+The Phase 2 dialplan degrades gracefully (never crashes) when:
+
+- `active_prompt` is empty → plays the built-in `vm-enter-num-to-call`.
+- `active_prompt_invalid` / `active_prompt_timeout` are empty → skips the
+  announcement and re-prompts immediately.
+- `timeout_seconds` / `max_retries` are empty or non-numeric → uses defaults
+  (`7` and `3`).
+- `opt_<digit>/dest` is empty → `[connect-option-router]` falls back to
+  `[connect-default-fallback]`.
+- A valid `opt_<digit>/dest` points at a non-existent context → Asterisk
+  dispatches the `t` (timeout) exten back into the prompt loop, bounded by
+  `max_retries`.
 
 `[connect-default-fallback]` plays `vm-goodbye` and hangs up cleanly — calls
 are never dropped silently, never spin, never cause a dialplan error.

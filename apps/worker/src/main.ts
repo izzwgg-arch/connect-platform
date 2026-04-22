@@ -1342,6 +1342,23 @@ function ivrToIvrSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+// Fixed set of digit slots written on every publish. Must match the list in
+// apps/api/src/server.ts — if they drift, an API publish and a worker publish
+// would write different key sets and snapshot/rollback would lose fidelity.
+const IVR_OPTION_DIGITS_WORKER = [
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "hash",
+] as const;
+
+function ivrModeToType(mode: string): string | null {
+  switch (mode) {
+    case "business":   return "business_hours";
+    case "afterhours": return "after_hours";
+    case "holiday":    return "holiday";
+    case "override":   return "manual_override";
+    default:           return null;
+  }
+}
+
 function ivrComputeMode(
   config: { timezone: string; businessHoursRules: any; holidayDates: any },
   override: { isActive: boolean; expiresAt: Date | null } | null,
@@ -1399,15 +1416,44 @@ async function runIvrScheduleCycle(): Promise<void> {
         const stale = !lastAt || lastAt < oneHourAgo;
         if (mode === lastMode && !stale) continue;
 
-        const byType = new Map((profiles as any[]).map((p: any) => [p.type, p.pbxDestination]));
-        const keys = [
+        // Look up the profile serving this mode (same fallback as the API:
+        // manual_override falls back to emergency). Its options + prompt refs
+        // drive the Phase 2 IVR keys.
+        const wantedType = ivrModeToType(mode);
+        const byType = new Map((profiles as any[]).map((p: any) => [p.type, p]));
+        const active: any = wantedType
+          ? (byType.get(wantedType) ?? (mode === "override" ? byType.get("emergency") : null))
+          : null;
+        const activeOptions: any[] = active
+          ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: active.id } })
+          : [];
+        const optByDigit = new Map<string, any>();
+        for (const o of activeOptions) {
+          if (o.enabled) optByDigit.set(o.optionDigit, o);
+        }
+
+        const keys: Array<{ family: string; key: string; value: string }> = [
+          // Legacy single-destination keys (still read by [connect-tenant-router]).
           { family: fam, key: "mode",             value: mode },
-          { family: fam, key: "dest_business",    value: byType.get("business_hours")  ?? "" },
-          { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")     ?? "" },
-          { family: fam, key: "dest_holiday",     value: byType.get("holiday")         ?? "" },
-          { family: fam, key: "dest_override",    value: byType.get("manual_override") ?? byType.get("emergency") ?? "" },
+          { family: fam, key: "dest_business",    value: byType.get("business_hours")?.pbxDestination  ?? "" },
+          { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")?.pbxDestination     ?? "" },
+          { family: fam, key: "dest_holiday",     value: byType.get("holiday")?.pbxDestination         ?? "" },
+          { family: fam, key: "dest_override",    value: byType.get("manual_override")?.pbxDestination ?? byType.get("emergency")?.pbxDestination ?? "" },
           { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(new Date(override.expiresAt).getTime() / 1000)) : "0" },
+          // Phase 2 prompt + timing keys (read by [connect-tenant-ivr]).
+          { family: fam, key: "active_prompt",         value: active?.pbxPromptRef        ?? "" },
+          { family: fam, key: "active_prompt_invalid", value: active?.pbxInvalidPromptRef ?? "" },
+          { family: fam, key: "active_prompt_timeout", value: active?.pbxTimeoutPromptRef ?? "" },
+          { family: fam, key: "timeout_seconds",       value: String(active?.timeoutSeconds ?? 7) },
+          { family: fam, key: "max_retries",           value: String(active?.maxRetries    ?? 3) },
         ];
+        // Always write every digit slot — empty value clears a stale option
+        // when the new active profile has fewer digits mapped than the old.
+        for (const digit of IVR_OPTION_DIGITS_WORKER) {
+          const o = optByDigit.get(digit);
+          keys.push({ family: fam, key: `opt_${digit}/dest`, value: o?.destinationRef  ?? "" });
+          keys.push({ family: fam, key: `opt_${digit}/type`, value: o?.destinationType ?? "" });
+        }
 
         // Snapshot pre-publish AstDB state so an operator-initiated rollback
         // of this automated publish can restore the true prior values. If the

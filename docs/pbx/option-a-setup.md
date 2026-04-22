@@ -31,8 +31,8 @@ rewriting, no PBX DB writes, no SSH, and no UI edits after this setup.
 2. Open (or create) `/etc/asterisk/extensions__60_custom.conf`.
 3. Paste the contents of **[`option-a-custom-context.conf`](./option-a-custom-context.conf)**
    at the bottom of the file. **Do not modify** the context names
-   `[connect-tenant-router]` or `[connect-default-fallback]` — Connect depends
-   on those exact names.
+   `[connect-tenant-router]`, `[connect-default-fallback]`, `[connect-tenant-ivr]`,
+   or `[connect-option-router]` — Connect depends on those exact names.
 4. Reload the dialplan **without touching anything else**:
 
    ```bash
@@ -44,11 +44,13 @@ rewriting, no PBX DB writes, no SSH, and no UI edits after this setup.
    ```bash
    asterisk -rx "dialplan show connect-tenant-router"
    asterisk -rx "dialplan show connect-default-fallback"
+   asterisk -rx "dialplan show connect-tenant-ivr"
+   asterisk -rx "dialplan show connect-option-router"
    ```
 
-Both commands should list the extensions. If `dialplan reload` reports any
+All four commands should list the extensions. If `dialplan reload` reports any
 error, revert your edit — **nothing else in VitalPBX is affected** because
-Option A only adds two new contexts.
+Option A only adds four new contexts.
 
 ---
 
@@ -65,18 +67,68 @@ toast shows `Publish succeeded for slug=<slug>`.
 
 ---
 
+## Step 2b — (Phase 2 only) Prep System Recordings for the Connect-owned IVR
+
+Only relevant if you plan to point Inbound Routes at `connect-tenant-ivr` in
+Step 3 (per-digit menu + scheduled greeting). Skip this section if the tenant
+is staying on `connect-tenant-router`.
+
+Connect's IVR dialplan plays **existing VitalPBX System Recordings** — it does
+not record, upload, or convert audio itself. For each greeting variant the
+tenant wants (normal business hours, after-hours, holiday, emergency), record
+a System Recording in VitalPBX:
+
+1. **PBX Admin → Applications → System Recordings → Add.**
+2. Give it a memorable name, e.g. `acme_normal`, `acme_afterhours`,
+   `acme_holiday`. The Connect UI will look these up live via VitalPBX's
+   recording API — no naming convention is enforced, but a consistent prefix
+   per tenant makes the dropdown easier to scan.
+3. Record or upload the audio.
+4. In Connect, the tenant admin picks the recording per **Route Profile**:
+   each profile has three slots (Greeting / Invalid prompt / Timeout prompt).
+
+When a Route Profile becomes active (via schedule or override), the dialplan
+plays that profile's greeting. Changing the content of a greeting still
+requires re-recording in VitalPBX; changing *which* greeting is active is
+instantaneous and happens in Connect.
+
+Connect stores the recording as `custom/<name>` (the VitalPBX naming
+convention for System Recordings). The dialplan reads `active_prompt` from
+AstDB and passes it directly to `Background()`. If the referenced recording
+doesn't exist on the PBX, Asterisk logs a warning and the call falls back to
+the re-prompt loop — it does **not** crash.
+
+---
+
 ## Step 3 — Point the tenant's Inbound Routes at the shared router (once per Inbound Route)
 
 In the VitalPBX admin UI (**PBX Admin → External → Inbound Routes**):
 
 1. Open an Inbound Route (DID) that should be Connect-controlled.
-2. Set **Destination → Custom Destination** to:
+2. **Choose the entry point based on what you want Connect to control:**
+   - **`connect-tenant-router`** (Phase 1) — Connect picks which preconfigured
+     destination to Goto based on business hours / after hours / holiday /
+     override mode. The destination does the rest (play a VitalPBX IVR, ring a
+     queue, drop to voicemail). One destination per mode, per tenant.
+   - **`connect-tenant-ivr`** (Phase 2) — Connect owns the IVR menu itself:
+     plays a per-profile greeting, collects the digit, and routes Press 1 / 2 /
+     etc. to separately-configured destinations. Use this when you want to
+     change the greeting and/or per-digit routing on a schedule without
+     touching VitalPBX IVR objects.
+
+   Both entry points can coexist. Tenants can migrate from `-router` to `-ivr`
+   (or back) by changing just the Inbound Route — no data migration needed.
+3. Set **Destination → Custom Destination** to the entry point you picked:
 
    ```
    connect-tenant-router,${CALLERID(dnid)},1
    ```
+   or (for Phase 2)
+   ```
+   connect-tenant-ivr,${CALLERID(dnid)},1
+   ```
 
-3. In the **Set Variables** field (VitalPBX ≥ 4.3 exposes this; on older
+4. In the **Set Variables** field (VitalPBX ≥ 4.3 exposes this; on older
    builds use a pre-processing script):
 
    ```
@@ -86,7 +138,7 @@ In the VitalPBX admin UI (**PBX Admin → External → Inbound Routes**):
    The leading `__` is important — it means "inherit to all child channels".
    If your VitalPBX build doesn't expose this field directly, add a one-line
    prefix context in custom dialplan that sets the variable and then Goto's
-   `connect-tenant-router`, e.g.:
+   the entry point you picked above, e.g.:
 
    ```
    [inbound-tenant-acme]
@@ -94,9 +146,10 @@ In the VitalPBX admin UI (**PBX Admin → External → Inbound Routes**):
     same =>     n,Goto(connect-tenant-router,${EXTEN},1)
    ```
 
-   …and point the Inbound Route at `inbound-tenant-acme`.
+   …and point the Inbound Route at `inbound-tenant-acme`. (Swap
+   `connect-tenant-router` for `connect-tenant-ivr` if you're using Phase 2.)
 
-4. Save and Apply Config (if VitalPBX asks).
+5. Save and Apply Config (if VitalPBX asks).
 
 **That's it.** Every subsequent publish from Connect updates AstDB only. The
 Inbound Route configuration never needs to change again.

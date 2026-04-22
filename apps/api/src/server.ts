@@ -11494,6 +11494,16 @@ function canManageIvr(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
 }
 
+// Separate permission for "can edit which greeting/recording a Route Profile
+// uses". Today it resolves to the same role set as canManageIvr, but it's
+// split out so a future, narrower role (e.g. a receptionist who schedules
+// holiday greetings but can't touch routing) can be granted this without
+// inheriting routing permissions. Keep both in sync with the portal's
+// `can_manage_ivr_prompts` permission.
+function canManageIvrPrompts(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
 /** Normalise a tenant name to a safe AstDB family slug: lowercase, a-z0-9_ only. */
 function toIvrSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -11546,23 +11556,163 @@ function computeCurrentMode(
   return "afterhours";
 }
 
-/** Build the full set of AstDB key-value pairs for a publish. */
+/**
+ * Fixed set of digit slots the dialplan consumes. We always write every slot
+ * (empty value for unused digits) so a re-publish that removes an option
+ * actually clears the stale AstDB entry instead of leaving it hanging.
+ * "star" and "hash" stand in for the `*` and `#` digits which aren't safe
+ * AstDB key characters.
+ */
+const IVR_OPTION_DIGITS = [
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "hash",
+] as const;
+type IvrOptionDigit = (typeof IVR_OPTION_DIGITS)[number];
+
+/** Map a computeCurrentMode() result to the profile.type that should serve it. */
+function ivrModeToProfileType(mode: string): string | null {
+  switch (mode) {
+    case "business":   return "business_hours";
+    case "afterhours": return "after_hours";
+    case "holiday":    return "holiday";
+    case "override":   return "manual_override";
+    default:           return null;
+  }
+}
+
+/** Pick the route profile that should serve the current mode. Falls back to
+ *  "emergency" when override mode is requested but no manual_override profile
+ *  is configured — matches the behavior of the legacy dest_override key. */
+function ivrFindActiveProfile<T extends { type: string }>(
+  mode: string,
+  profiles: T[],
+): T | null {
+  const wanted = ivrModeToProfileType(mode);
+  if (!wanted) return null;
+  const direct = profiles.find((p) => p.type === wanted) ?? null;
+  if (direct) return direct;
+  if (mode === "override") return profiles.find((p) => p.type === "emergency") ?? null;
+  return null;
+}
+
+/** Shape of the data buildIvrKeys needs from the active profile's options. */
+type IvrActiveOption = {
+  optionDigit: string;
+  destinationType: string;
+  destinationRef: string;
+  enabled: boolean;
+};
+
+/** Build the full set of AstDB key-value pairs for a publish.
+ *  Always returns a deterministic, fixed-size key set so rollback/snapshot
+ *  round-trips stay stable across publishes and so stale slots get cleared. */
 function buildIvrKeys(
   slug: string,
   mode: string,
-  profiles: { type: string; pbxDestination: string }[],
+  profiles: Array<{
+    type: string;
+    pbxDestination: string;
+    pbxPromptRef?: string | null;
+    pbxInvalidPromptRef?: string | null;
+    pbxTimeoutPromptRef?: string | null;
+    timeoutSeconds?: number | null;
+    maxRetries?: number | null;
+  }>,
   override: { expiresAt: Date | null } | null,
+  activeOptions: IvrActiveOption[] = [],
 ): Array<{ family: string; key: string; value: string }> {
   const fam = ivrFamily(slug);
-  const byType = new Map(profiles.map((p) => [p.type, p.pbxDestination]));
-  return [
+  const byType = new Map(profiles.map((p) => [p.type, p]));
+  const active = ivrFindActiveProfile(mode, profiles);
+
+  const keys: Array<{ family: string; key: string; value: string }> = [
+    // Legacy single-destination keys — still consumed by [connect-tenant-router]
+    // for tenants that haven't migrated to [connect-tenant-ivr].
     { family: fam, key: "mode",             value: mode },
-    { family: fam, key: "dest_business",    value: byType.get("business_hours")    ?? "" },
-    { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")       ?? "" },
-    { family: fam, key: "dest_holiday",     value: byType.get("holiday")           ?? "" },
-    { family: fam, key: "dest_override",    value: byType.get("manual_override") ?? byType.get("emergency") ?? "" },
+    { family: fam, key: "dest_business",    value: byType.get("business_hours")?.pbxDestination    ?? "" },
+    { family: fam, key: "dest_afterhours",  value: byType.get("after_hours")?.pbxDestination       ?? "" },
+    { family: fam, key: "dest_holiday",     value: byType.get("holiday")?.pbxDestination           ?? "" },
+    { family: fam, key: "dest_override",    value: byType.get("manual_override")?.pbxDestination ?? byType.get("emergency")?.pbxDestination ?? "" },
     { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(override.expiresAt.getTime() / 1000)) : "0" },
+
+    // Phase 2: active profile's prompt refs + IVR timing. Consumed by
+    // [connect-tenant-ivr]. Empty string means "use a safe default in dialplan".
+    { family: fam, key: "active_prompt",         value: active?.pbxPromptRef        ?? "" },
+    { family: fam, key: "active_prompt_invalid", value: active?.pbxInvalidPromptRef ?? "" },
+    { family: fam, key: "active_prompt_timeout", value: active?.pbxTimeoutPromptRef ?? "" },
+    { family: fam, key: "timeout_seconds",       value: String(active?.timeoutSeconds ?? 7) },
+    { family: fam, key: "max_retries",           value: String(active?.maxRetries    ?? 3) },
   ];
+
+  // Per-digit option routing. Disabled options are treated as if missing so
+  // admins can temporarily turn off a digit without deleting the row.
+  const optByDigit = new Map<string, IvrActiveOption>();
+  for (const opt of activeOptions) {
+    if (opt.enabled) optByDigit.set(opt.optionDigit, opt);
+  }
+  for (const digit of IVR_OPTION_DIGITS) {
+    const opt = optByDigit.get(digit);
+    keys.push({ family: fam, key: `opt_${digit}/dest`, value: opt?.destinationRef  ?? "" });
+    keys.push({ family: fam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" });
+  }
+
+  return keys;
+}
+
+// ── IVR input validation ─────────────────────────────────────────────────────
+// Shared between route-profile updates, option CRUD, and publish. Keeping
+// validation in helpers (not inline per-handler) so every entrypoint rejects
+// the same bad shapes. None of these queries VitalPBX — we only shape-check
+// strings so AstDB writes stay safe and the dialplan's Goto() sees something
+// parseable.
+
+/** `context,exten,priority` — the shape every Goto()'able PBX destination
+ *  must have in Asterisk. Context and exten are VitalPBX-derived so we allow
+ *  the same characters VitalPBX itself emits (letters, digits, `_`, `-`,
+ *  `+` for extens starting with +, `*`/`#` for feature codes). */
+const IVR_CEP_REGEX = /^[a-zA-Z0-9_\-]{1,64},[a-zA-Z0-9_\-\+\*\#]{1,80},\d{1,4}$/;
+/** E.164-ish. External destinations always dial out through the PBX trunk,
+ *  not directly from Asterisk — but we still sanity-check the number so we
+ *  don't end up with ;-injection in a dial string. */
+const IVR_E164_REGEX = /^\+?[1-9]\d{1,14}$/;
+/** VitalPBX recording references — path-like but no dots or shell metachars. */
+const IVR_PROMPT_REF_REGEX = /^[a-zA-Z0-9/_\-]{1,128}$/;
+
+const IVR_DESTINATION_TYPES = [
+  "extension", "queue", "ring_group", "voicemail", "ivr",
+  "announcement", "external_number", "terminate", "custom",
+] as const;
+type IvrDestinationType = (typeof IVR_DESTINATION_TYPES)[number];
+
+/** Validate a destinationRef against its declared type. Returns null on OK,
+ *  or a short error string suitable for a 400 response. */
+function ivrValidateDestinationRef(type: string, ref: string): string | null {
+  if (!IVR_DESTINATION_TYPES.includes(type as IvrDestinationType)) {
+    return `destinationType must be one of: ${IVR_DESTINATION_TYPES.join(", ")}`;
+  }
+  if (typeof ref !== "string" || ref.length === 0 || ref.length > 200) {
+    return "destinationRef must be 1..200 chars";
+  }
+  if (type === "external_number") {
+    if (!IVR_E164_REGEX.test(ref)) return "external_number destinationRef must be E.164 (e.g. +15551234567)";
+    return null;
+  }
+  // All other types point at a preconfigured VitalPBX object via Goto(), so
+  // they share the same context,exten,priority shape.
+  if (!IVR_CEP_REGEX.test(ref)) {
+    return `${type} destinationRef must be in "context,exten,priority" form`;
+  }
+  return null;
+}
+
+/** Validate an optional prompt recording ref (greeting / invalid / timeout).
+ *  null / "" is allowed — the dialplan interprets empty as "use default". */
+function ivrValidatePromptRef(ref: string | null | undefined): string | null {
+  if (ref == null || ref === "") return null;
+  if (typeof ref !== "string") return "prompt ref must be a string";
+  if (!IVR_PROMPT_REF_REGEX.test(ref)) {
+    return "prompt ref must match [a-zA-Z0-9/_-], <=128 chars (VitalPBX recording name, no file extension, no absolute path)";
+  }
+  return null;
 }
 
 /** Resolve (or derive) the IVR slug for a tenant. Uses the tenant's name. */
@@ -11659,36 +11809,244 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageIvr);
   if (!user) return;
   const body = z.object({
-    tenantId:       z.string(),
-    name:           z.string().min(1).max(100),
-    type:           z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]),
-    pbxDestination: z.string().min(1).max(200),
+    tenantId:            z.string(),
+    name:                z.string().min(1).max(100),
+    type:                z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]),
+    pbxDestination:      z.string().min(1).max(200),
+    // Phase 2 — optional IVR menu fields. All default to null/defaults.
+    pbxPromptRef:        z.string().nullable().optional(),
+    pbxInvalidPromptRef: z.string().nullable().optional(),
+    pbxTimeoutPromptRef: z.string().nullable().optional(),
+    timeoutSeconds:      z.number().int().min(1).max(60).optional(),
+    maxRetries:          z.number().int().min(1).max(10).optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
   assertIvrTenantAccess(user, d.tenantId);
+  // Prompt ref format guard — prevents path-traversal / shell metachars leaking
+  // into `Playback(${GREETING})` where VitalPBX runs unescaped.
+  for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
+    const err = ivrValidatePromptRef(ref ?? null);
+    if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
+  }
   const profile = await (db as any).ivrRouteProfile.create({
-    data: { tenantId: d.tenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true, createdBy: (user as any).id ?? null },
+    data: {
+      tenantId: d.tenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true,
+      pbxPromptRef: d.pbxPromptRef ?? null,
+      pbxInvalidPromptRef: d.pbxInvalidPromptRef ?? null,
+      pbxTimeoutPromptRef: d.pbxTimeoutPromptRef ?? null,
+      timeoutSeconds: d.timeoutSeconds ?? 7,
+      maxRetries: d.maxRetries ?? 3,
+      createdBy: (user as any).id ?? null,
+    },
   });
   return reply.code(201).send({ profile });
 });
 
 // ── PATCH /voice/ivr/route-profiles/:id ──────────────────────────────────────
+// Two permission tiers:
+//   - canManageIvr       → full edit (name, type, pbxDestination, prompts, timing)
+//   - canManageIvrPrompts → prompts + timing only
+// Callers with just the prompts permission that send forbidden fields get a
+// clean 403 with the offending field names, rather than a silent partial
+// update — avoids the "why didn't my change save?" support ticket.
 app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
-  if (!user) return;
+  const user = getUser(req);
+  const hasFullEdit   = canManageIvr(user);
+  const hasPromptEdit = canManageIvrPrompts(user);
+  if (!hasFullEdit && !hasPromptEdit) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
   const { id } = req.params as { id: string };
   const existing = await (db as any).ivrRouteProfile.findUnique({ where: { id } });
   if (!existing) return reply.code(404).send({ error: "not_found" });
   assertIvrTenantAccess(user, existing.tenantId);
   const body = z.object({
-    name:           z.string().min(1).max(100).optional(),
-    pbxDestination: z.string().min(1).max(200).optional(),
-    type:           z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]).optional(),
+    name:                z.string().min(1).max(100).optional(),
+    pbxDestination:      z.string().min(1).max(200).optional(),
+    type:                z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]).optional(),
+    pbxPromptRef:        z.string().nullable().optional(),
+    pbxInvalidPromptRef: z.string().nullable().optional(),
+    pbxTimeoutPromptRef: z.string().nullable().optional(),
+    timeoutSeconds:      z.number().int().min(1).max(60).optional(),
+    maxRetries:          z.number().int().min(1).max(10).optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  const updated = await (db as any).ivrRouteProfile.update({ where: { id }, data: body.data });
+  const d = body.data;
+
+  // Fields that callers with only prompt-edit rights are allowed to modify.
+  const PROMPT_FIELDS = new Set([
+    "pbxPromptRef", "pbxInvalidPromptRef", "pbxTimeoutPromptRef",
+    "timeoutSeconds", "maxRetries",
+  ]);
+  if (!hasFullEdit) {
+    const provided = Object.entries(d)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => k);
+    const forbidden = provided.filter((k) => !PROMPT_FIELDS.has(k));
+    if (forbidden.length > 0) {
+      return reply.code(403).send({
+        error: "forbidden_fields",
+        detail: "Your role can only edit greeting/prompt fields on route profiles.",
+        fields: forbidden,
+      });
+    }
+  }
+
+  // Only validate refs that were actually supplied — optional fields stay
+  // untouched when absent (Prisma partial update semantics).
+  for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
+    if (ref === undefined) continue;
+    const err = ivrValidatePromptRef(ref);
+    if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
+  }
+  const updated = await (db as any).ivrRouteProfile.update({ where: { id }, data: d });
   return reply.send({ profile: updated });
+});
+
+// ── Option routing CRUD ──────────────────────────────────────────────────────
+// Each IVR route profile has up to 12 option slots (digits 0-9 + `*` + `#`).
+// These rows are what the Connect-owned [connect-option-router] dialplan reads
+// at call time via AstDB — see docs/pbx/option-a-custom-context.conf.
+//
+// Tenant isolation is enforced on every entrypoint:
+//   1. assertIvrTenantAccess against the profile's tenantId
+//   2. the option's tenantId is copied from the profile — callers can't set it
+//   3. route handlers never query by tenantId supplied in the request body
+//
+// No writes to AstDB happen here — publishing is still explicit via
+// POST /voice/ivr/publish. The dialplan keeps reading whatever was last
+// published until the next publish/rollback.
+
+// Shared helper: load the profile and confirm the caller owns it.
+async function loadIvrProfileForWrite(
+  user: JwtUser,
+  profileId: string,
+): Promise<{ id: string; tenantId: string } | { error: number; body: unknown }> {
+  const profile = await (db as any).ivrRouteProfile.findUnique({
+    where: { id: profileId },
+    select: { id: true, tenantId: true, isActive: true },
+  });
+  if (!profile) return { error: 404, body: { error: "profile_not_found" } };
+  try {
+    assertIvrTenantAccess(user, profile.tenantId);
+  } catch {
+    return { error: 403, body: { error: "forbidden" } };
+  }
+  return { id: profile.id, tenantId: profile.tenantId };
+}
+
+const IVR_OPTION_DIGIT_SCHEMA = z.enum([
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "hash",
+]);
+
+// ── GET /voice/ivr/route-profiles/:profileId/options ─────────────────────────
+app.get("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const { profileId } = req.params as { profileId: string };
+  const profile = await (db as any).ivrRouteProfile.findUnique({
+    where: { id: profileId }, select: { id: true, tenantId: true },
+  });
+  if (!profile) return reply.code(404).send({ error: "profile_not_found" });
+  assertIvrTenantAccess(user, profile.tenantId);
+  const options = await (db as any).ivrOptionRoute.findMany({
+    where: { profileId: profile.id },
+    orderBy: [{ optionDigit: "asc" }],
+  });
+  return reply.send({ options });
+});
+
+// ── POST /voice/ivr/route-profiles/:profileId/options ────────────────────────
+app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { profileId } = req.params as { profileId: string };
+  const gate = await loadIvrProfileForWrite(user, profileId);
+  if ("error" in gate) return reply.code(gate.error).send(gate.body);
+
+  const body = z.object({
+    optionDigit:     IVR_OPTION_DIGIT_SCHEMA,
+    destinationType: z.enum(IVR_DESTINATION_TYPES as unknown as [string, ...string[]]),
+    destinationRef:  z.string().min(1).max(200),
+    label:           z.string().max(60).nullable().optional(),
+    enabled:         z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  const refErr = ivrValidateDestinationRef(d.destinationType, d.destinationRef);
+  if (refErr) return reply.code(400).send({ error: "invalid_destination", detail: refErr });
+
+  try {
+    const option = await (db as any).ivrOptionRoute.create({
+      data: {
+        tenantId:        gate.tenantId,       // copied from profile — not from body
+        profileId:       gate.id,
+        optionDigit:     d.optionDigit,
+        destinationType: d.destinationType,
+        destinationRef:  d.destinationRef,
+        label:           d.label ?? null,
+        enabled:         d.enabled ?? true,
+      },
+    });
+    return reply.code(201).send({ option });
+  } catch (err: any) {
+    // Prisma unique-constraint violation on (profileId, optionDigit).
+    if (err?.code === "P2002") {
+      return reply.code(409).send({ error: "digit_already_mapped", detail: `Digit ${d.optionDigit} already has an option on this profile — PATCH it instead.` });
+    }
+    throw err;
+  }
+});
+
+// ── PATCH /voice/ivr/route-profiles/:profileId/options/:optionId ─────────────
+app.patch("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { profileId, optionId } = req.params as { profileId: string; optionId: string };
+  const gate = await loadIvrProfileForWrite(user, profileId);
+  if ("error" in gate) return reply.code(gate.error).send(gate.body);
+  const existing = await (db as any).ivrOptionRoute.findUnique({ where: { id: optionId } });
+  if (!existing || existing.profileId !== gate.id) {
+    return reply.code(404).send({ error: "option_not_found" });
+  }
+
+  const body = z.object({
+    destinationType: z.enum(IVR_DESTINATION_TYPES as unknown as [string, ...string[]]).optional(),
+    destinationRef:  z.string().min(1).max(200).optional(),
+    label:           z.string().max(60).nullable().optional(),
+    enabled:         z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+
+  // If either type or ref moved, re-validate using the effective (new+existing)
+  // values. Validating only the new field would miss "change type to
+  // external_number without updating the ref" style mistakes.
+  if (d.destinationType !== undefined || d.destinationRef !== undefined) {
+    const effectiveType = d.destinationType ?? existing.destinationType;
+    const effectiveRef  = d.destinationRef  ?? existing.destinationRef;
+    const refErr = ivrValidateDestinationRef(effectiveType, effectiveRef);
+    if (refErr) return reply.code(400).send({ error: "invalid_destination", detail: refErr });
+  }
+
+  const updated = await (db as any).ivrOptionRoute.update({ where: { id: optionId }, data: d });
+  return reply.send({ option: updated });
+});
+
+// ── DELETE /voice/ivr/route-profiles/:profileId/options/:optionId ────────────
+app.delete("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvr);
+  if (!user) return;
+  const { profileId, optionId } = req.params as { profileId: string; optionId: string };
+  const gate = await loadIvrProfileForWrite(user, profileId);
+  if ("error" in gate) return reply.code(gate.error).send(gate.body);
+  const existing = await (db as any).ivrOptionRoute.findUnique({ where: { id: optionId } });
+  if (!existing || existing.profileId !== gate.id) {
+    return reply.code(404).send({ error: "option_not_found" });
+  }
+  await (db as any).ivrOptionRoute.delete({ where: { id: optionId } });
+  return reply.send({ ok: true });
 });
 
 // ── DELETE /voice/ivr/route-profiles/:id ─────────────────────────────────────
@@ -11837,14 +12195,19 @@ app.post("/voice/ivr/override/deactivate", async (req, reply) => {
 
 // ── GET /voice/ivr/preview ────────────────────────────────────────────────────
 // Returns what mode would be active right now (or at an optional timestamp),
-// plus the profile and PBX destination that the custom context would route
-// inbound calls to. Read-only — does NOT write anything to AstDB. Safe to
-// call as often as the UI needs.
+// plus the profile + PBX destination + greeting + per-digit option map that
+// the custom context would use to route inbound calls. Read-only — does NOT
+// write anything to AstDB. Safe to call as often as the UI needs.
 //
 // Response shape (backwards compatible — existing fields preserved):
 //   { mode: "business|afterhours|holiday|override",
 //     at: ISO8601,
-//     activeProfile: { id, name, type, pbxDestination } | null,
+//     activeProfile: {
+//       id, name, type, pbxDestination,
+//       prompts: { greeting, invalid, timeout },
+//       timing:  { timeoutSeconds, maxRetries },
+//       options: [{ digit, destinationType, destinationRef, label, enabled }]
+//     } | null,
 //     override: { isActive, expiresAt, reason } | null,
 //     reason?: "no_schedule_configured" | "no_profile_for_mode" }
 app.get("/voice/ivr/preview", async (req, reply) => {
@@ -11868,26 +12231,46 @@ app.get("/voice/ivr/preview", async (req, reply) => {
   const atTime = q.at ? new Date(q.at) : new Date();
   const mode = computeCurrentMode(schedule, override, atTime);
 
-  // Map the mode back to the profile that the dialplan's dest_<mode> key
-  // resolves to. Mirrors the selection logic in buildIvrKeys so preview and
-  // the actual published state can never diverge.
-  const modeToType: Record<string, string> = {
-    business:   "business_hours",
-    afterhours: "after_hours",
-    holiday:    "holiday",
-    override:   "manual_override",
-  };
-  let activeProfile: any = (profiles as any[]).find((p) => p.type === modeToType[mode]) ?? null;
-  // Emergency profile substitutes for manual_override if present and override mode is active.
-  if (mode === "override" && !activeProfile) {
-    activeProfile = (profiles as any[]).find((p) => p.type === "emergency") ?? null;
+  // Mirrors the selection logic in buildIvrKeys so preview and the actual
+  // published state can never diverge.
+  const activeProfile: any = ivrFindActiveProfile(mode, profiles as any[]);
+
+  // Pull the per-digit option routes for the active profile so the UI can
+  // show "Press 1 goes to X right now" without a second round-trip.
+  let options: any[] = [];
+  if (activeProfile) {
+    options = await (db as any).ivrOptionRoute.findMany({
+      where: { profileId: activeProfile.id },
+      orderBy: [{ optionDigit: "asc" }],
+    });
   }
 
   return reply.send({
     mode,
     at: atTime.toISOString(),
     activeProfile: activeProfile
-      ? { id: activeProfile.id, name: activeProfile.name, type: activeProfile.type, pbxDestination: activeProfile.pbxDestination }
+      ? {
+          id:   activeProfile.id,
+          name: activeProfile.name,
+          type: activeProfile.type,
+          pbxDestination: activeProfile.pbxDestination,
+          prompts: {
+            greeting: activeProfile.pbxPromptRef        ?? null,
+            invalid:  activeProfile.pbxInvalidPromptRef ?? null,
+            timeout:  activeProfile.pbxTimeoutPromptRef ?? null,
+          },
+          timing: {
+            timeoutSeconds: activeProfile.timeoutSeconds ?? 7,
+            maxRetries:     activeProfile.maxRetries     ?? 3,
+          },
+          options: options.map((o: any) => ({
+            digit:           o.optionDigit,
+            destinationType: o.destinationType,
+            destinationRef:  o.destinationRef,
+            label:           o.label,
+            enabled:         o.enabled,
+          })),
+        }
       : null,
     override: override
       ? { isActive: !!override.isActive, expiresAt: override.expiresAt ?? null, reason: override.reason ?? null }
@@ -11929,8 +12312,16 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   ]);
 
   const mode = schedule ? computeCurrentMode(schedule, override) : "business";
+  // Load the active profile's option routes so the Connect-owned IVR dialplan
+  // gets per-digit destinations alongside the legacy single-dest keys. We only
+  // load options for the ONE active profile — other profiles' options are
+  // in the DB but only written to AstDB when their profile becomes active.
+  const activeProfile = ivrFindActiveProfile(mode, profiles as any[]);
+  const activeOptions = activeProfile
+    ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } })
+    : [];
   const slug = await getIvrSlugForTenant(tenantId);
-  const keys = buildIvrKeys(slug, mode, profiles, override);
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions);
 
   // Snapshot the current AstDB values BEFORE writing, so rollback can restore
   // the true pre-publish state. If the snapshot fails (telephony unreachable,

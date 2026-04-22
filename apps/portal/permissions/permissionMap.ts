@@ -16,7 +16,9 @@ const END_USER_PERMISSIONS: Permission[] = [
   "can_manage_call_forwarding",
   "can_manage_blfs",
   "can_view_apps",
-  "can_download_apk"
+  "can_download_apk",
+  "can_view_ivr_routing",
+  "can_view_moh",
 ];
 
 const TENANT_ADMIN_PERMISSIONS: Permission[] = [
@@ -27,7 +29,14 @@ const TENANT_ADMIN_PERMISSIONS: Permission[] = [
   "can_view_reports",
   "can_view_admin",
   "can_manage_integrations",
-  "can_manage_tenant_settings"
+  "can_manage_tenant_settings",
+  "can_manage_ivr_routing",
+  "can_publish_ivr_routing",
+  "can_override_ivr_routing",
+  "can_manage_ivr_prompts",
+  "can_manage_moh",
+  "can_publish_moh",
+  "can_override_moh",
 ];
 
 const SUPER_ADMIN_PERMISSIONS: Permission[] = [
