@@ -60,23 +60,44 @@ to super-admins via `?tenantId=__all__`).
 
 ## How the catalog gets populated
 
-**Connect has no way to list the PBX filesystem on its own.** The public
-VitalPBX REST API has no endpoint for System Recordings, and SSH is not used.
-Therefore the catalog is populated via one of two **push** mechanisms:
+The catalog has three population paths. **Option 1 (Auto-Sync) is the default
+and works out of the box when the PBX instance already has a read-only
+`ombutel` MySQL URL configured** — which it does if DID sync is working.
 
-### Option 1 — Manual paste (recommended for small installs)
+### Option 1 — Auto-Sync from VitalPBX (recommended, one click)
 
-1. A super-admin (or any user with `can_manage_ivr_prompts`) opens the **IVR
-   Routing → Route Profiles** page.
-2. Clicks **Sync Prompt Library**.
-3. Pastes the current recording names — one per line, comma-separated, or
-   space-separated. File extensions and leading `custom/` are optional.
-4. Clicks **Sync**. Connect upserts every row, auto-matches to tenants, and
-   returns `{ created, updated, unassigned, total }`.
+1. A super-admin opens **IVR Routing → Route Profiles**.
+2. Clicks **Auto-Sync from VitalPBX**.
+3. Connect reads the System Recordings table directly from the PBX's
+   `ombutel` MariaDB (same read-only connection used by DID sync), maps each
+   recording's PBX `tenant_id` to a Connect tenant via `TenantPbxLink`, and
+   upserts into `TenantPbxPrompt`.
+
+Endpoint: `POST /voice/ivr/prompts/auto-sync` (super-admin JWT).
+
+Tenant assignment uses the PBX's own `tenant_id` foreign key, not filename
+guessing — so cross-tenant leakage is structurally impossible.
+
+**PBX load**: one indexed `SELECT` on `INFORMATION_SCHEMA` + one `SELECT` on
+the recordings table (`LIMIT 5000`). Zero filesystem work. Zero AMI traffic.
+Admin-gated and manual — never a polling loop.
+
+Requires the `PbxInstance.ombuMysqlUrlEncrypted` column to be set (an
+`encryptJson({ mysqlUrl: "mysql://user:pass@host:3306/ombutel" })` blob).
+If unset, Auto-Sync returns `{ok: false, skipReason, hint}` instead of
+erroring, and the UI tells the admin what to do.
+
+### Option 2 — Manual paste (fallback)
+
+1. Same page, click **Paste list…**.
+2. Paste recording names — one per line, comma-separated, or space-separated.
+   File extensions and leading `custom/` are optional.
+3. Click **Sync**. Connect upserts every row, auto-matches to tenants by
+   slug-prefix, and returns `{ created, updated, unassigned, total }`.
 
 **PBX load**: zero. The admin is typing, not scanning.
 
-### Option 2 — PBX-host cron (recommended for large installs)
+### Option 3 — PBX-host cron (large installs without the MySQL link)
 
 Run this one-liner on the VitalPBX host on a schedule chosen by ops (daily is
 typical; hourly is fine — the command is O(filesystem) and takes well under a
@@ -120,6 +141,7 @@ zero.
 | `PATCH` | `/voice/ivr/prompts/:id` | JWT (`can_manage_ivr_prompts`) | Rename, recategorise, deactivate |
 | `DELETE` | `/voice/ivr/prompts/:id` | JWT (`can_manage_ivr_prompts`) | Soft-delete (sets `isActive=false`) |
 | `POST` | `/voice/ivr/prompts/sync` | `x-cdr-secret` **or** super-admin JWT | Bulk upsert from a list of refs |
+| `POST` | `/voice/ivr/prompts/auto-sync` | super-admin JWT | One-click read from the PBX's `ombutel` MariaDB into the catalog |
 
 `GET /voice/ivr/prompts` behaviour:
 
@@ -190,8 +212,9 @@ Cross-tenant leakage is impossible through the API and the UI:
 | User opens the IVR Routing page | **0** — catalog read from Connect DB only |
 | User opens the Route Profile edit modal | **0** — uses already-loaded catalog |
 | Tenant admin edits a prompt | **0** — DB write + AstDB publish only on explicit Publish |
-| Sync button (manual paste) | **0** — admin is typing, no PBX call |
-| Sync button (large install, PBX cron) | One `find` per day, ~ms |
+| Auto-Sync button (one click) | Two `SELECT`s on `ombutel` MySQL; ~ms |
+| Paste-list button (manual fallback) | **0** — admin is typing, no PBX call |
+| PBX-host cron (Option 3) | One `find` per day, ~ms |
 | Background workers | **0** — no worker reads the prompt catalog from the PBX |
 
 Connect's `GET /voice/ivr/prompts` handler does a single indexed SELECT on

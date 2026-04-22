@@ -373,8 +373,43 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
   // Which profile card is expanded to show its Prompts + Option Routing.
   // Only one is open at a time — keeps the page scannable with many profiles.
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // "Sync Prompt Library" modal — only rendered for users with prompt mgmt rights.
+  // Prompt sync controls (super-admin only).
+  //   - "Auto-Sync from VitalPBX" calls POST /voice/ivr/prompts/auto-sync and
+  //     pulls the System Recordings straight from the PBX's ombutel MySQL.
+  //   - "Paste list…" is a manual fallback when the MySQL link isn't wired.
   const [showSync, setShowSync] = useState(false);
+  const [autoSyncing, setAutoSyncing] = useState(false);
+  const runAutoSync = useCallback(async () => {
+    if (!confirm("Auto-sync all VitalPBX System Recordings into Connect? This reads from the PBX's ombutel MySQL and updates the per-tenant dropdowns.")) return;
+    setAutoSyncing(true);
+    try {
+      const j = await apiPost<{
+        ok: boolean;
+        result?: { table: string; rowsRead: number; created: number; updated: number; unassigned: number; deactivated: number; errors: string[] };
+        skipReason?: string;
+        hint?: string;
+      }>("/voice/ivr/prompts/auto-sync", {});
+      if (!j?.ok) {
+        const hint = j?.hint ? `\n\nHint: ${j.hint}` : "";
+        alert(`Auto-sync failed: ${j?.skipReason ?? "unknown"}${hint}`);
+        return;
+      }
+      const r = j.result!;
+      const errLine = r.errors && r.errors.length > 0 ? `\n\nErrors:\n- ${r.errors.join("\n- ")}` : "";
+      alert(
+        `Auto-sync complete.\n\nSource table: ${r.table}\nRows read: ${r.rowsRead}\nCreated: ${r.created}\nUpdated: ${r.updated}\nUnassigned (no tenant match): ${r.unassigned}${errLine}`,
+      );
+      await onRefresh?.();
+    } catch (e: any) {
+      const msg = typeof e?.body === "object"
+        ? (e.body?.skipReason ?? e.body?.error ?? e?.message)
+        : (e?.message ?? String(e));
+      const hint = typeof e?.body === "object" && e.body?.hint ? `\n\nHint: ${e.body.hint}` : "";
+      alert(`Auto-sync failed: ${msg}${hint}`);
+    } finally {
+      setAutoSyncing(false);
+    }
+  }, [onRefresh]);
   // Catalog scoped to the currently-selected tenant. Shared by the modal form
   // AND every ProfilePromptsSection below, so we only hit the API once.
   const { prompts: modalPrompts, loading: modalPromptsLoading, reload: reloadPrompts } = usePromptCatalog(tenantId);
@@ -431,9 +466,23 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Route Profiles</h2>
         <div style={{ display: "flex", gap: 8 }}>
           {canManagePrompts && (
-            <button onClick={() => setShowSync(true)} style={btnSmall("#334155")} title="Paste the tenant's VitalPBX recording list to refresh the prompt dropdowns">
-              Sync Prompt Library
-            </button>
+            <>
+              <button
+                onClick={runAutoSync}
+                disabled={autoSyncing}
+                style={btnStyle("#0d9488")}
+                title="Pull every VitalPBX System Recording into Connect's catalog (read-only MySQL — no filenames to type)"
+              >
+                {autoSyncing ? "Syncing…" : "Auto-Sync from VitalPBX"}
+              </button>
+              <button
+                onClick={() => setShowSync(true)}
+                style={btnSmall("#334155")}
+                title="Manual fallback: paste a list of recording names"
+              >
+                Paste list…
+              </button>
+            </>
           )}
           {canManage && (
             <button onClick={openCreate} style={btnStyle("#6366f1")}>+ Add Profile</button>
@@ -524,7 +573,7 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
 
             <SectionLabel>Greeting &amp; Prompts</SectionLabel>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-              Pick a VitalPBX System Recording for this tenant (synced via&nbsp;<em>Sync Prompt Library</em>).
+              Pick a VitalPBX System Recording for this tenant (synced via&nbsp;<em>Auto-Sync from VitalPBX</em>).
               Leave blank to use the built-in default. Only consumed by tenants using the Connect-owned IVR context.
             </div>
             <label style={labelStyle}>Greeting recording</label>
@@ -654,6 +703,7 @@ function PromptPicker({
   const effectiveManual = manual || (filtered.length === 0 && !value);
 
   if (effectiveManual) {
+    const emptyCatalog = filtered.length === 0 && !catalogLoading;
     return (
       <div>
         <input
@@ -662,8 +712,14 @@ function PromptPicker({
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder ?? "custom/tenant_main"}
         />
-        <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center" }}>
-          <span>Manual entry — VitalPBX recording name, no file extension.</span>
+        <div style={{ fontSize: 11, color: emptyCatalog ? "#fbbf24" : "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {emptyCatalog ? (
+            <span>
+              No prompt catalog for this tenant yet. Close this dialog and click <strong>Auto-Sync from VitalPBX</strong> to pull every System Recording from the PBX, or type a ref manually.
+            </span>
+          ) : (
+            <span>Manual entry — VitalPBX recording name, no file extension.</span>
+          )}
           {filtered.length > 0 && (
             <button
               type="button"

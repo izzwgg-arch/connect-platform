@@ -12024,6 +12024,8 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // IVR PROMPT CATALOG — tenant-filtered recording dropdowns
 // Reads go to Connect DB only (TenantPbxPrompt). Writes come from:
+//   - super-admin "Auto-Sync from VitalPBX" (POST /voice/ivr/prompts/auto-sync)
+//     which pulls from the ombutel MariaDB (same read-only channel as DID sync)
 //   - super-admin manual paste (UI or POST /voice/ivr/prompts/sync)
 //   - optional PBX-host cron POSTing the current sounds inventory
 // The PBX is NEVER queried at request time to populate these dropdowns.
@@ -12297,6 +12299,61 @@ app.post("/voice/ivr/prompts/sync", async (req, reply) => {
     summary: { created, updated, deactivated, unassigned, total: norm.ok.length },
     rejected: norm.rejected.slice(0, 20),
   });
+});
+
+// ── POST /voice/ivr/prompts/auto-sync ─────────────────────────────────────────
+// One-click "Auto-Sync from VitalPBX": reads every System Recording row from
+// the ombutel MariaDB (read-only user, same channel as DID sync), maps each
+// recording's PBX tenant_id to a Connect tenant via TenantPbxLink, and upserts
+// into TenantPbxPrompt. After this runs, the per-tenant dropdowns in the IVR
+// Route Profiles UI are populated automatically — no filenames to type.
+//
+// CPU safety:
+//   - exactly one indexed SELECT on an INFORMATION_SCHEMA lookup + one SELECT
+//     on the recordings table (LIMIT 5000). No filesystem scan. No call-time
+//     PBX traffic. Admin-gated and manual — not a polling loop.
+app.post("/voice/ivr/prompts/auto-sync", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  if (!user) return;
+  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") {
+    return reply.code(403).send({ error: "super_admin_required" });
+  }
+
+  const body = z.object({
+    pbxInstanceId: z.string().optional(),
+    deactivateMissing: z.boolean().optional(),
+  }).safeParse(req.body ?? {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+
+  // Resolve the PbxInstance — explicit id wins; otherwise use the enabled one.
+  const instance = body.data.pbxInstanceId
+    ? await db.pbxInstance.findUnique({ where: { id: body.data.pbxInstanceId } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { createdAt: "asc" } });
+  if (!instance) {
+    return reply.code(404).send({
+      error: "no_pbx_instance",
+      hint: "Register a PbxInstance under Admin → PBX Instances first.",
+    });
+  }
+
+  const { syncPromptsFromOmbutelMysql } = await import("./pbxOmbutelPromptSync");
+  const result = await syncPromptsFromOmbutelMysql(
+    db,
+    instance.id,
+    instance.ombuMysqlUrlEncrypted,
+    { deactivateMissing: body.data.deactivateMissing === true },
+  );
+
+  app.log.info({ pbxInstanceId: instance.id, result }, "[IVR_PROMPT_AUTO_SYNC] done");
+  if (result.source === "skipped") {
+    // Deliberately return 200 so the UI gets the structured skipReason/hint.
+    return reply.send({
+      ok: false,
+      skipReason: result.skipReason,
+      hint: "Set PbxInstance.ombuMysqlUrlEncrypted to an encrypted MySQL URL (same one used by DID sync).",
+    });
+  }
+  return reply.send({ ok: true, result });
 });
 
 // Shared helper: load the profile and confirm the caller owns it.
