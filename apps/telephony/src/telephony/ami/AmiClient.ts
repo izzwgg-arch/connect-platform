@@ -82,6 +82,113 @@ export class AmiClient extends EventEmitter {
     return id;
   }
 
+  // Read a single AstDB value by Family + Key. Resolves with { ok: true, value }
+  // on success, { ok: false } if the key is absent, and rejects on timeout or
+  // disconnect.
+  //
+  // Implementation note: Asterisk's AMI `DBGet` is a two-step exchange:
+  //   1. We send Action: DBGet (ActionID: X)
+  //   2. Asterisk replies `Response: Success` (matching ActionID)
+  //   3. Then emits a separate `Event: DBGetResponse` carrying Family/Key/Val
+  //   — OR — if the key is missing, step 2 is `Response: Error`
+  //     with Message: "Database entry not found." and no event follows.
+  //
+  // We subscribe to both the `response` and `event` streams for the window of
+  // this call. This is cheap: DBGet is purely in-memory in Asterisk and the
+  // full round-trip typically completes in under 5ms.
+  //
+  // Used by Option A IVR routing to snapshot the pre-publish state so rollback
+  // can restore the real prior values.
+  dbGet(
+    family: string,
+    key: string,
+    timeoutMs = 3_000,
+  ): Promise<{ ok: true; value: string } | { ok: false }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.authenticated) {
+        reject(new Error("AMI not connected"));
+        return;
+      }
+      const id = `cc-${++this.actionSeq}`;
+      let settled = false;
+      let sawSuccessResponse = false;
+
+      const onResponse = (frame: AmiFrame) => {
+        if (frame["ActionID"] !== id) return;
+        if (settled) return;
+        const status = frame["Response"] ?? "";
+        if (status === "Success") {
+          // Some Asterisk builds inline the value in the Response frame itself
+          // (observed on 18+ in certain configurations). Prefer that if present.
+          if (typeof frame["Val"] === "string") {
+            settled = true;
+            cleanup();
+            resolve({ ok: true, value: frame["Val"] });
+            return;
+          }
+          // Otherwise, wait for the DBGetResponse event below.
+          sawSuccessResponse = true;
+          return;
+        }
+        // Response: Error → key missing (or another AMI error).
+        settled = true;
+        cleanup();
+        resolve({ ok: false });
+      };
+
+      const onEvent = (frame: AmiFrame) => {
+        if (settled) return;
+        if (frame["Event"] !== "DBGetResponse") return;
+        if (frame["Family"] !== family || frame["Key"] !== key) return;
+        // Only trust the event if we first saw a Success response for our id,
+        // to avoid racing against unrelated parallel DBGet calls. ActionID on
+        // events is usually echoed by Asterisk for actions that emit them.
+        if (frame["ActionID"] !== undefined && frame["ActionID"] !== id) return;
+        if (!sawSuccessResponse && frame["ActionID"] !== id) return;
+        settled = true;
+        cleanup();
+        resolve({ ok: true, value: frame["Val"] ?? "" });
+      };
+
+      const onDisconnect = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("AMI disconnected before DBGet completed"));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        // If we got Success but the event never arrived, treat as missing
+        // rather than error — the response itself said the action succeeded.
+        if (sawSuccessResponse) resolve({ ok: false });
+        else reject(new Error(`AMI DBGet timed out: ${family}/${key}`));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("response", onResponse);
+        this.off("event", onEvent);
+        this.off("disconnected", onDisconnect);
+      };
+      this.on("response", onResponse);
+      this.on("event", onEvent);
+      this.once("disconnected", onDisconnect);
+
+      const msg =
+        `Action: DBGet\r\nActionID: ${id}\r\nFamily: ${family}\r\nKey: ${key}\r\n\r\n`;
+      try {
+        this.socket.write(msg);
+      } catch (err) {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    });
+  }
+
   private connect(): void {
     if (isAborted(this.reconnect)) return;
     log.info({ host: this.cfg.host, port: this.cfg.port }, "AMI connecting");

@@ -1409,8 +1409,28 @@ async function runIvrScheduleCycle(): Promise<void> {
           { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(new Date(override.expiresAt).getTime() / 1000)) : "0" },
         ];
 
+        // Snapshot pre-publish AstDB state so an operator-initiated rollback
+        // of this automated publish can restore the true prior values. If the
+        // snapshot call fails, we still publish and record an empty array —
+        // rollback of that record will fail cleanly with no_snapshot_available.
+        let previousKeys: Array<{ family: string; key: string; value: string }> = [];
+        try {
+          const snapResp = await fetch(`${base}/telephony/internal/astdb-read-family`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(secret ? { "x-cdr-secret": secret } : {}) },
+            body: JSON.stringify({ tenantSlug: slug, family: fam, keys: keys.map((k) => k.key) }),
+            signal: AbortSignal.timeout(5_000),
+          });
+          if (snapResp.ok) {
+            const snapData = await snapResp.json().catch(() => null) as { ok?: boolean; snapshot?: Array<{ family: string; key: string; value: string }> } | null;
+            if (snapData?.ok && Array.isArray(snapData.snapshot)) previousKeys = snapData.snapshot;
+          }
+        } catch {
+          previousKeys = [];
+        }
+
         const record: any = await (db as any).ivrPublishRecord.create({
-          data: { tenantId, publishedBy: "system", mode, keysWritten: keys, previousKeys: [], status: "pending", isRollback: false },
+          data: { tenantId, publishedBy: "system", mode, keysWritten: keys, previousKeys, status: "pending", isRollback: false },
         });
 
         try {

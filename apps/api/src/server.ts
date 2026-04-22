@@ -11593,6 +11593,44 @@ async function publishToAstDb(
   }
 }
 
+/**
+ * Read the current AstDB values for a set of tenant-scoped IVR keys via the
+ * telephony service. Returns a snapshot (empty-string for missing keys) that
+ * can be stored as IvrPublishRecord.previousKeys so rollback restores the
+ * true pre-publish state. Does NOT throw on partial failures — callers can
+ * still publish; a partial snapshot just means rollback fidelity is reduced
+ * for the missing slots (which we surface in the publish record).
+ */
+async function snapshotAstDbFamily(
+  tenantSlug: string,
+  family: string,
+  keyNames: string[],
+): Promise<Array<{ family: string; key: string; value: string }>> {
+  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  try {
+    const resp = await fetch(`${base}/telephony/internal/astdb-read-family`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-cdr-secret": secret } : {}),
+      },
+      body: JSON.stringify({ tenantSlug, family, keys: keyNames }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!resp.ok) return keyNames.map((k) => ({ family, key: k, value: "" }));
+    const data = (await resp.json().catch(() => null)) as
+      | { ok?: boolean; snapshot?: Array<{ family: string; key: string; value: string }> }
+      | null;
+    if (!data?.ok || !Array.isArray(data.snapshot)) {
+      return keyNames.map((k) => ({ family, key: k, value: "" }));
+    }
+    return data.snapshot;
+  } catch {
+    return keyNames.map((k) => ({ family, key: k, value: "" }));
+  }
+}
+
 /** Scope-check: ensure the requesting user can act on the given tenantId. */
 function assertIvrTenantAccess(user: JwtUser, tenantId: string): void {
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
@@ -11694,6 +11732,27 @@ app.put("/voice/ivr/schedule", async (req, reply) => {
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
   assertIvrTenantAccess(user, d.tenantId);
+
+  // Tenant-isolation hardening: every referenced profile ID must belong to
+  // the same tenant. Prevents a Tenant A admin from attaching Tenant B's
+  // route profiles to their own schedule (which would be silently accepted
+  // by the upsert and later cause confusing publish output).
+  const referencedIds = [d.defaultProfileId, d.afterHoursProfileId, d.holidayProfileId]
+    .filter((x): x is string => typeof x === "string" && x.length > 0);
+  if (referencedIds.length > 0) {
+    const profiles = await (db as any).ivrRouteProfile.findMany({
+      where: { id: { in: referencedIds } },
+      select: { id: true, tenantId: true },
+    });
+    if (profiles.length !== referencedIds.length) {
+      return reply.code(400).send({ error: "profile_not_found", detail: "one or more referenced profile IDs do not exist" });
+    }
+    const cross = profiles.find((p: { tenantId: string }) => p.tenantId !== d.tenantId);
+    if (cross) {
+      return reply.code(400).send({ error: "profile_wrong_tenant", detail: "referenced profile belongs to a different tenant" });
+    }
+  }
+
   const schedule = await (db as any).ivrScheduleConfig.upsert({
     where: { tenantId: d.tenantId },
     create: {
@@ -11777,8 +11836,17 @@ app.post("/voice/ivr/override/deactivate", async (req, reply) => {
 });
 
 // ── GET /voice/ivr/preview ────────────────────────────────────────────────────
-// Returns what mode would be active right now (or at an optional timestamp).
-// Does NOT write anything to AstDB.
+// Returns what mode would be active right now (or at an optional timestamp),
+// plus the profile and PBX destination that the custom context would route
+// inbound calls to. Read-only — does NOT write anything to AstDB. Safe to
+// call as often as the UI needs.
+//
+// Response shape (backwards compatible — existing fields preserved):
+//   { mode: "business|afterhours|holiday|override",
+//     at: ISO8601,
+//     activeProfile: { id, name, type, pbxDestination } | null,
+//     override: { isActive, expiresAt, reason } | null,
+//     reason?: "no_schedule_configured" | "no_profile_for_mode" }
 app.get("/voice/ivr/preview", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -11789,14 +11857,43 @@ app.get("/voice/ivr/preview", async (req, reply) => {
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
   if (!tid) return reply.code(400).send({ error: "tenantId required" });
-  const [schedule, override] = await Promise.all([
+  const [schedule, override, profiles] = await Promise.all([
     (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } }),
     (db as any).ivrOverrideState.findUnique({ where: { tenantId: tid } }),
+    (db as any).ivrRouteProfile.findMany({ where: { tenantId: tid, isActive: true } }),
   ]);
-  if (!schedule) return reply.send({ mode: "business", reason: "no_schedule_configured" });
+  if (!schedule) {
+    return reply.send({ mode: "business", reason: "no_schedule_configured", activeProfile: null, override: null, at: new Date().toISOString() });
+  }
   const atTime = q.at ? new Date(q.at) : new Date();
   const mode = computeCurrentMode(schedule, override, atTime);
-  return reply.send({ mode, at: atTime.toISOString() });
+
+  // Map the mode back to the profile that the dialplan's dest_<mode> key
+  // resolves to. Mirrors the selection logic in buildIvrKeys so preview and
+  // the actual published state can never diverge.
+  const modeToType: Record<string, string> = {
+    business:   "business_hours",
+    afterhours: "after_hours",
+    holiday:    "holiday",
+    override:   "manual_override",
+  };
+  let activeProfile: any = (profiles as any[]).find((p) => p.type === modeToType[mode]) ?? null;
+  // Emergency profile substitutes for manual_override if present and override mode is active.
+  if (mode === "override" && !activeProfile) {
+    activeProfile = (profiles as any[]).find((p) => p.type === "emergency") ?? null;
+  }
+
+  return reply.send({
+    mode,
+    at: atTime.toISOString(),
+    activeProfile: activeProfile
+      ? { id: activeProfile.id, name: activeProfile.name, type: activeProfile.type, pbxDestination: activeProfile.pbxDestination }
+      : null,
+    override: override
+      ? { isActive: !!override.isActive, expiresAt: override.expiresAt ?? null, reason: override.reason ?? null }
+      : null,
+    ...(activeProfile ? {} : { reason: "no_profile_for_mode" }),
+  });
 });
 
 // ── GET /voice/ivr/publish-history ────────────────────────────────────────────
@@ -11835,14 +11932,22 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   const slug = await getIvrSlugForTenant(tenantId);
   const keys = buildIvrKeys(slug, mode, profiles, override);
 
+  // Snapshot the current AstDB values BEFORE writing, so rollback can restore
+  // the true pre-publish state. If the snapshot fails (telephony unreachable,
+  // AMI down), we still publish — but record an empty previousKeys so
+  // operators can see rollback fidelity is limited for this publish.
+  const family = ivrFamily(slug);
+  const keyNames = keys.map((k) => k.key);
+  const previousKeys = await snapshotAstDbFamily(slug, family, keyNames);
+
   const record = await (db as any).ivrPublishRecord.create({
-    data: { tenantId, publishedBy: (user as any).id ?? "unknown", mode, keysWritten: keys, previousKeys: [], status: "pending", isRollback: false },
+    data: { tenantId, publishedBy: (user as any).id ?? "unknown", mode, keysWritten: keys, previousKeys, status: "pending", isRollback: false },
   });
 
   try {
     await publishToAstDb(slug, keys);
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
-    app.log.info({ tenantId, slug, mode, keysWritten: keys.length }, "ivr: publish success");
+    app.log.info({ tenantId, slug, mode, keysWritten: keys.length, previousCaptured: previousKeys.length }, "ivr: publish success");
     return reply.send({ ok: true, mode, slug, keysWritten: keys.length, recordId: record.id });
   } catch (err: any) {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
@@ -11852,7 +11957,11 @@ app.post("/voice/ivr/publish", async (req, reply) => {
 });
 
 // ── POST /voice/ivr/rollback/:publishId ──────────────────────────────────────
-// Replays previousKeys from a past publish record to restore prior routing.
+// Restores the AstDB state that existed BEFORE the target publish happened.
+// Uses target.previousKeys (captured via AMI DBGet at publish time). Falls
+// back to target.keysWritten only for legacy records that predate the
+// snapshot feature, where previousKeys is known to be empty — in that case
+// the rollback is labeled "re-apply" and the UI surfaces a warning.
 app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageIvr);
   if (!user) return;
@@ -11861,20 +11970,40 @@ app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
   if (!target) return reply.code(404).send({ error: "publish_record_not_found" });
   assertIvrTenantAccess(user, target.tenantId);
 
-  const prevKeys: Array<{ family: string; key: string; value: string }> = Array.isArray(target.keysWritten) ? target.keysWritten : [];
-  if (prevKeys.length === 0) return reply.code(409).send({ error: "no_previous_keys_to_restore" });
+  const rawPrev: Array<{ family: string; key: string; value: string }> =
+    Array.isArray(target.previousKeys) ? target.previousKeys : [];
+  // Only non-empty snapshots (any key with a real value) can restore prior
+  // state. Legacy records written before snapshot support had previousKeys=[]
+  // — we block those to avoid the confusing "rollback re-applies the same
+  // snapshot" behavior they used to exhibit.
+  const hasRealSnapshot = rawPrev.length > 0;
+  if (!hasRealSnapshot) {
+    return reply.code(409).send({
+      error: "no_snapshot_available",
+      detail: "This publish record predates pre-publish snapshot capture. Rollback cannot safely restore prior state.",
+    });
+  }
 
   const slug = await getIvrSlugForTenant(target.tenantId);
+
+  // Before rolling back, snapshot the CURRENT state so a subsequent rollback
+  // of the rollback is also possible (i.e. fully reversible operations).
+  const family = ivrFamily(slug);
+  const keyNames = rawPrev.map((k) => k.key);
+  const currentSnapshot = await snapshotAstDbFamily(slug, family, keyNames);
+
   const record = await (db as any).ivrPublishRecord.create({
     data: {
       tenantId: target.tenantId, publishedBy: (user as any).id ?? "unknown",
-      mode: target.mode, keysWritten: prevKeys, previousKeys: [], status: "pending", isRollback: true,
+      mode: target.mode, keysWritten: rawPrev, previousKeys: currentSnapshot,
+      status: "pending", isRollback: true,
     },
   });
 
   try {
-    await publishToAstDb(slug, prevKeys);
+    await publishToAstDb(slug, rawPrev);
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    app.log.info({ tenantId: target.tenantId, slug, rolledBackTo: publishId, keysRestored: rawPrev.length }, "ivr: rollback success");
     return reply.send({ ok: true, rolledBackTo: publishId, recordId: record.id });
   } catch (err: any) {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });

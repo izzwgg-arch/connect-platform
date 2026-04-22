@@ -303,6 +303,107 @@ export function registerTelephonyRoutes(
     },
   );
 
+  // ── IVR AstDB publish ─────────────────────────────────────────────────────
+  // Writes tenant-scoped runtime routing keys to Asterisk AstDB via AMI DBPut.
+  // Called by the Connect API (and worker) on every IVR publish or rollback.
+  // Auth: x-cdr-secret (same shared secret as CDR ingest).
+  // Body: { tenantSlug: string, keys: Array<{ family: string, key: string, value: string }> }
+  router.post("/telephony/internal/ivr-publish", (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { tenantSlug, keys } = req.body as { tenantSlug?: unknown; keys?: unknown };
+    if (typeof tenantSlug !== "string" || !/^[a-z0-9_]+$/.test(tenantSlug)) {
+      res.status(400).json({ error: "invalid_slug" });
+      return;
+    }
+    if (!Array.isArray(keys) || keys.length === 0) {
+      res.status(400).json({ error: "keys must be a non-empty array" });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+    let written = 0;
+    for (const entry of keys) {
+      if (
+        typeof entry !== "object" || entry === null ||
+        typeof (entry as any).family !== "string" ||
+        typeof (entry as any).key !== "string" ||
+        typeof (entry as any).value !== "string"
+      ) continue;
+      const { family, key, value } = entry as { family: string; key: string; value: string };
+      // Extra safety: ensure family is scoped to this tenant
+      if (!family.startsWith(`connect/t_${tenantSlug}`)) {
+        res.status(400).json({ error: "family_scope_mismatch", family });
+        return;
+      }
+      telephony.ami.sendAction("DBPut", { Family: family, Key: key, Val: value });
+      written++;
+    }
+    res.json({ ok: true, written });
+  });
+
+  // ── IVR AstDB snapshot read ───────────────────────────────────────────────
+  // Reads tenant-scoped AstDB keys so the Connect API can snapshot the
+  // pre-publish state and enable real rollback. Uses AMI `DBGet` per key
+  // (cheap, in-memory in Asterisk). Missing keys are returned with value="".
+  //
+  // Auth: x-cdr-secret (same shared secret as CDR ingest / ivr-publish).
+  // Body: { tenantSlug: string, family: string, keys: string[] }
+  // Resp: { ok: true, snapshot: Array<{ family, key, value }> }
+  //
+  // Tenant isolation: the `family` must start with `connect/t_${tenantSlug}`,
+  // identical to the ivr-publish guard. No cross-tenant reads are possible.
+  router.post("/telephony/internal/astdb-read-family", async (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { tenantSlug, family, keys } = req.body as {
+      tenantSlug?: unknown; family?: unknown; keys?: unknown;
+    };
+    if (typeof tenantSlug !== "string" || !/^[a-z0-9_]+$/.test(tenantSlug)) {
+      res.status(400).json({ error: "invalid_slug" });
+      return;
+    }
+    if (typeof family !== "string" || !family.startsWith(`connect/t_${tenantSlug}`)) {
+      res.status(400).json({ error: "family_scope_mismatch" });
+      return;
+    }
+    if (!Array.isArray(keys) || keys.length === 0 || keys.length > 32) {
+      res.status(400).json({ error: "keys must be a 1..32 array" });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+    const snapshot: Array<{ family: string; key: string; value: string }> = [];
+    for (const k of keys) {
+      if (typeof k !== "string" || k.length === 0 || k.length > 64) {
+        res.status(400).json({ error: "invalid_key", key: k });
+        return;
+      }
+      try {
+        const result = await telephony.ami.dbGet(family, k, 2_000);
+        // Missing keys (result.ok === false) are snapshotted as "" so that
+        // rollback restores them to "no destination" — the custom context
+        // interprets an empty value as "fall through to default-fallback-ivr",
+        // which is the safe, correct pre-existing behavior.
+        snapshot.push({ family, key: k, value: result.ok ? result.value : "" });
+      } catch {
+        // Timeout or disconnect: record the key as absent rather than failing
+        // the whole snapshot. The caller logs partial snapshots via the
+        // IvrPublishRecord so an operator can see what happened.
+        snapshot.push({ family, key: k, value: "" });
+      }
+    }
+    res.json({ ok: true, snapshot });
+  });
+
   router.post(
     "/telephony/calls/:channelId/transfer",
     async (req: Request, res: Response) => {
