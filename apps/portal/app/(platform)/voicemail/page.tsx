@@ -7,7 +7,8 @@ import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useSipPhone } from "../../../hooks/useSipPhone";
-import { apiDelete, apiGet } from "../../../services/apiClient";
+import { apiDelete, apiGet, apiPatch } from "../../../services/apiClient";
+import { useAppContext } from "../../../hooks/useAppContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,21 +41,50 @@ function fmtDate(iso: string): string {
 
 // ── Audio Player ──────────────────────────────────────────────────────────────
 
+// Mirrors apiClient.baseUrl() — when NEXT_PUBLIC_API_URL is unset (prod), the
+// portal goes through nginx at `<origin>/api`. The <audio> element loads via the
+// browser (not fetch()), so we MUST include the /api prefix here or nginx 404s.
+function mediaBaseUrl(): string {
+  const baked = process.env.NEXT_PUBLIC_API_URL;
+  const fromEnv = baked != null && String(baked).trim() !== "" ? String(baked).trim().replace(/\/$/, "") : "";
+  if (fromEnv) return fromEnv;
+  if (typeof window !== "undefined") return `${window.location.origin.replace(/\/$/, "")}/api`;
+  return "";
+}
+
 function AudioPlayer({ vm }: { vm: Voicemail }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+  const apiBase = mediaBaseUrl();
   const token = typeof window !== "undefined"
-    ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || "") : "";
+    ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : "";
 
   const src = vm.streamUrl ??
     `${apiBase}/voice/voicemail/${vm.id}/stream?token=${encodeURIComponent(token)}`;
 
   function getOrCreateAudio() {
     if (!audioRef.current) {
-      const audio = new Audio(src);
+      const audio = new Audio();
+      audio.preload = "auto";
+      audio.src = src;
+      audio.addEventListener("loadstart", () => { setLoading(true); setError(null); });
+      audio.addEventListener("canplay",   () => setLoading(false));
+      audio.addEventListener("playing",   () => { setPlaying(true); setLoading(false); });
+      audio.addEventListener("pause",     () => setPlaying(false));
+      audio.addEventListener("waiting",   () => setLoading(true));
+      audio.addEventListener("stalled",   () => setLoading(true));
+      audio.addEventListener("error", () => {
+        const err = audio.error;
+        const codeName = err ? ({ 1: "aborted", 2: "network", 3: "decode", 4: "src_not_supported" } as Record<number, string>)[err.code] ?? `code_${err.code}` : "unknown";
+        console.error("[voicemail] audio error", { src, code: err?.code, codeName, message: err?.message });
+        setError(codeName);
+        setLoading(false);
+        setPlaying(false);
+      });
       audio.addEventListener("timeupdate", () => {
         setCurrentSec(Math.floor(audio.currentTime));
         setProgress(vm.durationSec > 0 ? (audio.currentTime / vm.durationSec) * 100 : 0);
@@ -70,12 +100,19 @@ function AudioPlayer({ vm }: { vm: Voicemail }) {
 
   function togglePlay() {
     const audio = getOrCreateAudio();
+    if (!playing) setLoading(true);
     if (playing) {
       audio.pause();
-      setPlaying(false);
     } else {
-      audio.play().catch(() => setPlaying(false));
-      setPlaying(true);
+      const p = audio.play();
+      if (p && typeof p.catch === "function") {
+        p.catch((err) => {
+          console.error("[voicemail] play() rejected", { src, name: err?.name, message: err?.message });
+          setError(err?.name === "NotAllowedError" ? "blocked" : err?.name === "NotSupportedError" ? "src_not_supported" : "play_failed");
+          setLoading(false);
+          setPlaying(false);
+        });
+      }
     }
   }
 
@@ -93,7 +130,7 @@ function AudioPlayer({ vm }: { vm: Voicemail }) {
         style={{
           width: 34, height: 34,
           borderRadius: "50%",
-          background: playing ? "var(--danger)" : "var(--accent)",
+          background: error ? "var(--danger)" : playing ? "var(--danger)" : "var(--accent)",
           border: "none",
           color: "#fff",
           cursor: "pointer",
@@ -103,9 +140,9 @@ function AudioPlayer({ vm }: { vm: Voicemail }) {
           flexShrink: 0,
           fontSize: 14,
         }}
-        title={playing ? "Pause" : "Play"}
+        title={error ? `Audio error: ${error}` : loading ? "Loading…" : playing ? "Pause" : "Play"}
       >
-        {playing ? "■" : "▶"}
+        {loading ? "…" : error ? "!" : playing ? "■" : "▶"}
       </button>
 
       {/* Progress bar */}
@@ -165,9 +202,9 @@ function VoicemailRow({
   onSelect: (vm: Voicemail) => void;
   deleting: boolean;
 }) {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+  const apiBase = mediaBaseUrl();
   const token = typeof window !== "undefined"
-    ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || "") : "";
+    ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : "";
 
   return (
     <div
@@ -314,11 +351,21 @@ export default function VoicemailPage() {
   const [folder, setFolder] = useState<FolderKey>("inbox");
   const [selected, setSelected] = useState<Voicemail | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [extensionFilter, setExtensionFilter] = useState("");
   const phone = useSipPhone();
+  const { adminScope, tenantId: contextTenantId } = useAppContext();
 
-  const state = useAsyncResource<{ voicemails: Voicemail[] }>(
-    () => apiGet(`/voice/voicemail?folder=${folder}`),
-    [reloadKey, folder]
+  function buildQuery() {
+    const params = new URLSearchParams({ folder });
+    if (contextTenantId) params.set("tenantId", contextTenantId);
+    else if (adminScope === "GLOBAL") params.set("tenantId", "global");
+    if (extensionFilter.trim()) params.set("extension", extensionFilter.trim());
+    return params.toString();
+  }
+
+  const state = useAsyncResource<{ voicemails: Voicemail[]; total: number }>(
+    () => apiGet(`/voice/voicemail?${buildQuery()}`),
+    [reloadKey, folder, contextTenantId, extensionFilter]
   );
 
   const voicemails = state.status === "success" ? (state.data.voicemails ?? []) : [];
@@ -412,13 +459,20 @@ export default function VoicemailPage() {
           overflowY: "auto",
           borderRight: selected ? "1px solid var(--border)" : undefined,
         }}>
-          {/* Search */}
-          <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)" }}>
+          {/* Search / filter bar */}
+          <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", display: "flex", gap: 8 }}>
             <input
               className="input"
-              style={{ fontSize: 13 }}
-              placeholder="Search voicemails…"
+              style={{ fontSize: 13, flex: 1 }}
+              placeholder="Filter by extension…"
+              value={extensionFilter}
+              onChange={(e) => setExtensionFilter(e.target.value)}
             />
+            {extensionFilter ? (
+              <button className="btn ghost" style={{ fontSize: 12 }} onClick={() => setExtensionFilter("")}>
+                Clear
+              </button>
+            ) : null}
           </div>
 
           {state.status === "loading" ? <LoadingSkeleton rows={5} /> : null}
