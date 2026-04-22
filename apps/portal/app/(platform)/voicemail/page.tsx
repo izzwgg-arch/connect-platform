@@ -15,11 +15,14 @@ import { useAppContext } from "../../../hooks/useAppContext";
 interface Voicemail {
   id: string;
   callerId: string;
-  callerName?: string;
+  callerName?: string | null;
   receivedAt: string;
   durationSec: number;
   folder: "inbox" | "old" | "urgent";
   listened: boolean;
+  extension: string;
+  tenantId: string | null;
+  tenantName?: string | null;
   transcription?: string;
   streamUrl?: string;
 }
@@ -194,6 +197,7 @@ function VoicemailRow({
   selected,
   onSelect,
   deleting,
+  showTenant,
 }: {
   vm: Voicemail;
   onDelete: (id: string) => void;
@@ -201,6 +205,7 @@ function VoicemailRow({
   selected: boolean;
   onSelect: (vm: Voicemail) => void;
   deleting: boolean;
+  showTenant: boolean;
 }) {
   const apiBase = mediaBaseUrl();
   const token = typeof window !== "undefined"
@@ -243,11 +248,45 @@ function VoicemailRow({
 
       {/* Info */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: !vm.listened ? 700 : 500, fontSize: 14 }}>
-          {vm.callerName ?? vm.callerId}
+        <div style={{ fontWeight: !vm.listened ? 700 : 500, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>
+            {vm.callerName || vm.callerId}
+          </span>
+          {/* Destination extension — always shown so it's clear which mailbox the VM is for */}
+          <span
+            title={`Left for extension ${vm.extension}`}
+            style={{
+              fontSize: 11, fontWeight: 600,
+              padding: "1px 7px", borderRadius: 10,
+              background: "rgba(34,168,255,0.12)",
+              color: "var(--accent)",
+              border: "1px solid rgba(34,168,255,0.25)",
+            }}
+          >
+            → ext {vm.extension}
+          </span>
+          {/* Tenant badge — only rendered when we're in the cross-tenant/global view */}
+          {showTenant && vm.tenantName ? (
+            <span
+              title={`Tenant: ${vm.tenantName}`}
+              style={{
+                fontSize: 11, fontWeight: 500,
+                padding: "1px 7px", borderRadius: 10,
+                background: "var(--panel-2)",
+                color: "var(--text-dim)",
+                border: "1px solid var(--border)",
+                maxWidth: 180,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {vm.tenantName}
+            </span>
+          ) : null}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
-          {vm.callerName ? vm.callerId + " · " : ""}{fmtDate(vm.receivedAt)}
+          {vm.callerName ? `${vm.callerId} · ` : ""}{fmtDate(vm.receivedAt)}
         </div>
       </div>
 
@@ -303,7 +342,7 @@ function VoicemailRow({
 
 // ── Transcription Panel ───────────────────────────────────────────────────────
 
-function TranscriptionPanel({ vm, onClose }: { vm: Voicemail; onClose: () => void }) {
+function TranscriptionPanel({ vm, onClose, showTenant }: { vm: Voicemail; onClose: () => void; showTenant: boolean }) {
   return (
     <div style={{
       padding: "20px",
@@ -316,7 +355,9 @@ function TranscriptionPanel({ vm, onClose }: { vm: Voicemail; onClose: () => voi
         <button className="icon-btn" onClick={onClose} style={{ fontSize: 18 }}>✕</button>
       </div>
       <div style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", flexDirection: "column", gap: 4 }}>
-        <div><strong>From:</strong> {vm.callerName ?? vm.callerId}</div>
+        <div><strong>From:</strong> {vm.callerName ? `${vm.callerName} (${vm.callerId})` : vm.callerId}</div>
+        <div><strong>Left for:</strong> extension {vm.extension}</div>
+        {showTenant && vm.tenantName ? <div><strong>Tenant:</strong> {vm.tenantName}</div> : null}
         <div><strong>Received:</strong> {fmtDate(vm.receivedAt)}</div>
         <div><strong>Duration:</strong> {fmtDuration(vm.durationSec)}</div>
       </div>
@@ -370,6 +411,10 @@ export default function VoicemailPage() {
 
   const voicemails = state.status === "success" ? (state.data.voicemails ?? []) : [];
   const unreadCount = voicemails.filter((v) => !v.listened).length;
+  // Show the tenant badge only in the cross-tenant view (super-admin "Main" /
+  // global scope). When a specific tenant is selected every row is that tenant,
+  // so the badge would just be noise.
+  const showTenant = !contextTenantId && adminScope === "GLOBAL";
 
   async function handleDelete(id: string) {
     setDeleteId(id);
@@ -493,6 +538,7 @@ export default function VoicemailPage() {
                 selected={selected?.id === vm.id}
                 onSelect={setSelected}
                 deleting={deleteId === vm.id}
+                showTenant={showTenant}
               />
             ))
           ) : null}
@@ -501,7 +547,7 @@ export default function VoicemailPage() {
         {/* Detail / transcription panel */}
         {selected ? (
           <div style={{ flex: 1, overflowY: "auto", background: "var(--panel)" }}>
-            <TranscriptionPanel vm={selected} onClose={() => setSelected(null)} />
+            <TranscriptionPanel vm={selected} onClose={() => setSelected(null)} showTenant={showTenant} />
           </div>
         ) : null}
       </div>

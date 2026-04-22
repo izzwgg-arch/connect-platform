@@ -1188,8 +1188,14 @@ function vmExtractCallerNumber(callerid: string): string {
 }
 
 function vmExtractCallerName(callerid: string): string {
-  const match = callerid.match(/^"([^"]+)"/);
-  return match ? match[1]! : "";
+  // VitalPBX sends clid like 'LANDAU TOBY<8457828230>' (no quotes), or
+  // '"LANDAU TOBY" <8457828230>' (RFC-3261 style). Grab everything before the
+  // first '<' as the CNAM, unless it's just a phone number.
+  const idx = callerid.indexOf("<");
+  if (idx <= 0) return "";
+  const name = callerid.slice(0, idx).replace(/^\s*"?/, "").replace(/"?\s*$/, "").trim();
+  if (!name || /^[\d\s+\-().]+$/.test(name)) return "";
+  return name;
 }
 
 function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
@@ -1298,6 +1304,10 @@ async function runVoicemailSyncCycle(): Promise<void> {
                   // Only overwrite recfile when PBX actually returned one — avoids
                   // nulling out a good value if a future response trims the field.
                   ...(recfile ? { pbxRecfile: recfile } : {}),
+                  // Re-apply caller fields every cycle so any CNAM-extraction fix
+                  // (e.g. unquoted clid support) backfills existing rows automatically.
+                  callerNumber,
+                  callerName,
                   listened,
                 },
               });

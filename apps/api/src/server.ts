@@ -10839,8 +10839,17 @@ function vmExtractCallerNumber(callerid: string): string {
   return raw.replace(/\D/g, "");
 }
 function vmExtractCallerName(callerid: string): string {
-  const m = callerid.match(/^"([^"]+)"/);
-  return m ? m[1]! : "";
+  // VitalPBX sends clid in several shapes:
+  //   '"LANDAU TOBY" <8457828230>' — quoted RFC-3261 style
+  //   '"LANDAU TOBY"<8457828230>'  — quoted, no space
+  //   'LANDAU TOBY<8457828230>'    — unquoted (current VitalPBX)
+  //   '<8457828230>' or '8457828230' — no CNAM
+  // Everything before the first '<' that isn't just digits is the name.
+  const idx = callerid.indexOf("<");
+  if (idx <= 0) return "";
+  const name = callerid.slice(0, idx).replace(/^\s*"?/, "").replace(/"?\s*$/, "").trim();
+  if (!name || /^[\d\s+\-().]+$/.test(name)) return "";
+  return name;
 }
 function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
   const f = folder.toLowerCase();
@@ -10955,18 +10964,53 @@ app.get("/voice/voicemail", async (req, reply) => {
     db.voicemail.count({ where }),
   ]);
 
+  // Resolve tenant display names in one batched lookup. Voicemail.tenantId may
+  // be either a Connect cuid or a 'vpbx:<slug>' placeholder for unresolved PBX
+  // tenants — look up both shapes so the list shows a human-readable name.
+  const tenantCuids = new Set<string>();
+  const vpbxSlugs   = new Set<string>();
+  for (const vm of voicemails) {
+    if (!vm.tenantId) continue;
+    if (vm.tenantId.startsWith("vpbx:")) vpbxSlugs.add(vm.tenantId.slice(5));
+    else tenantCuids.add(vm.tenantId);
+  }
+  const [tenantRows, dirRows] = await Promise.all([
+    tenantCuids.size
+      ? db.tenant.findMany({ where: { id: { in: Array.from(tenantCuids) } }, select: { id: true, name: true } })
+      : Promise.resolve([] as { id: string; name: string }[]),
+    vpbxSlugs.size
+      ? db.pbxTenantDirectory.findMany({
+          where:  { tenantSlug: { in: Array.from(vpbxSlugs) } },
+          select: { tenantSlug: true, displayName: true },
+        })
+      : Promise.resolve([] as { tenantSlug: string; displayName: string | null }[]),
+  ]);
+  const tenantNameByCuid = new Map(tenantRows.map((t) => [t.id, t.name]));
+  const tenantNameBySlug = new Map(dirRows.map((d) => [d.tenantSlug, d.displayName ?? d.tenantSlug]));
+
   return reply.send({
-    voicemails: voicemails.map((vm) => ({
-      id:          vm.id,
-      callerId:    vm.callerNumber ?? "Unknown",
-      callerName:  vm.callerName   ?? null,
-      receivedAt:  vm.receivedAt.toISOString(),
-      durationSec: vm.durationSec,
-      folder:      vm.folder as "inbox" | "old" | "urgent",
-      listened:    vm.listened,
-      extension:   vm.extension,
-      tenantId:    vm.tenantId,
-    })),
+    voicemails: voicemails.map((vm) => {
+      let tenantName: string | null = null;
+      if (vm.tenantId) {
+        if (vm.tenantId.startsWith("vpbx:")) {
+          tenantName = tenantNameBySlug.get(vm.tenantId.slice(5)) ?? null;
+        } else {
+          tenantName = tenantNameByCuid.get(vm.tenantId) ?? null;
+        }
+      }
+      return {
+        id:          vm.id,
+        callerId:    vm.callerNumber ?? "Unknown",
+        callerName:  vm.callerName   ?? null,
+        receivedAt:  vm.receivedAt.toISOString(),
+        durationSec: vm.durationSec,
+        folder:      vm.folder as "inbox" | "old" | "urgent",
+        listened:    vm.listened,
+        extension:   vm.extension,
+        tenantId:    vm.tenantId,
+        tenantName,
+      };
+    }),
     total,
     page: q.page,
   });
@@ -11104,7 +11148,7 @@ async function streamVoicemailAudio(
   // which many browsers refuse to play in <audio>. Derive the correct mime from
   // the recfile extension (.wav / .mp3 / .ogg / .gsm / .wav49) so the browser treats
   // the response as audio.
-  const recfileLower = recfile.toLowerCase();
+  const recfileLower = (recfile ?? "").toLowerCase();
   const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
   const mimeByExt: Record<string, string> = {
     wav:   "audio/wav",
@@ -12509,6 +12553,8 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           pbxFolder: rawFolder,
           pbxMsgNum,
           ...(recfile ? { pbxRecfile: recfile } : {}),
+          callerNumber,
+          callerName: vmExtractCallerName(rawCallerid) || null,
           listened: folder !== "inbox",
         },
       });
