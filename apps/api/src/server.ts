@@ -11100,19 +11100,42 @@ async function streamVoicemailAudio(
     return;
   }
 
-  const contentType = pbxResp.headers.get("content-type") || "audio/wav";
+  // VitalPBX serves voicemail audio with Content-Type: application/octet-stream,
+  // which many browsers refuse to play in <audio>. Derive the correct mime from
+  // the recfile extension (.wav / .mp3 / .ogg / .gsm / .wav49) so the browser treats
+  // the response as audio.
+  const recfileLower = recfile.toLowerCase();
+  const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
+  const mimeByExt: Record<string, string> = {
+    wav:   "audio/wav",
+    wav49: "audio/wav",
+    mp3:   "audio/mpeg",
+    ogg:   "audio/ogg",
+    opus:  "audio/ogg",
+    m4a:   "audio/mp4",
+    aac:   "audio/aac",
+    gsm:   "audio/x-gsm",
+  };
+  const contentType = mimeByExt[fileExt] ?? "audio/wav";
+  const buf = Buffer.from(await pbxResp.arrayBuffer());
+
   reply.header("Content-Type", contentType);
+  reply.header("Content-Length", String(buf.byteLength));
+  reply.header("Accept-Ranges", "bytes");
   reply.header("Cache-Control", "private, max-age=3600");
   if (asAttachment) {
-    const ext = contentType.includes("mpeg") ? "mp3" : contentType.includes("ogg") ? "ogg" : "wav";
-    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${ext}"`);
+    const downloadExt = contentType.includes("mpeg") ? "mp3"
+      : contentType.includes("ogg") ? "ogg"
+      : contentType.includes("mp4") ? "m4a"
+      : "wav";
+    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${downloadExt}"`);
   }
 
   if (!vm.readAt) {
     await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
   }
 
-  reply.send(Buffer.from(await pbxResp.arrayBuffer()));
+  reply.send(buf);
 }
 
 // ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
@@ -11129,9 +11152,13 @@ app.get("/voice/voicemail/:id/stream", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
+  app.log.info(
+    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder },
+    "voicemail: stream request",
+  );
   try { return await streamVoicemailAudio(vm, reply, false); }
   catch (err: any) {
-    app.log.warn({ id, err: err?.message }, "voicemail: stream failed");
+    app.log.warn({ id, err: err?.message, stack: err?.stack }, "voicemail: stream failed");
     return reply.code(503).send({ error: "audio_unavailable" });
   }
 });
