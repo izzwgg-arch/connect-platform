@@ -11721,6 +11721,106 @@ async function getIvrSlugForTenant(tenantId: string): Promise<string> {
   return toIvrSlug(tenant?.name ?? tenantId);
 }
 
+/** Derive the base filename from a canonical prompt ref.
+ *  `custom/acme_normal` → `acme_normal`; `trimpro-main` → `trimpro-main`. */
+function ivrPromptBaseName(ref: string): string {
+  const trimmed = String(ref || "").trim();
+  const slash = trimmed.lastIndexOf("/");
+  const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  return base.toLowerCase();
+}
+
+/** Match a prompt filename base to a tenant slug by leading-segment prefix.
+ *  `acme_normal` + slug `acme` → match; `acme2_normal` + slug `acme` → no match.
+ *  Returns the matched slug or null. Longest-match wins on ambiguity. */
+function ivrMatchPromptToSlug(base: string, slugs: string[]): string | null {
+  const lowered = base.toLowerCase();
+  const sorted = [...slugs].filter((s) => s && s.length > 0).sort((a, b) => b.length - a.length);
+  for (const slug of sorted) {
+    if (lowered === slug) return slug;
+    // Accept "<slug>_..." and "<slug>-..." as tenant-scoped.
+    if (lowered.startsWith(slug + "_") || lowered.startsWith(slug + "-")) return slug;
+  }
+  return null;
+}
+
+/** Infer a prompt category from its filename base. Best-effort — the UI is
+ *  authoritative and admins can re-categorise any row. */
+function ivrInferPromptCategory(base: string): string {
+  const b = base.toLowerCase();
+  if (/(greet|main|normal|welcome|business)/.test(b)) return "greeting";
+  if (/(invalid|wrong|bad)/.test(b)) return "invalid";
+  if (/(timeout|no[-_]?input|nodigit)/.test(b)) return "timeout";
+  if (/(closed|after[-_]?hours|holiday|emergency)/.test(b)) return "greeting";
+  return "general";
+}
+
+/** Tenant-safe prompt-ref guard for route profiles.
+ *  Rules:
+ *   - null/empty → allowed (dialplan uses safe default).
+ *   - Format must pass IVR_PROMPT_REF_REGEX.
+ *   - If the ref exists in TenantPbxPrompt and is assigned to a DIFFERENT
+ *     tenant → reject (cross-tenant prompt selection is never allowed).
+ *   - If the ref doesn't exist in the catalog → allowed (legacy / manual
+ *     entry) so we don't break pre-existing profiles when the catalog is
+ *     empty. The UI surfaces this as "legacy — not in catalog".
+ *  Returns null on OK, or a short error string. */
+async function ivrValidatePromptRefForTenant(
+  ref: string | null | undefined,
+  targetTenantId: string,
+): Promise<string | null> {
+  const fmt = ivrValidatePromptRef(ref);
+  if (fmt) return fmt;
+  if (ref == null || ref === "") return null;
+  try {
+    const row = await (db as any).tenantPbxPrompt.findUnique({
+      where: { promptRef: ref },
+      select: { tenantId: true, isActive: true },
+    });
+    if (!row) return null; // legacy / not-yet-synced → soft-allow
+    // Unassigned catalog row (tenantId=null) acts like a shared library.
+    if (row.tenantId && row.tenantId !== targetTenantId) {
+      return "prompt ref is registered to a different tenant";
+    }
+    return null;
+  } catch {
+    return null; // DB hiccup → don't block the write over catalog lookup
+  }
+}
+
+/** Normalise a user-supplied/PBX-supplied prompt list into canonical refs.
+ *  - Strips `.wav`/`.gsm`/`.ulaw`/`.sln*`/`.g722`/`.g729` extensions
+ *  - Collapses whitespace, drops empties
+ *  - Prepends `custom/` when the caller passed a bare basename
+ *  - Rejects anything that doesn't pass IVR_PROMPT_REF_REGEX after normalisation
+ *  Returns `{ ok, rejected }` so the caller can surface bad inputs. */
+function ivrNormalisePromptRefs(input: string[]): {
+  ok: Array<{ promptRef: string; fileBaseName: string }>;
+  rejected: Array<{ raw: string; reason: string }>;
+} {
+  const ok: Array<{ promptRef: string; fileBaseName: string }> = [];
+  const rejected: Array<{ raw: string; reason: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of input || []) {
+    if (typeof raw !== "string") { rejected.push({ raw: String(raw), reason: "not_a_string" }); continue; }
+    let ref = raw.trim();
+    if (!ref) continue;
+    // Strip common audio extensions.
+    ref = ref.replace(/\.(wav|gsm|ulaw|alaw|sln\d*|g722|g729)$/i, "");
+    // Bare basename → assume custom/ namespace (matches VitalPBX System Recordings).
+    if (!ref.includes("/")) ref = `custom/${ref}`;
+    if (!IVR_PROMPT_REF_REGEX.test(ref)) {
+      rejected.push({ raw, reason: "bad_format" });
+      continue;
+    }
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const base = ivrPromptBaseName(ref);
+    ok.push({ promptRef: ref, fileBaseName: base });
+  }
+  return { ok, rejected };
+}
+
 /** Call the telephony service to write keys to AstDB. */
 async function publishToAstDb(
   tenantSlug: string,
@@ -11824,9 +11924,10 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   const d = body.data;
   assertIvrTenantAccess(user, d.tenantId);
   // Prompt ref format guard — prevents path-traversal / shell metachars leaking
-  // into `Playback(${GREETING})` where VitalPBX runs unescaped.
+  // into `Playback(${GREETING})` where VitalPBX runs unescaped. Also blocks
+  // cross-tenant prompt selection when the catalog has a conflicting mapping.
   for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
-    const err = ivrValidatePromptRef(ref ?? null);
+    const err = await ivrValidatePromptRefForTenant(ref ?? null, d.tenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
   const profile = await (db as any).ivrRouteProfile.create({
@@ -11894,10 +11995,12 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
   }
 
   // Only validate refs that were actually supplied — optional fields stay
-  // untouched when absent (Prisma partial update semantics).
+  // untouched when absent (Prisma partial update semantics). Tenant-scoped
+  // catalog check blocks cross-tenant prompt refs when the catalog has an
+  // assigned row for the ref.
   for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
     if (ref === undefined) continue;
-    const err = ivrValidatePromptRef(ref);
+    const err = await ivrValidatePromptRefForTenant(ref, existing.tenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
   const updated = await (db as any).ivrRouteProfile.update({ where: { id }, data: d });
@@ -11917,6 +12020,284 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
 // No writes to AstDB happen here — publishing is still explicit via
 // POST /voice/ivr/publish. The dialplan keeps reading whatever was last
 // published until the next publish/rollback.
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IVR PROMPT CATALOG — tenant-filtered recording dropdowns
+// Reads go to Connect DB only (TenantPbxPrompt). Writes come from:
+//   - super-admin manual paste (UI or POST /voice/ivr/prompts/sync)
+//   - optional PBX-host cron POSTing the current sounds inventory
+// The PBX is NEVER queried at request time to populate these dropdowns.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PROMPT_CATEGORIES = ["greeting", "invalid", "timeout", "general", "unknown"] as const;
+
+// ── GET /voice/ivr/prompts ────────────────────────────────────────────────────
+// Returns the tenant-scoped prompt catalog for use in the IVR profile
+// dropdowns. Tenant admins are ALWAYS scoped to their own tenant regardless of
+// query params. Super-admins may override tenantId via ?tenantId=... or fetch
+// the full catalog with ?tenantId=__all__.
+app.get("/voice/ivr/prompts", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({
+    tenantId:  z.string().optional(),
+    category:  z.string().optional(),
+    includeInactive: z.string().optional(), // "1" to include inactive
+  }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+
+  // Tenant scoping: non-super-admins are pinned to their own tenantId.
+  let where: Record<string, unknown> = {};
+  if (isSuperAdmin) {
+    if (q.tenantId === "__all__") {
+      // full catalog (incl. unassigned) — super admin only
+    } else if (q.tenantId) {
+      where.tenantId = q.tenantId;
+    } else if (user.tenantId) {
+      where.tenantId = user.tenantId;
+    }
+  } else {
+    if (!user.tenantId) return reply.code(400).send({ error: "tenantId required" });
+    where.tenantId = user.tenantId;
+  }
+  if (q.category && (PROMPT_CATEGORIES as readonly string[]).includes(q.category)) where.category = q.category;
+  if (q.includeInactive !== "1") where.isActive = true;
+
+  const rows = await (db as any).tenantPbxPrompt.findMany({
+    where,
+    orderBy: [{ category: "asc" }, { displayName: "asc" }, { promptRef: "asc" }],
+    take: 1_000,
+  });
+  const prompts = rows.map((r: any) => ({
+    id: r.id,
+    tenantId: r.tenantId,
+    tenantSlug: r.tenantSlug,
+    promptRef: r.promptRef,
+    displayName: r.displayName,
+    category: r.category,
+    source: r.source,
+    isActive: r.isActive,
+    updatedAt: r.updatedAt,
+  }));
+  return reply.send({ prompts });
+});
+
+// ── POST /voice/ivr/prompts ───────────────────────────────────────────────────
+// Create a single prompt row. Super-admin only — used for "add manual entry"
+// from the UI. Tenant admins can't fabricate entries because we won't trust a
+// fake catalog to bypass cross-tenant validation.
+app.post("/voice/ivr/prompts", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  if (!user) return;
+  const body = z.object({
+    tenantId:    z.string().nullable().optional(),
+    promptRef:   z.string().min(1).max(160),
+    displayName: z.string().min(1).max(120).optional(),
+    category:    z.enum(PROMPT_CATEGORIES as unknown as [string, ...string[]]).optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+
+  const norm = ivrNormalisePromptRefs([d.promptRef]);
+  if (norm.ok.length === 0) return reply.code(400).send({ error: "invalid_prompt_ref", rejected: norm.rejected });
+  const { promptRef, fileBaseName } = norm.ok[0];
+
+  // Tenant scope: super-admin sets tenantId explicitly; everyone else is pinned.
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tenantId = isSuperAdmin ? (d.tenantId ?? null) : user.tenantId ?? null;
+  if (!isSuperAdmin && !tenantId) return reply.code(400).send({ error: "tenantId required" });
+
+  let tenantSlug: string | null = null;
+  if (tenantId) {
+    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+    tenantSlug = tenant ? toIvrSlug(tenant.name) : null;
+  }
+
+  const row = await (db as any).tenantPbxPrompt.upsert({
+    where:  { promptRef },
+    update: {
+      tenantId, tenantSlug,
+      displayName: d.displayName ?? fileBaseName,
+      category: d.category ?? ivrInferPromptCategory(fileBaseName),
+      source: "manual",
+      isActive: true,
+      lastSeenAt: new Date(),
+    },
+    create: {
+      tenantId, tenantSlug,
+      promptRef, fileBaseName, relativePath: promptRef,
+      displayName: d.displayName ?? fileBaseName,
+      category: d.category ?? ivrInferPromptCategory(fileBaseName),
+      source: "manual",
+    },
+  });
+  return reply.code(201).send({ prompt: row });
+});
+
+// ── PATCH /voice/ivr/prompts/:id ──────────────────────────────────────────────
+// Rename/recategorise/deactivate a prompt row. Super-admin can move a prompt
+// between tenants (for fixing mis-assigned rows after a slug rename).
+app.patch("/voice/ivr/prompts/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const body = z.object({
+    displayName: z.string().min(1).max(120).optional(),
+    category:    z.enum(PROMPT_CATEGORIES as unknown as [string, ...string[]]).optional(),
+    isActive:    z.boolean().optional(),
+    tenantId:    z.string().nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+
+  const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "prompt_not_found" });
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  // Tenant admins can only touch rows for their own tenant and can't change the tenantId.
+  if (!isSuperAdmin) {
+    if (existing.tenantId !== user.tenantId) return reply.code(403).send({ error: "forbidden" });
+    if (body.data.tenantId !== undefined) return reply.code(403).send({ error: "tenant_id_immutable_for_tenant_admin" });
+  }
+
+  let update: any = { ...body.data };
+  if (isSuperAdmin && body.data.tenantId !== undefined) {
+    if (body.data.tenantId) {
+      const tenant = await db.tenant.findUnique({ where: { id: body.data.tenantId }, select: { name: true } });
+      update.tenantSlug = tenant ? toIvrSlug(tenant.name) : null;
+    } else {
+      update.tenantSlug = null;
+    }
+  }
+  const row = await (db as any).tenantPbxPrompt.update({ where: { id }, data: update });
+  return reply.send({ prompt: row });
+});
+
+// ── DELETE /voice/ivr/prompts/:id ─────────────────────────────────────────────
+// Soft-delete (isActive=false) a prompt so it disappears from dropdowns but
+// existing IvrRouteProfile rows referencing it keep working. No physical
+// delete — we never want to lose the audit trail.
+app.delete("/voice/ivr/prompts/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "prompt_not_found" });
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin && existing.tenantId !== user.tenantId) return reply.code(403).send({ error: "forbidden" });
+  await (db as any).tenantPbxPrompt.update({ where: { id }, data: { isActive: false } });
+  return reply.send({ ok: true });
+});
+
+// ── POST /voice/ivr/prompts/sync ──────────────────────────────────────────────
+// Bulk upsert the prompt catalog from a list of refs. Two auth paths:
+//   1. Super-admin JWT (UI "Sync Prompt Library" button).
+//   2. Internal `x-cdr-secret` header (PBX-host cron that POSTs the current
+//      sounds inventory on a schedule chosen by ops — typically daily).
+//
+// CPU safety: this endpoint does NOT contact the PBX. The caller supplies the
+// full list; Connect stores it. The PBX is touched exactly once per sync run
+// by the caller's bounded `ls` command. No request-time PBX reads, ever.
+app.post("/voice/ivr/prompts/sync", async (req, reply) => {
+  // Auth: either x-cdr-secret (internal / cron) or super-admin JWT.
+  const providedSecret = String(req.headers["x-cdr-secret"] || "").trim();
+  const expectedSecret = (process.env.CDR_INGEST_SECRET || "").trim();
+  const secretAuth = Boolean(expectedSecret && providedSecret && providedSecret === expectedSecret);
+  let user: JwtUser | null = null;
+  if (!secretAuth) {
+    user = await requirePermission(req, reply, canManageIvrPrompts);
+    if (!user) return;
+    const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+    if (!isSuperAdmin) return reply.code(403).send({ error: "super_admin_required" });
+  }
+
+  const body = z.object({
+    refs:        z.array(z.string()).max(5_000),
+    source:      z.enum(["pbx_sync", "manual", "import"]).optional(),
+    deactivateMissing: z.boolean().optional(), // default false — missing refs are left active so stale IVR profiles keep working
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const { refs, source = "pbx_sync", deactivateMissing = false } = body.data;
+
+  const norm = ivrNormalisePromptRefs(refs);
+  if (norm.ok.length === 0 && refs.length > 0) {
+    return reply.code(400).send({ error: "no_valid_refs", rejected: norm.rejected.slice(0, 20) });
+  }
+
+  // Build tenant slug → id map once. This is the authoritative source for
+  // tenant assignment; we never trust caller-supplied tenantIds here.
+  const tenants = await db.tenant.findMany({ select: { id: true, name: true } });
+  const slugToTenant = new Map<string, { id: string; slug: string }>();
+  for (const t of tenants) {
+    const slug = toIvrSlug(t.name);
+    if (slug) slugToTenant.set(slug, { id: t.id, slug });
+  }
+  const slugList = Array.from(slugToTenant.keys());
+
+  const now = new Date();
+  let created = 0;
+  let updated = 0;
+  let unassigned = 0;
+  const seenRefs: string[] = [];
+
+  for (const { promptRef, fileBaseName } of norm.ok) {
+    const matchedSlug = ivrMatchPromptToSlug(fileBaseName, slugList);
+    const tenantInfo = matchedSlug ? slugToTenant.get(matchedSlug) ?? null : null;
+    const tenantId = tenantInfo?.id ?? null;
+    const tenantSlug = tenantInfo?.slug ?? null;
+    if (!tenantId) unassigned += 1;
+    seenRefs.push(promptRef);
+
+    const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { promptRef } });
+    if (existing) {
+      // Preserve a manual override (displayName/category) — only refresh
+      // lastSeenAt, source, tenant assignment, and re-activate.
+      await (db as any).tenantPbxPrompt.update({
+        where: { promptRef },
+        data: {
+          tenantId, tenantSlug,
+          lastSeenAt: now,
+          source: existing.source === "manual" ? "manual" : source,
+          isActive: true,
+        },
+      });
+      updated += 1;
+    } else {
+      await (db as any).tenantPbxPrompt.create({
+        data: {
+          tenantId, tenantSlug,
+          promptRef, fileBaseName, relativePath: promptRef,
+          displayName: fileBaseName,
+          category: ivrInferPromptCategory(fileBaseName),
+          source,
+          isActive: true,
+        },
+      });
+      created += 1;
+    }
+  }
+
+  // Optional: mark rows that were NOT in this sync as inactive. Off by
+  // default — we want existing IVR profile refs to keep resolving even if
+  // the cron is out of date or the admin pasted a partial list.
+  let deactivated = 0;
+  if (deactivateMissing && seenRefs.length > 0) {
+    const res = await (db as any).tenantPbxPrompt.updateMany({
+      where: { promptRef: { notIn: seenRefs }, isActive: true, source: { not: "manual" } },
+      data:  { isActive: false },
+    });
+    deactivated = res.count ?? 0;
+  }
+
+  app.log.info(
+    { created, updated, deactivated, unassigned, total: norm.ok.length, rejected: norm.rejected.length, via: secretAuth ? "secret" : "jwt" },
+    "[IVR_PROMPT_SYNC] done",
+  );
+  return reply.send({
+    ok: true,
+    summary: { created, updated, deactivated, unassigned, total: norm.ok.length },
+    rejected: norm.rejected.slice(0, 20),
+  });
+});
 
 // Shared helper: load the profile and confirm the caller owns it.
 async function loadIvrProfileForWrite(

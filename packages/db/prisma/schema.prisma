@@ -329,6 +329,7 @@ model Tenant {
   ivrSchedules                  IvrSchedule[]
   ivrRouteProfiles              IvrRouteProfile[]
   ivrOptionRoutes               IvrOptionRoute[]
+  pbxPrompts                    TenantPbxPrompt[]
   ivrScheduleConfig             IvrScheduleConfig?
   ivrOverrideState              IvrOverrideState?
   ivrPublishRecords             IvrPublishRecord[]
@@ -1615,6 +1616,50 @@ model IvrPublishRecord {
   @@index([tenantId])
   @@index([tenantId, publishedAt])
   @@index([status])
+}
+
+// ─── Tenant PBX Prompt Catalog ───────────────────────────────────────────────
+// Connect-owned index of VitalPBX System Recordings that belong to each tenant.
+// This table is the ONLY source of prompt dropdown data for the IVR UI —
+// request-time reads go straight here, never to the PBX.
+//
+// Population model (all CPU-safe for the PBX):
+//   1. Super-admin manual paste (UI / `POST /voice/ivr/prompts/sync`).
+//   2. Optional PBX-host cron that POSTs the current `ls sounds/custom` to
+//      `/voice/ivr/prompts/sync` on a schedule chosen by ops (typically daily).
+//
+// Tenant assignment is by filename-prefix convention: a prompt ref like
+// `custom/acme_normal` is assigned to the tenant whose `toIvrSlug(name)` slug
+// matches the longest leading slug segment of the basename
+// (`acme_normal` → slug `acme`). Refs that do not match any tenant slug are
+// stored with `tenantId = null` / `tenantSlug = null` and treated as
+// "unassigned" (never surfaced in tenant dropdowns, only to super-admins).
+//
+// No file data is stored here — only pointers. Audio stays in VitalPBX.
+model TenantPbxPrompt {
+  id             String   @id @default(cuid())
+  tenantId       String?                             // null = unassigned / shared
+  tenantSlug     String?                             // denormalised slug used for prefix match (lowercased)
+  promptRef      String                              // canonical dialplan ref, e.g. "custom/acme_normal"
+  fileBaseName   String                              // base name without ext, e.g. "acme_normal"
+  relativePath   String                              // same as promptRef today; reserved for future non-custom folders
+  displayName    String                              // human-friendly label (defaults to fileBaseName)
+  category       String   @default("general")       // "greeting" | "invalid" | "timeout" | "general" | "unknown"
+  source         String   @default("pbx_sync")      // "pbx_sync" | "manual" | "import"
+  isActive       Boolean  @default(true)
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Same promptRef can exist once globally (PBX filenames are globally unique).
+  @@unique([promptRef])
+  @@index([tenantId])
+  @@index([tenantSlug])
+  @@index([tenantId, isActive])
+  @@index([isActive])
 }
 
 // ─── MOH Scheduling — Option A ───────────────────────────────────────────────

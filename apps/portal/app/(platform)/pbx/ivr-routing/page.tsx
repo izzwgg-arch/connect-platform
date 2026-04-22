@@ -127,6 +127,53 @@ interface PublishRecord {
   isRollback: boolean;
 }
 
+// ── Prompt catalog (DB-backed, zero PBX load on page render) ─────────────────
+//
+// The catalog lives in Connect's `TenantPbxPrompt` table and is populated by:
+//   - super-admin manual paste from the "Sync Prompt Library" modal
+//   - an optional PBX-host cron POSTing to /voice/ivr/prompts/sync
+// The UI NEVER hits the PBX directly — it only reads the catalog via the
+// Connect API. This means tens of admins hitting the IVR page simultaneously
+// adds zero load to VitalPBX.
+
+interface PromptCatalogRow {
+  id: string;
+  tenantId: string | null;
+  tenantSlug: string | null;
+  promptRef: string;
+  displayName: string;
+  category: string;
+  source: string;
+  isActive: boolean;
+}
+
+function usePromptCatalog(tenantId: string | undefined): {
+  prompts: PromptCatalogRow[];
+  loading: boolean;
+  error: string | null;
+  reload: () => Promise<void>;
+} {
+  const [prompts, setPrompts] = useState<PromptCatalogRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    if (!tenantId) { setPrompts([]); return; }
+    setLoading(true); setError(null);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const r = await apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts${qs}`);
+      setPrompts(r.prompts ?? []);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load prompt catalog");
+      setPrompts([]);
+    } finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { reload(); }, [reload]);
+  return { prompts, loading, error, reload };
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ROUTE_TYPE_LABELS: Record<RouteType, string> = {
@@ -326,6 +373,11 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
   // Which profile card is expanded to show its Prompts + Option Routing.
   // Only one is open at a time — keeps the page scannable with many profiles.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // "Sync Prompt Library" modal — only rendered for users with prompt mgmt rights.
+  const [showSync, setShowSync] = useState(false);
+  // Catalog scoped to the currently-selected tenant. Shared by the modal form
+  // AND every ProfilePromptsSection below, so we only hit the API once.
+  const { prompts: modalPrompts, loading: modalPromptsLoading, reload: reloadPrompts } = usePromptCatalog(tenantId);
 
   const openCreate = () => {
     setEditId(null);
@@ -377,9 +429,16 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Route Profiles</h2>
-        {canManage && (
-          <button onClick={openCreate} style={btnStyle("#6366f1")}>+ Add Profile</button>
-        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          {canManagePrompts && (
+            <button onClick={() => setShowSync(true)} style={btnSmall("#334155")} title="Paste the tenant's VitalPBX recording list to refresh the prompt dropdowns">
+              Sync Prompt Library
+            </button>
+          )}
+          {canManage && (
+            <button onClick={openCreate} style={btnStyle("#6366f1")}>+ Add Profile</button>
+          )}
+        </div>
       </div>
 
       {profiles.length === 0 && (
@@ -465,14 +524,36 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
 
             <SectionLabel>Greeting &amp; Prompts</SectionLabel>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-              Name of a VitalPBX System Recording (no file extension). Leave blank to use the built-in default. Only consumed by tenants using the Connect-owned IVR context.
+              Pick a VitalPBX System Recording for this tenant (synced via&nbsp;<em>Sync Prompt Library</em>).
+              Leave blank to use the built-in default. Only consumed by tenants using the Connect-owned IVR context.
             </div>
             <label style={labelStyle}>Greeting recording</label>
-            <input style={inputStyle} value={form.pbxPromptRef ?? ""} onChange={(e) => setForm((f) => ({ ...f, pbxPromptRef: e.target.value }))} placeholder="custom/acme_normal" />
+            <PromptPicker
+              value={form.pbxPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxPromptRef: v }))}
+              prompts={modalPrompts}
+              catalogLoading={modalPromptsLoading}
+              placeholder="custom/acme_normal"
+              category="greeting"
+            />
             <label style={labelStyle}>Invalid-digit recording (optional)</label>
-            <input style={inputStyle} value={form.pbxInvalidPromptRef ?? ""} onChange={(e) => setForm((f) => ({ ...f, pbxInvalidPromptRef: e.target.value }))} placeholder="custom/acme_invalid" />
+            <PromptPicker
+              value={form.pbxInvalidPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxInvalidPromptRef: v }))}
+              prompts={modalPrompts}
+              catalogLoading={modalPromptsLoading}
+              placeholder="custom/acme_invalid"
+              category="invalid"
+            />
             <label style={labelStyle}>Timeout recording (optional)</label>
-            <input style={inputStyle} value={form.pbxTimeoutPromptRef ?? ""} onChange={(e) => setForm((f) => ({ ...f, pbxTimeoutPromptRef: e.target.value }))} placeholder="custom/acme_timeout" />
+            <PromptPicker
+              value={form.pbxTimeoutPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxTimeoutPromptRef: v }))}
+              prompts={modalPrompts}
+              catalogLoading={modalPromptsLoading}
+              placeholder="custom/acme_timeout"
+              category="timeout"
+            />
 
             <div style={{ display: "flex", gap: 12 }}>
               <div style={{ flex: 1 }}>
@@ -491,6 +572,13 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
             </div>
           </div>
         </div>
+      )}
+
+      {showSync && (
+        <SyncPromptLibraryModal
+          onClose={() => setShowSync(false)}
+          onDone={() => { reloadPrompts(); }}
+        />
       )}
     </div>
   );
@@ -528,6 +616,169 @@ function profileToForm(p: RouteProfile): ProfileFormState {
   };
 }
 
+// ── Prompt picker (dropdown-first, legacy-safe) ──────────────────────────────
+//
+// Renders a <select> populated from the tenant's DB-backed prompt catalog. If
+// the currently-saved value is NOT in the catalog (legacy row, or not yet
+// synced from the PBX), we STILL show it at the top of the list flagged as
+// "legacy" so existing profiles never get silently nulled on save. A "Type
+// custom" toggle falls back to a free-text input for edge cases where the
+// admin needs to point at a prompt that the catalog doesn't know about yet.
+
+function PromptPicker({
+  value, onChange, prompts, catalogLoading, placeholder, category,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  prompts: PromptCatalogRow[];
+  catalogLoading: boolean;
+  placeholder?: string;
+  // Category hint to filter the dropdown. "greeting" narrows to greeting + general;
+  // "invalid" / "timeout" narrow to that category + general (general = unrestricted).
+  category?: "greeting" | "invalid" | "timeout";
+}) {
+  // Category-aware filter: always include generic rows so admins can point at
+  // any recording without re-classifying it first.
+  const filtered = prompts.filter((p) => {
+    if (!p.isActive) return false;
+    if (!category) return true;
+    return p.category === category || p.category === "general" || p.category === "unknown";
+  });
+  const hasCurrent = !!value && filtered.some((p) => p.promptRef === value);
+  const showingLegacy = !!value && !hasCurrent;
+
+  // "Manual entry" mode lets the admin type a ref not in the catalog. We
+  // auto-enter manual mode when there are zero prompts for this tenant so
+  // they're not stuck on an empty dropdown.
+  const [manual, setManual] = useState(() => filtered.length === 0 && !!value === false);
+  const effectiveManual = manual || (filtered.length === 0 && !value);
+
+  if (effectiveManual) {
+    return (
+      <div>
+        <input
+          style={inputStyle}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder ?? "custom/tenant_main"}
+        />
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center" }}>
+          <span>Manual entry — VitalPBX recording name, no file extension.</span>
+          {filtered.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setManual(false)}
+              style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}
+            >Use dropdown</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <select
+        style={inputStyle}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">— (use default / skip)</option>
+        {showingLegacy && (
+          <option value={value}>{value} — legacy (not in catalog)</option>
+        )}
+        {filtered.map((p) => (
+          <option key={p.id} value={p.promptRef}>
+            {p.displayName}{p.displayName !== p.promptRef ? ` (${p.promptRef})` : ""}
+          </option>
+        ))}
+      </select>
+      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center" }}>
+        <span>
+          {catalogLoading
+            ? "Loading catalog…"
+            : filtered.length === 0
+              ? "No prompts synced for this tenant."
+              : `${filtered.length} recording${filtered.length === 1 ? "" : "s"} available`}
+        </span>
+        <button
+          type="button"
+          onClick={() => setManual(true)}
+          style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}
+        >Type custom value</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Sync Prompt Library modal (super-admin only) ─────────────────────────────
+//
+// Lets the admin paste the tenant's VitalPBX recording list and bulk-upsert it
+// into the Connect catalog. Accepts:
+//   - one ref per line (e.g. "custom/acme_normal" or just "acme_normal")
+//   - comma- or space-separated lists
+//   - raw filenames with extensions (.wav, .gsm, .g722…) — they're stripped
+// Tenant assignment is done server-side by slug prefix matching; the admin
+// doesn't have to categorise anything here.
+function SyncPromptLibraryModal({ onClose, onDone }: {
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<null | { created: number; updated: number; unassigned: number; total: number }>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      // Split on any combo of whitespace/commas. Keep it permissive.
+      const refs = text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+      if (refs.length === 0) { setErr("Paste at least one recording name."); setBusy(false); return; }
+      const r = await apiPost<{ ok: boolean; summary: { created: number; updated: number; unassigned: number; total: number } }>(
+        "/voice/ivr/prompts/sync",
+        { refs, source: "manual" },
+      );
+      setResult(r.summary);
+      onDone();
+    } catch (e: any) { setErr(e?.message ?? "Sync failed"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={modalOverlay}>
+      <div style={{ ...modalBox, maxWidth: 620 }}>
+        <h3 style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700 }}>Sync Prompt Library</h3>
+        <p style={{ fontSize: 12, color: "#94a3b8", margin: "0 0 14px" }}>
+          Paste VitalPBX System Recording names — one per line or comma-separated.
+          File extensions are stripped, and each recording is assigned to the
+          tenant whose slug matches its filename prefix (e.g. <code>acme_closed</code> → tenant <code>acme</code>).
+          No PBX call is made here; this just updates Connect&apos;s catalog.
+        </p>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={"custom/acme_normal\ncustom/acme_closed\ncustom/trimpro_main"}
+          style={{ ...inputStyle, minHeight: 180, fontFamily: "monospace", fontSize: 12 }}
+        />
+        {err && <div style={{ color: "#fca5a5", fontSize: 12, marginTop: 8 }}>{err}</div>}
+        {result && (
+          <div style={{ fontSize: 12, color: "#a7f3d0", marginTop: 10 }}>
+            Synced {result.total} prompt{result.total === 1 ? "" : "s"}: {result.created} new, {result.updated} updated
+            {result.unassigned > 0 ? `, ${result.unassigned} unassigned (no tenant slug match)` : ""}.
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={btnSmall("#334155")}>Close</button>
+          <button onClick={submit} disabled={busy} style={btnStyle("#6366f1")}>
+            {busy ? "Syncing…" : "Sync"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Greeting & prompts (inline edit) ─────────────────────────────────────────
 
 function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
@@ -535,6 +786,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
   canEdit: boolean;
   onRefresh: () => void;
 }) {
+  const { prompts, loading: catalogLoading } = usePromptCatalog(profile.tenantId);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     pbxPromptRef:        profile.pbxPromptRef        ?? "",
@@ -592,18 +844,39 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
           <div>Max retries:</div>       <code style={codePillStyle}>{profile.maxRetries ?? 3}</code>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 560 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 560 }}>
           <div>
             <label style={labelStyle}>Greeting recording</label>
-            <input style={inputStyle} value={form.pbxPromptRef} onChange={(e) => setForm((f) => ({ ...f, pbxPromptRef: e.target.value }))} placeholder="custom/acme_normal" />
+            <PromptPicker
+              value={form.pbxPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxPromptRef: v }))}
+              prompts={prompts}
+              catalogLoading={catalogLoading}
+              placeholder="custom/acme_normal"
+              category="greeting"
+            />
           </div>
           <div>
             <label style={labelStyle}>Invalid-digit recording</label>
-            <input style={inputStyle} value={form.pbxInvalidPromptRef} onChange={(e) => setForm((f) => ({ ...f, pbxInvalidPromptRef: e.target.value }))} placeholder="custom/acme_invalid (optional)" />
+            <PromptPicker
+              value={form.pbxInvalidPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxInvalidPromptRef: v }))}
+              prompts={prompts}
+              catalogLoading={catalogLoading}
+              placeholder="custom/acme_invalid"
+              category="invalid"
+            />
           </div>
           <div>
             <label style={labelStyle}>Timeout recording</label>
-            <input style={inputStyle} value={form.pbxTimeoutPromptRef} onChange={(e) => setForm((f) => ({ ...f, pbxTimeoutPromptRef: e.target.value }))} placeholder="custom/acme_timeout (optional)" />
+            <PromptPicker
+              value={form.pbxTimeoutPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxTimeoutPromptRef: v }))}
+              prompts={prompts}
+              catalogLoading={catalogLoading}
+              placeholder="custom/acme_timeout"
+              category="timeout"
+            />
           </div>
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1 }}>
