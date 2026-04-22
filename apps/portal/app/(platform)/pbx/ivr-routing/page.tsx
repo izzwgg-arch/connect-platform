@@ -385,7 +385,20 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
     try {
       const j = await apiPost<{
         ok: boolean;
-        result?: { table: string; rowsRead: number; created: number; updated: number; unassigned: number; deactivated: number; errors: string[] };
+        result?: {
+          table: string;
+          tenantColumn: string | null;
+          tenantColumnType: "numeric" | "string" | "none";
+          ombuTenantsSeen: number;
+          rowsRead: number;
+          created: number;
+          updated: number;
+          unassigned: number;
+          deactivated: number;
+          perTenant: Array<{ tenantId: string | null; tenantSlug: string | null; count: number }>;
+          sample: Array<{ ref: string; rawTenant: string | null; resolvedConnectTenantId: string | null; method: string }>;
+          errors: string[];
+        };
         skipReason?: string;
         hint?: string;
       }>("/voice/ivr/prompts/auto-sync", {});
@@ -396,8 +409,14 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
       }
       const r = j.result!;
       const errLine = r.errors && r.errors.length > 0 ? `\n\nErrors:\n- ${r.errors.join("\n- ")}` : "";
+      const perTenantLine = r.perTenant && r.perTenant.length > 0
+        ? `\n\nPer tenant:\n${r.perTenant.map((p) => `  • ${p.tenantSlug ?? p.tenantId ?? "(unassigned)"}: ${p.count}`).join("\n")}`
+        : "";
+      const sampleLine = r.unassigned > 0 && r.sample && r.sample.length > 0
+        ? `\n\nSample rows (for debugging):\n${r.sample.map((s) => `  • ${s.ref}  rawTenant=${s.rawTenant ?? "null"}  method=${s.method}`).join("\n")}`
+        : "";
       alert(
-        `Auto-sync complete.\n\nSource table: ${r.table}\nRows read: ${r.rowsRead}\nCreated: ${r.created}\nUpdated: ${r.updated}\nUnassigned (no tenant match): ${r.unassigned}${errLine}`,
+        `Auto-sync complete.\n\nSource table: ${r.table}\nTenant column: ${r.tenantColumn ?? "(none)"} (${r.tenantColumnType})\nombu_tenants rows: ${r.ombuTenantsSeen}\nRows read: ${r.rowsRead}\nCreated: ${r.created}\nUpdated: ${r.updated}\nUnassigned (no tenant match): ${r.unassigned}${perTenantLine}${sampleLine}${errLine}`,
       );
       await onRefresh?.();
     } catch (e: any) {
