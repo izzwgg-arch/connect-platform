@@ -76,7 +76,10 @@ function stripExt(s: string): string {
   return s.replace(/\.(wav|gsm|ulaw|alaw|sln\d*|g722|g729|mp3|wav49)$/i, "");
 }
 
-/** Build `custom/<base>` if the raw value is a bare filename; otherwise return as-is. */
+/** Build `custom/<base>` if the raw value is a bare filename; otherwise return as-is.
+ *  VitalPBX stores recordings on disk using a sanitized form of the `name`
+ *  column (spaces → `_`, punctuation stripped). We mirror that sanitization here
+ *  so the ref matches the file Asterisk will actually look up at playback time. */
 function canonicaliseRef(raw: string): string {
   let ref = stripExt(String(raw || "").trim());
   if (!ref) return "";
@@ -84,7 +87,18 @@ function canonicaliseRef(raw: string): string {
   ref = ref.replace(/^\/?var\/lib\/asterisk\/sounds\//, "");
   // Drop leading/trailing slashes.
   ref = ref.replace(/^\/+/, "").replace(/\/+$/, "");
-  if (!ref.includes("/")) ref = `custom/${ref}`;
+  // If this is a bare basename (no `/`), sanitise it to match VitalPBX's
+  // on-disk filename: collapse whitespace and disallowed chars into `_`,
+  // strip leading/trailing `_`, preserve case. Names like `"A plus main"`
+  // become `A_plus_main`; `"self_id_prompt (1)"` becomes `self_id_prompt_1`.
+  if (!ref.includes("/")) {
+    ref = ref
+      .replace(/[^A-Za-z0-9_\-.]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+    if (!ref) return "";
+    ref = `custom/${ref}`;
+  }
   return ref;
 }
 
@@ -332,10 +346,20 @@ export async function syncPromptsFromOmbutelMysql(
       if (!IVR_PROMPT_REF_REGEX.test(ref)) continue;
       seenRefs.push(ref);
 
+      // Prefer the explicit display column; otherwise fall back to the RAW
+      // filename column (not the sanitised ref). This matters for tables like
+      // ombu_recordings where `name` is both the filename source *and* the
+      // human label ("A plus main"), and ref sanitisation turns that into
+      // "A_plus_main" — we don't want that showing up in the dropdown.
       const displayRaw = Buffer.isBuffer(raw.display_name)
         ? (raw.display_name as Buffer).toString("utf8")
         : (raw.display_name == null ? null : String(raw.display_name));
-      const displayName = (displayRaw && displayRaw.trim()) || ref.split("/").pop() || ref;
+      const rawNameTrimmed = rawName.trim().replace(/\.(wav|gsm|ulaw|alaw|sln\d*|g722|g729|mp3|wav49)$/i, "");
+      const displayName =
+        (displayRaw && displayRaw.trim()) ||
+        rawNameTrimmed ||
+        ref.split("/").pop() ||
+        ref;
 
       // ── Resolve the tenant, layered best → worst ────────────────────────
       const rawTenant = raw.tenant_col == null ? "" : String(raw.tenant_col).trim().toLowerCase();
