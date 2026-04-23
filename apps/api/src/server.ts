@@ -11968,14 +11968,74 @@ function assertIvrTenantAccess(user: JwtUser, tenantId: string): void {
   }
 }
 
+/** Resolve a scope string (either a raw Connect CUID or the `vpbx:<slug>` form
+ *  emitted by the super-admin tenant switcher) to the Connect Tenant row's id.
+ *
+ *  The portal's super-admin switcher populates its options from VitalPBX's
+ *  tenant list (see apps/portal/services/tenantData.ts) and assigns each row
+ *  an id of `vpbx:<slug>`. Writes against IvrRouteProfile / MohProfile /
+ *  DidRouteMapping need an actual Tenant FK, so we resolve those vpbx scopes
+ *  via PbxTenantDirectory → TenantPbxLink before inserting.
+ *
+ *  Returns `null` when the scope can't be resolved (unlinked PBX tenant).
+ *  The caller should fall back to a 400 "Connect tenant not linked" response
+ *  so the admin knows to link the tenant before routing it. */
+async function resolveConnectTenantIdFromScope(raw: string): Promise<string | null> {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  if (!v.startsWith("vpbx:")) {
+    // Already a Connect CUID — validate it exists so we don't let a typo
+    // become a dangling row later.
+    const t = await db.tenant.findUnique({ where: { id: v }, select: { id: true } });
+    return t?.id ?? null;
+  }
+  const slug = v.slice(5).toLowerCase();
+  if (!slug) return null;
+  // Path 1: directory row → pbxTenantLink on the same vitalTenantId.
+  const dir = await db.pbxTenantDirectory.findFirst({
+    where: { tenantSlug: slug },
+    select: { vitalTenantId: true, pbxInstanceId: true },
+  });
+  if (dir?.vitalTenantId) {
+    const link = await db.tenantPbxLink.findFirst({
+      where: { pbxInstanceId: dir.pbxInstanceId, pbxTenantId: dir.vitalTenantId },
+      select: { tenantId: true },
+    });
+    if (link?.tenantId) return link.tenantId;
+  }
+  // Path 2: some links store the slug literally in pbxTenantId.
+  const link2 = await db.tenantPbxLink.findFirst({
+    where: { pbxTenantId: slug },
+    select: { tenantId: true },
+  });
+  if (link2?.tenantId) return link2.tenantId;
+  // Path 3: fall back to matching an existing TenantPbxPrompt row by slug
+  // (populated by the prompt sync and kept in lock-step with the PBX).
+  const promptRow = await (db as any).tenantPbxPrompt.findFirst({
+    where: { tenantSlug: slug, tenantId: { not: null } },
+    select: { tenantId: true },
+  });
+  return promptRow?.tenantId ?? null;
+}
+
 // ── GET /voice/ivr/route-profiles ─────────────────────────────────────────────
 app.get("/voice/ivr/route-profiles", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  // Portal super-admin switcher sends `vpbx:<slug>`; resolve to the linked
+  // Connect CUID. Non-super-admins always pass their own CUID (from JWT).
+  const tid = rawTid.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(rawTid)
+    : rawTid;
+  if (!tid) {
+    // PBX tenant exists but isn't linked yet — return empty list rather
+    // than 500-ing, so the UI just shows "no profiles configured yet".
+    return reply.send({ profiles: [] });
+  }
   const profiles = await (db as any).ivrRouteProfile.findMany({
     where: { tenantId: tid, isActive: true },
     orderBy: { createdAt: "asc" },
@@ -12001,17 +12061,29 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
-  assertIvrTenantAccess(user, d.tenantId);
+  // Resolve the tenant scope. The super-admin switcher sends `vpbx:<slug>`
+  // which must map to a Connect CUID before we can create an IvrRouteProfile
+  // (FK → Tenant.id).
+  const connectTenantId = d.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(d.tenantId)
+    : d.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before routing calls.",
+    });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
   // Prompt ref format guard — prevents path-traversal / shell metachars leaking
   // into `Playback(${GREETING})` where VitalPBX runs unescaped. Also blocks
   // cross-tenant prompt selection when the catalog has a conflicting mapping.
   for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
-    const err = await ivrValidatePromptRefForTenant(ref ?? null, d.tenantId);
+    const err = await ivrValidatePromptRefForTenant(ref ?? null, connectTenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
   const profile = await (db as any).ivrRouteProfile.create({
     data: {
-      tenantId: d.tenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true,
+      tenantId: connectTenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true,
       pbxPromptRef: d.pbxPromptRef ?? null,
       pbxInvalidPromptRef: d.pbxInvalidPromptRef ?? null,
       pbxTimeoutPromptRef: d.pbxTimeoutPromptRef ?? null,
@@ -12127,13 +12199,27 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
   }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
 
+  // The portal tenant switcher identifies super-admin tenant picks via
+  // `vpbx:<slug>` (see apps/portal/services/tenantData.ts). Accept that form
+  // here — rows are denormalised with `tenantSlug`, which is indexed — so the
+  // switcher "just works" even before a Connect Tenant row exists for every
+  // VitalPBX customer.
+  const parseTenantScope = (raw: string): { tenantId?: string; tenantSlug?: string } => {
+    const v = raw.trim();
+    if (!v) return {};
+    if (v.startsWith("vpbx:")) return { tenantSlug: v.slice(5).toLowerCase() };
+    return { tenantId: v };
+  };
+
   // Tenant scoping: non-super-admins are pinned to their own tenantId.
   let where: Record<string, unknown> = {};
   if (isSuperAdmin) {
     if (q.tenantId === "__all__") {
       // full catalog (incl. unassigned) — super admin only
     } else if (q.tenantId) {
-      where.tenantId = q.tenantId;
+      const scope = parseTenantScope(q.tenantId);
+      if (scope.tenantSlug) where.tenantSlug = scope.tenantSlug;
+      else if (scope.tenantId) where.tenantId = scope.tenantId;
     } else if (user.tenantId) {
       where.tenantId = user.tenantId;
     }
@@ -12980,7 +13066,10 @@ app.get("/voice/did/mappings", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  const tid = rawTid && rawTid.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(rawTid)
+    : rawTid;
   const where = tid ? { tenantId: tid } : {};
   const mappings = await (db as any).didRouteMapping.findMany({
     where,
@@ -13013,7 +13102,17 @@ app.post("/voice/did/mappings", async (req, reply) => {
   const body = schema.safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
   const input = body.data;
-  assertIvrTenantAccess(user, input.tenantId);
+  // Resolve vpbx:<slug> to a Connect CUID before creating the DID mapping.
+  const connectTenantId = input.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(input.tenantId)
+    : input.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before mapping DIDs.",
+    });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
 
   const normalized = normalizeDidE164(input.e164);
   if (!normalized) return reply.code(400).send({ error: "invalid_e164" });
@@ -13021,17 +13120,17 @@ app.post("/voice/did/mappings", async (req, reply) => {
   // Cross-tenant validation: profiles referenced MUST belong to the same tenant.
   if (input.ivrProfileId) {
     const prof = await (db as any).ivrRouteProfile.findUnique({ where: { id: input.ivrProfileId }, select: { tenantId: true } });
-    if (!prof || prof.tenantId !== input.tenantId) return reply.code(400).send({ error: "ivr_profile_tenant_mismatch" });
+    if (!prof || prof.tenantId !== connectTenantId) return reply.code(400).send({ error: "ivr_profile_tenant_mismatch" });
   }
   if (input.mohProfileId) {
     const prof = await (db as any).mohProfile.findUnique({ where: { id: input.mohProfileId }, select: { tenantId: true } });
-    if (!prof || prof.tenantId !== input.tenantId) return reply.code(400).send({ error: "moh_profile_tenant_mismatch" });
+    if (!prof || prof.tenantId !== connectTenantId) return reply.code(400).send({ error: "moh_profile_tenant_mismatch" });
   }
 
   try {
     const created = await (db as any).didRouteMapping.create({
       data: {
-        tenantId: input.tenantId,
+        tenantId: connectTenantId,
         e164: normalized,
         phoneNumberId: input.phoneNumberId ?? null,
         pbxInstanceId: input.pbxInstanceId ?? null,
@@ -13539,8 +13638,12 @@ app.get("/voice/moh/profiles", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = rawTid.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(rawTid)
+    : rawTid;
+  if (!tid) return reply.send({ profiles: [] });
   const profiles = await (db as any).mohProfile.findMany({
     where: { tenantId: tid, isActive: true },
     orderBy: { createdAt: "asc" },
@@ -13563,9 +13666,18 @@ app.post("/voice/moh/profiles", async (req, reply) => {
     introAnnouncementRef:        z.string().max(200).nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
-  assertMohTenantAccess(user, body.data.tenantId);
+  const connectTenantId = body.data.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(body.data.tenantId)
+    : body.data.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before creating MOH profiles.",
+    });
+  }
+  assertMohTenantAccess(user, connectTenantId);
   const profile = await (db as any).mohProfile.create({
-    data: { ...body.data, holdAnnouncementRef: body.data.holdAnnouncementRef ?? null, introAnnouncementRef: body.data.introAnnouncementRef ?? null, isActive: true, createdBy: (user as any).id ?? null },
+    data: { ...body.data, tenantId: connectTenantId, holdAnnouncementRef: body.data.holdAnnouncementRef ?? null, introAnnouncementRef: body.data.introAnnouncementRef ?? null, isActive: true, createdBy: (user as any).id ?? null },
   });
   return reply.code(201).send({ profile });
 });
@@ -14013,8 +14125,22 @@ app.get("/voice/moh/assets", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  const where = tid ? { tenantId: tid } : {};
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  // Resolve vpbx:<slug> scope to Connect CUID; tenant-slug filter is a
+  // fallback when no link exists yet so the UI can still show rows uploaded
+  // against the slug.
+  let where: Record<string, unknown> = {};
+  if (rawTid) {
+    if (rawTid.startsWith("vpbx:")) {
+      const slug = rawTid.slice(5).toLowerCase();
+      const resolved = await resolveConnectTenantIdFromScope(rawTid);
+      where = resolved
+        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }] }
+        : { tenantSlug: slug };
+    } else {
+      where = { tenantId: rawTid };
+    }
+  }
   const assets = await (db as any).mohAsset.findMany({
     where: { ...where, status: { in: ["ready", "uploading"] } },
     orderBy: [{ createdAt: "desc" }],
@@ -14136,15 +14262,29 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
 
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   const wantAll = isSA && q.tenantId === "__all__";
-  const scopeTenantId = wantAll ? null : (q.tenantId || user.tenantId || null);
-  if (!wantAll && !scopeTenantId) return reply.code(400).send({ error: "tenant_required" });
-  if (!isSA && scopeTenantId && scopeTenantId !== user.tenantId) {
-    return reply.code(403).send({ error: "forbidden" });
+  const rawScope = wantAll ? null : (q.tenantId || user.tenantId || null);
+  if (!wantAll && !rawScope) return reply.code(400).send({ error: "tenant_required" });
+  // Accept vpbx:<slug> and resolve / fall back to tenantSlug match on the
+  // mirrored PbxMohClass rows (which carry tenantSlug from the ombutel sync).
+  let pbxClassWhere: Record<string, unknown> = {};
+  if (!wantAll && rawScope) {
+    if (rawScope.startsWith("vpbx:")) {
+      const slug = rawScope.slice(5).toLowerCase();
+      const resolved = await resolveConnectTenantIdFromScope(rawScope);
+      pbxClassWhere = resolved
+        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }, { tenantId: null, tenantSlug: null }] }
+        : { OR: [{ tenantSlug: slug }, { tenantId: null, tenantSlug: null }] };
+    } else {
+      pbxClassWhere = { OR: [{ tenantId: rawScope }, { tenantId: null }] };
+      if (!isSA && rawScope !== user.tenantId) {
+        return reply.code(403).send({ error: "forbidden" });
+      }
+    }
   }
 
   const rows = await (db as any).pbxMohClass.findMany({
     where: {
-      ...(wantAll ? {} : { OR: [{ tenantId: scopeTenantId }, { tenantId: null }] }),
+      ...pbxClassWhere,
       ...((q.activeOnly ?? "1") === "0" ? {} : { isActive: true }),
     },
     orderBy: [{ name: "asc" }],
