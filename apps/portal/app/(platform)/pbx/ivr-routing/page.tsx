@@ -312,8 +312,8 @@ export default function IvrRoutingPage() {
         <RouteProfilesTab
           profiles={profiles}
           tenantId={tenantId}
-          tenantLabel={tenant?.name || tenant?.slug || tenantId || "(no tenant)"}
-          tenantSlug={tenant?.slug || ""}
+          tenantLabel={tenant?.name || tenantId || "(no tenant)"}
+          tenantSlug={tenantId || ""}
           canManage={canManage}
           canManagePrompts={canManagePrompts}
           onRefresh={reload}
