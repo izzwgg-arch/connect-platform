@@ -12245,6 +12245,13 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
     source: r.source,
     isActive: r.isActive,
     updatedAt: r.updatedAt,
+    // Audio playback metadata. `hasAudio` lets the UI show/hide the Play
+    // button without having to read the file itself. The bytes are streamed
+    // via /voice/ivr/prompts/:id/stream (JWT-authenticated, tenant-scoped).
+    hasAudio: !!r.storageKey,
+    contentType: r.contentType ?? null,
+    sizeBytes: r.sizeBytes ?? null,
+    syncedAt: r.syncedAt ?? null,
   }));
   return reply.send({ prompts });
 });
@@ -12519,6 +12526,313 @@ app.post("/voice/ivr/prompts/auto-sync", async (req, reply) => {
     });
   }
   return reply.send({ ok: true, result });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IVR PROMPT AUDIO (browser playback)
+//
+// The catalog above stores metadata only. To let admins preview a recording
+// in the Connect UI we also need the audio bytes. Three ingest paths:
+//
+//   1. Manual upload from the Connect UI (per prompt row, admin-gated).
+//   2. Bulk push from the PBX host via `connect-prompt-sync.sh` (cron).
+//   3. (Future) signed-URL pull, keeping the interface symmetric with MOH.
+//
+// Playback path: the browser hits GET /voice/ivr/prompts/:id/stream with a
+// JWT (via Authorization header OR ?token= for <audio>). We verify tenant
+// scope and serve the bytes straight from local storage. There is NO call
+// to the PBX on the user's click path — exactly one local fs read.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function ivrLoadPromptForRead(
+  user: JwtUser,
+  promptId: string,
+): Promise<{ error: number; body: unknown } | { row: any }> {
+  const row = await (db as any).tenantPbxPrompt.findUnique({ where: { id: promptId } });
+  if (!row) return { error: 404, body: { error: "prompt_not_found" } };
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin) {
+    // Non-super-admins can only read prompts in their own tenant. Match by
+    // either tenantId (the normal case) or tenantSlug (for vpbx:<slug> rows
+    // where the Connect Tenant link may not exist yet).
+    if (!user.tenantId) return { error: 403, body: { error: "forbidden" } };
+    const sameTenant = row.tenantId && row.tenantId === user.tenantId;
+    if (!sameTenant) return { error: 403, body: { error: "forbidden" } };
+  }
+  return { row };
+}
+
+// ── GET /voice/ivr/prompts/:id/stream ───────────────────────────────────────
+// Streams the stored audio bytes to the browser. 503 "audio_not_synced" if
+// we don't have the file yet — the UI shows an "Upload audio" button in
+// that case so the admin can provide the bytes directly.
+app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
+  // <audio> elements can't set headers so they pass the JWT as ?token=...
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam && !(req.headers as any).authorization) {
+    (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  }
+
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const { id } = req.params as { id: string };
+  const loaded = await ivrLoadPromptForRead(user, id);
+  if ("error" in loaded) return reply.code(loaded.error).send(loaded.body);
+  const row = loaded.row;
+
+  if (!row.storageKey) {
+    return reply.code(503).send({
+      error: "audio_not_synced",
+      hint: "No audio bytes uploaded yet. Upload via the UI or run the PBX-host `connect-prompt-sync.sh` helper.",
+    });
+  }
+
+  const { readPromptFile, contentTypeForFilename } = await import("./promptStorage");
+  let buf: Buffer;
+  try {
+    buf = await readPromptFile(row.storageKey);
+  } catch (err: any) {
+    app.log.warn({ id, storageKey: row.storageKey, err: err?.message }, "ivr prompt: read failed");
+    return reply.code(503).send({ error: "audio_read_failed" });
+  }
+
+  const ct = row.contentType || contentTypeForFilename(row.storageKey);
+  reply.header("Content-Type", ct);
+  reply.header("Content-Length", String(buf.byteLength));
+  reply.header("Accept-Ranges", "bytes");
+  reply.header("Cache-Control", "private, max-age=3600");
+  return reply.send(buf);
+});
+
+// ── POST /voice/ivr/prompts/:id/audio ───────────────────────────────────────
+// Multipart upload: field `file` (audio bytes). Admin-gated. Writes to disk,
+// computes sha256, updates the catalog row. Lets admins provide a bytes-only
+// preview for prompts the PBX-host helper hasn't uploaded yet (or for
+// tenants whose PBX doesn't run the helper at all).
+app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  if (!user) return;
+
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "prompt_not_found" });
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin) {
+    if (!user.tenantId || existing.tenantId !== user.tenantId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  if (!(req as any).isMultipart?.()) {
+    return reply.code(400).send({ error: "multipart_required" });
+  }
+
+  let fileBuf: Buffer | null = null;
+  let originalFilename = `${existing.fileBaseName || "prompt"}.wav`;
+  try {
+    const parts = (req as any).parts();
+    for await (const part of parts) {
+      if (part.type === "file" && part.fieldname === "file") {
+        originalFilename = String(part.filename || originalFilename);
+        fileBuf = await part.toBuffer();
+      }
+    }
+  } catch (err: any) {
+    return reply.code(400).send({ error: "multipart_parse_failed", detail: err?.message });
+  }
+
+  if (!fileBuf || fileBuf.length === 0) return reply.code(400).send({ error: "file_required" });
+  // Hard limit: 20MB — larger prompts are almost certainly a mistake and
+  // would blow the node multipart buffer.
+  if (fileBuf.length > 20 * 1024 * 1024) {
+    return reply.code(413).send({ error: "file_too_large", limit: 20 * 1024 * 1024 });
+  }
+
+  const { writePromptFile } = await import("./promptStorage");
+  let stored: { storageKey: string; sha256: string; sizeBytes: number; contentType: string };
+  try {
+    stored = await writePromptFile({
+      baseName: existing.fileBaseName || existing.promptRef,
+      originalFilename,
+      buffer: fileBuf,
+    });
+  } catch (err: any) {
+    return reply.code(500).send({ error: "storage_write_failed", detail: err?.message });
+  }
+
+  const updated = await (db as any).tenantPbxPrompt.update({
+    where: { id },
+    data: {
+      storageKey: stored.storageKey,
+      sha256: stored.sha256,
+      sizeBytes: stored.sizeBytes,
+      contentType: stored.contentType,
+      syncedAt: new Date(),
+    },
+  });
+
+  app.log.info(
+    { id, promptRef: existing.promptRef, storageKey: stored.storageKey, sha256: stored.sha256, sizeBytes: stored.sizeBytes },
+    "[IVR_PROMPT_UPLOAD] manual upload from UI",
+  );
+
+  return reply.send({
+    ok: true,
+    prompt: {
+      id: updated.id,
+      promptRef: updated.promptRef,
+      hasAudio: true,
+      contentType: updated.contentType,
+      sizeBytes: updated.sizeBytes,
+      syncedAt: updated.syncedAt,
+    },
+  });
+});
+
+// ── GET /voice/ivr/prompts/sync-manifest ────────────────────────────────────
+// Called by the PBX-host `connect-prompt-sync.sh` cron helper. Shared-secret
+// auth. Returns the current catalog so the helper can diff its local
+// /var/lib/asterisk/sounds/custom inventory and only push files that are
+// new or whose sha256 has drifted.
+app.get("/voice/ivr/prompts/sync-manifest", async (req, reply) => {
+  const expected = (
+    process.env.PROMPT_SYNC_SHARED_SECRET ||
+    process.env.MOH_SYNC_SHARED_SECRET ||
+    process.env.CDR_INGEST_SECRET ||
+    ""
+  ).trim();
+  const provided = String((req.headers as any)["x-connect-secret"] ?? "").trim();
+  if (!expected || provided !== expected) return reply.code(401).send({ error: "unauthorized" });
+
+  const rows = await (db as any).tenantPbxPrompt.findMany({
+    where: { isActive: true },
+    orderBy: [{ fileBaseName: "asc" }],
+  });
+  const files = rows.map((r: any) => ({
+    id: r.id,
+    promptRef: r.promptRef,
+    fileBaseName: r.fileBaseName,
+    storageKey: r.storageKey,
+    sha256: r.sha256,
+    sizeBytes: r.sizeBytes,
+    contentType: r.contentType,
+    syncedAt: r.syncedAt,
+    tenantSlug: r.tenantSlug,
+  }));
+  return reply.send({ files });
+});
+
+// ── POST /voice/ivr/prompts/upload ──────────────────────────────────────────
+// Called by the PBX-host helper. Multipart upload: field `file` (audio) and
+// field `meta` (JSON with `{ fileBaseName, originalFilename, sha256? }`).
+// Shared-secret auth, not JWT. Upserts the catalog row by fileBaseName.
+app.post("/voice/ivr/prompts/upload", async (req, reply) => {
+  const expected = (
+    process.env.PROMPT_SYNC_SHARED_SECRET ||
+    process.env.MOH_SYNC_SHARED_SECRET ||
+    process.env.CDR_INGEST_SECRET ||
+    ""
+  ).trim();
+  const provided = String((req.headers as any)["x-connect-secret"] ?? "").trim();
+  if (!expected || provided !== expected) return reply.code(401).send({ error: "unauthorized" });
+
+  if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+
+  let fileBuf: Buffer | null = null;
+  let originalFilename = "prompt.wav";
+  let metaRaw = "";
+  try {
+    const parts = (req as any).parts();
+    for await (const part of parts) {
+      if (part.type === "file" && part.fieldname === "file") {
+        originalFilename = String(part.filename || originalFilename);
+        fileBuf = await part.toBuffer();
+      } else if (part.type === "field" && part.fieldname === "meta") {
+        metaRaw = String(part.value || "");
+      }
+    }
+  } catch (err: any) {
+    return reply.code(400).send({ error: "multipart_parse_failed", detail: err?.message });
+  }
+  if (!fileBuf || fileBuf.length === 0) return reply.code(400).send({ error: "file_required" });
+  if (fileBuf.length > 20 * 1024 * 1024) {
+    return reply.code(413).send({ error: "file_too_large", limit: 20 * 1024 * 1024 });
+  }
+
+  let meta: { fileBaseName: string; originalFilename?: string; sha256?: string };
+  try {
+    meta = z.object({
+      fileBaseName: z.string().min(1).max(200),
+      originalFilename: z.string().max(200).optional(),
+      sha256: z.string().length(64).optional(),
+    }).parse(JSON.parse(metaRaw || "{}"));
+  } catch (err: any) {
+    return reply.code(400).send({ error: "invalid_meta", detail: err?.message });
+  }
+
+  const filename = meta.originalFilename || originalFilename;
+  const { writePromptFile } = await import("./promptStorage");
+  const stored = await writePromptFile({
+    baseName: meta.fileBaseName,
+    originalFilename: filename,
+    buffer: fileBuf,
+  });
+
+  // Meta sha256 check (if provided) — cheap integrity guard against a
+  // corrupted upload over a slow PBX-side link.
+  if (meta.sha256 && meta.sha256.toLowerCase() !== stored.sha256) {
+    const { deletePromptFile } = await import("./promptStorage");
+    await deletePromptFile(stored.storageKey).catch(() => void 0);
+    return reply.code(400).send({ error: "sha256_mismatch", expected: meta.sha256, actual: stored.sha256 });
+  }
+
+  // The canonical promptRef for `custom/<baseName>` files on VitalPBX.
+  const promptRef = `custom/${meta.fileBaseName}`;
+  const now = new Date();
+  const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { promptRef } });
+  if (existing) {
+    await (db as any).tenantPbxPrompt.update({
+      where: { promptRef },
+      data: {
+        storageKey: stored.storageKey,
+        sha256: stored.sha256,
+        sizeBytes: stored.sizeBytes,
+        contentType: stored.contentType,
+        syncedAt: now,
+        lastSeenAt: now,
+        isActive: true,
+      },
+    });
+  } else {
+    // New recording that the catalog sync hasn't seen yet — create it as an
+    // unassigned row. The regular prompt-sync pass will bind it to a tenant
+    // next time it runs.
+    await (db as any).tenantPbxPrompt.create({
+      data: {
+        promptRef,
+        fileBaseName: meta.fileBaseName,
+        relativePath: promptRef,
+        displayName: meta.fileBaseName,
+        category: "general",
+        source: "pbx_sync",
+        isActive: true,
+        storageKey: stored.storageKey,
+        sha256: stored.sha256,
+        sizeBytes: stored.sizeBytes,
+        contentType: stored.contentType,
+        syncedAt: now,
+      },
+    });
+  }
+
+  app.log.info(
+    { promptRef, storageKey: stored.storageKey, sha256: stored.sha256, sizeBytes: stored.sizeBytes },
+    "[IVR_PROMPT_UPLOAD] bulk upload from PBX helper",
+  );
+  return reply.send({ ok: true, promptRef, sha256: stored.sha256 });
 });
 
 // Shared helper: load the profile and confirm the caller owns it.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
@@ -145,6 +145,39 @@ interface PromptCatalogRow {
   category: string;
   source: string;
   isActive: boolean;
+  // Playback metadata (populated once Connect has the audio bytes).
+  // When false the Play button falls back to "upload audio first".
+  hasAudio?: boolean;
+  contentType?: string | null;
+  sizeBytes?: number | null;
+  syncedAt?: string | null;
+}
+
+// ── Media helpers for audio playback ─────────────────────────────────────────
+// Mirrors apiClient.baseUrl() — when NEXT_PUBLIC_API_URL is unset (prod), the
+// portal goes through nginx at `<origin>/api`. The <audio> element loads via
+// the browser (not fetch()), so we MUST include the /api prefix here or nginx
+// returns 404.
+function ivrMediaBaseUrl(): string {
+  const baked = process.env.NEXT_PUBLIC_API_URL;
+  const fromEnv = baked != null && String(baked).trim() !== "" ? String(baked).trim().replace(/\/$/, "") : "";
+  if (fromEnv) return fromEnv;
+  if (typeof window !== "undefined") return `${window.location.origin.replace(/\/$/, "")}/api`;
+  return "";
+}
+
+function ivrAuthToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token")
+    || localStorage.getItem("cc-token")
+    || localStorage.getItem("authToken")
+    || "";
+}
+
+function ivrStreamUrlForPrompt(promptId: string): string {
+  const base = ivrMediaBaseUrl();
+  const token = ivrAuthToken();
+  return `${base}/voice/ivr/prompts/${encodeURIComponent(promptId)}/stream?token=${encodeURIComponent(token)}`;
 }
 
 function usePromptCatalog(tenantId: string | undefined): {
@@ -681,6 +714,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               catalogLoading={modalPromptsLoading}
               placeholder="custom/acme_normal"
               category="greeting"
+              canUpload={canManagePrompts}
+              onAudioChanged={reloadPrompts}
             />
             <label style={labelStyle}>Invalid-digit recording (optional)</label>
             <PromptPicker
@@ -690,6 +725,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               catalogLoading={modalPromptsLoading}
               placeholder="custom/acme_invalid"
               category="invalid"
+              canUpload={canManagePrompts}
+              onAudioChanged={reloadPrompts}
             />
             <label style={labelStyle}>Timeout recording (optional)</label>
             <PromptPicker
@@ -699,6 +736,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               catalogLoading={modalPromptsLoading}
               placeholder="custom/acme_timeout"
               category="timeout"
+              canUpload={canManagePrompts}
+              onAudioChanged={reloadPrompts}
             />
 
             <div style={{ display: "flex", gap: 12 }}>
@@ -762,6 +801,135 @@ function profileToForm(p: RouteProfile): ProfileFormState {
   };
 }
 
+// ── Compact readonly cell used in the profile summary ───────────────────────
+// Shows the prompt ref in a code pill, plus a tiny ▶ button when the catalog
+// row exists and has audio. Click to preview inline without jumping to the
+// edit view.
+function PromptSummaryCell({
+  refValue, prompts, emptyLabel,
+}: {
+  refValue: string | null | undefined;
+  prompts: PromptCatalogRow[];
+  emptyLabel: string;
+}) {
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  if (!refValue) {
+    return <code style={codePillStyle}>{emptyLabel}</code>;
+  }
+  const row = prompts.find((p) => p.promptRef === refValue) ?? null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <code style={codePillStyle}>{refValue}</code>
+        {row?.hasAudio ? (
+          <button
+            type="button"
+            onClick={() => setPlayingId((prev) => (prev === row.id ? null : row.id))}
+            style={{
+              ...btnSmall(playingId === row.id ? "#7f1d1d" : "#0d9488"),
+              padding: "2px 8px", fontSize: 11,
+            }}
+            title={playingId === row.id ? "Stop" : "Preview"}
+          >
+            {playingId === row.id ? "■" : "▶"}
+          </button>
+        ) : row ? (
+          <span style={{ fontSize: 10, color: "#64748b" }} title="No audio bytes synced yet">(no audio)</span>
+        ) : null}
+      </div>
+      {playingId && row && (
+        <PromptAudioPlayer
+          key={playingId}
+          promptId={playingId}
+          displayName={row.displayName || row.promptRef}
+          onClose={() => setPlayingId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Inline prompt audio player ──────────────────────────────────────────────
+//
+// Thin wrapper around <audio> that streams from
+// `/voice/ivr/prompts/:id/stream?token=...`. The parent controls WHICH prompt
+// is playing (via the `promptId` prop) so only one player is audible at a
+// time across the whole page. We rebuild the element whenever promptId
+// changes so the browser never tries to resume a stale src.
+function PromptAudioPlayer({
+  promptId,
+  displayName,
+  onClose,
+  reloadPrompts,
+}: {
+  promptId: string;
+  displayName: string;
+  onClose: () => void;
+  reloadPrompts?: () => void | Promise<void>;
+}) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const url = ivrStreamUrlForPrompt(promptId);
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.src = url;
+    audioRef.current = audio;
+    setError(null);
+    setLoading(true);
+
+    const onCanPlay = () => { setLoading(false); audio.play().catch(() => undefined); };
+    const onErr = () => {
+      setLoading(false);
+      const code = audio.error?.code;
+      const codeName = code ? ({ 1: "aborted", 2: "network", 3: "decode", 4: "unsupported_format" } as Record<number, string>)[code] ?? `code_${code}` : "unknown";
+      setError(codeName === "network" ? "audio_not_synced_or_unavailable" : codeName);
+    };
+    audio.addEventListener("canplay", onCanPlay);
+    audio.addEventListener("error", onErr);
+    return () => {
+      try { audio.pause(); } catch { /* noop */ }
+      audio.removeEventListener("canplay", onCanPlay);
+      audio.removeEventListener("error", onErr);
+      audioRef.current = null;
+    };
+  }, [promptId]);
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+      background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)",
+      borderRadius: 7, marginTop: 6,
+    }}>
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        <div style={{ fontSize: 11, color: "#c7d2fe", fontWeight: 600 }}>
+          ▶ Playing: <span style={{ color: "#f1f5f9" }}>{displayName}</span>
+        </div>
+        {loading && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>Loading audio…</div>}
+        {error && (
+          <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 2 }}>
+            Can&apos;t play: {error}. {error === "audio_not_synced_or_unavailable" && "Upload the audio file first, or run the PBX-host sync helper."}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={() => { audioRef.current?.pause(); audioRef.current && (audioRef.current.currentTime = 0); audioRef.current?.play().catch(() => undefined); }}
+        style={btnSmall("#334155")}
+        type="button"
+        title="Restart"
+      >↻</button>
+      <button
+        onClick={() => { onClose(); reloadPrompts?.(); }}
+        style={btnSmall("#334155")}
+        type="button"
+        title="Stop"
+      >Stop</button>
+    </div>
+  );
+}
+
 // ── Prompt picker (dropdown-first, legacy-safe) ──────────────────────────────
 //
 // Renders a <select> populated from the tenant's DB-backed prompt catalog. If
@@ -772,7 +940,7 @@ function profileToForm(p: RouteProfile): ProfileFormState {
 // admin needs to point at a prompt that the catalog doesn't know about yet.
 
 function PromptPicker({
-  value, onChange, prompts, catalogLoading, placeholder, category,
+  value, onChange, prompts, catalogLoading, placeholder, category, canUpload, onAudioChanged,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -782,6 +950,12 @@ function PromptPicker({
   // Category hint to filter the dropdown. "greeting" narrows to greeting + general;
   // "invalid" / "timeout" narrow to that category + general (general = unrestricted).
   category?: "greeting" | "invalid" | "timeout";
+  // When true, show an "Upload audio" button next to the dropdown. Gated by
+  // caller permissions (super-admin or can_manage_ivr_prompts).
+  canUpload?: boolean;
+  // Called after an audio upload succeeds so the parent can refresh the
+  // catalog (to flip hasAudio → true on the affected row).
+  onAudioChanged?: () => void | Promise<void>;
 }) {
   // Category-aware filter: always include generic rows so admins can point at
   // any recording without re-classifying it first.
@@ -829,24 +1003,59 @@ function PromptPicker({
     );
   }
 
+  // Find the catalog row matching the current selection so we can enable
+  // Play/Upload controls for it.
+  const selectedRow = value ? filtered.find((p) => p.promptRef === value) ?? null : null;
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
   return (
     <div>
-      <select
-        style={inputStyle}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">— (use default / skip)</option>
-        {showingLegacy && (
-          <option value={value}>{value} — legacy (not in catalog)</option>
+      <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+        <select
+          style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
+          value={value}
+          onChange={(e) => { setPlayingId(null); onChange(e.target.value); }}
+        >
+          <option value="">— (use default / skip)</option>
+          {showingLegacy && (
+            <option value={value}>{value} — legacy (not in catalog)</option>
+          )}
+          {filtered.map((p) => (
+            <option key={p.id} value={p.promptRef}>
+              {p.displayName}{p.displayName !== p.promptRef ? ` (${p.promptRef})` : ""}{p.hasAudio ? "  ▶" : ""}
+            </option>
+          ))}
+        </select>
+        {/* ▶ Play button — only active when the selected recording has audio
+             synced into Connect. Otherwise shows a disabled grey button with
+             a tooltip explaining why. */}
+        <PlayPromptButton
+          selectedRow={selectedRow}
+          playing={!!playingId && selectedRow?.id === playingId}
+          onToggle={() => {
+            if (!selectedRow) return;
+            setPlayingId((prev) => (prev === selectedRow.id ? null : selectedRow.id));
+          }}
+        />
+        {canUpload && (
+          <UploadPromptAudioButton
+            selectedRow={selectedRow}
+            onUploaded={async () => { await onAudioChanged?.(); }}
+          />
         )}
-        {filtered.map((p) => (
-          <option key={p.id} value={p.promptRef}>
-            {p.displayName}{p.displayName !== p.promptRef ? ` (${p.promptRef})` : ""}
-          </option>
-        ))}
-      </select>
-      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center" }}>
+      </div>
+
+      {playingId && selectedRow && selectedRow.id === playingId && (
+        <PromptAudioPlayer
+          key={playingId}
+          promptId={playingId}
+          displayName={selectedRow.displayName || selectedRow.promptRef}
+          onClose={() => setPlayingId(null)}
+          reloadPrompts={onAudioChanged}
+        />
+      )}
+
+      <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span>
           {catalogLoading
             ? "Loading catalog…"
@@ -859,8 +1068,114 @@ function PromptPicker({
           onClick={() => setManual(true)}
           style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}
         >Type custom value</button>
+        {selectedRow && !selectedRow.hasAudio && (
+          <span style={{ color: "#fbbf24" }}>
+            (no audio synced for this recording yet — upload the WAV/MP3 to enable preview)
+          </span>
+        )}
       </div>
     </div>
+  );
+}
+
+function PlayPromptButton({
+  selectedRow, playing, onToggle,
+}: {
+  selectedRow: PromptCatalogRow | null;
+  playing: boolean;
+  onToggle: () => void;
+}) {
+  const disabled = !selectedRow || !selectedRow.hasAudio;
+  const title = !selectedRow
+    ? "Pick a recording first"
+    : !selectedRow.hasAudio
+      ? "Audio bytes for this recording aren't synced yet. Upload the file or run the PBX-host sync helper."
+      : playing ? "Stop" : "Preview this recording";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      title={title}
+      style={{
+        ...btnSmall(disabled ? "#1e293b" : playing ? "#7f1d1d" : "#0d9488"),
+        whiteSpace: "nowrap", padding: "0 12px", opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      {playing ? "■ Stop" : "▶ Play"}
+    </button>
+  );
+}
+
+function UploadPromptAudioButton({
+  selectedRow, onUploaded,
+}: {
+  selectedRow: PromptCatalogRow | null;
+  onUploaded: () => void | Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const doUpload = async (file: File) => {
+    if (!selectedRow) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const base = ivrMediaBaseUrl();
+      const token = ivrAuthToken();
+      const resp = await fetch(`${base}/voice/ivr/prompts/${encodeURIComponent(selectedRow.id)}/audio`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: fd,
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as any)?.error ?? `Upload failed (${resp.status})`);
+      }
+      await onUploaded();
+      alert(`Uploaded audio for "${selectedRow.displayName || selectedRow.promptRef}". Click ▶ Play to preview.`);
+    } catch (e: any) {
+      alert(`Upload failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  const disabled = !selectedRow || busy;
+  const title = !selectedRow
+    ? "Pick a recording first"
+    : busy ? "Uploading…" : "Upload audio bytes so this recording can be previewed in the browser";
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="audio/wav,audio/mpeg,audio/mp3,audio/ogg,audio/x-gsm,.wav,.mp3,.gsm,.ogg,.g722,.g729,.sln,.sln16,.ulaw,.alaw"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void doUpload(f);
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={disabled}
+        title={title}
+        style={{
+          ...btnSmall(disabled ? "#1e293b" : "#334155"),
+          whiteSpace: "nowrap", padding: "0 12px",
+          opacity: disabled ? 0.6 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {busy ? "…" : "⇧ Upload"}
+      </button>
+    </>
   );
 }
 
@@ -939,7 +1254,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
   canEdit: boolean;
   onRefresh: () => void;
 }) {
-  const { prompts, loading: catalogLoading } = usePromptCatalog(profile.tenantId);
+  const { prompts, loading: catalogLoading, reload: reloadPrompts } = usePromptCatalog(profile.tenantId);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     pbxPromptRef:        profile.pbxPromptRef        ?? "",
@@ -990,9 +1305,9 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
       {err && <div style={{ color: "#fca5a5", fontSize: 12, marginBottom: 8 }}>{err}</div>}
       {!editing ? (
         <div style={{ fontSize: 13, color: "#94a3b8", display: "grid", gridTemplateColumns: "140px 1fr", rowGap: 4, columnGap: 10 }}>
-          <div>Greeting:</div>          <code style={codePillStyle}>{profile.pbxPromptRef        || "— (use default)"}</code>
-          <div>Invalid prompt:</div>    <code style={codePillStyle}>{profile.pbxInvalidPromptRef || "— (skip)"}</code>
-          <div>Timeout prompt:</div>    <code style={codePillStyle}>{profile.pbxTimeoutPromptRef || "— (skip)"}</code>
+          <div>Greeting:</div>          <PromptSummaryCell refValue={profile.pbxPromptRef}        prompts={prompts} emptyLabel="— (use default)" />
+          <div>Invalid prompt:</div>    <PromptSummaryCell refValue={profile.pbxInvalidPromptRef} prompts={prompts} emptyLabel="— (skip)" />
+          <div>Timeout prompt:</div>    <PromptSummaryCell refValue={profile.pbxTimeoutPromptRef} prompts={prompts} emptyLabel="— (skip)" />
           <div>Digit-wait timeout:</div><code style={codePillStyle}>{profile.timeoutSeconds ?? 7}s</code>
           <div>Max retries:</div>       <code style={codePillStyle}>{profile.maxRetries ?? 3}</code>
         </div>
@@ -1007,6 +1322,8 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               catalogLoading={catalogLoading}
               placeholder="custom/acme_normal"
               category="greeting"
+              canUpload={canEdit}
+              onAudioChanged={reloadPrompts}
             />
           </div>
           <div>
@@ -1018,6 +1335,8 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               catalogLoading={catalogLoading}
               placeholder="custom/acme_invalid"
               category="invalid"
+              canUpload={canEdit}
+              onAudioChanged={reloadPrompts}
             />
           </div>
           <div>
@@ -1029,6 +1348,8 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               catalogLoading={catalogLoading}
               placeholder="custom/acme_timeout"
               category="timeout"
+              canUpload={canEdit}
+              onAudioChanged={reloadPrompts}
             />
           </div>
           <div style={{ display: "flex", gap: 12 }}>

@@ -1658,6 +1658,17 @@ model TenantPbxPrompt {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  // ── Audio bytes (optional) ────────────────────────────────────────────────
+  // Populated by either the PBX-host `connect-prompt-sync.sh` helper (cron
+  // pushes new/changed files), or a UI-triggered manual upload. When these
+  // are null the catalog row is still valid for dialplan use — only the
+  // in-browser "Play" button is unavailable until audio is synced.
+  storageKey     String?                            // relative path under PROMPT_STORAGE_DIR
+  sha256         String?                            // content hash — used by the PBX helper to diff
+  sizeBytes      Int?
+  contentType    String?                            // e.g. "audio/wav", "audio/mpeg"
+  syncedAt       DateTime?                          // last time audio bytes were uploaded
+
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Same promptRef can exist once globally (PBX filenames are globally unique).

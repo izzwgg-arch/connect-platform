@@ -63,6 +63,14 @@ services:
       # Public URL the PBX-host helper can actually reach. MUST be set in
       # production or signed URLs will point at http://localhost:3001.
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      # ── IVR prompt audio storage (browser-playable system recordings) ─────
+      # The PBX-host connect-prompt-sync.sh helper POSTs WAV/MP3/GSM bytes here
+      # so the Connect UI can preview them. Admins can also upload via the UI
+      # directly. Same shared-secret pattern as MOH; reuses its env var by
+      # default so no new secret is required for turn-up.
+      PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
+      PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
+      PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
     command: sh -lc "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
@@ -71,6 +79,10 @@ services:
       # connect-media-sync.sh cron on the PBX host pulls files from here via
       # signed HTTPS URLs, never by shared filesystem.
       - moh-assets:/var/lib/connect/moh-assets
+      # IVR prompt audio storage — same pattern as MOH. The
+      # connect-prompt-sync.sh cron on the PBX host POSTs recording bytes
+      # here so Connect can stream them to the browser on click.
+      - ivr-prompts:/var/lib/connect/ivr-prompts
     networks:
       - default
       - infra_default
@@ -190,4 +202,9 @@ volumes:
   # container rebuilds; PBX-host helper pulls files from here via signed
   # HTTPS, never by shared filesystem or SSH.
   moh-assets:
+    driver: local
+  # Persistent storage for IVR prompt audio (VitalPBX system recordings)
+  # uploaded via the PBX-host cron helper or directly from the Connect UI.
+  # The browser streams these via /voice/ivr/prompts/:id/stream.
+  ivr-prompts:
     driver: local
