@@ -128,8 +128,25 @@ const SOURCE_LABELS: Record<string, string> = {
   reconciliation:  "Reconcile",
 };
 
-const TABS = ["Hold Profiles", "Schedule", "Override", "Publish"] as const;
+const TABS = ["Hold Profiles", "Assets", "Schedule", "Override", "Publish"] as const;
 type Tab = typeof TABS[number];
+
+// ── MOH Assets (uploaded music tracks) ───────────────────────────────────────
+// Each upload becomes a MohAsset row on Connect and a MOH class on the PBX
+// once the sync helper pulls the manifest and reloads Asterisk. Connect is the
+// source of truth — the PBX only caches the bytes locally.
+interface MohAsset {
+  id: string;
+  tenantId: string;
+  name: string;
+  mohClassName: string;
+  sourceFilename: string;
+  sizeBytes: number;
+  mimeType: string;
+  contentHash: string;
+  status: string;
+  createdAt: string;
+}
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
@@ -226,6 +243,9 @@ export default function HoldSchedulingPage() {
       {!loading && activeTab === "Hold Profiles" && (
         <ProfilesTab profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
       )}
+      {!loading && activeTab === "Assets" && (
+        <AssetsTab tenantId={tenantId} canUpload={can("can_upload_moh")} />
+      )}
       {!loading && activeTab === "Schedule" && (
         <ScheduleTab schedule={schedule} profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
       )}
@@ -255,9 +275,32 @@ function StatusBadge({ color, label, value }: { color: string; label: string; va
 // Tab: Hold Profiles
 // ═══════════════════════════════════════════════════════════════════════════════
 
+interface PromptCatalogRow {
+  id: string;
+  tenantId: string | null;
+  tenantSlug: string | null;
+  promptRef: string;
+  displayName: string;
+  category: string;
+  source: string;
+  isActive: boolean;
+}
+
 function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
   profiles: HoldProfile[]; tenantId: string; canManage: boolean; onRefresh: () => void;
 }) {
+  const [prompts, setPrompts] = useState<PromptCatalogRow[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!tenantId) { setPrompts([]); return; }
+      try {
+        const r = await apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts?tenantId=${encodeURIComponent(tenantId)}`);
+        if (alive) setPrompts((r.prompts ?? []).filter((p) => p.isActive));
+      } catch { if (alive) setPrompts([]); }
+    })();
+    return () => { alive = false; };
+  }, [tenantId]);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<{
@@ -378,10 +421,19 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
 
             {form.holdAnnouncementEnabled && (
               <>
-                <label style={labelStyle}>Announcement Ref <span style={{ color: "#64748b", fontWeight: 400 }}>(VitalPBX recording name)</span></label>
-                <input style={inputStyle} value={form.holdAnnouncementRef} onChange={(e) => setForm((f) => ({ ...f, holdAnnouncementRef: e.target.value }))} placeholder="e.g. hold_announcement or agent-thankyou" />
+                <label style={labelStyle}>Announcement Prompt <span style={{ color: "#64748b", fontWeight: 400 }}>(tenant recording)</span></label>
+                <select
+                  style={inputStyle}
+                  value={form.holdAnnouncementRef}
+                  onChange={(e) => setForm((f) => ({ ...f, holdAnnouncementRef: e.target.value }))}
+                >
+                  <option value="">— Select a prompt —</option>
+                  {prompts.map((p) => (
+                    <option key={p.id} value={p.promptRef}>{p.displayName || p.promptRef} ({p.promptRef})</option>
+                  ))}
+                </select>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>
-                  Used as <code>announceoverride</code> in Queue() or via <code>CHANNEL(musicclass)</code> subroutine.
+                  Played on a loop while the caller is on hold via <code>[connect-hold-announce]</code>. Uses AstDB keys <code>hold_announce</code> + <code>hold_repeat</code>.
                 </div>
 
                 <label style={labelStyle}>Repeat Interval (seconds)</label>
@@ -389,8 +441,17 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
               </>
             )}
 
-            <label style={labelStyle}>Intro Announcement Ref <span style={{ color: "#64748b", fontWeight: 400 }}>(optional — played once on hold entry)</span></label>
-            <input style={inputStyle} value={form.introAnnouncementRef} onChange={(e) => setForm((f) => ({ ...f, introAnnouncementRef: e.target.value }))} placeholder="e.g. hold_intro (leave blank to skip)" />
+            <label style={labelStyle}>Intro Prompt <span style={{ color: "#64748b", fontWeight: 400 }}>(optional — played once on hold entry)</span></label>
+            <select
+              style={inputStyle}
+              value={form.introAnnouncementRef}
+              onChange={(e) => setForm((f) => ({ ...f, introAnnouncementRef: e.target.value }))}
+            >
+              <option value="">— None —</option>
+              {prompts.map((p) => (
+                <option key={p.id} value={p.promptRef}>{p.displayName || p.promptRef} ({p.promptRef})</option>
+              ))}
+            </select>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
               <button onClick={() => setShowForm(false)} style={btnSmall("#334155")}>Cancel</button>
@@ -699,7 +760,7 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
         <div style={{ width: "100%" }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Publish Hold Profile to PBX</div>
           <p style={{ fontSize: 13, color: "#94a3b8", margin: "0 0 12px" }}>
-            Writes the current effective Hold Profile as 6 AstDB keys to VitalPBX/Asterisk via AMI.
+            Writes the current effective Hold Profile as AstDB keys to VitalPBX/Asterisk via AMI.
             VitalPBX reads these at hold/queue time — Connect never handles media.
           </p>
 
@@ -714,6 +775,8 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
                 ["hold_announcement_ref", preview.profile.holdAnnouncementRef ?? ""],
                 ["hold_announcement_interval", String(preview.profile.holdAnnouncementIntervalSec ?? 30)],
                 ["intro_announcement_ref", preview.profile.introAnnouncementRef ?? ""],
+                ["hold_announce", preview.profile.holdAnnouncementEnabled ? (preview.profile.holdAnnouncementRef ?? "") : ""],
+                ["hold_repeat", String(preview.profile.holdAnnouncementIntervalSec ?? 30)],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: "flex", gap: 12, fontSize: 12, padding: "2px 0" }}>
                   <code style={{ color: "#94a3b8", minWidth: 220 }}>{k}</code>
@@ -782,3 +845,140 @@ const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, backgro
 const modalBox: React.CSSProperties = { background: "#0f172a", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 28, minWidth: 420, maxWidth: 560, width: "100%", maxHeight: "90vh", overflowY: "auto" };
 function btnStyle(bg: string): React.CSSProperties { return { background: bg, color: "#fff", border: "none", borderRadius: 7, padding: "9px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600 }; }
 function btnSmall(bg: string): React.CSSProperties { return { background: bg, color: "#e2e8f0", border: "none", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 500, whiteSpace: "nowrap" }; }
+
+// ── Assets tab ────────────────────────────────────────────────────────────────
+// Tenants upload MOH audio here. Files land on Connect; the PBX-host
+// connect-media-sync helper pulls them on a cron (see docs/pbx/connect-media-sync.sh).
+function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boolean }) {
+  const [assets, setAssets] = useState<MohAsset[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [name, setName] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const r = await apiGet<{ assets: MohAsset[] }>(`/voice/moh/assets${qs}`);
+      setAssets(r.assets ?? []);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load assets");
+    } finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const upload = useCallback(async () => {
+    if (!file) { setError("Choose a file first"); return; }
+    if (!name.trim()) { setError("Name is required"); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      // Direct multipart upload — not JSON — so we bypass the apiClient helper.
+      // Same session token as normal API calls; the server validates it.
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || (typeof window !== "undefined" ? `${window.location.origin}/api` : "")).replace(/\/+$/, "");
+      const token =
+        (typeof window !== "undefined" &&
+          (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken"))) || "";
+      const fd = new FormData();
+      fd.append("meta", JSON.stringify({ tenantId, name: name.trim() }));
+      fd.append("file", file);
+      const res = await fetch(`${baseUrl}/voice/moh/assets`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(msg || `Upload failed (${res.status})`);
+      }
+      setName("");
+      setFile(null);
+      await reload();
+    } catch (e: any) {
+      setError(e?.message ?? "Upload failed");
+    } finally { setBusy(false); }
+  }, [file, name, tenantId, reload]);
+
+  const remove = useCallback(async (id: string) => {
+    if (!confirm("Archive this MOH asset? The PBX helper will remove it on the next sync.")) return;
+    try {
+      await apiDelete(`/voice/moh/assets/${id}`);
+      await reload();
+    } catch (e: any) { setError(e?.message ?? "Delete failed"); }
+  }, [reload]);
+
+  return (
+    <div>
+      {canUpload && (
+        <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 12, padding: 20, marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>Upload music on hold</div>
+          <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>
+            MP3 / WAV / AAC up to 50 MB. A new VitalPBX MOH class is created on the next PBX sync run.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="Asset name (e.g. Holiday Jazz)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={{ ...inputStyle, width: 260, marginBottom: 0 }}
+            />
+            <input
+              type="file"
+              accept="audio/mpeg,audio/wav,audio/x-wav,audio/aac,audio/mp4,audio/ogg"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              style={{ color: "#cbd5e1", fontSize: 12 }}
+            />
+            <button onClick={upload} disabled={busy} style={btnStyle("#6366f1")}>
+              {busy ? "Uploading…" : "Upload"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 16px", marginBottom: 20, fontSize: 13, color: "#fca5a5" }}>
+          {error}
+          <button onClick={() => setError(null)} style={{ ...btnSmall("transparent"), marginLeft: 12 }}>dismiss</button>
+        </div>
+      )}
+
+      <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", padding: 0 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "rgba(0,0,0,0.3)" }}>
+              <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>Name</th>
+              <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>MOH Class</th>
+              <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>Size</th>
+              <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>Status</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", color: "#cbd5e1" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan={5} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>Loading…</td></tr>}
+            {!loading && assets.length === 0 && (
+              <tr><td colSpan={5} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>
+                No MOH assets uploaded yet.
+              </td></tr>
+            )}
+            {assets.map((a) => (
+              <tr key={a.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                <td style={{ padding: "10px 14px" }}>{a.name}</td>
+                <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12 }}>{a.mohClassName}</td>
+                <td style={{ padding: "10px 14px" }}>{(a.sizeBytes / 1024 / 1024).toFixed(2)} MB</td>
+                <td style={{ padding: "10px 14px", color: a.status === "ready" ? "#22c55e" : "#f59e0b" }}>{a.status}</td>
+                <td style={{ padding: "10px 14px", textAlign: "right" }}>
+                  {canUpload && <button onClick={() => remove(a.id)} style={btnSmall("#ef444480")}>Archive</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

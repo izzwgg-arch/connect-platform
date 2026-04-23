@@ -23,6 +23,7 @@
     "@connect/security": "workspace:*",
     "@connect/shared": "workspace:*",
     "@fastify/jwt": "^9.1.0",
+    "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.58.0",

@@ -338,6 +338,8 @@ model Tenant {
   mohOverrideState              MohOverrideState?
   mohPublishRecords             MohPublishRecord[]
   mohLastPublishedState         MohLastPublishedState?
+  didRouteMappings              DidRouteMapping[]
+  mohAssets                     MohAsset[]
   pbxCallEvents                 PbxCallEvent[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
@@ -1013,6 +1015,7 @@ model PbxInstance {
   webhookRegistration PbxWebhookRegistration?
   tenantDirectory  PbxTenantDirectory[]
   tenantInboundDids PbxTenantInboundDid[]
+  didRouteMappings DidRouteMapping[]
 }
 
 // Cached VitalPBX tenant rows for deterministic mapping (T8 / numeric id / slug -> Connect tenant).
@@ -1528,6 +1531,7 @@ model IvrRouteProfile {
   scheduleHoliday   IvrScheduleConfig[] @relation("ScheduleHolidayProfile")
   overrideStates    IvrOverrideState[]
   optionRoutes      IvrOptionRoute[]
+  didRouteMappings  DidRouteMapping[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -1697,6 +1701,7 @@ model MohProfile {
   scheduleHoliday       MohScheduleConfig[] @relation("MohScheduleHoliday")
   scheduleRules         MohScheduleRule[]
   overrideStates        MohOverrideState[]
+  didRouteMappings      DidRouteMapping[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -1801,4 +1806,91 @@ model MohLastPublishedState {
   publishedAt DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─── DID-level routing (shared-entry architecture) ───────────────────────────
+// Connect-owned mapping for each inbound phone number: which tenant owns it,
+// which IVR profile and MOH/hold profile are active, and which VitalPBX
+// inbound-route (if any) was auto-provisioned by Connect via REST.
+//
+// When admins Publish a DidRouteMapping, Connect:
+//   1. (optional, behind PBX_INBOUND_API flag) POSTs /api/v2/tenants/:vt/inbound_numbers
+//      on VitalPBX to create/update the inbound route pointing at the shared
+//      [connect-tenant-ivr] custom destination with TENANT_SLUG preset.
+//   2. Writes AstDB keys via AMI DBPut:
+//        connect/didmap/<e164>/tenant        = tenantSlug
+//        connect/didmap/<e164>/profile_id    = ivrProfileId or ""
+//        connect/didmap/<e164>/moh_class     = resolved MOH class name or ""
+//        connect/didmap/<e164>/hold_announce = holdAnnounceRef or ""
+//        connect/didmap/<e164>/hold_repeat   = holdRepeatSec or ""
+//
+// fallbackBehavior controls what the dialplan does if any mapping is missing:
+//   "default_ivr"  — fall through to tenant's default business-hours IVR profile
+//   "terminate"    — play safe fallback announcement and hang up
+//   "voicemail"    — go to the tenant's default voicemail box if configured
+model DidRouteMapping {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  e164                 String                              // normalised E.164, e.g. "+18005551212"
+  phoneNumberId        String?                             // FK → PhoneNumber (Connect-purchased); null for PBX-owned
+  pbxInstanceId        String?                             // FK → PbxInstance (which PBX holds the inbound route)
+  pbxInboundRouteId    String?                             // VitalPBX inbound route id once auto-created
+  ivrProfileId         String?                             // FK → IvrRouteProfile (active IVR for this DID)
+  mohProfileId         String?                             // FK → MohProfile (active Hold/MOH profile for this DID)
+  holdAnnouncePromptRef String?                            // VitalPBX recording ref for hold announcement
+  holdRepeatSec        Int      @default(30)               // seconds between announcement repeats
+  fallbackBehavior     String   @default("default_ivr")    // "default_ivr" | "terminate" | "voicemail"
+  enabled              Boolean  @default(true)
+  lastPublishedAt      DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdBy            String?
+  updatedBy            String?
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ivrProfile  IvrRouteProfile? @relation(fields: [ivrProfileId], references: [id], onDelete: SetNull)
+  mohProfile  MohProfile?      @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
+  pbxInstance PbxInstance?     @relation(fields: [pbxInstanceId], references: [id], onDelete: SetNull)
+
+  @@unique([e164])
+  @@index([tenantId])
+  @@index([tenantId, enabled])
+  @@index([ivrProfileId])
+  @@index([mohProfileId])
+  @@index([pbxInstanceId])
+}
+
+// ─── MOH uploaded media assets ───────────────────────────────────────────────
+// Metadata catalog of tenant-owned music files uploaded to Connect. The actual
+// audio bytes live in object storage (S3/R2) at `storageKey`; they are pulled
+// by the PBX-host `connect-media-sync` helper on a cron, which drops them into
+// /var/lib/asterisk/moh/<mohClassName>/ and runs `asterisk -rx "moh reload"`.
+//
+// mohClassName is deterministic per tenant+name: "connect_<tenantSlug>_<slug(name)>".
+// status flow: uploading -> ready -> (optionally) failed | archived
+model MohAsset {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenantSlug     String                                    // denormalised for helper lookups
+  name           String                                    // human label, e.g. "Holiday Jazz Mix"
+  mohClassName   String                                    // deterministic, e.g. "connect_acme_holiday_jazz"
+  sourceFilename String                                    // original upload filename
+  storageKey     String                                    // object-storage key (S3/R2)
+  contentHash    String                                    // sha256 hex — used by helper to diff
+  sizeBytes      Int
+  durationSec    Int?                                      // from ffprobe, null until validated
+  mimeType       String
+  status         String   @default("uploading")            // "uploading" | "ready" | "failed" | "archived"
+  failureReason  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, mohClassName])
+  @@unique([contentHash])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([status])
 }

@@ -268,3 +268,76 @@ The `database show` output should look like:
   dialplan hooks (e.g. tenant-specific pre-answer macros), create a thin
   tenant-specific prefix context per Step 3's alternative and chain to the
   shared router.
+
+---
+
+## Shared-entry additions (one-time PBX steps)
+
+After the core Option A install above, these optional one-time steps enable
+Connect's **DID Routing**, **MOH asset sync**, and **dynamic hold announcements**.
+They make per-customer onboarding a **Connect-only** task — no further Asterisk
+edits after this.
+
+### A) DID-level routing (per-DID tenant + profile override)
+
+The dialplan shipped in `option-a-custom-context.conf` already reads
+`connect/didmap/<e164>/tenant` and `connect/didmap/<e164>/profile_id`. No
+further PBX work is needed. To onboard a new DID, use **Portal → PBX → DID
+Routing** (see `adding-a-new-customer.md`). On Publish, Connect will:
+
+- Write `connect/didmap/<e164>/*` via AMI `DBPut`.
+- Optionally (when `PBX_INBOUND_API=1`) upsert the VitalPBX inbound route
+  pointing at `connect-tenant-ivr,${CALLERID(dnid)},1` with `__TENANT_SLUG`
+  preset. This replaces Step 3 manual work for every subsequent DID.
+
+### B) MOH asset sync helper (once per PBX)
+
+Install the PBX-host pull helper so Connect can ship new MOH audio without
+SSH. Full instructions in
+[`connect-media-sync-install.md`](./connect-media-sync-install.md).
+
+High-level:
+
+1. Copy `connect-media-sync.sh` to `/usr/local/bin/connect-media-sync.sh` on
+   the PBX.
+2. Put the shared secret in `/etc/connect/connect_media_secret` (chmod 600).
+3. Install cron `*/5 * * * * /usr/local/bin/connect-media-sync.sh >/dev/null 2>&1`.
+4. After first run, `asterisk -rx "moh show classes"` should list uploaded
+   classes under `/var/lib/asterisk/moh/<class>/`.
+
+### C) Hold announcements (already in the shipped dialplan)
+
+`option-a-custom-context.conf` includes `[connect-hold-announce]`, a local-
+channel wrapper that loops an announcement while the caller is queued. It
+reads `hold_announce` + `hold_repeat` from the tenant AstDB family. To use
+it on a queue:
+
+```
+exten => _X!,1,Queue(myqueue,,,,300,,,connect-hold-announce)
+```
+
+The wrapper gates on empty `hold_announce` (silent loop), enforces a minimum
+`hold_repeat` of 10s, and stops when the caller leaves the queue. Admins
+control it from **Portal → PBX → MOH Scheduling → Profile** (select
+Announcement Prompt + Repeat Interval) — no PBX reload required.
+
+### D) AstDB keys (reference)
+
+Tenant-scoped family `connect/t_<slug>`:
+
+```
+active_prompt / active_invalid_prompt / active_timeout_prompt   (IVR)
+moh_class                                                        (MOH)
+hold_announcement_enabled / hold_announcement_ref / hold_announcement_interval
+intro_announcement_ref
+hold_announce / hold_repeat                                      (aliases for [connect-hold-announce])
+mode / dest_business / dest_afterhours / dest_holiday / dest_override
+```
+
+DID-scoped family `connect/didmap/<e164>`:
+
+```
+tenant / profile_id / moh_class / hold_announce / hold_repeat
+```
+
+DID values override tenant values where both are set.

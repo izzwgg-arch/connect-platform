@@ -363,6 +363,50 @@ export class VitalPbxClient {
       throw err;
     }
   }
+  /**
+   * Add or update an inbound DID on a VitalPBX tenant.
+   *
+   * VitalPBX treats PATCH /tenants/:id/inbound_numbers as an upsert — pass the
+   * full payload for the number and the PBX will create it if new or replace
+   * the destination on an existing number.
+   *
+   * Used by Connect's shared-entry DID router: every new DID added in Connect
+   * (and then Published) triggers this so the VitalPBX inbound route is
+   * wired to the shared [connect-tenant-ivr] custom destination with the
+   * tenant's slug preset on the channel.
+   *
+   * Payload shape is VitalPBX-edition-specific; the input is passed through
+   * verbatim so callers can adapt without editing the client. Typical:
+   *   {
+   *     phone_number: "+18005551212",
+   *     description:  "Connect-managed DID (acme)",
+   *     destination_type: "custom-destinations",
+   *     destination:      "connect-tenant-ivr,<e164>,1",
+   *     channel_variables: { TENANT_SLUG: "acme" }
+   *   }
+   */
+  async addTenantInboundNumber(tenantId: string, payload: Record<string, unknown>): Promise<any> {
+    return unwrapData(
+      await this.callEndpoint<any>("tenants.addInboundNumbers", {
+        pathParams: { tenantId },
+        body: payload,
+      }),
+    );
+  }
+
+  /**
+   * Remove an inbound DID from a VitalPBX tenant. Used on DidRouteMapping
+   * delete / disable so the PBX no longer routes the DID through Connect.
+   */
+  async removeTenantInboundNumber(tenantId: string, payload: Record<string, unknown>): Promise<any> {
+    return unwrapData(
+      await this.callEndpoint<any>("tenants.removeInboundNumbers", {
+        pathParams: { tenantId },
+        body: payload,
+      }),
+    );
+  }
+
   async createTenant(input: Record<string, unknown>): Promise<any> {
     return unwrapData(await this.callEndpoint<any>("tenants.create", { body: input }));
   }

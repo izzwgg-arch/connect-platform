@@ -19,6 +19,7 @@ const END_USER_PERMISSIONS: Permission[] = [
   "can_download_apk",
   "can_view_ivr_routing",
   "can_view_moh",
+  "can_view_did_routing",
 ];
 
 const TENANT_ADMIN_PERMISSIONS: Permission[] = [
@@ -37,6 +38,9 @@ const TENANT_ADMIN_PERMISSIONS: Permission[] = [
   "can_manage_moh",
   "can_publish_moh",
   "can_override_moh",
+  "can_upload_moh",
+  "can_manage_did_routing",
+  "can_publish_did_routing",
 ];
 
 const SUPER_ADMIN_PERMISSIONS: Permission[] = [

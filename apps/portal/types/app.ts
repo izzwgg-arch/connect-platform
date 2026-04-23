@@ -35,7 +35,11 @@ export type Permission =
   | "can_view_moh"
   | "can_manage_moh"
   | "can_publish_moh"
-  | "can_override_moh";
+  | "can_override_moh"
+  | "can_upload_moh"
+  | "can_view_did_routing"
+  | "can_manage_did_routing"
+  | "can_publish_did_routing";
 
 export type Presence = "AVAILABLE" | "ON_CALL" | "AWAY" | "DND" | "OFFLINE";
 

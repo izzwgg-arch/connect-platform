@@ -307,13 +307,24 @@ export function registerTelephonyRoutes(
   // Writes tenant-scoped runtime routing keys to Asterisk AstDB via AMI DBPut.
   // Called by the Connect API (and worker) on every IVR publish or rollback.
   // Auth: x-cdr-secret (same shared secret as CDR ingest).
-  // Body: { tenantSlug: string, keys: Array<{ family: string, key: string, value: string }> }
+  // Body:
+  //   { tenantSlug: string,
+  //     keys: Array<{ family: string, key: string, value: string }>,
+  //     didE164?: string }    // optional: also permits connect/didmap/<e164>/*
+  //
+  // Families allowed in `keys`:
+  //   • connect/t_<tenantSlug>           — tenant-scoped IVR/MOH/hold state
+  //   • connect/didmap/<didE164>         — per-DID routing overrides (only
+  //                                         when didE164 is supplied, and must
+  //                                         match the single namespace exactly)
   router.post("/telephony/internal/ivr-publish", (req: Request, res: Response) => {
     if (!isInternalRouteAuthorized(req)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    const { tenantSlug, keys } = req.body as { tenantSlug?: unknown; keys?: unknown };
+    const { tenantSlug, keys, didE164 } = req.body as {
+      tenantSlug?: unknown; keys?: unknown; didE164?: unknown;
+    };
     if (typeof tenantSlug !== "string" || !/^[a-z0-9_]+$/.test(tenantSlug)) {
       res.status(400).json({ error: "invalid_slug" });
       return;
@@ -321,6 +332,16 @@ export function registerTelephonyRoutes(
     if (!Array.isArray(keys) || keys.length === 0) {
       res.status(400).json({ error: "keys must be a non-empty array" });
       return;
+    }
+    // didE164, if provided, must be strict E.164 digits (optionally with + prefix).
+    // This prevents the caller from smuggling a "../"-style family injection.
+    let didFamilyPrefix: string | null = null;
+    if (didE164 !== undefined && didE164 !== null && didE164 !== "") {
+      if (typeof didE164 !== "string" || !/^\+?\d{7,20}$/.test(didE164)) {
+        res.status(400).json({ error: "invalid_did_e164" });
+        return;
+      }
+      didFamilyPrefix = `connect/didmap/${didE164}`;
     }
     if (!telephony.ami._isConnected) {
       res.status(503).json({ error: "ami_not_connected" });
@@ -335,8 +356,10 @@ export function registerTelephonyRoutes(
         typeof (entry as any).value !== "string"
       ) continue;
       const { family, key, value } = entry as { family: string; key: string; value: string };
-      // Extra safety: ensure family is scoped to this tenant
-      if (!family.startsWith(`connect/t_${tenantSlug}`)) {
+      // Tenant-scoped family OR the specific didmap family for this e164.
+      const tenantScoped = family.startsWith(`connect/t_${tenantSlug}`);
+      const didScoped = didFamilyPrefix !== null && family === didFamilyPrefix;
+      if (!tenantScoped && !didScoped) {
         res.status(400).json({ error: "family_scope_mismatch", family });
         return;
       }
@@ -362,14 +385,27 @@ export function registerTelephonyRoutes(
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    const { tenantSlug, family, keys } = req.body as {
-      tenantSlug?: unknown; family?: unknown; keys?: unknown;
+    const { tenantSlug, family, keys, didE164 } = req.body as {
+      tenantSlug?: unknown; family?: unknown; keys?: unknown; didE164?: unknown;
     };
     if (typeof tenantSlug !== "string" || !/^[a-z0-9_]+$/.test(tenantSlug)) {
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    if (typeof family !== "string" || !family.startsWith(`connect/t_${tenantSlug}`)) {
+    // Accept either a tenant family (connect/t_<slug>*) or the specific
+    // didmap family (connect/didmap/<e164>) when didE164 is supplied.
+    let didFamily: string | null = null;
+    if (didE164 !== undefined && didE164 !== null && didE164 !== "") {
+      if (typeof didE164 !== "string" || !/^\+?\d{7,20}$/.test(didE164)) {
+        res.status(400).json({ error: "invalid_did_e164" });
+        return;
+      }
+      didFamily = `connect/didmap/${didE164}`;
+    }
+    if (
+      typeof family !== "string" ||
+      !(family.startsWith(`connect/t_${tenantSlug}`) || (didFamily !== null && family === didFamily))
+    ) {
       res.status(400).json({ error: "family_scope_mismatch" });
       return;
     }

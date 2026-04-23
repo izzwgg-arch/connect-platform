@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
+import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
 import dgram from "dgram";
@@ -40,6 +41,15 @@ import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTen
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx } from "./pbxExtensionSync";
+import {
+  buildMohClassName,
+  buildSignedDownloadUrl,
+  deleteMohFile,
+  resolveStoragePath,
+  verifySignedDownload,
+  writeMohFile,
+} from "./mohStorage";
+import * as fs from "node:fs";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -55,6 +65,13 @@ const fallbackNumberProvider = new FakeNumberProvider();
 
 app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
+// File-upload support for MOH asset uploads. 50 MB cap per file covers
+// typical 10-30 min AAC/MP3/WAV hold-music tracks with generous headroom.
+// One file per request keeps the UI simple and the server-side validation
+// (hash, ffprobe, size) deterministic.
+app.register(fastifyMultipart, {
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+});
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -11504,6 +11521,25 @@ function canManageIvrPrompts(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
 }
 
+// ── Shared-entry architecture permissions ────────────────────────────────────
+// DID-level routing: admins assign DIDs to tenants + IVR/MOH profiles and
+// publish the mapping to AstDB + VitalPBX inbound_numbers. Same role gate as
+// IVR routing today (SUPER_ADMIN + tenant ADMIN) — split out as its own helper
+// so a future narrower role can be granted this without inheriting IVR edits.
+function canManageDidRouting(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+function canPublishDidRouting(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+// MOH asset uploads: tenant-scoped audio files that the PBX-host helper pulls
+// onto /var/lib/asterisk/moh/<class>/. Same role gate as MOH management.
+function canUploadMoh(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
 /** Normalise a tenant name to a safe AstDB family slug: lowercase, a-z0-9_ only. */
 function toIvrSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -11825,16 +11861,19 @@ function ivrNormalisePromptRefs(input: string[]): {
 async function publishToAstDb(
   tenantSlug: string,
   keys: Array<{ family: string; key: string; value: string }>,
+  opts: { didE164?: string } = {},
 ): Promise<void> {
   const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
   const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const payload: Record<string, unknown> = { tenantSlug, keys };
+  if (opts.didE164) payload["didE164"] = opts.didE164;
   const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(secret ? { "x-cdr-secret": secret } : {}),
     },
-    body: JSON.stringify({ tenantSlug, keys }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(8_000),
   });
   if (!resp.ok) {
@@ -11842,6 +11881,43 @@ async function publishToAstDb(
     throw new Error(`telephony ivr-publish failed: ${resp.status} ${body}`);
   }
 }
+
+/**
+ * Write per-DID routing keys to AstDB under `connect/didmap/<e164>/*`.
+ *
+ * Values use empty string ("") for "no override / use tenant default", which
+ * the dialplan treats as "fall through to the tenant-scoped family". This
+ * keeps published didmap rows reversible: writing "" to all 5 keys is the
+ * same as "not published".
+ *
+ * Called from:
+ *   • POST /voice/did/publish       — new/updated mapping
+ *   • POST /voice/did/rollback/:id  — restore previous snapshot
+ */
+async function publishDidmapToAstDb(
+  tenantSlug: string,
+  e164: string,
+  values: {
+    tenant: string;         // tenantSlug (required — empty = "tombstone" delete)
+    profile_id: string;
+    moh_class: string;
+    hold_announce: string;
+    hold_repeat: string;
+  },
+): Promise<void> {
+  const family = `connect/didmap/${e164}`;
+  const keys: Array<{ family: string; key: string; value: string }> = [
+    { family, key: "tenant",        value: values.tenant },
+    { family, key: "profile_id",    value: values.profile_id },
+    { family, key: "moh_class",     value: values.moh_class },
+    { family, key: "hold_announce", value: values.hold_announce },
+    { family, key: "hold_repeat",   value: values.hold_repeat },
+  ];
+  await publishToAstDb(tenantSlug, keys, { didE164: e164 });
+}
+
+/** The 5 didmap keys written for every DID publish — exposed for snapshot/rollback. */
+const DIDMAP_KEY_NAMES = ["tenant", "profile_id", "moh_class", "hold_announce", "hold_repeat"] as const;
 
 /**
  * Read the current AstDB values for a set of tenant-scoped IVR keys via the
@@ -11855,9 +11931,12 @@ async function snapshotAstDbFamily(
   tenantSlug: string,
   family: string,
   keyNames: string[],
+  opts: { didE164?: string } = {},
 ): Promise<Array<{ family: string; key: string; value: string }>> {
   const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
   const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const payload: Record<string, unknown> = { tenantSlug, family, keys: keyNames };
+  if (opts.didE164) payload["didE164"] = opts.didE164;
   try {
     const resp = await fetch(`${base}/telephony/internal/astdb-read-family`, {
       method: "POST",
@@ -11865,7 +11944,7 @@ async function snapshotAstDbFamily(
         "Content-Type": "application/json",
         ...(secret ? { "x-cdr-secret": secret } : {}),
       },
-      body: JSON.stringify({ tenantSlug, family, keys: keyNames }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5_000),
     });
     if (!resp.ok) return keyNames.map((k) => ({ family, key: k, value: "" }));
@@ -12841,6 +12920,397 @@ app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DID ROUTING — shared-entry architecture
+//
+// Connect owns every inbound DID. Each DidRouteMapping pins a DID to a tenant
+// + IVR profile + MOH/hold profile + hold-announce prompt. On Publish,
+// Connect:
+//   1. (optional, behind PBX_INBOUND_API flag) upserts the VitalPBX inbound
+//      route via tenants.addInboundNumbers so the PBX sends the DID into the
+//      shared [connect-tenant-ivr] custom destination with TENANT_SLUG preset.
+//   2. Writes connect/didmap/<e164>/{tenant,profile_id,moh_class,hold_announce,hold_repeat}
+//      to AstDB via AMI DBPut. The dialplan reads this family BEFORE its own
+//      tenant-scoped family, so didmap wins on conflict.
+// Rollback restores both the AstDB snapshot and (if PBX_INBOUND_API is on) the
+// previous VitalPBX inbound-route payload captured at publish time.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Normalise a user-entered DID to strict E.164 ("+" + 7..20 digits). */
+function normalizeDidE164(raw: string): string | null {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const digits = s.replace(/[^\d]/g, "");
+  if (digits.length < 7 || digits.length > 20) return null;
+  return `+${digits}`;
+}
+
+/** Resolve the active MOH class name for a MohProfile (falls back to empty). */
+function didResolveMohClass(profile: { vitalPbxMohClassName?: string | null } | null): string {
+  return String(profile?.vitalPbxMohClassName ?? "").trim();
+}
+
+/**
+ * Build the didmap values to publish for a DidRouteMapping. Empty strings
+ * mean "no override" and make the dialplan fall back to the tenant family.
+ */
+async function didBuildPublishValues(
+  mapping: { tenantId: string; e164: string; ivrProfileId: string | null; mohProfileId: string | null; holdAnnouncePromptRef: string | null; holdRepeatSec: number; enabled: boolean },
+  tenantSlug: string,
+): Promise<{ tenant: string; profile_id: string; moh_class: string; hold_announce: string; hold_repeat: string }> {
+  if (!mapping.enabled) {
+    return { tenant: "", profile_id: "", moh_class: "", hold_announce: "", hold_repeat: "" };
+  }
+  let mohClass = "";
+  if (mapping.mohProfileId) {
+    const prof = await (db as any).mohProfile.findUnique({ where: { id: mapping.mohProfileId } });
+    mohClass = didResolveMohClass(prof);
+  }
+  return {
+    tenant: tenantSlug,
+    profile_id: mapping.ivrProfileId ?? "",
+    moh_class: mohClass,
+    hold_announce: mapping.holdAnnouncePromptRef ?? "",
+    hold_repeat: String(mapping.holdRepeatSec ?? 30),
+  };
+}
+
+// ── GET /voice/did/mappings ──────────────────────────────────────────────────
+app.get("/voice/did/mappings", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  const where = tid ? { tenantId: tid } : {};
+  const mappings = await (db as any).didRouteMapping.findMany({
+    where,
+    orderBy: [{ tenantId: "asc" }, { e164: "asc" }],
+    include: {
+      ivrProfile: { select: { id: true, name: true, type: true } },
+      mohProfile: { select: { id: true, name: true, vitalPbxMohClassName: true } },
+      tenant: { select: { id: true, name: true } },
+    },
+  });
+  return reply.send({ mappings });
+});
+
+// ── POST /voice/did/mappings ─────────────────────────────────────────────────
+app.post("/voice/did/mappings", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const schema = z.object({
+    tenantId: z.string().min(1),
+    e164: z.string().min(4),
+    phoneNumberId: z.string().optional().nullable(),
+    pbxInstanceId: z.string().optional().nullable(),
+    ivrProfileId: z.string().optional().nullable(),
+    mohProfileId: z.string().optional().nullable(),
+    holdAnnouncePromptRef: z.string().optional().nullable(),
+    holdRepeatSec: z.number().int().min(10).max(3600).optional(),
+    fallbackBehavior: z.enum(["default_ivr", "terminate", "voicemail"]).optional(),
+    enabled: z.boolean().optional(),
+  });
+  const body = schema.safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
+  const input = body.data;
+  assertIvrTenantAccess(user, input.tenantId);
+
+  const normalized = normalizeDidE164(input.e164);
+  if (!normalized) return reply.code(400).send({ error: "invalid_e164" });
+
+  // Cross-tenant validation: profiles referenced MUST belong to the same tenant.
+  if (input.ivrProfileId) {
+    const prof = await (db as any).ivrRouteProfile.findUnique({ where: { id: input.ivrProfileId }, select: { tenantId: true } });
+    if (!prof || prof.tenantId !== input.tenantId) return reply.code(400).send({ error: "ivr_profile_tenant_mismatch" });
+  }
+  if (input.mohProfileId) {
+    const prof = await (db as any).mohProfile.findUnique({ where: { id: input.mohProfileId }, select: { tenantId: true } });
+    if (!prof || prof.tenantId !== input.tenantId) return reply.code(400).send({ error: "moh_profile_tenant_mismatch" });
+  }
+
+  try {
+    const created = await (db as any).didRouteMapping.create({
+      data: {
+        tenantId: input.tenantId,
+        e164: normalized,
+        phoneNumberId: input.phoneNumberId ?? null,
+        pbxInstanceId: input.pbxInstanceId ?? null,
+        ivrProfileId: input.ivrProfileId ?? null,
+        mohProfileId: input.mohProfileId ?? null,
+        holdAnnouncePromptRef: input.holdAnnouncePromptRef ?? null,
+        holdRepeatSec: input.holdRepeatSec ?? 30,
+        fallbackBehavior: input.fallbackBehavior ?? "default_ivr",
+        enabled: input.enabled ?? true,
+        createdBy: (user as any).id ?? null,
+        updatedBy: (user as any).id ?? null,
+      },
+    });
+    return reply.send({ ok: true, mapping: created });
+  } catch (err: any) {
+    if (String(err?.code) === "P2002") return reply.code(409).send({ error: "e164_already_mapped" });
+    throw err;
+  }
+});
+
+// ── PATCH /voice/did/mappings/:id ────────────────────────────────────────────
+app.patch("/voice/did/mappings/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const existing = await (db as any).didRouteMapping.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, existing.tenantId);
+
+  const schema = z.object({
+    ivrProfileId: z.string().nullable().optional(),
+    mohProfileId: z.string().nullable().optional(),
+    holdAnnouncePromptRef: z.string().nullable().optional(),
+    holdRepeatSec: z.number().int().min(10).max(3600).optional(),
+    fallbackBehavior: z.enum(["default_ivr", "terminate", "voicemail"]).optional(),
+    enabled: z.boolean().optional(),
+    pbxInstanceId: z.string().nullable().optional(),
+  });
+  const body = schema.safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
+  const input = body.data;
+
+  if (input.ivrProfileId) {
+    const prof = await (db as any).ivrRouteProfile.findUnique({ where: { id: input.ivrProfileId }, select: { tenantId: true } });
+    if (!prof || prof.tenantId !== existing.tenantId) return reply.code(400).send({ error: "ivr_profile_tenant_mismatch" });
+  }
+  if (input.mohProfileId) {
+    const prof = await (db as any).mohProfile.findUnique({ where: { id: input.mohProfileId }, select: { tenantId: true } });
+    if (!prof || prof.tenantId !== existing.tenantId) return reply.code(400).send({ error: "moh_profile_tenant_mismatch" });
+  }
+
+  const updated = await (db as any).didRouteMapping.update({
+    where: { id },
+    data: {
+      ...(input.ivrProfileId !== undefined ? { ivrProfileId: input.ivrProfileId } : {}),
+      ...(input.mohProfileId !== undefined ? { mohProfileId: input.mohProfileId } : {}),
+      ...(input.holdAnnouncePromptRef !== undefined ? { holdAnnouncePromptRef: input.holdAnnouncePromptRef } : {}),
+      ...(input.holdRepeatSec !== undefined ? { holdRepeatSec: input.holdRepeatSec } : {}),
+      ...(input.fallbackBehavior !== undefined ? { fallbackBehavior: input.fallbackBehavior } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.pbxInstanceId !== undefined ? { pbxInstanceId: input.pbxInstanceId } : {}),
+      updatedBy: (user as any).id ?? null,
+    },
+  });
+  return reply.send({ ok: true, mapping: updated });
+});
+
+// ── DELETE /voice/did/mappings/:id ───────────────────────────────────────────
+// Soft semantic: tombstones the DID (enabled=false, published with empty
+// values) so Asterisk stops routing it, but the row is kept for audit.
+// `hard=1` actually removes the row (admin must publish separately first).
+app.delete("/voice/did/mappings/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const q = z.object({ hard: z.string().optional() }).parse(req.query || {});
+  const existing = await (db as any).didRouteMapping.findUnique({ where: { id } });
+  if (!existing) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, existing.tenantId);
+  if (q.hard === "1") {
+    await (db as any).didRouteMapping.delete({ where: { id } });
+    return reply.send({ ok: true, deleted: "hard" });
+  }
+  const updated = await (db as any).didRouteMapping.update({
+    where: { id }, data: { enabled: false, updatedBy: (user as any).id ?? null },
+  });
+  return reply.send({ ok: true, deleted: "soft", mapping: updated });
+});
+
+// ── POST /voice/did/publish ──────────────────────────────────────────────────
+// Publishes a single DidRouteMapping. Writes connect/didmap/<e164>/* to AstDB
+// and (if PBX_INBOUND_API is enabled AND a pbxInstance is linked) upserts the
+// VitalPBX inbound route so the DID enters the shared custom destination.
+app.post("/voice/did/publish", async (req, reply) => {
+  const user = await requirePermission(req, reply, canPublishDidRouting);
+  if (!user) return;
+  const body = z.object({ mappingId: z.string().min(1) }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const mapping = await (db as any).didRouteMapping.findUnique({ where: { id: body.data.mappingId } });
+  if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, mapping.tenantId);
+
+  const tenantSlug = await getIvrSlugForTenant(mapping.tenantId);
+  const e164 = String(mapping.e164);
+  const didFamily = `connect/didmap/${e164}`;
+
+  // Snapshot CURRENT didmap state for rollback.
+  const previousKeys = await snapshotAstDbFamily(
+    tenantSlug, didFamily, [...DIDMAP_KEY_NAMES], { didE164: e164 },
+  );
+
+  const values = await didBuildPublishValues(mapping, tenantSlug);
+  const keysWritten = [
+    { family: didFamily, key: "tenant",        value: values.tenant },
+    { family: didFamily, key: "profile_id",    value: values.profile_id },
+    { family: didFamily, key: "moh_class",     value: values.moh_class },
+    { family: didFamily, key: "hold_announce", value: values.hold_announce },
+    { family: didFamily, key: "hold_repeat",   value: values.hold_repeat },
+  ];
+
+  // Mode label "did" distinguishes didmap publishes from tenant-scoped ones.
+  const record = await (db as any).ivrPublishRecord.create({
+    data: {
+      tenantId: mapping.tenantId,
+      publishedBy: (user as any).id ?? "unknown",
+      mode: "did",
+      keysWritten,
+      previousKeys,
+      status: "pending",
+      isRollback: false,
+    },
+  });
+
+  try {
+    await publishDidmapToAstDb(tenantSlug, e164, values);
+
+    // Optional: auto-provision VitalPBX inbound route.
+    const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+    let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
+    if (inboundApiEnabled && mapping.pbxInstanceId) {
+      try {
+        const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
+        if (link?.pbxTenantId) {
+          const pbxClient = getVitalPbxClient();
+          const payload = {
+            phone_number: e164,
+            description: `Connect-managed DID (${tenantSlug})`,
+            destination_type: "custom-destinations",
+            destination: `connect-tenant-ivr,${e164},1`,
+            channel_variables: { TENANT_SLUG: tenantSlug },
+          };
+          const result = await pbxClient.addTenantInboundNumber(link.pbxTenantId, payload);
+          if (result?.id) pbxInboundRouteId = String(result.id);
+          app.log.info({ tenantId: mapping.tenantId, e164, pbxInboundRouteId }, "did: inbound route upserted");
+        } else {
+          app.log.warn({ tenantId: mapping.tenantId, e164 }, "did: pbxInstance linked but no pbxTenantId — skipping inbound_numbers upsert");
+        }
+      } catch (err: any) {
+        // PBX REST failure is non-fatal: AstDB write already succeeded so the
+        // call flow still works once the operator creates the inbound route
+        // manually. Record the failure on the publish record for triage.
+        app.log.warn({ err: err?.message, e164 }, "did: inbound_numbers upsert failed (non-fatal)");
+        await (db as any).ivrPublishRecord.update({
+          where: { id: record.id }, data: { error: `inbound_route_upsert_failed: ${err?.message ?? "unknown"}` },
+        });
+      }
+    }
+
+    await (db as any).didRouteMapping.update({
+      where: { id: mapping.id },
+      data: { lastPublishedAt: new Date(), pbxInboundRouteId },
+    });
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    app.log.info({ e164, tenantSlug, keysWritten: keysWritten.length, pbxInboundRouteId }, "did: publish success");
+    return reply.send({ ok: true, e164, tenantSlug, recordId: record.id, pbxInboundRouteId });
+  } catch (err: any) {
+    await (db as any).ivrPublishRecord.update({
+      where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" },
+    });
+    app.log.warn({ e164, err: err?.message }, "did: publish failed");
+    return reply.code(503).send({ error: "publish_failed", detail: err?.message });
+  }
+});
+
+// ── POST /voice/did/rollback/:publishId ──────────────────────────────────────
+// Restores the AstDB didmap state captured at the target publish.
+app.post("/voice/did/rollback/:publishId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canPublishDidRouting);
+  if (!user) return;
+  const { publishId } = req.params as { publishId: string };
+  const target = await (db as any).ivrPublishRecord.findUnique({ where: { id: publishId } });
+  if (!target) return reply.code(404).send({ error: "publish_record_not_found" });
+  if (target.mode !== "did") return reply.code(400).send({ error: "not_a_did_publish" });
+  assertIvrTenantAccess(user, target.tenantId);
+
+  const rawPrev: Array<{ family: string; key: string; value: string }> =
+    Array.isArray(target.previousKeys) ? target.previousKeys : [];
+  if (rawPrev.length === 0) {
+    return reply.code(409).send({ error: "no_snapshot_available" });
+  }
+
+  // Derive e164 from the first key's family (all keys share one family).
+  const family = rawPrev[0].family;
+  const e164Match = family.match(/^connect\/didmap\/(\+?\d{7,20})$/);
+  if (!e164Match) return reply.code(500).send({ error: "invalid_snapshot_family" });
+  const e164 = e164Match[1];
+
+  const tenantSlug = await getIvrSlugForTenant(target.tenantId);
+  const currentSnapshot = await snapshotAstDbFamily(
+    tenantSlug, family, [...DIDMAP_KEY_NAMES], { didE164: e164 },
+  );
+
+  const record = await (db as any).ivrPublishRecord.create({
+    data: {
+      tenantId: target.tenantId, publishedBy: (user as any).id ?? "unknown",
+      mode: "did", keysWritten: rawPrev, previousKeys: currentSnapshot,
+      status: "pending", isRollback: true,
+    },
+  });
+
+  try {
+    await publishToAstDb(tenantSlug, rawPrev, { didE164: e164 });
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    app.log.info({ e164, rolledBackTo: publishId }, "did: rollback success");
+    return reply.send({ ok: true, e164, rolledBackTo: publishId, recordId: record.id });
+  } catch (err: any) {
+    await (db as any).ivrPublishRecord.update({
+      where: { id: record.id }, data: { status: "failed", error: err?.message },
+    });
+    return reply.code(503).send({ error: "rollback_failed", detail: err?.message });
+  }
+});
+
+// ── GET /voice/did/:e164/preview ─────────────────────────────────────────────
+// Returns the current effective runtime state for a DID — what Asterisk will
+// actually do on the next call. Combines the DidRouteMapping row, its linked
+// IVR/MOH profiles, and (best-effort) the current AstDB snapshot for didmap.
+app.get("/voice/did/:e164/preview", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const { e164: rawE164 } = req.params as { e164: string };
+  const e164 = normalizeDidE164(decodeURIComponent(rawE164));
+  if (!e164) return reply.code(400).send({ error: "invalid_e164" });
+
+  const mapping = await (db as any).didRouteMapping.findUnique({
+    where: { e164 },
+    include: {
+      ivrProfile: true,
+      mohProfile: true,
+      tenant: { select: { id: true, name: true } },
+    },
+  });
+  if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, mapping.tenantId);
+
+  const tenantSlug = await getIvrSlugForTenant(mapping.tenantId);
+  const family = `connect/didmap/${e164}`;
+  const live = await snapshotAstDbFamily(
+    tenantSlug, family, [...DIDMAP_KEY_NAMES], { didE164: e164 },
+  );
+  const liveMap: Record<string, string> = {};
+  for (const { key, value } of live) liveMap[key] = value;
+
+  return reply.send({
+    ok: true,
+    e164,
+    mapping,
+    tenantSlug,
+    live: {
+      tenant: liveMap.tenant ?? "",
+      profileId: liveMap.profile_id ?? "",
+      mohClass: liveMap.moh_class ?? "",
+      holdAnnounce: liveMap.hold_announce ?? "",
+      holdRepeat: liveMap.hold_repeat ?? "",
+    },
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // HOLD PROFILE SCHEDULING — OPTION A  (formerly "MOH Scheduling")
 //
 // Unified control plane for Music-On-Hold class + hold announcements.
@@ -12855,6 +13325,8 @@ app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
 //   hold_announcement_ref      — VitalPBX recording name (empty = none)
 //   hold_announcement_interval — seconds between playbacks (default "30")
 //   intro_announcement_ref     — one-time intro recording on hold entry (empty = none)
+//   hold_announce              — alias of hold_announcement_ref (read by [connect-hold-announce])
+//   hold_repeat                — alias of hold_announcement_interval (read by [connect-hold-announce])
 //
 // Immediate publish paths:
 //   POST /voice/moh/publish           → publishes immediately
@@ -12907,6 +13379,10 @@ function buildMohKeys(
     { family: fam, key: "hold_announcement_ref",      value: profile.holdAnnouncementRef ?? "" },
     { family: fam, key: "hold_announcement_interval", value: String(profile.holdAnnouncementIntervalSec ?? 30) },
     { family: fam, key: "intro_announcement_ref",     value: profile.introAnnouncementRef ?? "" },
+    // Aliases consumed by [connect-hold-announce] wrapper (see docs/pbx/option-a-custom-context.conf).
+    // Only emitted when the announcement is enabled — wrapper guards on empty hold_announce.
+    { family: fam, key: "hold_announce",              value: profile.holdAnnouncementEnabled ? (profile.holdAnnouncementRef ?? "") : "" },
+    { family: fam, key: "hold_repeat",                value: String(profile.holdAnnouncementIntervalSec ?? 30) },
   ];
 }
 
@@ -13404,6 +13880,8 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
       { family: fam, key: "hold_announcement_ref",      value: "" },
       { family: fam, key: "hold_announcement_interval", value: "30" },
       { family: fam, key: "intro_announcement_ref",     value: "" },
+      { family: fam, key: "hold_announce",              value: "" },
+      { family: fam, key: "hold_repeat",                value: "30" },
     ];
   } else {
     return reply.code(409).send({ error: "no_previous_state_to_restore" });
@@ -13431,6 +13909,208 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
     await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
     return reply.code(503).send({ error: "rollback_failed", detail: err?.message });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MOH ASSET UPLOADS + PBX-HOST SYNC MANIFEST
+//
+// Tenants upload music tracks through Connect. Each upload is stored on the
+// Connect side (filesystem now, S3/R2 behind the same API later) and
+// catalogued as a MohAsset row. A small bash helper on the PBX host pulls
+// /voice/moh/sync-manifest on a cron and mirrors the files into
+// /var/lib/asterisk/moh/<mohClassName>/, then runs `asterisk -rx "moh reload"`.
+//
+// Call-time impact: zero. The PBX plays MOH off its own disk. Connect serves
+// manifests on a cron, not per-call.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── POST /voice/moh/assets ───────────────────────────────────────────────────
+// Multipart upload: field `file` (audio bytes) + field `meta` (JSON string
+// with tenantId + name). Returns the created MohAsset row. Tenant scope and
+// size are enforced server-side.
+app.post("/voice/moh/assets", async (req, reply) => {
+  const user = await requirePermission(req, reply, canUploadMoh);
+  if (!user) return;
+
+  if (!(req as any).isMultipart?.()) {
+    return reply.code(400).send({ error: "multipart_required" });
+  }
+  let fileBuf: Buffer | null = null;
+  let originalFilename = "asset";
+  let mimeType = "application/octet-stream";
+  let metaRaw = "";
+  try {
+    // Iterate all parts once; multipart reader cannot be rewound.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parts = (req as any).parts();
+    for await (const part of parts) {
+      if (part.type === "file" && part.fieldname === "file") {
+        originalFilename = String(part.filename || "asset");
+        mimeType = String(part.mimetype || mimeType);
+        fileBuf = await part.toBuffer();
+      } else if (part.type === "field" && part.fieldname === "meta") {
+        metaRaw = String(part.value || "");
+      }
+    }
+  } catch (err: any) {
+    return reply.code(400).send({ error: "multipart_parse_failed", detail: err?.message });
+  }
+
+  if (!fileBuf || fileBuf.length === 0) return reply.code(400).send({ error: "file_required" });
+  const metaSchema = z.object({ tenantId: z.string().min(1), name: z.string().min(1).max(100) });
+  let meta: { tenantId: string; name: string };
+  try { meta = metaSchema.parse(JSON.parse(metaRaw)); }
+  catch { return reply.code(400).send({ error: "invalid_meta" }); }
+  assertIvrTenantAccess(user, meta.tenantId);
+
+  const tenantSlug = await getIvrSlugForTenant(meta.tenantId);
+  const mohClassName = buildMohClassName(tenantSlug, meta.name);
+
+  // Duplicate-name guard — class name is unique per tenant so overlapping
+  // uploads would otherwise break the PBX (two files mapping to one class).
+  const existing = await (db as any).mohAsset.findFirst({
+    where: { tenantId: meta.tenantId, mohClassName },
+  });
+  if (existing) return reply.code(409).send({ error: "name_already_exists", detail: mohClassName });
+
+  // Write, hash, catalog.
+  let stored: { storageKey: string; sha256: string; sizeBytes: number };
+  try {
+    stored = await writeMohFile({
+      tenantSlug, mohClassName, originalFilename, buffer: fileBuf,
+    });
+  } catch (err: any) {
+    return reply.code(500).send({ error: "storage_write_failed", detail: err?.message });
+  }
+
+  const asset = await (db as any).mohAsset.create({
+    data: {
+      tenantId: meta.tenantId,
+      tenantSlug,
+      name: meta.name,
+      mohClassName,
+      sourceFilename: originalFilename,
+      storageKey: stored.storageKey,
+      contentHash: stored.sha256,
+      sizeBytes: stored.sizeBytes,
+      mimeType,
+      status: "ready",
+      createdBy: (user as any).id ?? null,
+    },
+  }).catch(async (err: any) => {
+    // Roll back the file if the DB insert lost the race on contentHash uniqueness.
+    await deleteMohFile(stored.storageKey).catch(() => void 0);
+    if (String(err?.code) === "P2002") throw Object.assign(new Error("duplicate_content"), { statusCode: 409 });
+    throw err;
+  });
+
+  return reply.code(201).send({ asset });
+});
+
+// ── GET /voice/moh/assets ────────────────────────────────────────────────────
+app.get("/voice/moh/assets", async (req, reply) => {
+  const user = await requirePermission(req, reply, canUploadMoh);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  const where = tid ? { tenantId: tid } : {};
+  const assets = await (db as any).mohAsset.findMany({
+    where: { ...where, status: { in: ["ready", "uploading"] } },
+    orderBy: [{ createdAt: "desc" }],
+  });
+  return reply.send({ assets });
+});
+
+// ── DELETE /voice/moh/assets/:id ─────────────────────────────────────────────
+// Soft-delete the catalog row and remove the file from storage. The PBX-host
+// sync helper will reconcile the class directory on its next run (files not
+// in the manifest get removed locally).
+app.delete("/voice/moh/assets/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canUploadMoh);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const asset = await (db as any).mohAsset.findUnique({ where: { id } });
+  if (!asset) return reply.code(404).send({ error: "asset_not_found" });
+  assertIvrTenantAccess(user, asset.tenantId);
+
+  // Archive the row so historical publishes still resolve mohClass for audit,
+  // but the sync manifest will stop advertising the file.
+  await (db as any).mohAsset.update({ where: { id }, data: { status: "archived" } });
+  await deleteMohFile(asset.storageKey).catch(() => void 0);
+  return reply.send({ ok: true });
+});
+
+// ── GET /voice/moh/sync-manifest ─────────────────────────────────────────────
+// Called by the PBX-host `connect-media-sync.sh` helper. Shared-secret auth
+// (x-connect-secret header) — NOT JWT, because the helper is a machine
+// account outside the normal user-session flow.
+//
+// Response contains signed download URLs, sha256 hashes, and target MOH
+// class names so the helper can diff-sync files under
+// /var/lib/asterisk/moh/<mohClassName>/ and run `moh reload` only when
+// something changed.
+app.get("/voice/moh/sync-manifest", async (req, reply) => {
+  const expected = (process.env.MOH_SYNC_SHARED_SECRET || process.env.CDR_INGEST_SECRET || "").trim();
+  const provided = String((req.headers as any)["x-connect-secret"] ?? "").trim();
+  if (!expected || provided !== expected) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const assets = await (db as any).mohAsset.findMany({
+    where: { status: "ready" },
+    orderBy: [{ tenantSlug: "asc" }, { mohClassName: "asc" }],
+  });
+
+  const publicBase = (process.env.PUBLIC_API_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/+$/, "");
+  // 30-minute expiry gives the helper ample headroom; if the helper runs
+  // every 5 minutes and one manifest takes 25 minutes to download, the
+  // remaining URLs are still valid.
+  const urlExpirySec = 30 * 60;
+
+  const files = assets.map((a: any) => {
+    const ext = (a.sourceFilename || "").split(".").pop() || "";
+    // Target filename on the PBX side. Extension is preserved so Asterisk can
+    // pick up the file format correctly; "asset.<ext>" makes the directory
+    // contents deterministic for diff-sync.
+    const relPath = `${a.mohClassName}/asset${ext ? "." + ext : ""}`;
+    return {
+      relPath,
+      mohClass: a.mohClassName,
+      sha256: a.contentHash,
+      sizeBytes: a.sizeBytes,
+      downloadUrl: buildSignedDownloadUrl(publicBase, a.storageKey, urlExpirySec),
+    };
+  });
+
+  return reply.send({
+    generatedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + urlExpirySec * 1000).toISOString(),
+    files,
+  });
+});
+
+// ── GET /voice/moh/download/:key ─────────────────────────────────────────────
+// Signed-URL download for the PBX-host helper. No JWT — signature + expiry
+// are the only auth (see mohStorage.verifySignedDownload).
+app.get("/voice/moh/download/*", async (req, reply) => {
+  const wildcardPath = (req.params as any)["*"] as string | undefined;
+  const storageKey = decodeURIComponent(String(wildcardPath || ""));
+  if (!storageKey) return reply.code(400).send({ error: "missing_key" });
+
+  const q = req.query as { exp?: string; sig?: string };
+  const verified = verifySignedDownload(storageKey, q.exp, q.sig);
+  if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: verified.reason });
+
+  let absolutePath: string;
+  try { absolutePath = resolveStoragePath(storageKey); }
+  catch { return reply.code(400).send({ error: "invalid_key" }); }
+
+  if (!fs.existsSync(absolutePath)) return reply.code(404).send({ error: "not_found" });
+  const stat = await fs.promises.stat(absolutePath);
+  reply.header("content-length", stat.size);
+  reply.header("content-type", "application/octet-stream");
+  return reply.send(fs.createReadStream(absolutePath));
 });
 
 // ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──

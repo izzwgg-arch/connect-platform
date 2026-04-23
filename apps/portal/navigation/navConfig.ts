@@ -24,6 +24,7 @@ export const navItems: NavItem[] = [
   { href: "/pbx/softphone",      label: "WebRTC Softphone",  icon: "SP", section: "pbx", permission: "can_view_calls" },
   { href: "/pbx/sbc-connectivity",label: "SBC Connectivity", icon: "SB", section: "pbx", permission: "can_view_calls" },
   { href: "/pbx/ivr-routing",     label: "IVR Routing",       icon: "IR", section: "pbx", permission: "can_view_ivr_routing" },
+  { href: "/pbx/did-routing",     label: "DID Routing",       icon: "DR", section: "pbx", permission: "can_view_did_routing" },
   { href: "/pbx/moh-scheduling",  label: "MOH Scheduling",    icon: "MH", section: "pbx", permission: "can_view_moh" },
   { href: "/pbx/call-recordings",label: "Call Recordings",   icon: "CR", section: "pbx", permission: "can_view_recordings" },
   { href: "/pbx/call-reports",   label: "Call Reports",      icon: "CP", section: "pbx", permission: "can_view_reports" },
