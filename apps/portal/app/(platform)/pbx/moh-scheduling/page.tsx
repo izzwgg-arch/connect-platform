@@ -384,7 +384,7 @@ function MohClassPicker({
   );
 }
 
-function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
+function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }: {
   profiles: HoldProfile[]; tenantId: string; canManage: boolean; onRefresh: () => void;
   isSuperAdmin?: boolean;
 }) {
