@@ -27,14 +27,31 @@ type VitalTenantRaw = {
   [key: string]: unknown;
 };
 
-/** PBX slug values we still hide from the switcher (system / lab tenants only). */
-const EXCLUDED_PBX_SLUGS = new Set(["smoke", "billing", "test", "default", "helper", "demo", "trial", "local", "bg"]);
+/** PBX slug values that look like system / lab tenants. They're only hidden
+ *  when the description is *also* empty or matches one of these — otherwise a
+ *  real customer whose slug happens to be "test" (e.g. Landau Home on
+ *  VitalPBX uses slug="test", description="Landau Home") would be hidden. */
+const SYSTEM_LIKE_SLUGS = new Set(["smoke", "billing", "test", "default", "helper", "demo", "trial", "local", "bg"]);
 
-function isExcludedPbxSlug(slug: string): boolean {
-  const s = slug.toLowerCase().trim();
-  if (!s) return true;
-  if (EXCLUDED_PBX_SLUGS.has(s)) return true;
+function isSystemLikeSlug(slug: string): boolean {
+  const s = (slug || "").toLowerCase().trim();
+  if (!s) return false;
+  if (SYSTEM_LIKE_SLUGS.has(s)) return true;
   if (s.includes("switch smoke") || s.includes("bc switch")) return true;
+  return false;
+}
+
+/** Drop a row only when BOTH the slug and the human description look like
+ *  a system/lab tenant. Empty-slug rows are always hidden. */
+function isExcludedPbxTenant(slug: string, description: string | undefined): boolean {
+  const s = (slug || "").trim();
+  if (!s) return true;
+  if (!isSystemLikeSlug(s)) return false;
+  // Slug is suspicious → require a non-empty, non-suspicious description to
+  // keep the row. Landau Home passes this because desc="Landau Home".
+  const d = (description || "").trim();
+  if (!d) return true;
+  if (isSystemLikeSlug(d)) return true;
   return false;
 }
 
@@ -66,7 +83,8 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
 
         const slug = String(t.name || "").trim();
         const tid = String(t.tenant_id ?? t.id ?? "").trim();
-        if (slug && isExcludedPbxSlug(slug)) continue;
+        const description = String(t.description || "").trim();
+        if (isExcludedPbxTenant(slug, description)) continue;
 
         const displayName = resolveDisplayName(t);
         const id = slug ? `vpbx:${slug}` : tid ? `vpbx:${tid}` : "";
