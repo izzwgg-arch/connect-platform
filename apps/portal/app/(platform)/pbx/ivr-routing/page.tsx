@@ -158,7 +158,10 @@ function usePromptCatalog(tenantId: string | undefined): {
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    if (!tenantId) { setPrompts([]); return; }
+    // Skip the initial placeholder tenantId (set by AppProvider before the
+    // real tenant list loads) — it maps to nothing in the DB and would waste
+    // a round-trip returning "[]".
+    if (!tenantId || tenantId === "local") { setPrompts([]); return; }
     setLoading(true); setError(null);
     try {
       const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
@@ -436,7 +439,12 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
   }, [onRefresh]);
   // Catalog scoped to the currently-selected tenant. Shared by the modal form
   // AND every ProfilePromptsSection below, so we only hit the API once.
-  const { prompts: modalPrompts, loading: modalPromptsLoading, reload: reloadPrompts } = usePromptCatalog(tenantId);
+  const {
+    prompts: modalPrompts,
+    loading: modalPromptsLoading,
+    error: modalPromptsError,
+    reload: reloadPrompts,
+  } = usePromptCatalog(tenantId);
 
   const openCreate = () => {
     setEditId(null);
@@ -488,23 +496,67 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
     <div>
       {/* Active-tenant indicator — makes it obvious which tenant the
           prompt dropdowns and profile list are scoped to. Super-admins
-          switch tenants via the top-right tenant switcher. */}
+          switch tenants via the top-right tenant switcher.
+          Also shows the raw tenantId being sent to /voice/ivr/prompts so we
+          can tell at a glance when the UI is scoped to a wrong/stale value. */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 10, marginBottom: 14,
+        display: "flex", flexDirection: "column", gap: 4, marginBottom: 14,
         fontSize: 12, color: "#94a3b8",
-        background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)",
-        borderRadius: 8, padding: "8px 14px",
+        background: modalPromptsError
+          ? "rgba(248,113,113,0.10)"
+          : modalPrompts.length === 0
+            ? "rgba(250,204,21,0.08)"
+            : "rgba(34,197,94,0.08)",
+        border: modalPromptsError
+          ? "1px solid rgba(248,113,113,0.35)"
+          : modalPrompts.length === 0
+            ? "1px solid rgba(250,204,21,0.25)"
+            : "1px solid rgba(34,197,94,0.25)",
+        borderRadius: 8, padding: "10px 14px",
       }}>
-        <span style={{ fontWeight: 600, color: "#c7d2fe" }}>Active tenant:</span>
-        <span style={{ color: "#f1f5f9" }}>{tenantLabel}</span>
-        <span style={{ color: "#64748b" }}>•</span>
-        <span>
-          {modalPromptsLoading
-            ? "loading catalog…"
-            : modalPrompts.length === 0
-              ? "0 synced recordings — click Auto-Sync from VitalPBX above, or pick a different tenant in the top-right switcher"
-              : `${modalPrompts.length} synced recording${modalPrompts.length === 1 ? "" : "s"} available`}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, color: "#c7d2fe" }}>Active tenant:</span>
+          <span style={{ color: "#f1f5f9" }}>{tenantLabel || "(no tenant selected)"}</span>
+          <span style={{ color: "#64748b" }}>•</span>
+          <span style={{ color: "#94a3b8", fontFamily: "ui-monospace, monospace", fontSize: 11 }}>
+            id=<span style={{ color: "#f1f5f9" }}>{tenantId || "(empty)"}</span>
+          </span>
+          <span style={{ color: "#64748b" }}>•</span>
+          <span>
+            {modalPromptsLoading
+              ? "loading catalog…"
+              : modalPromptsError
+                ? <span style={{ color: "#fca5a5" }}>catalog fetch failed — {String(modalPromptsError)}</span>
+                : modalPrompts.length === 0
+                  ? <span style={{ color: "#fde68a" }}>0 synced recordings for this tenant</span>
+                  : <span style={{ color: "#86efac" }}>{modalPrompts.length} synced recording{modalPrompts.length === 1 ? "" : "s"} available</span>}
+          </span>
+        </div>
+        {!modalPromptsLoading && !modalPromptsError && modalPrompts.length === 0 && (
+          <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 2 }}>
+            Click <strong style={{ color: "#c7d2fe" }}>Auto-Sync from VitalPBX</strong> to pull System Recordings for this tenant,
+            or pick a different tenant in the top-right switcher.
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={() => reloadPrompts()}
+            disabled={modalPromptsLoading || !tenantId || tenantId === "local"}
+            style={{
+              fontSize: 11, padding: "3px 8px", borderRadius: 4,
+              background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.35)",
+              color: "#c7d2fe", cursor: modalPromptsLoading ? "default" : "pointer",
+            }}
+          >
+            {modalPromptsLoading ? "Refreshing…" : "Refresh catalog"}
+          </button>
+          {modalPrompts.length > 0 && (
+            <span style={{ fontSize: 10, color: "#64748b" }}>
+              First: {modalPrompts[0]?.displayName} ({modalPrompts[0]?.promptRef})
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
