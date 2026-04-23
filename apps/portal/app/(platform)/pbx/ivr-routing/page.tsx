@@ -217,7 +217,7 @@ type Tab = typeof TABS[number];
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function IvrRoutingPage() {
-  const { tenantId, can } = useAppContext();
+  const { tenantId, tenant, can } = useAppContext();
   const [activeTab, setActiveTab] = useState<Tab>("Route Profiles");
   const [error, setError] = useState<string | null>(null);
 
@@ -312,6 +312,8 @@ export default function IvrRoutingPage() {
         <RouteProfilesTab
           profiles={profiles}
           tenantId={tenantId}
+          tenantLabel={tenant?.name || tenant?.slug || tenantId || "(no tenant)"}
+          tenantSlug={tenant?.slug || ""}
           canManage={canManage}
           canManagePrompts={canManagePrompts}
           onRefresh={reload}
@@ -358,13 +360,16 @@ export default function IvrRoutingPage() {
 // Tab: Route Profiles
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onRefresh }: {
+function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canManage, canManagePrompts, onRefresh }: {
   profiles: RouteProfile[];
   tenantId: string;
+  tenantLabel: string;
+  tenantSlug: string;
   canManage: boolean;
   canManagePrompts: boolean;
   onRefresh: () => void;
 }) {
+  void tenantSlug;
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<ProfileFormState>(blankProfileForm());
@@ -481,6 +486,27 @@ function RouteProfilesTab({ profiles, tenantId, canManage, canManagePrompts, onR
 
   return (
     <div>
+      {/* Active-tenant indicator — makes it obvious which tenant the
+          prompt dropdowns and profile list are scoped to. Super-admins
+          switch tenants via the top-right tenant switcher. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, marginBottom: 14,
+        fontSize: 12, color: "#94a3b8",
+        background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)",
+        borderRadius: 8, padding: "8px 14px",
+      }}>
+        <span style={{ fontWeight: 600, color: "#c7d2fe" }}>Active tenant:</span>
+        <span style={{ color: "#f1f5f9" }}>{tenantLabel}</span>
+        <span style={{ color: "#64748b" }}>•</span>
+        <span>
+          {modalPromptsLoading
+            ? "loading catalog…"
+            : modalPrompts.length === 0
+              ? "0 synced recordings — click Auto-Sync from VitalPBX above, or pick a different tenant in the top-right switcher"
+              : `${modalPrompts.length} synced recording${modalPrompts.length === 1 ? "" : "s"} available`}
+        </span>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Route Profiles</h2>
         <div style={{ display: "flex", gap: 8 }}>
