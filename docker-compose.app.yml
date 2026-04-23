@@ -49,9 +49,28 @@ services:
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
       # Shared secret for /internal/cdr-ingest — must match telephony service CDR_INGEST_SECRET.
       CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # ── MOH asset storage + PBX sync ───────────────────────────────────────
+      # Volume-backed directory so uploaded MOH audio survives container
+      # rebuilds. Bound to the docker volume moh-assets below.
+      MOH_STORAGE_DIR: ${MOH_STORAGE_DIR:-/var/lib/connect/moh-assets}
+      # Shared secret the PBX-host connect-media-sync.sh helper presents as
+      # x-connect-secret when pulling /voice/moh/sync-manifest. Distinct from
+      # CDR_INGEST_SECRET so we can rotate them independently.
+      MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
+      # Signs the short-lived download URLs embedded in the manifest. Keep
+      # separate from CDR_INGEST so a CDR secret leak doesn't grant file read.
+      MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
+      # Public URL the PBX-host helper can actually reach. MUST be set in
+      # production or signed URLs will point at http://localhost:3001.
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
     command: sh -lc "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
+    volumes:
+      # Persistent MOH asset storage — survives container rebuilds. The
+      # connect-media-sync.sh cron on the PBX host pulls files from here via
+      # signed HTTPS URLs, never by shared filesystem.
+      - moh-assets:/var/lib/connect/moh-assets
     networks:
       - default
       - infra_default
@@ -165,3 +184,10 @@ services:
 networks:
   infra_default:
     external: true
+
+volumes:
+  # Persistent storage for MOH audio files uploaded via the portal. Survives
+  # container rebuilds; PBX-host helper pulls files from here via signed
+  # HTTPS, never by shared filesystem or SSH.
+  moh-assets:
+    driver: local

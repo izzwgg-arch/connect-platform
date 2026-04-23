@@ -14113,6 +14113,94 @@ app.get("/voice/moh/download/*", async (req, reply) => {
   return reply.send(fs.createReadStream(absolutePath));
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// PBX MOH CLASS CATALOG — existing VitalPBX MOH classes, read-only mirror
+// ----------------------------------------------------------------------------
+// Populated from `ombutel.ombu_music_groups` via the super-admin
+// "Auto-Sync PBX MOH classes" button. Reads from Connect DB only; the PBX
+// MariaDB is hit exactly once per sync run (two indexed SELECTs) — never on
+// page load, never on a schedule the UI runs.
+// ----------------------------------------------------------------------------
+
+// ── GET /voice/moh/pbx-classes ────────────────────────────────────────────────
+// Feeds the Hold-Profile MOH-class dropdown. Tenant-admins are pinned to their
+// own tenantId; super-admins can pass ?tenantId=... or ?tenantId=__all__.
+app.get("/voice/moh/pbx-classes", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+
+  const q = z.object({
+    tenantId: z.string().optional(),
+    activeOnly: z.string().optional(),
+  }).parse(req.query || {});
+
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const wantAll = isSA && q.tenantId === "__all__";
+  const scopeTenantId = wantAll ? null : (q.tenantId || user.tenantId || null);
+  if (!wantAll && !scopeTenantId) return reply.code(400).send({ error: "tenant_required" });
+  if (!isSA && scopeTenantId && scopeTenantId !== user.tenantId) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+
+  const rows = await (db as any).pbxMohClass.findMany({
+    where: {
+      ...(wantAll ? {} : { OR: [{ tenantId: scopeTenantId }, { tenantId: null }] }),
+      ...((q.activeOnly ?? "1") === "0" ? {} : { isActive: true }),
+    },
+    orderBy: [{ name: "asc" }],
+    select: {
+      id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
+      pbxGroupId: true, name: true, mohClassName: true, classType: true,
+      isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
+    },
+  });
+  return reply.send({ classes: rows });
+});
+
+// ── POST /voice/moh/pbx-classes/auto-sync ─────────────────────────────────────
+// Super-admin only. Runs the bounded ombutel MariaDB sync. No polling loop.
+app.post("/voice/moh/pbx-classes/auto-sync", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") {
+    return reply.code(403).send({ error: "super_admin_required" });
+  }
+
+  const body = z.object({
+    pbxInstanceId: z.string().optional(),
+    deactivateMissing: z.boolean().optional(),
+  }).safeParse(req.body ?? {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+
+  const instance = body.data.pbxInstanceId
+    ? await db.pbxInstance.findUnique({ where: { id: body.data.pbxInstanceId } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { createdAt: "asc" } });
+  if (!instance) {
+    return reply.code(404).send({
+      error: "no_pbx_instance",
+      hint: "Register a PbxInstance under Admin → PBX Instances first.",
+    });
+  }
+
+  const { syncMohClassesFromOmbutelMysql } = await import("./pbxOmbutelMohClassSync");
+  const result = await syncMohClassesFromOmbutelMysql(
+    db,
+    instance.id,
+    instance.ombuMysqlUrlEncrypted,
+    { deactivateMissing: body.data.deactivateMissing === true },
+  );
+
+  app.log.info({ pbxInstanceId: instance.id, result }, "[MOH_CLASS_AUTO_SYNC] done");
+  if (result.source === "skipped") {
+    return reply.send({
+      ok: false,
+      skipReason: result.skipReason,
+      hint: "Set PbxInstance.ombuMysqlUrlEncrypted to an encrypted MySQL URL (same one used by DID sync).",
+    });
+  }
+  return reply.send({ ok: true, result });
+});
+
 // ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──
 // Called by the telephony service on AMI MessageWaiting events.
 app.post("/internal/voicemail-notify", async (req, reply) => {

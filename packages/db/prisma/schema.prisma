@@ -340,6 +340,7 @@ model Tenant {
   mohLastPublishedState         MohLastPublishedState?
   didRouteMappings              DidRouteMapping[]
   mohAssets                     MohAsset[]
+  pbxMohClasses                 PbxMohClass[]
   pbxCallEvents                 PbxCallEvent[]
   smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
   smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
@@ -1016,6 +1017,7 @@ model PbxInstance {
   tenantDirectory  PbxTenantDirectory[]
   tenantInboundDids PbxTenantInboundDid[]
   didRouteMappings DidRouteMapping[]
+  mohClasses       PbxMohClass[]
 }
 
 // Cached VitalPBX tenant rows for deterministic mapping (T8 / numeric id / slug -> Connect tenant).
@@ -1868,6 +1870,45 @@ model DidRouteMapping {
 //
 // mohClassName is deterministic per tenant+name: "connect_<tenantSlug>_<slug(name)>".
 // status flow: uploading -> ready -> (optionally) failed | archived
+/// Read-only index of Music-On-Hold classes that already exist on the VitalPBX
+/// side (table `ombutel.ombu_music_groups`). Populated by the super-admin
+/// "Auto-Sync PBX MOH classes" action which runs the same bounded, indexed
+/// MariaDB query pattern as the prompt and DID syncs — no filesystem scan, no
+/// call-time traffic, no polling. Admins pick from this catalog when they
+/// want a Hold Profile to point at a class VitalPBX already knows about.
+///
+/// Tenant mapping reuses TenantPbxLink (numeric VitalPBX tenant_id → Connect
+/// tenantId). A class whose tenant cannot be resolved is stored with
+/// `tenantId = null` so super-admins can still see + re-home it manually.
+model PbxMohClass {
+  id                String   @id @default(cuid())
+  pbxInstanceId     String                                  // which PBX this class lives on
+  tenantId          String?                                 // Connect tenant (nullable when mapping unknown)
+  tenantSlug        String?
+  pbxGroupId        Int                                     // ombu_music_groups.music_group_id
+  pbxTenantId       String?                                 // raw VitalPBX numeric tenant_id, as string
+  name              String                                  // raw name column (e.g. "default", "main")
+  mohClassName      String                                  // name as Asterisk/VitalPBX exposes it — typically equals `name`
+  classType         String?                                 // "files" | "stream" | "custom" etc.
+  streamingUrl      String?
+  streamingFormat   String?
+  isDefault         Boolean  @default(false)
+  fileCount         Int      @default(0)                    // rolled up from ombu_music_files
+  isActive          Boolean  @default(true)                 // false = removed in VitalPBX on last sync
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  pbxInstance PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+  tenant      Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@unique([pbxInstanceId, pbxGroupId])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([pbxInstanceId, isActive])
+}
+
 model MohAsset {
   id             String   @id @default(cuid())
   tenantId       String

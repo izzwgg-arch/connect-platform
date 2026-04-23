@@ -151,7 +151,8 @@ interface MohAsset {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function HoldSchedulingPage() {
-  const { tenantId, can } = useAppContext();
+  const { tenantId, can, role } = useAppContext();
+  const isSuperAdmin = role === "SUPER_ADMIN";
   const [activeTab, setActiveTab] = useState<Tab>("Hold Profiles");
   const [error, setError] = useState<string | null>(null);
 
@@ -241,7 +242,7 @@ export default function HoldSchedulingPage() {
       {loading && <div style={{ fontSize: 13, color: "#64748b" }}>Loading…</div>}
 
       {!loading && activeTab === "Hold Profiles" && (
-        <ProfilesTab profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
+        <ProfilesTab profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} isSuperAdmin={isSuperAdmin} />
       )}
       {!loading && activeTab === "Assets" && (
         <AssetsTab tenantId={tenantId} canUpload={can("can_upload_moh")} />
@@ -286,21 +287,150 @@ interface PromptCatalogRow {
   isActive: boolean;
 }
 
+interface PbxMohClassRow {
+  id: string;
+  tenantId: string | null;
+  tenantSlug: string | null;
+  pbxGroupId: number;
+  name: string;
+  mohClassName: string;
+  classType: string | null;
+  isDefault: boolean;
+  fileCount: number;
+  isActive: boolean;
+}
+
+// ── MOH class picker ─────────────────────────────────────────────────────────
+// Dropdown-first picker for the "VitalPBX MOH Class" field on Hold Profiles.
+// Merges two sources so the admin never has to guess the right class name:
+//   1. Classes synced from ombu_music_groups (existing VitalPBX classes).
+//   2. Classes materialised from uploaded MOH assets (each asset's
+//      deterministic mohClassName).
+// Legacy-safe: if the saved value isn't in either list we still render it at
+// the top of the options as "(legacy)" so saving the profile doesn't wipe it.
+// Manual-entry escape hatch is kept for brand-new classes that aren't on the
+// PBX yet.
+function MohClassPicker({
+  value, onChange, pbxClasses, assets, loading, placeholder,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  pbxClasses: PbxMohClassRow[];
+  assets: MohAsset[];
+  loading: boolean;
+  placeholder?: string;
+}) {
+  type Opt = { value: string; label: string; source: "pbx" | "upload" | "legacy" };
+  const options: Opt[] = [];
+  const seen = new Set<string>();
+  for (const c of pbxClasses) {
+    if (!c.isActive) continue;
+    const v = c.mohClassName;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    options.push({ value: v, label: `${v}${c.fileCount ? ` · ${c.fileCount} file${c.fileCount === 1 ? "" : "s"}` : ""}${c.isDefault ? " · default" : ""}`, source: "pbx" });
+  }
+  for (const a of assets) {
+    const v = a.mohClassName;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    options.push({ value: v, label: `${v} · uploaded "${a.name}"`, source: "upload" });
+  }
+  const hasCurrent = !!value && seen.has(value);
+  if (value && !hasCurrent) {
+    options.unshift({ value, label: `${value} (legacy — not in catalog)`, source: "legacy" });
+    seen.add(value);
+  }
+
+  const [manual, setManual] = useState(() => options.length === 0 && !value);
+  const effectiveManual = manual || (options.length === 0 && !value);
+
+  if (effectiveManual) {
+    const empty = options.length === 0 && !loading;
+    return (
+      <div>
+        <input style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? "e.g. default or holiday_jazz"} />
+        <div style={{ fontSize: 11, color: empty ? "#fbbf24" : "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {empty ? (
+            <span>No MOH classes indexed for this tenant yet. Click <strong>Sync PBX MOH classes</strong> above, upload a MOH asset on the <strong>Assets</strong> tab, or type an existing class name.</span>
+          ) : (
+            <span>Manual entry — VitalPBX MOH class name.</span>
+          )}
+          {options.length > 0 && (
+            <button type="button" onClick={() => setManual(false)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
+              Use dropdown
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <select style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">— Select MOH class —</option>
+        {options.map((o) => (
+          <option key={`${o.source}:${o.value}`} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <span>{pbxClasses.filter((c) => c.isActive).length} PBX · {assets.length} uploaded</span>
+        <button type="button" onClick={() => setManual(true)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
+          Type custom
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
   profiles: HoldProfile[]; tenantId: string; canManage: boolean; onRefresh: () => void;
+  isSuperAdmin?: boolean;
 }) {
   const [prompts, setPrompts] = useState<PromptCatalogRow[]>([]);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!tenantId) { setPrompts([]); return; }
-      try {
-        const r = await apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts?tenantId=${encodeURIComponent(tenantId)}`);
-        if (alive) setPrompts((r.prompts ?? []).filter((p) => p.isActive));
-      } catch { if (alive) setPrompts([]); }
-    })();
-    return () => { alive = false; };
+  const [mohClasses, setMohClasses] = useState<PbxMohClassRow[]>([]);
+  const [mohAssetsLite, setMohAssetsLite] = useState<MohAsset[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  const reloadCatalog = useCallback(async () => {
+    if (!tenantId) { setPrompts([]); setMohClasses([]); setMohAssetsLite([]); return; }
+    setCatalogLoading(true);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const [pR, cR, aR] = await Promise.allSettled([
+        apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts${qs}`),
+        apiGet<{ classes: PbxMohClassRow[] }>(`/voice/moh/pbx-classes${qs}`),
+        apiGet<{ assets: MohAsset[] }>(`/voice/moh/assets${qs}`),
+      ]);
+      setPrompts(pR.status === "fulfilled" ? (pR.value.prompts ?? []).filter((p) => p.isActive) : []);
+      setMohClasses(cR.status === "fulfilled" ? (cR.value.classes ?? []) : []);
+      setMohAssetsLite(aR.status === "fulfilled" ? (aR.value.assets ?? []) : []);
+    } finally { setCatalogLoading(false); }
   }, [tenantId]);
+
+  useEffect(() => { reloadCatalog(); }, [reloadCatalog]);
+
+  const autoSyncMohClasses = useCallback(async () => {
+    if (!confirm("Sync existing MOH classes from VitalPBX into Connect? Reads from the PBX's ombutel MySQL (same read-only channel as DID/prompt sync).")) return;
+    setSyncing(true); setSyncMsg(null);
+    try {
+      const r = await apiPost<{ ok: boolean; skipReason?: string; result?: { rowsRead: number; created: number; updated: number; unassigned: number } }>(
+        "/voice/moh/pbx-classes/auto-sync",
+        {},
+      );
+      if (r.ok && r.result) {
+        setSyncMsg(`Synced ${r.result.rowsRead} MOH class(es): +${r.result.created} new, ${r.result.updated} updated, ${r.result.unassigned} unassigned.`);
+      } else {
+        setSyncMsg(`Sync skipped: ${r.skipReason ?? "unknown reason"}`);
+      }
+      await reloadCatalog();
+    } catch (e: any) {
+      setSyncMsg(e?.message ?? "Sync failed");
+    } finally { setSyncing(false); }
+  }, [reloadCatalog]);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<{
@@ -353,8 +483,26 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
             Each profile maps to an existing VitalPBX MOH class and optionally enables hold announcements.
           </p>
         </div>
-        {canManage && <button onClick={openCreate} style={btnStyle("#6366f1")}>+ Add Profile</button>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {isSuperAdmin && (
+            <button
+              onClick={autoSyncMohClasses}
+              disabled={syncing}
+              style={btnSmall("#334155")}
+              title="Index existing VitalPBX MOH classes into Connect so the MOH-class dropdown has options"
+            >
+              {syncing ? "Syncing…" : "Sync PBX MOH classes"}
+            </button>
+          )}
+          {canManage && <button onClick={openCreate} style={btnStyle("#6366f1")}>+ Add Profile</button>}
+        </div>
       </div>
+
+      {syncMsg && (
+        <div style={{ margin: "0 0 14px", padding: "8px 12px", borderRadius: 6, fontSize: 12, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#c7d2fe" }}>
+          {syncMsg}
+        </div>
+      )}
 
       {profiles.length === 0 && <div style={emptyBox}>No Hold Profiles yet. Create one for each hold scenario you want to schedule.</div>}
 
@@ -408,8 +556,14 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh }: {
               {(Object.entries(TYPE_LABELS) as [HoldType, string][]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
 
-            <label style={labelStyle}>VitalPBX MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(must exist in VitalPBX → Music on Hold)</span></label>
-            <input style={inputStyle} value={form.vitalPbxMohClassName} onChange={(e) => setForm((f) => ({ ...f, vitalPbxMohClassName: e.target.value }))} placeholder="e.g. default or holiday_jazz" />
+            <label style={labelStyle}>VitalPBX MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(pick from your PBX or uploaded assets)</span></label>
+            <MohClassPicker
+              value={form.vitalPbxMohClassName}
+              onChange={(v) => setForm((f) => ({ ...f, vitalPbxMohClassName: v }))}
+              pbxClasses={mohClasses}
+              assets={mohAssetsLite}
+              loading={catalogLoading}
+            />
 
             <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 0 14px" }} />
             <SectionLabel>Hold Announcement (optional)</SectionLabel>

@@ -119,7 +119,7 @@ const buttonDanger: React.CSSProperties = { ...buttonSecondary, color: "#fca5a5"
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function DidRoutingPage() {
-  const { tenantId, can, role } = useAppContext();
+  const { tenantId, tenants, can, role } = useAppContext();
   const isSuper = role === "SUPER_ADMIN";
 
   const canManage = can("can_manage_did_routing");
@@ -139,32 +139,41 @@ export default function DidRoutingPage() {
   const [addIvrId, setAddIvrId] = useState<string>("");
   const [addMohId, setAddMohId] = useState<string>("");
 
+  // Scope tenant for the Add-form's IVR/MOH dropdowns. Super-admins drive this
+  // via the tenant <select>; tenant-admins are pinned to their own tenantId.
+  const scopeTenantId = isSuper ? (addTenantId || tenantId || "") : (tenantId || "");
+
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      // Mappings list: tenant-admin = scoped; super-admin = unscoped (all tenants).
       const qs = tenantId && !isSuper ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
       const m = await apiGet<{ mappings: DidMapping[] }>(`/voice/did/mappings${qs}`);
       setMappings(m.mappings ?? []);
 
-      // Load IVR + MOH profiles for the current (or selected) tenant so
-      // dropdowns only show same-tenant options. Empty tenantId on super-admin
-      // falls back to their active tenant.
-      const scopeTenantId = isSuper ? tenantId : tenantId;
+      // IVR + MOH profile dropdowns load against the *scope* tenant so the
+      // super-admin can pick any tenant first and see its options. Backend
+      // still enforces cross-tenant rules at create/update time.
       if (scopeTenantId) {
         const [p, h] = await Promise.allSettled([
           apiGet<{ profiles: IvrProfileLite[] }>(`/voice/ivr/route-profiles?tenantId=${encodeURIComponent(scopeTenantId)}`),
           apiGet<{ profiles: MohProfileLite[] }>(`/voice/moh/profiles?tenantId=${encodeURIComponent(scopeTenantId)}`),
         ]);
         if (p.status === "fulfilled") setIvrProfiles(p.value.profiles ?? []);
+        else setIvrProfiles([]);
         if (h.status === "fulfilled") setMohProfiles(h.value.profiles ?? []);
+        else setMohProfiles([]);
+      } else {
+        setIvrProfiles([]);
+        setMohProfiles([]);
       }
     } catch (e: any) {
       setError(e?.message ?? "Failed to load DID mappings");
     } finally {
       setLoading(false);
     }
-  }, [tenantId, isSuper]);
+  }, [tenantId, isSuper, scopeTenantId]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -293,26 +302,46 @@ export default function DidRoutingPage() {
               style={{ ...inputStyle, minWidth: 180 }}
             />
             {isSuper && (
-              <input
-                type="text"
-                placeholder="Tenant ID (this tenant by default)"
+              <select
                 value={addTenantId}
                 onChange={(e) => setAddTenantId(e.target.value)}
                 style={{ ...inputStyle, minWidth: 220 }}
-              />
+                title="Tenant this DID belongs to"
+              >
+                <option value="">— Select tenant —</option>
+                {tenants.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
             )}
-            <select value={addIvrId} onChange={(e) => setAddIvrId(e.target.value)} style={inputStyle}>
+            <select value={addIvrId} onChange={(e) => setAddIvrId(e.target.value)} style={inputStyle} disabled={!scopeTenantId}>
               <option value="">— No IVR —</option>
               {ivrProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            <select value={addMohId} onChange={(e) => setAddMohId(e.target.value)} style={inputStyle}>
+            <select value={addMohId} onChange={(e) => setAddMohId(e.target.value)} style={inputStyle} disabled={!scopeTenantId}>
               <option value="">— PBX default MOH —</option>
               {mohProfiles.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.vitalPbxMohClassName})</option>)}
             </select>
-            <button onClick={create} disabled={busy === "create"} style={buttonPrimary}>
+            <button onClick={create} disabled={busy === "create" || !scopeTenantId} style={buttonPrimary}>
               {busy === "create" ? "Creating…" : "Add mapping"}
             </button>
           </div>
+
+          {/* Empty-state guidance. Missing IVR/MOH profiles is by far the most
+              common reason the Add-form looks broken: the picks exist but the
+              tenant has no profiles configured yet. Point admins at the right
+              page rather than letting them stare at a blank dropdown. */}
+          {scopeTenantId && !loading && (ivrProfiles.length === 0 || mohProfiles.length === 0) && (
+            <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.25)", fontSize: 12, color: "#fde68a" }}>
+              {ivrProfiles.length === 0 && (
+                <div>No IVR profiles for this tenant yet — create one on <a href="/pbx/ivr-routing" style={{ color: "#facc15" }}>IVR Routing</a>.</div>
+              )}
+              {mohProfiles.length === 0 && (
+                <div>No Hold profiles for this tenant yet — create one on <a href="/pbx/moh-scheduling" style={{ color: "#facc15" }}>MOH Scheduling</a>.</div>
+              )}
+            </div>
+          )}
+
           <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--text-muted, #94a3b8)" }}>
             Adding a mapping does not change live routing — click <strong>Publish</strong> on its row to push the state to Asterisk and VitalPBX.
           </p>
