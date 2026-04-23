@@ -829,9 +829,9 @@ function PromptSummaryCell({
               ...btnSmall(playingId === row.id ? "#7f1d1d" : "#0d9488"),
               padding: "2px 8px", fontSize: 11,
             }}
-            title={playingId === row.id ? "Stop" : "Preview"}
+            title={playingId === row.id ? "Stop preview" : "Preview this recording"}
           >
-            {playingId === row.id ? "■" : "▶"}
+            {playingId === row.id ? "Stop" : "Play"}
           </button>
         ) : row ? (
           <span style={{ fontSize: 10, color: "#64748b" }} title="No audio bytes synced yet">(no audio)</span>
@@ -905,7 +905,7 @@ function PromptAudioPlayer({
     }}>
       <div style={{ flex: 1, overflow: "hidden" }}>
         <div style={{ fontSize: 11, color: "#c7d2fe", fontWeight: 600 }}>
-          ▶ Playing: <span style={{ color: "#f1f5f9" }}>{displayName}</span>
+          Playing: <span style={{ color: "#f1f5f9" }}>{displayName}</span>
         </div>
         {loading && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>Loading audio…</div>}
         {error && (
@@ -1022,7 +1022,7 @@ function PromptPicker({
           )}
           {filtered.map((p) => (
             <option key={p.id} value={p.promptRef}>
-              {p.displayName}{p.displayName !== p.promptRef ? ` (${p.promptRef})` : ""}{p.hasAudio ? "  ▶" : ""}
+              {p.displayName}{p.displayName !== p.promptRef ? ` (${p.promptRef})` : ""}{p.hasAudio ? "  [audio]" : ""}
             </option>
           ))}
         </select>
@@ -1089,8 +1089,8 @@ function PlayPromptButton({
   const title = !selectedRow
     ? "Pick a recording first"
     : !selectedRow.hasAudio
-      ? "Audio bytes for this recording aren't synced yet. Upload the file or run the PBX-host sync helper."
-      : playing ? "Stop" : "Preview this recording";
+      ? "No audio uploaded for this recording yet. Click 'Upload audio' to the right."
+      : playing ? "Stop preview" : "Preview this recording in the browser";
   return (
     <button
       type="button"
@@ -1103,7 +1103,7 @@ function PlayPromptButton({
         cursor: disabled ? "not-allowed" : "pointer",
       }}
     >
-      {playing ? "■ Stop" : "▶ Play"}
+      {playing ? "Stop" : "Play"}
     </button>
   );
 }
@@ -1135,7 +1135,7 @@ function UploadPromptAudioButton({
         throw new Error((body as any)?.error ?? `Upload failed (${resp.status})`);
       }
       await onUploaded();
-      alert(`Uploaded audio for "${selectedRow.displayName || selectedRow.promptRef}". Click ▶ Play to preview.`);
+      alert(`Uploaded audio for "${selectedRow.displayName || selectedRow.promptRef}". Click Play to preview.`);
     } catch (e: any) {
       alert(`Upload failed: ${e?.message ?? String(e)}`);
     } finally {
@@ -1145,9 +1145,17 @@ function UploadPromptAudioButton({
   };
 
   const disabled = !selectedRow || busy;
+  const needsAudio = !!selectedRow && !selectedRow.hasAudio;
   const title = !selectedRow
     ? "Pick a recording first"
-    : busy ? "Uploading…" : "Upload audio bytes so this recording can be previewed in the browser";
+    : busy
+      ? "Uploading…"
+      : needsAudio
+        ? "Upload the audio bytes from your computer so this recording can be previewed in the browser"
+        : "Replace the audio bytes for this recording";
+
+  const bg = disabled ? "#1e293b" : needsAudio ? "#f59e0b" : "#334155";
+  const fg = disabled ? undefined : needsAudio ? "#111827" : undefined;
 
   return (
     <>
@@ -1167,13 +1175,15 @@ function UploadPromptAudioButton({
         disabled={disabled}
         title={title}
         style={{
-          ...btnSmall(disabled ? "#1e293b" : "#334155"),
+          ...btnSmall(bg),
+          ...(fg ? { color: fg } : {}),
           whiteSpace: "nowrap", padding: "0 12px",
           opacity: disabled ? 0.6 : 1,
           cursor: disabled ? "not-allowed" : "pointer",
+          fontWeight: needsAudio ? 700 : 600,
         }}
       >
-        {busy ? "…" : "⇧ Upload"}
+        {busy ? "Uploading…" : needsAudio ? "Upload audio" : "Replace audio"}
       </button>
     </>
   );
