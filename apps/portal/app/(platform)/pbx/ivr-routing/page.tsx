@@ -43,6 +43,17 @@ interface IvrOptionRoute {
   enabled: boolean;
 }
 
+// Draft option held in client state while a brand-new profile is being
+// created (no DB row yet to FK against). Flushed to POST /options after
+// the profile is persisted in save().
+interface PendingOption {
+  optionDigit: string;
+  destinationType: DestinationType;
+  destinationRef: string;
+  label: string | null;
+  enabled: boolean;
+}
+
 type DestinationType =
   | "extension" | "queue" | "ring_group" | "voicemail" | "ivr"
   | "announcement" | "external_number" | "terminate" | "custom";
@@ -468,6 +479,11 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
   const [form, setForm] = useState<ProfileFormState>(blankProfileForm());
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Menu options buffered locally while the user is creating a brand-new
+  // profile (no DB row yet → can't FK to profileId). Flushed to the API in
+  // order after the profile is created. In edit mode this stays empty and
+  // the live ProfileOptionsSection handles CRUD directly.
+  const [pendingOptions, setPendingOptions] = useState<PendingOption[]>([]);
   // Which profile card is expanded to show its Prompts + Option Routing.
   // Only one is open at a time — keeps the page scannable with many profiles.
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -539,6 +555,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
   const openCreate = () => {
     setEditId(null);
     setForm(blankProfileForm());
+    setPendingOptions([]);
     setShowForm(true);
   };
 
@@ -577,7 +594,33 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
       if (editId) {
         await apiPatch(`/voice/ivr/route-profiles/${editId}`, payload);
       } else {
-        await apiPost("/voice/ivr/route-profiles", { tenantId, ...payload });
+        const created = await apiPost<{ profile: { id: string } }>(
+          "/voice/ivr/route-profiles",
+          { tenantId, ...payload },
+        );
+        // Flush any menu options the admin added before the profile existed.
+        // Sequential so we respect the unique-digit DB constraint and any
+        // per-request side-effects (e.g. audit log) happen in order.
+        const newProfileId = created?.profile?.id;
+        if (newProfileId && pendingOptions.length > 0) {
+          for (const opt of pendingOptions) {
+            try {
+              await apiPost(`/voice/ivr/route-profiles/${newProfileId}/options`, {
+                optionDigit:     opt.optionDigit,
+                enabled:         opt.enabled,
+                destinationType: opt.destinationType,
+                destinationRef:  opt.destinationRef,
+                label:           opt.label,
+              });
+            } catch (optErr: any) {
+              // Don't lose the profile if one option fails — surface the error
+              // but keep going. The admin can fix the offender in edit mode.
+              // eslint-disable-next-line no-console
+              console.error("Failed to persist pending IVR option", opt, optErr);
+            }
+          }
+          setPendingOptions([]);
+        }
       }
       setShowForm(false);
       onRefresh();
@@ -873,21 +916,39 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               />
             </div>
 
-            {/* IVR Menu Options inline editor. Shown in-modal for edit mode
-                so admins don't have to Save → close → expand → configure.
-                For create mode we can't render it yet (options FK to profileId)
-                so we point the admin at the post-save flow. */}
-            <SectionLabel>IVR Menu Options</SectionLabel>
-            {editId ? (
-              <ProfileOptionsSection
-                profile={profiles.find((p) => p.id === editId) ?? ({ id: editId, tenantId } as RouteProfile)}
-                canEdit={canManage}
-              />
-            ) : (
-              <div style={emptyBox}>
-                Save this profile first, then the menu options editor (Press 1, Press 2…) will appear here. You can also expand the profile in the list below to edit options inline.
+            {/* IVR Menu Options inline editor — works in BOTH create and edit
+                mode. In edit mode it talks to the API directly; in create mode
+                it buffers into `pendingOptions` and we flush after the profile
+                is created in save(). Styled as a prominent panel so admins
+                can't miss it. */}
+            <div style={{
+              marginTop: 14,
+              background: "rgba(99,102,241,0.06)",
+              border: "1px solid rgba(99,102,241,0.35)",
+              borderRadius: 10,
+              padding: "14px 16px",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#c7d2fe", letterSpacing: 0.3 }}>
+                  IVR MENU OPTIONS
+                </span>
+                <span style={{ fontSize: 10, color: "#64748b" }}>(Press 1, Press 2, …)</span>
               </div>
-            )}
+              {editId ? (
+                <ProfileOptionsSection
+                  profile={profiles.find((p) => p.id === editId) ?? ({ id: editId, tenantId } as RouteProfile)}
+                  canEdit={canManage}
+                  embedded
+                />
+              ) : (
+                <PendingOptionsEditor
+                  tenantId={tenantId}
+                  options={pendingOptions}
+                  canEdit={canManage}
+                  onChange={setPendingOptions}
+                />
+              )}
+            </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
               <button onClick={() => setShowForm(false)} style={btnSmall("#334155")}>Cancel</button>
@@ -1888,9 +1949,124 @@ function ProfileOptionCountBadge({ profileId }: { profileId: string }) {
   );
 }
 
-function ProfileOptionsSection({ profile, canEdit }: {
+// ─── PendingOptionsEditor ────────────────────────────────────────────────────
+// Local-state editor used inside the Add Profile modal, BEFORE the profile
+// row exists in the DB. Mirrors the card UX of ProfileOptionsSection but
+// never talks to the API — parent flushes the buffer after the profile is
+// created. Uses the same OptionCard component so create and edit mode look
+// pixel-identical.
+function PendingOptionsEditor({ tenantId, options, canEdit, onChange }: {
+  tenantId: string;
+  options: PendingOption[];
+  canEdit: boolean;
+  onChange: (next: PendingOption[]) => void;
+}) {
+  const takenDigits = new Set(options.map((o) => o.optionDigit));
+  const nextUnusedDigit = OPTION_DIGIT_ORDER.find((d) => !takenDigits.has(d)) ?? null;
+  const [addingDigit, setAddingDigit] = useState<string | null>(null);
+
+  const upsertAt = (idx: number, patch: Partial<PendingOption> & { __digit?: string }) => {
+    const next = options.slice();
+    const current = next[idx]!;
+    const newDigit = patch.__digit ?? current.optionDigit;
+    next[idx] = {
+      ...current,
+      optionDigit:     newDigit,
+      label:           patch.label ?? current.label,
+      destinationType: (patch.destinationType ?? current.destinationType) as DestinationType,
+      destinationRef:  patch.destinationRef ?? current.destinationRef,
+      enabled:         patch.enabled ?? current.enabled,
+    };
+    onChange(next);
+  };
+
+  const removeAt = (idx: number) => {
+    onChange(options.filter((_, i) => i !== idx));
+  };
+
+  const configured = options
+    .slice()
+    .sort((a, b) => OPTION_DIGIT_ORDER.indexOf(a.optionDigit) - OPTION_DIGIT_ORDER.indexOf(b.optionDigit));
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: "#64748b" }}>
+          Each option routes a caller digit (0-9, *, #) to an Extension, Queue, Voicemail, Ring Group, Announcement, External Number, or another IVR. Destinations are tenant-scoped. Options are saved when you click <strong style={{ color: "#c7d2fe" }}>Save</strong>.
+        </div>
+        {canEdit && nextUnusedDigit && addingDigit == null && (
+          <button onClick={() => setAddingDigit(nextUnusedDigit)} style={btnStyle("#6366f1")}>+ Add option</button>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {configured.length === 0 && addingDigit == null && (
+          <div style={emptyBox}>
+            No menu options yet. Click <strong style={{ color: "#c7d2fe" }}>+ Add option</strong> to configure Press 1, Press 2, etc.
+          </div>
+        )}
+        {configured.map((opt) => {
+          const idx = options.indexOf(opt);
+          const otherDigits = new Set(options.filter((_, i) => i !== idx).map((o) => o.optionDigit));
+          return (
+            <OptionCard
+              key={`pending-${opt.optionDigit}-${idx}`}
+              digit={opt.optionDigit}
+              tenantId={tenantId}
+              existing={{
+                id: `pending-${idx}`,
+                profileId: "",
+                optionDigit:     opt.optionDigit,
+                destinationType: opt.destinationType,
+                destinationRef:  opt.destinationRef,
+                label:           opt.label,
+                enabled:         opt.enabled,
+              }}
+              canEdit={canEdit}
+              takenDigits={otherDigits}
+              onSave={(patch) => upsertAt(idx, patch)}
+              onRemove={() => removeAt(idx)}
+            />
+          );
+        })}
+        {addingDigit && (
+          <OptionCard
+            key={`new-${addingDigit}`}
+            digit={addingDigit}
+            tenantId={tenantId}
+            existing={null}
+            canEdit={canEdit}
+            takenDigits={takenDigits}
+            isNew
+            onSave={(patch) => {
+              const digitToUse = (patch as any).__digit || addingDigit;
+              if (takenDigits.has(digitToUse)) return;
+              onChange([
+                ...options,
+                {
+                  optionDigit:     digitToUse,
+                  label:           patch.label ?? null,
+                  destinationType: (patch.destinationType ?? "extension") as DestinationType,
+                  destinationRef:  patch.destinationRef ?? "",
+                  enabled:         patch.enabled ?? true,
+                },
+              ]);
+              setAddingDigit(null);
+            }}
+            onRemove={() => setAddingDigit(null)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProfileOptionsSection({ profile, canEdit, embedded }: {
   profile: RouteProfile;
   canEdit: boolean;
+  // When rendered inside the Add/Edit modal the outer panel already carries
+  // a big "IVR MENU OPTIONS" heading, so we suppress the duplicate label
+  // and its description.
+  embedded?: boolean;
 }) {
   const [options, setOptions] = useState<IvrOptionRoute[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1944,7 +2120,7 @@ function ProfileOptionsSection({ profile, canEdit }: {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div>
-          <SectionLabel>IVR Menu Options</SectionLabel>
+          {!embedded && <SectionLabel>IVR Menu Options</SectionLabel>}
           <div style={{ fontSize: 11, color: "#64748b" }}>
             Each option routes a caller digit (0-9, *, #) to an Extension, Queue, Voicemail, Ring Group, Announcement, External Number, or another IVR. Destinations are tenant-scoped.
           </div>
