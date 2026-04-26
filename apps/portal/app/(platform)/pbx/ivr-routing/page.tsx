@@ -1984,9 +1984,11 @@ function PendingOptionsEditor({ tenantId, options, canEdit, onChange }: {
     onChange(options.filter((_, i) => i !== idx));
   };
 
-  const configured = options
-    .slice()
-    .sort((a, b) => OPTION_DIGIT_ORDER.indexOf(a.optionDigit) - OPTION_DIGIT_ORDER.indexOf(b.optionDigit));
+  const digitOrder = (d: string) => {
+    const i = (OPTION_DIGIT_ORDER as readonly string[]).indexOf(d);
+    return i < 0 ? 999 : i;
+  };
+  const configured = options.slice().sort((a, b) => digitOrder(a.optionDigit) - digitOrder(b.optionDigit));
 
   return (
     <div>
