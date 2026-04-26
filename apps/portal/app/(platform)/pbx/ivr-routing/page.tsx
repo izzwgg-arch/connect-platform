@@ -780,7 +780,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               prompts={modalPrompts}
               catalogLoading={modalPromptsLoading}
               placeholder="custom/acme_retry"
-              category="general"
+              category="timeout"
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
             />
@@ -1575,7 +1575,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               prompts={prompts}
               catalogLoading={catalogLoading}
               placeholder="custom/acme_retry"
-              category="general"
+              category="timeout"
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
             />
