@@ -11,7 +11,7 @@ function claimNextJob(db: Database.Database, now: number, logDir: string): JobRo
     const j = db
       .prepare(
         `SELECT id, service, branch, commit_hash, requested_by, status,
-                created_at, started_at, finished_at, log_path, error_message
+                created_at, started_at, finished_at, log_path, error_message, dry_run
          FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`,
       )
       .get() as JobRow | undefined;
@@ -41,6 +41,10 @@ function jobScript(repoRoot: string, service: string): string {
   return path.join(repoRoot, "scripts", `deploy-${service}.sh`);
 }
 
+function dryRunEnv(job: JobRow): Record<string, string> {
+  return (job.dry_run ?? 0) ? { DEPLOY_DRY_RUN: "1" } : {};
+}
+
 function ensureLogDir(logDir: string): void {
   fs.mkdirSync(logDir, { recursive: true });
 }
@@ -63,6 +67,7 @@ function runDeployScript(
         cwd: repoRoot,
         env: {
           ...process.env,
+          ...dryRunEnv(job),
           DEPLOY_REPO_ROOT: repoRoot,
           DEPLOY_BRANCH: job.branch,
           DEPLOY_COMMIT: job.commit_hash ?? "",
@@ -121,7 +126,7 @@ export function startWorkerLoop(cfg: WorkerConfig): () => void {
       const logPath = job.log_path as string;
       fs.writeFileSync(
         logPath,
-        `=== deploy job ${job.id} service=${job.service} branch=${job.branch} ===\n`,
+        `=== deploy job ${job.id} service=${job.service} branch=${job.branch} dryRun=${job.dry_run ? "1" : "0"} ===\n`,
         { flag: "a" },
       );
 

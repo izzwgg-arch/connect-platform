@@ -2,6 +2,9 @@
 # DEPLOY_SSH_TARGET default: root@45.14.194.179. DEPLOY_SSH_KEY default: $env:USERPROFILE\.ssh\connect_ed25519
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/release/deploy-via-ssh.ps1 [tag]
 $ErrorActionPreference = "Stop"
+if ($env:DEPLOY_QUEUE_ACK -ne "1") {
+  Write-Warning "This SSH path runs deploy-tag.sh directly and bypasses ops/deploy-queue. Prefer enqueue service 'full-stack' on the server unless this is intentional. Set DEPLOY_QUEUE_ACK=1 to silence."
+}
 $tag = $args[0]
 if (-not $tag) { $tag = "v2.0.7" }
 $sshTarget = if ($env:DEPLOY_SSH_TARGET) { $env:DEPLOY_SSH_TARGET } else { "root@45.14.194.179" }

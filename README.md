@@ -7,10 +7,10 @@ Monorepo scaffold for portal, API, realtime services, and shared packages.
 
 ## Safe deploy queue (multi-agent)
 
-Production uses **Docker Compose** for app services. A small **localhost-only** queue (`ops/deploy-queue`, PM2 name `connect-deploy-worker`) lets Cursor agents **enqueue** per-service deploys (`api`, `portal`, `telephony`, `realtime`) instead of SSH-ing concurrent `docker compose` / Prisma runs.
+Production uses **Docker Compose** for app services. A small **localhost-only** queue (`ops/deploy-queue`, PM2 name `connect-deploy-worker`) serializes **all** routine deploys. Targets: `api`, `portal`, `telephony`, `realtime`, `worker`, `full-stack` (wraps `deploy-tag.sh`). Use `GET /ops/deploy/status`, `GET /ops/deploy/jobs/:id/log`, and optional `dryRun: true` on enqueue.
 
 - **Full documentation:** [docs/safe-deploy-queue.md](docs/safe-deploy-queue.md)
-- **Cursor rule:** use `POST /ops/deploy/enqueue` with `DEPLOY_QUEUE_TOKEN`; do not run `scripts/release/deploy-tag.sh` or compose builds in parallel over SSH unless explicitly exclusive.
+- **Policy:** agents and humans enqueue only; direct `deploy-tag.sh` / `docker compose` rebuilds are **emergency-only** (warnings print unless `DEPLOY_QUEUE_ACK=1`).
 
 ## PBX Smoke Runner
 

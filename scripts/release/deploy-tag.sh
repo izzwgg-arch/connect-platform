@@ -14,6 +14,14 @@ if [[ "${_DEPLOY_LOCKED:-0}" != "1" ]]; then
   exec /opt/connectcomms/ops/run-heavy.sh "deploy-tag:${REQ_TAG}" -- env _DEPLOY_LOCKED=1 bash "$0" "$REQ_TAG"
 fi
 
+# Bypass notice: normal path is ops/deploy-queue (service full-stack). Direct
+# runs are for emergency recovery only. Queue wrappers set DEPLOY_QUEUE_ACK=1.
+if [[ "${DEPLOY_QUEUE_ACK:-}" != "1" ]]; then
+  echo "[deploy-tag] WARNING: you are running a full-stack deploy outside the deploy queue." >&2
+  echo "[deploy-tag] WARNING: use POST /ops/deploy/enqueue { \"service\":\"full-stack\", \"branch\":\"<tag>\" } unless this is emergency manual recovery." >&2
+  echo "[deploy-tag] (To silence when you really mean it: export DEPLOY_QUEUE_ACK=1)" >&2
+fi
+
 log(){ echo "[deploy-tag] $*"; }
 fail(){ echo "[deploy-tag] FAIL: $*" >&2; exit 1; }
 

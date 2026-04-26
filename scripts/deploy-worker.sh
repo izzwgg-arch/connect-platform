@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploy telephony only (Docker service `telephony`). Does NOT run Prisma migrations.
+# Deploy worker only (Docker service `worker`). Does NOT run Prisma migrations
+# (the api image/job owns migrate deploy for the platform DB).
 #
-# Env: same as deploy-api.sh
+# Env: same as deploy-api.sh (DEPLOY_REPO_ROOT, DEPLOY_BRANCH, DEPLOY_COMMIT, …)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,22 +10,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/deploy-common.sh"
 
 ROOT="${DEPLOY_REPO_ROOT:-$ROOT}"
-SERVICE="telephony"
+SERVICE="worker"
 COMPOSE="$(deploy_common_compose_file)"
 BRANCH="${DEPLOY_BRANCH:-}"
 COMMIT="${DEPLOY_COMMIT:-}"
 REQ="${DEPLOY_REQUESTED_BY:-manual}"
 
-log() { echo "[deploy-telephony] $*"; }
-fail() { echo "[deploy-telephony] FAIL: $*" >&2; exit 1; }
+log() { echo "[deploy-worker] $*"; }
+fail() { echo "[deploy-worker] FAIL: $*" >&2; exit 1; }
 
 [[ -n "$BRANCH" || -n "$COMMIT" ]] || fail "DEPLOY_BRANCH or DEPLOY_COMMIT is required"
 cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
-  log "DRY RUN — no git/docker/health changes"
-  log "Would: git sync, pnpm install if needed, docker compose build/up ${SERVICE}, GET :3003/health"
+  log "DRY RUN — no git/docker changes"
+  log "Would: git sync, pnpm install if lock changed, docker compose build/up ${SERVICE}, container running check"
   log "(branch=${BRANCH:-} commit=${COMMIT:-} requested_by=${REQ})"
   exit 0
 fi
@@ -53,18 +54,22 @@ deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
 log "docker up ${SERVICE}"
 docker compose -f "$COMPOSE" up -d "$SERVICE"
 
-log "health check http://127.0.0.1:3003/health"
+log "health check: worker container running"
 ok=0
 for i in $(seq 1 30); do
-  if curl -sfS --connect-timeout 2 --max-time 15 "http://127.0.0.1:3003/health" >/dev/null 2>&1; then
-    ok=1
-    break
+  rid="$(docker compose -f "$COMPOSE" ps -q "$SERVICE" 2>/dev/null || true)"
+  if [[ -n "$rid" ]]; then
+    running="$(docker inspect -f '{{.State.Running}}' "$rid" 2>/dev/null || echo false)"
+    if [[ "$running" == "true" ]]; then
+      ok=1
+      break
+    fi
   fi
   sleep 2
 done
 if [[ "$ok" != "1" ]]; then
   rollback
-  fail "telephony health check failed (requested by ${REQ})"
+  fail "worker container not running (requested by ${REQ})"
 fi
 
 trap - ERR

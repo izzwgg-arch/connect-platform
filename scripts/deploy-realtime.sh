@@ -22,6 +22,13 @@ fail() { echo "[deploy-realtime] FAIL: $*" >&2; exit 1; }
 cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
+if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
+  log "DRY RUN — no git/docker/health changes"
+  log "Would: git sync, pnpm install if needed, docker compose build/up ${SERVICE}, GET :3002/health"
+  log "(branch=${BRANCH:-} commit=${COMMIT:-} requested_by=${REQ})"
+  exit 0
+fi
+
 LOCK_BEFORE="$(deploy_common_lock_hash)"
 OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
 LOCK_AFTER="$(deploy_common_lock_hash)"

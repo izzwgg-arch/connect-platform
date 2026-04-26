@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
-export type DeployService = "api" | "portal" | "telephony" | "realtime";
+/** Queue targets (maps to scripts/deploy-<name>.sh with hyphens preserved). */
+export type DeployService = "api" | "portal" | "telephony" | "realtime" | "worker" | "full-stack";
 export type JobStatus = "queued" | "running" | "success" | "failed" | "cancelled";
 
 export type JobRow = {
@@ -17,12 +18,28 @@ export type JobRow = {
   finished_at: number | null;
   log_path: string | null;
   error_message: string | null;
+  dry_run: number;
 };
 
-const SERVICES: DeployService[] = ["api", "portal", "telephony", "realtime"];
+export const DEPLOY_SERVICES: DeployService[] = [
+  "api",
+  "portal",
+  "telephony",
+  "realtime",
+  "worker",
+  "full-stack",
+];
 
 export function isDeployService(s: string): s is DeployService {
-  return (SERVICES as string[]).includes(s);
+  return (DEPLOY_SERVICES as string[]).includes(s);
+}
+
+function migrateJobsTable(db: Database.Database): void {
+  const cols = db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("dry_run")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 export function openQueueDb(filePath: string): Database.Database {
@@ -42,13 +59,15 @@ export function openQueueDb(filePath: string): Database.Database {
       started_at INTEGER,
       finished_at INTEGER,
       log_path TEXT,
-      error_message TEXT
+      error_message TEXT,
+      dry_run INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_service
       ON jobs(service)
       WHERE status IN ('queued','running');
   `);
+  migrateJobsTable(db);
   return db;
 }
 
@@ -58,4 +77,9 @@ export function resetStaleRunning(db: Database.Database, reason: string): void {
     `UPDATE jobs SET status = 'failed', finished_at = ?, error_message = ?
      WHERE status = 'running'`,
   ).run(now, reason);
+}
+
+export function countQueued(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS c FROM jobs WHERE status = 'queued'`).get() as { c: number };
+  return row.c;
 }

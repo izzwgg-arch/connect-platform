@@ -1,190 +1,169 @@
-# Safe deploy queue
+# Safe deploy queue (serialized production deploys)
 
-Serializes production deploys so **multiple Cursor agents (or humans) never run `docker compose` / Prisma / git deploy steps at the same time** on the Connect server.
+All routine production deploys **must** go through **`ops/deploy-queue`** so there are **no parallel** `docker compose` builds, **no concurrent** `deploy-tag.sh` runs, and **no accidental** cross-agent races.
 
-Production today uses **Docker Compose** (`docker-compose.app.yml`) for `api`, `portal`, `telephony`, `realtime` (and `worker`). The queue runs a small **Node service** (`ops/deploy-queue`) that:
+| Who | Rule |
+|-----|------|
+| **Cursor agents** | Only `curl` the queue (`POST /ops/deploy/enqueue`). Never SSH in to run `docker compose … --build`, `pnpm prisma migrate deploy`, or `deploy-tag.sh` unless it is **documented emergency** work. |
+| **Humans** | Same: use the queue on the server (`127.0.0.1:3910` + token). |
+| **Emergency** | Direct `deploy-tag.sh` / `docker compose` is allowed for **break-glass recovery** only. You will see **warnings**; set `DEPLOY_QUEUE_ACK=1` to acknowledge and silence them. |
 
-- Exposes **localhost-only** HTTP endpoints under `/ops/deploy/…`
-- Persists jobs in **SQLite** (no changes to the main Postgres schema)
-- Runs a **single-threaded worker** that executes `scripts/deploy-<service>.sh` **one job at a time globally**
-- Writes **per-job logs** under `/var/log/connect-deploys/`
-- Uses a **PID lock file** so a second PM2 instance cannot accidentally run a second worker
-
-This does **not** replace `scripts/release/deploy-tag.sh` for full tagged releases (API + portal + worker + realtime + migrations + smoke). Use the queue for **targeted service** deploys from branches.
+**What this does *not* change:** port 22, firewall rules, nginx, Postgres **application** schema (queue uses **SQLite** on disk), or existing Docker service names.
 
 ---
 
-## Architecture
+## Supported targets
 
-| Piece | Path / name |
-|--------|-------------|
-| HTTP + worker (one process) | `ops/deploy-queue` → PM2 app **`connect-deploy-worker`** (`GET /health` = `ok`, no token) |
-| Per-service shell scripts | `scripts/deploy-api.sh`, `deploy-portal.sh`, `deploy-telephony.sh`, `deploy-realtime.sh` |
-| Shared bash helpers | `scripts/lib/deploy-common.sh` |
-| SQLite DB | `$DEPLOY_QUEUE_SQLITE_PATH` (default `ops/deploy-queue/var/queue.db`) |
-| Worker file lock | `$DEPLOY_QUEUE_STATE_DIR/worker.lock` |
-| Job logs | `/var/log/connect-deploys/<job-id>.log` |
+| `service` (enqueue) | Script | Notes |
+|---------------------|--------|--------|
+| `api` | `scripts/deploy-api.sh` | **Only** this target runs `prisma migrate deploy`. |
+| `portal` | `scripts/deploy-portal.sh` | No migrations. |
+| `telephony` | `scripts/deploy-telephony.sh` | No migrations. |
+| `realtime` | `scripts/deploy-realtime.sh` | No migrations. |
+| `worker` | `scripts/deploy-worker.sh` | No migrations; health = container running. |
+| `full-stack` | `scripts/deploy-full-stack.sh` | Wraps `scripts/release/deploy-tag.sh` (api+portal+worker+realtime + migrate + smoke). |
 
-**Migrations:** only `scripts/deploy-api.sh` runs `prisma migrate deploy`. Other services **must not** run migrations (requirement #7).
-
-**Duplicate protection:** SQLite partial unique index: at most one job per `service` in `queued` or `running`. A second enqueue for the same service returns **409**.
+**Global serialization:** the worker runs **at most one job at a time** (any target). A file lock prevents a second PM2 instance from executing deploy scripts.
 
 ---
 
-## Environment variables
+## How to enqueue (examples)
 
-Create **`/opt/connectcomms/env/.env.deploy-queue`** on the server (chmod `600`, owned by the deploy user). Minimum:
+Replace `TOKEN`, host, and IDs. Bind address defaults to **`127.0.0.1`** — use SSH port forward:  
+`ssh -L 3910:127.0.0.1:3910 user@server`
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DEPLOY_QUEUE_TOKEN` | **yes** | Shared secret; callers send `x-deploy-queue-token: <token>` or `Authorization: Bearer <token>` |
-| `DEPLOY_REPO_ROOT` | no | Git checkout root (default `/opt/connectcomms/app`) |
-| `DEPLOY_QUEUE_BIND` | no | Default `127.0.0.1` |
-| `DEPLOY_QUEUE_PORT` | no | Default `3910` |
-| `DEPLOY_QUEUE_LOG_DIR` | no | Default `/var/log/connect-deploys` |
-| `DEPLOY_QUEUE_STATE_DIR` | no | Lock + SQLite parent dir |
-| `DEPLOY_QUEUE_SQLITE_PATH` | no | Default `$DEPLOY_QUEUE_STATE_DIR/queue.db` (see `server.ts`) |
-| `DEPLOY_QUEUE_POLL_MS` | no | Worker poll interval (default `3000`) |
-
-Optional override for compose file path inside scripts:
-
-- `DEPLOY_COMPOSE_FILE` (default `docker-compose.app.yml` under repo root)
-
----
-
-## One-time server setup
+### Per-service (branch)
 
 ```bash
-# From repo root on the Linux server
-sudo mkdir -p /var/log/connect-deploys
-sudo chown "$(whoami)" /var/log/connect-deploys
+curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
+  -H "Content-Type: application/json" \
+  -H "x-deploy-queue-token: $TOKEN" \
+  -d '{"service":"api","branch":"main","requestedBy":"cursor:session-abc","dryRun":false}'
+```
 
-# Secrets file (example)
+Optional: `"commitHash":"<sha>"` instead of tracking `branch` for detached deploys.
+
+### Worker
+
+```bash
+curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
+  -H "Content-Type: application/json" \
+  -H "x-deploy-queue-token: $TOKEN" \
+  -d '{"service":"worker","branch":"main","requestedBy":"human:ops"}'
+```
+
+### Full-stack (git **tag**, not branch name)
+
+The `branch` JSON field carries the **tag** string passed to `deploy-tag.sh`:
+
+```bash
+curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
+  -H "Content-Type: application/json" \
+  -H "x-deploy-queue-token: $TOKEN" \
+  -d '{"service":"full-stack","branch":"v2.1.70","requestedBy":"human:release"}'
+```
+
+### Dry run (`dryRun: true`)
+
+Logs what **would** happen; scripts exit **before** git writes, `docker compose` rebuilds, and health-driven rollbacks. Still consumes a queue slot and respects duplicate protection.
+
+```bash
+curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
+  -H "Content-Type: application/json" \
+  -H "x-deploy-queue-token: $TOKEN" \
+  -d '{"service":"portal","branch":"main","requestedBy":"cursor:test","dryRun":true}'
+```
+
+---
+
+## HTTP API
+
+All routes except **`GET /health`** require:
+
+- Header `x-deploy-queue-token: <DEPLOY_QUEUE_TOKEN>` **or**
+- `Authorization: Bearer <DEPLOY_QUEUE_TOKEN>`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Plain `ok` (no token). |
+| GET | `/ops/deploy/status` | `queuedCount`, `runningCount` (0 or 1), `maxQueued`, `runningJob`, `targets`, worker `lock`, `version` (`deployQueuePackage` + `repoHead`). |
+| GET | `/ops/deploy/jobs` | `?status=&limit=` |
+| GET | `/ops/deploy/jobs/:id` | Job row + optional `logTail` (last bytes). |
+| GET | `/ops/deploy/jobs/:id/log` | JSON `{ lines, text }` — last **N** lines (default **200**, max **2000**). `?lines=500`. **Only** reads the log file registered for that job id (no arbitrary paths). |
+| POST | `/ops/deploy/enqueue` | Body: `service`, `branch`, optional `commitHash`, `requestedBy`, optional `dryRun`. |
+| POST | `/ops/deploy/jobs/:id/cancel` | Queued jobs only. |
+
+### Duplicate protection
+
+SQLite **partial unique index**: at most one row per `service` with `status IN ('queued','running')`. A second enqueue for the same target returns **409** `duplicate_active_job_for_service`.
+
+### Queue length limit
+
+Env **`DEPLOY_QUEUE_MAX_QUEUED`** (default **10**): if `COUNT(*)` of `queued` jobs ≥ max, enqueue returns **429** `queue_full`.
+
+---
+
+## Logs
+
+- Per-job file: `/var/log/connect-deploys/<job-id>.log`
+- View via API: `GET /ops/deploy/jobs/<id>/log?lines=200`
+- Or `pm2 logs connect-deploy-worker`
+
+---
+
+## Bypass warnings (emergency only)
+
+| Entry point | Behaviour |
+|-------------|-----------|
+| `scripts/release/deploy-tag.sh` | After the `run-heavy` re-exec lock, prints a **stderr WARNING** unless `DEPLOY_QUEUE_ACK=1`. The queue sets this when running `full-stack`. |
+| `scripts/release/deploy-via-ssh.ps1` | Emits a **PowerShell warning** unless `$env:DEPLOY_QUEUE_ACK -eq '1'`. |
+| Direct `docker compose …` | No automatic wrapper — **policy + code review**; agents must not do this for routine work. |
+
+---
+
+## Server setup (summary)
+
+```bash
+sudo mkdir -p /var/log/connect-deploys && sudo chown "$USER" /var/log/connect-deploys
 sudo install -m 600 /dev/null /opt/connectcomms/env/.env.deploy-queue
-sudoedit /opt/connectcomms/env/.env.deploy-queue
-# add:  DEPLOY_QUEUE_TOKEN='openssl rand -hex 32 output here'
+# add DEPLOY_QUEUE_TOKEN, optional DEPLOY_QUEUE_MAX_QUEUED, etc.
 
 cd /opt/connectcomms/app
 pnpm install
-pnpm approve-builds   # allow better-sqlite3 native build (required on Linux for the queue to run)
-pnpm rebuild better-sqlite3
+pnpm approve-builds && pnpm rebuild better-sqlite3   # Linux: native better-sqlite3
 
 bash scripts/ops/start-deploy-queue-pm2.sh
 ```
 
-**`better-sqlite3`:** uses a native addon. On the **Linux** server you must allow/rebuild install scripts (`pnpm approve-builds` / `pnpm rebuild better-sqlite3`). Windows dev machines may skip running the queue locally if the binary is not built.
+### Env vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEPLOY_QUEUE_TOKEN` | (required) | Shared secret for API auth. |
+| `DEPLOY_QUEUE_MAX_QUEUED` | `10` | Max **queued** jobs (not counting running). |
+| `DEPLOY_QUEUE_BIND` | `127.0.0.1` | Listen address. |
+| `DEPLOY_QUEUE_PORT` | `3910` | Listen port. |
+| `DEPLOY_QUEUE_LOG_DIR` | `/var/log/connect-deploys` | Job logs directory. |
+| `DEPLOY_QUEUE_STATE_DIR` | `…/ops/deploy-queue/var` | SQLite + worker lock. |
+| `DEPLOY_REPO_ROOT` | `/opt/connectcomms/app` | Git + compose root. |
 
 ---
 
-## HTTP API (localhost only)
+## Verification checklist (staging / maintenance)
 
-Bind address defaults to **`127.0.0.1:3910`**. Do not expose this port on the public internet. Reach it via:
-
-- SSH port forward: `ssh -L 3910:127.0.0.1:3910 user@server`
-- Or an existing internal admin nginx `location` (optional; not shipped here)
-
-All routes require the token header.
-
-### `POST /ops/deploy/enqueue`
-
-Body (JSON):
-
-```json
-{
-  "service": "api",
-  "branch": "main",
-  "commitHash": "optional-full-sha",
-  "requestedBy": "cursor-agent-session-xyz"
-}
-```
-
-- `service`: `api` \| `portal` \| `telephony` \| `realtime`
-- `branch`: required if `commitHash` omitted (scripts default to `main` when branch empty but commit empty fails)
-- `commitHash`: optional; if set, deploy scripts `git checkout` that SHA (detached)
-- `requestedBy`: audit string (agent id, human name, etc.)
-
-Responses: **201** created, **409** duplicate active job for that service, **401** bad token.
-
-### `GET /ops/deploy/jobs`
-
-Query: `?status=queued&limit=50`
-
-### `GET /ops/deploy/jobs/:id`
-
-Returns `job` plus `logTail` (last ~64 KiB of the log file if present).
-
-### `POST /ops/deploy/jobs/:id/cancel`
-
-Only if status is **`queued`**. Running jobs cannot be cancelled via this MVP endpoint.
+1. **PM2:** `pm2 status` shows `connect-deploy-worker` online; `curl -sS http://127.0.0.1:3910/health` → `ok`.
+2. **Status:** `GET /ops/deploy/status` with token → `targets` includes all six services; `lock` sane.
+3. **Enqueue api:** job reaches `success` (or `failed` with log reason).
+4. **Duplicate api:** second enqueue while first `queued`/`running` → **409**.
+5. **Serialize:** enqueue `portal`, then `api` — second starts only after first completes.
+6. **Log API:** `GET /ops/deploy/jobs/<id>/log?lines=50` returns text.
+7. **Dry run:** enqueue with `"dryRun":true` — log shows “DRY RUN”, no container churn (inspect `docker ps` timestamps).
+8. **Infra:** confirm no intentional edits to port 22 / nginx / Postgres platform schema from this feature.
 
 ---
 
-## How Cursor agents should deploy (do not SSH-run deploy concurrently)
+## Known limitations
 
-1. **Do not** run `bash scripts/release/deploy-tag.sh`, `docker compose … --build`, or `pnpm prisma migrate deploy` directly over SSH while another agent might do the same.
-2. Open an SSH tunnel to the queue port (or use an internal jump host that can curl localhost).
-3. **Enqueue** one job per service you need:
-
-```bash
-export DEPLOY_QUEUE_TOKEN='…from server env file…'
-curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
-  -H "Content-Type: application/json" \
-  -H "x-deploy-queue-token: $DEPLOY_QUEUE_TOKEN" \
-  -d '{"service":"portal","branch":"main","requestedBy":"cursor:<session-id>"}'
-```
-
-4. Poll until terminal state:
-
-```bash
-curl -sS "http://127.0.0.1:3910/ops/deploy/jobs/<id>" \
-  -H "x-deploy-queue-token: $DEPLOY_QUEUE_TOKEN"
-```
-
-5. For **full stack / tagged** releases that must match `deploy-tag.sh` behaviour, **coordinate** so only one human (or one agent with exclusive lock) runs `deploy-tag.sh`, or extend the queue later with a `full-stack` job type (TODO).
-
----
-
-## PM2
-
-- **Process name:** `connect-deploy-worker` (see `ops/deploy-queue/ecosystem.config.cjs`)
-- **Instances:** must stay at **1**. Scaling to 2+ can fight over Docker unless you rely solely on the file lock (second process will crash-loop on lock — intentional).
-
-Start / rebuild:
-
-```bash
-bash scripts/ops/start-deploy-queue-pm2.sh
-```
-
-Logs:
-
-```bash
-pm2 logs connect-deploy-worker
-```
-
----
-
-## Crash safety
-
-- On process start, any job still marked **`running`** is moved to **`failed`** with message `worker restarted while job was running (marked failed)`.
-- A **worker lock file** prevents two workers from running deploy scripts; stale locks are reclaimed if the owning PID is dead or the lock is older than ~2 minutes (see `src/lockfile.ts`).
-
----
-
-## Test checklist (staging or maintenance window)
-
-- [ ] `curl` enqueue each service once with a throwaway branch; confirm job reaches `success` or expected `failed`.
-- [ ] Second enqueue for same service while first is `queued` → **409**.
-- [ ] Cancel queued job → status `cancelled`.
-- [ ] Kill worker mid-deploy (`pm2 stop`) → restart → previous `running` job becomes `failed`; new jobs still process.
-- [ ] Confirm **portal** job does **not** run `prisma migrate` (grep log).
-- [ ] Confirm **api** job **does** run `prisma migrate deploy` once.
-- [ ] Health failures trigger rollback attempt in log (git + rebuild).
-
----
-
-## Known limitations / TODOs
-
-- **Worker** Docker service is **not** a queue target; `deploy-tag.sh` still rebuilds it. Add a fifth script if needed.
-- **Rollback** rebuilds the previous git revision; it is best-effort and may still fail if Docker state is inconsistent — check logs.
-- Servers that **only** deploy detached tags (never `origin/main`) may need branch/tag workflow adjustments — see `scripts/lib/deploy-common.sh` (`DEPLOY_COMMIT` vs `DEPLOY_BRANCH`).
-- **Nginx / port 22** are untouched by this feature.
+- `full-stack` jobs use the same global lock as single-service jobs; tag must exist on `origin` after `git fetch`.
+- Rollback in per-service scripts is best-effort (rebuild previous git state).
+- Windows dev hosts may skip running the queue locally if `better-sqlite3` is not built.

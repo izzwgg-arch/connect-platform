@@ -36,6 +36,7 @@ module.exports = {
         DEPLOY_QUEUE_STATE_DIR: "/opt/connectcomms/app/ops/deploy-queue/var",
         DEPLOY_QUEUE_SQLITE_PATH: "/opt/connectcomms/app/ops/deploy-queue/var/queue.db",
         DEPLOY_QUEUE_POLL_MS: "3000",
+        DEPLOY_QUEUE_MAX_QUEUED: "10",
       },
     },
   ],
