@@ -9,7 +9,8 @@ import type { Queue } from "bullmq";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { buildChatSignedDownloadUrl, canonicalSmsPhone, verifyChatSignedDownload } from "@connect/shared";
+import { canonicalSmsPhone } from "@connect/shared";
+import { buildChatSignedDownloadUrl, verifyChatSignedDownload } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials } from "@connect/integrations";
 import {
   assertStorageKeyForThread,

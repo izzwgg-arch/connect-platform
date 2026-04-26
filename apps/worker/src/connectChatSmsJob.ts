@@ -1,7 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { VoipMsSmsProvider } from "@connect/integrations";
-import { buildChatSignedDownloadUrl } from "@connect/shared";
+import { buildChatSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
