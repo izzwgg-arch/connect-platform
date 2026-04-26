@@ -12502,8 +12502,43 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
     } else if (q.tenantId) {
       const scope = parseTenantScope(q.tenantId);
       if (scope.unassigned) where.tenantId = null;
-      else if (scope.tenantSlug) where.tenantSlug = scope.tenantSlug;
-      else if (scope.tenantId) where.tenantId = scope.tenantId;
+      else if (scope.tenantSlug) {
+        // Match catalog rows by VitalPBX directory slug (primary), and also by
+        // resolved Connect tenantId so older rows created before we aligned
+        // tenantSlug with the vpbx switcher (they used toIvrSlug(Tenant.name))
+        // still show up in the IVR modal after refresh.
+        const slug = scope.tenantSlug;
+        const dir = await db.pbxTenantDirectory.findFirst({
+          where: { tenantSlug: { equals: slug, mode: "insensitive" } },
+          select: { vitalTenantId: true, tenantCode: true },
+        });
+        let connectId: string | null = null;
+        if (dir) {
+          const link = await db.tenantPbxLink.findFirst({
+            where: {
+              OR: [
+                { pbxTenantId: dir.vitalTenantId },
+                { pbxTenantCode: dir.tenantCode || "__never__" },
+              ],
+            },
+            select: { tenantId: true },
+          });
+          connectId = link?.tenantId ?? null;
+        }
+        if (!connectId) {
+          const needle = slug.replace(/_/g, " ");
+          const t = await db.tenant.findFirst({
+            where: { name: { equals: needle, mode: "insensitive" } },
+            select: { id: true },
+          });
+          connectId = t?.id ?? null;
+        }
+        const orPred: Array<Record<string, unknown>> = [
+          { tenantSlug: { equals: slug, mode: "insensitive" } },
+        ];
+        if (connectId) orPred.push({ tenantId: connectId });
+        where.AND = [{ OR: orPred }];
+      } else if (scope.tenantId) where.tenantId = scope.tenantId;
     } else if (user.tenantId) {
       where.tenantId = user.tenantId;
     }
@@ -12622,11 +12657,21 @@ app.post("/voice/ivr/prompts", async (req, reply) => {
   // actual tenant (FK), not a synthetic string.
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   let tenantId: string | null = isSuperAdmin ? (d.tenantId ?? null) : user.tenantId ?? null;
+  // When the portal is in super-admin "view as VitalPBX tenant" mode it sends
+  // `tenantId = "vpbx:<directorySlug>"`. GET /voice/ivr/prompts scopes that same
+  // view with `where: { tenantSlug: "<slug>" }` (see parseTenantScope). If we
+  // only denormalised `tenantSlug` from Connect Tenant.name here, new manual
+  // rows would never match the list query — the UI would show the selection as
+  // "legacy (not in catalog)" and Play would stay disabled because selectedRow
+  // is null. Persist the directory slug as tenantSlug whenever we resolved from
+  // vpbx: so catalog rows line up with the switcher.
+  let vpbxCatalogSlug: string | null = null;
   if (tenantId && tenantId.startsWith("vpbx:")) {
     if (!isSuperAdmin) return reply.code(403).send({ error: "super_admin_required_for_vpbx_override" });
-    const slug = tenantId.slice(5).trim();
+    const slug = tenantId.slice(5).trim().toLowerCase();
+    vpbxCatalogSlug = slug;
     const dir = await db.pbxTenantDirectory.findFirst({
-      where: { tenantSlug: slug },
+      where: { tenantSlug: { equals: slug, mode: "insensitive" } },
       select: { tenantCode: true, vitalTenantId: true },
     });
     let resolved: string | null = null;
@@ -12653,14 +12698,16 @@ app.post("/voice/ivr/prompts", async (req, reply) => {
       resolved = t?.id ?? null;
     }
     if (!resolved) {
-      return reply.code(400).send({ error: "unresolved_vpbx_slug", slug });
+      return reply.code(400).send({ error: "unresolved_vpbx_slug", slug: vpbxCatalogSlug });
     }
     tenantId = resolved;
   }
   if (!isSuperAdmin && !tenantId) return reply.code(400).send({ error: "tenantId required" });
 
   let tenantSlug: string | null = null;
-  if (tenantId) {
+  if (vpbxCatalogSlug) {
+    tenantSlug = vpbxCatalogSlug;
+  } else if (tenantId) {
     const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
     tenantSlug = tenant ? toIvrSlug(tenant.name) : null;
   }
