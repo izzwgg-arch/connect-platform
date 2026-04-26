@@ -16,7 +16,6 @@ type SidebarNavProps = {
 const SECTION_ORDER: NavItem["section"][] = [
   "dashboard",
   "pbx",
-  "reports",
   "settings",
   "admin",
   "billing",
