@@ -1,8 +1,66 @@
-#!/bin/sh
-docker cp /tmp/liveCall.ts app-portal-1:/app/apps/portal/types/liveCall.ts
-docker cp /tmp/dashboard_page.tsx "/app/apps/portal/app/(platform)/dashboard/page.tsx" 2>/dev/null || \
-  docker exec app-portal-1 sh -c 'mkdir -p /app/apps/portal/app/\(platform\)/dashboard' && \
-  docker cp /tmp/dashboard_page.tsx "app-portal-1:/app/apps/portal/app/(platform)/dashboard/page.tsx"
-docker cp /tmp/calls_page.tsx "app-portal-1:/app/apps/portal/app/(platform)/calls/page.tsx"
-docker cp /tmp/globals.css app-portal-1:/app/apps/portal/app/globals.css
-echo "Portal files deployed"
+#!/usr/bin/env bash
+# Deploy portal only (Docker service `portal`). Does NOT run Prisma migrations.
+#
+# Env: same as deploy-api.sh (DEPLOY_REPO_ROOT, DEPLOY_BRANCH, DEPLOY_COMMIT, …)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/deploy-common.sh"
+
+ROOT="${DEPLOY_REPO_ROOT:-$ROOT}"
+SERVICE="portal"
+COMPOSE="$(deploy_common_compose_file)"
+BRANCH="${DEPLOY_BRANCH:-}"
+COMMIT="${DEPLOY_COMMIT:-}"
+REQ="${DEPLOY_REQUESTED_BY:-manual}"
+
+log() { echo "[deploy-portal] $*"; }
+fail() { echo "[deploy-portal] FAIL: $*" >&2; exit 1; }
+
+[[ -n "$BRANCH" || -n "$COMMIT" ]] || fail "DEPLOY_BRANCH or DEPLOY_COMMIT is required"
+cd "$ROOT"
+[[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
+
+LOCK_BEFORE="$(deploy_common_lock_hash)"
+OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+LOCK_AFTER="$(deploy_common_lock_hash)"
+
+deploy_common_maybe_pnpm_install "deploy-queue:${SERVICE}" "$LOCK_BEFORE" "$LOCK_AFTER"
+
+rollback() {
+  trap - ERR
+  log "rollback: restoring git + rebuilding ${SERVICE}"
+  deploy_common_rollback_git "$ROOT" "$OLD_HEAD" || true
+  deploy_common_run_heavy "deploy-queue:${SERVICE}:rollback-build" \
+    docker compose -f "$COMPOSE" build "$SERVICE"
+  docker compose -f "$COMPOSE" up -d "$SERVICE" || true
+}
+
+trap 'rollback' ERR
+
+log "docker build ${SERVICE}"
+deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
+  docker compose -f "$COMPOSE" build "$SERVICE"
+
+log "docker up ${SERVICE}"
+docker compose -f "$COMPOSE" up -d "$SERVICE"
+
+log "health check portal /login"
+ok=0
+for i in $(seq 1 60); do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 25 \
+    -H 'Host: app.connectcomunications.com' 'http://127.0.0.1:3000/login' 2>/dev/null || echo 000)"
+  if [[ "$code" =~ ^(200|301|302|303|307|308)$ ]]; then
+    ok=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$ok" != "1" ]]; then
+  rollback
+  fail "portal health check failed (requested by ${REQ})"
+fi
+
+trap - ERR
+log "done $(git rev-parse --short HEAD) requested_by=${REQ}"

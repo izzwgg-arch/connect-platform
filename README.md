@@ -5,6 +5,13 @@ Monorepo scaffold for portal, API, realtime services, and shared packages.
 - Runtime env reference: `/opt/connectcomms/env/.env.platform`
 - Do not run installs in parallel.
 
+## Safe deploy queue (multi-agent)
+
+Production uses **Docker Compose** for app services. A small **localhost-only** queue (`ops/deploy-queue`, PM2 name `connect-deploy-worker`) lets Cursor agents **enqueue** per-service deploys (`api`, `portal`, `telephony`, `realtime`) instead of SSH-ing concurrent `docker compose` / Prisma runs.
+
+- **Full documentation:** [docs/safe-deploy-queue.md](docs/safe-deploy-queue.md)
+- **Cursor rule:** use `POST /ops/deploy/enqueue` with `DEPLOY_QUEUE_TOKEN`; do not run `scripts/release/deploy-tag.sh` or compose builds in parallel over SSH unless explicitly exclusive.
+
 ## PBX Smoke Runner
 
 Run on the Linux server (not PowerShell):

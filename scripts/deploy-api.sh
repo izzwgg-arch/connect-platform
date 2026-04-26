@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Deploy telephony only (Docker service `telephony`). Does NOT run Prisma migrations.
+# Deploy API only (Docker service `api`). Safe for ops/deploy-queue worker.
+# - Runs Prisma migrate deploy (ONLY this script among per-service deploys).
+# - Restarts only the `api` compose service.
 #
-# Env: same as deploy-api.sh
+# Env (set by worker or manually):
+#   DEPLOY_REPO_ROOT   default /opt/connectcomms/app
+#   DEPLOY_BRANCH      required unless DEPLOY_COMMIT set
+#   DEPLOY_COMMIT      optional SHA (detached); wins over branch
+#   DEPLOY_REQUESTED_BY
+#   DEPLOY_COMPOSE_FILE default docker-compose.app.yml
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,16 +16,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/deploy-common.sh"
 
 ROOT="${DEPLOY_REPO_ROOT:-$ROOT}"
-SERVICE="telephony"
+SERVICE="api"
 COMPOSE="$(deploy_common_compose_file)"
 BRANCH="${DEPLOY_BRANCH:-}"
 COMMIT="${DEPLOY_COMMIT:-}"
 REQ="${DEPLOY_REQUESTED_BY:-manual}"
 
-log() { echo "[deploy-telephony] $*"; }
-fail() { echo "[deploy-telephony] FAIL: $*" >&2; exit 1; }
+log() { echo "[deploy-api] $*"; }
+fail() { echo "[deploy-api] FAIL: $*" >&2; exit 1; }
 
 [[ -n "$BRANCH" || -n "$COMMIT" ]] || fail "DEPLOY_BRANCH or DEPLOY_COMMIT is required"
+
 cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
@@ -27,6 +35,7 @@ OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
 LOCK_AFTER="$(deploy_common_lock_hash)"
 
 deploy_common_maybe_pnpm_install "deploy-queue:${SERVICE}" "$LOCK_BEFORE" "$LOCK_AFTER"
+deploy_common_export_database_url
 
 rollback() {
   trap - ERR
@@ -39,6 +48,10 @@ rollback() {
 
 trap 'rollback' ERR
 
+log "prisma migrate deploy (api deploy only)"
+deploy_common_run_heavy "deploy-queue:${SERVICE}:prisma" \
+  pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma
+
 log "docker build ${SERVICE}"
 deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
   docker compose -f "$COMPOSE" build "$SERVICE"
@@ -46,10 +59,10 @@ deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
 log "docker up ${SERVICE}"
 docker compose -f "$COMPOSE" up -d "$SERVICE"
 
-log "health check http://127.0.0.1:3003/health"
+log "health check http://127.0.0.1:3001/health"
 ok=0
-for i in $(seq 1 30); do
-  if curl -sfS --connect-timeout 2 --max-time 15 "http://127.0.0.1:3003/health" >/dev/null 2>&1; then
+for i in $(seq 1 45); do
+  if curl -sfS --connect-timeout 2 --max-time 15 "http://127.0.0.1:3001/health" >/dev/null 2>&1; then
     ok=1
     break
   fi
@@ -57,7 +70,7 @@ for i in $(seq 1 30); do
 done
 if [[ "$ok" != "1" ]]; then
   rollback
-  fail "telephony health check failed (requested by ${REQ})"
+  fail "health check failed after deploy (requested by ${REQ})"
 fi
 
 trap - ERR
