@@ -145,9 +145,26 @@ interface PromptCatalogRow {
   category: string;
   source: string;
   isActive: boolean;
+  // Ownership confidence (post-20260426 tenant-isolation migration):
+  //   "exact"   — tenantId came from VitalPBX ombu_recordings.tenant_id
+  //   "path"    — folder/path convention
+  //   "prefix"  — filename prefix matched a known tenant slug
+  //   "manual"  — an admin set the tenant via the Connect UI
+  //   "unknown" — no reliable tenant mapping; hidden from tenant admins
+  // Tenant admins never see "unknown" rows (server enforces).
+  ownershipConfidence?: "exact" | "path" | "prefix" | "manual" | "unknown";
   // Playback metadata (populated once Connect has the audio bytes).
   // When false the Play button falls back to "upload audio first".
   hasAudio?: boolean;
+  // Admin-only diagnostic detail from the server:
+  //   audioStatus       — "cached" | "missing"
+  //   audioSource       — "storageKey" (explicit wiring), "matcher" (found
+  //                       on disk via fileBaseName/promptRef fallback), or
+  //                       "none".
+  //   audioMatchedKey   — the actual filename on disk, if any.
+  audioStatus?: "cached" | "missing";
+  audioSource?: "storageKey" | "matcher" | "none";
+  audioMatchedKey?: string | null;
   contentType?: string | null;
   sizeBytes?: number | null;
   syncedAt?: string | null;
@@ -1068,9 +1085,63 @@ function PromptPicker({
           onClick={() => setManual(true)}
           style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}
         >Type custom value</button>
-        {selectedRow && !selectedRow.hasAudio && (
-          <span style={{ color: "#fbbf24" }}>
-            (no audio synced for this recording yet — upload the WAV/MP3 to enable preview)
+        {selectedRow && (
+          selectedRow.hasAudio ? (
+            <span
+              title={
+                selectedRow.audioSource === "matcher"
+                  ? `Found by filename matcher: ${selectedRow.audioMatchedKey || ""}`
+                  : `Cached at ${selectedRow.audioMatchedKey || "(known key)"}`
+              }
+              style={{
+                color: "#4ade80",
+                background: "#064e3b",
+                padding: "2px 6px",
+                borderRadius: 3,
+                fontSize: 10,
+                fontWeight: 600,
+              }}
+            >
+              Audio: Cached{selectedRow.audioSource === "matcher" ? " (matched)" : ""}
+              {selectedRow.audioMatchedKey ? ` · ${selectedRow.audioMatchedKey}` : ""}
+            </span>
+          ) : (
+            <span
+              title="Click Upload audio to provide a WAV/MP3. Connect will never synthesise a fallback tone."
+              style={{
+                color: "#fbbf24",
+                background: "#451a03",
+                padding: "2px 6px",
+                borderRadius: 3,
+                fontSize: 10,
+                fontWeight: 600,
+              }}
+            >
+              Audio: Missing — upload a WAV/MP3 to enable Play
+            </span>
+          )
+        )}
+        {selectedRow && selectedRow.ownershipConfidence && selectedRow.ownershipConfidence !== "exact" && (
+          <span
+            title={
+              selectedRow.ownershipConfidence === "manual"
+                ? "Ownership set manually by a Connect admin."
+                : selectedRow.ownershipConfidence === "prefix"
+                  ? "Ownership inferred from filename prefix. Run Auto-Sync to confirm from VitalPBX."
+                  : selectedRow.ownershipConfidence === "path"
+                    ? "Ownership inferred from folder path."
+                    : "Ownership UNCONFIRMED — this row is hidden from tenant admins until a sync resolves it."
+            }
+            style={{
+              color: selectedRow.ownershipConfidence === "unknown" ? "#fca5a5" : "#cbd5e1",
+              background: selectedRow.ownershipConfidence === "unknown" ? "#450a0a" : "#1e293b",
+              padding: "2px 6px",
+              borderRadius: 3,
+              fontSize: 10,
+              fontWeight: 600,
+            }}
+          >
+            Ownership: {selectedRow.ownershipConfidence}
           </span>
         )}
       </div>

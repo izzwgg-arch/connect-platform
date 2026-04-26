@@ -3210,6 +3210,20 @@ app.addHook("preHandler", async (req, reply) => {
   // Authenticated by the shared CDR_INGEST_SECRET header, not by user JWT.
   const isInternalVoicemailNotifyPath =
     path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
+  // PBX-host → Connect audio push pipeline. These endpoints authenticate
+  // with the PROMPT_SYNC_SHARED_SECRET / MOH_SYNC_SHARED_SECRET header
+  // inside their own handlers — they must NOT require a JWT because the
+  // PBX helper is a cron job, not a logged-in user.
+  const isIvrPromptSyncPath =
+    path === "/voice/ivr/prompts/sync-manifest"
+    || path.endsWith("/voice/ivr/prompts/sync-manifest")
+    || path === "/voice/ivr/prompts/upload"
+    || path.endsWith("/voice/ivr/prompts/upload");
+  const isMohSyncPath =
+    path === "/voice/moh/sync-manifest"
+    || path.endsWith("/voice/moh/sync-manifest")
+    || path === "/voice/moh/upload"
+    || path.endsWith("/voice/moh/upload");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
@@ -3218,6 +3232,8 @@ app.addHook("preHandler", async (req, reply) => {
     || isInternalMobileRingPath
     || isInternalTelephonyPath
     || isInternalVoicemailNotifyPath
+    || isIvrPromptSyncPath
+    || isMohSyncPath
     || [
         "/health",
         "/auth/signup",
@@ -11809,16 +11825,24 @@ async function ivrValidatePromptRefForTenant(
   if (fmt) return fmt;
   if (ref == null || ref === "") return null;
   try {
-    const row = await (db as any).tenantPbxPrompt.findUnique({
+    // POST-20260426: promptRef is no longer globally unique; each tenant
+    // has its own namespace. A write is allowed iff
+    //   (a) a row exists with (tenantId=targetTenantId, promptRef=ref), OR
+    //   (b) there is no row at all (legacy / not-yet-synced soft-allow), OR
+    //   (c) there is ONLY an unassigned (tenantId=null) row (acts as a
+    //       shared library until ownership is confirmed by a sync).
+    // Rows that exist but belong exclusively to OTHER tenants are
+    // rejected with the usual error.
+    const rows = await (db as any).tenantPbxPrompt.findMany({
       where: { promptRef: ref },
       select: { tenantId: true, isActive: true },
     });
-    if (!row) return null; // legacy / not-yet-synced → soft-allow
-    // Unassigned catalog row (tenantId=null) acts like a shared library.
-    if (row.tenantId && row.tenantId !== targetTenantId) {
-      return "prompt ref is registered to a different tenant";
-    }
-    return null;
+    if (rows.length === 0) return null;
+    const hasOwn = rows.some((r: any) => r.tenantId === targetTenantId);
+    if (hasOwn) return null;
+    const hasOnlyUnassigned = rows.every((r: any) => r.tenantId == null);
+    if (hasOnlyUnassigned) return null;
+    return "prompt ref is registered to a different tenant";
   } catch {
     return null; // DB hiccup → don't block the write over catalog lookup
   }
@@ -12199,26 +12223,44 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
   }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
 
+  // ── Emergency freeze ──────────────────────────────────────────────────
+  // If IVR_PROMPT_TENANT_FREEZE=true the list endpoint returns an empty
+  // set to non-super-admins unconditionally. Used as an instant kill
+  // switch if we detect another cross-tenant leak in production; super
+  // admins can still inspect the full catalog.
+  const freezeOn = String(process.env.IVR_PROMPT_TENANT_FREEZE || "").toLowerCase() === "true";
+  if (freezeOn && !isSuperAdmin) {
+    app.log.warn({ userId: (user as any).id, tenantId: user.tenantId }, "[IVR_PROMPT] tenant freeze active — returning []");
+    return reply.send({ prompts: [], frozen: true });
+  }
+
   // The portal tenant switcher identifies super-admin tenant picks via
   // `vpbx:<slug>` (see apps/portal/services/tenantData.ts). Accept that form
   // here — rows are denormalised with `tenantSlug`, which is indexed — so the
   // switcher "just works" even before a Connect Tenant row exists for every
   // VitalPBX customer.
-  const parseTenantScope = (raw: string): { tenantId?: string; tenantSlug?: string } => {
+  const parseTenantScope = (raw: string): { tenantId?: string; tenantSlug?: string; unassigned?: boolean } => {
     const v = raw.trim();
     if (!v) return {};
+    if (v === "__unassigned__") return { unassigned: true };
     if (v.startsWith("vpbx:")) return { tenantSlug: v.slice(5).toLowerCase() };
     return { tenantId: v };
   };
 
-  // Tenant scoping: non-super-admins are pinned to their own tenantId.
+  // Tenant scoping: non-super-admins are pinned to their own tenantId AND
+  // are only allowed to see rows whose ownership has been confirmed
+  // (anything !== "unknown"). Super admins can inspect everything including
+  // the __unassigned__ bucket.
   let where: Record<string, unknown> = {};
   if (isSuperAdmin) {
     if (q.tenantId === "__all__") {
-      // full catalog (incl. unassigned) — super admin only
+      // full catalog (incl. unassigned + unknown) — super admin only
+    } else if (q.tenantId === "__unassigned__") {
+      where.tenantId = null;
     } else if (q.tenantId) {
       const scope = parseTenantScope(q.tenantId);
-      if (scope.tenantSlug) where.tenantSlug = scope.tenantSlug;
+      if (scope.unassigned) where.tenantId = null;
+      else if (scope.tenantSlug) where.tenantSlug = scope.tenantSlug;
       else if (scope.tenantId) where.tenantId = scope.tenantId;
     } else if (user.tenantId) {
       where.tenantId = user.tenantId;
@@ -12226,6 +12268,10 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
   } else {
     if (!user.tenantId) return reply.code(400).send({ error: "tenantId required" });
     where.tenantId = user.tenantId;
+    // CRITICAL: tenant admins never see rows with unconfirmed ownership.
+    // This is the post-20260426 isolation gate — an "unknown" row is, by
+    // definition, one we're not certain belongs to this tenant.
+    where.ownershipConfidence = { not: "unknown" };
   }
   if (q.category && (PROMPT_CATEGORIES as readonly string[]).includes(q.category)) where.category = q.category;
   if (q.includeInactive !== "1") where.isActive = true;
@@ -12235,24 +12281,73 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
     orderBy: [{ category: "asc" }, { displayName: "asc" }, { promptRef: "asc" }],
     take: 1_000,
   });
-  const prompts = rows.map((r: any) => ({
-    id: r.id,
-    tenantId: r.tenantId,
-    tenantSlug: r.tenantSlug,
-    promptRef: r.promptRef,
-    displayName: r.displayName,
-    category: r.category,
-    source: r.source,
-    isActive: r.isActive,
-    updatedAt: r.updatedAt,
-    // Audio playback metadata. `hasAudio` lets the UI show/hide the Play
-    // button without having to read the file itself. The bytes are streamed
-    // via /voice/ivr/prompts/:id/stream (JWT-authenticated, tenant-scoped).
-    hasAudio: !!r.storageKey,
-    contentType: r.contentType ?? null,
-    sizeBytes: r.sizeBytes ?? null,
-    syncedAt: r.syncedAt ?? null,
-  }));
+
+  // Cheap one-shot scan of the prompt storage directory so `hasAudio` can
+  // be true for rows whose `storageKey` was never written — e.g. a PBX
+  // bulk-upload that landed the file but couldn't wire it to this row
+  // because of a casing mismatch. The stream endpoint will auto-heal the
+  // row on first Play.
+  const { listStoredAudioFilenames, rowHasCachedAudio } = await import("./promptStorage");
+  const diskFiles = await listStoredAudioFilenames();
+
+  const { isTenantScopedStorageKey } = await import("./promptStorage");
+  const prompts = rows.map((r: any) => {
+    // A direct hit only counts if the stored key is tenant-scoped AND the
+    // file exists in THIS tenant's directory on disk. Legacy flat keys
+    // are refused — they're suspect bytes from before the isolation fix.
+    const scope = r.tenantId ? r.tenantId : "unassigned";
+    const scopeMap = diskFiles.get(scope);
+    let matchedKey: string | null = null;
+    let audioSource: "storageKey" | "matcher" | "none" = "none";
+    if (
+      r.storageKey &&
+      isTenantScopedStorageKey(r.storageKey) &&
+      scopeMap &&
+      r.storageKey.startsWith(`${scope === "unassigned" ? "unassigned" : `tenants/${scope}`}/`)
+    ) {
+      const tail = r.storageKey.split("/").pop() ?? "";
+      if (scopeMap.has(tail.toLowerCase())) {
+        matchedKey = r.storageKey;
+        audioSource = "storageKey";
+      }
+    }
+    if (audioSource === "none") {
+      const m = rowHasCachedAudio(r, diskFiles);
+      if (m.hit) {
+        matchedKey = m.storageKey;
+        audioSource = "matcher";
+      }
+    }
+    const hasAudio = audioSource !== "none";
+    return {
+      id: r.id,
+      tenantId: r.tenantId,
+      tenantSlug: r.tenantSlug,
+      promptRef: r.promptRef,
+      displayName: r.displayName,
+      category: r.category,
+      source: r.source,
+      isActive: r.isActive,
+      updatedAt: r.updatedAt,
+      // Ownership confidence (post-20260426): tenant admins only see rows
+      // with confidence !== "unknown" (enforced above), so this field is
+      // primarily for the super-admin inspector view.
+      ownershipConfidence: r.ownershipConfidence ?? "unknown",
+      // Audio playback metadata. `hasAudio` lets the UI show/hide the Play
+      // button without having to read the file itself. The bytes are
+      // streamed via /voice/ivr/prompts/:id/stream (JWT-authenticated,
+      // tenant-scoped).
+      hasAudio,
+      // Admin-visible detail so a maintainer can tell at a glance whether
+      // the audio is wired explicitly or was found by the fallback matcher.
+      audioStatus: hasAudio ? "cached" : "missing",
+      audioSource,
+      audioMatchedKey: matchedKey,
+      contentType: r.contentType ?? null,
+      sizeBytes: r.sizeBytes ?? null,
+      syncedAt: r.syncedAt ?? null,
+    };
+  });
   return reply.send({ prompts });
 });
 
@@ -12287,24 +12382,36 @@ app.post("/voice/ivr/prompts", async (req, reply) => {
     tenantSlug = tenant ? toIvrSlug(tenant.name) : null;
   }
 
-  const row = await (db as any).tenantPbxPrompt.upsert({
-    where:  { promptRef },
-    update: {
-      tenantId, tenantSlug,
-      displayName: d.displayName ?? fileBaseName,
-      category: d.category ?? ivrInferPromptCategory(fileBaseName),
-      source: "manual",
-      isActive: true,
-      lastSeenAt: new Date(),
-    },
-    create: {
-      tenantId, tenantSlug,
-      promptRef, fileBaseName, relativePath: promptRef,
-      displayName: d.displayName ?? fileBaseName,
-      category: d.category ?? ivrInferPromptCategory(fileBaseName),
-      source: "manual",
-    },
+  // Post-isolation-fix: upsert is tenant-scoped. Each tenant has its
+  // own (tenantId, promptRef) namespace — two tenants manually adding
+  // `custom/Main` both succeed and get independent rows.
+  const existing = await (db as any).tenantPbxPrompt.findFirst({
+    where: { tenantId: tenantId ?? null, promptRef },
+    select: { id: true },
   });
+  const row = existing
+    ? await (db as any).tenantPbxPrompt.update({
+        where: { id: existing.id },
+        data: {
+          tenantId, tenantSlug,
+          displayName: d.displayName ?? fileBaseName,
+          category: d.category ?? ivrInferPromptCategory(fileBaseName),
+          source: "manual",
+          isActive: true,
+          ownershipConfidence: "manual",
+          lastSeenAt: new Date(),
+        },
+      })
+    : await (db as any).tenantPbxPrompt.create({
+        data: {
+          tenantId, tenantSlug,
+          promptRef, fileBaseName, relativePath: promptRef,
+          displayName: d.displayName ?? fileBaseName,
+          category: d.category ?? ivrInferPromptCategory(fileBaseName),
+          source: "manual",
+          ownershipConfidence: "manual",
+        },
+      });
   return reply.code(201).send({ prompt: row });
 });
 
@@ -12421,14 +12528,23 @@ app.post("/voice/ivr/prompts/sync", async (req, reply) => {
     if (!tenantId) unassigned += 1;
     seenRefs.push(promptRef);
 
-    const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { promptRef } });
+    // Post-isolation-fix: upsert is scoped by (tenantId, promptRef).
+    // Filename-prefix slug match carries "prefix" confidence. A ref with
+    // no slug match becomes an unassigned row with "unknown" confidence
+    // so tenant admins don't see it until a higher-confidence source
+    // reassigns it.
+    const confidence: "prefix" | "unknown" = tenantId ? "prefix" : "unknown";
+
+    const existing = await (db as any).tenantPbxPrompt.findFirst({
+      where: { tenantId: tenantId ?? null, promptRef },
+      select: { id: true, source: true },
+    });
     if (existing) {
-      // Preserve a manual override (displayName/category) — only refresh
-      // lastSeenAt, source, tenant assignment, and re-activate.
       await (db as any).tenantPbxPrompt.update({
-        where: { promptRef },
+        where: { id: existing.id },
         data: {
           tenantId, tenantSlug,
+          ownershipConfidence: confidence,
           lastSeenAt: now,
           source: existing.source === "manual" ? "manual" : source,
           isActive: true,
@@ -12444,6 +12560,7 @@ app.post("/voice/ivr/prompts/sync", async (req, reply) => {
           category: ivrInferPromptCategory(fileBaseName),
           source,
           isActive: true,
+          ownershipConfidence: confidence,
         },
       });
       created += 1;
@@ -12582,28 +12699,155 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
   if ("error" in loaded) return reply.code(loaded.error).send(loaded.body);
   const row = loaded.row;
 
-  if (!row.storageKey) {
-    return reply.code(503).send({
-      error: "audio_not_synced",
-      hint: "No audio bytes uploaded yet. Upload via the UI or run the PBX-host `connect-prompt-sync.sh` helper.",
-    });
+  const debug = String(process.env.ENABLE_IVR_PROMPT_DEBUG || "").toLowerCase() === "true";
+  const {
+    readPromptFile,
+    contentTypeForFilename,
+    findCachedAudioForRow,
+    candidateStorageKeysForRow,
+    isTenantScopedStorageKey,
+    sanitizeTenantScope,
+  } = await import("./promptStorage");
+
+  // Post-isolation-fix safety gate: a row whose ownershipConfidence is
+  // "unknown" is not allowed to stream to anyone except a super admin.
+  // This defends against a race where a newly-synced row is still
+  // "unknown" and a tenant admin probes the /stream URL directly.
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (row.ownershipConfidence === "unknown" && !isSuperAdmin) {
+    return reply.code(403).send({ error: "ownership_unconfirmed" });
   }
 
-  const { readPromptFile, contentTypeForFilename } = await import("./promptStorage");
-  let buf: Buffer;
-  try {
-    buf = await readPromptFile(row.storageKey);
-  } catch (err: any) {
-    app.log.warn({ id, storageKey: row.storageKey, err: err?.message }, "ivr prompt: read failed");
-    return reply.code(503).send({ error: "audio_read_failed" });
+  // 1) Fast path — the row already knows which file it owns on disk.
+  //    We only honour the direct storageKey if it is tenant-scoped AND
+  //    lives under THIS row's tenant directory. Legacy flat keys from
+  //    before the isolation migration are refused so we never cross-serve
+  //    audio bytes across tenants.
+  const scope = row.tenantId ? sanitizeTenantScope(row.tenantId) : "unassigned";
+  const tenantPrefix = scope === "unassigned" ? "unassigned" : `tenants/${scope}`;
+  if (row.storageKey && isTenantScopedStorageKey(row.storageKey) && row.storageKey.startsWith(`${tenantPrefix}/`)) {
+    try {
+      const buf = await readPromptFile(row.storageKey);
+      const ct = row.contentType || contentTypeForFilename(row.storageKey);
+      if (debug) {
+        app.log.info(
+          {
+            event: "IVR_PROMPT_PLAY",
+            id,
+            promptRef: row.promptRef,
+            tenantId: row.tenantId,
+            ownershipConfidence: row.ownershipConfidence,
+            fileBaseName: row.fileBaseName,
+            resolvedVia: "row.storageKey",
+            storageKey: row.storageKey,
+            contentType: ct,
+            bytes: buf.byteLength,
+          },
+          "[IVR_PROMPT_DEBUG] served from storageKey",
+        );
+      }
+      reply.header("Content-Type", ct);
+      reply.header("Content-Length", String(buf.byteLength));
+      reply.header("Accept-Ranges", "bytes");
+      reply.header("Cache-Control", "private, max-age=3600");
+      return reply.send(buf);
+    } catch (err: any) {
+      app.log.warn(
+        { id, storageKey: row.storageKey, err: err?.message },
+        "[IVR_PROMPT] storageKey read failed, trying tenant-scoped matcher",
+      );
+    }
+  } else if (row.storageKey) {
+    app.log.warn(
+      { id, storageKey: row.storageKey, tenantId: row.tenantId },
+      "[IVR_PROMPT] ignoring non-tenant-scoped storageKey; falling through to matcher",
+    );
   }
 
-  const ct = row.contentType || contentTypeForFilename(row.storageKey);
-  reply.header("Content-Type", ct);
-  reply.header("Content-Length", String(buf.byteLength));
-  reply.header("Accept-Ranges", "bytes");
-  reply.header("Cache-Control", "private, max-age=3600");
-  return reply.send(buf);
+  // 2) Matcher path — try every safe candidate (fileBaseName, promptRef
+  //    with/without "custom/", displayName, relativePath; with each known
+  //    extension; case-insensitive).
+  const match = await findCachedAudioForRow(row);
+  if (match) {
+    let buf: Buffer;
+    try {
+      buf = await readPromptFile(match.storageKey);
+    } catch (err: any) {
+      app.log.warn(
+        { id, storageKey: match.storageKey, err: err?.message },
+        "[IVR_PROMPT] matcher hit but read failed",
+      );
+      return reply.code(503).send({ error: "audio_read_failed" });
+    }
+
+    if (debug) {
+      app.log.info(
+        {
+          event: "IVR_PROMPT_PLAY",
+          id,
+          promptRef: row.promptRef,
+          fileBaseName: row.fileBaseName,
+          resolvedVia: `matcher:${match.matchedBy}`,
+          storageKey: match.storageKey,
+          candidatesTried: match.candidatesTried,
+          contentType: match.contentType,
+          bytes: buf.byteLength,
+        },
+        "[IVR_PROMPT_DEBUG] served via matcher",
+      );
+    }
+
+    // Auto-heal: remember the match on the row so next Play skips the
+    // directory scan. Fire-and-forget — never block the stream on this.
+    (async () => {
+      try {
+        const crypto = await import("node:crypto");
+        const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+        await (db as any).tenantPbxPrompt.update({
+          where: { id: row.id },
+          data: {
+            storageKey: match.storageKey,
+            sha256,
+            sizeBytes: buf.byteLength,
+            contentType: match.contentType,
+            syncedAt: new Date(),
+          },
+        });
+      } catch (err: any) {
+        app.log.warn({ id, err: err?.message }, "[IVR_PROMPT] auto-heal update failed");
+      }
+    })();
+
+    reply.header("Content-Type", match.contentType);
+    reply.header("Content-Length", String(buf.byteLength));
+    reply.header("Accept-Ranges", "bytes");
+    reply.header("Cache-Control", "private, max-age=3600");
+    return reply.send(buf);
+  }
+
+  // 3) Nothing on disk. Never synthesise audio — tell the UI so it can
+  //    prompt the admin to upload. The UI guard already disables the Play
+  //    button in this state; this response only shows up if something
+  //    races past the guard.
+  if (debug) {
+    const tried = candidateStorageKeysForRow(row);
+    app.log.info(
+      {
+        event: "IVR_PROMPT_PLAY",
+        id,
+        promptRef: row.promptRef,
+        fileBaseName: row.fileBaseName,
+        resolvedVia: "none",
+        candidatesTried: tried,
+      },
+      "[IVR_PROMPT_DEBUG] no cached audio found",
+    );
+  }
+
+  return reply.code(503).send({
+    error: "audio_not_synced",
+    hint: "No audio bytes uploaded yet. Upload via the UI or push from the PBX helper.",
+  });
 });
 
 // ── POST /voice/ivr/prompts/:id/audio ───────────────────────────────────────
@@ -12655,6 +12899,7 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
   let stored: { storageKey: string; sha256: string; sizeBytes: number; contentType: string };
   try {
     stored = await writePromptFile({
+      tenantScope: existing.tenantId,
       baseName: existing.fileBaseName || existing.promptRef,
       originalFilename,
       buffer: fileBuf,
@@ -12671,6 +12916,9 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
       sizeBytes: stored.sizeBytes,
       contentType: stored.contentType,
       syncedAt: new Date(),
+      // A manual upload from the UI by a super-admin or the tenant's own
+      // admin proves ownership — upgrade confidence accordingly.
+      ownershipConfidence: existing.ownershipConfidence === "exact" ? "exact" : "manual",
     },
   });
 
@@ -12705,7 +12953,20 @@ app.get("/voice/ivr/prompts/sync-manifest", async (req, reply) => {
     ""
   ).trim();
   const provided = String((req.headers as any)["x-connect-secret"] ?? "").trim();
-  if (!expected || provided !== expected) return reply.code(401).send({ error: "unauthorized" });
+  if (!expected || provided !== expected) {
+    if (String(process.env.ENABLE_IVR_PROMPT_DEBUG || "").toLowerCase() === "true") {
+      app.log.warn(
+        {
+          event: "IVR_PROMPT_SYNC_AUTH_FAIL",
+          endpoint: "sync-manifest",
+          expectedLen: expected.length,
+          providedLen: provided.length,
+        },
+        "[IVR_PROMPT_DEBUG] sync-manifest auth failed",
+      );
+    }
+    return reply.code(401).send({ error: "unauthorized" });
+  }
 
   const rows = await (db as any).tenantPbxPrompt.findMany({
     where: { isActive: true },
@@ -12727,8 +12988,22 @@ app.get("/voice/ivr/prompts/sync-manifest", async (req, reply) => {
 
 // ── POST /voice/ivr/prompts/upload ──────────────────────────────────────────
 // Called by the PBX-host helper. Multipart upload: field `file` (audio) and
-// field `meta` (JSON with `{ fileBaseName, originalFilename, sha256? }`).
-// Shared-secret auth, not JWT. Upserts the catalog row by fileBaseName.
+// field `meta` (JSON with `{ fileBaseName, originalFilename, sha256?,
+// pbxInstanceId?, pbxTenantId }`).  Shared-secret auth, not JWT.
+//
+// TENANT ISOLATION (post-20260426):
+//   - `pbxTenantId` is REQUIRED in meta. It is the VitalPBX
+//     `ombu_recordings.tenant_id` (a small integer) for the recording
+//     being uploaded.
+//   - We resolve that to a Connect tenantId via TenantPbxLink on the
+//     provided pbxInstanceId (or the first enabled PbxInstance when
+//     unspecified). If the link doesn't exist we create the row with
+//     tenantId=NULL and ownershipConfidence="unknown" so the prompt is
+//     only visible to super-admins under the __unassigned__ filter.
+//   - Audio bytes are written to a TENANT-SCOPED directory so a different
+//     tenant's upload of a same-named recording can never overwrite them.
+//   - Upserts are scoped by (tenantId, promptRef) so tenant A's
+//     custom/Main cannot collide with tenant B's custom/Main.
 app.post("/voice/ivr/prompts/upload", async (req, reply) => {
   const expected = (
     process.env.PROMPT_SYNC_SHARED_SECRET ||
@@ -12762,41 +13037,102 @@ app.post("/voice/ivr/prompts/upload", async (req, reply) => {
     return reply.code(413).send({ error: "file_too_large", limit: 20 * 1024 * 1024 });
   }
 
-  let meta: { fileBaseName: string; originalFilename?: string; sha256?: string };
+  let meta: {
+    fileBaseName: string;
+    originalFilename?: string;
+    sha256?: string;
+    pbxInstanceId?: string;
+    pbxTenantId: string;
+    displayName?: string;
+  };
   try {
     meta = z.object({
       fileBaseName: z.string().min(1).max(200),
       originalFilename: z.string().max(200).optional(),
       sha256: z.string().length(64).optional(),
+      // REQUIRED: VitalPBX tenant_id for the recording. The PBX helper
+      // must read it from ombu_recordings.tenant_id and pass it here.
+      // Strings accepted because MySQL returns it as either — we
+      // lowercase + trim before lookup.
+      pbxTenantId: z.union([z.string(), z.number()]).transform((v) => String(v).trim().toLowerCase()),
+      pbxInstanceId: z.string().optional(),
+      displayName: z.string().max(200).optional(),
     }).parse(JSON.parse(metaRaw || "{}"));
   } catch (err: any) {
-    return reply.code(400).send({ error: "invalid_meta", detail: err?.message });
+    return reply.code(400).send({
+      error: "invalid_meta",
+      detail: err?.message,
+      hint: "meta must be JSON with at least { fileBaseName, pbxTenantId }",
+    });
+  }
+
+  // ── Resolve VitalPBX tenantId → Connect tenantId via TenantPbxLink ───
+  // We accept an explicit pbxInstanceId; otherwise use the first enabled
+  // instance. This is the same source of truth as DID sync and auto-sync.
+  const pbxInstance = meta.pbxInstanceId
+    ? await db.pbxInstance.findUnique({ where: { id: meta.pbxInstanceId }, select: { id: true } })
+    : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  if (!pbxInstance) {
+    return reply.code(400).send({
+      error: "no_pbx_instance",
+      hint: "Register or enable a PbxInstance; then pass pbxInstanceId in meta (or leave blank to use the first enabled one).",
+    });
+  }
+
+  const link = await (db as any).tenantPbxLink.findFirst({
+    where: {
+      pbxInstanceId: pbxInstance.id,
+      pbxTenantId: meta.pbxTenantId,
+    },
+    select: { tenantId: true },
+  });
+  let connectTenantId: string | null = link?.tenantId ?? null;
+  let tenantSlug: string | null = null;
+  let ownershipConfidence: "exact" | "unknown" = "unknown";
+  if (connectTenantId) {
+    ownershipConfidence = "exact";
+    const t = await db.tenant.findUnique({ where: { id: connectTenantId }, select: { name: true } });
+    tenantSlug = t ? toIvrSlug(t.name) : null;
+  } else {
+    app.log.warn(
+      { pbxInstanceId: pbxInstance.id, pbxTenantId: meta.pbxTenantId, fileBaseName: meta.fileBaseName },
+      "[IVR_PROMPT_UPLOAD] pbxTenantId has no TenantPbxLink row — uploading as unassigned/unknown",
+    );
   }
 
   const filename = meta.originalFilename || originalFilename;
-  const { writePromptFile } = await import("./promptStorage");
+  const { writePromptFile, deletePromptFile } = await import("./promptStorage");
   const stored = await writePromptFile({
+    tenantScope: connectTenantId,
     baseName: meta.fileBaseName,
     originalFilename: filename,
     buffer: fileBuf,
   });
 
-  // Meta sha256 check (if provided) — cheap integrity guard against a
-  // corrupted upload over a slow PBX-side link.
   if (meta.sha256 && meta.sha256.toLowerCase() !== stored.sha256) {
-    const { deletePromptFile } = await import("./promptStorage");
     await deletePromptFile(stored.storageKey).catch(() => void 0);
     return reply.code(400).send({ error: "sha256_mismatch", expected: meta.sha256, actual: stored.sha256 });
   }
 
-  // The canonical promptRef for `custom/<baseName>` files on VitalPBX.
   const promptRef = `custom/${meta.fileBaseName}`;
+  const displayName = meta.displayName?.trim() || meta.fileBaseName;
   const now = new Date();
-  const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { promptRef } });
+
+  // Scoped upsert: ONLY match rows for the same (tenantId, promptRef).
+  // No cross-tenant fileBaseName OR any more — that was the source of
+  // the isolation bug being patched.
+  const existing = await (db as any).tenantPbxPrompt.findFirst({
+    where: { tenantId: connectTenantId, promptRef },
+    select: { id: true, source: true, displayName: true, category: true },
+  });
+
   if (existing) {
     await (db as any).tenantPbxPrompt.update({
-      where: { promptRef },
+      where: { id: existing.id },
       data: {
+        tenantId: connectTenantId,
+        tenantSlug,
+        ownershipConfidence,
         storageKey: stored.storageKey,
         sha256: stored.sha256,
         sizeBytes: stored.sizeBytes,
@@ -12804,19 +13140,21 @@ app.post("/voice/ivr/prompts/upload", async (req, reply) => {
         syncedAt: now,
         lastSeenAt: now,
         isActive: true,
+        // Preserve admin-authored display/category when source=manual.
+        displayName: existing.source === "manual" ? existing.displayName : displayName,
+        category: existing.source === "manual" ? existing.category : ivrInferPromptCategory(meta.fileBaseName),
       },
     });
   } else {
-    // New recording that the catalog sync hasn't seen yet — create it as an
-    // unassigned row. The regular prompt-sync pass will bind it to a tenant
-    // next time it runs.
     await (db as any).tenantPbxPrompt.create({
       data: {
+        tenantId: connectTenantId,
+        tenantSlug,
         promptRef,
         fileBaseName: meta.fileBaseName,
         relativePath: promptRef,
-        displayName: meta.fileBaseName,
-        category: "general",
+        displayName,
+        category: ivrInferPromptCategory(meta.fileBaseName),
         source: "pbx_sync",
         isActive: true,
         storageKey: stored.storageKey,
@@ -12824,15 +13162,31 @@ app.post("/voice/ivr/prompts/upload", async (req, reply) => {
         sizeBytes: stored.sizeBytes,
         contentType: stored.contentType,
         syncedAt: now,
+        ownershipConfidence,
       },
     });
   }
 
   app.log.info(
-    { promptRef, storageKey: stored.storageKey, sha256: stored.sha256, sizeBytes: stored.sizeBytes },
-    "[IVR_PROMPT_UPLOAD] bulk upload from PBX helper",
+    {
+      promptRef,
+      pbxTenantId: meta.pbxTenantId,
+      connectTenantId,
+      ownershipConfidence,
+      storageKey: stored.storageKey,
+      sha256: stored.sha256,
+      sizeBytes: stored.sizeBytes,
+    },
+    "[IVR_PROMPT_UPLOAD] tenant-scoped bulk upload from PBX helper",
   );
-  return reply.send({ ok: true, promptRef, sha256: stored.sha256 });
+  return reply.send({
+    ok: true,
+    promptRef,
+    tenantId: connectTenantId,
+    ownershipConfidence,
+    sha256: stored.sha256,
+    storageKey: stored.storageKey,
+  });
 });
 
 // Shared helper: load the profile and confirm the caller owns it.

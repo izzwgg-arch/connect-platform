@@ -393,6 +393,22 @@ export async function syncPromptsFromOmbutelMysql(
       const tenantSlug = vitalTenantId ? (dirByVital.get(vitalTenantId)?.tenantSlug ?? null) : null;
       if (!connectTenantId) { unassigned += 1; method = method === "none" ? "unassigned" : `${method}_but_no_connect_link`; }
 
+      // ── Ownership confidence ──────────────────────────────────────────
+      // The VitalPBX `ombu_recordings.tenant_id` column is the
+      // authoritative source — when the sync resolves via that column
+      // AND we have a TenantPbxLink, the row is "exact". Prefix / slug
+      // fallbacks (older Ombutel builds without the FK) are "prefix".
+      // Anything without a resolved Connect link is "unknown" and will
+      // be hidden from tenant admins.
+      let ownershipConfidence: "exact" | "prefix" | "unknown";
+      if (!connectTenantId) {
+        ownershipConfidence = "unknown";
+      } else if (method === "tenant_id" || method === "tenant_prefix") {
+        ownershipConfidence = "exact";
+      } else {
+        ownershipConfidence = "prefix";
+      }
+
       // Per-tenant counter for the response.
       const bucketKey = connectTenantId ?? "__unassigned__";
       const bucket = perTenantCounts.get(bucketKey);
@@ -406,13 +422,19 @@ export async function syncPromptsFromOmbutelMysql(
       const fileBase = (ref.split("/").pop() ?? ref).toLowerCase();
       const category = inferCategory(fileBase);
 
-      const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { promptRef: ref } });
+      // Upsert scoped to (tenantId, promptRef) — each tenant has its own
+      // namespace so two tenants' "Main" recordings coexist cleanly.
+      const existing = await (db as any).tenantPbxPrompt.findFirst({
+        where: { tenantId: connectTenantId, promptRef: ref },
+        select: { id: true, source: true, displayName: true, category: true },
+      });
       if (existing) {
         await (db as any).tenantPbxPrompt.update({
-          where: { promptRef: ref },
+          where: { id: existing.id },
           data: {
             tenantId: connectTenantId,
             tenantSlug,
+            ownershipConfidence,
             lastSeenAt: now,
             // Preserve an admin's manual displayName/category edits.
             displayName: existing.source === "manual" ? existing.displayName : displayName,
@@ -427,6 +449,7 @@ export async function syncPromptsFromOmbutelMysql(
           data: {
             tenantId: connectTenantId,
             tenantSlug,
+            ownershipConfidence,
             promptRef: ref,
             fileBaseName: fileBase,
             relativePath: ref,

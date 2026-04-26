@@ -1644,7 +1644,7 @@ model IvrPublishRecord {
 // No file data is stored here — only pointers. Audio stays in VitalPBX.
 model TenantPbxPrompt {
   id             String   @id @default(cuid())
-  tenantId       String?                             // null = unassigned / shared
+  tenantId       String?                             // null = unassigned / shared / unknown-ownership
   tenantSlug     String?                             // denormalised slug used for prefix match (lowercased)
   promptRef      String                              // canonical dialplan ref, e.g. "custom/acme_normal"
   fileBaseName   String                              // base name without ext, e.g. "acme_normal"
@@ -1663,16 +1663,32 @@ model TenantPbxPrompt {
   // pushes new/changed files), or a UI-triggered manual upload. When these
   // are null the catalog row is still valid for dialplan use — only the
   // in-browser "Play" button is unavailable until audio is synced.
-  storageKey     String?                            // relative path under PROMPT_STORAGE_DIR
+  storageKey     String?                            // relative path under PROMPT_STORAGE_DIR (tenant-scoped, e.g. "tenants/<tenantId>/acme_normal.wav")
   sha256         String?                            // content hash — used by the PBX helper to diff
   sizeBytes      Int?
   contentType    String?                            // e.g. "audio/wav", "audio/mpeg"
   syncedAt       DateTime?                          // last time audio bytes were uploaded
 
+  // ── Ownership confidence ──────────────────────────────────────────────────
+  // How did we decide this row belongs to `tenantId`?
+  //   "exact"   — tenantId resolved from VitalPBX `ombu_recordings.tenant_id`
+  //               via TenantPbxLink. This is the authoritative source.
+  //   "path"    — folder/path convention (e.g. "custom/<tenant_slug>/foo").
+  //   "prefix"  — filename prefix matches a known tenant slug.
+  //   "manual"  — an admin set the tenantId via the Connect UI.
+  //   "unknown" — we could not determine ownership. Never show in tenant
+  //               dropdowns; surface in the super-admin "__unassigned__"
+  //               filter only.
+  ownershipConfidence String @default("unknown")
+
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  // Same promptRef can exist once globally (PBX filenames are globally unique).
-  @@unique([promptRef])
+  // Scoped uniqueness: each tenant has its own namespace of promptRefs, so
+  // tenant A's `custom/Main` and tenant B's `custom/Main` can co-exist as
+  // two separate rows. Null tenantId (unassigned) can appear multiple
+  // times under Postgres NULL-uniqueness semantics, which is fine — the
+  // super-admin cleanup UI dedupes them.
+  @@unique([tenantId, promptRef])
   @@index([tenantId])
   @@index([tenantSlug])
   @@index([tenantId, isActive])
