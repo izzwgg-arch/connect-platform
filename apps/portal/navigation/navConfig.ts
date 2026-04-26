@@ -4,7 +4,7 @@ export type NavItem = {
   href: string;
   label: string;
   icon: string;
-  section: "dashboard" | "pbx" | "reports" | "settings" | "admin" | "billing" | "apps";
+  section: "dashboard" | "pbx" | "settings" | "admin" | "billing" | "apps";
   permission: Permission;
 };
 
@@ -29,11 +29,6 @@ export const navItems: NavItem[] = [
   { href: "/pbx/call-recordings",label: "Call Recordings",   icon: "CR", section: "pbx", permission: "can_view_recordings" },
   { href: "/pbx/call-reports",   label: "Call Reports",      icon: "CP", section: "pbx", permission: "can_view_reports" },
 
-  { href: "/reports",             label: "Operations Reports",icon: "RP", section: "reports", permission: "can_view_reports" },
-  { href: "/reports/cdr",         label: "CDR",               icon: "CD", section: "reports", permission: "can_view_reports" },
-  { href: "/reports/queues",      label: "Queue Reports",     icon: "QR", section: "reports", permission: "can_view_reports" },
-  { href: "/reports/performance", label: "Agent Performance", icon: "AP", section: "reports", permission: "can_view_reports" },
-  { href: "/reports/call-quality",label: "Call Quality RCA", icon: "QA", section: "reports", permission: "can_manage_global_settings" },
 
   { href: "/settings",             label: "Tenant Settings",  icon: "TS", section: "settings", permission: "can_view_settings" },
   { href: "/settings/email",       label: "Email Settings",   icon: "EM", section: "settings", permission: "can_view_settings" },
@@ -67,7 +62,6 @@ export const navItems: NavItem[] = [
 export const navSectionMeta: Record<NavItem["section"], { label: string; railIcon: string }> = {
   dashboard: { label: "Workspace",  railIcon: "WS" },
   pbx:       { label: "PBX",        railIcon: "PB" },
-  reports:   { label: "Reports",    railIcon: "RP" },
   settings:  { label: "Settings",   railIcon: "ST" },
   admin:     { label: "Admin",      railIcon: "AD" },
   billing:   { label: "Billing",    railIcon: "BL" },
