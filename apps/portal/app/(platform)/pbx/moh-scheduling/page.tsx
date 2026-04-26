@@ -292,6 +292,7 @@ interface PbxMohClassRow {
   tenantId: string | null;
   tenantSlug: string | null;
   pbxGroupId: number;
+  pbxTenantId: string | null;
   name: string;
   mohClassName: string;
   classType: string | null;
@@ -302,16 +303,21 @@ interface PbxMohClassRow {
 
 // ── MOH class picker ─────────────────────────────────────────────────────────
 // Dropdown-first picker for the "VitalPBX MOH Class" field on Hold Profiles.
-// Merges two sources so the admin never has to guess the right class name:
-//   1. Classes synced from ombu_music_groups (existing VitalPBX classes).
-//   2. Classes materialised from uploaded MOH assets (each asset's
-//      deterministic mohClassName).
-// Legacy-safe: if the saved value isn't in either list we still render it at
-// the top of the options as "(legacy)" so saving the profile doesn't wipe it.
-// Manual-entry escape hatch is kept for brand-new classes that aren't on the
-// PBX yet.
+// Merges three sources so the admin never has to guess the right class name:
+//   1. This tenant's own classes from ombu_music_groups.
+//   2. The PBX-wide "system" classes the admin tenant ships (default / main /
+//      No Music) — always appended so a tenant with zero own classes still has
+//      working options to pick from.
+//   3. Classes materialised from uploaded MOH assets (each asset's
+//      deterministic mohClassName) — rare in practice.
+// Legacy-safe: if the saved value isn't in the merged catalog we still render
+// it at the top of the options as "(legacy)" so saving the profile doesn't
+// wipe it. Super-admins get a "Refresh from PBX" action inline and a toggle to
+// peek at other tenants' classes (read-only).
 function MohClassPicker({
   value, onChange, pbxClasses, assets, loading, placeholder,
+  tenantSlug, canSyncPbx, onSync, syncing,
+  canIncludeAll, includeAll, onToggleIncludeAll,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -319,49 +325,141 @@ function MohClassPicker({
   assets: MohAsset[];
   loading: boolean;
   placeholder?: string;
+  tenantSlug?: string | null;
+  canSyncPbx?: boolean;
+  onSync?: () => void | Promise<void>;
+  syncing?: boolean;
+  canIncludeAll?: boolean;
+  includeAll?: boolean;
+  onToggleIncludeAll?: (next: boolean) => void;
 }) {
-  type Opt = { value: string; label: string; source: "pbx" | "upload" | "legacy" };
+  type Opt = {
+    value: string;
+    label: string;
+    group: "yours" | "system" | "other" | "upload" | "legacy";
+    tenantLabel?: string | null;
+  };
+
+  const GROUP_LABELS: Record<Opt["group"], string> = {
+    yours:  tenantSlug ? `This tenant (${tenantSlug})` : "This tenant",
+    system: "System (available to all tenants)",
+    other:  "Other tenants on this PBX",
+    upload: "Uploaded on Connect (pending PBX sync)",
+    legacy: "Saved value (not in catalog)",
+  };
+
   const options: Opt[] = [];
   const seen = new Set<string>();
+
+  const classify = (c: PbxMohClassRow): Opt["group"] => {
+    // tenantSlug "vitalpbx" / pbxTenantId "1" is the PBX-admin tenant —
+    // its classes are the built-in "system" classes everyone can use.
+    if (c.tenantSlug === "vitalpbx" || c.pbxTenantId === "1" || c.isDefault) return "system";
+    if (tenantSlug && c.tenantSlug && c.tenantSlug.toLowerCase() === tenantSlug.toLowerCase()) return "yours";
+    if (!tenantSlug) return "yours";
+    return "other";
+  };
+
+  const labelFor = (c: PbxMohClassRow): string => {
+    const parts: string[] = [c.mohClassName];
+    if (c.fileCount) parts.push(`${c.fileCount} file${c.fileCount === 1 ? "" : "s"}`);
+    if (c.isDefault) parts.push("default");
+    return parts.join(" · ");
+  };
+
   for (const c of pbxClasses) {
     if (!c.isActive) continue;
     const v = c.mohClassName;
     if (seen.has(v)) continue;
     seen.add(v);
-    options.push({ value: v, label: `${v}${c.fileCount ? ` · ${c.fileCount} file${c.fileCount === 1 ? "" : "s"}` : ""}${c.isDefault ? " · default" : ""}`, source: "pbx" });
+    options.push({
+      value: v,
+      label: labelFor(c),
+      group: classify(c),
+      tenantLabel: c.tenantSlug ?? null,
+    });
   }
   for (const a of assets) {
     const v = a.mohClassName;
     if (seen.has(v)) continue;
     seen.add(v);
-    options.push({ value: v, label: `${v} · uploaded "${a.name}"`, source: "upload" });
+    options.push({ value: v, label: `${v} · uploaded "${a.name}"`, group: "upload" });
   }
   const hasCurrent = !!value && seen.has(value);
   if (value && !hasCurrent) {
-    options.unshift({ value, label: `${value} (legacy — not in catalog)`, source: "legacy" });
+    options.unshift({ value, label: `${value} (legacy — not in catalog)`, group: "legacy" });
     seen.add(value);
   }
 
+  const GROUP_ORDER: Array<Opt["group"]> = ["legacy", "yours", "system", "upload", "other"];
+  const grouped = new Map<Opt["group"], Opt[]>();
+  for (const o of options) {
+    const list = grouped.get(o.group) ?? [];
+    list.push(o);
+    grouped.set(o.group, list);
+  }
+
+  const ownCount    = (grouped.get("yours") ?? []).length;
+  const systemCount = (grouped.get("system") ?? []).length;
+  const otherCount  = (grouped.get("other") ?? []).length;
+  const uploadCount = (grouped.get("upload") ?? []).length;
+
   const [manual, setManual] = useState(() => options.length === 0 && !value);
   const effectiveManual = manual || (options.length === 0 && !value);
+
+  const controls = (
+    <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      <span>
+        {ownCount} yours · {systemCount} system
+        {otherCount ? ` · ${otherCount} other` : ""}
+        {uploadCount ? ` · ${uploadCount} uploaded` : ""}
+      </span>
+      {canSyncPbx && onSync && (
+        <button
+          type="button"
+          onClick={() => onSync()}
+          disabled={!!syncing}
+          style={{ background: "transparent", border: "none", color: syncing ? "#64748b" : "#818cf8", cursor: syncing ? "wait" : "pointer", fontSize: 11, padding: 0 }}
+          title="Re-read MOH classes from VitalPBX's ombutel MySQL"
+        >
+          {syncing ? "Refreshing…" : "↻ Refresh from PBX"}
+        </button>
+      )}
+      {canIncludeAll && onToggleIncludeAll && (
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={!!includeAll}
+            onChange={(e) => onToggleIncludeAll(e.target.checked)}
+            style={{ accentColor: "#818cf8" }}
+          />
+          <span>Show all tenants</span>
+        </label>
+      )}
+      {!effectiveManual && options.length > 0 && (
+        <button type="button" onClick={() => setManual(true)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
+          Type custom
+        </button>
+      )}
+      {effectiveManual && options.length > 0 && (
+        <button type="button" onClick={() => setManual(false)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
+          Use dropdown
+        </button>
+      )}
+    </div>
+  );
 
   if (effectiveManual) {
     const empty = options.length === 0 && !loading;
     return (
       <div>
         <input style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? "e.g. default or holiday_jazz"} />
-        <div style={{ fontSize: 11, color: empty ? "#fbbf24" : "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {empty ? (
-            <span>No MOH classes indexed for this tenant yet. Click <strong>Sync PBX MOH classes</strong> above, upload a MOH asset on the <strong>Assets</strong> tab, or type an existing class name.</span>
-          ) : (
-            <span>Manual entry — VitalPBX MOH class name.</span>
-          )}
-          {options.length > 0 && (
-            <button type="button" onClick={() => setManual(false)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
-              Use dropdown
-            </button>
-          )}
-        </div>
+        {empty && (
+          <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 4, marginBottom: 4 }}>
+            No MOH classes indexed for this tenant yet. Click <strong>Refresh from PBX</strong> below, upload a MOH asset on the <strong>Assets</strong> tab, or type an existing class name.
+          </div>
+        )}
+        {controls}
       </div>
     );
   }
@@ -370,16 +468,21 @@ function MohClassPicker({
     <div>
       <select style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">— Select MOH class —</option>
-        {options.map((o) => (
-          <option key={`${o.source}:${o.value}`} value={o.value}>{o.label}</option>
-        ))}
+        {GROUP_ORDER.map((g) => {
+          const list = grouped.get(g);
+          if (!list || list.length === 0) return null;
+          return (
+            <optgroup key={g} label={GROUP_LABELS[g]}>
+              {list.map((o) => (
+                <option key={`${o.group}:${o.value}`} value={o.value}>
+                  {o.tenantLabel && o.group === "other" ? `${o.label} (${o.tenantLabel})` : o.label}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
       </select>
-      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <span>{pbxClasses.filter((c) => c.isActive).length} PBX · {assets.length} uploaded</span>
-        <button type="button" onClick={() => setManual(true)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
-          Type custom
-        </button>
-      </div>
+      {controls}
     </div>
   );
 }
@@ -394,22 +497,30 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [includeAllTenants, setIncludeAllTenants] = useState(false);
+
+  const tenantSlug = (() => {
+    if (!tenantId) return null;
+    if (tenantId.startsWith("vpbx:")) return tenantId.slice(5);
+    return null;
+  })();
 
   const reloadCatalog = useCallback(async () => {
     if (!tenantId) { setPrompts([]); setMohClasses([]); setMohAssetsLite([]); return; }
     setCatalogLoading(true);
     try {
-      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}${isSuperAdmin && includeAllTenants ? "&includeAll=1" : ""}`;
+      const qsSimple = `?tenantId=${encodeURIComponent(tenantId)}`;
       const [pR, cR, aR] = await Promise.allSettled([
-        apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts${qs}`),
+        apiGet<{ prompts: PromptCatalogRow[] }>(`/voice/ivr/prompts${qsSimple}`),
         apiGet<{ classes: PbxMohClassRow[] }>(`/voice/moh/pbx-classes${qs}`),
-        apiGet<{ assets: MohAsset[] }>(`/voice/moh/assets${qs}`),
+        apiGet<{ assets: MohAsset[] }>(`/voice/moh/assets${qsSimple}`),
       ]);
       setPrompts(pR.status === "fulfilled" ? (pR.value.prompts ?? []).filter((p) => p.isActive) : []);
       setMohClasses(cR.status === "fulfilled" ? (cR.value.classes ?? []) : []);
       setMohAssetsLite(aR.status === "fulfilled" ? (aR.value.assets ?? []) : []);
     } finally { setCatalogLoading(false); }
-  }, [tenantId]);
+  }, [tenantId, isSuperAdmin, includeAllTenants]);
 
   useEffect(() => { reloadCatalog(); }, [reloadCatalog]);
 
@@ -563,6 +674,13 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
               pbxClasses={mohClasses}
               assets={mohAssetsLite}
               loading={catalogLoading}
+              tenantSlug={tenantSlug}
+              canSyncPbx={isSuperAdmin}
+              onSync={autoSyncMohClasses}
+              syncing={syncing}
+              canIncludeAll={isSuperAdmin}
+              includeAll={includeAllTenants}
+              onToggleIncludeAll={setIncludeAllTenants}
             />
 
             <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 0 14px" }} />

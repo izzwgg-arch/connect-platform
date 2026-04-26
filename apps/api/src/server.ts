@@ -15741,36 +15741,55 @@ app.get("/voice/moh/download/*", async (req, reply) => {
 
 // ── GET /voice/moh/pbx-classes ────────────────────────────────────────────────
 // Feeds the Hold-Profile MOH-class dropdown. Tenant-admins are pinned to their
-// own tenantId; super-admins can pass ?tenantId=... or ?tenantId=__all__.
+// own tenantId; super-admins can pass ?tenantId=... or ?tenantId=__all__, or
+// ?includeAll=1 on any tenant scope to peek across the whole PBX.
+//
+// The PBX's admin tenant (`pbxTenantId = "1"` / `tenantSlug = "vitalpbx"`) ships
+// with built-in classes (`default`, `main`, `No Music`) that every tenant can
+// reference in queue/hold configuration. Those are *always* included as "system"
+// classes so a fresh tenant with zero own classes still has working options.
 app.get("/voice/moh/pbx-classes", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
   if (!user) return;
 
   const q = z.object({
-    tenantId: z.string().optional(),
+    tenantId:   z.string().optional(),
     activeOnly: z.string().optional(),
+    includeAll: z.string().optional(),
   }).parse(req.query || {});
 
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const wantAll = isSA && q.tenantId === "__all__";
-  const rawScope = wantAll ? null : (q.tenantId || user.tenantId || null);
+  const wantAll = isSA && (q.tenantId === "__all__" || q.includeAll === "1");
+  const rawScope = q.tenantId && q.tenantId !== "__all__" ? q.tenantId : (user.tenantId || null);
   if (!wantAll && !rawScope) return reply.code(400).send({ error: "tenant_required" });
+
+  // Admin-PBX-tenant ("system") classes are always appended so every tenant
+  // sees the built-in defaults (`default`, `No Music`, `main`).
+  const systemClassOr = [
+    { pbxTenantId: "1" },
+    { tenantSlug: "vitalpbx" },
+    { isDefault: true },
+  ];
+
   // Accept vpbx:<slug> and resolve / fall back to tenantSlug match on the
   // mirrored PbxMohClass rows (which carry tenantSlug from the ombutel sync).
   let pbxClassWhere: Record<string, unknown> = {};
   if (!wantAll && rawScope) {
+    const tenantOr: Array<Record<string, unknown>> = [];
     if (rawScope.startsWith("vpbx:")) {
       const slug = rawScope.slice(5).toLowerCase();
       const resolved = await resolveConnectTenantIdFromScope(rawScope);
-      pbxClassWhere = resolved
-        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }, { tenantId: null, tenantSlug: null }] }
-        : { OR: [{ tenantSlug: slug }, { tenantId: null, tenantSlug: null }] };
+      if (resolved) tenantOr.push({ tenantId: resolved });
+      tenantOr.push({ tenantSlug: slug });
+      tenantOr.push({ tenantId: null, tenantSlug: null });
     } else {
-      pbxClassWhere = { OR: [{ tenantId: rawScope }, { tenantId: null }] };
       if (!isSA && rawScope !== user.tenantId) {
         return reply.code(403).send({ error: "forbidden" });
       }
+      tenantOr.push({ tenantId: rawScope });
+      tenantOr.push({ tenantId: null });
     }
+    pbxClassWhere = { OR: [...tenantOr, ...systemClassOr] };
   }
 
   const rows = await (db as any).pbxMohClass.findMany({
@@ -15778,10 +15797,11 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       ...pbxClassWhere,
       ...((q.activeOnly ?? "1") === "0" ? {} : { isActive: true }),
     },
-    orderBy: [{ name: "asc" }],
+    orderBy: [{ tenantSlug: "asc" }, { name: "asc" }],
     select: {
       id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
-      pbxGroupId: true, name: true, mohClassName: true, classType: true,
+      pbxGroupId: true, pbxTenantId: true,
+      name: true, mohClassName: true, classType: true,
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
     },
   });
