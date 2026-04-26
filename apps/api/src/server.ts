@@ -38,7 +38,6 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
-import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
@@ -22817,8 +22816,6 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // END PBX LIVE METRICS
 // ─────────────────────────────────────────────────────────────────────────────
-
-registerConnectChatRoutes(app);
 
 // ── Startup telephony/WebRTC config validation ────────────────────────────────
 // Runs just before listen so logs appear during startup, not at module load.
