@@ -10491,14 +10491,22 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
 
 // ── GET /voice/pbx/ring-groups ──────────────────────────────────────────────
 //
-// On-demand live listing of VitalPBX ring groups for a given Connect tenant,
-// scoped through Ombutel MariaDB (the REST collection doesn't expose ring
-// groups). Used by the IVR destination picker so admins can pick a ring
-// group from a dropdown instead of hand-typing `ext-group,601,1`.
+// On-demand live listing of VitalPBX ring groups for a given tenant, scoped
+// through Ombutel MariaDB (the REST collection doesn't expose ring groups).
+// Used by the IVR destination picker so admins can pick a ring group from a
+// dropdown instead of hand-typing `ext-group,601,1`.
 //
-// Query params:
-//   ?tenantId=<connectTenantId>   (super-admin override; otherwise derived
-//                                  from the caller's JWT tenant scope)
+// The caller may identify the target tenant in any of these formats (checked
+// in priority order):
+//   1. `?tenantId=<connectTenantId>`        — canonical Connect tenant id
+//   2. `?tenantId=vpbx:<slug>`              — VitalPBX slug (super-admin
+//                                              "view as tenant" mode — the
+//                                              portal uses this shape when
+//                                              no Connect TenantPbxLink row
+//                                              exists yet for the tenant)
+//   3. `x-tenant-context: vpbx:<slug>`      — same, but via header (set by
+//                                              `apiClient` in the portal)
+//   4. Otherwise: fall back to `user.tenantId`
 //
 // Response:
 //   { rows: [{ number, name, strategy, id }], source, table }
@@ -10508,38 +10516,76 @@ app.get("/voice/pbx/ring-groups", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
 
-  // Resolve which Connect tenant we're scoping to. Super-admins may pass
-  // ?tenantId=; everyone else is pinned to their own tenant.
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
   const qsTenantId = String((req.query as any)?.tenantId || "").trim();
   const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
-  const connectTenantId = isSuperAdmin
-    ? (qsTenantId || headerTenantId || user.tenantId)
-    : user.tenantId;
-  if (!connectTenantId || connectTenantId === "local") {
+
+  // Decide whether the caller gave us a `vpbx:<slug>` (super-admin mode) or
+  // a Connect tenantId. vpbx: may arrive via the query string OR the header.
+  let vpbxSlug: string | null = null;
+  let connectTenantId: string | null = null;
+
+  const raw = qsTenantId || headerTenantId || user.tenantId || "";
+  if (raw.startsWith("vpbx:")) {
+    if (!isSuperAdmin) {
+      return reply.code(403).send({ error: "super_admin_required_for_vpbx_override" });
+    }
+    vpbxSlug = raw.slice(5).trim();
+  } else if (raw && raw !== "local") {
+    connectTenantId = raw;
+  }
+
+  if (!vpbxSlug && !connectTenantId) {
     return reply.send({ rows: [], source: "skipped", skipReason: "no tenant context" });
   }
 
-  // Resolve: Connect tenant → TenantPbxLink → PbxInstance (for mysql url)
-  //          and the VitalPBX tenant_id used for scoping in ombutel.
-  const link = await db.tenantPbxLink.findUnique({
-    where: { tenantId: connectTenantId },
-    include: { pbxInstance: true },
-  });
-  if (!link || !link.pbxInstance) {
-    return reply.send({ rows: [], source: "skipped", skipReason: "pbx_link_not_found" });
+  // Find the enabled PbxInstance for the mysql connection string, regardless
+  // of which resolution path we took. In production we have exactly one.
+  const pbxInstance = await db.pbxInstance.findFirst({ where: { isEnabled: true } });
+  if (!pbxInstance) {
+    return reply.send({ rows: [], source: "skipped", skipReason: "no_enabled_pbx_instance" });
+  }
+
+  // Resolve the VitalPBX tenant_id we should filter by in Ombutel. Two paths:
+  //   A. connectTenantId → TenantPbxLink.pbxTenantId
+  //   B. vpbxSlug        → PbxTenantDirectory.vitalTenantId (numeric id)
+  let vitalTenantId: string | null = null;
+  if (connectTenantId) {
+    const link = await db.tenantPbxLink.findUnique({
+      where: { tenantId: connectTenantId },
+      select: { pbxTenantId: true },
+    });
+    vitalTenantId = link?.pbxTenantId?.trim() || null;
+  } else if (vpbxSlug) {
+    // The portal sends `a_plus_center`, `gesheft`, etc.; our directory stores
+    // the slug + its numeric vitalTenantId. Match case-insensitively because
+    // slugs can round-trip through UI inputs with weird casing.
+    const dir = await db.pbxTenantDirectory.findFirst({
+      where: { tenantSlug: vpbxSlug },
+      select: { vitalTenantId: true },
+    });
+    vitalTenantId = dir?.vitalTenantId?.trim() || null;
+    // Fallback: some super-admins pass the raw vitalTenantId in the slot too.
+    if (!vitalTenantId && /^\d+$/.test(vpbxSlug)) vitalTenantId = vpbxSlug;
+  }
+
+  if (!vitalTenantId) {
+    return reply.send({
+      rows: [], source: "skipped",
+      skipReason: vpbxSlug ? `no_directory_entry_for_slug:${vpbxSlug}` : "tenant_not_linked_to_pbx",
+    });
   }
 
   const { listRingGroupsFromOmbutel } = await import("./pbxOmbutelRingGroupList");
   const result = await listRingGroupsFromOmbutel(
-    link.pbxTenantId || null,
-    link.pbxInstance.ombuMysqlUrlEncrypted,
+    vitalTenantId,
+    pbxInstance.ombuMysqlUrlEncrypted,
   );
 
   if (result.source === "skipped") {
     return reply.send({ rows: [], source: "skipped", skipReason: result.skipReason });
   }
-  return reply.send({ rows: result.rows, source: result.source, table: result.table });
+  return reply.send({ rows: result.rows, source: result.source, table: result.table, vitalTenantId });
 });
 
 app.post("/voice/pbx/resources/:resource", async (req, reply) => {
@@ -12568,8 +12614,49 @@ app.post("/voice/ivr/prompts", async (req, reply) => {
   const { promptRef, fileBaseName } = norm.ok[0];
 
   // Tenant scope: super-admin sets tenantId explicitly; everyone else is pinned.
+  //
+  // Super-admins in "view as tenant" mode send `tenantId = "vpbx:<slug>"`
+  // because the portal uses the same tenant-switcher value for every API
+  // call. We resolve that to the real Connect tenantId here via
+  // PbxTenantDirectory so the resulting TenantPbxPrompt row points at an
+  // actual tenant (FK), not a synthetic string.
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tenantId = isSuperAdmin ? (d.tenantId ?? null) : user.tenantId ?? null;
+  let tenantId: string | null = isSuperAdmin ? (d.tenantId ?? null) : user.tenantId ?? null;
+  if (tenantId && tenantId.startsWith("vpbx:")) {
+    if (!isSuperAdmin) return reply.code(403).send({ error: "super_admin_required_for_vpbx_override" });
+    const slug = tenantId.slice(5).trim();
+    const dir = await db.pbxTenantDirectory.findFirst({
+      where: { tenantSlug: slug },
+      select: { tenantCode: true, vitalTenantId: true },
+    });
+    let resolved: string | null = null;
+    if (dir) {
+      const link = await db.tenantPbxLink.findFirst({
+        where: {
+          OR: [
+            { pbxTenantId: dir.vitalTenantId },
+            { pbxTenantCode: dir.tenantCode || "__never__" },
+          ],
+        },
+        select: { tenantId: true },
+      });
+      resolved = link?.tenantId ?? null;
+    }
+    // Last-resort: try matching Tenant.name ~ slug (tenants like "A plus center"
+    // slugify to "a_plus_center"). Only used when no Link row exists yet.
+    if (!resolved) {
+      const needle = slug.replace(/_/g, " ");
+      const t = await db.tenant.findFirst({
+        where: { name: { equals: needle, mode: "insensitive" } },
+        select: { id: true },
+      });
+      resolved = t?.id ?? null;
+    }
+    if (!resolved) {
+      return reply.code(400).send({ error: "unresolved_vpbx_slug", slug });
+    }
+    tenantId = resolved;
+  }
   if (!isSuperAdmin && !tenantId) return reply.code(400).send({ error: "tenantId required" });
 
   let tenantSlug: string | null = null;
