@@ -30,6 +30,8 @@ const TENANT_ADMIN_PERMISSIONS: Permission[] = [
   "can_view_reports",
   "can_view_admin",
   "can_manage_integrations",
+  "can_manage_voip_ms",
+  "can_assign_sms_numbers",
   "can_manage_tenant_settings",
   "can_manage_ivr_routing",
   "can_publish_ivr_routing",
@@ -46,7 +48,8 @@ const TENANT_ADMIN_PERMISSIONS: Permission[] = [
 const SUPER_ADMIN_PERMISSIONS: Permission[] = [
   ...TENANT_ADMIN_PERMISSIONS,
   "can_switch_tenants",
-  "can_manage_global_settings"
+  "can_manage_global_settings",
+  "can_sync_voip_ms_numbers"
 ];
 
 export const ROLE_PERMISSION_MAP: Record<Role, Permission[]> = {

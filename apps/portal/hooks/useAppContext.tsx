@@ -42,20 +42,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const resolvedRole = jwt?.role ? mapBackendRole(jwt.role) : "SUPER_ADMIN";
 
     const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
-    const scopeMigrated = typeof window !== "undefined" ? localStorage.getItem("cc-scope-migrated") : null;
-
-    if (resolvedRole === "SUPER_ADMIN" && !scopeMigrated && storedScope === "TENANT") {
-      // One-time migration: SUPER_ADMINs who had the old "TENANT" default stored
-      // are reset to GLOBAL so they see all tenant calls by default.
-      // A deliberate tenant selection after this will re-store "TENANT" and set the migrated flag.
-      setAdminScopeState("GLOBAL");
-      localStorage.setItem("cc-admin-scope", "GLOBAL");
-      localStorage.setItem("cc-scope-migrated", "1");
-    } else if (storedScope === "GLOBAL" || storedScope === "TENANT") {
+    // Default to scoped primary workspace (TENANT). GLOBAL is opt-in and only restored from localStorage.
+    if (storedScope === "GLOBAL" || storedScope === "TENANT") {
       setAdminScopeState(storedScope);
-    } else if (resolvedRole === "SUPER_ADMIN") {
-      // No scope stored yet — default SUPER_ADMIN to GLOBAL.
-      setAdminScopeState("GLOBAL");
+    } else {
+      setAdminScopeState("TENANT");
     }
 
     if (jwt?.role) setRole(resolvedRole);
@@ -101,9 +92,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [role]);
 
   useEffect(() => {
-    if (tenants.length > 0 && !tenants.some((entry: Tenant) => entry.id === tenantId)) {
-      setTenantId(tenants[0]?.id || tenantId);
-    }
+    if (tenants.length === 0) return;
+    if (tenants.some((entry: Tenant) => entry.id === tenantId)) return;
+    const jwt = readJwtPayload();
+    const jwtTid = jwt?.tenantId;
+    const pick =
+      jwtTid && tenants.some((entry: Tenant) => entry.id === jwtTid)
+        ? jwtTid
+        : tenants[0]?.id || tenantId;
+    setTenantId(pick);
   }, [tenantId, tenants]);
 
   const user = useMemo<User>(() => {
@@ -137,8 +134,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTenantId,
       setRole,
       setAdminScope: (scope: AdminScope) => {
-        // Mark migration done so future explicit tenant selections are respected.
-        if (typeof window !== "undefined") localStorage.setItem("cc-scope-migrated", "1");
         setAdminScopeState(scope);
       }
     }),

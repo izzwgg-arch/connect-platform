@@ -55,7 +55,7 @@ function browserTenantContext(): string {
   return localStorage.getItem("cc-tenant-id") || "";
 }
 
-async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+async function apiRequest<T>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -103,10 +103,60 @@ export async function apiPost<T>(path: string, body?: Record<string, unknown>, t
   return apiRequest<T>("POST", path, body, token);
 }
 
+export async function apiPut<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+  return apiRequest<T>("PUT", path, body, token);
+}
+
 export async function apiPatch<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   return apiRequest<T>("PATCH", path, body, token);
 }
 
 export async function apiDelete<T>(path: string, token?: string): Promise<T> {
   return apiRequest<T>("DELETE", path, undefined, token);
+}
+
+/** Multipart upload for Connect chat attachments (field name `file`). */
+export async function apiUploadChatAttachment(
+  threadId: string,
+  file: File,
+  token?: string,
+): Promise<{
+  ok: boolean;
+  storageKey: string;
+  sha256: string;
+  sizeBytes: number;
+  mimeType: string;
+  fileName: string;
+}> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch(`${baseUrl()}/chat/threads/${encodeURIComponent(threadId)}/attachments/upload`, {
+      method: "POST",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+      },
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: unknown = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
+      const ep = errPayload as { error?: string; message?: string } | null;
+      const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
+      throw new ApiError(detail || `Upload failed (${res.status})`, res.status);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

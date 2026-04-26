@@ -18,6 +18,7 @@ export default function AppsPage() {
         <div className="row-actions">
           <Link className="btn ghost" href="/apps/sms-campaigns">SMS Campaigns</Link>
           <Link className="btn ghost" href="/apps/whatsapp">WhatsApp Inbox</Link>
+          <Link className="btn ghost" href="/apps/voip-ms">VoIP.ms</Link>
           <Link className="btn ghost" href="/apps/customers">Customer Hub</Link>
         </div>
       </section>

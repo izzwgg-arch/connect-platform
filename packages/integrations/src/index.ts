@@ -361,6 +361,73 @@ export class VoipMsSmsProvider implements SmsProvider {
       throw e;
     }
   }
+
+  /** VoIP.ms `sendMMS` — up to three `mediaN` URLs (or base64 per their docs). */
+  async sendMms(input: {
+    tenantId: string;
+    to: string;
+    from: string;
+    body?: string;
+    mediaUrls: string[];
+  }): Promise<{ status: string; providerMessageId?: string; providerStatus?: string }> {
+    if ((process.env.SIMULATE_PROVIDER_FAILURE_VOIPMS || "false").toLowerCase() === "true") {
+      const err: any = new Error("Simulated VoIP.ms provider outage");
+      err.provider = "VOIPMS";
+      err.status = 503;
+      err.code = "SIM_VOIPMS_DOWN";
+      throw err;
+    }
+
+    const urls = (input.mediaUrls || []).filter(Boolean).slice(0, 3);
+    if (urls.length === 0) {
+      return this.sendMessage({
+        tenantId: input.tenantId,
+        to: input.to,
+        from: input.from,
+        body: input.body || "",
+      });
+    }
+
+    if (this.testMode) {
+      return {
+        status: "SENT",
+        providerMessageId: `voipms-mms-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        providerStatus: "accepted",
+      };
+    }
+
+    const base = this.credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
+    const url = new URL(base);
+    url.searchParams.set("api_username", this.credentials.username);
+    url.searchParams.set("api_password", this.credentials.password);
+    url.searchParams.set("method", "sendMMS");
+    url.searchParams.set("did", this.credentials.fromNumber || input.from);
+    url.searchParams.set("dst", input.to);
+    url.searchParams.set("message", input.body || "");
+    urls.forEach((mediaUrl, i) => url.searchParams.set(`media${i + 1}`, mediaUrl));
+
+    try {
+      const res = await fetch(url.toString(), { method: "GET" });
+      const json: any = await res.json().catch(() => ({}));
+      const status = String(json.status || "").toLowerCase();
+      if (!res.ok || status !== "success") {
+        const err: any = new Error("VoIP.ms sendMMS failed");
+        err.provider = "VOIPMS";
+        err.status = res.status;
+        err.code = json.response?.code || json.code || "VOIPMS_MMS_FAILED";
+        err.detail = json;
+        throw err;
+      }
+      return {
+        status: "SENT",
+        providerMessageId: String(json.sms || json.id || json.mms || `voipms-mms-${Date.now()}`),
+        providerStatus: "sent",
+      };
+    } catch (e: any) {
+      e.provider = "VOIPMS";
+      throw e;
+    }
+  }
 }
 
 export async function validateTwilioCredentials(credentials: TwilioCredentials): Promise<{ ok: true } | { ok: false; message: string }> {

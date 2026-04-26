@@ -14,6 +14,7 @@ import {
   WirePbxClient,
   VitalPbxClient,
 } from "@connect/integrations";
+import { processConnectChatSmsJob } from "./connectChatSmsJob";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -956,6 +957,12 @@ async function runPbxCdrSyncCycle(): Promise<void> {
 const worker = new Worker(
   "sms-send",
   async (job) => {
+    const raw = job.data as { kind?: string; connectChatMessageId?: string; messageId?: string; tenantId: string };
+    if (raw?.kind === "CONNECT_CHAT" && raw.connectChatMessageId) {
+      await processConnectChatSmsJob({ connectChatMessageId: raw.connectChatMessageId, tenantId: raw.tenantId });
+      return;
+    }
+
     const payload = job.data as { messageId: string; tenantId: string };
     const msg = await db.smsMessage.findUnique({ where: { id: payload.messageId }, include: { campaign: { include: { tenant: true } } } });
     if (!msg) return;

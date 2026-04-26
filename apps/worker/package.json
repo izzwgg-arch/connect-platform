@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@connect/db": "workspace:*",
+    "@connect/shared": "workspace:*",
     "@connect/integrations": "workspace:*",
     "bullmq": "^5.58.0",
     "ioredis": "^5.8.0",

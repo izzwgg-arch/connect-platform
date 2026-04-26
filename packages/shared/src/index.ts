@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export * from "./phoneE164";
+export * from "./chatSignedUrl";
+
 export const UserSchema = z.object({
   id: z.string(),
   tenantId: z.string(),

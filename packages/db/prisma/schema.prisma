@@ -236,149 +236,155 @@ enum CallInviteStatus {
 }
 
 model Tenant {
-  id                            String                 @id @default(cuid())
-  name                          String
-  isApproved                    Boolean                @default(false)
-  dailySmsCap                   Int                    @default(100)
-  perSecondRate                 Float                  @default(1.0)
-  firstCampaignRequiresApproval Boolean                @default(true)
-  smsSendMode                   SmsSendMode            @default(TEST)
-  smsLiveEnabledAt              DateTime?
-  smsLiveEnabledByUserId        String?
-  dailySmsLimit                 Int                    @default(500)
-  hourlySmsLimit                Int                    @default(100)
-  perSecondRateLimit            Int                    @default(5)
-  maxCampaignSize               Int                    @default(2000)
-  smsSuspended                  Boolean                @default(false)
-  smsSuspendedReason            String?
-  smsSuspendedAt                DateTime?
-  smsRoutingMode                SmsProviderRoutingMode @default(FAILOVER)
-  smsPrimaryProvider            IntegrationProvider    @default(TWILIO)
-  smsSecondaryProvider          IntegrationProvider?   @default(VOIPMS)
-  smsProviderLock               IntegrationProvider?
-  smsProviderLockReason         String?
-  smsProviderLockedAt           DateTime?
-  smsProviderLockedByUserId     String?
-  defaultSmsFromNumberId        String?
-  defaultVoiceFromNumberId      String?
-  numberPurchaseEnabled         Boolean                @default(true)
-  smsSubscriptionRequired       Boolean                @default(true)
-  smsBillingEnforced            Boolean                @default(true)
-  webrtcEnabled                 Boolean                @default(false)
-  webrtcRouteViaSbc             Boolean                @default(false)
-  sipWsUrl                      String?
-  sipDomain                     String?
-  iceServers                    Json?
-  outboundProxy                 String?
-  dtmfMode                      DtmfMode               @default(RFC2833)
-  turnRequiredForMobile         Boolean                @default(false)
-  turnValidationStatus          TurnValidationStatus   @default(UNKNOWN)
-  turnValidatedAt               DateTime?
-  turnLastErrorCode             String?
-  turnLastErrorAt               DateTime?
-  mediaReliabilityGateEnabled   Boolean                @default(false)
-  mediaTestStatus               MediaTestStatus        @default(UNKNOWN)
-  mediaTestedAt                 DateTime?
-  mediaLastErrorCode            String?
-  mediaLastErrorAt              DateTime?
-  mediaPolicy                  MediaPolicy            @default(TURN_ONLY)
-  sbcUdpExposureConfirmed      Boolean                @default(false)
-  sbcUdpExposureConfirmedAt    DateTime?
+  id                              String                    @id @default(cuid())
+  name                            String
+  isApproved                      Boolean                   @default(false)
+  dailySmsCap                     Int                       @default(100)
+  perSecondRate                   Float                     @default(1.0)
+  firstCampaignRequiresApproval   Boolean                   @default(true)
+  smsSendMode                     SmsSendMode               @default(TEST)
+  smsLiveEnabledAt                DateTime?
+  smsLiveEnabledByUserId          String?
+  dailySmsLimit                   Int                       @default(500)
+  hourlySmsLimit                  Int                       @default(100)
+  perSecondRateLimit              Int                       @default(5)
+  maxCampaignSize                 Int                       @default(2000)
+  smsSuspended                    Boolean                   @default(false)
+  smsSuspendedReason              String?
+  smsSuspendedAt                  DateTime?
+  smsRoutingMode                  SmsProviderRoutingMode    @default(FAILOVER)
+  smsPrimaryProvider              IntegrationProvider       @default(TWILIO)
+  smsSecondaryProvider            IntegrationProvider?      @default(VOIPMS)
+  smsProviderLock                 IntegrationProvider?
+  smsProviderLockReason           String?
+  smsProviderLockedAt             DateTime?
+  smsProviderLockedByUserId       String?
+  defaultSmsFromNumberId          String?
+  defaultVoiceFromNumberId        String?
+  numberPurchaseEnabled           Boolean                   @default(true)
+  smsSubscriptionRequired         Boolean                   @default(true)
+  smsBillingEnforced              Boolean                   @default(true)
+  webrtcEnabled                   Boolean                   @default(false)
+  webrtcRouteViaSbc               Boolean                   @default(false)
+  sipWsUrl                        String?
+  sipDomain                       String?
+  iceServers                      Json?
+  outboundProxy                   String?
+  dtmfMode                        DtmfMode                  @default(RFC2833)
+  turnRequiredForMobile           Boolean                   @default(false)
+  turnValidationStatus            TurnValidationStatus      @default(UNKNOWN)
+  turnValidatedAt                 DateTime?
+  turnLastErrorCode               String?
+  turnLastErrorAt                 DateTime?
+  mediaReliabilityGateEnabled     Boolean                   @default(false)
+  mediaTestStatus                 MediaTestStatus           @default(UNKNOWN)
+  mediaTestedAt                   DateTime?
+  mediaLastErrorCode              String?
+  mediaLastErrorAt                DateTime?
+  mediaPolicy                     MediaPolicy               @default(TURN_ONLY)
+  sbcUdpExposureConfirmed         Boolean                   @default(false)
+  sbcUdpExposureConfirmedAt       DateTime?
   sbcUdpExposureConfirmedByUserId String?
-  createdAt                     DateTime               @default(now())
-  users                         User[]
-  tenDlcSubs                    TenDlcSubmission[]
-  campaigns                     SmsCampaign[]
-  numbers                       PhoneNumber[]          @relation("TenantOwnedNumbers")
-  audits                        AuditLog[]
-  providerCredentials           ProviderCredential[]
-  billingSolaConfig             BillingSolaConfig?
-  whatsappProviderConfigs       WhatsAppProviderConfig[]
-  whatsAppThreads               WhatsAppThread[]
-  whatsAppMessages              WhatsAppMessage[]
-  emailProviderConfig           EmailProviderConfig?
-  webhookEvents                 SmsWebhookEvent[]
-  providerHealth                ProviderHealth[]
-  subscription                  Subscription?
-  paymentEvents                 PaymentEvent[]
-  usageLedger                   UsageLedger[]
-  receipts                      Receipt[]
-  invoices                      Invoice[]
-  customers                     Customer[]
-  customerNotes                 CustomerNote[]
-  customerTasks                 CustomerTask[]
-  automationRules               AutomationRule[]
-  invoiceEvents                 InvoiceEvent[]
-  emailJobs                     EmailJob[]
-  alerts                        Alert[]
-  extensions                    Extension[]
-  callRecords                   CallRecord[]
-  mobileDevices                 MobileDevice[]
-  callInvites                   CallInvite[]
-  voiceClientSessions           VoiceClientSession[]
-  voiceDiagEvents               VoiceDiagEvent[]
-  mediaTestRuns                 MediaTestRun[]
-  turnConfigs                   TurnConfig[]
-  turnValidationJobs            TurnValidationJob[]
-  mobileProvisioningTokens      MobileProvisioningToken[]
-  pbxTenantLink                 TenantPbxLink?
-  pbxExtensionLinks             PbxExtensionLink[]
-  pbxDidLinks                   PbxDidLink[]
-  pbxCdrCursor                  PbxCdrCursor?
-  pbxJobs                       PbxJob[]
-  ivrSchedules                  IvrSchedule[]
-  ivrRouteProfiles              IvrRouteProfile[]
-  ivrOptionRoutes               IvrOptionRoute[]
-  pbxPrompts                    TenantPbxPrompt[]
-  ivrScheduleConfig             IvrScheduleConfig?
-  ivrOverrideState              IvrOverrideState?
-  ivrPublishRecords             IvrPublishRecord[]
-  mohProfiles                   MohProfile[]
-  mohScheduleConfig             MohScheduleConfig?
-  mohOverrideState              MohOverrideState?
-  mohPublishRecords             MohPublishRecord[]
-  mohLastPublishedState         MohLastPublishedState?
-  didRouteMappings              DidRouteMapping[]
-  mohAssets                     MohAsset[]
-  pbxMohClasses                 PbxMohClass[]
-  pbxCallEvents                 PbxCallEvent[]
-  smsLiveEnabledByUser          User?                  @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
-  smsProviderLockedByUser       User?                  @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
-  defaultSmsFromNumber          PhoneNumber?           @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
+  createdAt                       DateTime                  @default(now())
+  users                           User[]
+  tenDlcSubs                      TenDlcSubmission[]
+  campaigns                       SmsCampaign[]
+  numbers                         PhoneNumber[]             @relation("TenantOwnedNumbers")
+  audits                          AuditLog[]
+  providerCredentials             ProviderCredential[]
+  billingSolaConfig               BillingSolaConfig?
+  whatsappProviderConfigs         WhatsAppProviderConfig[]
+  whatsAppThreads                 WhatsAppThread[]
+  whatsAppMessages                WhatsAppMessage[]
+  emailProviderConfig             EmailProviderConfig?
+  webhookEvents                   SmsWebhookEvent[]
+  providerHealth                  ProviderHealth[]
+  subscription                    Subscription?
+  paymentEvents                   PaymentEvent[]
+  usageLedger                     UsageLedger[]
+  receipts                        Receipt[]
+  invoices                        Invoice[]
+  customers                       Customer[]
+  customerNotes                   CustomerNote[]
+  customerTasks                   CustomerTask[]
+  automationRules                 AutomationRule[]
+  invoiceEvents                   InvoiceEvent[]
+  emailJobs                       EmailJob[]
+  alerts                          Alert[]
+  extensions                      Extension[]
+  callRecords                     CallRecord[]
+  mobileDevices                   MobileDevice[]
+  callInvites                     CallInvite[]
+  voiceClientSessions             VoiceClientSession[]
+  voiceDiagEvents                 VoiceDiagEvent[]
+  mediaTestRuns                   MediaTestRun[]
+  turnConfigs                     TurnConfig[]
+  turnValidationJobs              TurnValidationJob[]
+  mobileProvisioningTokens        MobileProvisioningToken[]
+  pbxTenantLink                   TenantPbxLink?
+  pbxExtensionLinks               PbxExtensionLink[]
+  pbxDidLinks                     PbxDidLink[]
+  pbxCdrCursor                    PbxCdrCursor?
+  pbxJobs                         PbxJob[]
+  ivrSchedules                    IvrSchedule[]
+  ivrRouteProfiles                IvrRouteProfile[]
+  ivrOptionRoutes                 IvrOptionRoute[]
+  pbxPrompts                      TenantPbxPrompt[]
+  ivrScheduleConfig               IvrScheduleConfig?
+  ivrOverrideState                IvrOverrideState?
+  ivrPublishRecords               IvrPublishRecord[]
+  mohProfiles                     MohProfile[]
+  mohScheduleConfig               MohScheduleConfig?
+  mohOverrideState                MohOverrideState?
+  mohPublishRecords               MohPublishRecord[]
+  mohLastPublishedState           MohLastPublishedState?
+  didRouteMappings                DidRouteMapping[]
+  mohAssets                       MohAsset[]
+  pbxMohClasses                   PbxMohClass[]
+  pbxCallEvents                   PbxCallEvent[]
+  smsLiveEnabledByUser            User?                     @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
+  smsProviderLockedByUser         User?                     @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
+  defaultSmsFromNumber            PhoneNumber?              @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
+  tenantSmsNumbers                TenantSmsNumber[]
+  connectChatThreads              ConnectChatThread[]
+  smsRoutingLogs                  SmsRoutingLog[]
 }
 
 model User {
-  id                         String               @id @default(cuid())
-  tenantId                   String
-  email                      String               @unique
-  passwordHash               String
-  role                       UserRole             @default(USER)
-  createdAt                  DateTime             @default(now())
-  tenant                     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auditEvents                AuditLog[]           @relation("AuditActor")
-  createdProviderCredentials ProviderCredential[] @relation("ProviderCredentialCreatedBy")
-  updatedProviderCredentials ProviderCredential[] @relation("ProviderCredentialUpdatedBy")
-  createdBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigCreatedBy")
-  updatedBillingSolaConfigs BillingSolaConfig[]  @relation("BillingSolaConfigUpdatedBy")
-  createdWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigCreatedBy")
-  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[] @relation("WhatsAppProviderConfigUpdatedBy")
-  createdEmailProviderConfigs    EmailProviderConfig[]    @relation("EmailProviderConfigCreatedBy")
-  updatedEmailProviderConfigs    EmailProviderConfig[]    @relation("EmailProviderConfigUpdatedBy")
-  smsLiveEnabledTenants      Tenant[]             @relation("TenantSmsLiveEnabledBy")
-  smsProviderLockedTenants   Tenant[]             @relation("TenantSmsProviderLockedBy")
-  ownedExtensions            Extension[]          @relation("ExtensionOwner")
-  mobileDevices              MobileDevice[]
-  callInvites                CallInvite[]
-  voiceClientSessions        VoiceClientSession[]
-  voiceDiagEvents            VoiceDiagEvent[]
-  requestedTurnValidationJobs TurnValidationJob[] @relation("TurnValidationRequestedBy")
-  requestedMediaTestRuns     MediaTestRun[]      @relation("MediaTestRequestedBy")
-  mobileProvisioningTokens    MobileProvisioningToken[]
-  updatedSbcConfigs           SbcConfig[]        @relation("SbcConfigUpdatedBy")
-  customerNotes               CustomerNote[]
-  createdCustomerTasks        CustomerTask[]     @relation("CustomerTaskCreatedBy")
-  completedCustomerTasks      CustomerTask[]     @relation("CustomerTaskCompletedBy")
-  createdAutomationRules      AutomationRule[]   @relation("AutomationRuleCreatedBy")
+  id                             String                    @id @default(cuid())
+  tenantId                       String
+  email                          String                    @unique
+  passwordHash                   String
+  role                           UserRole                  @default(USER)
+  createdAt                      DateTime                  @default(now())
+  tenant                         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents                    AuditLog[]                @relation("AuditActor")
+  createdProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialCreatedBy")
+  updatedProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialUpdatedBy")
+  createdBillingSolaConfigs      BillingSolaConfig[]       @relation("BillingSolaConfigCreatedBy")
+  updatedBillingSolaConfigs      BillingSolaConfig[]       @relation("BillingSolaConfigUpdatedBy")
+  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]  @relation("WhatsAppProviderConfigCreatedBy")
+  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]  @relation("WhatsAppProviderConfigUpdatedBy")
+  createdEmailProviderConfigs    EmailProviderConfig[]     @relation("EmailProviderConfigCreatedBy")
+  updatedEmailProviderConfigs    EmailProviderConfig[]     @relation("EmailProviderConfigUpdatedBy")
+  smsLiveEnabledTenants          Tenant[]                  @relation("TenantSmsLiveEnabledBy")
+  smsProviderLockedTenants       Tenant[]                  @relation("TenantSmsProviderLockedBy")
+  ownedExtensions                Extension[]               @relation("ExtensionOwner")
+  mobileDevices                  MobileDevice[]
+  callInvites                    CallInvite[]
+  voiceClientSessions            VoiceClientSession[]
+  voiceDiagEvents                VoiceDiagEvent[]
+  requestedTurnValidationJobs    TurnValidationJob[]       @relation("TurnValidationRequestedBy")
+  requestedMediaTestRuns         MediaTestRun[]            @relation("MediaTestRequestedBy")
+  mobileProvisioningTokens       MobileProvisioningToken[]
+  updatedSbcConfigs              SbcConfig[]               @relation("SbcConfigUpdatedBy")
+  customerNotes                  CustomerNote[]
+  createdCustomerTasks           CustomerTask[]            @relation("CustomerTaskCreatedBy")
+  completedCustomerTasks         CustomerTask[]            @relation("CustomerTaskCompletedBy")
+  createdAutomationRules         AutomationRule[]          @relation("AutomationRuleCreatedBy")
+  tenantSmsNumbersAssigned       TenantSmsNumber[]         @relation("TenantSmsNumberAssignUser")
+  connectChatParticipants        ConnectChatParticipant[]
+  connectChatMessages            ConnectChatMessage[]      @relation("ConnectChatMessageSenderUser")
 }
 
 enum UserRole {
@@ -754,26 +760,26 @@ model EmailProviderConfig {
 }
 
 model Invoice {
-  id                   String       @id @default(cuid())
-  tenantId             String
-  customerId           String?
-  customerEmail        String
-  customerPhone        String?
-  amountCents          Int
-  currency             String       @default("USD")
-  status               InvoiceStatus @default(DRAFT)
-  dueAt                DateTime?
-  paidAt               DateTime?
-  externalPaymentLink  String?
-  payToken             String?      @unique
-  payTokenExpiresAt    DateTime?
-  providerInvoiceRef   String?
-  lastFailureReason    String?
-  createdAt            DateTime     @default(now())
-  updatedAt            DateTime     @updatedAt
-  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer             Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  events               InvoiceEvent[]
+  id                  String         @id @default(cuid())
+  tenantId            String
+  customerId          String?
+  customerEmail       String
+  customerPhone       String?
+  amountCents         Int
+  currency            String         @default("USD")
+  status              InvoiceStatus  @default(DRAFT)
+  dueAt               DateTime?
+  paidAt              DateTime?
+  externalPaymentLink String?
+  payToken            String?        @unique
+  payTokenExpiresAt   DateTime?
+  providerInvoiceRef  String?
+  lastFailureReason   String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  tenant              Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer            Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  events              InvoiceEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -781,25 +787,25 @@ model Invoice {
 }
 
 model Customer {
-  id             String          @id @default(cuid())
-  tenantId       String
-  displayName    String
-  companyName    String?
-  primaryEmail   String?
-  primaryPhone   String?
-  whatsappNumber String?
-  notes          String?
-  tags           Json?
-  status         CustomerStatus  @default(ACTIVE)
-  lastContactAt  DateTime?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoices       Invoice[]
+  id              String           @id @default(cuid())
+  tenantId        String
+  displayName     String
+  companyName     String?
+  primaryEmail    String?
+  primaryPhone    String?
+  whatsappNumber  String?
+  notes           String?
+  tags            Json?
+  status          CustomerStatus   @default(ACTIVE)
+  lastContactAt   DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices        Invoice[]
   whatsAppThreads WhatsAppThread[]
-  customerNotes  CustomerNote[]
-  customerTasks  CustomerTask[]
-  pbxCallEvents  PbxCallEvent[]
+  customerNotes   CustomerNote[]
+  customerTasks   CustomerTask[]
+  pbxCallEvents   PbxCallEvent[]
 
   @@index([tenantId, displayName])
   @@index([tenantId, primaryEmail])
@@ -810,23 +816,23 @@ model Customer {
 }
 
 model CustomerTask {
-  id                 String               @id @default(cuid())
-  tenantId           String
-  customerId         String
-  title              String
-  body               String?
-  status             CustomerTaskStatus   @default(OPEN)
-  priority           CustomerTaskPriority @default(MEDIUM)
-  dueAt              DateTime?
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  completedAt        DateTime?
-  createdByUserId    String
-  completedByUserId  String?
-  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  createdByUser      User                 @relation("CustomerTaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  completedByUser    User?                @relation("CustomerTaskCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  id                String               @id @default(cuid())
+  tenantId          String
+  customerId        String
+  title             String
+  body              String?
+  status            CustomerTaskStatus   @default(OPEN)
+  priority          CustomerTaskPriority @default(MEDIUM)
+  dueAt             DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  completedAt       DateTime?
+  createdByUserId   String
+  completedByUserId String?
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer          Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdByUser     User                 @relation("CustomerTaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  completedByUser   User?                @relation("CustomerTaskCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status, updatedAt])
   @@index([customerId, createdAt])
@@ -866,20 +872,20 @@ model IvrSchedule {
 }
 
 model PbxCallEvent {
-  id           String   @id @default(cuid())
-  tenantId     String
-  customerId   String?
-  pbxTenantId  String?
-  eventType    String
-  callId       String?
-  fromNumber   String?
-  toNumber     String?
-  extension    String?
-  status       String?
-  payload      Json?
-  createdAt    DateTime @default(now())
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  id          String    @id @default(cuid())
+  tenantId    String
+  customerId  String?
+  pbxTenantId String?
+  eventType   String
+  callId      String?
+  fromNumber  String?
+  toNumber    String?
+  extension   String?
+  status      String?
+  payload     Json?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([customerId, createdAt])
@@ -915,24 +921,24 @@ model InvoiceEvent {
 }
 
 model EmailJob {
-  id                   String         @id @default(cuid())
-  tenantId             String
-  invoiceId            String?
-  type                 String
-  toEmail              String
-  subject              String
-  htmlBody             String
-  textBody             String
-  status               EmailJobStatus @default(QUEUED)
-  attempts             Int            @default(0)
-  maxAttempts          Int            @default(5)
-  nextRunAt            DateTime       @default(now())
-  sentAt               DateTime?
-  lastErrorCode        String?
-  lastErrorMessage     String?
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
-  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id               String         @id @default(cuid())
+  tenantId         String
+  invoiceId        String?
+  type             String
+  toEmail          String
+  subject          String
+  htmlBody         String
+  textBody         String
+  status           EmailJobStatus @default(QUEUED)
+  attempts         Int            @default(0)
+  maxAttempts      Int            @default(5)
+  nextRunAt        DateTime       @default(now())
+  sentAt           DateTime?
+  lastErrorCode    String?
+  lastErrorMessage String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([status, nextRunAt])
   @@index([tenantId, createdAt])
@@ -981,19 +987,21 @@ model Alert {
 }
 
 model Extension {
-  id           String            @id @default(cuid())
-  tenantId     String
-  extNumber    String
-  displayName  String
-  pbxUserEmail String?
-  ownerUserId  String?
-  status       String            @default("ACTIVE")
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ownerUser   User?             @relation("ExtensionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  pbxLink     PbxExtensionLink?
-  callInvites CallInvite[]
+  id                       String                   @id @default(cuid())
+  tenantId                 String
+  extNumber                String
+  displayName              String
+  pbxUserEmail             String?
+  ownerUserId              String?
+  status                   String                   @default("ACTIVE")
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  tenant                   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerUser                User?                    @relation("ExtensionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  pbxLink                  PbxExtensionLink?
+  callInvites              CallInvite[]
+  tenantSmsNumbersAssigned TenantSmsNumber[]        @relation("TenantSmsNumberAssignExtension")
+  connectChatParticipants  ConnectChatParticipant[] @relation("ConnectChatParticipantExtension")
 
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])
@@ -1001,35 +1009,35 @@ model Extension {
 }
 
 model PbxInstance {
-  id               String          @id @default(cuid())
-  name             String
-  baseUrl          String
-  apiAuthEncrypted String
+  id                    String                  @id @default(cuid())
+  name                  String
+  baseUrl               String
+  apiAuthEncrypted      String
   /// Optional encrypted read-only MySQL URL for VitalPBX `ombutel` schema (e.g. mysql://user:pass@host:3306/ombutel). Used to sync inbound DID → tenant from ombu_inbound_routes.
   ombuMysqlUrlEncrypted String?
-  isEnabled        Boolean         @default(true)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
-  tenantLinks      TenantPbxLink[]
-  cdrCursors       PbxCdrCursor[]
-  pbxJobs          PbxJob[]
-  webhookRegistration PbxWebhookRegistration?
-  tenantDirectory  PbxTenantDirectory[]
-  tenantInboundDids PbxTenantInboundDid[]
-  didRouteMappings DidRouteMapping[]
-  mohClasses       PbxMohClass[]
+  isEnabled             Boolean                 @default(true)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  tenantLinks           TenantPbxLink[]
+  cdrCursors            PbxCdrCursor[]
+  pbxJobs               PbxJob[]
+  webhookRegistration   PbxWebhookRegistration?
+  tenantDirectory       PbxTenantDirectory[]
+  tenantInboundDids     PbxTenantInboundDid[]
+  didRouteMappings      DidRouteMapping[]
+  mohClasses            PbxMohClass[]
 }
 
 // Cached VitalPBX tenant rows for deterministic mapping (T8 / numeric id / slug -> Connect tenant).
 model PbxTenantDirectory {
-  id             String      @id @default(cuid())
-  pbxInstanceId  String
-  vitalTenantId  String
-  tenantSlug     String
-  tenantCode     String
-  displayName    String?
-  syncedAt       DateTime    @default(now())
-  pbxInstance    PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+  id            String      @id @default(cuid())
+  pbxInstanceId String
+  vitalTenantId String
+  tenantSlug    String
+  tenantCode    String
+  displayName   String?
+  syncedAt      DateTime    @default(now())
+  pbxInstance   PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
 
   @@unique([pbxInstanceId, vitalTenantId])
   @@index([pbxInstanceId, tenantCode])
@@ -1039,20 +1047,20 @@ model PbxTenantDirectory {
 // Inbound DIDs / phone numbers assigned to each VitalPBX tenant, synced on admin PBX tenant refresh (not polled).
 // Used for future DID -> PBX tenant -> Connect tenant resolution. connectTenantId is denormalized when TenantPbxLink exists.
 model PbxTenantInboundDid {
-  id               String      @id @default(cuid())
-  pbxInstanceId    String
-  vitalTenantId    String
-  e164             String
-  pbxInboundId     String?
-  rawNumber        String?
-  pbxTenantSlug    String?
-  pbxTenantCode    String?
-  connectTenantId  String?
-  active           Boolean     @default(true)
-  lastSeenAt       DateTime    @default(now())
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  pbxInstance      PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
+  id              String      @id @default(cuid())
+  pbxInstanceId   String
+  vitalTenantId   String
+  e164            String
+  pbxInboundId    String?
+  rawNumber       String?
+  pbxTenantSlug   String?
+  pbxTenantCode   String?
+  connectTenantId String?
+  active          Boolean     @default(true)
+  lastSeenAt      DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  pbxInstance     PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
 
   @@unique([pbxInstanceId, e164])
   @@index([pbxInstanceId, vitalTenantId])
@@ -1165,51 +1173,51 @@ model CallRecord {
 // Populated by the telephony service via /internal/cdr-ingest when a call ends.
 // This is the authoritative source for dashboard KPI cards and call history.
 model ConnectCdr {
-  id          String    @id @default(cuid())
-  linkedId    String    @unique           // Asterisk Linkedid — canonical dedupe key
-  tenantId    String?                     // Connect Tenant.id when linked; else vpbx:{slug}; null = unassigned
-  pbxVitalTenantId String?                // VitalPBX tenant_id (numeric string, e.g. "8")
-  pbxTenantCode    String?                // Canonical label e.g. "T8"
-  tenantResolutionSource String?          // audit: how tenantId was chosen
-  fromNumber  String?
-  fromName    String?                     // CNAM from AMI CallerIDName (caller's display name)
-  toNumber    String?
-  direction   String                      // "incoming" | "outgoing" | "internal" | "unknown"
-  disposition String                      // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
-  startedAt   DateTime
-  answeredAt  DateTime?
-  endedAt     DateTime
-  durationSec Int       @default(0)       // wall time: endedAt - startedAt (seconds)
-  talkSec     Int       @default(0)       // talk time: endedAt - answeredAt (0 if unanswered)
-  queueId     String?
-  hangupCause String?
-  dcontext    String?                     // AMI Cdr dcontext — most authoritative direction signal (e.g. "ext-local-gesheft")
-  dcontextsSeen Json?                     // string[] — all AMI Cdr dcontext values observed for this linkedId
-  channelsSeen  Json?                     // string[] — accumulated channel names for direction evidence
-  rawLegCount Int       @default(1)       // how many CDR notifications were received for this linkedId (channel-leg count)
-  isForwarded     Boolean   @default(false)   // true for :out rows — inbound call automatically forwarded to an external number (find-me/follow-me)
-  recordingPath   String?                     // deterministic path "YYYY/MM/DD/<linkedId>.wav" computed at ingest; null when call is not recorded
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                     String    @id @default(cuid())
+  linkedId               String    @unique // Asterisk Linkedid — canonical dedupe key
+  tenantId               String? // Connect Tenant.id when linked; else vpbx:{slug}; null = unassigned
+  pbxVitalTenantId       String? // VitalPBX tenant_id (numeric string, e.g. "8")
+  pbxTenantCode          String? // Canonical label e.g. "T8"
+  tenantResolutionSource String? // audit: how tenantId was chosen
+  fromNumber             String?
+  fromName               String? // CNAM from AMI CallerIDName (caller's display name)
+  toNumber               String?
+  direction              String // "incoming" | "outgoing" | "internal" | "unknown"
+  disposition            String // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
+  startedAt              DateTime
+  answeredAt             DateTime?
+  endedAt                DateTime
+  durationSec            Int       @default(0) // wall time: endedAt - startedAt (seconds)
+  talkSec                Int       @default(0) // talk time: endedAt - answeredAt (0 if unanswered)
+  queueId                String?
+  hangupCause            String?
+  dcontext               String? // AMI Cdr dcontext — most authoritative direction signal (e.g. "ext-local-gesheft")
+  dcontextsSeen          Json? // string[] — all AMI Cdr dcontext values observed for this linkedId
+  channelsSeen           Json? // string[] — accumulated channel names for direction evidence
+  rawLegCount            Int       @default(1) // how many CDR notifications were received for this linkedId (channel-leg count)
+  isForwarded            Boolean   @default(false) // true for :out rows — inbound call automatically forwarded to an external number (find-me/follow-me)
+  recordingPath          String? // deterministic path "YYYY/MM/DD/<linkedId>.wav" computed at ingest; null when call is not recorded
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  @@index([tenantId, startedAt])           // per-tenant KPI queries
-  @@index([startedAt])                     // global aggregate queries
+  @@index([tenantId, startedAt]) // per-tenant KPI queries
+  @@index([startedAt]) // global aggregate queries
   @@index([tenantId, direction, startedAt]) // typed per-tenant KPI queries
 }
 
 model Voicemail {
   id             String    @id @default(cuid())
-  tenantId       String?                          // Connect Tenant.id; null = unresolved
-  pbxMessageId   String    @unique                // stable dedup key: "{pbxTenantId}|{ext}|{origtime}|{callerDigits10}"
-  extension      String                           // mailbox extension number (e.g. "104")
-  pbxExtensionId String?                          // VitalPBX resource ID for this extension
+  tenantId       String? // Connect Tenant.id; null = unresolved
+  pbxMessageId   String    @unique // stable dedup key: "{pbxTenantId}|{ext}|{origtime}|{callerDigits10}"
+  extension      String // mailbox extension number (e.g. "104")
+  pbxExtensionId String? // VitalPBX resource ID for this extension
   callerNumber   String?
   callerName     String?
   durationSec    Int       @default(0)
-  folder         String    @default("inbox")      // normalised: "inbox" | "old" | "urgent"
-  pbxFolder      String?                          // raw PBX folder (e.g. "INBOX", "Old", "Urgent")
-  pbxMsgNum      String?                          // PBX message file basename (e.g. "msg0007")
-  pbxRecfile     String?                          // VitalPBX-relative playback path (e.g. "/static/<tok>/voicemail/<tenant>/<ext>/INBOX/msg0007.wav") — token-authenticated, no app-key needed
+  folder         String    @default("inbox") // normalised: "inbox" | "old" | "urgent"
+  pbxFolder      String? // raw PBX folder (e.g. "INBOX", "Old", "Urgent")
+  pbxMsgNum      String? // PBX message file basename (e.g. "msg0007")
+  pbxRecfile     String? // VitalPBX-relative playback path (e.g. "/static/<tok>/voicemail/<tenant>/<ext>/INBOX/msg0007.wav") — token-authenticated, no app-key needed
   listened       Boolean   @default(false)
   receivedAt     DateTime
   readAt         DateTime?
@@ -1236,9 +1244,9 @@ model Voicemail {
 //             The tenantId written to ConnectCdr will be "vpbx:{tenantSlug}".
 model CdrTenantRule {
   id          String   @id @default(cuid())
-  matchType   String   // "did" | "from_did" | "extension_prefix"
-  matchValue  String   // the phone number, DID, or prefix
-  tenantSlug  String   // VitalPBX tenant name (without vpbx: prefix)
+  matchType   String // "did" | "from_did" | "extension_prefix"
+  matchValue  String // the phone number, DID, or prefix
+  tenantSlug  String // VitalPBX tenant name (without vpbx: prefix)
   description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1266,40 +1274,36 @@ model PbxJob {
   @@index([tenantId, createdAt])
 }
 
-
 model MobileDevice {
-  id            String         @id @default(cuid())
-  tenantId      String
-  userId        String
-  platform      MobilePlatform
-  expoPushToken String         @unique
-  voipPushToken String?
-  deviceName    String?
-  lastSeenAt    DateTime       @default(now())
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  acceptedInvites    CallInvite[]        @relation("CallInviteAcceptedByDevice")
+  id                  String               @id @default(cuid())
+  tenantId            String
+  userId              String
+  platform            MobilePlatform
+  expoPushToken       String               @unique
+  voipPushToken       String?
+  deviceName          String?
+  lastSeenAt          DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptedInvites     CallInvite[]         @relation("CallInviteAcceptedByDevice")
   voiceClientSessions VoiceClientSession[]
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
 }
 
-
-
-
 model MobileProvisioningToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   tenantId  String
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, userId, createdAt])
   @@index([expiresAt, usedAt])
@@ -1352,18 +1356,18 @@ model TurnValidationJob {
 }
 
 model MediaTestRun {
-  id              String             @id @default(cuid())
+  id              String              @id @default(cuid())
   tenantId        String
   userId          String
-  tokenId         String             @unique
+  tokenId         String              @unique
   expiresAt       DateTime
-  createdAt       DateTime           @default(now())
+  createdAt       DateTime            @default(now())
   completedAt     DateTime?
-  status          MediaTestRunStatus @default(QUEUED)
+  status          MediaTestRunStatus  @default(QUEUED)
   platform        VoiceClientPlatform
   details         Json?
-  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  requestedByUser User               @relation("MediaTestRequestedBy", fields: [userId], references: [id], onDelete: Cascade)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedByUser User                @relation("MediaTestRequestedBy", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
   @@index([tenantId, status, createdAt])
@@ -1371,25 +1375,25 @@ model MediaTestRun {
 }
 
 model VoiceClientSession {
-  id            String             @id @default(cuid())
+  id            String              @id @default(cuid())
   tenantId      String
   userId        String
   platform      VoiceClientPlatform
   deviceId      String?
   appVersion    String?
-  startedAt     DateTime           @default(now())
+  startedAt     DateTime            @default(now())
   endedAt       DateTime?
-  lastSeenAt    DateTime           @default(now())
+  lastSeenAt    DateTime            @default(now())
   sipWsUrl      String?
   sipDomain     String?
-  iceHasTurn    Boolean            @default(false)
-  lastRegState  VoiceDiagRegState  @default(IDLE)
-  lastCallState VoiceDiagCallState @default(IDLE)
+  iceHasTurn    Boolean             @default(false)
+  lastRegState  VoiceDiagRegState   @default(IDLE)
+  lastCallState VoiceDiagCallState  @default(IDLE)
   lastErrorCode String?
   lastErrorAt   DateTime?
-  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  device        MobileDevice?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device        MobileDevice?       @relation(fields: [deviceId], references: [id], onDelete: SetNull)
   events        VoiceDiagEvent[]
 
   @@index([tenantId, startedAt])
@@ -1398,15 +1402,15 @@ model VoiceClientSession {
 }
 
 model VoiceDiagEvent {
-  id        String            @id @default(cuid())
+  id        String             @id @default(cuid())
   tenantId  String
   userId    String
   sessionId String
-  createdAt DateTime          @default(now())
+  createdAt DateTime           @default(now())
   type      VoiceDiagEventType
   payload   Json
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   session   VoiceClientSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
@@ -1419,7 +1423,7 @@ model VoiceDiagEvent {
 // queries; the indexed columns cover the common admin search paths.
 
 model CallFlightSession {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   // Call identity – at least one of these will be present
   inviteId       String?
   pbxCallId      String?
@@ -1431,28 +1435,28 @@ model CallFlightSession {
   extension      String?
   fromNumber     String?
   // Device context
-  platform       String   @default("ANDROID")
+  platform       String    @default("ANDROID")
   appVersion     String?
   networkType    String?
   // Call outcome
-  result         String?  // answered | missed | declined | failed | ended | unknown
-  uiMode         String?  // full_screen | floating | in_app
+  result         String? // answered | missed | declined | failed | ended | unknown
+  uiMode         String? // full_screen | floating | in_app
   startedAt      DateTime
   endedAt        DateTime?
-  uploadedAt     DateTime @default(now())
+  uploadedAt     DateTime  @default(now())
   // Quick-access timing flags (ms)
   answerDelayMs  Int?
   sipConnectMs   Int?
   pushToUiMs     Int?
   // Boolean flags for fast filtering
-  hadRingtone    Boolean  @default(false)
-  hadBlankScreen Boolean  @default(false)
-  hadAppRestart  Boolean  @default(false)
-  hadFullScreen  Boolean  @default(false)
+  hadRingtone    Boolean   @default(false)
+  hadBlankScreen Boolean   @default(false)
+  hadAppRestart  Boolean   @default(false)
+  hadFullScreen  Boolean   @default(false)
   // Automatically detected problems (array of flag strings)
   warningFlags   String[]
   // All timeline events — full structured array stored as JSON
-  events         Json     @default("[]")
+  events         Json      @default("[]")
   // Cached AI diagnosis (generated on demand, stored for reuse)
   aiSummary      Json?
 
@@ -1465,9 +1469,9 @@ model CallFlightSession {
 }
 
 model CallInvite {
-  id          String           @id @default(cuid())
-  tenantId    String
-  userId      String
+  id                 String           @id @default(cuid())
+  tenantId           String
+  userId             String
   extensionId        String?
   pbxCallId          String?
   pbxSipUsername     String?
@@ -1509,40 +1513,40 @@ model CallInvite {
 /// A named routing destination for one mode (business hours, after hours, etc.).
 /// pbxDestination is a "context,exten,priority" string, e.g. "app-ivr,8000,1".
 model IvrRouteProfile {
-  id             String   @id @default(cuid())
-  tenantId       String
-  name           String                              // human label, e.g. "Main Business IVR"
-  type           String                              // "business_hours" | "after_hours" | "holiday" | "manual_override" | "emergency"
-  pbxDestination String                              // "context,exten,priority" written to AstDB (legacy single-dest)
+  id                     String   @id @default(cuid())
+  tenantId               String
+  name                   String // human label, e.g. "Main Business IVR"
+  type                   String // "business_hours" | "after_hours" | "holiday" | "manual_override" | "emergency"
+  pbxDestination         String // "context,exten,priority" written to AstDB (legacy single-dest)
   // Optional greeting/prompt refs for the Connect-owned IVR menu. Values are
   // VitalPBX recording names (e.g. "custom/acme_normal" — no file extension).
   // Empty/null = dialplan plays a safe built-in fallback.
-  pbxPromptRef        String?                        // main greeting
-  pbxInvalidPromptRef String?                        // played on invalid digit, then re-prompt
-  pbxTimeoutPromptRef String?                        // played on no-digit timeout, then re-prompt
-  pbxRetryPromptRef   String?                        // VitalPBX-parity "please try again" prompt on retry iterations
-  timeoutSeconds      Int      @default(7)           // WaitExten timeout per iteration
-  maxRetries          Int      @default(3)           // retries before falling through to default-fallback
+  pbxPromptRef           String? // main greeting
+  pbxInvalidPromptRef    String? // played on invalid digit, then re-prompt
+  pbxTimeoutPromptRef    String? // played on no-digit timeout, then re-prompt
+  pbxRetryPromptRef      String? // VitalPBX-parity "please try again" prompt on retry iterations
+  timeoutSeconds         Int      @default(7) // WaitExten timeout per iteration
+  maxRetries             Int      @default(3) // retries before falling through to default-fallback
   // VitalPBX-parity IVR controls. All three default to "fall through to the
   // global connect-default-fallback after max retries" so existing profiles
   // behave exactly as they did pre-migration until an admin opts in.
-  directDialEnabled       Boolean @default(false)    // allow dial-by-extension during IVR (Read multi-digit)
-  invalidDestinationType  String?                    // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
-  invalidDestinationRef   String?                    // CEP or E.164; consumed after max_retries on invalid digits
-  timeoutDestinationType  String?                    // same module enum as invalid
-  timeoutDestinationRef   String?                    // CEP or E.164; consumed after max_retries on timeouts
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  createdBy      String?                             // userId
+  directDialEnabled      Boolean  @default(false) // allow dial-by-extension during IVR (Read multi-digit)
+  invalidDestinationType String? // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
+  invalidDestinationRef  String? // CEP or E.164; consumed after max_retries on invalid digits
+  timeoutDestinationType String? // same module enum as invalid
+  timeoutDestinationRef  String? // CEP or E.164; consumed after max_retries on timeouts
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  createdBy              String? // userId
 
-  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  scheduleDefault   IvrScheduleConfig[] @relation("ScheduleDefaultProfile")
-  scheduleAfterHrs  IvrScheduleConfig[] @relation("ScheduleAfterHoursProfile")
-  scheduleHoliday   IvrScheduleConfig[] @relation("ScheduleHolidayProfile")
-  overrideStates    IvrOverrideState[]
-  optionRoutes      IvrOptionRoute[]
-  didRouteMappings  DidRouteMapping[]
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleDefault  IvrScheduleConfig[] @relation("ScheduleDefaultProfile")
+  scheduleAfterHrs IvrScheduleConfig[] @relation("ScheduleAfterHoursProfile")
+  scheduleHoliday  IvrScheduleConfig[] @relation("ScheduleHolidayProfile")
+  overrideStates   IvrOverrideState[]
+  optionRoutes     IvrOptionRoute[]
+  didRouteMappings DidRouteMapping[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -1556,10 +1560,10 @@ model IvrOptionRoute {
   id              String   @id @default(cuid())
   tenantId        String
   profileId       String
-  optionDigit     String                              // "0".."9" | "star" | "hash"
-  destinationType String                              // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
-  destinationRef  String                              // "context,exten,priority" | E.164 | etc.
-  label           String?                             // optional human label, e.g. "Sales"
+  optionDigit     String // "0".."9" | "star" | "hash"
+  destinationType String // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
+  destinationRef  String // "context,exten,priority" | E.164 | etc.
+  label           String? // optional human label, e.g. "Sales"
   enabled         Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1576,37 +1580,37 @@ model IvrOptionRoute {
 /// businessHoursRules JSON: [{ day: 0, open: "09:00", close: "17:00" }, ...]
 /// holidayDates JSON:       ["2026-12-25", "2026-01-01", ...]
 model IvrScheduleConfig {
-  id                 String   @id @default(cuid())
-  tenantId           String   @unique
-  timezone           String   @default("America/New_York")
-  businessHoursRules Json     @default("[]")
-  holidayDates       Json     @default("[]")
-  defaultProfileId   String?                         // FK → IvrRouteProfile (business hours)
-  afterHoursProfileId String?                        // FK → IvrRouteProfile (after hours)
-  holidayProfileId   String?                         // FK → IvrRouteProfile (holidays)
-  isActive           Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  tenantId            String   @unique
+  timezone            String   @default("America/New_York")
+  businessHoursRules  Json     @default("[]")
+  holidayDates        Json     @default("[]")
+  defaultProfileId    String? // FK → IvrRouteProfile (business hours)
+  afterHoursProfileId String? // FK → IvrRouteProfile (after hours)
+  holidayProfileId    String? // FK → IvrRouteProfile (holidays)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultProfile  IvrRouteProfile? @relation("ScheduleDefaultProfile",   fields: [defaultProfileId],   references: [id], onDelete: SetNull)
+  defaultProfile  IvrRouteProfile? @relation("ScheduleDefaultProfile", fields: [defaultProfileId], references: [id], onDelete: SetNull)
   afterHrsProfile IvrRouteProfile? @relation("ScheduleAfterHoursProfile", fields: [afterHoursProfileId], references: [id], onDelete: SetNull)
-  holidayProfile  IvrRouteProfile? @relation("ScheduleHolidayProfile",   fields: [holidayProfileId],   references: [id], onDelete: SetNull)
+  holidayProfile  IvrRouteProfile? @relation("ScheduleHolidayProfile", fields: [holidayProfileId], references: [id], onDelete: SetNull)
 }
 
 /// Current manual override state for a tenant (one row per tenant).
 /// isActive=true means calls are routed to the override profile right now.
 model IvrOverrideState {
-  id              String    @id @default(cuid())
-  tenantId        String    @unique
-  isActive        Boolean   @default(false)
-  profileId       String?                             // FK → IvrRouteProfile
-  reason          String?
-  expiresAt       DateTime?                           // null = manual until explicitly cleared
-  activatedAt     DateTime?
-  activatedBy     String?                             // userId
-  deactivatedAt   DateTime?
-  deactivatedBy   String?                             // userId
+  id            String    @id @default(cuid())
+  tenantId      String    @unique
+  isActive      Boolean   @default(false)
+  profileId     String? // FK → IvrRouteProfile
+  reason        String?
+  expiresAt     DateTime? // null = manual until explicitly cleared
+  activatedAt   DateTime?
+  activatedBy   String? // userId
+  deactivatedAt DateTime?
+  deactivatedBy String? // userId
 
   tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   profile IvrRouteProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
@@ -1615,16 +1619,16 @@ model IvrOverrideState {
 /// Audit log for every AstDB publish (manual or automatic).
 /// keysWritten / previousKeys store [{family,key,value}] arrays for rollback.
 model IvrPublishRecord {
-  id          String   @id @default(cuid())
-  tenantId    String
-  publishedBy String                                  // userId or "system"
-  publishedAt DateTime @default(now())
-  mode        String                                  // "business" | "afterhours" | "holiday" | "override"
-  keysWritten Json                                    // [{family,key,value}]
-  previousKeys Json    @default("[]")                 // snapshot before publish (for rollback)
-  status      String   @default("pending")            // "pending" | "success" | "failed"
-  error       String?
-  isRollback  Boolean  @default(false)
+  id           String   @id @default(cuid())
+  tenantId     String
+  publishedBy  String // userId or "system"
+  publishedAt  DateTime @default(now())
+  mode         String // "business" | "afterhours" | "holiday" | "override"
+  keysWritten  Json // [{family,key,value}]
+  previousKeys Json     @default("[]") // snapshot before publish (for rollback)
+  status       String   @default("pending") // "pending" | "success" | "failed"
+  error        String?
+  isRollback   Boolean  @default(false)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -1652,31 +1656,31 @@ model IvrPublishRecord {
 //
 // No file data is stored here — only pointers. Audio stays in VitalPBX.
 model TenantPbxPrompt {
-  id             String   @id @default(cuid())
-  tenantId       String?                             // null = unassigned / shared / unknown-ownership
-  tenantSlug     String?                             // denormalised slug used for prefix match (lowercased)
-  promptRef      String                              // canonical dialplan ref, e.g. "custom/acme_normal"
-  fileBaseName   String                              // base name without ext, e.g. "acme_normal"
-  relativePath   String                              // same as promptRef today; reserved for future non-custom folders
-  displayName    String                              // human-friendly label (defaults to fileBaseName)
-  category       String   @default("general")       // "greeting" | "invalid" | "timeout" | "general" | "unknown"
-  source         String   @default("pbx_sync")      // "pbx_sync" | "manual" | "import"
-  isActive       Boolean  @default(true)
-  firstSeenAt    DateTime @default(now())
-  lastSeenAt     DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String? // null = unassigned / shared / unknown-ownership
+  tenantSlug   String? // denormalised slug used for prefix match (lowercased)
+  promptRef    String // canonical dialplan ref, e.g. "custom/acme_normal"
+  fileBaseName String // base name without ext, e.g. "acme_normal"
+  relativePath String // same as promptRef today; reserved for future non-custom folders
+  displayName  String // human-friendly label (defaults to fileBaseName)
+  category     String   @default("general") // "greeting" | "invalid" | "timeout" | "general" | "unknown"
+  source       String   @default("pbx_sync") // "pbx_sync" | "manual" | "import"
+  isActive     Boolean  @default(true)
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // ── Audio bytes (optional) ────────────────────────────────────────────────
   // Populated by either the PBX-host `connect-prompt-sync.sh` helper (cron
   // pushes new/changed files), or a UI-triggered manual upload. When these
   // are null the catalog row is still valid for dialplan use — only the
   // in-browser "Play" button is unavailable until audio is synced.
-  storageKey     String?                            // relative path under PROMPT_STORAGE_DIR (tenant-scoped, e.g. "tenants/<tenantId>/acme_normal.wav")
-  sha256         String?                            // content hash — used by the PBX helper to diff
-  sizeBytes      Int?
-  contentType    String?                            // e.g. "audio/wav", "audio/mpeg"
-  syncedAt       DateTime?                          // last time audio bytes were uploaded
+  storageKey  String? // relative path under PROMPT_STORAGE_DIR (tenant-scoped, e.g. "tenants/<tenantId>/acme_normal.wav")
+  sha256      String? // content hash — used by the PBX helper to diff
+  sizeBytes   Int?
+  contentType String? // e.g. "audio/wav", "audio/mpeg"
+  syncedAt    DateTime? // last time audio bytes were uploaded
 
   // ── Ownership confidence ──────────────────────────────────────────────────
   // How did we decide this row belongs to `tenantId`?
@@ -1718,28 +1722,28 @@ model TenantPbxPrompt {
 /// Unified Hold Profile — controls both the MOH class and optional hold announcement.
 /// Renamed conceptually to "Hold Profile" in the UI; table/model name kept for backward compat.
 model MohProfile {
-  id                       String   @id @default(cuid())
-  tenantId                 String
-  name                     String                       // human label, e.g. "Holiday Jazz"
-  type                     String                       // "default" | "business_hours" | "after_hours" | "holiday" | "campaign" | "emergency" | "custom"
-  vitalPbxMohClassName     String                       // exact VitalPBX MOH class name
-  holdAnnouncementEnabled  Boolean  @default(false)     // whether to play a periodic hold announcement
-  holdAnnouncementRef      String?                      // VitalPBX recording/file ref for the announcement
-  holdAnnouncementIntervalSec Int   @default(30)        // seconds between announcement playbacks
-  introAnnouncementRef     String?                      // optional one-time intro played on hold entry
-  isActive                 Boolean  @default(true)
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
-  createdBy                String?
-  updatedBy                String?
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  name                        String // human label, e.g. "Holiday Jazz"
+  type                        String // "default" | "business_hours" | "after_hours" | "holiday" | "campaign" | "emergency" | "custom"
+  vitalPbxMohClassName        String // exact VitalPBX MOH class name
+  holdAnnouncementEnabled     Boolean  @default(false) // whether to play a periodic hold announcement
+  holdAnnouncementRef         String? // VitalPBX recording/file ref for the announcement
+  holdAnnouncementIntervalSec Int      @default(30) // seconds between announcement playbacks
+  introAnnouncementRef        String? // optional one-time intro played on hold entry
+  isActive                    Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  createdBy                   String?
+  updatedBy                   String?
 
-  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  scheduleDefault       MohScheduleConfig[] @relation("MohScheduleDefault")
-  scheduleAfterHours    MohScheduleConfig[] @relation("MohScheduleAfterHours")
-  scheduleHoliday       MohScheduleConfig[] @relation("MohScheduleHoliday")
-  scheduleRules         MohScheduleRule[]
-  overrideStates        MohOverrideState[]
-  didRouteMappings      DidRouteMapping[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleDefault    MohScheduleConfig[] @relation("MohScheduleDefault")
+  scheduleAfterHours MohScheduleConfig[] @relation("MohScheduleAfterHours")
+  scheduleHoliday    MohScheduleConfig[] @relation("MohScheduleHoliday")
+  scheduleRules      MohScheduleRule[]
+  overrideStates     MohOverrideState[]
+  didRouteMappings   DidRouteMapping[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -1752,17 +1756,17 @@ model MohScheduleConfig {
   id                  String   @id @default(cuid())
   tenantId            String   @unique
   timezone            String   @default("America/New_York")
-  defaultProfileId    String?                         // FK → MohProfile (fallback when no rule matches)
-  afterHoursProfileId String?                         // FK → MohProfile (when outside business hours)
-  holidayProfileId    String?                         // FK → MohProfile (on holiday dates)
+  defaultProfileId    String? // FK → MohProfile (fallback when no rule matches)
+  afterHoursProfileId String? // FK → MohProfile (when outside business hours)
+  holidayProfileId    String? // FK → MohProfile (on holiday dates)
   isActive            Boolean  @default(true)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultProfile  MohProfile?  @relation("MohScheduleDefault",    fields: [defaultProfileId],    references: [id], onDelete: SetNull)
-  afterHrsProfile MohProfile?  @relation("MohScheduleAfterHours", fields: [afterHoursProfileId], references: [id], onDelete: SetNull)
-  holidayProfile  MohProfile?  @relation("MohScheduleHoliday",    fields: [holidayProfileId],    references: [id], onDelete: SetNull)
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultProfile  MohProfile?       @relation("MohScheduleDefault", fields: [defaultProfileId], references: [id], onDelete: SetNull)
+  afterHrsProfile MohProfile?       @relation("MohScheduleAfterHours", fields: [afterHoursProfileId], references: [id], onDelete: SetNull)
+  holidayProfile  MohProfile?       @relation("MohScheduleHoliday", fields: [holidayProfileId], references: [id], onDelete: SetNull)
   rules           MohScheduleRule[]
 }
 
@@ -1772,21 +1776,21 @@ model MohScheduleConfig {
 /// For "holiday": date ("YYYY-MM-DD") stored in startTime, endTime ignored
 /// For "one_time": startAt/endAt (UTC timestamps) override everything
 model MohScheduleRule {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   scheduleId String
   profileId  String
-  ruleType   String                                   // "weekly" | "holiday" | "one_time"
-  weekday    Int?                                     // 0=Sun…6=Sat — used for "weekly"
-  startTime  String?                                  // "HH:MM" for weekly / "YYYY-MM-DD" for holiday
-  endTime    String?                                  // "HH:MM" for weekly
-  startAt    DateTime?                                // UTC — for "one_time" overrides
-  endAt      DateTime?                                // UTC — for "one_time" overrides
-  priority   Int      @default(0)                     // higher = wins on overlap
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
+  ruleType   String // "weekly" | "holiday" | "one_time"
+  weekday    Int? // 0=Sun…6=Sat — used for "weekly"
+  startTime  String? // "HH:MM" for weekly / "YYYY-MM-DD" for holiday
+  endTime    String? // "HH:MM" for weekly
+  startAt    DateTime? // UTC — for "one_time" overrides
+  endAt      DateTime? // UTC — for "one_time" overrides
+  priority   Int       @default(0) // higher = wins on overlap
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
 
   schedule MohScheduleConfig @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  profile  MohProfile         @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile  MohProfile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   @@index([scheduleId])
   @@index([scheduleId, isActive])
@@ -1796,16 +1800,16 @@ model MohScheduleRule {
 /// Current manual override per tenant (upsert: one row per tenant).
 /// isActive=true means all schedules are bypassed and profileId is used directly.
 model MohOverrideState {
-  id              String    @id @default(cuid())
-  tenantId        String    @unique
-  isActive        Boolean   @default(false)
-  profileId       String?
-  reason          String?
-  expiresAt       DateTime?
-  activatedAt     DateTime?
-  activatedBy     String?
-  deactivatedAt   DateTime?
-  deactivatedBy   String?
+  id            String    @id @default(cuid())
+  tenantId      String    @unique
+  isActive      Boolean   @default(false)
+  profileId     String?
+  reason        String?
+  expiresAt     DateTime?
+  activatedAt   DateTime?
+  activatedBy   String?
+  deactivatedAt DateTime?
+  deactivatedBy String?
 
   tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   profile MohProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
@@ -1817,14 +1821,14 @@ model MohOverrideState {
 model MohPublishRecord {
   id                   String   @id @default(cuid())
   tenantId             String
-  publishedBy          String                         // userId or "system"
+  publishedBy          String // userId or "system"
   publishedAt          DateTime @default(now())
-  source               String                         // "schedule" | "manual" | "override" | "rollback" | "reconciliation"
-  previousMohClass     String?                        // display only — class name before this publish
-  newMohClass          String                         // VitalPBX MOH class name written
-  keysWritten          Json                           // [{family,key,value}] — all keys written this publish
-  previousKeysSnapshot Json     @default("[]")        // full AstDB key snapshot before this publish (for rollback)
-  status               String   @default("pending")   // "pending" | "success" | "failed"
+  source               String // "schedule" | "manual" | "override" | "rollback" | "reconciliation"
+  previousMohClass     String? // display only — class name before this publish
+  newMohClass          String // VitalPBX MOH class name written
+  keysWritten          Json // [{family,key,value}] — all keys written this publish
+  previousKeysSnapshot Json     @default("[]") // full AstDB key snapshot before this publish (for rollback)
+  status               String   @default("pending") // "pending" | "success" | "failed"
   error                String?
   isRollback           Boolean  @default(false)
 
@@ -1867,19 +1871,19 @@ model MohLastPublishedState {
 //   "terminate"    — play safe fallback announcement and hang up
 //   "voicemail"    — go to the tenant's default voicemail box if configured
 model DidRouteMapping {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  e164                 String                              // normalised E.164, e.g. "+18005551212"
-  phoneNumberId        String?                             // FK → PhoneNumber (Connect-purchased); null for PBX-owned
-  pbxInstanceId        String?                             // FK → PbxInstance (which PBX holds the inbound route)
-  pbxInboundRouteId    String?                             // VitalPBX inbound route id once auto-created
-  ivrProfileId         String?                             // FK → IvrRouteProfile (active IVR for this DID)
-  mohProfileId         String?                             // FK → MohProfile (active Hold/MOH profile for this DID)
-  holdAnnouncePromptRef String?                            // VitalPBX recording ref for hold announcement
-  holdRepeatSec        Int      @default(30)               // seconds between announcement repeats
-  fallbackBehavior     String   @default("default_ivr")    // "default_ivr" | "terminate" | "voicemail"
-  enabled              Boolean  @default(true)
-  lastPublishedAt      DateTime?
+  id                          String    @id @default(cuid())
+  tenantId                    String
+  e164                        String // normalised E.164, e.g. "+18005551212"
+  phoneNumberId               String? // FK → PhoneNumber (Connect-purchased); null for PBX-owned
+  pbxInstanceId               String? // FK → PbxInstance (which PBX holds the inbound route)
+  pbxInboundRouteId           String? // VitalPBX inbound route id once auto-created
+  ivrProfileId                String? // FK → IvrRouteProfile (active IVR for this DID)
+  mohProfileId                String? // FK → MohProfile (active Hold/MOH profile for this DID)
+  holdAnnouncePromptRef       String? // VitalPBX recording ref for hold announcement
+  holdRepeatSec               Int       @default(30) // seconds between announcement repeats
+  fallbackBehavior            String    @default("default_ivr") // "default_ivr" | "terminate" | "voicemail"
+  enabled                     Boolean   @default(true)
+  lastPublishedAt             DateTime?
   // ── DID takeover (switch between PBX-native routing and Connect IVR) ──
   // `routingMode` tracks where the DID's inbound destination currently points:
   //   "pbx"     → VitalPBX still owns the routing (the factory/legacy destination)
@@ -1887,23 +1891,23 @@ model DidRouteMapping {
   // Before the first "switch to connect" we snapshot the live VitalPBX
   // inbound_number payload into the originalPbx* fields so a later "restore
   // to PBX" can PATCH it back verbatim without operator guesswork.
-  routingMode                 String   @default("pbx")       // "pbx" | "connect"
-  originalPbxDestinationType  String?                         // e.g. "ivr", "queues", "extensions", "custom-destinations"
-  originalPbxDestination      String?                         // opaque VitalPBX destination string (id or CEP)
-  originalPbxChannelVariables Json?                           // full channel_variables map as last seen on PBX
-  originalCapturedAt          DateTime?                       // when we captured the PBX-native destination
-  lastSwitchedAt              DateTime?                       // last time routingMode flipped
-  lastSwitchedBy              String?                         // user id that performed the flip
-  lastSwitchError             String?                         // surfaced from last failed switch attempt (null on success)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  createdBy            String?
-  updatedBy            String?
+  routingMode                 String    @default("pbx") // "pbx" | "connect"
+  originalPbxDestinationType  String? // e.g. "ivr", "queues", "extensions", "custom-destinations"
+  originalPbxDestination      String? // opaque VitalPBX destination string (id or CEP)
+  originalPbxChannelVariables Json? // full channel_variables map as last seen on PBX
+  originalCapturedAt          DateTime? // when we captured the PBX-native destination
+  lastSwitchedAt              DateTime? // last time routingMode flipped
+  lastSwitchedBy              String? // user id that performed the flip
+  lastSwitchError             String? // surfaced from last failed switch attempt (null on success)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+  createdBy                   String?
+  updatedBy                   String?
 
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ivrProfile  IvrRouteProfile? @relation(fields: [ivrProfileId], references: [id], onDelete: SetNull)
-  mohProfile  MohProfile?      @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
-  pbxInstance PbxInstance?     @relation(fields: [pbxInstanceId], references: [id], onDelete: SetNull)
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ivrProfile  IvrRouteProfile?    @relation(fields: [ivrProfileId], references: [id], onDelete: SetNull)
+  mohProfile  MohProfile?         @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
+  pbxInstance PbxInstance?        @relation(fields: [pbxInstanceId], references: [id], onDelete: SetNull)
   switchLogs  DidRouteSwitchLog[]
 
   @@unique([e164])
@@ -1922,17 +1926,17 @@ model DidRouteMapping {
 // toggle) and indispensable for post-mortems when a tenant calls saying
 // "my IVR stopped working".
 model DidRouteSwitchLog {
-  id           String   @id @default(cuid())
-  mappingId    String
-  tenantId     String
-  fromMode     String                                          // "pbx" | "connect"
-  toMode       String                                          // "pbx" | "connect"
-  performedBy  String
-  performedAt  DateTime @default(now())
-  pbxPayload   Json?                                           // what we sent to VitalPBX (null on pure DB updates)
-  pbxSnapshot  Json?                                           // what we read from VitalPBX before the change
-  status       String                                          // "pending" | "success" | "failed"
-  error        String?                                         // stringified failure reason when status="failed"
+  id          String   @id @default(cuid())
+  mappingId   String
+  tenantId    String
+  fromMode    String // "pbx" | "connect"
+  toMode      String // "pbx" | "connect"
+  performedBy String
+  performedAt DateTime @default(now())
+  pbxPayload  Json? // what we sent to VitalPBX (null on pure DB updates)
+  pbxSnapshot Json? // what we read from VitalPBX before the change
+  status      String // "pending" | "success" | "failed"
+  error       String? // stringified failure reason when status="failed"
 
   mapping DidRouteMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
 
@@ -1960,24 +1964,24 @@ model DidRouteSwitchLog {
 /// tenantId). A class whose tenant cannot be resolved is stored with
 /// `tenantId = null` so super-admins can still see + re-home it manually.
 model PbxMohClass {
-  id                String   @id @default(cuid())
-  pbxInstanceId     String                                  // which PBX this class lives on
-  tenantId          String?                                 // Connect tenant (nullable when mapping unknown)
-  tenantSlug        String?
-  pbxGroupId        Int                                     // ombu_music_groups.music_group_id
-  pbxTenantId       String?                                 // raw VitalPBX numeric tenant_id, as string
-  name              String                                  // raw name column (e.g. "default", "main")
-  mohClassName      String                                  // name as Asterisk/VitalPBX exposes it — typically equals `name`
-  classType         String?                                 // "files" | "stream" | "custom" etc.
-  streamingUrl      String?
-  streamingFormat   String?
-  isDefault         Boolean  @default(false)
-  fileCount         Int      @default(0)                    // rolled up from ombu_music_files
-  isActive          Boolean  @default(true)                 // false = removed in VitalPBX on last sync
-  firstSeenAt       DateTime @default(now())
-  lastSeenAt        DateTime @default(now())
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id              String   @id @default(cuid())
+  pbxInstanceId   String // which PBX this class lives on
+  tenantId        String? // Connect tenant (nullable when mapping unknown)
+  tenantSlug      String?
+  pbxGroupId      Int // ombu_music_groups.music_group_id
+  pbxTenantId     String? // raw VitalPBX numeric tenant_id, as string
+  name            String // raw name column (e.g. "default", "main")
+  mohClassName    String // name as Asterisk/VitalPBX exposes it — typically equals `name`
+  classType       String? // "files" | "stream" | "custom" etc.
+  streamingUrl    String?
+  streamingFormat String?
+  isDefault       Boolean  @default(false)
+  fileCount       Int      @default(0) // rolled up from ombu_music_files
+  isActive        Boolean  @default(true) // false = removed in VitalPBX on last sync
+  firstSeenAt     DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   pbxInstance PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
   tenant      Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
@@ -1991,16 +1995,16 @@ model PbxMohClass {
 model MohAsset {
   id             String   @id @default(cuid())
   tenantId       String
-  tenantSlug     String                                    // denormalised for helper lookups
-  name           String                                    // human label, e.g. "Holiday Jazz Mix"
-  mohClassName   String                                    // deterministic, e.g. "connect_acme_holiday_jazz"
-  sourceFilename String                                    // original upload filename
-  storageKey     String                                    // object-storage key (S3/R2)
-  contentHash    String                                    // sha256 hex — used by helper to diff
+  tenantSlug     String // denormalised for helper lookups
+  name           String // human label, e.g. "Holiday Jazz Mix"
+  mohClassName   String // deterministic, e.g. "connect_acme_holiday_jazz"
+  sourceFilename String // original upload filename
+  storageKey     String // object-storage key (S3/R2)
+  contentHash    String // sha256 hex — used by helper to diff
   sizeBytes      Int
-  durationSec    Int?                                      // from ffprobe, null until validated
+  durationSec    Int? // from ffprobe, null until validated
   mimeType       String
-  status         String   @default("uploading")            // "uploading" | "ready" | "failed" | "archived"
+  status         String   @default("uploading") // "uploading" | "ready" | "failed" | "archived"
   failureReason  String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -2013,4 +2017,208 @@ model MohAsset {
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([status])
+}
+
+// ── Connect unified chat (internal + VoIP.ms SMS) ───────────────────────────
+
+enum ConnectChatThreadType {
+  SMS
+  DM
+  GROUP
+  TENANT_GROUP
+}
+
+enum ConnectChatMessageDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+}
+
+enum ConnectChatMessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  VOICE_NOTE
+  FILE
+  LOCATION
+  SYSTEM
+}
+
+enum ConnectChatParticipantRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+/// Singleton-style row (id = "default") for platform VoIP.ms API credentials.
+model GlobalVoipMsConfig {
+  id                     String    @id @default("default")
+  credentialsEncrypted   String?
+  credentialsKeyId       String    @default("v1")
+  apiBaseUrl             String?
+  smsEnabled             Boolean   @default(false)
+  mmsEnabled             Boolean   @default(false)
+  webhookSecretEncrypted String?
+  lastDidsSyncAt         DateTime?
+  lastHealthAt           DateTime?
+  lastHealthOk           Boolean?
+  lastHealthMessage      String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+}
+
+/// VoIP.ms SMS-capable number assigned to a tenant (optionally to one user/extension).
+model TenantSmsNumber {
+  id                  String              @id @default(cuid())
+  /// Null until assigned to a Connect tenant (synced inventory row).
+  tenantId            String?
+  provider            IntegrationProvider @default(VOIPMS)
+  voipmsDid           String?
+  phoneRaw            String?
+  phoneE164           String              @unique
+  smsCapable          Boolean             @default(true)
+  mmsCapable          Boolean             @default(false)
+  assignedUserId      String?
+  assignedExtensionId String?
+  isTenantDefault     Boolean             @default(false)
+  active              Boolean             @default(true)
+  lastSyncedAt        DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  tenant              Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedUser        User?               @relation("TenantSmsNumberAssignUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedExtension   Extension?          @relation("TenantSmsNumberAssignExtension", fields: [assignedExtensionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, active])
+  @@index([tenantId, isTenantDefault])
+}
+
+model ConnectChatThread {
+  id                   String                   @id @default(cuid())
+  tenantId             String
+  type                 ConnectChatThreadType
+  title                String?
+  createdByUserId      String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  lastMessageAt        DateTime                 @default(now())
+  isDefaultTenantGroup Boolean                  @default(false)
+  active               Boolean                  @default(true)
+  /// Stable key: SMS `sms:{tenant}:{tenantE164}:{externalE164}:{inboxScope}` — DM/group unique id
+  dedupeKey            String                   @unique
+  tenantSmsRaw         String?
+  tenantSmsE164        String?
+  externalSmsRaw       String?
+  externalSmsE164      String?
+  /// "" = tenant-wide SMS inbox; else Connect user id for assigned-number personal inbox
+  smsInboxOwnerUserId  String                   @default("")
+  participants         ConnectChatParticipant[]
+  messages             ConnectChatMessage[]
+  tenant               Tenant                   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, lastMessageAt])
+  @@index([tenantId, type])
+  @@index([tenantSmsE164, externalSmsE164])
+}
+
+model ConnectChatParticipant {
+  id              String                     @id @default(cuid())
+  threadId        String
+  participantKey  String
+  userId          String?
+  extensionId     String?
+  role            ConnectChatParticipantRole @default(MEMBER)
+  joinedAt        DateTime                   @default(now())
+  leftAt          DateTime?
+  muted           Boolean                    @default(false)
+  archivedForUser Boolean                    @default(false)
+  thread          ConnectChatThread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user            User?                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extension       Extension?                 @relation("ConnectChatParticipantExtension", fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, participantKey])
+  @@index([userId])
+}
+
+model ConnectChatMessage {
+  id                   String                         @id @default(cuid())
+  tenantId             String
+  threadId             String
+  senderUserId         String?
+  senderExtensionId    String?
+  direction            ConnectChatMessageDirection
+  type                 ConnectChatMessageType         @default(TEXT)
+  body                 String                         @default("")
+  metadata             Json?
+  replyToMessageId     String?
+  editedAt             DateTime?
+  deletedForEveryoneAt DateTime?
+  deletedForUserIds    Json?
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+  smsProviderMessageId String?
+  deliveryStatus       String?
+  deliveryError        String?
+  thread               ConnectChatThread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderUser           User?                          @relation("ConnectChatMessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
+  replyTo              ConnectChatMessage?            @relation("ConnectChatMessageReply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies              ConnectChatMessage[]           @relation("ConnectChatMessageReply")
+  attachments          ConnectChatMessageAttachment[]
+  reactions            ConnectChatMessageReaction[]
+
+  @@index([threadId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([smsProviderMessageId])
+}
+
+model ConnectChatMessageAttachment {
+  id          String             @id @default(cuid())
+  messageId   String
+  tenantId    String
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  storageKey  String
+  contentHash String?
+  scanStatus  String             @default("pending")
+  createdAt   DateTime           @default(now())
+  message     ConnectChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([messageId])
+}
+
+model ConnectChatMessageReaction {
+  id        String             @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  message   ConnectChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+model SmsRoutingLog {
+  id                  String   @id @default(cuid())
+  rawFrom             String?
+  rawTo               String?
+  normalizedFrom      String?
+  normalizedTo        String?
+  direction           String
+  resolvedTenantId    String?
+  resolvedUserId      String?
+  resolvedExtensionId String?
+  resolvedThreadId    String?
+  status              String
+  error               String?
+  payload             Json?
+  createdAt           DateTime @default(now())
+  tenant              Tenant?  @relation(fields: [resolvedTenantId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([normalizedTo, createdAt])
 }

@@ -22,6 +22,7 @@
     "@connect/integrations": "workspace:*",
     "@connect/security": "workspace:*",
     "@connect/shared": "workspace:*",
+    "@fastify/formbody": "^8.0.2",
     "@fastify/jwt": "^9.1.0",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
