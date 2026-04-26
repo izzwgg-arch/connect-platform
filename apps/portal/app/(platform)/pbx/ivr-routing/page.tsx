@@ -873,7 +873,23 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               />
             </div>
 
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+            {/* IVR Menu Options inline editor. Shown in-modal for edit mode
+                so admins don't have to Save → close → expand → configure.
+                For create mode we can't render it yet (options FK to profileId)
+                so we point the admin at the post-save flow. */}
+            <SectionLabel>IVR Menu Options</SectionLabel>
+            {editId ? (
+              <ProfileOptionsSection
+                profile={profiles.find((p) => p.id === editId) ?? ({ id: editId, tenantId } as RouteProfile)}
+                canEdit={canManage}
+              />
+            ) : (
+              <div style={emptyBox}>
+                Save this profile first, then the menu options editor (Press 1, Press 2…) will appear here. You can also expand the profile in the list below to edit options inline.
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
               <button onClick={() => setShowForm(false)} style={btnSmall("#334155")}>Cancel</button>
               <button onClick={save} disabled={saving} style={btnStyle("#6366f1")}>{saving ? "Saving…" : "Save"}</button>
             </div>
