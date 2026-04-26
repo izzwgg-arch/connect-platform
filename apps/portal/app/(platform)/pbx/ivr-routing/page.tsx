@@ -1209,6 +1209,16 @@ function PromptPicker({
   const [manual, setManual] = useState(() => filtered.length === 0 && !!value === false);
   const effectiveManual = manual || (filtered.length === 0 && !value);
 
+  // IMPORTANT: all useState/useRef calls MUST happen before any early return,
+  // otherwise React's hook ordering rules are violated. Previously `playingId`
+  // was declared below the `if (effectiveManual) return …` block — when a
+  // tenant with zero prompts saved their first recording, `effectiveManual`
+  // flipped from true → false, the dropdown branch rendered for the first
+  // time, and React threw "Rendered more hooks than during the previous
+  // render". The error bubbled to the workspace error boundary as
+  // "Something went wrong. The workspace failed to render."
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
   if (effectiveManual) {
     const emptyCatalog = filtered.length === 0 && !catalogLoading;
     return (
@@ -1276,9 +1286,9 @@ function PromptPicker({
   }
 
   // Find the catalog row matching the current selection so we can enable
-  // Play/Upload controls for it.
+  // Play/Upload controls for it. (playingId useState is hoisted above the
+  // effectiveManual early-return to keep hook order stable.)
   const selectedRow = value ? filtered.find((p) => p.promptRef === value) ?? null : null;
-  const [playingId, setPlayingId] = useState<string | null>(null);
 
   return (
     <div>
