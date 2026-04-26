@@ -1520,8 +1520,17 @@ model IvrRouteProfile {
   pbxPromptRef        String?                        // main greeting
   pbxInvalidPromptRef String?                        // played on invalid digit, then re-prompt
   pbxTimeoutPromptRef String?                        // played on no-digit timeout, then re-prompt
+  pbxRetryPromptRef   String?                        // VitalPBX-parity "please try again" prompt on retry iterations
   timeoutSeconds      Int      @default(7)           // WaitExten timeout per iteration
   maxRetries          Int      @default(3)           // retries before falling through to default-fallback
+  // VitalPBX-parity IVR controls. All three default to "fall through to the
+  // global connect-default-fallback after max retries" so existing profiles
+  // behave exactly as they did pre-migration until an admin opts in.
+  directDialEnabled       Boolean @default(false)    // allow dial-by-extension during IVR (Read multi-digit)
+  invalidDestinationType  String?                    // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
+  invalidDestinationRef   String?                    // CEP or E.164; consumed after max_retries on invalid digits
+  timeoutDestinationType  String?                    // same module enum as invalid
+  timeoutDestinationRef   String?                    // CEP or E.164; consumed after max_retries on timeouts
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

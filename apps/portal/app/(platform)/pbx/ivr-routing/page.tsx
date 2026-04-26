@@ -17,8 +17,16 @@ interface RouteProfile {
   pbxPromptRef: string | null;
   pbxInvalidPromptRef: string | null;
   pbxTimeoutPromptRef: string | null;
+  pbxRetryPromptRef: string | null;
   timeoutSeconds: number;
   maxRetries: number;
+  // VitalPBX-parity fields. All default server-side so legacy rows still
+  // deserialize — see apps/api/src/server.ts ivrValidateOptionalDestination.
+  directDialEnabled: boolean;
+  invalidDestinationType: DestinationType | null;
+  invalidDestinationRef: string | null;
+  timeoutDestinationType: DestinationType | null;
+  timeoutDestinationRef: string | null;
   isActive: boolean;
   createdAt: string;
 }
@@ -519,8 +527,14 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
         pbxPromptRef:        form.pbxPromptRef        || null,
         pbxInvalidPromptRef: form.pbxInvalidPromptRef || null,
         pbxTimeoutPromptRef: form.pbxTimeoutPromptRef || null,
+        pbxRetryPromptRef:   form.pbxRetryPromptRef   || null,
         timeoutSeconds:      form.timeoutSeconds,
         maxRetries:          form.maxRetries,
+        directDialEnabled:      form.directDialEnabled,
+        invalidDestinationType: form.invalidDestinationType || null,
+        invalidDestinationRef:  form.invalidDestinationRef  || null,
+        timeoutDestinationType: form.timeoutDestinationType || null,
+        timeoutDestinationRef:  form.timeoutDestinationRef  || null,
       };
       if (editId) {
         await apiPatch(`/voice/ivr/route-profiles/${editId}`, payload);
@@ -756,6 +770,23 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
             />
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: -4, marginBottom: 8 }}>
+              Blank = PBX default (<code>vm-enter-num-to-call</code>).
+            </div>
+            <label style={labelStyle}>Retry prompt (optional, VitalPBX parity)</label>
+            <PromptPicker
+              value={form.pbxRetryPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxRetryPromptRef: v }))}
+              prompts={modalPrompts}
+              catalogLoading={modalPromptsLoading}
+              placeholder="custom/acme_retry"
+              category="general"
+              canUpload={canManagePrompts}
+              onAudioChanged={reloadPrompts}
+            />
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: -4, marginBottom: 8 }}>
+              Played on retry iterations instead of the main greeting. Blank = replay greeting.
+            </div>
 
             <div style={{ display: "flex", gap: 12 }}>
               <div style={{ flex: 1 }}>
@@ -765,6 +796,82 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Max retries</label>
                 <input type="number" min={1} max={10} style={inputStyle} value={form.maxRetries} onChange={(e) => setForm((f) => ({ ...f, maxRetries: Math.max(1, Math.min(10, Number(e.target.value) || 3)) }))} />
+              </div>
+            </div>
+
+            <SectionLabel>Direct Dial</SectionLabel>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#cbd5e1", marginBottom: 14, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={form.directDialEnabled}
+                onChange={(e) => setForm((f) => ({ ...f, directDialEnabled: e.target.checked }))}
+                style={{ accentColor: "#6366f1" }}
+              />
+              <span>
+                Allow callers to dial extensions directly during the menu
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+                  When enabled, callers can dial any 3- or 4-digit local extension while the greeting is playing. When disabled, only the configured digit options work — multi-digit input is treated as invalid.
+                </div>
+              </span>
+            </label>
+
+            <SectionLabel>Invalid Handling</SectionLabel>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+              Where to route after the caller exceeds max retries on invalid digits. Leave blank to fall through to the global <code>connect-default-fallback</code> (existing behavior).
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <div style={{ flex: "0 0 160px" }}>
+                <label style={labelStyle}>Module</label>
+                <select
+                  style={{ ...inputStyle, marginBottom: 0 }}
+                  value={form.invalidDestinationType}
+                  onChange={(e) => setForm((f) => ({ ...f, invalidDestinationType: e.target.value as DestinationType | "" }))}
+                >
+                  <option value="">— none (default fallback) —</option>
+                  {DESTINATION_TYPES.map((t) => (
+                    <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Destination</label>
+                <input
+                  style={{ ...inputStyle, marginBottom: 0, fontFamily: "monospace" }}
+                  value={form.invalidDestinationRef}
+                  onChange={(e) => setForm((f) => ({ ...f, invalidDestinationRef: e.target.value }))}
+                  placeholder={form.invalidDestinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
+                  disabled={!form.invalidDestinationType}
+                />
+              </div>
+            </div>
+
+            <SectionLabel>Timeout Handling</SectionLabel>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+              Where to route after the caller exceeds max retries on WaitExten timeouts (no digit pressed). Leave blank to fall through to the global fallback.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <div style={{ flex: "0 0 160px" }}>
+                <label style={labelStyle}>Module</label>
+                <select
+                  style={{ ...inputStyle, marginBottom: 0 }}
+                  value={form.timeoutDestinationType}
+                  onChange={(e) => setForm((f) => ({ ...f, timeoutDestinationType: e.target.value as DestinationType | "" }))}
+                >
+                  <option value="">— none (default fallback) —</option>
+                  {DESTINATION_TYPES.map((t) => (
+                    <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Destination</label>
+                <input
+                  style={{ ...inputStyle, marginBottom: 0, fontFamily: "monospace" }}
+                  value={form.timeoutDestinationRef}
+                  onChange={(e) => setForm((f) => ({ ...f, timeoutDestinationRef: e.target.value }))}
+                  placeholder={form.timeoutDestinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
+                  disabled={!form.timeoutDestinationType}
+                />
               </div>
             </div>
 
@@ -795,15 +902,29 @@ type ProfileFormState = {
   pbxPromptRef: string;
   pbxInvalidPromptRef: string;
   pbxTimeoutPromptRef: string;
+  pbxRetryPromptRef: string;
   timeoutSeconds: number;
   maxRetries: number;
+  // VitalPBX-parity additions. The invalid/timeout destination fields use
+  // "" for "not set" so the form can distinguish between "user cleared" and
+  // "not provided" when patching (zod on the server accepts null/""). See
+  // buildIvrKeys in apps/api/src/server.ts for how these map to AstDB.
+  directDialEnabled: boolean;
+  invalidDestinationType: DestinationType | "";
+  invalidDestinationRef: string;
+  timeoutDestinationType: DestinationType | "";
+  timeoutDestinationRef: string;
 };
 
 function blankProfileForm(): ProfileFormState {
   return {
     name: "", type: "business_hours", pbxDestination: "",
     pbxPromptRef: "", pbxInvalidPromptRef: "", pbxTimeoutPromptRef: "",
+    pbxRetryPromptRef: "",
     timeoutSeconds: 7, maxRetries: 3,
+    directDialEnabled: false,
+    invalidDestinationType: "", invalidDestinationRef: "",
+    timeoutDestinationType: "", timeoutDestinationRef: "",
   };
 }
 
@@ -813,8 +934,14 @@ function profileToForm(p: RouteProfile): ProfileFormState {
     pbxPromptRef:        p.pbxPromptRef        ?? "",
     pbxInvalidPromptRef: p.pbxInvalidPromptRef ?? "",
     pbxTimeoutPromptRef: p.pbxTimeoutPromptRef ?? "",
+    pbxRetryPromptRef:   p.pbxRetryPromptRef   ?? "",
     timeoutSeconds: p.timeoutSeconds ?? 7,
     maxRetries:     p.maxRetries     ?? 3,
+    directDialEnabled:      !!p.directDialEnabled,
+    invalidDestinationType: (p.invalidDestinationType ?? "") as DestinationType | "",
+    invalidDestinationRef:  p.invalidDestinationRef  ?? "",
+    timeoutDestinationType: (p.timeoutDestinationType ?? "") as DestinationType | "",
+    timeoutDestinationRef:  p.timeoutDestinationRef  ?? "",
   };
 }
 
@@ -1341,6 +1468,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
     pbxPromptRef:        profile.pbxPromptRef        ?? "",
     pbxInvalidPromptRef: profile.pbxInvalidPromptRef ?? "",
     pbxTimeoutPromptRef: profile.pbxTimeoutPromptRef ?? "",
+    pbxRetryPromptRef:   profile.pbxRetryPromptRef   ?? "",
     timeoutSeconds: profile.timeoutSeconds ?? 7,
     maxRetries:     profile.maxRetries     ?? 3,
   });
@@ -1353,6 +1481,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
         pbxPromptRef:        profile.pbxPromptRef        ?? "",
         pbxInvalidPromptRef: profile.pbxInvalidPromptRef ?? "",
         pbxTimeoutPromptRef: profile.pbxTimeoutPromptRef ?? "",
+        pbxRetryPromptRef:   profile.pbxRetryPromptRef   ?? "",
         timeoutSeconds: profile.timeoutSeconds ?? 7,
         maxRetries:     profile.maxRetries     ?? 3,
       });
@@ -1366,6 +1495,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
         pbxPromptRef:        form.pbxPromptRef        || null,
         pbxInvalidPromptRef: form.pbxInvalidPromptRef || null,
         pbxTimeoutPromptRef: form.pbxTimeoutPromptRef || null,
+        pbxRetryPromptRef:   form.pbxRetryPromptRef   || null,
         timeoutSeconds: form.timeoutSeconds,
         maxRetries:     form.maxRetries,
       });
@@ -1387,8 +1517,9 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
       {!editing ? (
         <div style={{ fontSize: 13, color: "#94a3b8", display: "grid", gridTemplateColumns: "140px 1fr", rowGap: 4, columnGap: 10 }}>
           <div>Greeting:</div>          <PromptSummaryCell refValue={profile.pbxPromptRef}        prompts={prompts} emptyLabel="— (use default)" />
-          <div>Invalid prompt:</div>    <PromptSummaryCell refValue={profile.pbxInvalidPromptRef} prompts={prompts} emptyLabel="— (skip)" />
-          <div>Timeout prompt:</div>    <PromptSummaryCell refValue={profile.pbxTimeoutPromptRef} prompts={prompts} emptyLabel="— (skip)" />
+          <div>Invalid prompt:</div>    <PromptSummaryCell refValue={profile.pbxInvalidPromptRef} prompts={prompts} emptyLabel="pbx-invalid (default)" />
+          <div>Timeout prompt:</div>    <PromptSummaryCell refValue={profile.pbxTimeoutPromptRef} prompts={prompts} emptyLabel="vm-enter-num-to-call (default)" />
+          <div>Retry prompt:</div>      <PromptSummaryCell refValue={profile.pbxRetryPromptRef}   prompts={prompts} emptyLabel="— (replay greeting)" />
           <div>Digit-wait timeout:</div><code style={codePillStyle}>{profile.timeoutSeconds ?? 7}s</code>
           <div>Max retries:</div>       <code style={codePillStyle}>{profile.maxRetries ?? 3}</code>
         </div>
@@ -1432,6 +1563,25 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
             />
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>
+              Leave blank to use PBX default <code>vm-enter-num-to-call</code>.
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Retry prompt (optional, VitalPBX parity)</label>
+            <PromptPicker
+              value={form.pbxRetryPromptRef}
+              onChange={(v) => setForm((f) => ({ ...f, pbxRetryPromptRef: v }))}
+              prompts={prompts}
+              catalogLoading={catalogLoading}
+              placeholder="custom/acme_retry"
+              category="general"
+              canUpload={canEdit}
+              onAudioChanged={reloadPrompts}
+            />
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>
+              Played instead of the main greeting on retry iterations. Blank = replay greeting.
+            </div>
           </div>
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1 }}>
@@ -1455,6 +1605,34 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
 
 // ── Per-digit option routing (inline CRUD) ───────────────────────────────────
 
+// Module-backed destination suggestions (VitalPBX-parity). Loaded once per
+// section (not per row) so we don't spam /voice/pbx/resources for every
+// digit slot. Tenant-scoped via ?tenantId so super-admins get the right
+// list when switching contexts. Failures are non-fatal — the destination
+// input falls back to free text.
+type ExtensionSuggestion = { extension: string; name: string | null };
+
+function useExtensionSuggestions(tenantId: string): ExtensionSuggestion[] {
+  const [rows, setRows] = useState<ExtensionSuggestion[]>([]);
+  useEffect(() => {
+    if (!tenantId) { setRows([]); return; }
+    let abort = false;
+    (async () => {
+      try {
+        const r = await apiGet<{ rows: Array<{ extension: string; name?: string | null }> }>(
+          `/voice/pbx/resources/extensions?tenantId=${encodeURIComponent(tenantId)}`,
+        );
+        if (abort) return;
+        setRows((r.rows || []).map((e) => ({ extension: String(e.extension), name: e.name ?? null })));
+      } catch {
+        if (!abort) setRows([]);
+      }
+    })();
+    return () => { abort = true; };
+  }, [tenantId]);
+  return rows;
+}
+
 function ProfileOptionsSection({ profile, canEdit }: {
   profile: RouteProfile;
   canEdit: boolean;
@@ -1462,6 +1640,7 @@ function ProfileOptionsSection({ profile, canEdit }: {
   const [options, setOptions] = useState<IvrOptionRoute[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const extensions = useExtensionSuggestions(profile.tenantId);
 
   const reload = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -1527,6 +1706,7 @@ function ProfileOptionsSection({ profile, canEdit }: {
                 digit={digit}
                 existing={byDigit.get(digit) ?? null}
                 canEdit={canEdit}
+                extensions={extensions}
                 onSave={(patch) => upsert(digit, byDigit.get(digit) ?? null, patch)}
                 onRemove={(opt) => remove(opt)}
               />
@@ -1538,10 +1718,11 @@ function ProfileOptionsSection({ profile, canEdit }: {
   );
 }
 
-function OptionRow({ digit, existing, canEdit, onSave, onRemove }: {
+function OptionRow({ digit, existing, canEdit, extensions, onSave, onRemove }: {
   digit: string;
   existing: IvrOptionRoute | null;
   canEdit: boolean;
+  extensions: ExtensionSuggestion[];
   onSave: (patch: Partial<IvrOptionRoute>) => void;
   onRemove: (opt: IvrOptionRoute) => void;
 }) {
@@ -1612,8 +1793,26 @@ function OptionRow({ digit, existing, canEdit, onSave, onRemove }: {
           value={draft.destinationRef}
           placeholder={draft.destinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
           disabled={!canEdit}
+          list={draft.destinationType === "extension" ? `ext-suggest-${digit}` : undefined}
           onChange={(e) => set("destinationRef", e.target.value)}
         />
+        {/* VitalPBX-parity: for extension destinations we offer the tenant's
+            own extensions as suggestions so admins don't have to memorise
+            `from-internal,<ext>,1`. Typing any part of the extension number
+            or display name surfaces the match; selecting one fills the full
+            CEP string. Tenant-scoped by usExtensionSuggestions (no cross-
+            tenant leakage). */}
+        {draft.destinationType === "extension" && extensions.length > 0 && (
+          <datalist id={`ext-suggest-${digit}`}>
+            {extensions.map((e) => (
+              <option
+                key={e.extension}
+                value={`from-internal,${e.extension},1`}
+                label={`${e.extension}${e.name ? ` — ${e.name}` : ""}`}
+              />
+            ))}
+          </datalist>
+        )}
       </td>
       <td style={{ ...tdStyle, width: 44, textAlign: "center" }}>
         <input

@@ -11654,6 +11654,14 @@ type IvrActiveOption = {
   enabled: boolean;
 };
 
+/** VitalPBX-parity defaults for the optional prompt slots. The dialplan
+ *  checks for a LITERAL empty string and falls back to these when the admin
+ *  hasn't uploaded a custom recording. Matches what VitalPBX ships out of
+ *  the box so a fresh IVR behaves sensibly without any admin configuration.
+ *  Stored as Asterisk built-in playable names (no `custom/` prefix). */
+const IVR_DEFAULT_PROMPT_INVALID = "pbx-invalid";
+const IVR_DEFAULT_PROMPT_TIMEOUT = "vm-enter-num-to-call";
+
 /** Build the full set of AstDB key-value pairs for a publish.
  *  Always returns a deterministic, fixed-size key set so rollback/snapshot
  *  round-trips stay stable across publishes and so stale slots get cleared. */
@@ -11666,8 +11674,14 @@ function buildIvrKeys(
     pbxPromptRef?: string | null;
     pbxInvalidPromptRef?: string | null;
     pbxTimeoutPromptRef?: string | null;
+    pbxRetryPromptRef?: string | null;
     timeoutSeconds?: number | null;
     maxRetries?: number | null;
+    directDialEnabled?: boolean | null;
+    invalidDestinationType?: string | null;
+    invalidDestinationRef?: string | null;
+    timeoutDestinationType?: string | null;
+    timeoutDestinationRef?: string | null;
   }>,
   override: { expiresAt: Date | null } | null,
   activeOptions: IvrActiveOption[] = [],
@@ -11675,6 +11689,18 @@ function buildIvrKeys(
   const fam = ivrFamily(slug);
   const byType = new Map(profiles.map((p) => [p.type, p]));
   const active = ivrFindActiveProfile(mode, profiles);
+
+  // VitalPBX-parity default-prompt fallback. The dialplan COULD also do this
+  // at call time, but we resolve it here so the published AstDB state is
+  // self-describing (e.g. when debugging a live call via `asterisk -rx
+  // "database show connect"`) and so old dialplans keep working too.
+  const invalidPromptResolved =
+    (active?.pbxInvalidPromptRef && active.pbxInvalidPromptRef.trim()) || IVR_DEFAULT_PROMPT_INVALID;
+  const timeoutPromptResolved =
+    (active?.pbxTimeoutPromptRef && active.pbxTimeoutPromptRef.trim()) || IVR_DEFAULT_PROMPT_TIMEOUT;
+  const retryPromptResolved   = active?.pbxRetryPromptRef && active.pbxRetryPromptRef.trim()
+    ? active.pbxRetryPromptRef
+    : ""; // retry prompt is opt-in; empty = reuse main prompt
 
   const keys: Array<{ family: string; key: string; value: string }> = [
     // Legacy single-destination keys — still consumed by [connect-tenant-router]
@@ -11687,12 +11713,27 @@ function buildIvrKeys(
     { family: fam, key: "override_expires", value: override?.expiresAt ? String(Math.floor(override.expiresAt.getTime() / 1000)) : "0" },
 
     // Phase 2: active profile's prompt refs + IVR timing. Consumed by
-    // [connect-tenant-ivr]. Empty string means "use a safe default in dialplan".
+    // [connect-tenant-ivr]. The dialplan treats empty as "already applied
+    // the PBX default"; Connect writes the resolved default here so the
+    // published state self-documents the effective behavior.
     { family: fam, key: "active_prompt",         value: active?.pbxPromptRef        ?? "" },
-    { family: fam, key: "active_prompt_invalid", value: active?.pbxInvalidPromptRef ?? "" },
-    { family: fam, key: "active_prompt_timeout", value: active?.pbxTimeoutPromptRef ?? "" },
+    { family: fam, key: "active_prompt_invalid", value: invalidPromptResolved },
+    { family: fam, key: "active_prompt_timeout", value: timeoutPromptResolved },
+    { family: fam, key: "active_prompt_retry",   value: retryPromptResolved },
     { family: fam, key: "timeout_seconds",       value: String(active?.timeoutSeconds ?? 7) },
     { family: fam, key: "max_retries",           value: String(active?.maxRetries    ?? 3) },
+
+    // VitalPBX-parity — direct dial + per-profile invalid/timeout destinations.
+    // All three are OPTIONAL. Empty strings mean "fall through to the global
+    // connect-default-fallback after max retries" (legacy behavior). The
+    // dialplan in docs/pbx/option-a-custom-context.conf reads these keys
+    // BUT is backward-compatible — an older pasted-in dialplan that doesn't
+    // read these keys will simply ignore them.
+    { family: fam, key: "direct_dial",       value: (active?.directDialEnabled ?? false) ? "1" : "0" },
+    { family: fam, key: "dest_invalid_type", value: (active?.invalidDestinationType ?? "").trim() },
+    { family: fam, key: "dest_invalid",      value: (active?.invalidDestinationRef  ?? "").trim() },
+    { family: fam, key: "dest_timeout_type", value: (active?.timeoutDestinationType ?? "").trim() },
+    { family: fam, key: "dest_timeout",      value: (active?.timeoutDestinationRef  ?? "").trim() },
   ];
 
   // Per-digit option routing. Disabled options are treated as if missing so
@@ -11754,6 +11795,22 @@ function ivrValidateDestinationRef(type: string, ref: string): string | null {
     return `${type} destinationRef must be in "context,exten,priority" form`;
   }
   return null;
+}
+
+/** VitalPBX-parity validator: a per-profile invalid/timeout destination is
+ *  optional, but if the caller supplies either the type or the ref, we
+ *  require BOTH and then run the same shape check as per-digit options.
+ *  Returns null on OK (or when both are empty), or a short error string. */
+function ivrValidateOptionalDestination(
+  type: string | null | undefined,
+  ref: string | null | undefined,
+): string | null {
+  const hasType = type != null && String(type).trim() !== "";
+  const hasRef  = ref  != null && String(ref).trim()  !== "";
+  if (!hasType && !hasRef) return null; // opt-out: fall through to default
+  if (hasType && !hasRef)  return "destinationRef is required when destinationType is set";
+  if (!hasType && hasRef)  return "destinationType is required when destinationRef is set";
+  return ivrValidateDestinationRef(String(type), String(ref));
 }
 
 /** Validate an optional prompt recording ref (greeting / invalid / timeout).
@@ -12080,8 +12137,17 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
     pbxPromptRef:        z.string().nullable().optional(),
     pbxInvalidPromptRef: z.string().nullable().optional(),
     pbxTimeoutPromptRef: z.string().nullable().optional(),
+    pbxRetryPromptRef:   z.string().nullable().optional(),
     timeoutSeconds:      z.number().int().min(1).max(60).optional(),
     maxRetries:          z.number().int().min(1).max(10).optional(),
+    // VitalPBX-parity — direct dial + per-profile invalid/timeout destinations.
+    // Nullable so admins can leave them unset and fall through to the global
+    // connect-default-fallback after max retries (existing behavior).
+    directDialEnabled:      z.boolean().optional(),
+    invalidDestinationType: z.string().nullable().optional(),
+    invalidDestinationRef:  z.string().nullable().optional(),
+    timeoutDestinationType: z.string().nullable().optional(),
+    timeoutDestinationRef:  z.string().nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
@@ -12101,18 +12167,43 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   // Prompt ref format guard — prevents path-traversal / shell metachars leaking
   // into `Playback(${GREETING})` where VitalPBX runs unescaped. Also blocks
   // cross-tenant prompt selection when the catalog has a conflicting mapping.
-  for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
+  for (const [label, ref] of [
+    ["pbxPromptRef", d.pbxPromptRef],
+    ["pbxInvalidPromptRef", d.pbxInvalidPromptRef],
+    ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef],
+    ["pbxRetryPromptRef",   d.pbxRetryPromptRef],
+  ] as const) {
     const err = await ivrValidatePromptRefForTenant(ref ?? null, connectTenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
+  // pbxDestination is used by the legacy single-dest router. CEP-validate it
+  // with the same regex option destinations use so we don't publish a value
+  // the dialplan can't Goto(). Existing rows stay untouched — we only check
+  // on create/update.
+  if (!IVR_CEP_REGEX.test(d.pbxDestination)) {
+    return reply.code(400).send({ error: "invalid_pbx_destination", detail: "pbxDestination must be in \"context,exten,priority\" form" });
+  }
+  // VitalPBX-parity: per-profile invalid/timeout destinations. Both fields
+  // are optional, but if either the type OR the ref is provided, we require
+  // BOTH (and the ref must match the type's regex, same as per-digit options).
+  const invalidDestCheck = ivrValidateOptionalDestination(d.invalidDestinationType, d.invalidDestinationRef);
+  if (invalidDestCheck) return reply.code(400).send({ error: "invalid_destination_invalid", detail: invalidDestCheck });
+  const timeoutDestCheck = ivrValidateOptionalDestination(d.timeoutDestinationType, d.timeoutDestinationRef);
+  if (timeoutDestCheck) return reply.code(400).send({ error: "timeout_destination_invalid", detail: timeoutDestCheck });
   const profile = await (db as any).ivrRouteProfile.create({
     data: {
       tenantId: connectTenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true,
       pbxPromptRef: d.pbxPromptRef ?? null,
       pbxInvalidPromptRef: d.pbxInvalidPromptRef ?? null,
       pbxTimeoutPromptRef: d.pbxTimeoutPromptRef ?? null,
+      pbxRetryPromptRef:   d.pbxRetryPromptRef   ?? null,
       timeoutSeconds: d.timeoutSeconds ?? 7,
       maxRetries: d.maxRetries ?? 3,
+      directDialEnabled:      d.directDialEnabled      ?? false,
+      invalidDestinationType: d.invalidDestinationType ?? null,
+      invalidDestinationRef:  d.invalidDestinationRef  ?? null,
+      timeoutDestinationType: d.timeoutDestinationType ?? null,
+      timeoutDestinationRef:  d.timeoutDestinationRef  ?? null,
       createdBy: (user as any).id ?? null,
     },
   });
@@ -12144,15 +12235,23 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
     pbxPromptRef:        z.string().nullable().optional(),
     pbxInvalidPromptRef: z.string().nullable().optional(),
     pbxTimeoutPromptRef: z.string().nullable().optional(),
+    pbxRetryPromptRef:   z.string().nullable().optional(),
     timeoutSeconds:      z.number().int().min(1).max(60).optional(),
     maxRetries:          z.number().int().min(1).max(10).optional(),
+    directDialEnabled:      z.boolean().optional(),
+    invalidDestinationType: z.string().nullable().optional(),
+    invalidDestinationRef:  z.string().nullable().optional(),
+    timeoutDestinationType: z.string().nullable().optional(),
+    timeoutDestinationRef:  z.string().nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
   const d = body.data;
 
   // Fields that callers with only prompt-edit rights are allowed to modify.
+  // Retry prompt is a greeting/prompt-class field too. Direct-dial and
+  // invalid/timeout destinations are ROUTING-class — require canManageIvr.
   const PROMPT_FIELDS = new Set([
-    "pbxPromptRef", "pbxInvalidPromptRef", "pbxTimeoutPromptRef",
+    "pbxPromptRef", "pbxInvalidPromptRef", "pbxTimeoutPromptRef", "pbxRetryPromptRef",
     "timeoutSeconds", "maxRetries",
   ]);
   if (!hasFullEdit) {
@@ -12173,11 +12272,42 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
   // untouched when absent (Prisma partial update semantics). Tenant-scoped
   // catalog check blocks cross-tenant prompt refs when the catalog has an
   // assigned row for the ref.
-  for (const [label, ref] of [["pbxPromptRef", d.pbxPromptRef], ["pbxInvalidPromptRef", d.pbxInvalidPromptRef], ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef]] as const) {
+  for (const [label, ref] of [
+    ["pbxPromptRef",        d.pbxPromptRef],
+    ["pbxInvalidPromptRef", d.pbxInvalidPromptRef],
+    ["pbxTimeoutPromptRef", d.pbxTimeoutPromptRef],
+    ["pbxRetryPromptRef",   d.pbxRetryPromptRef],
+  ] as const) {
     if (ref === undefined) continue;
     const err = await ivrValidatePromptRefForTenant(ref, existing.tenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
+
+  // If caller touched pbxDestination, run it through the same CEP shape check
+  // as per-digit options so partial updates can't smuggle in unparseable
+  // values. Untouched field stays as-is.
+  if (d.pbxDestination !== undefined && !IVR_CEP_REGEX.test(d.pbxDestination)) {
+    return reply.code(400).send({ error: "invalid_pbx_destination", detail: "pbxDestination must be in \"context,exten,priority\" form" });
+  }
+
+  // VitalPBX-parity destination validation. We only re-validate the PAIR
+  // when either the type or the ref was supplied in this PATCH — otherwise
+  // the partial update semantics leave them untouched. When the caller
+  // supplies ONE half of a pair we read the other half from `existing` so
+  // "just updating the ref" still produces a consistent row.
+  if (d.invalidDestinationType !== undefined || d.invalidDestinationRef !== undefined) {
+    const effType = d.invalidDestinationType !== undefined ? d.invalidDestinationType : (existing as any).invalidDestinationType;
+    const effRef  = d.invalidDestinationRef  !== undefined ? d.invalidDestinationRef  : (existing as any).invalidDestinationRef;
+    const err = ivrValidateOptionalDestination(effType, effRef);
+    if (err) return reply.code(400).send({ error: "invalid_destination_invalid", detail: err });
+  }
+  if (d.timeoutDestinationType !== undefined || d.timeoutDestinationRef !== undefined) {
+    const effType = d.timeoutDestinationType !== undefined ? d.timeoutDestinationType : (existing as any).timeoutDestinationType;
+    const effRef  = d.timeoutDestinationRef  !== undefined ? d.timeoutDestinationRef  : (existing as any).timeoutDestinationRef;
+    const err = ivrValidateOptionalDestination(effType, effRef);
+    if (err) return reply.code(400).send({ error: "timeout_destination_invalid", detail: err });
+  }
+
   const updated = await (db as any).ivrRouteProfile.update({ where: { id }, data: d });
   return reply.send({ profile: updated });
 });
@@ -13529,11 +13659,23 @@ app.get("/voice/ivr/preview", async (req, reply) => {
             greeting: activeProfile.pbxPromptRef        ?? null,
             invalid:  activeProfile.pbxInvalidPromptRef ?? null,
             timeout:  activeProfile.pbxTimeoutPromptRef ?? null,
+            retry:    activeProfile.pbxRetryPromptRef   ?? null,
           },
           timing: {
             timeoutSeconds: activeProfile.timeoutSeconds ?? 7,
             maxRetries:     activeProfile.maxRetries     ?? 3,
           },
+          // VitalPBX-parity preview fields — surfaced so the UI can show
+          // "Invalid → Queue 700" / "Timeout → Voicemail 1001" without
+          // re-fetching the profile row. null means "fall through to the
+          // global default-fallback after max retries" (legacy behavior).
+          directDial: !!activeProfile.directDialEnabled,
+          invalidDestination: activeProfile.invalidDestinationType
+            ? { type: activeProfile.invalidDestinationType, ref: activeProfile.invalidDestinationRef ?? "" }
+            : null,
+          timeoutDestination: activeProfile.timeoutDestinationType
+            ? { type: activeProfile.timeoutDestinationType, ref: activeProfile.timeoutDestinationRef ?? "" }
+            : null,
           options: options.map((o: any) => ({
             digit:           o.optionDigit,
             destinationType: o.destinationType,
@@ -13671,6 +13813,89 @@ app.post("/voice/ivr/rollback/:publishId", async (req, reply) => {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
     return reply.code(503).send({ error: "rollback_failed", detail: err?.message });
   }
+});
+
+// ── POST /voice/ivr/events ───────────────────────────────────────────────────
+// Lightweight analytics ingest for IVR DTMF / timeout / invalid events. Called
+// by the VitalPBX dialplan (or an AGI hook) at call time with the shared CDR
+// ingest secret — NOT by the portal, so there's no JWT check here. Writes to
+// `PbxCallEvent` with eventType="ivr_*" so the existing call-event reporting
+// stack picks it up without schema changes.
+//
+// This endpoint is DELIBERATELY cheap:
+//   • Single insert, no joins, no FK lookups on the hot path.
+//   • tenantId is the Connect CUID (resolved from the tenant slug by the
+//     caller or passed directly). If we can't resolve a tenantId we drop the
+//     event on the floor with a 202 rather than 400'ing — we don't want the
+//     dialplan to wait on an HTTP error during a live call.
+//   • If the secret is missing or wrong we still return 200 so a
+//     misconfigured AGI can't jam the call; we just don't write anything.
+app.post("/voice/ivr/events", async (req, reply) => {
+  if (!verifyCdrSecret(req)) {
+    // Silent accept so an incorrectly configured dialplan can't break calls.
+    app.log.warn("[IVR_EVENTS] rejected (bad x-cdr-secret) — dropping event");
+    return reply.code(202).send({ ok: false, reason: "bad_secret" });
+  }
+  const body = z.object({
+    // Either tenantId (Connect CUID) OR tenantSlug (PBX slug) is required.
+    tenantId:   z.string().optional(),
+    tenantSlug: z.string().optional(),
+    pbxTenantId: z.string().optional(),
+    callId:     z.string().optional(),
+    // One of: ivr_option_pressed | ivr_invalid | ivr_timeout |
+    //         ivr_direct_dial    | ivr_fallback_invalid | ivr_fallback_timeout
+    eventType:  z.string().min(1).max(64),
+    digit:      z.string().max(8).optional(),
+    extension:  z.string().max(32).optional(),
+    retryCount: z.number().int().min(0).max(20).optional(),
+    fromNumber: z.string().max(32).optional(),
+    toNumber:   z.string().max(32).optional(),
+    profileId:  z.string().optional(),
+    payload:    z.record(z.unknown()).optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(202).send({ ok: false, reason: "invalid_payload" });
+  const d = body.data;
+
+  // Resolve tenantId: direct → vpbx:slug → findFirst by name slug.
+  let tenantId: string | null = d.tenantId ?? null;
+  if (!tenantId && d.tenantSlug) {
+    try {
+      const t = await db.tenant.findFirst({
+        where: { name: { mode: "insensitive", equals: d.tenantSlug } },
+        select: { id: true },
+      });
+      tenantId = t?.id ?? null;
+    } catch { /* fall through */ }
+  }
+  if (!tenantId) {
+    // Soft-drop — we do NOT want to 4xx the dialplan mid-call.
+    return reply.code(202).send({ ok: false, reason: "tenant_unresolved" });
+  }
+
+  try {
+    await (db as any).pbxCallEvent.create({
+      data: {
+        tenantId,
+        pbxTenantId: d.pbxTenantId ?? null,
+        eventType:   d.eventType,
+        callId:      d.callId ?? null,
+        fromNumber:  d.fromNumber ?? null,
+        toNumber:    d.toNumber ?? null,
+        extension:   d.extension ?? null,
+        status:      null,
+        payload: {
+          digit:      d.digit      ?? null,
+          retryCount: d.retryCount ?? null,
+          profileId:  d.profileId  ?? null,
+          ...(d.payload ?? {}),
+        },
+      },
+    });
+  } catch (err) {
+    app.log.warn({ err }, "[IVR_EVENTS] insert failed — suppressed to protect call flow");
+    return reply.code(202).send({ ok: false, reason: "insert_failed" });
+  }
+  return reply.send({ ok: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
