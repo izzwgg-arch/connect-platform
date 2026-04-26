@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import formbody from "@fastify/formbody";
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
@@ -37,6 +38,7 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
+import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
@@ -3242,10 +3244,12 @@ app.addHook("preHandler", async (req, reply) => {
         "/webhooks/twilio/sms-status",
         "/webhooks/sola-cardknox",
         "/webhooks/whatsapp/meta",
-        "/webhooks/whatsapp/twilio/status"
-      ].includes(path)
+        "/webhooks/whatsapp/twilio/status",
+        "/webhooks/voipms/sms"
+      ].includes(path) || path.endsWith("/webhooks/voipms/sms")
     || path === "/metrics"
     || path.endsWith("/metrics")
+    || path.includes("/chat/attachments/download")
   ) return;
   // Allow a JWT passed via `?token=` query param (used by <audio> / download <a>
   // tags where you can't set an Authorization header). Copy it to the header
@@ -14949,6 +14953,22 @@ function assertMohTenantAccess(user: JwtUser, tenantId: string): void {
   }
 }
 
+/**
+ * Resolve either a real Connect tenant cuid or a `vpbx:<slug>` scope string
+ * into the Connect `Tenant.id` the MOH tables require (their `tenantId`
+ * columns all have FKs to `Tenant.id`, so a raw `vpbx:…` would violate the
+ * FK and fail the write with a 500).
+ *
+ * Returns `null` when the scope can't be mapped to a linked Connect tenant
+ * yet — the caller should render that as a friendly "link this tenant first"
+ * error rather than letting it bubble into Prisma.
+ */
+async function resolveMohTenantId(raw: string | null | undefined): Promise<string | null> {
+  if (!raw) return null;
+  if (raw.startsWith("vpbx:")) return resolveConnectTenantIdFromScope(raw);
+  return raw;
+}
+
 /** Slug for AstDB family — same derivation as IVR. */
 async function getMohSlugForTenant(tenantId: string): Promise<string> {
   const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
@@ -15213,8 +15233,10 @@ app.get("/voice/moh/schedule", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ schedule: null });
   const schedule = await (db as any).mohScheduleConfig.findUnique({
     where: { tenantId: tid },
     include: { rules: { where: { isActive: true }, orderBy: [{ ruleType: "asc" }, { priority: "desc" }] } },
@@ -15236,10 +15258,17 @@ app.put("/voice/moh/schedule", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
-  assertMohTenantAccess(user, d.tenantId);
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving the Hold schedule.",
+    });
+  }
+  assertMohTenantAccess(user, tid);
   const schedule = await (db as any).mohScheduleConfig.upsert({
-    where: { tenantId: d.tenantId },
-    create: { tenantId: d.tenantId, timezone: d.timezone, defaultProfileId: d.defaultProfileId ?? null, afterHoursProfileId: d.afterHoursProfileId ?? null, holidayProfileId: d.holidayProfileId ?? null, isActive: d.isActive },
+    where: { tenantId: tid },
+    create: { tenantId: tid, timezone: d.timezone, defaultProfileId: d.defaultProfileId ?? null, afterHoursProfileId: d.afterHoursProfileId ?? null, holidayProfileId: d.holidayProfileId ?? null, isActive: d.isActive },
     update: { timezone: d.timezone, defaultProfileId: d.defaultProfileId ?? null, afterHoursProfileId: d.afterHoursProfileId ?? null, holidayProfileId: d.holidayProfileId ?? null, isActive: d.isActive },
   });
   return reply.send({ schedule });
@@ -15263,10 +15292,12 @@ app.post("/voice/moh/schedule/rules", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
-  assertMohTenantAccess(user, d.tenantId);
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertMohTenantAccess(user, tid);
   // Verify schedule belongs to tenant
   const schedule = await (db as any).mohScheduleConfig.findUnique({ where: { id: d.scheduleId } });
-  if (!schedule || schedule.tenantId !== d.tenantId) return reply.code(404).send({ error: "schedule_not_found" });
+  if (!schedule || schedule.tenantId !== tid) return reply.code(404).send({ error: "schedule_not_found" });
   const rule = await (db as any).mohScheduleRule.create({
     data: {
       scheduleId: d.scheduleId, profileId: d.profileId, ruleType: d.ruleType,
@@ -15296,8 +15327,10 @@ app.get("/voice/moh/override", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ override: null });
   const override = await (db as any).mohOverrideState.findUnique({
     where: { tenantId: tid },
     include: { profile: { select: { name: true, vitalPbxMohClassName: true } } },
@@ -15318,13 +15351,15 @@ app.post("/voice/moh/override/activate", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
   const d = body.data;
-  assertMohTenantAccess(user, d.tenantId);
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertMohTenantAccess(user, tid);
   const profile = await (db as any).mohProfile.findUnique({ where: { id: d.profileId } });
-  if (!profile || profile.tenantId !== d.tenantId) return reply.code(404).send({ error: "profile_not_found" });
+  if (!profile || profile.tenantId !== tid) return reply.code(404).send({ error: "profile_not_found" });
   const override = await (db as any).mohOverrideState.upsert({
-    where: { tenantId: d.tenantId },
+    where: { tenantId: tid },
     create: {
-      tenantId: d.tenantId, isActive: true, profileId: d.profileId,
+      tenantId: tid, isActive: true, profileId: d.profileId,
       reason: d.reason ?? null, expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
       activatedAt: new Date(), activatedBy: (user as any).id ?? null,
       deactivatedAt: null, deactivatedBy: null,
@@ -15340,12 +15375,12 @@ app.post("/voice/moh/override/activate", async (req, reply) => {
   let publishResult: { mohClass: string; mode: string } | null = null;
   let publishError: string | null = null;
   try {
-    const r = await doMohPublish(d.tenantId, (user as any).id ?? "unknown", "override");
+    const r = await doMohPublish(tid, (user as any).id ?? "unknown", "override");
     publishResult = { mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
-    app.log.info({ tenantId: d.tenantId, ...publishResult }, "moh override: activated + published immediately");
+    app.log.info({ tenantId: tid, ...publishResult }, "moh override: activated + published immediately");
   } catch (pubErr: any) {
     publishError = pubErr?.message ?? "publish failed";
-    app.log.warn({ tenantId: d.tenantId, err: publishError }, "moh override: activated but immediate publish failed (worker will reconcile)");
+    app.log.warn({ tenantId: tid, err: publishError }, "moh override: activated but immediate publish failed (worker will reconcile)");
   }
   return reply.send({ override, publishResult, publishError });
 });
@@ -15357,22 +15392,24 @@ app.post("/voice/moh/override/deactivate", async (req, reply) => {
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  assertMohTenantAccess(user, body.data.tenantId);
+  const tid = await resolveMohTenantId(body.data.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertMohTenantAccess(user, tid);
   const override = await (db as any).mohOverrideState.upsert({
-    where: { tenantId: body.data.tenantId },
-    create: { tenantId: body.data.tenantId, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+    where: { tenantId: tid },
+    create: { tenantId: tid, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
     update: { isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
   });
   // Immediate publish back to schedule-derived state
   let publishResult: { mohClass: string; mode: string } | null = null;
   let publishError: string | null = null;
   try {
-    const r = await doMohPublish(body.data.tenantId, (user as any).id ?? "unknown", "override");
+    const r = await doMohPublish(tid, (user as any).id ?? "unknown", "override");
     publishResult = { mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
-    app.log.info({ tenantId: body.data.tenantId, ...publishResult }, "moh override: deactivated + published immediately");
+    app.log.info({ tenantId: tid, ...publishResult }, "moh override: deactivated + published immediately");
   } catch (pubErr: any) {
     publishError = pubErr?.message ?? "publish failed";
-    app.log.warn({ tenantId: body.data.tenantId, err: publishError }, "moh override: deactivated but immediate publish failed (worker will reconcile)");
+    app.log.warn({ tenantId: tid, err: publishError }, "moh override: deactivated but immediate publish failed (worker will reconcile)");
   }
   return reply.send({ override, publishResult, publishError });
 });
@@ -15385,8 +15422,10 @@ app.get("/voice/moh/preview", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional(), at: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ profile: null, mode: "tenant_not_linked", at: new Date().toISOString(), lastPublished: null });
 
   const [config, rulesRaw, overrideRaw, profilesRaw, lastState] = await Promise.all([
     (db as any).mohScheduleConfig.findUnique({ where: { tenantId: tid } }),
@@ -15419,8 +15458,10 @@ app.get("/voice/moh/publish-history", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ records: [] });
   const records = await (db as any).mohPublishRecord.findMany({
     where: { tenantId: tid },
     orderBy: { publishedAt: "desc" },
@@ -15436,7 +15477,8 @@ app.post("/voice/moh/publish", async (req, reply) => {
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  const { tenantId } = body.data;
+  const tenantId = await resolveMohTenantId(body.data.tenantId);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_not_linked" });
   assertMohTenantAccess(user, tenantId);
   try {
     const r = await doMohPublish(tenantId, (user as any).id ?? "unknown", "manual");
@@ -15564,15 +15606,24 @@ app.post("/voice/moh/assets", async (req, reply) => {
   let meta: { tenantId: string; name: string };
   try { meta = metaSchema.parse(JSON.parse(metaRaw)); }
   catch { return reply.code(400).send({ error: "invalid_meta" }); }
-  assertIvrTenantAccess(user, meta.tenantId);
+  // `MohAsset.tenantId` FKs to `Tenant.id`, so a `vpbx:<slug>` scope would
+  // violate the constraint — resolve to the linked Connect tenant first.
+  const resolvedTenantId = await resolveMohTenantId(meta.tenantId);
+  if (!resolvedTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before uploading MOH assets.",
+    });
+  }
+  assertIvrTenantAccess(user, resolvedTenantId);
 
-  const tenantSlug = await getIvrSlugForTenant(meta.tenantId);
+  const tenantSlug = await getIvrSlugForTenant(resolvedTenantId);
   const mohClassName = buildMohClassName(tenantSlug, meta.name);
 
   // Duplicate-name guard — class name is unique per tenant so overlapping
   // uploads would otherwise break the PBX (two files mapping to one class).
   const existing = await (db as any).mohAsset.findFirst({
-    where: { tenantId: meta.tenantId, mohClassName },
+    where: { tenantId: resolvedTenantId, mohClassName },
   });
   if (existing) return reply.code(409).send({ error: "name_already_exists", detail: mohClassName });
 
@@ -15588,7 +15639,7 @@ app.post("/voice/moh/assets", async (req, reply) => {
 
   const asset = await (db as any).mohAsset.create({
     data: {
-      tenantId: meta.tenantId,
+      tenantId: resolvedTenantId,
       tenantSlug,
       name: meta.name,
       mohClassName,
@@ -15741,55 +15792,36 @@ app.get("/voice/moh/download/*", async (req, reply) => {
 
 // ── GET /voice/moh/pbx-classes ────────────────────────────────────────────────
 // Feeds the Hold-Profile MOH-class dropdown. Tenant-admins are pinned to their
-// own tenantId; super-admins can pass ?tenantId=... or ?tenantId=__all__, or
-// ?includeAll=1 on any tenant scope to peek across the whole PBX.
-//
-// The PBX's admin tenant (`pbxTenantId = "1"` / `tenantSlug = "vitalpbx"`) ships
-// with built-in classes (`default`, `main`, `No Music`) that every tenant can
-// reference in queue/hold configuration. Those are *always* included as "system"
-// classes so a fresh tenant with zero own classes still has working options.
+// own tenantId; super-admins can pass ?tenantId=... or ?tenantId=__all__.
 app.get("/voice/moh/pbx-classes", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
   if (!user) return;
 
   const q = z.object({
-    tenantId:   z.string().optional(),
+    tenantId: z.string().optional(),
     activeOnly: z.string().optional(),
-    includeAll: z.string().optional(),
   }).parse(req.query || {});
 
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const wantAll = isSA && (q.tenantId === "__all__" || q.includeAll === "1");
-  const rawScope = q.tenantId && q.tenantId !== "__all__" ? q.tenantId : (user.tenantId || null);
+  const wantAll = isSA && q.tenantId === "__all__";
+  const rawScope = wantAll ? null : (q.tenantId || user.tenantId || null);
   if (!wantAll && !rawScope) return reply.code(400).send({ error: "tenant_required" });
-
-  // Admin-PBX-tenant ("system") classes are always appended so every tenant
-  // sees the built-in defaults (`default`, `No Music`, `main`).
-  const systemClassOr = [
-    { pbxTenantId: "1" },
-    { tenantSlug: "vitalpbx" },
-    { isDefault: true },
-  ];
-
   // Accept vpbx:<slug> and resolve / fall back to tenantSlug match on the
   // mirrored PbxMohClass rows (which carry tenantSlug from the ombutel sync).
   let pbxClassWhere: Record<string, unknown> = {};
   if (!wantAll && rawScope) {
-    const tenantOr: Array<Record<string, unknown>> = [];
     if (rawScope.startsWith("vpbx:")) {
       const slug = rawScope.slice(5).toLowerCase();
       const resolved = await resolveConnectTenantIdFromScope(rawScope);
-      if (resolved) tenantOr.push({ tenantId: resolved });
-      tenantOr.push({ tenantSlug: slug });
-      tenantOr.push({ tenantId: null, tenantSlug: null });
+      pbxClassWhere = resolved
+        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }, { tenantId: null, tenantSlug: null }] }
+        : { OR: [{ tenantSlug: slug }, { tenantId: null, tenantSlug: null }] };
     } else {
+      pbxClassWhere = { OR: [{ tenantId: rawScope }, { tenantId: null }] };
       if (!isSA && rawScope !== user.tenantId) {
         return reply.code(403).send({ error: "forbidden" });
       }
-      tenantOr.push({ tenantId: rawScope });
-      tenantOr.push({ tenantId: null });
     }
-    pbxClassWhere = { OR: [...tenantOr, ...systemClassOr] };
   }
 
   const rows = await (db as any).pbxMohClass.findMany({
@@ -15797,11 +15829,10 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       ...pbxClassWhere,
       ...((q.activeOnly ?? "1") === "0" ? {} : { isActive: true }),
     },
-    orderBy: [{ tenantSlug: "asc" }, { name: "asc" }],
+    orderBy: [{ name: "asc" }],
     select: {
       id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
-      pbxGroupId: true, pbxTenantId: true,
-      name: true, mohClassName: true, classType: true,
+      pbxGroupId: true, name: true, mohClassName: true, classType: true,
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
     },
   });
@@ -22786,6 +22817,8 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // END PBX LIVE METRICS
 // ─────────────────────────────────────────────────────────────────────────────
+
+registerConnectChatRoutes(app);
 
 // ── Startup telephony/WebRTC config validation ────────────────────────────────
 // Runs just before listen so logs appear during startup, not at module load.
