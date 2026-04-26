@@ -20,7 +20,26 @@ test -f ops/deploy-queue/ecosystem.config.cjs && echo "ecosystem: OK" || { echo 
 
 corepack enable 2>/dev/null || true
 pnpm install --frozen-lockfile
-pnpm rebuild better-sqlite3
+
+# pnpm 10+ skips better-sqlite3 postinstall unless allowlisted; allowlisting breaks typical Windows dev installs.
+# On Linux production, compile via npm in the resolved package dir (prebuild or node-gyp).
+ensure_better_sqlite3_native() {
+  shopt -s nullglob
+  local dirs=( "$APP"/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 )
+  shopt -u nullglob
+  if ((${#dirs[@]} == 0)); then
+    echo "better-sqlite3: package dir not found" >&2
+    return 1
+  fi
+  local bs="${dirs[0]}"
+  if [[ -f "$bs/build/Release/better_sqlite3.node" ]]; then
+    echo "better-sqlite3: native binary OK"
+    return 0
+  fi
+  echo "better-sqlite3: building native addon in $bs"
+  (cd "$bs" && npm run install)
+}
+ensure_better_sqlite3_native
 pnpm --filter connect-deploy-queue run build
 
 ENV_FILE=/opt/connectcomms/env/.env.deploy-queue
