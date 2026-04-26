@@ -2,3 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
   - "ops/deploy-queue"
+
+# pnpm 10+ blocks dependency install scripts unless allowlisted (better-sqlite3 must compile on Linux).
+onlyBuiltDependencies:
+  - better-sqlite3
