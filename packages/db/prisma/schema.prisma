@@ -1880,6 +1880,21 @@ model DidRouteMapping {
   fallbackBehavior     String   @default("default_ivr")    // "default_ivr" | "terminate" | "voicemail"
   enabled              Boolean  @default(true)
   lastPublishedAt      DateTime?
+  // ── DID takeover (switch between PBX-native routing and Connect IVR) ──
+  // `routingMode` tracks where the DID's inbound destination currently points:
+  //   "pbx"     → VitalPBX still owns the routing (the factory/legacy destination)
+  //   "connect" → Connect has repointed the inbound_number to [connect-tenant-ivr]
+  // Before the first "switch to connect" we snapshot the live VitalPBX
+  // inbound_number payload into the originalPbx* fields so a later "restore
+  // to PBX" can PATCH it back verbatim without operator guesswork.
+  routingMode                 String   @default("pbx")       // "pbx" | "connect"
+  originalPbxDestinationType  String?                         // e.g. "ivr", "queues", "extensions", "custom-destinations"
+  originalPbxDestination      String?                         // opaque VitalPBX destination string (id or CEP)
+  originalPbxChannelVariables Json?                           // full channel_variables map as last seen on PBX
+  originalCapturedAt          DateTime?                       // when we captured the PBX-native destination
+  lastSwitchedAt              DateTime?                       // last time routingMode flipped
+  lastSwitchedBy              String?                         // user id that performed the flip
+  lastSwitchError             String?                         // surfaced from last failed switch attempt (null on success)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   createdBy            String?
@@ -1889,6 +1904,7 @@ model DidRouteMapping {
   ivrProfile  IvrRouteProfile? @relation(fields: [ivrProfileId], references: [id], onDelete: SetNull)
   mohProfile  MohProfile?      @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
   pbxInstance PbxInstance?     @relation(fields: [pbxInstanceId], references: [id], onDelete: SetNull)
+  switchLogs  DidRouteSwitchLog[]
 
   @@unique([e164])
   @@index([tenantId])
@@ -1896,6 +1912,33 @@ model DidRouteMapping {
   @@index([ivrProfileId])
   @@index([mohProfileId])
   @@index([pbxInstanceId])
+  @@index([routingMode])
+}
+
+// ─── DID takeover audit log ──────────────────────────────────────────────────
+// Every call to /voice/did/:id/switch-to-connect or /switch-to-pbx inserts one
+// row so operators can see the full history of who repointed which DID and
+// what the PBX state looked like before/after. Cheap to keep (one row per
+// toggle) and indispensable for post-mortems when a tenant calls saying
+// "my IVR stopped working".
+model DidRouteSwitchLog {
+  id           String   @id @default(cuid())
+  mappingId    String
+  tenantId     String
+  fromMode     String                                          // "pbx" | "connect"
+  toMode       String                                          // "pbx" | "connect"
+  performedBy  String
+  performedAt  DateTime @default(now())
+  pbxPayload   Json?                                           // what we sent to VitalPBX (null on pure DB updates)
+  pbxSnapshot  Json?                                           // what we read from VitalPBX before the change
+  status       String                                          // "pending" | "success" | "failed"
+  error        String?                                         // stringified failure reason when status="failed"
+
+  mapping DidRouteMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+
+  @@index([mappingId])
+  @@index([tenantId, performedAt])
+  @@index([status])
 }
 
 // ─── MOH uploaded media assets ───────────────────────────────────────────────

@@ -820,6 +820,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               category="greeting"
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
+              tenantId={tenantId}
+              tenantSlug={tenantSlug}
             />
             <label style={labelStyle}>Invalid-digit recording (optional)</label>
             <PromptPicker
@@ -831,6 +833,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               category="invalid"
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
+              tenantId={tenantId}
+              tenantSlug={tenantSlug}
             />
             <label style={labelStyle}>Timeout recording (optional)</label>
             <PromptPicker
@@ -842,6 +846,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               category="timeout"
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
+              tenantId={tenantId}
+              tenantSlug={tenantSlug}
             />
             <div style={{ fontSize: 10, color: "#64748b", marginTop: -4, marginBottom: 8 }}>
               Blank = PBX default (<code>vm-enter-num-to-call</code>).
@@ -856,6 +862,8 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
               category="timeout"
               canUpload={canManagePrompts}
               onAudioChanged={reloadPrompts}
+              tenantId={tenantId}
+              tenantSlug={tenantSlug}
             />
             <div style={{ fontSize: 10, color: "#64748b", marginTop: -4, marginBottom: 8 }}>
               Played on retry iterations instead of the main greeting. Blank = replay greeting.
@@ -1159,7 +1167,7 @@ function PromptAudioPlayer({
 // admin needs to point at a prompt that the catalog doesn't know about yet.
 
 function PromptPicker({
-  value, onChange, prompts, catalogLoading, placeholder, category, canUpload, onAudioChanged,
+  value, onChange, prompts, catalogLoading, placeholder, category, canUpload, onAudioChanged, tenantId, tenantSlug,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -1175,7 +1183,16 @@ function PromptPicker({
   // Called after an audio upload succeeds so the parent can refresh the
   // catalog (to flip hasAudio → true on the affected row).
   onAudioChanged?: () => void | Promise<void>;
+  // Required by the "New recording" flow — used to tag the new catalog row
+  // with its tenant so cross-tenant isolation rules pick it up correctly.
+  // Optional so existing callers that only pick existing prompts keep working.
+  tenantId?: string;
+  tenantSlug?: string;
 }) {
+  // Controls visibility of the "Create recording" modal. Hoisted here (not
+  // inside the branches below) so it works whether the picker is in manual-
+  // entry mode (empty catalog) or in dropdown mode.
+  const [showNewModal, setShowNewModal] = useState(false);
   // Category-aware filter: always include generic rows so admins can point at
   // any recording without re-classifying it first.
   const filtered = prompts.filter((p) => {
@@ -1196,16 +1213,37 @@ function PromptPicker({
     const emptyCatalog = filtered.length === 0 && !catalogLoading;
     return (
       <div>
-        <input
-          style={inputStyle}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? "custom/tenant_main"}
-        />
+        <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+          <input
+            style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder ?? "custom/tenant_main"}
+          />
+          {/* New recording button: shown in empty-catalog mode so a tenant
+              with zero prompts can upload their first one without leaving
+              this dialog. Opens the inline CreatePromptModal below. */}
+          {canUpload && (
+            <button
+              type="button"
+              onClick={() => setShowNewModal(true)}
+              style={{
+                ...btnSmall("#6366f1"),
+                whiteSpace: "nowrap",
+                padding: "0 12px",
+                fontWeight: 600,
+              }}
+              title="Create a brand-new recording for this tenant (name + audio upload)"
+            >
+              + New recording
+            </button>
+          )}
+        </div>
         <div style={{ fontSize: 11, color: emptyCatalog ? "#fbbf24" : "#64748b", marginTop: 4, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {emptyCatalog ? (
             <span>
-              No prompt catalog for this tenant yet. Close this dialog and click <strong>Auto-Sync from VitalPBX</strong> to pull every System Recording from the PBX, or type a ref manually.
+              No prompt catalog for this tenant yet. Click <strong>+ New recording</strong> above to upload one,
+              or close this dialog and click <strong>Auto-Sync from VitalPBX</strong> to pull existing System Recordings.
             </span>
           ) : (
             <span>Manual entry — VitalPBX recording name, no file extension.</span>
@@ -1218,6 +1256,21 @@ function PromptPicker({
             >Use dropdown</button>
           )}
         </div>
+        {showNewModal && (
+          <CreatePromptModal
+            tenantId={tenantId || null}
+            tenantSlug={tenantSlug || null}
+            category={category}
+            onClose={() => setShowNewModal(false)}
+            onCreated={async (newRef) => {
+              setShowNewModal(false);
+              await onAudioChanged?.();
+              onChange(newRef);
+              // Flip to dropdown so the new entry is visible immediately.
+              setManual(false);
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -1262,7 +1315,36 @@ function PromptPicker({
             onUploaded={async () => { await onAudioChanged?.(); }}
           />
         )}
+        {canUpload && (
+          <button
+            type="button"
+            onClick={() => setShowNewModal(true)}
+            style={{
+              ...btnSmall("#6366f1"),
+              whiteSpace: "nowrap",
+              padding: "0 12px",
+              fontWeight: 600,
+            }}
+            title="Create a brand-new recording (name + audio upload)"
+          >
+            + New
+          </button>
+        )}
       </div>
+
+      {showNewModal && (
+        <CreatePromptModal
+          tenantId={tenantId || null}
+          tenantSlug={tenantSlug || null}
+          category={category}
+          onClose={() => setShowNewModal(false)}
+          onCreated={async (newRef) => {
+            setShowNewModal(false);
+            await onAudioChanged?.();
+            onChange(newRef);
+          }}
+        />
+      )}
 
       {playingId && selectedRow && selectedRow.id === playingId && (
         <PromptAudioPlayer
@@ -1462,6 +1544,158 @@ function UploadPromptAudioButton({
   );
 }
 
+// ── CreatePromptModal ────────────────────────────────────────────────────────
+//
+// Two-step wizard for admins who hit the IVR modal with a tenant that has
+// zero prompts synced (or who just want to add a new one without leaving the
+// modal):
+//   1. POST /voice/ivr/prompts { tenantId, promptRef, displayName, category }
+//   2. POST /voice/ivr/prompts/:id/audio (multipart file)
+// On success, the parent picker refreshes the catalog and selects the new
+// ref so the rest of the IVR form can reference it immediately.
+//
+// We intentionally keep the UX as small as possible: one name field, one
+// file input, one save button. `category` defaults to the picker's context
+// (greeting/invalid/timeout) which also seeds a reasonable name prefix —
+// e.g. "greeting_morning" — so tenant admins don't have to think about
+// VitalPBX naming conventions.
+function CreatePromptModal({
+  tenantId, tenantSlug, category, onClose, onCreated,
+}: {
+  tenantId: string | null;
+  tenantSlug: string | null;
+  category?: "greeting" | "invalid" | "timeout";
+  onClose: () => void;
+  onCreated: (newRef: string) => void | Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState<string>(() => {
+    const prefix = category ? `${category}_` : "";
+    return `${prefix}${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
+  });
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [localErr, setLocalErr] = useState<string | null>(null);
+
+  // Derive the promptRef from the display name. VitalPBX-convention: lowercase,
+  // spaces → underscores, no file extension, "custom/<slug>_" prefix when we
+  // have the tenant's slug so it lives in the right folder on the PBX.
+  const sanitizedName = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  const promptRef = tenantSlug
+    ? `custom/${tenantSlug}_${sanitizedName}`
+    : `custom/${sanitizedName}`;
+
+  const disabledSave = busy || !displayName.trim() || !sanitizedName || !file;
+
+  const save = async () => {
+    if (disabledSave) return;
+    setBusy(true);
+    setLocalErr(null);
+    try {
+      // Step 1 — create the catalog row. Tenant isolation rules run here.
+      const createResp = await apiPost<{ prompt: { id: string; promptRef: string } }>(
+        "/voice/ivr/prompts",
+        {
+          tenantId: tenantId || null,
+          promptRef,
+          displayName: displayName.trim(),
+          category: category ?? "general",
+        },
+      );
+      const newPromptId = createResp?.prompt?.id;
+      const effectiveRef = createResp?.prompt?.promptRef ?? promptRef;
+      if (!newPromptId) throw new Error("API did not return a prompt id.");
+
+      // Step 2 — upload the audio bytes. Uses the same endpoint as the
+      // "Upload audio" button elsewhere on the page.
+      const fd = new FormData();
+      fd.append("file", file!, file!.name);
+      const base = ivrMediaBaseUrl();
+      const token = ivrAuthToken();
+      const upResp = await fetch(
+        `${base}/voice/ivr/prompts/${encodeURIComponent(newPromptId)}/audio`,
+        {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: fd,
+        },
+      );
+      if (!upResp.ok) {
+        const body = await upResp.json().catch(() => ({}));
+        throw new Error((body as any)?.error ?? `Upload failed (${upResp.status})`);
+      }
+
+      await onCreated(effectiveRef);
+    } catch (e: any) {
+      setLocalErr(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div
+        style={{ ...modalBox, maxWidth: 480 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700 }}>New recording</h3>
+
+        {!tenantId && (
+          <div style={{
+            background: "rgba(239,68,68,0.1)", border: "1px solid #ef4444",
+            borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#fca5a5",
+          }}>
+            No tenant selected. Pick a tenant in the header switcher before creating a recording.
+          </div>
+        )}
+
+        <label style={labelStyle}>Display name</label>
+        <input
+          style={inputStyle}
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="e.g. Morning greeting"
+          autoFocus
+        />
+
+        <label style={labelStyle}>Audio file</label>
+        <input
+          type="file"
+          accept="audio/wav,audio/mpeg,audio/mp3,audio/ogg,audio/x-gsm,.wav,.mp3,.gsm,.ogg,.g722,.g729,.sln,.sln16,.ulaw,.alaw"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          style={{ ...inputStyle, padding: 6 }}
+        />
+
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 10 }}>
+          Saved as <code style={{ fontFamily: "monospace", color: "#c7d2fe" }}>{promptRef}</code>
+          {category ? ` · category: ${category}` : ""}
+          {tenantSlug ? "" : " · (no tenant slug resolved — ref will lack a tenant prefix)"}
+        </div>
+
+        {localErr && (
+          <div style={{ color: "#fca5a5", fontSize: 12, marginTop: 10 }}>
+            {localErr}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button type="button" onClick={onClose} style={btnSmall("#334155")} disabled={busy}>Cancel</button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={disabledSave || !tenantId}
+            style={{ ...btnSmall("#6366f1"), opacity: disabledSave || !tenantId ? 0.6 : 1, cursor: disabledSave || !tenantId ? "not-allowed" : "pointer" }}
+          >{busy ? "Saving…" : "Create & upload"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Sync Prompt Library modal (super-admin only) ─────────────────────────────
 //
 // Lets the admin paste the tenant's VitalPBX recording list and bulk-upsert it
@@ -1611,6 +1845,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               category="greeting"
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
+              tenantId={profile.tenantId}
             />
           </div>
           <div>
@@ -1624,6 +1859,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               category="invalid"
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
+              tenantId={profile.tenantId}
             />
           </div>
           <div>
@@ -1637,6 +1873,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               category="timeout"
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
+              tenantId={profile.tenantId}
             />
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>
               Leave blank to use PBX default <code>vm-enter-num-to-call</code>.
@@ -1653,6 +1890,7 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
               category="timeout"
               canUpload={canEdit}
               onAudioChanged={reloadPrompts}
+              tenantId={profile.tenantId}
             />
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>
               Played instead of the main greeting on retry iterations. Blank = replay greeting.
@@ -1754,6 +1992,37 @@ function useQueueSuggestions(tenantId: string): QueueSuggestion[] {
   return rows;
 }
 
+type RingGroupSuggestion = { number: string; name: string | null };
+
+/** Live ring-group list for the current tenant, read from the Connect API
+ *  (which goes to Ombutel MariaDB — VitalPBX REST doesn't expose ring
+ *  groups). Returns `[]` on any error so the DestinationPicker cleanly
+ *  falls back to a free-text input. */
+function useRingGroupSuggestions(tenantId: string): RingGroupSuggestion[] {
+  const [rows, setRows] = useState<RingGroupSuggestion[]>([]);
+  useEffect(() => {
+    if (!tenantId || tenantId === "local") { setRows([]); return; }
+    let abort = false;
+    (async () => {
+      try {
+        const r = await apiGet<{ rows: any[]; source?: string; skipReason?: string }>(
+          `/voice/pbx/ring-groups?tenantId=${encodeURIComponent(tenantId)}`,
+        );
+        if (abort) return;
+        setRows((r.rows || []).map((g) => {
+          const number = String(g.number ?? g.group_number ?? g.extension ?? "").trim();
+          const name = g.name ?? g.description ?? null;
+          return { number, name };
+        }).filter((g) => g.number));
+      } catch {
+        if (!abort) setRows([]);
+      }
+    })();
+    return () => { abort = true; };
+  }, [tenantId]);
+  return rows;
+}
+
 /** Parse a stored destinationRef into the pieces the picker edits. Best-effort:
  *  extensions / queues / ring-groups / voicemail recognise their well-known
  *  CEP shape so switching between profiles preserves the selection. Falls
@@ -1772,7 +2041,10 @@ function parseDestinationRef(type: DestinationType | "", ref: string): { selecte
   }
   if (type === "ring_group") {
     const m = r.match(/^ext-group,([^,]+),\d+$/i);
-    if (m) return { selected: m[1], free: r };
+    if (m) return { selected: m[1], free: "" };
+    // Legacy/custom CEPs that aren't the canonical `ext-group,<n>,1` shape
+    // round-trip as free text so they don't get silently blanked.
+    return { selected: "", free: r };
   }
   if (type === "voicemail") {
     const m = r.match(/^ext-local,vmu([^,]+),\d+$/i);
@@ -1789,7 +2061,8 @@ function buildDestinationRef(type: DestinationType | "", selected: string, free:
   const f = (free ?? "").trim();
   if (type === "extension"        && s) return `from-internal,${s},1`;
   if (type === "queue"            && s) return `ext-queues,${s},1`;
-  if (type === "ring_group")            return f; // no live list; free text CEP
+  if (type === "ring_group"       && s) return `ext-group,${s},1`;
+  if (type === "ring_group")            return f; // legacy/custom free-text fallback
   if (type === "voicemail"        && s) return `ext-local,vmu${s},1`;
   if (type === "ivr")                   return f; // free text CEP for nested IVRs
   if (type === "announcement")          return f;
@@ -1818,6 +2091,7 @@ function DestinationPicker({
 }) {
   const extensions = useExtensionSuggestions(tenantId);
   const queues     = useQueueSuggestions(tenantId);
+  const ringGroups = useRingGroupSuggestions(tenantId);
   const parsed     = parseDestinationRef(value.type, value.ref);
 
   const setType = (t: DestinationType | "") => {
@@ -1899,7 +2173,43 @@ function DestinationPicker({
           ))}
         </select>
       )}
-      {(value.type === "ring_group" || value.type === "ivr" || value.type === "announcement" || value.type === "external_number" || value.type === "custom") && (
+      {value.type === "ring_group" && (
+        // Live dropdown of existing ring groups (from Ombutel MariaDB). When
+        // the list loads empty (no PBX config or a legacy CEP that doesn't
+        // match any live group) we surface a free-text fallback so admins
+        // can still set a custom ext-group,<n>,1 value.
+        ringGroups.length > 0 && !parsed.free ? (
+          <select
+            disabled={disabled}
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+            value={parsed.selected}
+            onChange={(e) => setSelected(e.target.value)}
+          >
+            <option value="">— pick ring group —</option>
+            {ringGroups.map((g) => (
+              <option key={g.number} value={g.number}>
+                {g.number}{g.name ? ` — ${g.name}` : ""}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+            <input
+              disabled={disabled}
+              style={{ ...inputStyle, marginBottom: 0, fontFamily: "monospace" }}
+              value={parsed.free || (parsed.selected ? `ext-group,${parsed.selected},1` : "")}
+              placeholder={freePlaceholder.ring_group ?? "ext-group,601,1"}
+              onChange={(e) => setFree(e.target.value)}
+            />
+            <span style={{ fontSize: 10, color: "#64748b" }}>
+              {ringGroups.length === 0
+                ? "(no ring groups synced for this tenant — enter a CEP manually or set up Ombutel MySQL)"
+                : "(legacy CEP — clear the field to switch back to the dropdown)"}
+            </span>
+          </div>
+        )
+      )}
+      {(value.type === "ivr" || value.type === "announcement" || value.type === "external_number" || value.type === "custom") && (
         <input
           disabled={disabled}
           style={{ ...inputStyle, marginBottom: 0, flex: 1, fontFamily: "monospace" }}

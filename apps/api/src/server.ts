@@ -10489,6 +10489,59 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   return { resource, rows: out };
 });
 
+// ── GET /voice/pbx/ring-groups ──────────────────────────────────────────────
+//
+// On-demand live listing of VitalPBX ring groups for a given Connect tenant,
+// scoped through Ombutel MariaDB (the REST collection doesn't expose ring
+// groups). Used by the IVR destination picker so admins can pick a ring
+// group from a dropdown instead of hand-typing `ext-group,601,1`.
+//
+// Query params:
+//   ?tenantId=<connectTenantId>   (super-admin override; otherwise derived
+//                                  from the caller's JWT tenant scope)
+//
+// Response:
+//   { rows: [{ number, name, strategy, id }], source, table }
+//   On any config/schema problem we return `{ rows: [] }` plus a soft
+//   `skipReason` so the UI can fall back to a free-text input cleanly.
+app.get("/voice/pbx/ring-groups", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  // Resolve which Connect tenant we're scoping to. Super-admins may pass
+  // ?tenantId=; everyone else is pinned to their own tenant.
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const qsTenantId = String((req.query as any)?.tenantId || "").trim();
+  const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
+  const connectTenantId = isSuperAdmin
+    ? (qsTenantId || headerTenantId || user.tenantId)
+    : user.tenantId;
+  if (!connectTenantId || connectTenantId === "local") {
+    return reply.send({ rows: [], source: "skipped", skipReason: "no tenant context" });
+  }
+
+  // Resolve: Connect tenant → TenantPbxLink → PbxInstance (for mysql url)
+  //          and the VitalPBX tenant_id used for scoping in ombutel.
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: connectTenantId },
+    include: { pbxInstance: true },
+  });
+  if (!link || !link.pbxInstance) {
+    return reply.send({ rows: [], source: "skipped", skipReason: "pbx_link_not_found" });
+  }
+
+  const { listRingGroupsFromOmbutel } = await import("./pbxOmbutelRingGroupList");
+  const result = await listRingGroupsFromOmbutel(
+    link.pbxTenantId || null,
+    link.pbxInstance.ombuMysqlUrlEncrypted,
+  );
+
+  if (result.source === "skipped") {
+    return reply.send({ rows: [], source: "skipped", skipReason: result.skipReason });
+  }
+  return reply.send({ rows: result.rows, source: result.source, table: result.table });
+});
+
 app.post("/voice/pbx/resources/:resource", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -14313,6 +14366,404 @@ app.get("/voice/did/:e164/preview", async (req, reply) => {
       holdRepeat: liveMap.hold_repeat ?? "",
     },
   });
+});
+
+// ── GET /voice/did/capabilities ──────────────────────────────────────────────
+// Lightweight feature-flag endpoint the DID Routing UI reads on load so it
+// can render a "PBX_INBOUND_API is disabled" banner proactively rather than
+// waiting for the first 503 from a switch attempt. Read-only, no PBX calls.
+app.get("/voice/did/capabilities", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+  return reply.send({
+    ok: true,
+    inboundApiEnabled,
+    // Hint to help super-admins turn it on without a doc-dive.
+    howToEnable: inboundApiEnabled
+      ? null
+      : "Set PBX_INBOUND_API=true in the Connect API environment and restart to enable DID takeover.",
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DID takeover — one-click switch a DID between "pbx" and "connect" routing.
+//
+// These three endpoints implement the full reversible takeover flow:
+//   GET  /voice/did/:id/inspect            → read live PBX inbound_number config
+//   POST /voice/did/:id/switch-to-connect  → capture original, publish didmap,
+//                                            PATCH inbound_numbers to
+//                                            connect-tenant-ivr
+//   POST /voice/did/:id/switch-to-pbx      → restore originalPbx* payload on PBX
+//
+// Design goals:
+//   - Fail-closed: every step must succeed before we flip routingMode. If the
+//     PBX PATCH fails we leave Connect DB in "pbx" mode and surface the error;
+//     the PBX itself never sees a partial write because addTenantInboundNumber
+//     is a single upsert.
+//   - Reversible: originalPbx* fields stash the live destination so Restore
+//     is a one-PATCH operation with no operator typing. Kept across switches
+//     so you can flip back and forth without re-reading the PBX every time.
+//   - Auditable: every switch (success or fail) inserts a DidRouteSwitchLog
+//     row with the payload we sent and the snapshot we read beforehand.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Normalize a PBX "phone_number" field to our E.164 form ("+1...") for
+// matching. VitalPBX sometimes stores numbers without the leading "+" or
+// with an embedded country code — be permissive on read.
+function didNormalizePbxPhoneNumber(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (s.startsWith("+")) return s;
+  if (/^\d{7,20}$/.test(s)) return `+${s}`;
+  return s;
+}
+
+// Pull the PBX-side inbound_number record that matches this DID. Returns
+// null (not throws) when the PBX has no entry for the number yet — so
+// /inspect can render a clean "not provisioned" state instead of 500.
+async function didFetchLivePbxInboundNumber(
+  pbxTenantId: string,
+  e164: string,
+): Promise<Record<string, unknown> | null> {
+  const rows = await getVitalPbxClient().listTenantInboundNumbers(pbxTenantId);
+  if (!Array.isArray(rows)) return null;
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const candidate = didNormalizePbxPhoneNumber((row as any).phone_number ?? (row as any).phoneNumber ?? (row as any).number);
+    if (candidate && candidate === e164) return row as Record<string, unknown>;
+  }
+  return null;
+}
+
+// Compare the stashed originalPbx* on the mapping against what VitalPBX is
+// actually serving right now. Drift means an operator changed the PBX
+// destination outside of Connect — we surface this in the UI so they can
+// decide whether to re-capture or restore.
+function didComputeDrift(
+  mapping: { routingMode: string; originalPbxDestinationType: string | null; originalPbxDestination: string | null },
+  live: Record<string, unknown> | null,
+): { driftDetected: boolean; reason: string | null } {
+  if (mapping.routingMode !== "connect") return { driftDetected: false, reason: null };
+  if (!live) return { driftDetected: true, reason: "pbx_inbound_not_found" };
+  const liveDest = String((live as any).destination ?? "");
+  const liveType = String((live as any).destination_type ?? "");
+  // When we own the route we expect it pointed at connect-tenant-ivr.
+  const expectedDest = /^connect-tenant-ivr,/.test(liveDest);
+  const expectedType = liveType === "custom-destinations";
+  if (!expectedDest || !expectedType) return { driftDetected: true, reason: "pbx_destination_drifted" };
+  return { driftDetected: false, reason: null };
+}
+
+// ── GET /voice/did/:id/inspect ───────────────────────────────────────────────
+// Read-only. Returns both the Connect-stored "original PBX destination" snapshot
+// and the live VitalPBX state so the UI can show them side-by-side and warn
+// about drift.
+app.get("/voice/did/:id/inspect", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageDidRouting);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const mapping = await (db as any).didRouteMapping.findUnique({ where: { id } });
+  if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, mapping.tenantId);
+
+  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
+  if (!link?.pbxTenantId) {
+    return reply.send({
+      ok: true,
+      mapping,
+      pbxLive: null,
+      driftDetected: false,
+      driftReason: "tenant_not_linked",
+    });
+  }
+
+  let pbxLive: Record<string, unknown> | null = null;
+  let fetchError: string | null = null;
+  try {
+    pbxLive = await didFetchLivePbxInboundNumber(link.pbxTenantId, String(mapping.e164));
+  } catch (err: any) {
+    fetchError = err?.message ?? "pbx_read_failed";
+    app.log.warn({ id, err: fetchError }, "did.inspect: live PBX read failed");
+  }
+
+  const drift = didComputeDrift(mapping, pbxLive);
+  return reply.send({
+    ok: true,
+    mapping,
+    pbxLive: pbxLive
+      ? {
+          destination_type: (pbxLive as any).destination_type ?? null,
+          destination: (pbxLive as any).destination ?? null,
+          channel_variables: (pbxLive as any).channel_variables ?? null,
+          description: (pbxLive as any).description ?? null,
+          raw: pbxLive,
+        }
+      : null,
+    pbxFetchError: fetchError,
+    driftDetected: drift.driftDetected,
+    driftReason: drift.reason,
+  });
+});
+
+// ── POST /voice/did/:id/switch-to-connect ────────────────────────────────────
+// Captures the live PBX destination, stashes it on the mapping, publishes the
+// didmap AstDB keys, and PATCHes the VitalPBX inbound_number so the DID now
+// enters `[connect-tenant-ivr]` with TENANT_SLUG preset.
+app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
+  const user = await requirePermission(req, reply, canPublishDidRouting);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+
+  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+  if (!inboundApiEnabled) {
+    return reply.code(503).send({
+      error: "pbx_inbound_api_disabled",
+      detail: "Set PBX_INBOUND_API=true in the Connect API environment to allow DID takeover.",
+    });
+  }
+
+  const mapping = await (db as any).didRouteMapping.findUnique({ where: { id } });
+  if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, mapping.tenantId);
+  if (!mapping.enabled) return reply.code(409).send({ error: "mapping_disabled" });
+  if (!mapping.ivrProfileId) {
+    return reply.code(409).send({
+      error: "no_ivr_configured",
+      detail: "Assign an IVR profile before taking over this DID — otherwise the call has nowhere to go.",
+    });
+  }
+
+  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
+  if (!link?.pbxTenantId) {
+    return reply.code(409).send({ error: "tenant_not_linked", detail: "This tenant has no TenantPbxLink.pbxTenantId." });
+  }
+
+  const tenantSlug = await getIvrSlugForTenant(mapping.tenantId);
+  const e164 = String(mapping.e164);
+
+  // Step 1 — read the current PBX destination so we can restore it later.
+  let pbxSnapshot: Record<string, unknown> | null = null;
+  try {
+    pbxSnapshot = await didFetchLivePbxInboundNumber(link.pbxTenantId, e164);
+  } catch (err: any) {
+    return reply.code(502).send({ error: "pbx_read_failed", detail: err?.message ?? "unknown" });
+  }
+  if (!pbxSnapshot) {
+    return reply.code(404).send({
+      error: "pbx_inbound_not_found",
+      detail: `VitalPBX tenant has no inbound_numbers entry for ${e164}. Create the DID on the PBX first.`,
+    });
+  }
+
+  // Step 2 — stash snapshot + insert pending audit row. Same transaction so
+  // we can't lose the capture even if later steps fail.
+  const performedBy = (user as any).id ?? "unknown";
+  const stashedDestinationType = String((pbxSnapshot as any).destination_type ?? "") || null;
+  const stashedDestination     = String((pbxSnapshot as any).destination ?? "")      || null;
+  const stashedChannelVars     = (pbxSnapshot as any).channel_variables ?? null;
+
+  const { logRow } = await (db as any).$transaction(async (tx: any) => {
+    await tx.didRouteMapping.update({
+      where: { id: mapping.id },
+      data: {
+        originalPbxDestinationType:  stashedDestinationType,
+        originalPbxDestination:      stashedDestination,
+        originalPbxChannelVariables: stashedChannelVars ?? undefined,
+        originalCapturedAt:          new Date(),
+      },
+    });
+    const logRow = await tx.didRouteSwitchLog.create({
+      data: {
+        mappingId:  mapping.id,
+        tenantId:   mapping.tenantId,
+        fromMode:   mapping.routingMode ?? "pbx",
+        toMode:     "connect",
+        performedBy,
+        status:     "pending",
+        pbxSnapshot: pbxSnapshot as any,
+      },
+    });
+    return { logRow };
+  });
+
+  // Step 3 — publish didmap AstDB keys (tenant + profile + MOH).
+  try {
+    const values = await didBuildPublishValues(mapping, tenantSlug);
+    await publishDidmapToAstDb(tenantSlug, e164, values);
+  } catch (err: any) {
+    await (db as any).didRouteSwitchLog.update({
+      where: { id: logRow.id },
+      data:  { status: "failed", error: `astdb_publish_failed: ${err?.message ?? "unknown"}` },
+    });
+    await (db as any).didRouteMapping.update({
+      where: { id: mapping.id },
+      data:  { lastSwitchError: `astdb_publish_failed: ${err?.message ?? "unknown"}` },
+    });
+    return reply.code(503).send({ error: "astdb_publish_failed", detail: err?.message });
+  }
+
+  // Step 4 — PATCH VitalPBX inbound_numbers to connect-tenant-ivr.
+  const pbxPayload: Record<string, unknown> = {
+    phone_number:     e164,
+    description:      `Connect-managed DID (${tenantSlug})`,
+    destination_type: "custom-destinations",
+    destination:      `connect-tenant-ivr,${e164},1`,
+    channel_variables: { TENANT_SLUG: tenantSlug },
+  };
+
+  let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
+  try {
+    const result = await getVitalPbxClient().addTenantInboundNumber(link.pbxTenantId, pbxPayload);
+    if (result?.id) pbxInboundRouteId = String(result.id);
+  } catch (err: any) {
+    await (db as any).didRouteSwitchLog.update({
+      where: { id: logRow.id },
+      data:  { status: "failed", error: `inbound_patch_failed: ${err?.message ?? "unknown"}`, pbxPayload: pbxPayload as any },
+    });
+    await (db as any).didRouteMapping.update({
+      where: { id: mapping.id },
+      data:  { lastSwitchError: `inbound_patch_failed: ${err?.message ?? "unknown"}` },
+    });
+    return reply.code(502).send({ error: "pbx_patch_failed", detail: err?.message });
+  }
+
+  // Step 5 — commit routingMode="connect". AstDB + PBX are now in sync; if
+  // this DB write somehow fails we're technically "out of sync", but the
+  // switchLog row already proves what we did, and the next inspect will
+  // reconcile.
+  const updated = await (db as any).didRouteMapping.update({
+    where: { id: mapping.id },
+    data: {
+      routingMode:       "connect",
+      lastSwitchedAt:    new Date(),
+      lastSwitchedBy:    performedBy,
+      lastPublishedAt:   new Date(),
+      lastSwitchError:   null,
+      pbxInboundRouteId,
+    },
+  });
+  await (db as any).didRouteSwitchLog.update({
+    where: { id: logRow.id },
+    data:  { status: "success", pbxPayload: pbxPayload as any },
+  });
+
+  app.log.info({ e164, tenantSlug, pbxInboundRouteId }, "did.switch-to-connect: success");
+  return reply.send({ ok: true, mapping: updated, logId: logRow.id, pbxPayload });
+});
+
+// ── POST /voice/did/:id/switch-to-pbx ────────────────────────────────────────
+// Restore the DID's inbound_number to the destination it pointed at before
+// Connect took over. Accepts an optional override body for the rare case
+// where the stored snapshot is stale (e.g. PBX was reinstalled).
+app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
+  const user = await requirePermission(req, reply, canPublishDidRouting);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+
+  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+  if (!inboundApiEnabled) {
+    return reply.code(503).send({
+      error: "pbx_inbound_api_disabled",
+      detail: "Set PBX_INBOUND_API=true in the Connect API environment to allow DID restore.",
+    });
+  }
+
+  const body = z.object({
+    overrideDestinationType:  z.string().min(1).max(80).optional(),
+    overrideDestination:      z.string().min(1).max(400).optional(),
+    overrideChannelVariables: z.record(z.string(), z.any()).optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+
+  const mapping = await (db as any).didRouteMapping.findUnique({ where: { id } });
+  if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+  assertIvrTenantAccess(user, mapping.tenantId);
+
+  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
+  if (!link?.pbxTenantId) {
+    return reply.code(409).send({ error: "tenant_not_linked" });
+  }
+
+  // Resolve destination: override wins, else stored original. If neither is
+  // present we refuse to guess — the operator should /inspect and pass
+  // override fields explicitly.
+  const destinationType = body.data.overrideDestinationType ?? mapping.originalPbxDestinationType;
+  const destination     = body.data.overrideDestination     ?? mapping.originalPbxDestination;
+  const channelVars     = body.data.overrideChannelVariables ?? mapping.originalPbxChannelVariables ?? undefined;
+  if (!destinationType || !destination) {
+    return reply.code(409).send({
+      error: "no_original_captured",
+      detail: "Connect has no stored pre-takeover destination for this DID. Call /inspect then pass overrideDestinationType and overrideDestination.",
+    });
+  }
+
+  const e164 = String(mapping.e164);
+
+  // Snapshot the current PBX state so the audit log records what we overwrote.
+  let pbxSnapshot: Record<string, unknown> | null = null;
+  try {
+    pbxSnapshot = await didFetchLivePbxInboundNumber(link.pbxTenantId, e164);
+  } catch (err: any) {
+    app.log.warn({ id, err: err?.message }, "did.switch-to-pbx: snapshot read failed (non-fatal)");
+  }
+
+  const performedBy = (user as any).id ?? "unknown";
+  const logRow = await (db as any).didRouteSwitchLog.create({
+    data: {
+      mappingId:   mapping.id,
+      tenantId:    mapping.tenantId,
+      fromMode:    mapping.routingMode ?? "connect",
+      toMode:      "pbx",
+      performedBy,
+      status:      "pending",
+      pbxSnapshot: pbxSnapshot as any,
+    },
+  });
+
+  const pbxPayload: Record<string, unknown> = {
+    phone_number:     e164,
+    destination_type: destinationType,
+    destination,
+  };
+  if (channelVars && typeof channelVars === "object" && !Array.isArray(channelVars)) {
+    pbxPayload.channel_variables = channelVars;
+  }
+
+  let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
+  try {
+    const result = await getVitalPbxClient().addTenantInboundNumber(link.pbxTenantId, pbxPayload);
+    if (result?.id) pbxInboundRouteId = String(result.id);
+  } catch (err: any) {
+    await (db as any).didRouteSwitchLog.update({
+      where: { id: logRow.id },
+      data:  { status: "failed", error: `inbound_patch_failed: ${err?.message ?? "unknown"}`, pbxPayload: pbxPayload as any },
+    });
+    await (db as any).didRouteMapping.update({
+      where: { id: mapping.id },
+      data:  { lastSwitchError: `inbound_patch_failed: ${err?.message ?? "unknown"}` },
+    });
+    return reply.code(502).send({ error: "pbx_patch_failed", detail: err?.message });
+  }
+
+  const updated = await (db as any).didRouteMapping.update({
+    where: { id: mapping.id },
+    data: {
+      routingMode:     "pbx",
+      lastSwitchedAt:  new Date(),
+      lastSwitchedBy:  performedBy,
+      lastSwitchError: null,
+      pbxInboundRouteId,
+    },
+  });
+  await (db as any).didRouteSwitchLog.update({
+    where: { id: logRow.id },
+    data:  { status: "success", pbxPayload: pbxPayload as any },
+  });
+
+  app.log.info({ e164, restoredTo: destination, destinationType }, "did.switch-to-pbx: success");
+  return reply.send({ ok: true, mapping: updated, logId: logRow.id, pbxPayload });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
