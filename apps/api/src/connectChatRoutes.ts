@@ -11,7 +11,7 @@ import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone } from "@connect/shared";
 import { buildChatSignedDownloadUrl, verifyChatSignedDownload } from "@connect/shared/chatSignedUrl";
-import { validateVoipMsCredentials } from "@connect/integrations";
+import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
 import {
   assertStorageKeyForThread,
   isAllowedChatMime,
@@ -920,6 +920,57 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       isTenantDefault: row.isTenantDefault,
       inboundRoutesTo: row.assignedUserId ? `user:${row.assignedUserId}` : row.tenantId ? "tenant_inbox" : "unassigned",
     };
+  });
+
+  // ── Tenant & extension lists for the portal assignment UI ─────────────────
+  app.get("/admin/apps/voip-ms/tenants", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    const rows = await db.tenant.findMany({
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    return { tenants: rows };
+  });
+
+  app.get("/admin/apps/voip-ms/extensions", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user) && !isTenantAdmin(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    const { tenantId } = z.object({ tenantId: z.string().min(1) }).parse(req.query || {});
+    const effTenant = isSuper(user) ? tenantId : effectiveChatTenantId(req, user);
+    const rows = await db.extension.findMany({
+      where: { tenantId: effTenant },
+      select: { id: true, extNumber: true, displayName: true },
+      orderBy: { extNumber: "asc" },
+    });
+    return { extensions: rows };
+  });
+
+  // ── Send test SMS ───────────────────────────────────────────────────────────
+  app.post("/admin/apps/voip-ms/send-test-sms", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    const body = z
+      .object({
+        from: z.string().min(1),
+        to: z.string().min(1),
+        message: z.string().min(1).max(1600),
+      })
+      .parse(req.body || {});
+    const creds = await loadVoipMsCreds();
+    if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED" });
+    const cfg = await getOrCreateGlobalVoipConfig();
+    const provider = new VoipMsSmsProvider(
+      { username: creds.username, password: creds.password, fromNumber: body.from, apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl },
+      false, // real send, not test mode
+    );
+    try {
+      const r = await provider.sendMessage({ tenantId: "test", from: body.from, to: body.to, body: body.message });
+      return { ok: true, messageId: r.providerMessageId };
+    } catch (e: unknown) {
+      return reply.status(502).send({ error: "SEND_FAILED", detail: String((e as Error)?.message || e) });
+    }
   });
 
   function mergeVoipMsPayload(req: any): Record<string, unknown> {
