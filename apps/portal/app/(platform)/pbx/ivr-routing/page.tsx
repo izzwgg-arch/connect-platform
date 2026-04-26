@@ -64,6 +64,35 @@ const DESTINATION_TYPE_LABELS: Record<DestinationType, string> = {
   custom:           "Custom Destination",
 };
 
+/** Human-readable description of a stored destinationRef for the preview
+ *  panel + option summary cards. Recognises the standard VitalPBX CEP shapes
+ *  the DestinationPicker emits; falls back to the raw ref for custom values. */
+function describeDestination(dest: { type: DestinationType; ref: string } | null | undefined): string {
+  if (!dest) return "";
+  const { type, ref } = dest;
+  if (type === "terminate")       return "Hang up";
+  if (type === "external_number") return `External → ${ref}`;
+  const r = (ref ?? "").trim();
+  if (!r) return DESTINATION_TYPE_LABELS[type];
+  if (type === "extension") {
+    const m = r.match(/^from-internal,([^,]+),\d+$/i);
+    if (m) return `Extension ${m[1]}`;
+  }
+  if (type === "queue") {
+    const m = r.match(/^ext-queues,([^,]+),\d+$/i);
+    if (m) return `Queue ${m[1]}`;
+  }
+  if (type === "ring_group") {
+    const m = r.match(/^ext-group,([^,]+),\d+$/i);
+    if (m) return `Ring Group ${m[1]}`;
+  }
+  if (type === "voicemail") {
+    const m = r.match(/^ext-local,vmu([^,]+),\d+$/i);
+    if (m) return `Voicemail ${m[1]}`;
+  }
+  return `${DESTINATION_TYPE_LABELS[type]} — ${r}`;
+}
+
 // Display order for the 12 digit slots shown in the Option Routing table.
 const OPTION_DIGIT_ORDER = ["1","2","3","4","5","6","7","8","9","0","star","hash"] as const;
 const OPTION_DIGIT_LABEL: Record<string, string> = {
@@ -77,8 +106,11 @@ interface PreviewActiveProfile {
   name: string;
   type: RouteType;
   pbxDestination: string;
-  prompts: { greeting: string | null; invalid: string | null; timeout: string | null };
+  prompts: { greeting: string | null; invalid: string | null; timeout: string | null; retry?: string | null };
   timing: { timeoutSeconds: number; maxRetries: number };
+  directDial?: boolean;
+  invalidDestination?: { type: DestinationType; ref: string } | null;
+  timeoutDestination?: { type: DestinationType; ref: string } | null;
   options: Array<{
     digit: string;
     destinationType: DestinationType;
@@ -517,13 +549,19 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
   };
 
   const save = async () => {
-    if (!form.name.trim() || !form.pbxDestination.trim()) { setErr("Name and PBX Destination are required."); return; }
+    if (!form.name.trim()) { setErr("Name is required."); return; }
     setSaving(true); setErr(null);
     try {
       const payload: Record<string, unknown> = {
         name: form.name,
         type: form.type,
-        pbxDestination: form.pbxDestination,
+        // pbxDestination is a legacy single-destination CEP consumed by
+        // [connect-tenant-router]. Connect-owned IVRs all go through
+        // [connect-tenant-ivr] via the Phase 2 menu, so the UI no longer
+        // asks admins to hand-type this. The API defaults a blank value
+        // to `connect-tenant-ivr,s,1` so the legacy router still has a
+        // valid Goto() for tenants that haven't migrated.
+        pbxDestination: form.pbxDestination || undefined,
         pbxPromptRef:        form.pbxPromptRef        || null,
         pbxInvalidPromptRef: form.pbxInvalidPromptRef || null,
         pbxTimeoutPromptRef: form.pbxTimeoutPromptRef || null,
@@ -680,9 +718,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
                     <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{ROUTE_TYPE_LABELS[p.type] ?? p.type}</div>
                   </div>
                 </div>
-                <code style={{ fontSize: 12, background: "rgba(0,0,0,0.3)", padding: "3px 8px", borderRadius: 5, color: "#94a3b8", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {p.pbxDestination || "—"}
-                </code>
+                <ProfileOptionCountBadge profileId={p.id} />
                 {canManage && (
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => openEdit(p)} style={btnSmall("#334155")}>Edit</button>
@@ -725,12 +761,6 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
                 <option key={v} value={v}>{l}</option>
               ))}
             </select>
-
-            <label style={labelStyle}>PBX Destination <span style={{ color: "#64748b", fontWeight: 400 }}>(context,exten,priority)</span></label>
-            <input style={inputStyle} value={form.pbxDestination} onChange={(e) => setForm((f) => ({ ...f, pbxDestination: e.target.value }))} placeholder="app-ivr,8000,1" />
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
-              Used by the legacy single-destination router. Example: <code>app-ivr,8000,1</code> or <code>from-internal,1001,1</code>
-            </div>
 
             <SectionLabel>Greeting &amp; Prompts</SectionLabel>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
@@ -819,60 +849,28 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
               Where to route after the caller exceeds max retries on invalid digits. Leave blank to fall through to the global <code>connect-default-fallback</code> (existing behavior).
             </div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <div style={{ flex: "0 0 160px" }}>
-                <label style={labelStyle}>Module</label>
-                <select
-                  style={{ ...inputStyle, marginBottom: 0 }}
-                  value={form.invalidDestinationType}
-                  onChange={(e) => setForm((f) => ({ ...f, invalidDestinationType: e.target.value as DestinationType | "" }))}
-                >
-                  <option value="">— none (default fallback) —</option>
-                  {DESTINATION_TYPES.map((t) => (
-                    <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>Destination</label>
-                <input
-                  style={{ ...inputStyle, marginBottom: 0, fontFamily: "monospace" }}
-                  value={form.invalidDestinationRef}
-                  onChange={(e) => setForm((f) => ({ ...f, invalidDestinationRef: e.target.value }))}
-                  placeholder={form.invalidDestinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
-                  disabled={!form.invalidDestinationType}
-                />
-              </div>
+            <div style={{ marginBottom: 14 }}>
+              <DestinationPicker
+                tenantId={tenantId}
+                includeEmpty
+                emptyLabel="— none (default fallback) —"
+                value={{ type: form.invalidDestinationType, ref: form.invalidDestinationRef }}
+                onChange={(v) => setForm((f) => ({ ...f, invalidDestinationType: v.type, invalidDestinationRef: v.ref }))}
+              />
             </div>
 
             <SectionLabel>Timeout Handling</SectionLabel>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
               Where to route after the caller exceeds max retries on WaitExten timeouts (no digit pressed). Leave blank to fall through to the global fallback.
             </div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <div style={{ flex: "0 0 160px" }}>
-                <label style={labelStyle}>Module</label>
-                <select
-                  style={{ ...inputStyle, marginBottom: 0 }}
-                  value={form.timeoutDestinationType}
-                  onChange={(e) => setForm((f) => ({ ...f, timeoutDestinationType: e.target.value as DestinationType | "" }))}
-                >
-                  <option value="">— none (default fallback) —</option>
-                  {DESTINATION_TYPES.map((t) => (
-                    <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>Destination</label>
-                <input
-                  style={{ ...inputStyle, marginBottom: 0, fontFamily: "monospace" }}
-                  value={form.timeoutDestinationRef}
-                  onChange={(e) => setForm((f) => ({ ...f, timeoutDestinationRef: e.target.value }))}
-                  placeholder={form.timeoutDestinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
-                  disabled={!form.timeoutDestinationType}
-                />
-              </div>
+            <div style={{ marginBottom: 14 }}>
+              <DestinationPicker
+                tenantId={tenantId}
+                includeEmpty
+                emptyLabel="— none (default fallback) —"
+                value={{ type: form.timeoutDestinationType, ref: form.timeoutDestinationRef }}
+                onChange={(v) => setForm((f) => ({ ...f, timeoutDestinationType: v.type, timeoutDestinationRef: v.ref }))}
+              />
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
@@ -1633,6 +1631,247 @@ function useExtensionSuggestions(tenantId: string): ExtensionSuggestion[] {
   return rows;
 }
 
+// ── Module-backed destination catalog (VitalPBX-parity) ─────────────────────
+//
+// Each "module" maps to either a live PBX resource list or a tenant-scoped
+// Connect object (prompts, nested IVR profiles). The picker renders the
+// right control per type so admins don't hand-type CEP strings like
+// `ext-queues,900,1`.
+//
+// CEP patterns used (VitalPBX defaults — admins can still drop to "custom"
+// to pin a non-default context):
+//   extension    → from-internal,<ext>,1
+//   queue        → ext-queues,<queuenum>,1
+//   ring_group   → ext-group,<groupnum>,1      (free text — no live list)
+//   voicemail    → ext-local,vmu<ext>,1
+//   ivr          → connect-tenant-ivr,<did>,1  (nested Connect IVR profile)
+//   announcement → app-daemon-announce,<ref>,1 (free text; rarely used)
+//   external_number → +E.164
+//   terminate    → connect-default-fallback,s,1
+//   custom       → any CEP the admin pastes
+
+type QueueSuggestion = { number: string; name: string | null };
+
+function useQueueSuggestions(tenantId: string): QueueSuggestion[] {
+  const [rows, setRows] = useState<QueueSuggestion[]>([]);
+  useEffect(() => {
+    if (!tenantId) { setRows([]); return; }
+    let abort = false;
+    (async () => {
+      try {
+        const r = await apiGet<{ rows: any[] }>(
+          `/voice/pbx/resources/queues?tenantId=${encodeURIComponent(tenantId)}`,
+        );
+        if (abort) return;
+        setRows((r.rows || []).map((q) => {
+          const number = String(q.number ?? q.queue_number ?? q.queuenumber ?? q.id ?? "");
+          const name = q.name ?? q.description ?? q.queue_name ?? null;
+          return { number, name };
+        }).filter((q) => q.number));
+      } catch {
+        if (!abort) setRows([]);
+      }
+    })();
+    return () => { abort = true; };
+  }, [tenantId]);
+  return rows;
+}
+
+/** Parse a stored destinationRef into the pieces the picker edits. Best-effort:
+ *  extensions / queues / ring-groups / voicemail recognise their well-known
+ *  CEP shape so switching between profiles preserves the selection. Falls
+ *  back to `{ free: ref }` so unknown patterns round-trip through a raw input
+ *  without being mangled. */
+function parseDestinationRef(type: DestinationType | "", ref: string): { selected: string; free: string } {
+  const r = (ref ?? "").trim();
+  if (!r) return { selected: "", free: "" };
+  if (type === "extension") {
+    const m = r.match(/^from-internal,([^,]+),\d+$/i);
+    if (m) return { selected: m[1], free: "" };
+  }
+  if (type === "queue") {
+    const m = r.match(/^ext-queues,([^,]+),\d+$/i);
+    if (m) return { selected: m[1], free: "" };
+  }
+  if (type === "ring_group") {
+    const m = r.match(/^ext-group,([^,]+),\d+$/i);
+    if (m) return { selected: m[1], free: r };
+  }
+  if (type === "voicemail") {
+    const m = r.match(/^ext-local,vmu([^,]+),\d+$/i);
+    if (m) return { selected: m[1], free: "" };
+  }
+  if (type === "external_number") return { selected: "", free: r };
+  if (type === "terminate")       return { selected: "", free: "" };
+  return { selected: "", free: r };
+}
+
+/** Turn a picker selection into the CEP the publisher writes to AstDB. */
+function buildDestinationRef(type: DestinationType | "", selected: string, free: string): string {
+  const s = (selected ?? "").trim();
+  const f = (free ?? "").trim();
+  if (type === "extension"        && s) return `from-internal,${s},1`;
+  if (type === "queue"            && s) return `ext-queues,${s},1`;
+  if (type === "ring_group")            return f; // no live list; free text CEP
+  if (type === "voicemail"        && s) return `ext-local,vmu${s},1`;
+  if (type === "ivr")                   return f; // free text CEP for nested IVRs
+  if (type === "announcement")          return f;
+  if (type === "external_number")       return f;
+  if (type === "terminate")             return "connect-default-fallback,s,1";
+  if (type === "custom")                return f;
+  return f;
+}
+
+/** Unified destination picker used by option rows + invalid/timeout handlers.
+ *  Renders a module dropdown plus the right value control:
+ *  - live dropdowns for extension / queue / voicemail
+ *  - free-text for ring_group / ivr / announcement / custom
+ *  - E.164 input for external_number
+ *  - no input for terminate
+ *  Emits (type, ref) where ref is a CEP string the dialplan can Goto(). */
+function DestinationPicker({
+  tenantId, value, disabled, onChange, includeEmpty, emptyLabel,
+}: {
+  tenantId: string;
+  value: { type: DestinationType | ""; ref: string };
+  disabled?: boolean;
+  onChange: (next: { type: DestinationType | ""; ref: string }) => void;
+  includeEmpty?: boolean;
+  emptyLabel?: string;
+}) {
+  const extensions = useExtensionSuggestions(tenantId);
+  const queues     = useQueueSuggestions(tenantId);
+  const parsed     = parseDestinationRef(value.type, value.ref);
+
+  const setType = (t: DestinationType | "") => {
+    if (t === "terminate") { onChange({ type: t, ref: "connect-default-fallback,s,1" }); return; }
+    if (t === "")          { onChange({ type: "",       ref: "" }); return; }
+    onChange({ type: t, ref: "" });
+  };
+
+  const setSelected = (s: string) => {
+    onChange({ type: value.type, ref: buildDestinationRef(value.type, s, "") });
+  };
+  const setFree = (f: string) => {
+    onChange({ type: value.type, ref: buildDestinationRef(value.type, "", f) });
+  };
+
+  const freePlaceholder: Partial<Record<DestinationType, string>> = {
+    ring_group:      "ext-group,601,1",
+    ivr:             "connect-tenant-ivr,<did>,1",
+    announcement:    "app-daemon-announce,custom/notice,1",
+    external_number: "+15551234567",
+    custom:          "from-internal,1001,1",
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <select
+        disabled={disabled}
+        style={{ ...inputStyle, marginBottom: 0, flex: "0 0 170px" }}
+        value={value.type}
+        onChange={(e) => setType(e.target.value as DestinationType | "")}
+      >
+        {includeEmpty && <option value="">{emptyLabel ?? "— none —"}</option>}
+        {DESTINATION_TYPES.map((t) => (
+          <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
+        ))}
+      </select>
+      {value.type === "extension" && (
+        <select
+          disabled={disabled || extensions.length === 0}
+          style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+          value={parsed.selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          <option value="">{extensions.length === 0 ? "(no extensions synced)" : "— pick extension —"}</option>
+          {extensions.map((e) => (
+            <option key={e.extension} value={e.extension}>
+              {e.extension}{e.name ? ` — ${e.name}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {value.type === "queue" && (
+        <select
+          disabled={disabled || queues.length === 0}
+          style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+          value={parsed.selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          <option value="">{queues.length === 0 ? "(no queues synced)" : "— pick queue —"}</option>
+          {queues.map((q) => (
+            <option key={q.number} value={q.number}>
+              {q.number}{q.name ? ` — ${q.name}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {value.type === "voicemail" && (
+        <select
+          disabled={disabled || extensions.length === 0}
+          style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+          value={parsed.selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          <option value="">{extensions.length === 0 ? "(no extensions synced)" : "— pick mailbox (extension) —"}</option>
+          {extensions.map((e) => (
+            <option key={e.extension} value={e.extension}>
+              vmu{e.extension}{e.name ? ` — ${e.name}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {(value.type === "ring_group" || value.type === "ivr" || value.type === "announcement" || value.type === "external_number" || value.type === "custom") && (
+        <input
+          disabled={disabled}
+          style={{ ...inputStyle, marginBottom: 0, flex: 1, fontFamily: "monospace" }}
+          value={parsed.free}
+          placeholder={freePlaceholder[value.type as DestinationType] ?? "from-internal,101,1"}
+          onChange={(e) => setFree(e.target.value)}
+        />
+      )}
+      {value.type === "terminate" && (
+        <div style={{ ...inputStyle, marginBottom: 0, flex: 1, color: "#64748b", fontStyle: "italic" }}>
+          Call hangs up cleanly (no destination needed).
+        </div>
+      )}
+      {value.type === "" && (
+        <div style={{ ...inputStyle, marginBottom: 0, flex: 1, color: "#64748b", fontStyle: "italic" }}>
+          Falls through to the global fallback.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Compact badge shown in the collapsed profile row header. Replaces the raw
+// pbxDestination CEP — admins don't care about the legacy CEP, they care
+// about how many menu options they've configured.
+function ProfileOptionCountBadge({ profileId }: { profileId: string }) {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    let abort = false;
+    (async () => {
+      try {
+        const r = await apiGet<{ options: Array<{ enabled: boolean }> }>(
+          `/voice/ivr/route-profiles/${profileId}/options`,
+        );
+        if (abort) return;
+        setCount((r.options || []).filter((o) => o.enabled).length);
+      } catch {
+        if (!abort) setCount(null);
+      }
+    })();
+    return () => { abort = true; };
+  }, [profileId]);
+  return (
+    <code style={{ fontSize: 12, background: "rgba(0,0,0,0.3)", padding: "3px 8px", borderRadius: 5, color: "#94a3b8" }}>
+      {count == null ? "…" : `${count} option${count === 1 ? "" : "s"}`}
+    </code>
+  );
+}
+
 function ProfileOptionsSection({ profile, canEdit }: {
   profile: RouteProfile;
   canEdit: boolean;
@@ -1640,7 +1879,6 @@ function ProfileOptionsSection({ profile, canEdit }: {
   const [options, setOptions] = useState<IvrOptionRoute[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const extensions = useExtensionSuggestions(profile.tenantId);
 
   const reload = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -1671,7 +1909,7 @@ function ProfileOptionsSection({ profile, canEdit }: {
   };
 
   const remove = async (opt: IvrOptionRoute) => {
-    if (!confirm(`Clear routing for digit "${OPTION_DIGIT_LABEL[opt.optionDigit]}"?`)) return;
+    if (!confirm(`Remove Press ${OPTION_DIGIT_LABEL[opt.optionDigit]}?`)) return;
     try {
       await apiDelete(`/voice/ivr/route-profiles/${profile.id}/options/${opt.id}`);
       reload();
@@ -1679,160 +1917,211 @@ function ProfileOptionsSection({ profile, canEdit }: {
   };
 
   const byDigit = new Map(options.map((o) => [o.optionDigit, o]));
+  // Which digit does the "Add option" card default to? Pick the lowest
+  // unused slot so admins get 1 → 2 → 3 … without picking from a dropdown.
+  const nextUnusedDigit = OPTION_DIGIT_ORDER.find((d) => !byDigit.has(d)) ?? null;
+  const [addingDigit, setAddingDigit] = useState<string | null>(null);
+
+  const configured = OPTION_DIGIT_ORDER.filter((d) => byDigit.has(d));
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <SectionLabel>Option Routing</SectionLabel>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div>
+          <SectionLabel>IVR Menu Options</SectionLabel>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Each option routes a caller digit (0-9, *, #) to an Extension, Queue, Voicemail, Ring Group, Announcement, External Number, or another IVR. Destinations are tenant-scoped.
+          </div>
+        </div>
+        {canEdit && nextUnusedDigit && addingDigit == null && (
+          <button onClick={() => setAddingDigit(nextUnusedDigit)} style={btnStyle("#6366f1")}>+ Add option</button>
+        )}
       </div>
       {err && <div style={{ color: "#fca5a5", fontSize: 12, marginBottom: 8 }}>{err}</div>}
       {loading && <div style={{ fontSize: 12, color: "#64748b" }}>Loading options…</div>}
       {!loading && (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "#64748b", fontSize: 11, textTransform: "uppercase" }}>
-              <th style={thStyle}>Digit</th>
-              <th style={thStyle}>Label</th>
-              <th style={thStyle}>Type</th>
-              <th style={thStyle}>Destination (context,exten,priority or +E.164)</th>
-              <th style={thStyle}>On</th>
-              <th style={thStyle}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {OPTION_DIGIT_ORDER.map((digit) => (
-              <OptionRow
-                key={digit}
-                digit={digit}
-                existing={byDigit.get(digit) ?? null}
-                canEdit={canEdit}
-                extensions={extensions}
-                onSave={(patch) => upsert(digit, byDigit.get(digit) ?? null, patch)}
-                onRemove={(opt) => remove(opt)}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {configured.length === 0 && addingDigit == null && (
+            <div style={emptyBox}>
+              No menu options configured. Click <strong style={{ color: "#c7d2fe" }}>+ Add option</strong> to configure Press 1, Press 2, etc.
+            </div>
+          )}
+          {configured.map((digit) => (
+            <OptionCard
+              key={digit}
+              digit={digit}
+              tenantId={profile.tenantId}
+              existing={byDigit.get(digit) ?? null}
+              canEdit={canEdit}
+              takenDigits={new Set(configured.filter((d) => d !== digit))}
+              onSave={(patch) => upsert(digit, byDigit.get(digit) ?? null, patch)}
+              onRemove={(opt) => remove(opt)}
+            />
+          ))}
+          {addingDigit && (
+            <OptionCard
+              key={`new-${addingDigit}`}
+              digit={addingDigit}
+              tenantId={profile.tenantId}
+              existing={null}
+              canEdit={canEdit}
+              takenDigits={new Set(configured)}
+              isNew
+              onSave={(patch) => {
+                // Commit with whichever digit the user picked in the draft
+                const digitToUse = (patch as any).__digit || addingDigit;
+                upsert(digitToUse, null, patch);
+                setAddingDigit(null);
+              }}
+              onRemove={() => setAddingDigit(null)}
+            />
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function OptionRow({ digit, existing, canEdit, extensions, onSave, onRemove }: {
+function OptionCard({ digit, tenantId, existing, canEdit, takenDigits, isNew, onSave, onRemove }: {
   digit: string;
+  tenantId: string;
   existing: IvrOptionRoute | null;
   canEdit: boolean;
-  extensions: ExtensionSuggestion[];
-  onSave: (patch: Partial<IvrOptionRoute>) => void;
+  takenDigits: Set<string>;
+  isNew?: boolean;
+  onSave: (patch: Partial<IvrOptionRoute> & { __digit?: string }) => void;
   onRemove: (opt: IvrOptionRoute) => void;
 }) {
   const [draft, setDraft] = useState({
+    digit,
     label: existing?.label ?? "",
     destinationType: (existing?.destinationType ?? "extension") as DestinationType,
     destinationRef:  existing?.destinationRef ?? "",
     enabled: existing?.enabled ?? true,
   });
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(!!isNew);
 
-  // Re-seed draft when the row's underlying data changes (e.g. after reload
-  // from a successful save from another row). Avoids stomping an in-progress
-  // edit by gating on `dirty`.
   useEffect(() => {
     if (dirty) return;
     setDraft({
+      digit,
       label: existing?.label ?? "",
       destinationType: (existing?.destinationType ?? "extension") as DestinationType,
       destinationRef:  existing?.destinationRef ?? "",
       enabled: existing?.enabled ?? true,
     });
-  }, [existing, dirty]);
+  }, [existing, digit, dirty]);
 
-  const set = <K extends keyof typeof draft>(k: K, v: typeof draft[K]) => {
+  const touch = <K extends keyof typeof draft>(k: K, v: typeof draft[K]) => {
     setDraft((d) => ({ ...d, [k]: v }));
     setDirty(true);
   };
 
   const save = () => {
-    if (!draft.destinationRef.trim()) return;
+    if (!draft.destinationRef.trim() && draft.destinationType !== "terminate") return;
+    if (isNew && takenDigits.has(draft.digit)) return;
     onSave({
       label: draft.label || null,
       destinationType: draft.destinationType,
       destinationRef: draft.destinationRef.trim(),
       enabled: draft.enabled,
+      ...(isNew ? { __digit: draft.digit } : {}),
     });
     setDirty(false);
   };
 
+  const duplicateDigit = isNew && takenDigits.has(draft.digit);
+
   return (
-    <tr style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-      <td style={{ ...tdStyle, fontWeight: 700, width: 44 }}>{OPTION_DIGIT_LABEL[digit]}</td>
-      <td style={tdStyle}>
-        <input
-          style={{ ...inputStyle, marginBottom: 0, padding: "5px 8px" }}
-          value={draft.label}
-          placeholder="Sales, Support…"
-          disabled={!canEdit}
-          onChange={(e) => set("label", e.target.value)}
-        />
-      </td>
-      <td style={tdStyle}>
-        <select
-          style={{ ...inputStyle, marginBottom: 0, padding: "5px 8px" }}
-          value={draft.destinationType}
-          disabled={!canEdit}
-          onChange={(e) => set("destinationType", e.target.value as DestinationType)}
-        >
-          {DESTINATION_TYPES.map((t) => (
-            <option key={t} value={t}>{DESTINATION_TYPE_LABELS[t]}</option>
-          ))}
-        </select>
-      </td>
-      <td style={tdStyle}>
-        <input
-          style={{ ...inputStyle, marginBottom: 0, padding: "5px 8px", fontFamily: "monospace" }}
-          value={draft.destinationRef}
-          placeholder={draft.destinationType === "external_number" ? "+15551234567" : "from-internal,101,1"}
-          disabled={!canEdit}
-          list={draft.destinationType === "extension" ? `ext-suggest-${digit}` : undefined}
-          onChange={(e) => set("destinationRef", e.target.value)}
-        />
-        {/* VitalPBX-parity: for extension destinations we offer the tenant's
-            own extensions as suggestions so admins don't have to memorise
-            `from-internal,<ext>,1`. Typing any part of the extension number
-            or display name surfaces the match; selecting one fills the full
-            CEP string. Tenant-scoped by usExtensionSuggestions (no cross-
-            tenant leakage). */}
-        {draft.destinationType === "extension" && extensions.length > 0 && (
-          <datalist id={`ext-suggest-${digit}`}>
-            {extensions.map((e) => (
-              <option
-                key={e.extension}
-                value={`from-internal,${e.extension},1`}
-                label={`${e.extension}${e.name ? ` — ${e.name}` : ""}`}
-              />
+    <div style={{
+      background: "rgba(15,23,42,0.4)",
+      border: "1px solid rgba(255,255,255,0.06)",
+      borderRadius: 10, padding: "12px 14px",
+      display: "grid", gridTemplateColumns: "70px 1fr auto", gap: 12, alignItems: "flex-start",
+    }}>
+      <div>
+        <label style={{ ...labelStyle, marginBottom: 4, fontSize: 10 }}>Digit</label>
+        {isNew ? (
+          <select
+            style={{ ...inputStyle, marginBottom: 0, padding: "6px 8px", fontWeight: 700, fontSize: 14 }}
+            value={draft.digit}
+            disabled={!canEdit}
+            onChange={(e) => touch("digit", e.target.value)}
+          >
+            {OPTION_DIGIT_ORDER.map((d) => (
+              <option key={d} value={d} disabled={takenDigits.has(d)}>
+                {OPTION_DIGIT_LABEL[d]}{takenDigits.has(d) ? " (taken)" : ""}
+              </option>
             ))}
-          </datalist>
-        )}
-      </td>
-      <td style={{ ...tdStyle, width: 44, textAlign: "center" }}>
-        <input
-          type="checkbox"
-          checked={draft.enabled}
-          disabled={!canEdit}
-          onChange={(e) => set("enabled", e.target.checked)}
-          style={{ accentColor: "#6366f1" }}
-        />
-      </td>
-      <td style={{ ...tdStyle, width: 140, textAlign: "right" }}>
-        {canEdit && (dirty ? (
-          <button onClick={save} style={btnSmall("#6366f1")}>Save</button>
-        ) : existing ? (
-          <button onClick={() => onRemove(existing)} style={btnSmall("#7f1d1d")}>Clear</button>
+          </select>
         ) : (
-          <span style={{ fontSize: 11, color: "#475569" }}>Unassigned</span>
-        ))}
-      </td>
-    </tr>
+          <div style={{
+            fontWeight: 800, fontSize: 20, textAlign: "center",
+            background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
+            borderRadius: 8, padding: "6px 0", color: "#c7d2fe",
+          }}>
+            {OPTION_DIGIT_LABEL[digit]}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        <div>
+          <label style={{ ...labelStyle, marginBottom: 4, fontSize: 10 }}>Label (optional)</label>
+          <input
+            style={{ ...inputStyle, marginBottom: 0, padding: "6px 8px" }}
+            value={draft.label}
+            placeholder="Sales, Support, Reception…"
+            disabled={!canEdit}
+            onChange={(e) => touch("label", e.target.value)}
+          />
+        </div>
+        <div>
+          <label style={{ ...labelStyle, marginBottom: 4, fontSize: 10 }}>Destination</label>
+          <DestinationPicker
+            tenantId={tenantId}
+            disabled={!canEdit}
+            value={{ type: draft.destinationType, ref: draft.destinationRef }}
+            onChange={(v) => {
+              setDraft((d) => ({
+                ...d,
+                destinationType: (v.type || "extension") as DestinationType,
+                destinationRef: v.ref,
+              }));
+              setDirty(true);
+            }}
+          />
+        </div>
+        {duplicateDigit && (
+          <div style={{ fontSize: 11, color: "#fca5a5" }}>
+            Digit {OPTION_DIGIT_LABEL[draft.digit]} already has a menu option. Pick a different digit.
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#cbd5e1" }}>
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            disabled={!canEdit}
+            onChange={(e) => touch("enabled", e.target.checked)}
+            style={{ accentColor: "#6366f1" }}
+          />
+          Enabled
+        </label>
+        {canEdit && (
+          <div style={{ display: "flex", gap: 6 }}>
+            {dirty ? (
+              <button onClick={save} disabled={duplicateDigit} style={btnSmall("#6366f1")}>Save</button>
+            ) : null}
+            {existing ? (
+              <button onClick={() => onRemove(existing)} style={btnSmall("#7f1d1d")}>Remove</button>
+            ) : isNew ? (
+              <button onClick={() => onRemove(null as any)} style={btnSmall("#334155")}>Cancel</button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2239,8 +2528,12 @@ function ActiveCallPreview({ preview }: { preview: PreviewResponse }) {
         <code style={codePillStyle}>{p.prompts.greeting || "(built-in default)"}</code>
         <div>Waits for digit:</div>
         <code style={codePillStyle}>{p.timing.timeoutSeconds}s, up to {p.timing.maxRetries} retries</code>
-        <div>Fallback destination:</div>
-        <code style={codePillStyle}>{p.pbxDestination || "connect-default-fallback"}</code>
+        <div>Direct dial:</div>
+        <code style={codePillStyle}>{p.directDial ? "ON — callers can dial extensions" : "OFF — only configured digits"}</code>
+        <div>Invalid exhausted →</div>
+        <code style={codePillStyle}>{describeDestination(p.invalidDestination) || "(global default-fallback)"}</code>
+        <div>Timeout exhausted →</div>
+        <code style={codePillStyle}>{describeDestination(p.timeoutDestination) || "(global default-fallback)"}</code>
       </div>
       <div style={{ fontSize: 11, color: "#64748b", marginTop: 10, marginBottom: 6, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase" }}>Per-digit routing</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 6 }}>
@@ -2262,10 +2555,10 @@ function ActiveCallPreview({ preview }: { preview: PreviewResponse }) {
               {o && o.enabled ? (
                 <div style={{ overflow: "hidden" }}>
                   <div style={{ color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {o.label || DESTINATION_TYPE_LABELS[o.destinationType]}
+                    {o.label || describeDestination({ type: o.destinationType, ref: o.destinationRef })}
                   </div>
                   <code style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>
-                    {o.destinationRef}
+                    {o.label ? describeDestination({ type: o.destinationType, ref: o.destinationRef }) : o.destinationRef}
                   </code>
                 </div>
               ) : (

@@ -12132,7 +12132,13 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
     tenantId:            z.string(),
     name:                z.string().min(1).max(100),
     type:                z.enum(["business_hours", "after_hours", "holiday", "manual_override", "emergency"]),
-    pbxDestination:      z.string().min(1).max(200),
+    // pbxDestination is the legacy single-destination CEP used by
+    // [connect-tenant-router] for tenants that haven't migrated to the
+    // Phase 2 [connect-tenant-ivr] menu. For new profiles the UI no longer
+    // asks for it — we default to the Phase 2 IVR entry, which is the
+    // mode 99%+ of tenants use anyway. Admins can still pass a value
+    // explicitly to pin a legacy CEP.
+    pbxDestination:      z.string().min(1).max(200).optional(),
     // Phase 2 — optional IVR menu fields. All default to null/defaults.
     pbxPromptRef:        z.string().nullable().optional(),
     pbxInvalidPromptRef: z.string().nullable().optional(),
@@ -12176,11 +12182,13 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
     const err = await ivrValidatePromptRefForTenant(ref ?? null, connectTenantId);
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
-  // pbxDestination is used by the legacy single-dest router. CEP-validate it
-  // with the same regex option destinations use so we don't publish a value
-  // the dialplan can't Goto(). Existing rows stay untouched — we only check
-  // on create/update.
-  if (!IVR_CEP_REGEX.test(d.pbxDestination)) {
+  // pbxDestination is used by the legacy single-dest router. Default to the
+  // Phase 2 IVR entry context when the UI doesn't send one — Connect-owned
+  // IVR menus don't need the legacy CEP and making admins hand-type it was
+  // the source of the "invalid_pbx_destination" papercut. If a value IS sent,
+  // CEP-validate it so we don't publish garbage.
+  const effectivePbxDestination = (d.pbxDestination ?? "connect-tenant-ivr,s,1").trim();
+  if (!IVR_CEP_REGEX.test(effectivePbxDestination)) {
     return reply.code(400).send({ error: "invalid_pbx_destination", detail: "pbxDestination must be in \"context,exten,priority\" form" });
   }
   // VitalPBX-parity: per-profile invalid/timeout destinations. Both fields
@@ -12192,7 +12200,7 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   if (timeoutDestCheck) return reply.code(400).send({ error: "timeout_destination_invalid", detail: timeoutDestCheck });
   const profile = await (db as any).ivrRouteProfile.create({
     data: {
-      tenantId: connectTenantId, name: d.name, type: d.type, pbxDestination: d.pbxDestination, isActive: true,
+      tenantId: connectTenantId, name: d.name, type: d.type, pbxDestination: effectivePbxDestination, isActive: true,
       pbxPromptRef: d.pbxPromptRef ?? null,
       pbxInvalidPromptRef: d.pbxInvalidPromptRef ?? null,
       pbxTimeoutPromptRef: d.pbxTimeoutPromptRef ?? null,
@@ -12283,11 +12291,16 @@ app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
     if (err) return reply.code(400).send({ error: "invalid_prompt_ref", field: label, detail: err });
   }
 
-  // If caller touched pbxDestination, run it through the same CEP shape check
-  // as per-digit options so partial updates can't smuggle in unparseable
-  // values. Untouched field stays as-is.
-  if (d.pbxDestination !== undefined && !IVR_CEP_REGEX.test(d.pbxDestination)) {
-    return reply.code(400).send({ error: "invalid_pbx_destination", detail: "pbxDestination must be in \"context,exten,priority\" form" });
+  // If caller touched pbxDestination, accept empty / whitespace as "reset to
+  // the Phase 2 IVR entry" so the UI can safely drop this legacy field from
+  // its form without stranding existing profiles on stale CEPs. Any non-empty
+  // value must still match the shape the dialplan can Goto().
+  if (d.pbxDestination !== undefined) {
+    const resolved = (d.pbxDestination ?? "").trim() || "connect-tenant-ivr,s,1";
+    if (!IVR_CEP_REGEX.test(resolved)) {
+      return reply.code(400).send({ error: "invalid_pbx_destination", detail: "pbxDestination must be in \"context,exten,priority\" form" });
+    }
+    d.pbxDestination = resolved;
   }
 
   // VitalPBX-parity destination validation. We only re-validate the PAIR
