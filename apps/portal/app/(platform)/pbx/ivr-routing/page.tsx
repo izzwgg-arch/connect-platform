@@ -1579,13 +1579,26 @@ function CreatePromptModal({
   // Derive the promptRef from the display name. VitalPBX-convention: lowercase,
   // spaces → underscores, no file extension, "custom/<slug>_" prefix when we
   // have the tenant's slug so it lives in the right folder on the PBX.
+  //
+  // `tenantSlug` often arrives as either a raw VitalPBX slug
+  // (`a_plus_center`), a Connect cuid (`cmnlgnumi0000p9g6l7t1t0z7`), or the
+  // super-admin view-as-tenant shape `vpbx:<slug>`. Strip the `vpbx:` prefix
+  // and sanitize so the final ref never contains colons or other chars the
+  // backend's ivrNormalisePromptRefs rejects (which produced the
+  // `invalid_prompt_ref` error in the field).
   const sanitizedName = displayName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 80);
-  const promptRef = tenantSlug
-    ? `custom/${tenantSlug}_${sanitizedName}`
+  const cleanSlug = (tenantSlug || "")
+    .replace(/^vpbx:/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60);
+  const promptRef = cleanSlug
+    ? `custom/${cleanSlug}_${sanitizedName}`
     : `custom/${sanitizedName}`;
 
   const disabledSave = busy || !displayName.trim() || !sanitizedName || !file;
