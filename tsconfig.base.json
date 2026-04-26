@@ -13,6 +13,9 @@
       "@connect/shared": [
         "packages/shared/src"
       ],
+      "@connect/shared/chatSignedUrl": [
+        "packages/shared/src/chatSignedUrl.ts"
+      ],
       "@connect/db": [
         "packages/db/src"
       ],

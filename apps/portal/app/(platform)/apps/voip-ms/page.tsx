@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { useAppContext } from "../../../../hooks/useAppContext";
-import { apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
-import { normalizeUsCanadaToE164 } from "@connect/shared";
+import { apiGet, apiPatch, apiPost, apiPut, getPortalApiBaseUrl } from "../../../../services/apiClient";
+import { buildVoipMsSmsWebhookCallbackUrl, normalizeUsCanadaToE164 } from "@connect/shared";
 
 type Overview = {
   hasCredentials: boolean;
@@ -18,6 +18,7 @@ type Overview = {
   lastHealthMessage: string | null;
   lastDidsSyncAt: string | null;
   webhookUrl: string;
+  webhookUrlNote?: string;
 };
 
 type SmsRow = {
@@ -50,6 +51,7 @@ export default function VoipMsIntegrationPage() {
   const [credBase, setCredBase] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [previewPhone, setPreviewPhone] = useState("");
+  const [webhookCopied, setWebhookCopied] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +67,7 @@ export default function VoipMsIntegrationPage() {
       setNumbers([]);
     } finally {
       setLoading(false);
+      setWebhookCopied(false);
     }
   }, []);
 
@@ -88,6 +91,52 @@ export default function VoipMsIntegrationPage() {
     } catch (e: unknown) {
       setMsg(String((e as Error)?.message || e));
     }
+  }
+
+  const resolvedWebhookUrl = useMemo(() => {
+    const w = overview?.webhookUrl?.trim() ?? "";
+    if (w && !w.startsWith("(")) return w;
+    if (typeof window !== "undefined") {
+      const apiBase = getPortalApiBaseUrl();
+      if (apiBase) return buildVoipMsSmsWebhookCallbackUrl(apiBase);
+    }
+    return w;
+  }, [overview?.webhookUrl]);
+
+  const usedPortalOriginFallback =
+    Boolean(overview?.webhookUrl?.trim().startsWith("(")) &&
+    typeof window !== "undefined" &&
+    Boolean(resolvedWebhookUrl) &&
+    !resolvedWebhookUrl.startsWith("(");
+
+  const webhookUrlCopyable =
+    Boolean(resolvedWebhookUrl) && !resolvedWebhookUrl.startsWith("(") && resolvedWebhookUrl !== "—";
+
+  async function copyWebhookUrl() {
+    const url = resolvedWebhookUrl.trim();
+    if (!url || url.startsWith("(")) {
+      setMsg("Could not build webhook URL — check NEXT_PUBLIC_API_URL or open this page in the browser.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {
+        setMsg("Could not copy — select the URL in the box and copy manually (Ctrl+C).");
+        return;
+      }
+    }
+    setWebhookCopied(true);
+    window.setTimeout(() => setWebhookCopied(false), 2000);
   }
 
   async function testConn() {
@@ -147,9 +196,57 @@ export default function VoipMsIntegrationPage() {
           <section className="panel stack">
             <h3>Connection</h3>
             <p style={{ color: "var(--text-dim)", fontSize: 14 }}>
-              Webhook URL (configure in VoIP.ms DID → SMS URL callback):{" "}
-              <code style={{ wordBreak: "break-all" }}>{overview?.webhookUrl || "—"}</code>
+              SMS/MMS callback URL (VoIP.ms DID → SMS/MMS URL callback). Include the{" "}
+              <code>{"{FROM}"}</code>, <code>{"{TO}"}</code>, … placeholders — VoIP.ms substitutes them on each hit (VoIP.ms SMS-MMS policy).
             </p>
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 10,
+                alignItems: "stretch",
+                flexWrap: "wrap",
+              }}
+            >
+              <textarea
+                readOnly
+                aria-label="VoIP.ms SMS/MMS webhook URL"
+                value={resolvedWebhookUrl}
+                placeholder={loading ? "Loading…" : "—"}
+                onFocus={(e) => e.currentTarget.select()}
+                rows={4}
+                style={{
+                  flex: "1 1 280px",
+                  minWidth: 0,
+                  fontSize: 12,
+                  fontFamily: "ui-monospace, monospace",
+                  padding: 10,
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--panel-2)",
+                  color: "var(--text)",
+                  resize: "vertical",
+                  wordBreak: "break-all",
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "flex-start" }}>
+                <button type="button" className="btn" onClick={() => void copyWebhookUrl()} disabled={!webhookUrlCopyable}>
+                  {webhookCopied ? "Copied" : "Copy URL"}
+                </button>
+                <span style={{ fontSize: 12, color: "var(--text-dim)", maxWidth: 140 }}>
+                  Paste into VoIP.ms → DID → SMS/MMS URL callback
+                </span>
+              </div>
+            </div>
+            {usedPortalOriginFallback ? (
+              <p style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 6 }}>
+                URL uses this site’s public API base (same as the portal). If VoIP.ms must call a different host, set{" "}
+                <code>PUBLIC_API_BASE_URL</code> on the API — the overview will then show that value.
+              </p>
+            ) : null}
+            {overview?.webhookUrlNote ? (
+              <p style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 8 }}>{overview.webhookUrlNote}</p>
+            ) : null}
             <div className="grid two">
               <div>
                 <div style={{ fontSize: 13, marginBottom: 6 }}>Status</div>

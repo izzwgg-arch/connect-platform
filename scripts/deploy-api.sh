@@ -69,7 +69,7 @@ docker compose -f "$COMPOSE" up -d "$SERVICE"
 
 log "health check http://127.0.0.1:3001/health"
 ok=0
-for i in $(seq 1 45); do
+for i in $(seq 1 75); do
   if curl -sfS --connect-timeout 2 --max-time 15 "http://127.0.0.1:3001/health" >/dev/null 2>&1; then
     ok=1
     break

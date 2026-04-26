@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./phoneE164";
+export * from "./voipMsWebhook";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 
 export const UserSchema = z.object({

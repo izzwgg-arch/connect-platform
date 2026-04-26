@@ -22,6 +22,11 @@ function baseUrl(): string {
   return (process.env.PORTAL_API_INTERNAL_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
 }
 
+/** Same origin the portal uses for API calls — suitable for displaying public webhook URLs in the browser. */
+export function getPortalApiBaseUrl(): string {
+  return baseUrl();
+}
+
 function parseJsonResponse<T>(res: Response, text: string): T {
   const trimmed = text.trim();
   if (!trimmed) {

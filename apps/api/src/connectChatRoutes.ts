@@ -9,7 +9,7 @@ import type { Queue } from "bullmq";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { canonicalSmsPhone } from "@connect/shared";
+import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone } from "@connect/shared";
 import { buildChatSignedDownloadUrl, verifyChatSignedDownload } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials } from "@connect/integrations";
 import {
@@ -146,9 +146,15 @@ function extractInboundMmsUrls(payload: Record<string, unknown>): string[] {
     const s = String(v ?? "").trim();
     if (/^https?:\/\//i.test(s)) out.push(s);
   };
+  const pushCommaUrls = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    if (!s) return;
+    for (const part of s.split(",")) push(part.trim());
+  };
   const arr = (v: unknown) => {
     if (Array.isArray(v)) for (const x of v) push(x);
   };
+  pushCommaUrls(payload.media);
   push(payload.media_url);
   push(payload.mediaurl);
   push(payload.MediaUrl);
@@ -676,7 +682,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const cfg = await getOrCreateGlobalVoipConfig();
     const creds = await loadVoipMsCreds();
     const baseUrl = process.env.PUBLIC_API_BASE_URL || process.env.PORTAL_PUBLIC_URL || "";
-    const webhookUrl = baseUrl ? `${baseUrl.replace(/\/$/, "")}/webhooks/voipms/sms` : "(set PUBLIC_API_BASE_URL for full URL)";
+    const webhookUrl = baseUrl
+      ? buildVoipMsSmsWebhookCallbackUrl(baseUrl)
+      : "(set PUBLIC_API_BASE_URL for full URL — must be the HTTPS origin VoIP.ms can reach)";
     return {
       hasCredentials: !!(creds?.username && creds?.password),
       usernameHint: creds?.username ? `${creds.username.slice(0, 3)}…` : null,
@@ -687,6 +695,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       lastHealthMessage: cfg.lastHealthMessage,
       lastDidsSyncAt: cfg.lastDidsSyncAt?.toISOString() || null,
       webhookUrl,
+      webhookUrlNote:
+        "Paste this entire URL into VoIP.ms → DID → SMS/MMS URL callback. Keep the {FROM}, {TO}, … placeholders exactly — VoIP.ms fills them on each inbound message (per VoIP.ms SMS-MMS wiki).",
     };
   });
 
@@ -940,7 +950,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const payload = mergeVoipMsPayload(req);
     const rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
     const rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
-    const message = String(payload.message ?? payload.body ?? "");
+    const message = String(payload.message ?? payload.body ?? payload.msg ?? "");
     const mmsUrls = extractInboundMmsUrls(payload);
 
     const nf = canonicalSmsPhone(rawFrom);

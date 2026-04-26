@@ -51,6 +51,7 @@ import {
   writeMohFile,
 } from "./mohStorage";
 import * as fs from "node:fs";
+import { registerConnectChatRoutes } from "./connectChatRoutes";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -66,6 +67,7 @@ const fallbackNumberProvider = new FakeNumberProvider();
 
 app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
+app.register(formbody);
 // File-upload support for MOH asset uploads. 50 MB cap per file covers
 // typical 10-30 min AAC/MP3/WAV hold-music tracks with generous headroom.
 // One file per request keeps the UI simple and the server-side validation
@@ -22871,6 +22873,7 @@ const port = Number(process.env.PORT || 3001);
     app.log.info("WebRTC telephony env config OK");
   }
 
+  registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
 })().catch((e) => {
