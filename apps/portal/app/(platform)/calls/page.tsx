@@ -522,10 +522,10 @@ export default function CallsPage() {
 
   // Quick actions
   const handleCallBack = (number: string) => {
-    if (telephony.dial) {
-      telephony.dial(number);
-    } else {
-      alert(`Calling ${number}... (integrated with telephony context)`);
+    // Open the floating dialer if available, otherwise fall back to tel: link
+    const clean = number.replace(/\D/g, "");
+    if (clean) {
+      window.open(`tel:${clean}`, "_self");
     }
   };
 
