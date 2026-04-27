@@ -1947,7 +1947,7 @@ body {
 }
 
 .ws-switcher-current {
-  padding: 10px 12px;
+  padding: 11px 12px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--console-panel-soft) 88%, var(--console-accent) 4%);
   border: 1px solid color-mix(in srgb, var(--console-border) 70%, transparent);
@@ -1965,30 +1965,40 @@ body {
 .ws-switcher-current-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  min-width: 0;
 }
 
 .ws-switcher-current-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--console-text);
-}
-
-.ws-switcher-current-meta {
-  font-size: 12px;
-  color: var(--console-muted);
-  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ws-switcher-search-wrap {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  height: 40px;
-  border-radius: 10px;
-  border: 1px solid var(--console-border);
-  background: var(--console-bg-soft);
+  gap: 9px;
+  padding: 0 12px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--console-border) 88%, var(--console-accent) 8%);
+  background: color-mix(in srgb, var(--console-panel-soft) 88%, var(--console-bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+  transition:
+    border-color 0.16s ease-in-out,
+    background 0.16s ease-in-out,
+    box-shadow 0.16s ease-in-out;
+}
+
+.ws-switcher-search-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--console-accent) 48%, var(--console-border));
+  background: color-mix(in srgb, var(--console-panel-soft) 78%, var(--console-accent) 5%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--console-accent) 14%, transparent);
 }
 
 .ws-switcher-search-icon {
@@ -2003,11 +2013,12 @@ body {
   background: transparent;
   color: var(--console-text);
   font-size: 13px;
+  line-height: 1.3;
   outline: none;
 }
 
 .ws-switcher-search::placeholder {
-  color: var(--console-muted);
+  color: color-mix(in srgb, var(--console-muted) 84%, var(--console-text) 16%);
 }
 
 .ws-switcher-scroll {
@@ -2017,7 +2028,30 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-right: 2px;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--console-muted) 45%, transparent) color-mix(in srgb, var(--console-panel-soft) 45%, transparent);
+}
+
+.ws-switcher-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ws-switcher-scroll::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--console-panel-soft) 45%, transparent);
+  border-radius: 999px;
+}
+
+.ws-switcher-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--console-muted) 42%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.ws-switcher-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--console-muted) 62%, transparent);
+  background-clip: padding-box;
 }
 
 .ws-switcher-section-label {
@@ -2039,8 +2073,9 @@ body {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 10px;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
@@ -2063,37 +2098,20 @@ body {
   background: color-mix(in srgb, var(--console-accent) 10%, var(--console-panel-soft));
 }
 
-.ws-switcher-row-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--console-panel-soft) 80%, transparent);
-  color: var(--console-muted);
-  flex-shrink: 0;
-}
-
-.ws-switcher-row.is-active .ws-switcher-row-icon {
-  color: var(--console-accent);
-}
-
 .ws-switcher-row-text {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 .ws-switcher-row-title {
   font-size: 13px;
   font-weight: 600;
-}
-
-.ws-switcher-row-sub {
-  font-size: 11px;
-  color: var(--console-muted);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ws-switcher-check {

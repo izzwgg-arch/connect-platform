@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Building2, Check, ChevronDown, Layers, Plus, Search, UserPlus } from "lucide-react";
+import { Check, ChevronDown, Plus, Search, UserPlus } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 
@@ -11,7 +11,7 @@ type TenantSwitcherProps = {
 };
 
 export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
-  const { tenants, tenantId, tenant, setTenantId, adminScope, setAdminScope, user, can } = useAppContext();
+  const { tenants, tenantId, tenant, setTenantId, adminScope, setAdminScope, can } = useAppContext();
   const canSwitch = can("can_switch_tenants");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -120,7 +120,7 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
         {!railMode ? (
           <div className="ws-switcher-brand-text">
             <div className="ws-switcher-tenant-name">{displayName}</div>
-            <div className="ws-switcher-user-email">{user.email || user.name}</div>
+            <div className="ws-switcher-user-email">Admin</div>
           </div>
         ) : null}
       </div>
@@ -153,7 +153,7 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
           {!railMode ? (
             <div className="ws-switcher-trigger-text">
               <span className="ws-switcher-trigger-tenant">{displayName}</span>
-              <span className="ws-switcher-trigger-email">{user.email || user.name}</span>
+              <span className="ws-switcher-trigger-email">Admin</span>
             </div>
           ) : null}
           {!railMode ? <ChevronDown className="ws-switcher-trigger-chevron" size={16} strokeWidth={2} /> : null}
@@ -173,13 +173,7 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
             <div className="ws-switcher-current">
               <div className="ws-switcher-current-label">Current workspace</div>
               <div className="ws-switcher-current-row">
-                <div className="ws-switcher-logo" aria-hidden>
-                  {tenantInitials}
-                </div>
-                <div>
-                  <div className="ws-switcher-current-name">{displayName}</div>
-                  <div className="ws-switcher-current-meta">{user.email}</div>
-                </div>
+                <div className="ws-switcher-current-name">{displayName}</div>
               </div>
             </div>
 
@@ -212,12 +206,8 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
                     onClick={selectGlobal}
                     onMouseEnter={() => setHighlight(0)}
                   >
-                    <span className="ws-switcher-row-icon" aria-hidden>
-                      <Layers size={18} strokeWidth={1.85} />
-                    </span>
                     <span className="ws-switcher-row-text">
                       <span className="ws-switcher-row-title">All workspaces</span>
-                      <span className="ws-switcher-row-sub">Unscoped platform view</span>
                     </span>
                     {adminScope === "GLOBAL" ? <Check className="ws-switcher-check" size={18} strokeWidth={2} /> : null}
                   </button>
@@ -237,9 +227,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
                       onClick={() => selectTenant(row.id)}
                       onMouseEnter={() => setHighlight(idx)}
                     >
-                      <span className="ws-switcher-row-icon" aria-hidden>
-                        <Building2 size={18} strokeWidth={1.85} />
-                      </span>
                       <span className="ws-switcher-row-text">
                         <span className="ws-switcher-row-title">{row.name}</span>
                       </span>
