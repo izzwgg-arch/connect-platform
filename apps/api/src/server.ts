@@ -17863,6 +17863,212 @@ function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal
   return "outgoing";
 }
 
+type DashboardCallRange = "today" | "7d";
+type DashboardCallDirection = "incoming" | "outgoing" | "internal";
+type DashboardCallDisposition = "answered" | "missed" | "canceled" | "failed" | "unknown";
+type DashboardCallActivityPoint = {
+  label: string;
+  start: string;
+  end: string;
+  total: number;
+  incoming: number;
+  outgoing: number;
+  internal: number;
+  missed: number;
+};
+type DashboardCallActivityAggregate = {
+  range: DashboardCallRange;
+  timezone: string;
+  timeWhere: { gte: Date; lt: Date };
+  bucketMinutes: number | null;
+  totals: {
+    made: number;
+    total: number;
+    incoming: number;
+    outgoing: number;
+    internal: number;
+    missed: number;
+  };
+  points: DashboardCallActivityPoint[];
+  sourceRows: { connectCdr: number; legacyCallRecord: number };
+};
+
+function normalizeDashboardDisposition(input: unknown): DashboardCallDisposition {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (raw === "answered" || raw === "answer" || raw === "completed") return "answered";
+  if (raw === "missed" || raw === "no answer" || raw === "no_answer" || raw === "unanswered") return "missed";
+  if (raw === "canceled" || raw === "cancelled" || raw === "busy") return "canceled";
+  if (raw === "failed" || raw === "congestion") return "failed";
+  return "unknown";
+}
+
+function formatDashboardBucketLabel(start: Date, range: DashboardCallRange, timezone: string): string {
+  if (range === "7d") {
+    return start.toLocaleDateString("en-US", { timeZone: timezone, weekday: "short", month: "short", day: "numeric" });
+  }
+  return start.toLocaleTimeString("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" });
+}
+
+function resolveDashboardCallRange(range: DashboardCallRange, nowUtc = new Date()): {
+  timezone: string;
+  timeWhere: { gte: Date; lt: Date };
+  bucketMinutes: number | null;
+} {
+  const today = computePbxLocalDayRangeUtc(nowUtc);
+  if (range === "7d") {
+    return {
+      timezone: today.timezone,
+      timeWhere: {
+        gte: new Date(today.dayStartUtc.getTime() - 6 * 24 * 60 * 60 * 1000),
+        lt: today.dayEndUtc,
+      },
+      bucketMinutes: null,
+    };
+  }
+  return { timezone: today.timezone, timeWhere: today.timeWhere, bucketMinutes: 30 };
+}
+
+async function aggregateDashboardCallActivity(opts: {
+  tenantFilter: Record<string, unknown>;
+  range?: DashboardCallRange;
+  logContext?: Record<string, unknown>;
+}): Promise<DashboardCallActivityAggregate> {
+  const range = opts.range ?? "today";
+  const { timezone, timeWhere, bucketMinutes } = resolveDashboardCallRange(range);
+  const normalizedRows: Array<{
+    ts: number;
+    direction: DashboardCallDirection;
+    disposition: DashboardCallDisposition;
+  }> = [];
+  let connectCdrSourceRows = 0;
+  let legacyCallRecordRows = 0;
+
+  const connectRows = await db.connectCdr.findMany({
+    where: { ...opts.tenantFilter, startedAt: timeWhere },
+    select: { startedAt: true, direction: true, disposition: true },
+    orderBy: { startedAt: "asc" },
+    take: 20_000,
+  });
+  connectCdrSourceRows = connectRows.length;
+  for (const row of connectRows) {
+    const ts = row.startedAt.getTime();
+    if (!Number.isFinite(ts)) continue;
+    normalizedRows.push({
+      ts,
+      direction: normalizeCallDirection({ direction: row.direction }),
+      disposition: normalizeDashboardDisposition(row.disposition),
+    });
+  }
+
+  // Legacy fallback only when ConnectCdr has no rows, matching existing behaviour.
+  if (connectCdrSourceRows === 0) {
+    const legacyRows = await db.callRecord.findMany({
+      where: { ...opts.tenantFilter, startedAt: timeWhere },
+      orderBy: { startedAt: "asc" },
+      take: 20_000,
+    });
+    legacyCallRecordRows = legacyRows.length;
+    for (const row of legacyRows) {
+      const ts = row.startedAt.getTime();
+      if (!Number.isFinite(ts)) continue;
+      normalizedRows.push({
+        ts,
+        direction: normalizeCallDirection({ direction: row.direction }),
+        disposition: normalizeDashboardDisposition((row as any).disposition ?? (row as any).status),
+      });
+    }
+  }
+
+  const totals = normalizedRows.reduce(
+    (acc, row) => {
+      acc[row.direction] += 1;
+      if (row.direction === "incoming" && row.disposition === "missed") acc.missed += 1;
+      return acc;
+    },
+    { made: 0, total: 0, incoming: 0, outgoing: 0, internal: 0, missed: 0 },
+  );
+  totals.made = totals.incoming + totals.outgoing + totals.internal;
+  totals.total = totals.made;
+
+  const points: DashboardCallActivityPoint[] = [];
+  const startMs = timeWhere.gte.getTime();
+  const endMs = timeWhere.lt.getTime();
+  if (range === "7d") {
+    for (let i = 0; i < 7; i++) {
+      const start = new Date(startMs + i * 24 * 60 * 60 * 1000);
+      const end = new Date(Math.min(endMs, start.getTime() + 24 * 60 * 60 * 1000));
+      points.push({
+        label: formatDashboardBucketLabel(start, range, timezone),
+        start: start.toISOString(),
+        end: end.toISOString(),
+        total: 0,
+        incoming: 0,
+        outgoing: 0,
+        internal: 0,
+        missed: 0,
+      });
+    }
+  } else {
+    const msPerBucket = (bucketMinutes ?? 30) * 60 * 1000;
+    const bucketCount = Math.max(1, Math.ceil((endMs - startMs) / msPerBucket));
+    for (let i = 0; i < bucketCount; i++) {
+      const start = new Date(startMs + i * msPerBucket);
+      const end = new Date(Math.min(endMs, start.getTime() + msPerBucket));
+      points.push({
+        label: formatDashboardBucketLabel(start, range, timezone),
+        start: start.toISOString(),
+        end: end.toISOString(),
+        total: 0,
+        incoming: 0,
+        outgoing: 0,
+        internal: 0,
+        missed: 0,
+      });
+    }
+  }
+
+  for (const row of normalizedRows) {
+    const bucketSizeMs = range === "7d" ? 24 * 60 * 60 * 1000 : (bucketMinutes ?? 30) * 60 * 1000;
+    const bucketIndex = Math.floor((row.ts - startMs) / bucketSizeMs);
+    if (bucketIndex < 0 || bucketIndex >= points.length) continue;
+    const point = points[bucketIndex];
+    point[row.direction] += 1;
+    if (row.direction === "incoming" && row.disposition === "missed") point.missed += 1;
+    point.total = point.incoming + point.outgoing + point.internal;
+  }
+
+  const pointTotals = points.reduce(
+    (acc, p) => {
+      acc.incoming += p.incoming;
+      acc.outgoing += p.outgoing;
+      acc.internal += p.internal;
+      acc.missed += p.missed;
+      return acc;
+    },
+    { incoming: 0, outgoing: 0, internal: 0, missed: 0 },
+  );
+  if (
+    pointTotals.incoming !== totals.incoming ||
+    pointTotals.outgoing !== totals.outgoing ||
+    pointTotals.internal !== totals.internal ||
+    pointTotals.missed !== totals.missed
+  ) {
+    app.log.warn({ ...opts.logContext, totals, pointTotals, range }, "dashboard_call_activity_aggregation_mismatch");
+  } else {
+    app.log.debug({ ...opts.logContext, totals, range }, "dashboard_call_activity_aggregation_ok");
+  }
+
+  return {
+    range,
+    timezone,
+    timeWhere,
+    bucketMinutes,
+    totals,
+    points,
+    sourceRows: { connectCdr: connectCdrSourceRows, legacyCallRecord: legacyCallRecordRows },
+  };
+}
+
 function extractCallTimestampMs(input: any): number | null {
   const raw = input?.startedAt || input?.start || input?.calldate || input?.createdAt || input?.date || input?.timestamp || input?.end || input?.answeredAt;
   if (!raw) return null;
@@ -19168,7 +19374,7 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     : user.tenantId ?? null;
 
   const nowUtc = new Date();
-  const { timezone, timeWhere } = computePbxLocalDayRangeUtc(nowUtc);
+  const { timezone } = computePbxLocalDayRangeUtc(nowUtc);
 
   if (wantPbxAggregate) {
     const cacheKey = `pbx:${scopeTenantId ?? "global"}`;
@@ -19227,42 +19433,41 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
 
   try {
     const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
-    const baseWhere = { ...tenantClause, startedAt: timeWhere };
+    const activity = await aggregateDashboardCallActivity({
+      tenantFilter: tenantClause,
+      range: "today",
+      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, role: user.role },
+    });
 
-    const [incoming, outgoing, internal, missed, total, outgoingForwarded] = await Promise.all([
-      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming" } }),
-      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing" } }),
-      db.connectCdr.count({ where: { ...baseWhere, direction: "internal" } }),
-      db.connectCdr.count({ where: { ...baseWhere, direction: "incoming", disposition: "missed" } }),
-      db.connectCdr.count({ where: baseWhere }),
-      // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
-      // These are real outgoing legs but originate from an inbound call — surfaced separately so
-      // the dashboard can show "outgoing direct" vs "outgoing forwarded" without breaking totals.
-      db.connectCdr.count({ where: { ...baseWhere, direction: "outgoing", isForwarded: true } }),
-    ]);
+    // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
+    // Kept as supplemental metadata; primary KPI/chart counts come from the shared
+    // normalized aggregation above so they cannot drift.
+    const outgoingForwarded = await db.connectCdr.count({
+      where: { ...tenantClause, startedAt: activity.timeWhere, direction: "outgoing", isForwarded: true },
+    });
 
     // Canonical mode: direction is authoritative at ingest (callDirectionPolicy + merged dcontexts).
     // No SQL-time reclassification — avoids dashboard drift vs call history.
     let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number; outgoingForwarded: number } | null = null;
     if (query.mode === "canonical") {
       canonicalCounts = {
-        incoming: Number(incoming),
-        outgoing: Number(outgoing),
-        internal: Number(internal),
-        missed: Number(missed),
-        total: Number(total),
+        incoming: activity.totals.incoming,
+        outgoing: activity.totals.outgoing,
+        internal: activity.totals.internal,
+        missed: activity.totals.missed,
+        total: activity.totals.total,
         outgoingForwarded: Number(outgoingForwarded),
       };
     }
 
     const base = {
-      incomingToday: incoming,
-      outgoingToday: outgoing,
+      incomingToday: activity.totals.incoming,
+      outgoingToday: activity.totals.outgoing,
       outgoingForwardedToday: outgoingForwarded,
-      outgoingDirectToday: Number(outgoing) - Number(outgoingForwarded),
-      internalToday: internal,
-      missedToday: missed,
-      callsToday: total,
+      outgoingDirectToday: activity.totals.outgoing - Number(outgoingForwarded),
+      internalToday: activity.totals.internal,
+      missedToday: activity.totals.missed,
+      callsToday: activity.totals.total,
       scope: scopeTenantId ? "tenant" as const : "global" as const,
       ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
       asOf: nowUtc.toISOString(),
@@ -19277,7 +19482,12 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
         canonical: canonicalCounts,
         // When canonical mode is active, expose corrected values as the primary KPIs
         // so the dashboard can display them directly; raw values remain available.
-        raw: { incomingToday: incoming, outgoingToday: outgoing, internalToday: internal, missedToday: missed },
+        raw: {
+          incomingToday: activity.totals.incoming,
+          outgoingToday: activity.totals.outgoing,
+          internalToday: activity.totals.internal,
+          missedToday: activity.totals.missed,
+        },
         incomingToday: canonicalCounts.incoming,
         outgoingToday: canonicalCounts.outgoing,
         internalToday: canonicalCounts.internal,
@@ -19672,6 +19882,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   if (!user) return;
   const query = z.object({
     scope: z.enum(["GLOBAL", "TENANT"]).optional(),
+    range: z.enum(["today", "7d"]).optional().default("today"),
     windowMinutes: z.coerce.number().int().min(15).max(1440).optional(),
     // Super-admin may pass tenantId to scope a tenant view (mirrors call-kpis behaviour).
     tenantId: z.string().optional(),
@@ -19686,65 +19897,25 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
     : (user.tenantId ?? null);
 
-  const windowMinutes = query.windowMinutes || 1440;
-  const bucketMinutes = windowMinutes >= 720 ? 30 : windowMinutes >= 180 ? 15 : 5;
-  const bucketCount = Math.max(1, Math.ceil(windowMinutes / bucketMinutes));
   const nowMs = Date.now();
-  const sinceMs = nowMs - windowMinutes * 60 * 1000;
 
   // Cache key includes the resolved tenantId so different scoped views don't bleed into each other.
-  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${windowMinutes}`;
+  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
   if (cached && nowMs - cached.at < 120_000) return cached.payload;
 
-  const timeRange = { gte: new Date(sinceMs), lte: new Date(nowMs) };
   // For global super-admin scope: no tenant filter. Otherwise filter to resolved tenant.
   const tenantFilter = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
     ? {}
     : { tenantId: scopeTenantId };
 
-  const normalizedRows: Array<{ ts: number; direction: "incoming" | "outgoing" | "internal" }> = [];
-  let connectCdrSourceRows = 0;
-  let legacyCallRecordRows = 0;
-
+  let activity: DashboardCallActivityAggregate;
   try {
-    // ── Primary source: ConnectCdr ──────────────────────────────────────────
-    // ConnectCdr is the authoritative store for all PBX/AMI calls (populated by
-    // /internal/cdr-ingest). Query it unconditionally — never gate it behind
-    // CallRecord being empty, because CallRecord is a legacy supplemental table
-    // and may contain stale rows from earlier periods.
-    const connectRows = await db.connectCdr.findMany({
-      where: { ...tenantFilter, startedAt: timeRange },
-      select: { startedAt: true, direction: true },
-      orderBy: { startedAt: "desc" },
-      take: 5000,
+    activity = await aggregateDashboardCallActivity({
+      tenantFilter,
+      range: query.range,
+      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, role: user.role },
     });
-    connectCdrSourceRows = connectRows.length;
-    for (const row of connectRows) {
-      const ts = row.startedAt.getTime();
-      if (!Number.isFinite(ts)) continue;
-      normalizedRows.push({ ts, direction: normalizeCallDirection({ direction: row.direction }) });
-    }
-
-    // ── Supplemental legacy source: CallRecord ──────────────────────────────
-    // Only add CallRecord rows when ConnectCdr has no data, to cover any legacy
-    // calls that pre-date CDR ingest being fully wired up.
-    if (connectCdrSourceRows === 0) {
-      const legacyWhere = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
-        ? { startedAt: timeRange }
-        : { tenantId: scopeTenantId, startedAt: timeRange };
-      const legacyRows = await db.callRecord.findMany({
-        where: legacyWhere,
-        orderBy: { startedAt: "desc" },
-        take: 5000,
-      });
-      legacyCallRecordRows = legacyRows.length;
-      for (const row of legacyRows) {
-        const ts = row.startedAt.getTime();
-        if (!Number.isFinite(ts)) continue;
-        normalizedRows.push({ ts, direction: normalizeCallDirection({ direction: row.direction }) });
-      }
-    }
   } catch (err: any) {
     app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
     // Return stale cache rather than a broken empty response.
@@ -19753,41 +19924,14 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     return reply.code(500).send({ error: "db_error" });
   }
 
-  const points = Array.from({ length: bucketCount }).map((_, idx) => {
-    const bucketTs = new Date(sinceMs + idx * bucketMinutes * 60 * 1000);
-    return {
-      label: `${String(bucketTs.getHours()).padStart(2, "0")}:${String(bucketTs.getMinutes()).padStart(2, "0")}`,
-      incoming: 0,
-      outgoing: 0,
-      internal: 0,
-    };
-  });
-
-  let incoming = 0;
-  let outgoing = 0;
-  let internal = 0;
-  for (const row of normalizedRows) {
-    if (row.direction === "incoming") incoming += 1;
-    if (row.direction === "outgoing") outgoing += 1;
-    if (row.direction === "internal") internal += 1;
-    const bucketIndex = Math.floor((row.ts - sinceMs) / (bucketMinutes * 60 * 1000));
-    if (bucketIndex >= 0 && bucketIndex < points.length) {
-      points[bucketIndex][row.direction] += 1;
-    }
-  }
-
   const payload = {
     scope,
-    windowMinutes,
-    bucketMinutes,
-    totals: {
-      made: incoming + outgoing + internal,
-      incoming,
-      outgoing,
-      internal,
-      activeNow: normalizedRows.filter((row) => row.ts >= nowMs - 5 * 60 * 1000).length,
-    },
-    points,
+    range: activity.range,
+    timezone: activity.timezone,
+    windowMinutes: query.range === "7d" ? 7 * 24 * 60 : 24 * 60,
+    bucketMinutes: activity.bucketMinutes,
+    totals: activity.totals,
+    points: activity.points,
     updatedAt: new Date(nowMs).toISOString(),
   };
 
@@ -19796,9 +19940,10 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       scope,
       role: user.role,
       tenantId: scopeTenantId,
-      connectCdrSourceRows,
-      legacyCallRecordRows,
-      rowCount: normalizedRows.length,
+      range: activity.range,
+      connectCdrSourceRows: activity.sourceRows.connectCdr,
+      legacyCallRecordRows: activity.sourceRows.legacyCallRecord,
+      rowCount: activity.totals.total,
       totals: payload.totals,
     },
     "dashboard_call_traffic",
@@ -19806,7 +19951,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
 
   // Don't cache empty results longer than 30 s — a 0-row result is likely transient
   // (ingest lag, cold start) and should not persist in the cache for the full 2 min TTL.
-  const cacheTtlMs = normalizedRows.length === 0 ? 30_000 : 120_000;
+  const cacheTtlMs = activity.totals.total === 0 ? 30_000 : 120_000;
   DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs - (120_000 - cacheTtlMs), payload });
   return payload;
 });

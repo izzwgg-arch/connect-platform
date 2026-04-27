@@ -46,8 +46,19 @@ function DirectionIcon({ direction, size = 14 }: { direction: string; size?: num
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type DashboardCallTraffic = {
-  totals: { made: number; incoming: number; outgoing: number; internal: number; missed?: number };
-  points: Array<{ label: string; incoming: number; outgoing: number; internal: number; missed?: number }>;
+  range: "today" | "7d";
+  timezone: string;
+  totals: { made: number; total: number; incoming: number; outgoing: number; internal: number; missed: number };
+  points: Array<{
+    label: string;
+    start: string;
+    end: string;
+    total: number;
+    incoming: number;
+    outgoing: number;
+    internal: number;
+    missed: number;
+  }>;
 };
 
 type ConnectKpis = {
@@ -119,7 +130,7 @@ export default function DashboardPage() {
   );
 
   const trafficParam = (() => {
-    const params = new URLSearchParams({ scope: adminScope, windowMinutes: "1440" });
+    const params = new URLSearchParams({ scope: adminScope, range: "today" });
     if (!isGlobal && contextTenantId) params.set("tenantId", contextTenantId);
     return `?${params.toString()}`;
   })();
@@ -182,19 +193,17 @@ export default function DashboardPage() {
             <div className="dash-hero-header">
               <div>
                 <h2 className="dash-hero-title">Call activity</h2>
-                <p className="dash-hero-sub">Today · direction-corrected</p>
-            </div>
-              <div className="dash-hero-legend">
-                <LegendItem color="var(--dash-incoming)" label="Incoming" value={traffic?.totals?.incoming ?? null} />
-                <LegendItem color="var(--dash-outgoing)" label="Outgoing" value={traffic?.totals?.outgoing ?? null} />
-                <LegendItem color="var(--dash-internal)" label="Internal" value={traffic?.totals?.internal ?? null} />
-                <LegendItem color="var(--dash-missed)"   label="Missed"   value={missedToday} />
-          </div>
+                <p className="dash-hero-sub">Today · total call volume · {traffic?.timezone ?? "local PBX time"}</p>
+              </div>
+              <div className="dash-hero-status-pill">
+                <Activity size={13} />
+                <span>30-minute buckets</span>
+              </div>
             </div>
             <div className="dash-hero-plot">
               {trafficState.status === "loading" ? (
                 <LoadingSkeleton rows={5} />
-              ) : !traffic || traffic.points.length === 0 ? (
+              ) : !traffic || traffic.points.length === 0 || traffic.totals.total === 0 ? (
                 <ChartEmptyState />
               ) : (
                 <CallVolumeChart points={traffic.points} />
@@ -737,16 +746,6 @@ function BillingSnapshotCard() {
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
-function LegendItem({ color, label, value }: { color: string; label: string; value: number | null }) {
-  return (
-    <span className="dash-legend-item">
-      <span className="dash-legend-swatch" style={{ background: color }} />
-      <span className="dash-legend-label">{label}</span>
-      <strong className="dash-legend-value">{value ?? "--"}</strong>
-    </span>
-  );
-}
-
 function KpiCard({
   label, value, meta, variant, delay,
 }: {
@@ -880,8 +879,11 @@ function LiveCallsEmptyState() {
 function ChartEmptyState() {
   return (
     <div className="dash-chart-empty">
-      <p className="dash-chart-empty-text">No call data yet today</p>
-      <p className="dash-chart-empty-sub">Completed calls appear here after they are ingested.</p>
+      <div className="dash-chart-empty-orb">
+        <PhoneCall size={22} />
+      </div>
+      <p className="dash-chart-empty-text">No call activity yet</p>
+      <p className="dash-chart-empty-sub">Calls will appear here once activity is recorded.</p>
     </div>
   );
 }
@@ -1167,7 +1169,14 @@ function DonutRing({
 
 // ── Hero Chart ────────────────────────────────────────────────────────────────
 
-type ChartPoint = { label: string; incoming: number; outgoing: number; internal: number; missed?: number };
+type ChartPoint = {
+  label: string;
+  total: number;
+  incoming: number;
+  outgoing: number;
+  internal: number;
+  missed: number;
+};
 
 function smoothCurve(pts: [number, number][]): string {
   if (pts.length < 2) return pts.length === 1 ? `M ${pts[0][0]} ${pts[0][1]}` : "";
@@ -1196,12 +1205,12 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
 
   const W   = 900;
   const H   = 300;
-  const PAD = { top: 24, right: 24, bottom: 48, left: 48 };
+  const PAD = { top: 24, right: 26, bottom: 44, left: 46 };
   const iW  = W - PAD.left - PAD.right;
   const iH  = H - PAD.top  - PAD.bottom;
   const bY  = PAD.top + iH;
 
-  const peak = Math.max(1, ...points.flatMap((p) => [p.incoming, p.outgoing, p.internal]));
+  const peak = Math.max(1, ...points.map((p) => p.total));
   const yMax = (() => {
     const raw = peak * 1.2;
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -1211,12 +1220,11 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const xOf = (i: number) => PAD.left + (i / Math.max(1, points.length - 1)) * iW;
   const yOf = (v: number) => PAD.top  + iH - (v / yMax) * iH;
 
-  const inPts:  [number, number][] = points.map((p, i) => [xOf(i), yOf(p.incoming)]);
-  const outPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.outgoing)]);
-  const intPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.internal)]);
+  const totalPts:  [number, number][] = points.map((p, i) => [xOf(i), yOf(p.total)]);
+  const missedPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.missed)]);
 
-  const maxLabels = 10;
-  const step      = Math.max(1, Math.floor(points.length / maxLabels));
+  const maxLabels = points.length > 24 ? 8 : 10;
+  const step      = Math.max(1, Math.ceil(points.length / maxLabels));
   const xLabels   = points
     .map((p, i) => ({ label: p.label, i }))
     .filter(({ i }) => i % step === 0 || i === points.length - 1);
@@ -1228,6 +1236,7 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
 
   const hov = hovIdx !== null ? points[hovIdx] : null;
   const hovX = hovIdx !== null ? xOf(hovIdx) : null;
+  const hovTotalY = hov ? yOf(hov.total) : null;
 
   // Tooltip: flip to left when in the right third
   const tooltipLeft = hovIdx !== null && hovIdx > points.length * 0.65;
@@ -1252,18 +1261,18 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
       aria-label="Call activity chart"
     >
       <defs>
-        <linearGradient id="hg-in"  x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="var(--dash-incoming)" stopOpacity="0.30" />
-          <stop offset="100%" stopColor="var(--dash-incoming)" stopOpacity="0.00" />
+        <linearGradient id="hg-total" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.34" />
+          <stop offset="56%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.10" />
+          <stop offset="100%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.00" />
         </linearGradient>
-        <linearGradient id="hg-out" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="var(--dash-outgoing)" stopOpacity="0.22" />
-          <stop offset="100%" stopColor="var(--dash-outgoing)" stopOpacity="0.00" />
-        </linearGradient>
-        <linearGradient id="hg-int" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="var(--dash-internal)" stopOpacity="0.18" />
-          <stop offset="100%" stopColor="var(--dash-internal)" stopOpacity="0.00" />
-        </linearGradient>
+        <filter id="hg-glow" x="-20%" y="-40%" width="140%" height="180%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
         <clipPath id="hg-clip">
           <rect x={PAD.left} y={0} height={H} className="hg-clip-rect" style={{ width: iW }} />
         </clipPath>
@@ -1273,9 +1282,9 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
       {yTicks.map(({ v, y }) => (
         <g key={v}>
           <line x1={PAD.left} y1={y} x2={W - PAD.right} y2={y}
-            stroke="currentColor" strokeOpacity="0.07" strokeWidth="1" strokeDasharray="4 3" />
+            className="hg-grid-line" />
           <text x={PAD.left - 8} y={y} textAnchor="end" dominantBaseline="middle"
-            fill="currentColor" fillOpacity="0.4" fontSize="11" fontFamily="var(--font-mono, monospace)">
+            className="hg-axis-label">
             {v}
           </text>
         </g>
@@ -1283,67 +1292,69 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
 
       {/* Baseline */}
       <line x1={PAD.left} y1={bY} x2={W - PAD.right} y2={bY}
-        stroke="currentColor" strokeOpacity="0.15" strokeWidth="1" />
+        className="hg-baseline" />
 
       {/* X labels */}
       {xLabels.map(({ label, i }) => (
         <text key={i} x={xOf(i)} y={bY + 18} textAnchor="middle"
-          fill="currentColor" fillOpacity="0.45" fontSize="11" fontFamily="var(--font-mono, monospace)">
+          className="hg-axis-label hg-axis-label--x">
           {label}
         </text>
       ))}
 
-      {/* Area fills */}
+      {/* Area fill */}
       <g clipPath="url(#hg-clip)">
-        <path d={smoothArea(inPts,  bY)} fill="url(#hg-in)"  className="hg-area" />
-        <path d={smoothArea(outPts, bY)} fill="url(#hg-out)" className="hg-area hg-area--2" />
-        <path d={smoothArea(intPts, bY)} fill="url(#hg-int)" className="hg-area hg-area--3" />
+        <path d={smoothArea(totalPts, bY)} fill="url(#hg-total)" className="hg-area hg-area--total" />
       </g>
 
       {/* Lines */}
       <g clipPath="url(#hg-clip)">
-        <path d={smoothCurve(inPts)}  fill="none" stroke="var(--dash-incoming)" strokeWidth="2.5"
+        {points.some((p) => p.missed > 0) && (
+          <path d={smoothCurve(missedPts)} fill="none" stroke="var(--dash-missed)" strokeWidth="1.5"
+            strokeLinecap="round" strokeLinejoin="round"
+            pathLength="1" className="hg-line hg-line--missed" />
+        )}
+        <path d={smoothCurve(totalPts)} fill="none" stroke="var(--dash-total-line, #38bdf8)" strokeWidth="7"
           strokeLinecap="round" strokeLinejoin="round"
-          pathLength="1" className="hg-line hg-line--1" />
-        <path d={smoothCurve(outPts)} fill="none" stroke="var(--dash-outgoing)" strokeWidth="2.5"
+          pathLength="1" className="hg-line hg-line--glow" filter="url(#hg-glow)" />
+        <path d={smoothCurve(totalPts)} fill="none" stroke="var(--dash-total-line, #38bdf8)" strokeWidth="3.25"
           strokeLinecap="round" strokeLinejoin="round"
-          pathLength="1" className="hg-line hg-line--2" />
-        <path d={smoothCurve(intPts)} fill="none" stroke="var(--dash-internal)" strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round"
-          pathLength="1" className="hg-line hg-line--3" />
+          pathLength="1" className="hg-line hg-line--total" />
       </g>
 
       {/* Hover crosshair */}
-      {hovX !== null && hov !== null && (
+      {hovX !== null && hov !== null && hovTotalY !== null && (
         <g>
           <line x1={hovX} y1={PAD.top} x2={hovX} y2={bY}
-            stroke="currentColor" strokeOpacity="0.2" strokeWidth="1" strokeDasharray="4 3" />
+            className="hg-hover-line" />
 
-          {/* Intersection dots */}
-          <circle cx={hovX} cy={yOf(hov.incoming)} r="4" fill="var(--dash-incoming)" />
-          <circle cx={hovX} cy={yOf(hov.outgoing)} r="4" fill="var(--dash-outgoing)" />
-          <circle cx={hovX} cy={yOf(hov.internal)} r="4" fill="var(--dash-internal)" />
+          {/* Hover point */}
+          <circle cx={hovX} cy={hovTotalY} r="10" className="hg-hover-pulse" />
+          <circle cx={hovX} cy={hovTotalY} r="4.5" className="hg-hover-dot" />
 
           {/* Tooltip box */}
           {(() => {
-            const tx = tooltipLeft ? hovX - 130 : hovX + 12;
+            const tx = tooltipLeft ? hovX - 176 : hovX + 14;
             const ty = PAD.top + 8;
             return (
-              <g>
-                <rect x={tx} y={ty} width="118" height="80" rx="8"
-                  fill="var(--dash-tooltip-bg, #1a2535)" opacity="0.95"
-                  stroke="currentColor" strokeOpacity="0.12" strokeWidth="1" />
-                <text x={tx + 10} y={ty + 18} fill="currentColor" fillOpacity="0.7" fontSize="11"
-                  fontFamily="var(--font-mono, monospace)">{hov.label}</text>
-                <circle cx={tx + 12} cy={ty + 34} r="4" fill="var(--dash-incoming)" />
-                <text x={tx + 22} y={ty + 38} fill="currentColor" fillOpacity="0.9" fontSize="12"
-                  fontFamily="var(--font-sans, sans-serif)">{hov.incoming}</text>
-                <circle cx={tx + 12} cy={ty + 52} r="4" fill="var(--dash-outgoing)" />
-                <text x={tx + 22} y={ty + 56} fill="currentColor" fillOpacity="0.9" fontSize="12"
-                  fontFamily="var(--font-sans, sans-serif)">{hov.outgoing}</text>
-                <circle cx={tx + 12} cy={ty + 70} r="4" fill="var(--dash-internal)" />
-                <text x={tx + 22} y={ty + 74} fill="currentColor" fillOpacity="0.9" fontSize="12"
-                  fontFamily="var(--font-sans, sans-serif)">{hov.internal}</text>
+              <g className="hg-tooltip">
+                <rect x={tx} y={ty} width="162" height="126" rx="12" className="hg-tooltip-bg" />
+                <text x={tx + 14} y={ty + 22} className="hg-tooltip-title">{hov.label}</text>
+                <text x={tx + 14} y={ty + 45} className="hg-tooltip-total">{hov.total.toLocaleString()} total calls</text>
+                {[
+                  ["Incoming", hov.incoming, "var(--dash-incoming)"],
+                  ["Outgoing", hov.outgoing, "var(--dash-outgoing)"],
+                  ["Internal", hov.internal, "var(--dash-internal)"],
+                  ["Missed", hov.missed, "var(--dash-missed)"],
+                ].map(([label, value, color], idx) => (
+                  <g key={String(label)} transform={`translate(${tx + 14} ${ty + 68 + idx * 14})`}>
+                    <circle cx="0" cy="-3.5" r="3" fill={String(color)} />
+                    <text x="10" y="0" className="hg-tooltip-label">{label}</text>
+                    <text x="134" y="0" textAnchor="end" className="hg-tooltip-value">
+                      {Number(value).toLocaleString()}
+                    </text>
+                  </g>
+                ))}
               </g>
             );
           })()}
