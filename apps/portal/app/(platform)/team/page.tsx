@@ -11,7 +11,6 @@ import {
   Phone,
   Search,
   User,
-  Users,
   Wifi,
   WifiOff,
   X,
@@ -74,6 +73,55 @@ function mapAmiPresence(
 
 function mkInitials(name: string): string {
   return name.trim().split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
+}
+
+function readString(row: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number") return String(value);
+  }
+  return undefined;
+}
+
+function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null | undefined): boolean {
+  if (!tenantId) return false;
+
+  const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
+  if (directTenant) return directTenant === tenantId;
+
+  const nestedTenant = row.tenant;
+  if (nestedTenant && typeof nestedTenant === "object") {
+    const nestedId = readString(nestedTenant as Record<string, unknown>, ["id", "tenantId", "tenant_id"]);
+    if (nestedId) return nestedId === tenantId;
+  }
+
+  // The PBX resource endpoint is tenant-scoped by apiClient headers. If the row
+  // carries no tenant marker, trust the scoped response instead of leaking global rows.
+  return true;
+}
+
+function isValidTenantExtension(ext: string): boolean {
+  return /^\d{3}$/.test(ext);
+}
+
+function isSystemExtensionName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return (
+    normalized === "pbx user" ||
+    /^pbx user\s+\d+$/.test(normalized) ||
+    normalized === "invite lifecycle" ||
+    normalized.includes("invite lifecycle") ||
+    normalized.includes("provisioning") ||
+    normalized.includes("smoke") ||
+    normalized.includes("system") ||
+    normalized === "voice user" ||
+    /^voice user\s+\d+$/.test(normalized)
+  );
+}
+
+function byExtensionAsc(a: TeamMember, b: TeamMember): number {
+  return Number(a.extension) - Number(b.extension);
 }
 
 type ViewMode = "card" | "list";
@@ -322,7 +370,7 @@ function MemberCard({
       onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
     >
       <div className="td-card-top">
-        <MemberAvatar member={member} size={68} />
+        <MemberAvatar member={member} size={42} />
         <span
           className="td-status-pill td-status-pill-float"
           style={{
@@ -386,7 +434,7 @@ function MemberListRow({
       onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
     >
       <div className="td-list-name-cell">
-        <MemberAvatar member={member} size={46} />
+        <MemberAvatar member={member} size={38} />
         <div>
           <div className="td-list-name">{member.name}</div>
           <div className="td-list-email">Ext {member.extension}{member.email ? ` · ${member.email}` : ""}</div>
@@ -455,7 +503,7 @@ export default function TeamDirectoryPage() {
   const [rawSearch, setRawSearch] = useState("");
   const search = useDebouncedValue(rawSearch, 180);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortKey, setSortKey] = useState<SortKey>("extension");
 
   // Detail panel
   const [detail, setDetail] = useState<TeamMember | null>(null);
@@ -480,10 +528,10 @@ export default function TeamDirectoryPage() {
   // Tenant-scoped live calls for presence (not cross-tenant)
   const tenantCalls = useMemo(
     () =>
-      adminScope === "GLOBAL"
-        ? telephony.activeCalls
-        : telephony.activeCalls.filter((c) => c.tenantId === tenantId),
-    [telephony.activeCalls, tenantId, adminScope],
+      tenantId
+        ? telephony.activeCalls.filter((c) => c.tenantId === tenantId)
+        : [],
+    [telephony.activeCalls, tenantId],
   );
 
   // Build active/ringing extension sets from live calls
@@ -491,7 +539,7 @@ export default function TeamDirectoryPage() {
     const active = new Set<string>();
     const ringing = new Set<string>();
     tenantCalls.forEach((c) => {
-      const exts = c.extensions ?? [];
+      const exts = (c.extensions ?? []).filter(isValidTenantExtension);
       if (c.state === "up" || c.state === "held") exts.forEach((e) => active.add(e));
       else if (c.state === "ringing" || c.state === "dialing") exts.forEach((e) => ringing.add(e));
     });
@@ -501,43 +549,54 @@ export default function TeamDirectoryPage() {
   // Build member list — merge VitalPBX directory + live AMI presence
   const members: TeamMember[] = useMemo(() => {
     const extRows = extState.status === "success" ? extState.data.rows : [];
-    const mapped = extRows.map((r, i): TeamMember => {
-      const ext = String(r.extension ?? r.number ?? i);
+    const mapped = extRows.flatMap((r, i): TeamMember[] => {
+      if (!rowTenantMatches(r, tenantId)) return [];
+
+      const ext = readString(r, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
+      if (!ext || !isValidTenantExtension(ext)) return [];
+
+      const name = readString(r, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${ext}`;
+      if (isSystemExtensionName(name)) return [];
+
       const amiState = telephony.extensionList.find((e) => e.extension === ext);
-      return {
-        id: String(r.id ?? r.uuid ?? i),
-        name: String(r.name ?? r.display_name ?? r.callerid ?? `Extension ${ext}`),
+      return [{
+        id: readString(r, ["id", "uuid"]) ?? ext,
+        name,
         extension: ext,
-        email: r.email ? String(r.email) : undefined,
-        department: r.department ? String(r.department) : undefined,
-        title: r.title ? String(r.title) : undefined,
+        email: readString(r, ["email"]),
+        department: readString(r, ["department", "team"]),
+        title: readString(r, ["title", "role"]),
         presence: mapAmiPresence(
-          amiState?.status ?? String(r.state ?? "offline"),
+          amiState?.status ?? readString(r, ["state", "status"]) ?? "offline",
           ext,
           activeExts,
           ringingExts,
         ),
         callerId: undefined,
-      };
+      }];
     });
 
-    // Fall back to AMI extension list when VitalPBX directory hasn't loaded yet
-    if (mapped.length === 0) {
-      return telephony.extensionList.map((e): TeamMember => ({
+    // During the initial fetch only, fall back to AMI data filtered to real
+    // 3-digit extensions so system or cross-tenant junk never enters the UI.
+    if (mapped.length === 0 && extState.status === "loading") {
+      return telephony.extensionList.flatMap((e): TeamMember[] => {
+        if (!isValidTenantExtension(e.extension) || isSystemExtensionName(e.hint || e.extension)) return [];
+        return [{
         id: e.extension,
         name: e.hint || e.extension,
         extension: e.extension,
         presence: mapAmiPresence(e.status ?? "offline", e.extension, activeExts, ringingExts),
-      }));
+        }];
+      }).sort(byExtensionAsc);
     }
-    return mapped;
-  }, [extState, telephony.extensionList, activeExts, ringingExts]);
+    return mapped.sort(byExtensionAsc);
+  }, [extState, tenantId, telephony.extensionList, activeExts, ringingExts]);
 
   // Keep detail panel in sync with live presence updates
   useEffect(() => {
     setDetail((prev) => {
       if (!prev) return null;
-      return members.find((m) => m.id === prev.id) ?? prev;
+      return members.find((m) => m.id === prev.id) ?? null;
     });
   }, [members]);
 
@@ -563,10 +622,13 @@ export default function TeamDirectoryPage() {
         list.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
         break;
       case "status":
-        list.sort((a, b) => PRESENCE_ORDER[a.presence] - PRESENCE_ORDER[b.presence] || a.name.localeCompare(b.name));
+        list.sort((a, b) => PRESENCE_ORDER[a.presence] - PRESENCE_ORDER[b.presence] || byExtensionAsc(a, b));
+        break;
+      case "name":
+        list.sort((a, b) => a.name.localeCompare(b.name));
         break;
       default:
-        list.sort((a, b) => a.name.localeCompare(b.name));
+        list.sort(byExtensionAsc);
     }
     return list;
   }, [members, search, statusFilter, sortKey]);
@@ -579,11 +641,6 @@ export default function TeamDirectoryPage() {
     ringing:   members.filter((m) => m.presence === "ringing").length,
     offline:   members.filter((m) => m.presence === "offline").length,
   }), [members]);
-
-  const liveMembers = useMemo(
-    () => members.filter((m) => m.presence === "available" || m.presence === "on_call" || m.presence === "ringing").slice(0, 16),
-    [members],
-  );
 
   // Actions
   const handleCall = useCallback((ext: string) => {
@@ -632,26 +689,6 @@ export default function TeamDirectoryPage() {
             <strong>{counts.ringing}</strong>
             <span>Ringing</span>
           </div>
-        </div>
-      </section>
-
-      <section className="td-live-strip" aria-label="Live activity">
-        <div className="td-live-strip-head">
-          <Users size={15} />
-          <span>Live Activity</span>
-        </div>
-        <div className="td-live-avatars">
-          {liveMembers.length === 0 ? (
-            <span className="td-live-empty">No active users right now</span>
-          ) : liveMembers.map((member) => {
-            const meta = PRESENCE_META[member.presence];
-            return (
-              <button key={member.id} className={`td-live-avatar td-presence-${member.presence}`} onClick={() => setDetail(member)} title={`${member.name} · ${meta.label}`}>
-                <MemberAvatar member={member} size={38} />
-                <span>{member.name}</span>
-              </button>
-            );
-          })}
         </div>
       </section>
 
@@ -704,8 +741,8 @@ export default function TeamDirectoryPage() {
             onChange={(e) => setSortKey(e.target.value as SortKey)}
             aria-label="Sort by"
           >
-            <option value="name">Name</option>
             <option value="extension">Extension</option>
+            <option value="name">Name</option>
             <option value="status">Status</option>
           </select>
 

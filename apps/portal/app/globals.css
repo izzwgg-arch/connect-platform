@@ -5178,15 +5178,15 @@ table tr:hover {
   display: flex;
   align-items: stretch;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 20px 14px;
+  gap: 12px;
+  padding: 14px 20px 10px;
 }
 .td-hub-title {
   min-width: 0;
   flex: 1;
-  padding: 18px 18px 16px;
+  padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 24px;
+  border-radius: 18px;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--panel) 82%, transparent), color-mix(in srgb, var(--panel-2) 72%, transparent));
   box-shadow: 0 18px 50px color-mix(in srgb, #000 18%, transparent);
@@ -5196,7 +5196,7 @@ table tr:hover {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 10px;
+  margin-bottom: 7px;
   color: var(--accent);
   font-size: 12px;
   font-weight: 800;
@@ -5204,7 +5204,7 @@ table tr:hover {
   text-transform: uppercase;
 }
 .td-hub-title h1 {
-  font-size: clamp(28px, 4vw, 44px);
+  font-size: clamp(24px, 3vw, 34px);
   line-height: 0.95;
   letter-spacing: -0.04em;
   margin: 0 0 8px;
@@ -5212,22 +5212,22 @@ table tr:hover {
 .td-hub-title p {
   max-width: 720px;
   color: var(--text-dim);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.45;
 }
 .td-hub-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(94px, 1fr));
-  gap: 10px;
-  min-width: min(420px, 42%);
+  gap: 8px;
+  min-width: min(360px, 38%);
 }
 .td-hub-metric {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 116px;
-  padding: 14px;
-  border-radius: 22px;
+  min-height: 88px;
+  padding: 12px;
+  border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
   background: color-mix(in srgb, var(--success) 9%, var(--panel));
   box-shadow: 0 14px 36px color-mix(in srgb, #000 14%, transparent);
@@ -5235,12 +5235,12 @@ table tr:hover {
 .td-hub-metric.danger { border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); background: color-mix(in srgb, var(--danger) 9%, var(--panel)); }
 .td-hub-metric.warning { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); background: color-mix(in srgb, var(--warning) 9%, var(--panel)); }
 .td-hub-metric strong {
-  font-size: 34px;
+  font-size: 28px;
   line-height: 1;
   letter-spacing: -0.04em;
 }
 .td-hub-metric span {
-  margin-top: 8px;
+  margin-top: 6px;
   color: var(--text-dim);
   font-size: 12px;
   font-weight: 700;
@@ -5293,8 +5293,8 @@ table tr:hover {
 .td-live-empty { color: var(--text-dim); font-size: 13px; }
 .td-toolbar {
   margin: 0 20px 12px;
-  padding: 12px;
-  border-radius: 18px;
+  padding: 10px;
+  border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   background: color-mix(in srgb, var(--panel) 74%, transparent);
   backdrop-filter: blur(12px);
@@ -5306,7 +5306,7 @@ table tr:hover {
   background: color-mix(in srgb, var(--panel-2) 78%, transparent);
 }
 .td-filter-chip {
-  padding: 7px 12px;
+  padding: 6px 11px;
   border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
   background: color-mix(in srgb, var(--panel-2) 58%, transparent);
   transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
@@ -5334,25 +5334,25 @@ table tr:hover {
 }
 .td-content { padding: 0 20px 18px; }
 .td-card-grid {
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
 }
 .td-smart-card {
-  min-height: 238px;
-  padding: 20px;
-  border-radius: 24px;
+  min-height: 132px;
+  padding: 12px;
+  border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
   background:
     radial-gradient(circle at 80% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 44%),
     color-mix(in srgb, var(--panel) 82%, transparent);
-  box-shadow: 0 14px 36px color-mix(in srgb, #000 13%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, #000 11%, transparent);
   backdrop-filter: blur(10px);
   animation: td-grid-in 0.36s ease both;
   transform-origin: center;
 }
 .td-smart-card:hover {
-  transform: translateY(-4px) scale(1.015);
-  box-shadow: 0 26px 64px color-mix(in srgb, #000 22%, transparent);
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 18px 42px color-mix(in srgb, #000 18%, transparent);
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
 }
 .td-smart-card.td-presence-available {
@@ -5368,21 +5368,21 @@ table tr:hover {
 .td-card-top { align-items: flex-start; }
 .td-status-pill-float { margin-left: auto; }
 .td-card-name {
-  margin-top: 10px;
-  font-size: 20px;
-  font-weight: 820;
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 780;
   letter-spacing: -0.02em;
 }
 .td-card-ext {
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
-.td-card-role { margin-top: 8px; font-size: 13px; }
-.td-card-dept { font-size: 12px; }
+.td-card-role,
+.td-card-dept { display: none; }
 .td-card-footer {
   margin-top: auto;
-  padding-top: 14px;
+  padding-top: 8px;
   opacity: 0;
   transform: translateY(6px);
   transition: opacity 0.18s ease, transform 0.18s ease;
@@ -5396,13 +5396,13 @@ table tr:hover {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 34px;
-  padding: 0 12px;
+  height: 28px;
+  padding: 0 9px;
   border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--panel-2) 72%, transparent);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   cursor: pointer;
 }
@@ -5424,7 +5424,7 @@ table tr:hover {
 .td-clean-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   overflow: visible;
 }
 .td-clean-row {
@@ -5432,9 +5432,9 @@ table tr:hover {
   grid-template-columns: minmax(220px, 1.4fr) minmax(120px, 0.8fr) auto auto;
   align-items: center;
   gap: 16px;
-  padding: 12px 14px;
+  padding: 9px 12px;
   border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
-  border-radius: 18px;
+  border-radius: 14px;
   background: color-mix(in srgb, var(--panel) 74%, transparent);
   backdrop-filter: blur(10px);
   animation: td-grid-in 0.24s ease both;
@@ -5447,7 +5447,7 @@ table tr:hover {
 .td-list-row { border-bottom: none; }
 .td-list-row td { padding: 0; }
 .td-list-name-cell { gap: 12px; }
-.td-list-name { font-size: 14px; font-weight: 780; }
+.td-list-name { font-size: 13px; font-weight: 760; }
 .td-list-email { margin-top: 3px; }
 .td-list-meta {
   display: flex;
