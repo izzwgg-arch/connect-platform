@@ -24,6 +24,7 @@ export default function AdminPage() {
 
         <RoleGate allow={["SUPER_ADMIN"]}>
           <section className="grid three">
+            <AdminModuleCard title="Deploy Center" summary="Enqueue, monitor, and manage production deployments through the safe deploy queue. View logs and cancel jobs." href="/admin/deploy-center" />
             <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." href="/admin/tenants" />
             <AdminModuleCard
               title="Call Flight Recorder"

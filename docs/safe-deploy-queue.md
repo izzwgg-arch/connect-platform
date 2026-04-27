@@ -93,6 +93,29 @@ All routes except **`GET /health`** require:
 | POST | `/ops/deploy/enqueue` | Body: `service`, `branch`, optional `commitHash`, `requestedBy`, optional `dryRun`. |
 | POST | `/ops/deploy/jobs/:id/cancel` | Queued jobs only. |
 
+### Job object fields
+
+All `job` objects returned by the API include both snake_case (raw SQLite columns) and camelCase aliases:
+
+| camelCase | snake_case | Meaning |
+|-----------|------------|---------|
+| `id` | `id` | UUID |
+| `service` | `service` | `api` / `portal` / `telephony` / `realtime` / `worker` / `full-stack` |
+| `branch` | `branch` | Branch (or tag for `full-stack`) |
+| `commitHash` | `commit_hash` | Requested SHA (may be null) |
+| `deployedCommit` | `deployed_commit` | SHA the deploy script actually checked out |
+| `requestedBy` | `requested_by` | Caller identifier |
+| `status` | `status` | `queued` / `running` / `success` / `failed` / `cancelled` |
+| `dryRun` | `dry_run` | Boolean / 0-1 |
+| `queuedAt` | `created_at` | Epoch ms when enqueued |
+| `startedAt` | `started_at` | Epoch ms when worker picked it up |
+| `finishedAt` | `finished_at` | Epoch ms when it reached a terminal status |
+| `duration`, `durationMs` | `duration_ms` | ms between `startedAt` and `finishedAt` (null while running) |
+| `currentStage` | `current_stage` | `git-sync` / `change-detect` / `install` / `migrate` / `build` / `restart` / `health` / `done` / `rollback` / `dry-run` |
+| `skipReason` | `skip_reason` | `no_changes`, `unrelated_paths`, or null (only set on `success` short-circuits) |
+| `logPath` | `log_path` | Path on server, under `/var/log/connect-deploys/` |
+| `errorMessage` | `error_message` | Populated on failure |
+
 ### Duplicate protection
 
 SQLite **partial unique index**: at most one row per `service` with `status IN ('queued','running')`. A second enqueue for the same target returns **409** `duplicate_active_job_for_service`.
@@ -108,6 +131,19 @@ Env **`DEPLOY_QUEUE_MAX_QUEUED`** (default **10**): if `COUNT(*)` of `queued` jo
 - Per-job file: `/var/log/connect-deploys/<job-id>.log`
 - View via API: `GET /ops/deploy/jobs/<id>/log?lines=200`
 - Or `pm2 logs connect-deploy-worker`
+- **Rotation:** the worker deletes `.log` files older than **30 days** on startup and daily. Active logs (`queued` or `running`) and logs newer than 1 hour are never removed.
+- Every successful deploy writes `[timing] install=… build=… restart=… health=… total=…` lines so you can see where the time went without running a profiler.
+
+## Optimization behaviour
+
+The worker + per-service scripts cooperate to avoid wasted work:
+
+- **No-change skip** — if `origin/<branch>` or the pinned commit already equals the currently deployed HEAD, the script exits with `status=success`, `skipReason=no_changes`, and no docker / prisma work runs.
+- **Change-path detection** — when the commit changed but the diff touches none of the service's paths (e.g. `apps/api/**`, `packages/db/**`, `packages/shared/**`, `pnpm-lock.yaml`, `docker-compose.app.yml`), the script exits with `skipReason=unrelated_paths`.
+- **Smart install** — `pnpm install --frozen-lockfile --prefer-offline` only runs if `pnpm-lock.yaml` **or** `package.json` changed.
+- **Gated migrations** — `prisma migrate deploy` only runs on `api` jobs **and** only when `packages/db/prisma/schema.prisma` or `packages/db/prisma/migrations/**` changed.
+- **Service-scoped restart** — each per-service script runs `docker compose up -d <service>` for its own container only. No other PM2 process is ever restarted.
+- **Instant wake** — `POST /ops/deploy/enqueue` wakes the worker loop immediately (no 3 s poll delay); fallback poll runs every **1 s**.
 
 ---
 

@@ -33,6 +33,7 @@ import {
   Plane,
   Radio,
   Receipt,
+  Rocket,
   Route,
   Send,
   Server,
@@ -94,6 +95,7 @@ export const navItems: NavItem[] = [
   { href: "/admin/audio-intelligence", label: "Audio Intelligence", icon: "AI", lucide: Mic2, section: "admin", permission: "can_manage_global_settings" },
   { href: "/admin/call-timeline", label: "Call Timeline", icon: "CT", lucide: History, section: "admin", permission: "can_manage_global_settings" },
   { href: "/admin/call-flight", label: "Call Flight Recorder", icon: "CF", lucide: Plane, section: "admin", permission: "can_manage_global_settings" },
+  { href: "/admin/deploy-center", label: "Deploy Center", icon: "DC", lucide: Rocket, section: "admin", permission: "can_manage_deploys" },
 
   { href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", permission: "can_view_reports" },
   { href: "/billing/invoices", label: "Invoices", icon: "IN", lucide: FileText, section: "billing", permission: "can_view_reports" },

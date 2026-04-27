@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Deploy API only (Docker service `api`). Safe for ops/deploy-queue worker.
-# - Runs Prisma migrate deploy (ONLY this script among per-service deploys).
-# - Restarts only the `api` compose service.
+# - Only this per-service script runs `prisma migrate deploy`, and only when
+#   `packages/db/prisma/**` actually changed between old and new HEAD.
+# - Skips docker build when the target commit equals the deployed commit, or
+#   when the diff touches no API-relevant paths.
+# - Restarts only the `api` compose service. Never other PM2 processes.
 #
 # Env (set by worker or manually):
 #   DEPLOY_REPO_ROOT   default /opt/connectcomms/app
@@ -9,6 +12,7 @@
 #   DEPLOY_COMMIT      optional SHA (detached); wins over branch
 #   DEPLOY_REQUESTED_BY
 #   DEPLOY_COMPOSE_FILE default docker-compose.app.yml
+#   DEPLOY_JOB_ID, DEPLOY_QUEUE_STATE_DIR (set by worker — used for stage file)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,22 +35,49 @@ cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
+  deploy_common_emit_stage "dry-run"
   log "DRY RUN — no git/docker/prisma/health changes"
-  log "Would: git sync (branch=${BRANCH:-} commit=${COMMIT:-}), pnpm install if lock changed,"
-  log "  prisma migrate deploy, docker compose build/up ${SERVICE}, curl /health"
+  log "Would: git sync (branch=${BRANCH:-} commit=${COMMIT:-}), pnpm install if lock/pkg changed,"
+  log "  prisma migrate deploy IF prisma/** changed, docker compose build/up ${SERVICE}, curl /health"
   log "(requested_by=${REQ})"
   exit 0
 fi
 
-LOCK_BEFORE="$(deploy_common_lock_hash)"
-OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
-LOCK_AFTER="$(deploy_common_lock_hash)"
+JOB_START_NS="$(deploy_common_stopwatch_start)"
 
-deploy_common_maybe_pnpm_install "deploy-queue:${SERVICE}" "$LOCK_BEFORE" "$LOCK_AFTER"
+deploy_common_emit_stage "git-sync"
+LOCK_BEFORE="$(deploy_common_lock_hash)"
+PKG_BEFORE="$(deploy_common_pkg_hash)"
+OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+NEW_HEAD="$(deploy_common_head_sha)"
+LOCK_AFTER="$(deploy_common_lock_hash)"
+PKG_AFTER="$(deploy_common_pkg_hash)"
+
+deploy_common_emit_stage "change-detect"
+if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
+  deploy_common_emit_stage "done"
+  deploy_common_emit_skip "no_changes"
+  log "deployed commit already at ${NEW_HEAD:0:12} — skipping install/build/restart"
+  exit 0
+fi
+
+if ! deploy_common_needs_rebuild "$SERVICE" "$OLD_HEAD"; then
+  deploy_common_emit_stage "done"
+  deploy_common_emit_skip "unrelated_paths"
+  log "commit changed ${OLD_HEAD:0:12}..${NEW_HEAD:0:12} but no api-relevant paths changed — skipping build/restart"
+  exit 0
+fi
+
+deploy_common_emit_stage "install"
+INSTALL_START="$(deploy_common_stopwatch_start)"
+deploy_common_maybe_pnpm_install "deploy-queue:${SERVICE}" "$LOCK_BEFORE" "$LOCK_AFTER" "$PKG_BEFORE" "$PKG_AFTER"
+deploy_common_log_timing "install" "$(deploy_common_stopwatch_elapsed_ms "$INSTALL_START")"
+
 deploy_common_export_database_url
 
 rollback() {
   trap - ERR
+  deploy_common_emit_stage "rollback"
   log "rollback: restoring git + rebuilding ${SERVICE}"
   deploy_common_rollback_git "$ROOT" "$OLD_HEAD" || true
   deploy_common_run_heavy "deploy-queue:${SERVICE}:rollback-build" \
@@ -56,30 +87,40 @@ rollback() {
 
 trap 'rollback' ERR
 
-log "prisma migrate deploy (api deploy only)"
-deploy_common_run_heavy "deploy-queue:${SERVICE}:prisma" \
-  pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma
+if deploy_common_needs_migrate "$OLD_HEAD"; then
+  deploy_common_emit_stage "migrate"
+  MIGRATE_START="$(deploy_common_stopwatch_start)"
+  log "prisma migrate deploy (schema/migrations changed)"
+  deploy_common_run_heavy "deploy-queue:${SERVICE}:prisma" \
+    pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma
+  deploy_common_log_timing "migrate" "$(deploy_common_stopwatch_elapsed_ms "$MIGRATE_START")"
+else
+  log "prisma: no schema/migrations changes -> skipping migrate deploy"
+fi
 
+deploy_common_emit_stage "build"
+BUILD_START="$(deploy_common_stopwatch_start)"
 log "docker build ${SERVICE}"
 deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
   docker compose -f "$COMPOSE" build "$SERVICE"
+deploy_common_log_timing "build" "$(deploy_common_stopwatch_elapsed_ms "$BUILD_START")"
 
+deploy_common_emit_stage "restart"
+RESTART_START="$(deploy_common_stopwatch_start)"
 log "docker up ${SERVICE}"
 docker compose -f "$COMPOSE" up -d "$SERVICE"
+deploy_common_log_timing "restart" "$(deploy_common_stopwatch_elapsed_ms "$RESTART_START")"
 
+deploy_common_emit_stage "health"
+HEALTH_START="$(deploy_common_stopwatch_start)"
 log "health check http://127.0.0.1:3001/health"
-ok=0
-for i in $(seq 1 75); do
-  if curl -sfS --connect-timeout 2 --max-time 15 "http://127.0.0.1:3001/health" >/dev/null 2>&1; then
-    ok=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$ok" != "1" ]]; then
+if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 45 2; then
   rollback
   fail "health check failed after deploy (requested by ${REQ})"
 fi
+deploy_common_log_timing "health" "$(deploy_common_stopwatch_elapsed_ms "$HEALTH_START")"
 
 trap - ERR
+deploy_common_emit_stage "done"
+deploy_common_log_timing "total" "$(deploy_common_stopwatch_elapsed_ms "$JOB_START_NS")"
 log "done $(git rev-parse --short HEAD) requested_by=${REQ}"

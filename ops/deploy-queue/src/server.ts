@@ -7,6 +7,34 @@ import type Database from "better-sqlite3";
 import { countQueued, isDeployService, openQueueDb, resetStaleRunning, DEPLOY_SERVICES, type JobRow } from "./db.js";
 import { startWorkerLoop } from "./worker.js";
 
+const JOB_COLUMNS = `id, service, branch, commit_hash, deployed_commit, requested_by, status, dry_run,
+                     created_at, started_at, finished_at, log_path, error_message,
+                     current_stage, skip_reason, duration_ms`;
+
+/** Add camelCase aliases + derived `duration` so HTTP clients (and AGENTS.md) don't have to know SQLite column naming. */
+function decorateJob(row: JobRow): Record<string, unknown> {
+  const started = row.started_at ?? null;
+  const finished = row.finished_at ?? null;
+  const computedDuration =
+    row.duration_ms ?? (started != null && finished != null ? Math.max(0, finished - started) : null);
+  return {
+    ...row,
+    queuedAt: row.created_at,
+    startedAt: started,
+    finishedAt: finished,
+    commitHash: row.commit_hash,
+    deployedCommit: row.deployed_commit,
+    requestedBy: row.requested_by,
+    logPath: row.log_path,
+    errorMessage: row.error_message,
+    dryRun: !!row.dry_run,
+    currentStage: row.current_stage,
+    skipReason: row.skip_reason,
+    duration: computedDuration,
+    durationMs: computedDuration,
+  };
+}
+
 function timingSafeEqualString(a: string, b: string): boolean {
   const aa = Buffer.from(a, "utf8");
   const bb = Buffer.from(b, "utf8");
@@ -120,10 +148,13 @@ export type CreateAppOptions = {
   maxQueued: number;
   queueVersion: string;
   repoHead: string | null;
+  /** Optional: called right after a successful enqueue so the worker wakes immediately instead of waiting for the next poll. */
+  onEnqueued?: () => void;
 };
 
 export function createApp(opts: CreateAppOptions) {
   const { db, token, logDir, repoRoot, stateDir, maxQueued, queueVersion, repoHead } = opts;
+  const onEnqueued = opts.onEnqueued ?? (() => undefined);
   const app = express();
   app.use(express.json({ limit: "64kb" }));
 
@@ -158,9 +189,7 @@ export function createApp(opts: CreateAppOptions) {
     ).c;
     const running = db
       .prepare(
-        `SELECT id, service, branch, commit_hash, requested_by, status, dry_run,
-                created_at, started_at, finished_at, log_path, error_message
-         FROM jobs WHERE status = 'running' LIMIT 1`,
+        `SELECT ${JOB_COLUMNS} FROM jobs WHERE status = 'running' LIMIT 1`,
       )
       .get() as JobRow | undefined;
     const lock = readWorkerLockState(stateDir);
@@ -168,7 +197,7 @@ export function createApp(opts: CreateAppOptions) {
       queuedCount: queued,
       runningCount,
       maxQueued,
-      runningJob: running ?? null,
+      runningJob: running ? decorateJob(running) : null,
       targets: DEPLOY_SERVICES,
       lock,
       version: {
@@ -181,9 +210,7 @@ export function createApp(opts: CreateAppOptions) {
   app.get("/ops/deploy/jobs", (req, res) => {
     const status = String(req.query.status || "").trim();
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
-    let sql = `SELECT id, service, branch, commit_hash, requested_by, status, dry_run,
-                      created_at, started_at, finished_at, log_path, error_message
-               FROM jobs`;
+    let sql = `SELECT ${JOB_COLUMNS} FROM jobs`;
     const args: string[] = [];
     if (status && /^[a-z-]+$/.test(status)) {
       sql += ` WHERE status = ?`;
@@ -192,16 +219,12 @@ export function createApp(opts: CreateAppOptions) {
     sql += ` ORDER BY created_at DESC LIMIT ?`;
     args.push(String(limit));
     const rows = db.prepare(sql).all(...args) as JobRow[];
-    res.json({ jobs: rows });
+    res.json({ jobs: rows.map(decorateJob) });
   });
 
   app.get("/ops/deploy/jobs/:id", (req, res) => {
     const row = db
-      .prepare(
-        `SELECT id, service, branch, commit_hash, requested_by, status, dry_run,
-                created_at, started_at, finished_at, log_path, error_message
-         FROM jobs WHERE id = ?`,
-      )
+      .prepare(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?`)
       .get(req.params.id) as JobRow | undefined;
     if (!row) {
       res.status(404).json({ error: "not_found" });
@@ -211,7 +234,7 @@ export function createApp(opts: CreateAppOptions) {
     if (row.log_path && fs.existsSync(row.log_path)) {
       logTail = readTail(row.log_path, 64_000);
     }
-    res.json({ job: row, logTail });
+    res.json({ job: decorateJob(row), logTail });
   });
 
   app.get("/ops/deploy/jobs/:id/log", (req, res) => {
@@ -271,8 +294,8 @@ export function createApp(opts: CreateAppOptions) {
     const dryInt = dryRun ? 1 : 0;
     try {
       db.prepare(
-        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?)`,
+        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run, current_stage, skip_reason, deployed_commit, duration_ms)
+         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL)`,
       ).run(
         id,
         service,
@@ -294,13 +317,14 @@ export function createApp(opts: CreateAppOptions) {
       throw e;
     }
     const job = db
-      .prepare(
-        `SELECT id, service, branch, commit_hash, requested_by, status, dry_run,
-                created_at, started_at, finished_at, log_path, error_message
-         FROM jobs WHERE id = ?`,
-      )
+      .prepare(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?`)
       .get(id) as JobRow;
-    res.status(201).json({ job });
+    try {
+      onEnqueued();
+    } catch {
+      /* worker wake is best-effort */
+    }
+    res.status(201).json({ job: decorateJob(job) });
   });
 
   app.post("/ops/deploy/jobs/:id/cancel", (req, res) => {
@@ -343,7 +367,7 @@ async function main() {
   const logDir = envStr("DEPLOY_QUEUE_LOG_DIR", "/var/log/connect-deploys");
   const host = envStr("DEPLOY_QUEUE_BIND", "127.0.0.1");
   const port = Number(envStr("DEPLOY_QUEUE_PORT", "3910")) || 3910;
-  const pollMs = Number(envStr("DEPLOY_QUEUE_POLL_MS", "3000")) || 3000;
+  const pollMs = Number(envStr("DEPLOY_QUEUE_POLL_MS", "1000")) || 1000;
   const maxQueued = Math.min(500, Math.max(1, Number(envStr("DEPLOY_QUEUE_MAX_QUEUED", "10")) || 10));
 
   const db = openQueueDb(sqlitePath);
@@ -351,7 +375,7 @@ async function main() {
 
   const { packageVersion, repoHead } = readQueueVersion(repoRoot);
 
-  const stopWorker = startWorkerLoop({ db, repoRoot, logDir, stateDir, pollMs });
+  const worker = startWorkerLoop({ db, repoRoot, logDir, stateDir, pollMs });
   const app = createApp({
     db,
     token,
@@ -361,13 +385,14 @@ async function main() {
     maxQueued,
     queueVersion: packageVersion,
     repoHead,
+    onEnqueued: worker.signalEnqueued,
   });
   const server = app.listen(port, host, () => {
-    console.log(`[deploy-queue] listening http://${host}:${port} (repo=${repoRoot}) maxQueued=${maxQueued}`);
+    console.log(`[deploy-queue] listening http://${host}:${port} (repo=${repoRoot}) maxQueued=${maxQueued} pollMs=${pollMs}`);
   });
 
   const shutdown = () => {
-    stopWorker();
+    worker.stop();
     server.close(() => {
       db.close();
       process.exit(0);

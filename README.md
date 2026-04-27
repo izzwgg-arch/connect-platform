@@ -5,12 +5,15 @@ Monorepo scaffold for portal, API, realtime services, and shared packages.
 - Runtime env reference: `/opt/connectcomms/env/.env.platform`
 - Do not run installs in parallel.
 
-## Safe deploy queue (multi-agent)
+## Safe Deploy Queue
 
-Production uses **Docker Compose** for app services. A small **localhost-only** queue (`ops/deploy-queue`, PM2 name `connect-deploy-worker`) serializes **all** routine deploys. Targets: `api`, `portal`, `telephony`, `realtime`, `worker`, `full-stack` (wraps `deploy-tag.sh`). Use `GET /ops/deploy/status`, `GET /ops/deploy/jobs/:id/log`, and optional `dryRun: true` on enqueue.
-
-- **Full documentation:** [docs/safe-deploy-queue.md](docs/safe-deploy-queue.md)
-- **Policy:** agents and humans enqueue only; direct `deploy-tag.sh` / `docker compose` rebuilds are **emergency-only** (warnings print unless `DEPLOY_QUEUE_ACK=1`).
+- All deployments go through the deploy queue — never run `docker compose`, `pnpm build`, `prisma migrate`, or `deploy-tag.sh` manually on the server.
+- Agents must not deploy directly. The full rulebook is in [`AGENTS.md`](AGENTS.md).
+- Enqueue: `POST /ops/deploy/enqueue` (body: `service`, `branch`, optional `commitHash`, `requestedBy`, `reason`, optional `dryRun`).
+- Check: `GET /ops/deploy/jobs` and `GET /ops/deploy/jobs/:id`.
+- Logs: `/var/log/connect-deploys/` on the server, or `GET /ops/deploy/jobs/:id/log?lines=200`.
+- Targets: `api`, `portal`, `telephony`, `realtime`, `worker`, `full-stack` (wraps `deploy-tag.sh`). Global serialization — one job at a time.
+- Full HTTP reference, examples, and emergency-override policy: [`docs/safe-deploy-queue.md`](docs/safe-deploy-queue.md).
 
 ## PBX Smoke Runner
 

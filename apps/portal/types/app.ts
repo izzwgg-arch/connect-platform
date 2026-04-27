@@ -42,7 +42,8 @@ export type Permission =
   | "can_upload_moh"
   | "can_view_did_routing"
   | "can_manage_did_routing"
-  | "can_publish_did_routing";
+  | "can_publish_did_routing"
+  | "can_manage_deploys";
 
 export type Presence = "AVAILABLE" | "ON_CALL" | "AWAY" | "DND" | "OFFLINE";
 

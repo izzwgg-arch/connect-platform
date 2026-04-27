@@ -11,6 +11,8 @@ export type JobRow = {
   service: DeployService;
   branch: string;
   commit_hash: string | null;
+  /** SHA the deploy script actually checked out (may differ from requested commit_hash when branch was passed). */
+  deployed_commit: string | null;
   requested_by: string;
   status: JobStatus;
   created_at: number;
@@ -19,6 +21,12 @@ export type JobRow = {
   log_path: string | null;
   error_message: string | null;
   dry_run: number;
+  /** Coarse-grained stage the worker last observed from the deploy script's state file. */
+  current_stage: string | null;
+  /** If non-null on a successful job, the script short-circuited (e.g. `no_changes`, `unrelated_paths`). */
+  skip_reason: string | null;
+  /** started_at → finished_at difference, cached at completion for easy querying. */
+  duration_ms: number | null;
 };
 
 export const DEPLOY_SERVICES: DeployService[] = [
@@ -40,6 +48,18 @@ function migrateJobsTable(db: Database.Database): void {
   if (!names.has("dry_run")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!names.has("current_stage")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN current_stage TEXT`);
+  }
+  if (!names.has("skip_reason")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN skip_reason TEXT`);
+  }
+  if (!names.has("deployed_commit")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN deployed_commit TEXT`);
+  }
+  if (!names.has("duration_ms")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN duration_ms INTEGER`);
+  }
 }
 
 export function openQueueDb(filePath: string): Database.Database {
@@ -60,7 +80,11 @@ export function openQueueDb(filePath: string): Database.Database {
       finished_at INTEGER,
       log_path TEXT,
       error_message TEXT,
-      dry_run INTEGER NOT NULL DEFAULT 0
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      current_stage TEXT,
+      skip_reason TEXT,
+      deployed_commit TEXT,
+      duration_ms INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_service

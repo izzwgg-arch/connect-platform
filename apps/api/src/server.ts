@@ -22819,6 +22819,141 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 // END PBX LIVE METRICS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Deploy Center — proxy to ops/deploy-queue (localhost:3910)
+//
+// Rules enforced here:
+//  • SUPER_ADMIN only (via requireSuperAdmin).
+//  • DEPLOY_QUEUE_TOKEN is read from env server-side; NEVER forwarded to
+//    the browser in any response body or header.
+//  • Only the six specific deploy-queue paths are proxied — no arbitrary URL.
+//  • The log sub-path only accepts a jobId from the URL, never a raw path.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const deployQueueBase = (process.env.DEPLOY_QUEUE_URL ?? "http://127.0.0.1:3910").replace(/\/$/, "");
+const deployQueueToken = process.env.DEPLOY_QUEUE_TOKEN ?? "";
+
+async function dqFetch(path: string, opts: { method?: string; body?: string } = {}): Promise<{ ok: boolean; status: number; data: unknown }> {
+  if (!deployQueueToken) {
+    return { ok: false, status: 503, data: { error: "deploy_queue_token_not_configured" } };
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 10_000);
+  try {
+    const res = await fetch(`${deployQueueBase}${path}`, {
+      method: opts.method ?? "GET",
+      headers: {
+        "content-type": "application/json",
+        "x-deploy-queue-token": deployQueueToken,
+      },
+      body: opts.body,
+      signal: ctrl.signal,
+    });
+    let data: unknown;
+    try { data = await res.json(); } catch { data = { error: "invalid_response_from_queue" }; }
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("abort") || msg.includes("signal")) {
+      return { ok: false, status: 504, data: { error: "deploy_queue_timeout" } };
+    }
+    return { ok: false, status: 502, data: { error: "deploy_queue_unreachable", detail: msg } };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// GET /admin/deploy/status
+app.get("/admin/deploy/status", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const r = await dqFetch("/ops/deploy/status");
+  return reply.status(r.status).send(r.data);
+});
+
+// GET /admin/deploy/jobs?status=…&limit=…
+app.get("/admin/deploy/jobs", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const qs = req.query as Record<string, string>;
+  const params = new URLSearchParams();
+  if (qs.status) params.set("status", qs.status);
+  if (qs.limit) params.set("limit", qs.limit);
+  const path = `/ops/deploy/jobs${params.toString() ? `?${params.toString()}` : ""}`;
+  const r = await dqFetch(path);
+  return reply.status(r.status).send(r.data);
+});
+
+// GET /admin/deploy/jobs/:id
+app.get("/admin/deploy/jobs/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  if (!/^[0-9a-f-]{36}$/.test(id)) return reply.status(400).send({ error: "invalid_job_id" });
+  const r = await dqFetch(`/ops/deploy/jobs/${encodeURIComponent(id)}`);
+  return reply.status(r.status).send(r.data);
+});
+
+// GET /admin/deploy/jobs/:id/log?lines=…
+app.get("/admin/deploy/jobs/:id/log", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  if (!/^[0-9a-f-]{36}$/.test(id)) return reply.status(400).send({ error: "invalid_job_id" });
+  const qs = req.query as Record<string, string>;
+  const lines = Math.min(2000, Math.max(1, Number(qs.lines) || 200));
+  const r = await dqFetch(`/ops/deploy/jobs/${encodeURIComponent(id)}/log?lines=${lines}`);
+  return reply.status(r.status).send(r.data);
+});
+
+// POST /admin/deploy/enqueue
+app.post("/admin/deploy/enqueue", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const body = req.body as Record<string, unknown>;
+  const { service, branch, commitHash, dryRun, reason } = body;
+  const requestedBy = `${admin.email ?? admin.sub} (Deploy Center)`;
+  const payload = JSON.stringify({ service, branch, commitHash, requestedBy, reason, dryRun });
+  const r = await dqFetch("/ops/deploy/enqueue", { method: "POST", body: payload });
+  if (r.ok) {
+    try {
+      await audit({
+        tenantId: admin.tenantId,
+        actorUserId: admin.sub,
+        action: dryRun ? "DEPLOY_DRY_RUN_ENQUEUED" : "DEPLOY_ENQUEUED",
+        entityType: "DeployJob",
+        entityId: (r.data as { job?: { id?: string } })?.job?.id ?? "unknown",
+      });
+    } catch {
+      app.log.warn("deploy audit log failed (non-blocking)");
+    }
+  }
+  return reply.status(r.status).send(r.data);
+});
+
+// POST /admin/deploy/jobs/:id/cancel
+app.post("/admin/deploy/jobs/:id/cancel", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  if (!/^[0-9a-f-]{36}$/.test(id)) return reply.status(400).send({ error: "invalid_job_id" });
+  const r = await dqFetch(`/ops/deploy/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  if (r.ok) {
+    try {
+      await audit({
+        tenantId: admin.tenantId,
+        actorUserId: admin.sub,
+        action: "DEPLOY_JOB_CANCELLED",
+        entityType: "DeployJob",
+        entityId: id,
+      });
+    } catch {
+      app.log.warn("deploy cancel audit log failed (non-blocking)");
+    }
+  }
+  return reply.status(r.status).send(r.data);
+});
+
 // ── Startup telephony/WebRTC config validation ────────────────────────────────
 // Runs just before listen so logs appear during startup, not at module load.
 const port = Number(process.env.PORT || 3001);
