@@ -2,17 +2,11 @@
 
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
-import { GlobalScopeNotice } from "../../../components/GlobalScopeNotice";
-import { LiveBadge } from "../../../components/LiveBadge";
-import { LiveCallBadge } from "../../../components/LiveCallBadge";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PermissionGate } from "../../../components/PermissionGate";
-import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import { useTelephony } from "../../../contexts/TelephonyContext";
 import { apiGet } from "../../../services/apiClient";
-import { formatDurationSec, directionLabel, directionClass } from "../../../services/pbxLive";
 import {
   ArrowDown, ArrowLeftRight, ArrowUp,
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
@@ -608,9 +602,7 @@ const DATE_PRESETS: { id: DatePreset; label: string }[] = [
 export default function CallsPage() {
   const { adminScope, tenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
-  const telephony = useTelephony();
   const scopedTenantId = isGlobal ? null : tenantId;
-  const liveCalls = telephony.callsByTenant(scopedTenantId);
 
   // Filter state
   const [searchDraft, setSearchDraft]   = useState("");
@@ -722,17 +714,9 @@ export default function CallsPage() {
         <header className="ch-hero">
           <div className="ch-title-block">
             <div>
-              <p className="ch-eyebrow">Communication history</p>
               <h1>Call History</h1>
-              <p className="ch-subtitle">Conversations, outcomes, recordings, and follow-ups for the selected tenant.</p>
-            </div>
-            <div className="ch-hero-badges">
-              <ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} />
-              <LiveBadge status={telephony.status} />
             </div>
           </div>
-
-          {isGlobal ? <GlobalScopeNotice /> : null}
 
           {/* ── KPI bar ── */}
           {historyState.status === "success" && kpiStats ? (
@@ -774,61 +758,6 @@ export default function CallsPage() {
             </div>
           ) : null}
         </header>
-
-        {/* ── Live calls strip ── */}
-        {liveCalls.length > 0 ? (
-          <section className="calls-live-section" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-count">{liveCalls.length}</span>
-            </div>
-            <div className="calls-live-list">
-              {liveCalls.map((call) => {
-                const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
-                const elapsed = call.answeredAt
-                  ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
-                  : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
-                const displayTo = call.to
-                  ? call.to
-                  : <span style={{ fontStyle: "italic", color: "var(--console-muted)", fontSize: "0.8rem" }}>Resolving…</span>;
-                const displayTenant = call.tenantName ?? call.tenantId ?? null;
-                return (
-                  <div key={call.id} className="calls-live-row">
-                    <DirectionIcon direction={dir as CallDirection} size={15} />
-                    <span className="calls-live-caller">
-                      {call.fromName && <span className="calls-live-cnam">{call.fromName}</span>}
-                      <span className="mono">{call.from || "—"}</span>
-                    </span>
-                    <span className="calls-live-arrow">→</span>
-                    <span className="mono">{displayTo}</span>
-                    <span className={`chip ${directionClass(dir)}`}>{directionLabel(dir)}</span>
-                    <span className="chip info">{call.state}</span>
-                    <span className="mono muted">{formatDurationSec(elapsed)}</span>
-                    {isGlobal && displayTenant ? <span className="muted">{displayTenant}</span> : null}
-                    <LiveCallBadge active />
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : telephony.status === "connected" ? (
-          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot idle" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-idle-label">No active calls right now</span>
-            </div>
-          </section>
-        ) : telephony.status === "failed" ? (
-          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot error" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-idle-label">Connection lost — refresh the page to reconnect</span>
-            </div>
-          </section>
-        ) : null}
 
         {/* ── Smart filter bar ── */}
         <section className="ch-filter-bar" aria-label="Filters">
