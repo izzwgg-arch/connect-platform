@@ -1939,42 +1939,11 @@ body {
 }
 
 .ws-switcher-panel-inner {
-  padding: 12px;
+  padding: 10px;
   max-height: min(72vh, 520px);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.ws-switcher-current {
-  padding: 11px 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--console-panel-soft) 88%, var(--console-accent) 4%);
-  border: 1px solid color-mix(in srgb, var(--console-border) 70%, transparent);
-}
-
-.ws-switcher-current-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--console-muted);
-  margin-bottom: 8px;
-}
-
-.ws-switcher-current-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.ws-switcher-current-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--console-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  gap: 8px;
 }
 
 .ws-switcher-search-wrap {
@@ -1982,7 +1951,7 @@ body {
   align-items: center;
   gap: 9px;
   padding: 0 12px;
-  min-height: 44px;
+  min-height: 40px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--console-border) 88%, var(--console-accent) 8%);
   background: color-mix(in srgb, var(--console-panel-soft) 88%, var(--console-bg));
@@ -2027,7 +1996,7 @@ body {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--console-muted) 45%, transparent) color-mix(in srgb, var(--console-panel-soft) 45%, transparent);
@@ -2054,15 +2023,6 @@ body {
   background-clip: padding-box;
 }
 
-.ws-switcher-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--console-muted);
-  padding: 4px 4px 0;
-}
-
 .ws-switcher-list {
   display: flex;
   flex-direction: column;
@@ -2074,8 +2034,8 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 10px 12px;
+  min-height: 38px;
+  padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;

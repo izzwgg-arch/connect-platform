@@ -170,13 +170,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
           onKeyDown={onPanelKeyDown}
         >
           <div className="ws-switcher-panel-inner">
-            <div className="ws-switcher-current">
-              <div className="ws-switcher-current-label">Current workspace</div>
-              <div className="ws-switcher-current-row">
-                <div className="ws-switcher-current-name">{displayName}</div>
-              </div>
-            </div>
-
             <div className="ws-switcher-search-wrap">
               <Search className="ws-switcher-search-icon" size={16} strokeWidth={2} aria-hidden />
               <input
@@ -189,7 +182,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
             </div>
 
             <div className="ws-switcher-scroll">
-              <div className="ws-switcher-section-label">Your workspaces</div>
               <div
                 className="ws-switcher-list"
                 role="listbox"
@@ -243,7 +235,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
 
               <div className="ws-switcher-divider" />
 
-              <div className="ws-switcher-section-label">Create</div>
               <div className="ws-switcher-actions">
                 <Link href="/admin/tenants" className="ws-switcher-action" onClick={() => setOpen(false)}>
                   <Plus size={16} strokeWidth={2} />
