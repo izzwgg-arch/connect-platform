@@ -55,6 +55,7 @@ export function ChatComposer({
   }, [recording]);
 
   async function startRecording() {
+    // Voice notes upload through the same tenant-scoped attachment pipeline.
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") return;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : undefined });

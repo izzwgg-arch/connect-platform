@@ -48,6 +48,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
 
   const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: data.tenantId } });
   const hasMedia = msg.attachments.length > 0;
+  // API marks this when SMS should send signed media links instead of MMS.
   const metadata = msg.metadata && typeof msg.metadata === "object" && !Array.isArray(msg.metadata) ? msg.metadata as Record<string, any> : {};
   const linkFallback = Boolean(metadata.smsLinkFallback);
   if (hasMedia && !linkFallback && (!cfg.mmsEnabled || !smsRow?.mmsCapable)) {
