@@ -9,23 +9,40 @@ import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { ScopeBadge } from "../../../components/ScopeBadge";
+import { useTelephony } from "../../../contexts/TelephonyContext";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import { useTelephony } from "../../../contexts/TelephonyContext";
 import { apiGet } from "../../../services/apiClient";
-import { formatDurationSec, directionLabel, directionClass } from "../../../services/pbxLive";
+import { directionClass, directionLabel, formatDurationSec } from "../../../services/pbxLive";
 import {
-  ArrowDown, ArrowLeftRight, ArrowUp,
-  Phone, PhoneOff, PhoneMissed, PhoneIncoming,
-  ChevronDown, ChevronRight, Clock, User, Voicemail,
-  Radio, GitBranch, CheckCircle2, XCircle, AlertCircle, Info,
-  X, Mic, Download,
+  ArrowDown,
+  ArrowLeftRight,
+  ArrowUp,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  Copy,
+  Download,
+  MessageSquare,
+  Mic,
+  MoreHorizontal,
+  Phone,
+  PhoneMissed,
+  Radio,
+  Search,
+  Sparkles,
+  StickyNote,
+  Voicemail,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type CallDirection = "incoming" | "outgoing" | "internal";
 type CallStatus = "answered" | "missed" | "canceled" | "failed";
 type AnsweredByType = "human" | "ivr" | "voicemail" | "system" | null;
+type SmartTab = "all" | "missed" | "answered" | "voicemail" | "internal";
+type QuickRange = "today" | "yesterday" | "last7";
 
 type JourneyStep = {
   label: string;
@@ -51,10 +68,8 @@ type CallHistoryRow = {
   tenantId: string | null;
   tenantName: string;
   rangExtension: string | null;
-  // Recording
   recordingAvailable: boolean;
   recordingPath: string | null;
-  // Derived outcome fields
   answeredByType: AnsweredByType;
   humanAnswered: boolean;
   ivrAnswered: boolean;
@@ -80,11 +95,15 @@ type CallHistoryResponse = {
   };
 };
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
-
 function todayDateInput(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function addDays(base: string, days: number): string {
+  const d = new Date(`${base}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function toIsoRange(startDate: string, endDate: string) {
@@ -95,45 +114,40 @@ function toIsoRange(startDate: string, endDate: string) {
 
 function formatDuration(sec: number): string {
   if (!sec || sec <= 0) return "—";
-  const m = Math.floor(sec / 60);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const abs = Math.abs(ms);
-  const suffix = ms >= 0 ? "ago" : "from now";
-  if (abs < 60_000) {
-    const value = Math.max(1, Math.round(abs / 1_000));
-    return `${value} sec${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  if (abs < 3_600_000) {
-    const value = Math.max(1, Math.round(abs / 60_000));
-    return `${value} min${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  if (abs < 86_400_000) {
-    const value = Math.max(1, Math.round(abs / 3_600_000));
-    return `${value} hour${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  const value = Math.max(1, Math.round(abs / 86_400_000));
-  return `${value} day${value === 1 ? "" : "s"} ${suffix}`;
-}
-
-function formatAbsTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-  });
-}
-
 function formatPhone(num: string): string {
-  const d = num.replace(/\D/g, "");
-  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-  if (d.length === 11 && d.startsWith("1")) return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  const digits = num.replace(/\D/g, "");
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
   return num || "—";
 }
 
-// ─── Direction & status display ───────────────────────────────────────────────
+function formatTimeBucket(iso: string): string {
+  const now = new Date();
+  const d = new Date(iso);
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const hhmm = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (isToday) return `Today ${hhmm}`;
+  if (isYesterday) return `Yesterday ${hhmm}`;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function ringTimeSec(row: CallHistoryRow): number {
+  if (!row.answeredAt) return 0;
+  const started = new Date(row.startedAt).getTime();
+  const answered = new Date(row.answeredAt).getTime();
+  if (Number.isNaN(started) || Number.isNaN(answered)) return 0;
+  return Math.max(0, Math.round((answered - started) / 1000));
+}
 
 function DirectionIcon({ direction, size = 14 }: { direction: CallDirection; size?: number }) {
   if (direction === "incoming") return <ArrowDown className="call-dir-icon incoming" size={size} />;
@@ -142,435 +156,720 @@ function DirectionIcon({ direction, size = 14 }: { direction: CallDirection; siz
 }
 
 function outcomeLabel(row: CallHistoryRow): string {
-  if (row.status === "canceled") return "Canceled";
-  if (row.status === "failed") return "Failed";
   if (row.voicemailAnswered) return "Voicemail";
-  if (row.ivrAnswered && !row.humanAnswered && row.status === "missed") return "IVR → Missed";
-  if (row.ivrAnswered && !row.humanAnswered) return "IVR only";
-  if (row.humanAnswered) return "Answered";
+  if (row.humanAnswered || row.status === "answered") return "Answered";
   if (row.status === "missed") return "Missed";
+  if (row.ivrAnswered) return "IVR";
+  if (row.status === "failed") return "Failed";
+  if (row.status === "canceled") return "Canceled";
   return row.status;
 }
 
 function outcomeClass(row: CallHistoryRow): string {
-  if (row.status === "canceled" || row.status === "failed") return "outcome-neutral";
   if (row.voicemailAnswered) return "outcome-voicemail";
-  if (row.ivrAnswered && !row.humanAnswered && row.status === "missed") return "outcome-missed";
-  if (row.ivrAnswered && !row.humanAnswered) return "outcome-ivr";
-  if (row.humanAnswered) return "outcome-answered";
+  if (row.humanAnswered || row.status === "answered") return "outcome-answered";
   if (row.status === "missed") return "outcome-missed";
+  if (row.ivrAnswered) return "outcome-ivr";
   return "outcome-neutral";
+}
+
+function statusDescription(row: CallHistoryRow): string {
+  if (row.voicemailAnswered) return "Voicemail captured";
+  if (row.direction === "incoming" && row.status === "missed") return "Missed call";
+  if (row.direction === "outgoing" && (row.humanAnswered || row.status === "answered")) return "Outgoing call answered";
+  if (row.direction === "internal") return "Internal call";
+  if (row.status === "canceled") return "Call canceled";
+  if (row.status === "failed") return "Call failed";
+  return `${row.direction} call`;
 }
 
 function OutcomeIcon({ row }: { row: CallHistoryRow }) {
   if (row.voicemailAnswered) return <Voicemail size={13} />;
-  if (row.ivrAnswered && !row.humanAnswered && row.status === "missed") return <PhoneMissed size={13} />;
-  if (row.ivrAnswered && !row.humanAnswered) return <Radio size={13} />;
-  if (row.humanAnswered) return <Phone size={13} />;
+  if (row.humanAnswered || row.status === "answered") return <CheckCircle2 size={13} />;
   if (row.status === "missed") return <PhoneMissed size={13} />;
-  if (row.status === "canceled") return <PhoneOff size={13} />;
-  return <PhoneOff size={13} />;
+  if (row.ivrAnswered) return <Radio size={13} />;
+  return <Phone size={13} />;
 }
 
-function StepIcon({ result }: { result: JourneyStep["result"] }) {
-  if (result === "ok") return <CheckCircle2 size={15} className="step-icon ok" />;
-  if (result === "missed") return <XCircle size={15} className="step-icon missed" />;
-  if (result === "warn") return <AlertCircle size={15} className="step-icon warn" />;
-  return <Info size={15} className="step-icon info" />;
+function contactLabel(row: CallHistoryRow): string {
+  if (row.fromName?.trim()) return row.fromName.trim();
+  return row.direction === "outgoing" ? formatPhone(row.toNumber) : formatPhone(row.fromNumber);
 }
 
-// ─── Call detail panel ────────────────────────────────────────────────────────
-
-function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () => void }) {
-  const [techExpanded, setTechExpanded] = useState(false);
-  const dir = row.direction;
-
-  return (
-    <div className="call-detail-overlay" onClick={onClose} role="dialog" aria-modal aria-label="Call details">
-      <div className="call-detail-panel" onClick={(e) => e.stopPropagation()}>
-
-        {/* Header */}
-        <div className="cdp-header">
-          <div className="cdp-header-left">
-            <div className={`cdp-dir-badge ${dir}`}>
-              <DirectionIcon direction={dir} size={16} />
-              <span>{dir === "incoming" ? "Inbound" : dir === "outgoing" ? "Outbound" : "Internal"}</span>
-            </div>
-            <div className={`cdp-outcome-badge ${outcomeClass(row)}`}>
-              <OutcomeIcon row={row} />
-              <span>{outcomeLabel(row)}</span>
-            </div>
-          </div>
-          <button className="cdp-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-        </div>
-
-        {/* Call identity */}
-        <div className="cdp-identity">
-          <div className="cdp-number-row">
-            <div className="cdp-number-block">
-              <span className="cdp-number-label">From</span>
-              {row.fromName && <span className="cdp-caller-name">{row.fromName}</span>}
-              <span className="cdp-number">{formatPhone(row.fromNumber)}</span>
-            </div>
-            <div className="cdp-arrow">→</div>
-            <div className="cdp-number-block">
-              <span className="cdp-number-label">To</span>
-              <span className="cdp-number">{formatPhone(row.toNumber)}</span>
-            </div>
-          </div>
-          <div className="cdp-meta-row">
-            {row.tenantName !== "Unassigned" ? (
-              <span className="cdp-meta-chip"><User size={12} />{row.tenantName}</span>
-            ) : null}
-            <span className="cdp-meta-chip"><Clock size={12} />{formatAbsTime(row.startedAt)}</span>
-            {row.durationSec > 0 ? (
-              <span className="cdp-meta-chip"><Phone size={12} />{formatDuration(row.durationSec)} total</span>
-            ) : null}
-            {row.talkSec > 0 ? (
-              <span className="cdp-meta-chip talk"><CheckCircle2 size={12} />{formatDuration(row.talkSec)} talk</span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Outcome summary card */}
-        <div className={`cdp-outcome-card ${outcomeClass(row)}`}>
-          <div className="cdp-outcome-icon-wrap">
-            <OutcomeIcon row={row} />
-          </div>
-          <p className="cdp-outcome-text">{row.journeySummary || "No summary available."}</p>
-        </div>
-
-        {/* Journey timeline */}
-        {row.journeySteps.length > 0 ? (
-          <div className="cdp-section">
-            <h4 className="cdp-section-title">Call journey</h4>
-            <ol className="cdp-timeline">
-              {row.journeySteps.map((step, i) => (
-                <li key={i} className={`cdp-step cdp-step-${step.result}`}>
-                  <div className="cdp-step-icon"><StepIcon result={step.result} /></div>
-                  <div className="cdp-step-body">
-                    <span className="cdp-step-label">{step.label}</span>
-                    {step.detail ? <span className="cdp-step-detail">{step.detail}</span> : null}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
-        ) : null}
-
-        {/* Attempted extensions */}
-        {row.attemptedExtensions.length > 0 ? (
-          <div className="cdp-section">
-            <h4 className="cdp-section-title">Extensions involved</h4>
-            <div className="cdp-ext-list">
-              {row.attemptedExtensions.map((ext) => (
-                <span key={ext} className={`cdp-ext-chip ${row.humanAnswered && row.rangExtension === ext ? "answered" : "rang"}`}>
-                  <Phone size={11} />
-                  {ext}
-                  {row.humanAnswered && row.rangExtension === ext ? " ✓" : ""}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {/* Recording — shown only when recordingPath is present. Audio is fetched on-demand
-            (preload="none") so opening call details does not trigger any PBX request. */}
-        {row.recordingAvailable ? (
-          <div className="cdp-section">
-            <h4 className="cdp-section-title">
-              <Mic size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
-              Recording
-            </h4>
-            <div className="cdp-recording-player">
-              <audio
-                controls
-                preload="none"
-                style={{ width: "100%", height: 36 }}
-                src={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/stream?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
-              >
-                Your browser does not support audio playback.
-              </audio>
-              <a
-                className="btn ghost btn-sm"
-                style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}
-                href={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
-                download
-              >
-                <Download size={13} />
-                Download
-              </a>
-            </div>
-          </div>
-        ) : null}
-
-        {/* Technical details (collapsed) */}
-        <div className="cdp-section">
-          <button
-            className="cdp-tech-toggle"
-            onClick={() => setTechExpanded((v) => !v)}
-            aria-expanded={techExpanded}
-          >
-            <span>Technical details</span>
-            {techExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </button>
-          {techExpanded ? (
-            <dl className="cdp-tech-grid">
-              <dt>Linked ID</dt><dd className="mono">{row.linkedId}</dd>
-              <dt>Disposition</dt><dd>{row.disposition}</dd>
-              <dt>Outcome reason</dt><dd>{row.finalOutcomeReason || "—"}</dd>
-              {row.answeredByType ? <><dt>Answered by</dt><dd>{row.answeredByType}</dd></> : null}
-              {row.rangExtension ? <><dt>Rang extension</dt><dd>{row.rangExtension}</dd></> : null}
-              {row.answeredAt ? <><dt>Answered at</dt><dd>{new Date(row.answeredAt).toLocaleTimeString()}</dd></> : null}
-              {row.endedAt ? <><dt>Ended at</dt><dd>{new Date(row.endedAt).toLocaleTimeString()}</dd></> : null}
-            </dl>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
+function contactNumber(row: CallHistoryRow): string {
+  return row.direction === "outgoing" ? row.toNumber : row.fromNumber;
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+function initialsFromRow(row: CallHistoryRow): string {
+  const label = contactLabel(row);
+  const parts = label.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+function getAudioToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
+}
+
+function recordingStreamUrl(linkedId: string): string {
+  return `/api/voice/recording/${encodeURIComponent(linkedId)}/stream?token=${getAudioToken()}`;
+}
+
+function recordingDownloadUrl(linkedId: string): string {
+  return `/api/voice/recording/${encodeURIComponent(linkedId)}/download?token=${getAudioToken()}`;
+}
+
+function splitByGroup(rows: CallHistoryRow[]) {
+  const today: CallHistoryRow[] = [];
+  const yesterday: CallHistoryRow[] = [];
+  const earlier: CallHistoryRow[] = [];
+  const now = new Date();
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  for (const row of rows) {
+    const d = new Date(row.startedAt);
+    if (d.toDateString() === now.toDateString()) {
+      today.push(row);
+    } else if (d.toDateString() === y.toDateString()) {
+      yesterday.push(row);
+    } else {
+      earlier.push(row);
+    }
+  }
+  return { today, yesterday, earlier };
+}
 
 export default function CallsPage() {
   const { adminScope, tenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
-  const telephony = useTelephony();
   const scopedTenantId = isGlobal ? null : tenantId;
+  const telephony = useTelephony();
   const liveCalls = telephony.callsByTenant(scopedTenantId);
 
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
+  const [smartTab, setSmartTab] = useState<SmartTab>("all");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [direction, setDirection] = useState<"all" | CallDirection>("all");
   const [status, setStatus] = useState<"all" | CallStatus>("all");
   const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
   const [startDate, setStartDate] = useState(todayDateInput());
   const [endDate, setEndDate] = useState(todayDateInput());
+  const [range, setRange] = useState<QuickRange>("today");
   const [pageSize, setPageSize] = useState(100);
   const [page, setPage] = useState(1);
+  const [feedRows, setFeedRows] = useState<CallHistoryRow[]>([]);
+  const [loadedTotalPages, setLoadedTotalPages] = useState(1);
+  const [loadedTotal, setLoadedTotal] = useState(0);
   const [selectedRow, setSelectedRow] = useState<CallHistoryRow | null>(null);
+  const [notesByCallId, setNotesByCallId] = useState<Record<string, string>>({});
+  const [copiedForRowId, setCopiedForRowId] = useState<string | null>(null);
+  const notesRef = useRef<HTMLTextAreaElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const t = window.setTimeout(() => { setSearch(searchDraft.trim()); setPage(1); }, 220);
-    return () => clearTimeout(t);
+    const timer = window.setTimeout(() => {
+      setSearch(searchDraft.trim());
+      setPage(1);
+    }, 220);
+    return () => window.clearTimeout(timer);
   }, [searchDraft]);
 
-  useEffect(() => { setPage(1); }, [direction, status, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
+  useEffect(() => {
+    setPage(1);
+  }, [smartTab, direction, status, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
+
+  useEffect(() => {
+    setFeedRows([]);
+    setLoadedTotalPages(1);
+    setLoadedTotal(0);
+  }, [smartTab, direction, status, hasRecording, startDate, endDate, adminScope, scopedTenantId, search, pageSize]);
+
+  useEffect(() => {
+    if (!selectedRow) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelectedRow(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedRow]);
+
+  useEffect(() => {
+    if (!copiedForRowId) return;
+    const t = window.setTimeout(() => setCopiedForRowId(null), 1400);
+    return () => window.clearTimeout(t);
+  }, [copiedForRowId]);
+
+  const queryDirection = smartTab === "internal" ? "internal" : direction;
+  const queryStatus = smartTab === "missed" ? "missed" : smartTab === "answered" ? "answered" : status;
 
   const historyQuery = useMemo(() => {
     const { startIso, endIso } = toIsoRange(startDate, endDate);
-    const p = new URLSearchParams({ startDate: startIso, endDate: endIso, direction, status, page: String(page), pageSize: String(pageSize) });
+    const p = new URLSearchParams({
+      startDate: startIso,
+      endDate: endIso,
+      direction: queryDirection,
+      status: queryStatus,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
     if (search) p.set("search", search);
     if (scopedTenantId) p.set("tenantId", scopedTenantId);
     if (hasRecording !== "all") p.set("hasRecording", hasRecording);
     return p.toString();
-  }, [direction, endDate, hasRecording, page, pageSize, scopedTenantId, search, startDate, status]);
+  }, [endDate, hasRecording, page, pageSize, queryDirection, queryStatus, scopedTenantId, search, startDate]);
 
   const historyState = useAsyncResource<CallHistoryResponse>(
     () => apiGet<CallHistoryResponse>(`/calls/history?${historyQuery}`),
-    [historyQuery]
+    [historyQuery],
   );
 
-  const history = historyState.status === "success" ? historyState.data : null;
-
-  // Close detail panel on Escape
   useEffect(() => {
-    if (!selectedRow) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedRow(null); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [selectedRow]);
+    if (historyState.status !== "success") return;
+    const data = historyState.data;
+    setLoadedTotalPages(data.totalPages || 1);
+    setLoadedTotal(data.total || 0);
+    setFeedRows((prev) => {
+      const next = page === 1 ? [] : [...prev];
+      const seen = new Set(next.map((row) => row.rowId));
+      for (const row of data.items) {
+        if (!seen.has(row.rowId)) {
+          seen.add(row.rowId);
+          next.push(row);
+        }
+      }
+      return next;
+    });
+  }, [historyState.status, page]);
+
+  const hasMorePages = page < loadedTotalPages;
+
+  useEffect(() => {
+    if (!hasMorePages || historyState.status === "loading") return;
+    const sentinel = loadMoreRef.current;
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setPage((current) => (current < loadedTotalPages ? current + 1 : current));
+        }
+      },
+      { rootMargin: "420px 0px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMorePages, historyState.status, loadedTotalPages]);
+
+  const filteredItems = useMemo(() => {
+    return feedRows.filter((row) => {
+      if (smartTab === "voicemail" && !row.voicemailAnswered) return false;
+      if (search) {
+        const blob = [
+          row.fromName || "",
+          row.fromNumber || "",
+          row.toNumber || "",
+          row.rangExtension || "",
+          row.tenantName || "",
+          row.linkedId || "",
+        ].join(" ").toLowerCase();
+        if (!blob.includes(search.toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [feedRows, search, smartTab]);
+
+  const grouped = useMemo(() => splitByGroup(filteredItems), [filteredItems]);
+
+  const kpis = useMemo(() => {
+    const rows = filteredItems;
+    const total = rows.length;
+    const answered = rows.filter((r) => r.humanAnswered || r.status === "answered").length;
+    const missed = rows.filter((r) => r.status === "missed").length;
+    const voicemail = rows.filter((r) => r.voicemailAnswered).length;
+    const avgDuration = total > 0 ? Math.round(rows.reduce((acc, r) => acc + Number(r.durationSec || 0), 0) / total) : 0;
+    return {
+      total,
+      answeredPct: total > 0 ? Math.round((answered / total) * 100) : 0,
+      missedPct: total > 0 ? Math.round((missed / total) * 100) : 0,
+      voicemail,
+      avgDuration,
+    };
+  }, [filteredItems]);
+
+  const onQuickRange = (next: QuickRange) => {
+    const today = todayDateInput();
+    setRange(next);
+    if (next === "today") {
+      setStartDate(today);
+      setEndDate(today);
+    } else if (next === "yesterday") {
+      const y = addDays(today, -1);
+      setStartDate(y);
+      setEndDate(y);
+    } else {
+      setStartDate(addDays(today, -6));
+      setEndDate(today);
+    }
+  };
+
+  const callNumber = (num: string) => {
+    if (!num) return;
+    window.location.href = `tel:${num}`;
+  };
+
+  const messageNumber = (num: string) => {
+    if (!num) return;
+    window.location.href = `/chat?to=${encodeURIComponent(num)}`;
+  };
+
+  const copyNumber = async (row: CallHistoryRow) => {
+    const num = contactNumber(row);
+    if (!num) return;
+    try {
+      await navigator.clipboard.writeText(num);
+      setCopiedForRowId(row.rowId);
+    } catch {
+      setCopiedForRowId(row.rowId);
+    }
+  };
+
+  const renderLiveCalls = () => {
+    if (liveCalls.length > 0) {
+      return (
+        <section className="calls-live-section" aria-label="Live calls">
+          <div className="calls-live-header">
+            <span className="calls-live-dot" />
+            <h3 className="calls-live-title">Live calls</h3>
+            <span className="calls-live-count">{liveCalls.length}</span>
+          </div>
+          <div className="calls-live-list">
+            {liveCalls.map((call) => {
+              const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
+              const elapsed = call.answeredAt
+                ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
+                : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
+              return (
+                <div key={call.id} className="calls-live-row">
+                  <DirectionIcon direction={dir as CallDirection} size={15} />
+                  <span className="calls-live-caller">
+                    {call.fromName ? <span className="calls-live-cnam">{call.fromName}</span> : null}
+                    <span className="mono">{call.from || "—"}</span>
+                  </span>
+                  <span className="calls-live-arrow">→</span>
+                  <span className="mono">{call.to || "Resolving…"}</span>
+                  <span className={`chip ${directionClass(dir)}`}>{directionLabel(dir)}</span>
+                  <span className="chip info">{call.state}</span>
+                  <span className="mono muted">{formatDurationSec(elapsed)}</span>
+                  <LiveCallBadge active />
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      );
+    }
+    if (telephony.status === "connected") {
+      return (
+        <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+          <div className="calls-live-header">
+            <span className="calls-live-dot idle" />
+            <h3 className="calls-live-title">Live calls</h3>
+            <span className="calls-live-idle-label">No active calls right now</span>
+          </div>
+        </section>
+      );
+    }
+    if (telephony.status === "failed") {
+      return (
+        <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+          <div className="calls-live-header">
+            <span className="calls-live-dot error" />
+            <h3 className="calls-live-title">Live calls</h3>
+            <span className="calls-live-idle-label">Connection lost — refresh to reconnect</span>
+          </div>
+        </section>
+      );
+    }
+    return null;
+  };
 
   return (
     <PermissionGate permission="can_view_calls" fallback={<div className="state-box">You do not have permission to view calls.</div>}>
-      <div className="calls-page stack compact-stack">
+      <div className="calls-page calls-premium stack compact-stack">
         <PageHeader
           title="Call History"
-          subtitle="All calls routed through the platform."
-          badges={<><ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} /><LiveBadge status={telephony.status} /></>}
+          subtitle="Conversations and outcomes across your voice stack."
+          badges={
+            <>
+              <ScopeBadge scope={isGlobal ? "GLOBAL" : "TENANT"} />
+              <LiveBadge status={telephony.status} />
+            </>
+          }
         />
 
         {isGlobal ? <GlobalScopeNotice /> : null}
+        {renderLiveCalls()}
 
-        {/* ── Live calls ── */}
-        {liveCalls.length > 0 ? (
-          <section className="calls-live-section" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-count">{liveCalls.length}</span>
-            </div>
-            <div className="calls-live-list">
-              {liveCalls.map((call) => {
-                const dir = call.direction === "inbound" ? "incoming" : call.direction === "outbound" ? "outgoing" : "internal";
-                const elapsed = call.answeredAt
-                  ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
-                  : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
-                const displayTo = call.to
-                  ? call.to
-                  : <span style={{ fontStyle: "italic", color: "var(--console-muted)", fontSize: "0.8rem" }}>Resolving…</span>;
-                const displayTenant = call.tenantName ?? call.tenantId ?? null;
-                return (
-                  <div key={call.id} className="calls-live-row">
-                    <DirectionIcon direction={dir as CallDirection} size={15} />
-                    <span className="calls-live-caller">
-                      {call.fromName && <span className="calls-live-cnam">{call.fromName}</span>}
-                      <span className="mono">{call.from || "—"}</span>
-                    </span>
-                    <span className="calls-live-arrow">→</span>
-                    <span className="mono">{displayTo}</span>
-                    <span className={`chip ${directionClass(dir)}`}>{directionLabel(dir)}</span>
-                    <span className="chip info">{call.state}</span>
-                    <span className="mono muted">{formatDurationSec(elapsed)}</span>
-                    {isGlobal && displayTenant ? (
-                      <span className="muted">{displayTenant}</span>
-                    ) : null}
-                    <LiveCallBadge active />
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : telephony.status === "connected" ? (
-          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot idle" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-idle-label">No active calls right now</span>
-            </div>
-          </section>
-        ) : telephony.status === "failed" ? (
-          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
-            <div className="calls-live-header">
-              <span className="calls-live-dot error" />
-              <h3 className="calls-live-title">Live calls</h3>
-              <span className="calls-live-idle-label">Connection lost — refresh the page to reconnect</span>
-            </div>
-          </section>
-        ) : null}
+        <section className="calls-kpi-grid" aria-label="Call performance">
+          <article className="calls-kpi-card">
+            <span className="calls-kpi-label">Total Calls</span>
+            <strong>{(loadedTotal || kpis.total).toLocaleString()}</strong>
+            <span className="calls-kpi-trend up"><Sparkles size={12} /> Active {liveCalls.length}</span>
+          </article>
+          <article className="calls-kpi-card">
+            <span className="calls-kpi-label">Answered %</span>
+            <strong>{kpis.answeredPct}%</strong>
+            <span className={`calls-kpi-trend ${kpis.answeredPct >= 50 ? "up" : "down"}`}>{kpis.answeredPct >= 50 ? "↑" : "↓"} Service quality</span>
+          </article>
+          <article className="calls-kpi-card">
+            <span className="calls-kpi-label">Missed %</span>
+            <strong>{kpis.missedPct}%</strong>
+            <span className={`calls-kpi-trend ${kpis.missedPct <= 20 ? "up" : "down"}`}>{kpis.missedPct <= 20 ? "↓" : "↑"} Attention needed</span>
+          </article>
+          <article className="calls-kpi-card">
+            <span className="calls-kpi-label">Avg Duration</span>
+            <strong>{formatDuration(kpis.avgDuration)}</strong>
+            <span className="calls-kpi-trend up">↑ Talk time</span>
+          </article>
+          <article className="calls-kpi-card">
+            <span className="calls-kpi-label">Voicemails</span>
+            <strong>{kpis.voicemail.toLocaleString()}</strong>
+            <span className="calls-kpi-trend neutral">• Follow-ups</span>
+          </article>
+        </section>
 
-        {/* ── Filters ── */}
-        <section className="calls-filters" aria-label="Filters">
-          <input
-            className="calls-search"
-            type="search"
-            placeholder="Search by number…"
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-            aria-label="Search calls"
-          />
-          <select className="calls-filter-select" value={direction} onChange={(e) => setDirection(e.target.value as typeof direction)} aria-label="Direction">
-            <option value="all">All directions</option>
-            <option value="incoming">Incoming</option>
-            <option value="outgoing">Outgoing</option>
-            <option value="internal">Internal</option>
-          </select>
-          <select className="calls-filter-select" value={status} onChange={(e) => setStatus(e.target.value as typeof status)} aria-label="Status">
-            <option value="all">All statuses</option>
-            <option value="answered">Answered</option>
-            <option value="missed">Missed</option>
-            <option value="canceled">Canceled</option>
-          </select>
-          <select className="calls-filter-select" value={hasRecording} onChange={(e) => setHasRecording(e.target.value as typeof hasRecording)} aria-label="Recording">
-            <option value="all">All calls</option>
-            <option value="yes">Has recording</option>
-            <option value="no">No recording</option>
-          </select>
-          <div className="calls-date-range">
-            <input type="date" className="calls-date-input" value={startDate} onChange={(e) => setStartDate(e.target.value)} aria-label="Start date" />
-            <span className="calls-date-sep">—</span>
-            <input type="date" className="calls-date-input" value={endDate} onChange={(e) => setEndDate(e.target.value)} aria-label="End date" />
+        <section className="calls-smart-filters" aria-label="Smart filters">
+          <label className="calls-search-wrap">
+            <Search size={15} />
+            <input
+              type="search"
+              className="calls-search-input"
+              placeholder="Search name, number, extension"
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
+            />
+          </label>
+
+          <div className="calls-pill-tabs">
+            {([
+              ["all", "All"],
+              ["missed", "Missed"],
+              ["answered", "Answered"],
+              ["voicemail", "Voicemail"],
+              ["internal", "Internal"],
+            ] as Array<[SmartTab, string]>).map(([value, label]) => (
+              <button
+                key={value}
+                className={`calls-pill-tab ${smartTab === value ? "active" : ""}`}
+                onClick={() => setSmartTab(value)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <select className="calls-filter-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} aria-label="Page size">
-            <option value={50}>50 / page</option>
-            <option value={100}>100 / page</option>
-            <option value={200}>200 / page</option>
-          </select>
-          {history ? (
-            <span className="calls-filter-count">{history.total.toLocaleString()} call{history.total !== 1 ? "s" : ""}</span>
+
+          <div className="calls-quick-range">
+            {([
+              ["today", "Today"],
+              ["yesterday", "Yesterday"],
+              ["last7", "Last 7 days"],
+            ] as Array<[QuickRange, string]>).map(([value, label]) => (
+              <button
+                key={value}
+                className={`calls-range-chip ${range === value ? "active" : ""}`}
+                onClick={() => onQuickRange(value)}
+              >
+                <Calendar size={12} />
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <button className={`btn ghost btn-sm calls-advanced-toggle ${showAdvanced ? "active" : ""}`} onClick={() => setShowAdvanced((v) => !v)}>
+            <ChevronDown size={13} />
+            Advanced filters
+          </button>
+
+          {showAdvanced ? (
+            <div className="calls-advanced-panel">
+              <label>
+                Direction
+                <select value={direction} onChange={(e) => setDirection(e.target.value as "all" | CallDirection)}>
+                  <option value="all">All</option>
+                  <option value="incoming">Incoming</option>
+                  <option value="outgoing">Outgoing</option>
+                  <option value="internal">Internal</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select value={status} onChange={(e) => setStatus(e.target.value as "all" | CallStatus)}>
+                  <option value="all">All</option>
+                  <option value="answered">Answered</option>
+                  <option value="missed">Missed</option>
+                  <option value="canceled">Canceled</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </label>
+              <label>
+                Recording
+                <select value={hasRecording} onChange={(e) => setHasRecording(e.target.value as "all" | "yes" | "no")}>
+                  <option value="all">All</option>
+                  <option value="yes">Has recording</option>
+                  <option value="no">No recording</option>
+                </select>
+              </label>
+              <label>
+                Start
+                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </label>
+              <label>
+                End
+                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </label>
+              <label>
+                Page size
+                <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </label>
+            </div>
           ) : null}
         </section>
 
-        {/* ── History list ── */}
-        <section className="calls-history-section" aria-label="Call history">
-          {historyState.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
-          {historyState.status === "error" ? (
-            <ErrorState message={historyState.error || "Could not load call history."} />
-          ) : null}
-          {historyState.status === "success" && history!.items.length === 0 ? (
-            <EmptyState title="No calls found" message="Try adjusting the date range or filters." />
-          ) : null}
-          {historyState.status === "success" && history!.items.length > 0 ? (
-            <div className="calls-card-list">
-              {history!.items.map((row) => (
-                <button
-                  key={row.rowId}
-                  className="call-row-card"
-                  onClick={() => setSelectedRow(row)}
-                  aria-label={`Call from ${row.fromNumber} to ${row.toNumber}`}
-                >
-                  {/* Left: direction icon */}
-                  <div className="crc-dir">
-                    <DirectionIcon direction={row.direction} size={16} />
-                  </div>
+        <section className="calls-premium-main" aria-label="Call feed and details">
+          <div className="calls-feed-shell">
+            {historyState.status === "loading" && page === 1 ? <LoadingSkeleton rows={7} /> : null}
+            {historyState.status === "error" ? <ErrorState message={historyState.error || "Could not load call history."} /> : null}
+            {historyState.status === "success" && loadedTotal === 0 ? (
+              <EmptyState title="No calls yet" message="Calls will appear here once telephony activity starts." />
+            ) : null}
+            {historyState.status === "success" && loadedTotal > 0 && filteredItems.length === 0 ? (
+              <EmptyState title="No calls match your filters" message="Try adjusting your search, tab, or date range." />
+            ) : null}
 
-                  {/* Centre: from/to + journey summary */}
-                  <div className="crc-main">
-                    <div className="crc-numbers">
-                      <span className="crc-number">
-                        {row.fromName ? (
-                          <span className="crc-caller-name">{row.fromName}</span>
-                        ) : null}
-                        {formatPhone(row.fromNumber)}
-                      </span>
-                      <span className="crc-arrow">→</span>
-                      <span className="crc-number">{formatPhone(row.toNumber)}</span>
-                      {row.rangExtension ? <span className="crc-ext-chip">ext {row.rangExtension}</span> : null}
-                    </div>
-                    {row.journeySummary ? (
-                      <p className="crc-journey">{row.journeySummary}</p>
-                    ) : null}
-                    {isGlobal && row.tenantName !== "Unassigned" ? (
-                      <p className="crc-tenant">{row.tenantName}</p>
-                    ) : null}
-                  </div>
+            {historyState.status === "success" && filteredItems.length > 0 ? (
+              <div className="calls-feed-groups">
+                {([
+                  ["Today", grouped.today],
+                  ["Yesterday", grouped.yesterday],
+                  ["Earlier", grouped.earlier],
+                ] as Array<[string, CallHistoryRow[]]>).map(([label, rows]) => (
+                  <section key={label} className="calls-group-section">
+                    {rows.length > 0 ? (
+                      <>
+                        <header className="calls-group-header">{label}</header>
+                        <div className="calls-feed-list">
+                          {rows.map((row) => (
+                            <article
+                              key={row.rowId}
+                              className={`call-feed-card ${outcomeClass(row)} ${selectedRow?.rowId === row.rowId ? "selected" : ""}`}
+                              onClick={() => setSelectedRow(row)}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") setSelectedRow(row);
+                              }}
+                            >
+                              <div className="call-feed-avatar">{initialsFromRow(row)}</div>
 
-                  {/* Right: outcome badge + time + duration + recording indicator */}
-                  <div className="crc-meta">
-                    <span className={`crc-outcome ${outcomeClass(row)}`}>
-                      <OutcomeIcon row={row} />
-                      {outcomeLabel(row)}
-                    </span>
-                    <span className="crc-time" title={formatAbsTime(row.startedAt)}>{relativeTime(row.startedAt)}</span>
-                    <span className="crc-duration">{formatDuration(row.durationSec)}</span>
-                    {row.recordingAvailable ? (
-                      <span className="crc-recording-badge" title="Recording available">
-                        <Mic size={12} />
-                      </span>
-                    ) : null}
-                  </div>
+                              <div className="call-feed-main">
+                                <div className="call-feed-title-row">
+                                  <strong className="call-feed-name">{contactLabel(row)}</strong>
+                                  <span className="call-feed-number mono">{formatPhone(contactNumber(row))}</span>
+                                </div>
+                                <div className="call-feed-sub">
+                                  {row.rangExtension ? <span>ext {row.rangExtension}</span> : null}
+                                  <span>{row.direction === "internal" ? "Internal" : "External"}</span>
+                                  {isGlobal && row.tenantName !== "Unassigned" ? <span>{row.tenantName}</span> : null}
+                                </div>
+                                <div className="call-feed-center">
+                                  <span className="call-feed-direction"><DirectionIcon direction={row.direction} size={14} /></span>
+                                  <span className={`call-feed-status ${outcomeClass(row)}`}>
+                                    <OutcomeIcon row={row} />
+                                    {outcomeLabel(row)}
+                                  </span>
+                                  <span className="call-feed-description">{statusDescription(row)}</span>
+                                </div>
+                              </div>
 
-                  <ChevronRight size={14} className="crc-chevron" />
+                              <div className="call-feed-right">
+                                <span className="call-feed-time">{formatTimeBucket(row.startedAt)}</span>
+                                <span className="call-feed-duration">{formatDuration(row.durationSec)}</span>
+                                <div className="call-feed-actions">
+                                  <button
+                                    className="call-action-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      callNumber(contactNumber(row));
+                                    }}
+                                    title="Call back"
+                                  >
+                                    <Phone size={13} />
+                                  </button>
+                                  <button
+                                    className="call-action-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      messageNumber(contactNumber(row));
+                                    }}
+                                    title="Message"
+                                  >
+                                    <MessageSquare size={13} />
+                                  </button>
+                                  {row.recordingAvailable ? (
+                                    <button
+                                      className="call-action-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedRow(row);
+                                      }}
+                                      title="Play recording"
+                                    >
+                                      <Mic size={13} />
+                                    </button>
+                                  ) : null}
+
+                                  <details className="call-menu" onClick={(e) => e.stopPropagation()}>
+                                    <summary className="call-action-btn" title="More actions">
+                                      <MoreHorizontal size={13} />
+                                    </summary>
+                                    <div className="call-menu-list">
+                                      <button onClick={() => callNumber(contactNumber(row))}><Phone size={13} />Call back</button>
+                                      <button onClick={() => messageNumber(contactNumber(row))}><MessageSquare size={13} />Message</button>
+                                      <button onClick={() => copyNumber(row)}><Copy size={13} />Copy number</button>
+                                      <button onClick={() => setSelectedRow(row)}><ChevronDown size={13} />View details</button>
+                                      {row.recordingAvailable ? (
+                                        <a href={recordingDownloadUrl(row.linkedId)} download>
+                                          <Download size={13} />Download recording
+                                        </a>
+                                      ) : null}
+                                    </div>
+                                  </details>
+                                </div>
+                                {copiedForRowId === row.rowId ? <span className="call-feed-copied">Copied</span> : null}
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </section>
+                ))}
+              </div>
+            ) : null}
+
+            <div ref={loadMoreRef} className="calls-load-more" aria-live="polite">
+              {historyState.status === "loading" && page > 1 ? (
+                <span className="calls-load-status">Loading more calls...</span>
+              ) : hasMorePages ? (
+                <button className="btn ghost btn-sm" onClick={() => setPage((p) => Math.min(p + 1, loadedTotalPages))}>
+                  Load older calls
                 </button>
-              ))}
+              ) : filteredItems.length > 0 ? (
+                <span className="calls-load-status">All visible calls loaded</span>
+              ) : null}
             </div>
-          ) : null}
+          </div>
 
-          {/* Pagination */}
-          {history && history.totalPages > 1 ? (
-            <div className="calls-pagination">
-              <button className="btn ghost btn-sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</button>
-              <span className="calls-page-info">Page {page} of {history.totalPages}</span>
-              <button className="btn ghost btn-sm" disabled={page >= history.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</button>
-            </div>
-          ) : null}
+          <aside className={`calls-side-panel ${selectedRow ? "open" : ""}`} aria-label="Call details">
+            {!selectedRow ? (
+              <div className="calls-side-empty">
+                <Sparkles size={20} />
+                <h4>Select a call</h4>
+                <p>Choose any conversation to view full details, notes, and recording actions.</p>
+              </div>
+            ) : (
+              <div className="calls-side-content">
+                <div className="calls-side-top">
+                  <div className="calls-side-avatar">{initialsFromRow(selectedRow)}</div>
+                  <div>
+                    <h3>{contactLabel(selectedRow)}</h3>
+                    <p className="mono">{formatPhone(contactNumber(selectedRow))}</p>
+                  </div>
+                  <button className="calls-side-close" onClick={() => setSelectedRow(null)} aria-label="Close details">
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className={`calls-side-status ${outcomeClass(selectedRow)}`}>
+                  <OutcomeIcon row={selectedRow} />
+                  {outcomeLabel(selectedRow)}
+                </div>
+
+                <dl className="calls-side-grid">
+                  <dt>Direction</dt><dd className="capitalize">{selectedRow.direction}</dd>
+                  <dt>Duration</dt><dd>{formatDuration(selectedRow.durationSec)}</dd>
+                  <dt>Ring time</dt><dd>{formatDuration(ringTimeSec(selectedRow))}</dd>
+                  <dt>Answered by</dt><dd>{selectedRow.answeredByType || "—"}</dd>
+                  <dt>Type</dt><dd>{selectedRow.direction === "internal" ? "Internal" : "External"}</dd>
+                  <dt>Call ID</dt><dd className="mono">{selectedRow.linkedId || selectedRow.callId}</dd>
+                  <dt>Timestamp</dt><dd>{formatTimeBucket(selectedRow.startedAt)}</dd>
+                </dl>
+
+                {selectedRow.recordingAvailable ? (
+                  <section className="calls-side-recording">
+                    <h4><Mic size={14} /> Recording</h4>
+                    <div className="calls-waveform" aria-hidden>
+                      {Array.from({ length: 26 }).map((_, i) => (
+                        <span key={i} style={{ height: `${10 + ((i * 7) % 24)}px` }} />
+                      ))}
+                    </div>
+                    <audio controls preload="none" src={recordingStreamUrl(selectedRow.linkedId)}>
+                      Your browser does not support audio playback.
+                    </audio>
+                    <a className="btn ghost btn-sm" href={recordingDownloadUrl(selectedRow.linkedId)} download>
+                      <Download size={13} />
+                      Download recording
+                    </a>
+                  </section>
+                ) : null}
+
+                <section className="calls-side-actions">
+                  <button className="btn primary btn-sm" onClick={() => callNumber(contactNumber(selectedRow))}><Phone size={14} />Call</button>
+                  <button className="btn ghost btn-sm" onClick={() => messageNumber(contactNumber(selectedRow))}><MessageSquare size={14} />Message</button>
+                  <button className="btn ghost btn-sm" onClick={() => notesRef.current?.focus()}><StickyNote size={14} />Add note</button>
+                </section>
+
+                <section className="calls-side-notes">
+                  <h4>Notes</h4>
+                  <textarea
+                    ref={notesRef}
+                    placeholder="Add call notes for follow-up..."
+                    value={notesByCallId[selectedRow.callId] || ""}
+                    onChange={(e) =>
+                      setNotesByCallId((prev) => ({
+                        ...prev,
+                        [selectedRow.callId]: e.target.value,
+                      }))
+                    }
+                  />
+                </section>
+
+                {selectedRow.journeySteps.length > 0 ? (
+                  <section className="calls-side-journey">
+                    <h4>Journey</h4>
+                    <ol>
+                      {selectedRow.journeySteps.map((step, idx) => (
+                        <li key={`${selectedRow.rowId}-${idx}`}>
+                          <span>{step.label}</span>
+                          {step.detail ? <small>{step.detail}</small> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                ) : null}
+              </div>
+            )}
+          </aside>
         </section>
 
-        {/* ── Detail panel ── */}
-        {selectedRow ? (
-          <CallDetailPanel row={selectedRow} onClose={() => setSelectedRow(null)} />
-        ) : null}
+        {selectedRow ? <button className="calls-side-backdrop" onClick={() => setSelectedRow(null)} aria-label="Close details panel" /> : null}
       </div>
     </PermissionGate>
   );
