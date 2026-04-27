@@ -23,7 +23,6 @@ import {
   Map,
   Megaphone,
   MessageCircle,
-  MessageSquare,
   MessagesSquare,
   Mic2,
   Music,
@@ -60,9 +59,7 @@ export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: "OV", lucide: LayoutDashboard, section: "dashboard", permission: "can_view_dashboard" },
   { href: "/team", label: "Team Directory", icon: "TM", lucide: Users, section: "dashboard", permission: "can_view_team" },
   { href: "/calls", label: "Call History", icon: "CL", lucide: Phone, section: "dashboard", permission: "can_view_calls" },
-  { href: "/calls/health", label: "System Health", icon: "SH", lucide: Activity, section: "dashboard", permission: "can_view_calls" },
   { href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "dashboard", permission: "can_view_voicemail" },
-  { href: "/sms", label: "SMS Inbox", icon: "SM", lucide: MessageSquare, section: "dashboard", permission: "can_view_sms" },
   { href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "dashboard", permission: "can_view_chat" },
   { href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "dashboard", permission: "can_view_contacts" },
 
@@ -78,6 +75,7 @@ export const navItems: NavItem[] = [
 
   { href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", permission: "can_view_settings" },
   { href: "/settings/email", label: "Email Settings", icon: "EM", lucide: Mail, section: "settings", permission: "can_view_settings" },
+  { href: "/calls/health", label: "System Health", icon: "SH", lucide: Activity, section: "settings", permission: "can_view_admin" },
   { href: "/settings/billing", label: "Billing Settings", icon: "BS", lucide: CreditCard, section: "settings", permission: "can_view_settings" },
   { href: "/settings/messaging", label: "Messaging Settings", icon: "MS", lucide: Send, section: "settings", permission: "can_view_settings" },
 
