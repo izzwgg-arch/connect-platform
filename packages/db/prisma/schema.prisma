@@ -305,6 +305,8 @@ model Tenant {
   receipts                        Receipt[]
   invoices                        Invoice[]
   customers                       Customer[]
+  contacts                        Contact[]
+  contactTags                     ContactTag[]
   customerNotes                   CustomerNote[]
   customerTasks                   CustomerTask[]
   automationRules                 AutomationRule[]
@@ -379,6 +381,7 @@ model User {
   mobileProvisioningTokens       MobileProvisioningToken[]
   updatedSbcConfigs              SbcConfig[]               @relation("SbcConfigUpdatedBy")
   customerNotes                  CustomerNote[]
+  createdContacts                Contact[]                 @relation("ContactCreatedBy")
   createdCustomerTasks           CustomerTask[]            @relation("CustomerTaskCreatedBy")
   completedCustomerTasks         CustomerTask[]            @relation("CustomerTaskCompletedBy")
   createdAutomationRules         AutomationRule[]          @relation("AutomationRuleCreatedBy")
@@ -401,6 +404,31 @@ enum CustomerStatus {
   ACTIVE
   PAST_DUE
   INACTIVE
+}
+
+enum ContactType {
+  INTERNAL_EXTENSION
+  EXTERNAL
+  COMPANY
+}
+
+enum ContactSource {
+  MANUAL
+  EXTENSION
+  IMPORTED
+}
+
+enum ContactPhoneType {
+  MOBILE
+  OFFICE
+  HOME
+  OTHER
+}
+
+enum ContactEmailType {
+  WORK
+  PERSONAL
+  OTHER
 }
 
 enum CustomerTaskStatus {
@@ -815,6 +843,105 @@ model Customer {
   @@index([tenantId, lastContactAt])
 }
 
+model Contact {
+  id          String                 @id @default(cuid())
+  tenantId    String
+  type        ContactType            @default(EXTERNAL)
+  extensionId String?
+  firstName   String?
+  lastName    String?
+  displayName String
+  company     String?
+  title       String?
+  avatarUrl   String?
+  storageKey  String?
+  notes       String?
+  source      ContactSource          @default(MANUAL)
+  favorite    Boolean                @default(false)
+  active      Boolean                @default(true)
+  archivedAt  DateTime?
+  createdBy   String?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension   Extension?             @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  creator     User?                  @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  phones      ContactPhone[]
+  emails      ContactEmail[]
+  addresses   ContactAddress[]
+  tagLinks    ContactTagAssignment[]
+
+  @@unique([tenantId, extensionId])
+  @@index([tenantId, type, active])
+  @@index([tenantId, displayName])
+  @@index([tenantId, favorite])
+  @@index([tenantId, archivedAt])
+}
+
+model ContactPhone {
+  id               String           @id @default(cuid())
+  contactId        String
+  type             ContactPhoneType @default(MOBILE)
+  numberRaw        String
+  numberNormalized String
+  isPrimary        Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  contact          Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, numberNormalized])
+  @@index([numberNormalized])
+}
+
+model ContactEmail {
+  id        String           @id @default(cuid())
+  contactId String
+  type      ContactEmailType @default(WORK)
+  email     String
+  isPrimary Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  contact   Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, email])
+  @@index([email])
+}
+
+model ContactAddress {
+  id        String   @id @default(cuid())
+  contactId String
+  street    String?
+  city      String?
+  state     String?
+  zip       String?
+  country   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model ContactTag {
+  id          String                 @id @default(cuid())
+  tenantId    String
+  name        String
+  color       String?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments ContactTagAssignment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, name])
+}
+
+model ContactTagAssignment {
+  contactId String
+  tagId     String
+  contact   Contact    @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       ContactTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId])
+}
+
 model CustomerTask {
   id                String               @id @default(cuid())
   tenantId          String
@@ -999,6 +1126,7 @@ model Extension {
   tenant                   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerUser                User?                    @relation("ExtensionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   pbxLink                  PbxExtensionLink?
+  contacts                 Contact[]
   callInvites              CallInvite[]
   tenantSmsNumbersAssigned TenantSmsNumber[]        @relation("TenantSmsNumberAssignExtension")
   connectChatParticipants  ConnectChatParticipant[] @relation("ConnectChatParticipantExtension")

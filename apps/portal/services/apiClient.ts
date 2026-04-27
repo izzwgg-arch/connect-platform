@@ -165,3 +165,42 @@ export async function apiUploadChatAttachment(
     clearTimeout(timeout);
   }
 }
+
+/** Multipart upload for tenant-scoped contact avatars (field name `file`). */
+export async function apiUploadContactAvatar(
+  contactId: string,
+  file: File,
+  token?: string,
+): Promise<{ ok: boolean; avatarUrl: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch(`${baseUrl()}/contacts/${encodeURIComponent(contactId)}/avatar`, {
+      method: "POST",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+      },
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: unknown = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
+      const ep = errPayload as { error?: string; message?: string } | null;
+      const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
+      throw new ApiError(detail || `Upload failed (${res.status})`, res.status);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}

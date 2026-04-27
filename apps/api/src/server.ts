@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import net from "net";
 import dgram from "dgram";
 import { promises as fsp } from "fs";
+import path from "node:path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -16,6 +17,7 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
+import { canonicalSmsPhone } from "@connect/shared";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -52,6 +54,7 @@ import {
 } from "./mohStorage";
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
+import { registerBillingRoutes } from "./billing/routes";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -360,7 +363,7 @@ async function queuePbxJob(input: { tenantId: string; pbxInstanceId?: string | n
     data: {
       tenantId: input.tenantId,
       pbxInstanceId: input.pbxInstanceId || null,
-      type: input.type,
+      type: input.type as any,
       payload: input.payload as any,
       status: "QUEUED",
       attempts: 0,
@@ -6224,7 +6227,7 @@ app.post("/voice/diag/event", async (req, reply) => {
       tenantId: user.tenantId,
       userId: user.sub,
       sessionId: session.id,
-      type: input.type,
+      type: input.type as any,
       payload: payload as any
     }
   });
@@ -7922,8 +7925,7 @@ app.post("/admin/voice/diag/explain", async (req, reply) => {
 
 // ── Mobile upload: POST /mobile/flight-recorder/upload ───────────────────────
 app.post("/mobile/flight-recorder/upload", async (req, reply) => {
-  const auth = await requireAuth(req, reply);
-  if (!auth) return;
+  const auth = getUser(req);
 
   const body = req.body as { session?: unknown; stats?: unknown };
   if (!body?.session || typeof body.session !== "object") {
@@ -7975,7 +7977,7 @@ app.post("/mobile/flight-recorder/upload", async (req, reply) => {
         pbxCallId,
         linkedId,
         tenantId: auth.tenantId || null,
-        userId: auth.userId || null,
+        userId: auth.sub || null,
         deviceId: meta.deviceId ? String(meta.deviceId) : null,
         extension: meta.extension ? String(meta.extension) : null,
         fromNumber: meta.fromNumber ? String(meta.fromNumber) : null,
@@ -8957,7 +8959,7 @@ app.get("/admin/incidents", async (req, reply) => {
   }
 
   // ── 2. Check TURN config ──────────────────────────────────────────────────
-  const turnCount = await db.turnConfig.count({ where: { enabled: true } }).catch(() => 0);
+  const turnCount = await db.turnConfig.count().catch(() => 0);
 
   // ── 3. Quality issues in last 2h grouped by tenant + cause ────────────────
   const recentBadEvents = await db.voiceDiagEvent.findMany({
@@ -9833,7 +9835,11 @@ app.post("/mobile/call-invites/test", async (req, reply) => {
 });
 
 app.post("/webhooks/pbx", async (req, reply) => {
-  const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
+  const rawBody = typeof req.body === "string"
+    ? req.body
+    : String(req.headers["content-type"] || "").includes("application/x-www-form-urlencoded")
+      ? new URLSearchParams(req.body as any).toString()
+      : JSON.stringify(req.body || {});
   const verified = verifyPbxWebhook(req, rawBody);
   if (!verified.ok) {
     app.log.warn({ reason: verified.reason, sourceIp: getRequestSourceIp(req) }, "pbx webhook verification failed");
@@ -17195,6 +17201,408 @@ app.post("/settings/email/test", async (req, reply) => {
   }
 });
 
+const CONTACT_INCLUDE = {
+  phones: true,
+  emails: true,
+  addresses: true,
+  tagLinks: { include: { tag: true } },
+} as const;
+
+function effectiveContactsTenantId(req: any, user: JwtUser): string | null {
+  const queryTenant = String(req.query?.tenantId || "").trim();
+  if (isRole(user, ["SUPER_ADMIN"]) && queryTenant && !queryTenant.startsWith("vpbx:") && queryTenant !== "local") return queryTenant;
+  const headerTenant = String(req.headers?.["x-tenant-context"] || "").trim();
+  if (isRole(user, ["SUPER_ADMIN"]) && headerTenant && !headerTenant.startsWith("vpbx:") && headerTenant !== "local") return headerTenant;
+  return user.tenantId ?? null;
+}
+
+function normalizeContactPhone(raw: string): string {
+  const normalized = canonicalSmsPhone(raw);
+  if (normalized.ok) return normalized.e164;
+  return String(raw || "").replace(/[^\d+]/g, "");
+}
+
+function isValidContactExtension(ext: string): boolean {
+  return /^\d{3}$/.test(ext);
+}
+
+function isSystemContactExtensionName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === "pbx user" ||
+    /^pbx user\s+\d+$/.test(normalized) ||
+    normalized.includes("invite lifecycle") ||
+    normalized.includes("provisioning") ||
+    normalized.includes("smoke") ||
+    normalized.includes("system") ||
+    normalized === "voice user" ||
+    /^voice user\s+\d+$/.test(normalized);
+}
+
+const contactPhoneInput = z.object({
+  type: z.enum(["mobile", "office", "home", "other"]).default("mobile"),
+  numberRaw: z.string().min(1),
+  isPrimary: z.boolean().optional(),
+});
+const contactEmailInput = z.object({
+  type: z.enum(["work", "personal", "other"]).default("work"),
+  email: z.string().email(),
+  isPrimary: z.boolean().optional(),
+});
+const contactAddressInput = z.object({
+  street: z.string().optional().nullable(),
+  city: z.string().optional().nullable(),
+  state: z.string().optional().nullable(),
+  zip: z.string().optional().nullable(),
+  country: z.string().optional().nullable(),
+});
+const contactWriteInput = z.object({
+  type: z.enum(["external", "company"]).default("external"),
+  firstName: z.string().optional().nullable(),
+  lastName: z.string().optional().nullable(),
+  displayName: z.string().optional().nullable(),
+  company: z.string().optional().nullable(),
+  title: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  favorite: z.boolean().optional(),
+  active: z.boolean().optional(),
+  phones: z.array(contactPhoneInput).default([]),
+  emails: z.array(contactEmailInput).default([]),
+  addresses: z.array(contactAddressInput).default([]),
+  tags: z.array(z.string().min(1).max(40)).default([]),
+});
+
+function contactTypeToApi(type: string): "internal_extension" | "external" | "company" {
+  if (type === "INTERNAL_EXTENSION") return "internal_extension";
+  if (type === "COMPANY") return "company";
+  return "external";
+}
+
+function buildContactDisplayName(input: z.infer<typeof contactWriteInput>): string {
+  const explicit = String(input.displayName || "").trim();
+  if (explicit) return explicit;
+  const person = [input.firstName, input.lastName].map((v) => String(v || "").trim()).filter(Boolean).join(" ");
+  return person || String(input.company || "").trim() || input.phones[0]?.numberRaw || input.emails[0]?.email || "Untitled contact";
+}
+
+function formatContact(row: any) {
+  const phones = (row.phones ?? []).map((p: any) => ({
+    id: p.id, type: String(p.type || "MOBILE").toLowerCase(), numberRaw: p.numberRaw,
+    numberNormalized: p.numberNormalized, isPrimary: Boolean(p.isPrimary),
+  }));
+  const emails = (row.emails ?? []).map((e: any) => ({
+    id: e.id, type: String(e.type || "WORK").toLowerCase(), email: e.email, isPrimary: Boolean(e.isPrimary),
+  }));
+  const tags = (row.tagLinks ?? []).map((l: any) => ({ id: l.tag.id, name: l.tag.name, color: l.tag.color ?? null }));
+  return {
+    id: row.id, tenantId: row.tenantId, type: contactTypeToApi(row.type), extensionId: row.extensionId ?? null,
+    firstName: row.firstName ?? "", lastName: row.lastName ?? "", displayName: row.displayName,
+    company: row.company ?? "", title: row.title ?? "", avatarUrl: row.avatarUrl ?? null,
+    notes: row.notes ?? "", favorite: Boolean(row.favorite), active: Boolean(row.active),
+    archivedAt: row.archivedAt?.toISOString?.() ?? row.archivedAt ?? null,
+    source: String(row.source || "MANUAL").toLowerCase(), phones, emails, addresses: row.addresses ?? [], tags,
+    primaryPhone: phones.find((p: any) => p.isPrimary) ?? phones[0] ?? null,
+    primaryEmail: emails.find((e: any) => e.isPrimary) ?? emails[0] ?? null,
+    createdAt: row.createdAt?.toISOString?.() ?? row.createdAt,
+    updatedAt: row.updatedAt?.toISOString?.() ?? row.updatedAt,
+  };
+}
+
+function formatExtensionContact(ext: any) {
+  const primaryPhone = { id: `ext-phone:${ext.id}`, type: "office", numberRaw: ext.extNumber, numberNormalized: ext.extNumber, isPrimary: true };
+  const primaryEmail = ext.ownerUser?.email ? { id: `ext-email:${ext.id}`, type: "work", email: ext.ownerUser.email, isPrimary: true } : null;
+  return {
+    id: `ext:${ext.id}`, tenantId: ext.tenantId, type: "internal_extension", extensionId: ext.id,
+    firstName: "", lastName: "", displayName: ext.displayName || `Extension ${ext.extNumber}`,
+    company: "", title: "Internal extension", avatarUrl: null, notes: "", favorite: false, active: true,
+    archivedAt: null, source: "extension", extension: ext.extNumber, presence: null,
+    phones: [primaryPhone], emails: primaryEmail ? [primaryEmail] : [], addresses: [],
+    tags: [{ id: "internal", name: "Internal", color: "#38bdf8" }], primaryPhone, primaryEmail,
+    createdAt: ext.createdAt?.toISOString?.() ?? ext.createdAt,
+    updatedAt: ext.updatedAt?.toISOString?.() ?? ext.updatedAt,
+  };
+}
+
+async function ensureContactTags(tenantId: string, names: string[]) {
+  const uniqueNames = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  const out: Array<{ id: string }> = [];
+  for (const name of uniqueNames) {
+    const tag = await (db as any).contactTag.upsert({
+      where: { tenantId_name: { tenantId, name } },
+      create: { tenantId, name, color: null },
+      update: {},
+    });
+    out.push({ id: tag.id });
+  }
+  return out;
+}
+
+async function assertNoDuplicateContactPhones(tenantId: string, phones: Array<{ numberRaw: string }>, excludeContactId?: string) {
+  const numbers = [...new Set(phones.map((p) => normalizeContactPhone(p.numberRaw)).filter(Boolean))];
+  if (numbers.length === 0) return;
+  const existing = await (db as any).contactPhone.findFirst({
+    where: {
+      numberNormalized: { in: numbers },
+      contact: { tenantId, active: true, archivedAt: null, ...(excludeContactId ? { id: { not: excludeContactId } } : {}) },
+    },
+  });
+  if (existing) throw new Error("duplicate_phone");
+}
+
+async function replaceContactChildren(contactId: string, tenantId: string, input: z.infer<typeof contactWriteInput>) {
+  await Promise.all([
+    (db as any).contactPhone.deleteMany({ where: { contactId } }),
+    (db as any).contactEmail.deleteMany({ where: { contactId } }),
+    (db as any).contactAddress.deleteMany({ where: { contactId } }),
+    (db as any).contactTagAssignment.deleteMany({ where: { contactId } }),
+  ]);
+  const tags = await ensureContactTags(tenantId, input.tags);
+  if (input.phones.length) await (db as any).contactPhone.createMany({
+    data: input.phones.map((phone, index) => ({
+      contactId, type: phone.type.toUpperCase(), numberRaw: phone.numberRaw,
+      numberNormalized: normalizeContactPhone(phone.numberRaw), isPrimary: phone.isPrimary ?? index === 0,
+    })),
+  });
+  if (input.emails.length) await (db as any).contactEmail.createMany({
+    data: input.emails.map((email, index) => ({
+      contactId, type: email.type.toUpperCase(), email: email.email.trim().toLowerCase(), isPrimary: email.isPrimary ?? index === 0,
+    })),
+  });
+  if (input.addresses.length) await (db as any).contactAddress.createMany({
+    data: input.addresses.map((address) => ({
+      contactId, street: address.street || null, city: address.city || null,
+      state: address.state || null, zip: address.zip || null, country: address.country || null,
+    })),
+  });
+  if (tags.length) await (db as any).contactTagAssignment.createMany({
+    data: tags.map((tag) => ({ contactId, tagId: tag.id })),
+    skipDuplicates: true,
+  });
+}
+
+app.get("/contacts", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const query = z.object({
+    q: z.string().optional(),
+    type: z.enum(["all", "extensions", "external", "companies", "favorites"]).optional(),
+    tag: z.string().optional(),
+    sort: z.enum(["name", "updated", "extension"]).optional(),
+  }).parse(req.query || {});
+  const search = (query.q || "").trim().toLowerCase();
+  const [manualRows, extensionRows, tags] = await Promise.all([
+    (db as any).contact.findMany({
+      where: {
+        tenantId, archivedAt: null, active: true,
+        ...(query.type === "external" ? { type: "EXTERNAL" } : {}),
+        ...(query.type === "companies" ? { type: "COMPANY" } : {}),
+        ...(query.type === "favorites" ? { favorite: true } : {}),
+        ...(query.tag ? { tagLinks: { some: { tag: { name: query.tag } } } } : {}),
+        ...(search ? { OR: [
+          { displayName: { contains: search, mode: "insensitive" } },
+          { firstName: { contains: search, mode: "insensitive" } },
+          { lastName: { contains: search, mode: "insensitive" } },
+          { company: { contains: search, mode: "insensitive" } },
+          { title: { contains: search, mode: "insensitive" } },
+          { phones: { some: { OR: [{ numberRaw: { contains: search, mode: "insensitive" } }, { numberNormalized: { contains: search, mode: "insensitive" } }] } } },
+          { emails: { some: { email: { contains: search, mode: "insensitive" } } } },
+        ] } : {}),
+      },
+      include: CONTACT_INCLUDE,
+      orderBy: query.sort === "updated" ? [{ updatedAt: "desc" }] : [{ displayName: "asc" }],
+      take: 1000,
+    }),
+    db.extension.findMany({
+      where: { tenantId, status: "ACTIVE" },
+      include: { ownerUser: { select: { email: true } } },
+      orderBy: { extNumber: "asc" },
+      take: 500,
+    }),
+    (db as any).contactTag.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+  ]);
+  const extensionContacts = extensionRows
+    .filter((ext) => isValidContactExtension(ext.extNumber))
+    .filter((ext) => !isSystemContactExtensionName(ext.displayName || ext.extNumber))
+    .map(formatExtensionContact)
+    .filter((contact) => {
+      if (query.type && !["all", "extensions"].includes(query.type)) return false;
+      if (!search) return true;
+      return [contact.displayName, contact.extension, contact.primaryEmail?.email ?? ""].some((v) => v.toLowerCase().includes(search));
+    });
+  const manualContacts = query.type === "extensions" ? [] : manualRows.map(formatContact);
+  const rows = [...extensionContacts, ...manualContacts].sort((a, b) => {
+    if (a.type === "internal_extension" && b.type === "internal_extension") return String(a.extension || "").localeCompare(String(b.extension || ""), undefined, { numeric: true });
+    return a.displayName.localeCompare(b.displayName);
+  });
+  return reply.send({
+    tenantId,
+    rows,
+    tags,
+    stats: {
+      total: rows.length,
+      internalExtensions: extensionContacts.length,
+      external: manualContacts.filter((c: any) => c.type === "external").length,
+      companies: manualContacts.filter((c: any) => c.type === "company").length,
+      favorites: manualContacts.filter((c: any) => c.favorite).length,
+    },
+  });
+});
+
+app.post("/contacts", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const input = contactWriteInput.parse(req.body || {});
+  const displayName = buildContactDisplayName(input);
+  if (!displayName.trim() && input.phones.length === 0 && input.emails.length === 0) return reply.code(400).send({ error: "name_phone_or_email_required" });
+  try { await assertNoDuplicateContactPhones(tenantId, input.phones); } catch { return reply.code(409).send({ error: "duplicate_phone" }); }
+  const contact = await (db as any).contact.create({
+    data: {
+      tenantId, type: input.type === "company" ? "COMPANY" : "EXTERNAL",
+      firstName: input.firstName || null, lastName: input.lastName || null, displayName,
+      company: input.company || null, title: input.title || null, notes: input.notes || null,
+      favorite: input.favorite ?? false, active: input.active ?? true, source: "MANUAL", createdBy: user.sub,
+    },
+  });
+  await replaceContactChildren(contact.id, tenantId, input);
+  const row = await (db as any).contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
+  return reply.code(201).send({ contact: formatContact(row) });
+});
+
+app.post("/contacts/import", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  return reply.code(501).send({
+    error: "import_not_implemented",
+    message: "CSV import endpoint is scaffolded; manual contact creation is available through POST /contacts.",
+  });
+});
+
+app.get("/contacts/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  if (id.startsWith("ext:")) {
+    const ext = await db.extension.findFirst({ where: { id: id.slice(4), tenantId, status: "ACTIVE" }, include: { ownerUser: { select: { email: true } } } });
+    if (!ext || !isValidContactExtension(ext.extNumber) || isSystemContactExtensionName(ext.displayName || ext.extNumber)) return reply.code(404).send({ error: "not_found" });
+    return reply.send({ contact: formatExtensionContact(ext) });
+  }
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null }, include: CONTACT_INCLUDE });
+  if (!row) return reply.code(404).send({ error: "not_found" });
+  return reply.send({ contact: formatContact(row) });
+});
+
+app.patch("/contacts/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  if (id.startsWith("ext:")) return reply.code(400).send({ error: "extension_contacts_are_read_only" });
+  const existing = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null } });
+  if (!existing) return reply.code(404).send({ error: "not_found" });
+  const input = contactWriteInput.parse(req.body || {});
+  try { await assertNoDuplicateContactPhones(tenantId, input.phones, id); } catch { return reply.code(409).send({ error: "duplicate_phone" }); }
+  await (db as any).contact.update({
+    where: { id },
+    data: {
+      type: input.type === "company" ? "COMPANY" : "EXTERNAL",
+      firstName: input.firstName || null, lastName: input.lastName || null,
+      displayName: buildContactDisplayName(input), company: input.company || null,
+      title: input.title || null, notes: input.notes || null,
+      favorite: input.favorite ?? existing.favorite, active: input.active ?? existing.active,
+    },
+  });
+  await replaceContactChildren(id, tenantId, input);
+  const row = await (db as any).contact.findUnique({ where: { id }, include: CONTACT_INCLUDE });
+  return reply.send({ contact: formatContact(row) });
+});
+
+app.delete("/contacts/:id", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  if (id.startsWith("ext:")) return reply.code(400).send({ error: "extension_contacts_are_read_only" });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId } });
+  if (!row) return reply.code(404).send({ error: "not_found" });
+  await (db as any).contact.update({ where: { id }, data: { active: false, archivedAt: new Date() } });
+  return reply.send({ ok: true });
+});
+
+function contactAvatarRoot(): string {
+  return process.env.CONTACT_AVATAR_STORAGE_DIR || path.join(process.cwd(), "data", "contact-avatars");
+}
+
+app.get("/contacts/:id/avatar", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId }, select: { storageKey: true } });
+  if (!row?.storageKey) return reply.code(404).send({ error: "not_found" });
+  try {
+    const filePath = path.join(contactAvatarRoot(), row.storageKey);
+    const bytes = await fsp.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    reply.header("content-type", ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg");
+    reply.header("cache-control", "private, max-age=3600");
+    return reply.send(bytes);
+  } catch {
+    return reply.code(404).send({ error: "not_found" });
+  }
+});
+
+app.post("/contacts/:id/avatar", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null } });
+  if (!row) return reply.code(404).send({ error: "not_found" });
+  if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+  const part = await (req as any).file();
+  if (!part) return reply.code(400).send({ error: "file_required" });
+  const mime = String(part.mimetype || "");
+  if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) return reply.code(400).send({ error: "unsupported_image_type" });
+  const chunks: Buffer[] = [];
+  for await (const chunk of part.file) chunks.push(Buffer.from(chunk));
+  const bytes = Buffer.concat(chunks);
+  if (bytes.length > 2 * 1024 * 1024) return reply.code(413).send({ error: "file_too_large" });
+  const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
+  const sha = createHash("sha256").update(bytes).digest("hex").slice(0, 24);
+  const storageKey = path.join(tenantId, `${id}-${sha}${ext}`);
+  const filePath = path.join(contactAvatarRoot(), storageKey);
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  await fsp.writeFile(filePath, bytes);
+  if (row.storageKey) await fsp.unlink(path.join(contactAvatarRoot(), row.storageKey)).catch(() => {});
+  const avatarUrl = `/api/contacts/${encodeURIComponent(id)}/avatar?v=${sha}`;
+  await (db as any).contact.update({ where: { id }, data: { storageKey, avatarUrl } });
+  return reply.send({ ok: true, avatarUrl });
+});
+
+app.delete("/contacts/:id/avatar", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const { id } = req.params as { id: string };
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId } });
+  if (!row) return reply.code(404).send({ error: "not_found" });
+  if (row.storageKey) await fsp.unlink(path.join(contactAvatarRoot(), row.storageKey)).catch(() => {});
+  await (db as any).contact.update({ where: { id }, data: { storageKey: null, avatarUrl: null } });
+  return reply.send({ ok: true });
+});
+
 app.get("/customers", async (req, reply) => {
   const admin = await requirePermission(req, reply, canViewCustomers);
   if (!admin) return;
@@ -21041,6 +21449,63 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
   }
   if (!event.eventId) return reply.status(400).send({ error: "missing_event_id" });
 
+  const payload = (event.payload || {}) as Record<string, any>;
+  const platformInvoiceRef = String(payload.xInvoice || payload.invoice || payload.Invoice || "").trim();
+  const platformRefNum = String(payload.xRefNum || payload.xRefnum || event.eventId || "").trim();
+  const platformInvoice = platformInvoiceRef
+    ? await (db as any).billingInvoice.findFirst({ where: { OR: [{ invoiceNumber: platformInvoiceRef }, { id: platformInvoiceRef }] }, include: { paymentMethod: true } })
+    : null;
+  if (platformInvoice) {
+    let verifyAdapter = envAdapter;
+    try {
+      const tenantSola = await getTenantSolaConfig(platformInvoice.tenantId, { requireEnabled: false, allowFallbackEnv: true });
+      verifyAdapter = getSolaAdapter(tenantSola.adapterConfig);
+    } catch {
+      verifyAdapter = envAdapter;
+    }
+    const validSignature =
+      verifyAdapter.verifyWebhook(req.headers as any, rawBody) ||
+      verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
+      envAdapter.verifyWebhook(req.headers as any, rawBody) ||
+      envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
+    if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
+
+    const existingTx = platformRefNum
+      ? await (db as any).paymentTransaction.findFirst({ where: { processor: "SOLA", processorTransactionId: platformRefNum } })
+      : null;
+    if (existingTx) return { ok: true, deduped: true, invoiceId: platformInvoice.id };
+
+    const approved = event.status === "SUCCEEDED";
+    const tx = await (db as any).paymentTransaction.create({
+      data: {
+        tenantId: platformInvoice.tenantId,
+        invoiceId: platformInvoice.id,
+        paymentMethodId: platformInvoice.paymentMethodId || null,
+        amountCents: event.amountCents || platformInvoice.balanceDueCents || platformInvoice.totalCents,
+        currency: event.currency || platformInvoice.currency || "USD",
+        status: approved ? "APPROVED" : event.status === "FAILED" ? "DECLINED" : "PENDING",
+        processor: "SOLA",
+        processorTransactionId: platformRefNum || null,
+        responseCode: payload.xResult ? String(payload.xResult) : null,
+        responseMessage: payload.xError || payload.xStatus ? String(payload.xError || payload.xStatus) : null,
+        rawResponseSafeJson: payload as any,
+        idempotencyKey: platformRefNum ? `webhook:${platformRefNum}` : undefined,
+      },
+    });
+    if (approved) {
+      await (db as any).billingInvoice.update({
+        where: { id: platformInvoice.id },
+        data: { status: "PAID", amountPaidCents: platformInvoice.totalCents, balanceDueCents: 0, paidAt: new Date(), failedAt: null },
+      });
+      await (db as any).billingEventLog.create({ data: { tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id, type: "webhook.payment_approved", metadata: { transactionId: tx.id, providerEventId: event.eventId } } });
+    } else if (event.status === "FAILED") {
+      await (db as any).billingInvoice.update({ where: { id: platformInvoice.id }, data: { status: "FAILED", failedAt: new Date() } });
+      await (db as any).alert.create({ data: { tenantId: platformInvoice.tenantId, severity: "HIGH", category: "BILLING", message: `Payment failed for invoice ${platformInvoice.invoiceNumber}`, metadata: { invoiceId: platformInvoice.id, transactionId: tx.id } } }).catch(() => null);
+      await (db as any).billingEventLog.create({ data: { tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id, type: "webhook.payment_failed", metadata: { transactionId: tx.id, providerEventId: event.eventId } } });
+    }
+    return { ok: true, invoiceId: platformInvoice.id, transactionId: tx.id };
+  }
+
   const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
   if (seen) return { ok: true, deduped: true };
 
@@ -21059,7 +21524,7 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
       verifyAdapter = envAdapter;
     }
 
-    const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody);
+    const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
     if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
 
     await db.paymentEvent.create({
@@ -21119,7 +21584,7 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
     verifyAdapter = envAdapter;
   }
 
-  const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody);
+  const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
   if (!validSignature) {
     return reply.status(403).send({ error: "invalid_signature" });
   }
@@ -23302,6 +23767,7 @@ const port = Number(process.env.PORT || 3001);
     app.log.info("WebRTC telephony env config OK");
   }
 
+  await registerBillingRoutes(app);
   registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
