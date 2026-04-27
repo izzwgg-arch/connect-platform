@@ -345,10 +345,12 @@ export class VoipMsSmsProvider implements SmsProvider {
       const json: any = await res.json().catch(() => ({}));
       const status = String(json.status || "").toLowerCase();
       if (!res.ok || status !== "success") {
-        const err: any = new Error("VoIP.ms send failed");
+        const voipStatus = json.status || "unknown_error";
+        const err: any = new Error(`VoIP.ms sendSMS rejected: ${voipStatus}`);
         err.provider = "VOIPMS";
-        err.status = res.status;
-        err.code = json.response?.code || json.code || "VOIPMS_SEND_FAILED";
+        err.httpStatus = res.status;
+        err.code = voipStatus;
+        err.voipMsResponse = json;
         throw err;
       }
       return {
@@ -411,11 +413,12 @@ export class VoipMsSmsProvider implements SmsProvider {
       const json: any = await res.json().catch(() => ({}));
       const status = String(json.status || "").toLowerCase();
       if (!res.ok || status !== "success") {
-        const err: any = new Error("VoIP.ms sendMMS failed");
+        const voipStatus = json.status || "unknown_error";
+        const err: any = new Error(`VoIP.ms sendMMS rejected: ${voipStatus}`);
         err.provider = "VOIPMS";
-        err.status = res.status;
-        err.code = json.response?.code || json.code || "VOIPMS_MMS_FAILED";
-        err.detail = json;
+        err.httpStatus = res.status;
+        err.code = voipStatus;
+        err.voipMsResponse = json;
         throw err;
       }
       return {
