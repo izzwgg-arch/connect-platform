@@ -5159,7 +5159,7 @@ table tr:hover {
   .td-search-wrap { min-width: 140px; }
 }
 
-/* ── Connect Chat MVP ─────────────────────────────────────────────────────── */
+/* ── Connect Chat MVP UI ──────────────────────────────────────────────────── */
 .cc-shell {
   height: calc(100vh - 52px);
   min-height: 0;
