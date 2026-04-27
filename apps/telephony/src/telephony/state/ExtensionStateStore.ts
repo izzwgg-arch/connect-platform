@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import type { NormalizedExtensionState, ExtensionStatus } from "../types";
+import { normalizeExtensionFromChannel } from "../normalizers/normalizeExtension";
 
 export declare interface ExtensionStateStore {
   on(event: "extensionUpsert", listener: (ext: NormalizedExtensionState) => void): this;
@@ -109,7 +110,7 @@ function peerStatusToExtStatus(peerStatus: string): ExtensionStatus {
 }
 
 function extractPeer(peer: string): string | null {
-  // Peer format: "PJSIP/1001" or "SIP/1001"
-  const m = /(?:PJSIP|SIP|IAX2?)\/(.+)/.exec(peer);
-  return m ? (m[1] ?? null) : null;
+  // Shared normalizer handles "PJSIP/105", "SIP/105-000b1", "PJSIP/T11_105",
+  // "Local/105@ctx" etc. and rejects trunk peers ("PJSIP/344022_gesheft-xxx").
+  return normalizeExtensionFromChannel(peer);
 }

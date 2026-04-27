@@ -96,12 +96,18 @@ function isSystemExtensionName(name: string): boolean {
 }
 
 function mapPresence(rawState: string, ext: string, activeExts: Set<string>, ringingExts: Set<string>): PresenceState {
+  // BLF must match Dashboard Live Calls and Team Directory exactly. Live-call
+  // state is the only source that can promote a tile to On Call / Ringing —
+  // AMI hints without a matching live call are treated as Available so the
+  // panels never disagree with the dashboard.
   if (ringingExts.has(ext)) return "ringing";
   if (activeExts.has(ext)) return "on_call";
-  const state = rawState.toLowerCase();
+  const state = (rawState || "").toLowerCase();
   if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") return "available";
-  if (state === "inuse" || state === "busy" || state === "onhold" || state === "1" || state === "3") return "on_call";
-  if (state === "ringing" || state === "2") return "ringing";
+  if (state === "inuse" || state === "busy" || state === "onhold" || state === "ringing" ||
+      state === "1" || state === "2" || state === "3") {
+    return "available";
+  }
   return "offline";
 }
 

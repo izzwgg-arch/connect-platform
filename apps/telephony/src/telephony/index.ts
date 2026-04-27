@@ -158,6 +158,7 @@ export function createTelephonyModule(server: http.Server) {
     extStore,
     queueStore,
     healingEngine,
+    pbxTenantMapCache: pbxMapCache,
     start,
     stop,
   };

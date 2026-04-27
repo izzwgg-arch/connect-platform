@@ -69,6 +69,7 @@ export function registerTelephonyRoutes(
       from: c.from,
       to: c.to,
       channels: c.channels,
+      extensions: c.extensions,
       startedAt: c.startedAt,
       answeredAt: c.answeredAt,
       endedAt: c.endedAt,

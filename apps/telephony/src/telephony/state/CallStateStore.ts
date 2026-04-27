@@ -7,6 +7,7 @@ import {
   hasValidChannel,
   isHelperChannel,
 } from "../normalizers/normalizeCallEvent";
+import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
 import { extractPbxTenantHintsFromContext } from "../pbx/pbxTenantHints";
 
 const log = childLogger("CallStateStore");
@@ -397,9 +398,18 @@ export class CallStateStore extends EventEmitter {
     if (!seen.includes(params.channel)) {
       call.metadata["seenChannels"] = [...seen, params.channel];
     }
-    if (!call.extensions.includes(params.channel)) {
-      const ext = extractExtension(params.channel);
-      if (ext && !call.extensions.includes(ext)) call.extensions.push(ext);
+    // Normalize channel → bare dialplan extension (strips PJSIP/ driver,
+    // T{n}_ VitalPBX tenant prefix, -<uniqueid> suffix, @host).
+    const chExt = normalizeExtensionFromChannel(params.channel);
+    if (chExt && !call.extensions.includes(chExt)) call.extensions.push(chExt);
+    // Also seed from dialplan `exten` so the dialed-to extension is captured
+    // even before the answering channel appears. Skip helper codes (`s`,`h`).
+    if (looksLikeExtension(params.exten) && !call.extensions.includes(params.exten)) {
+      call.extensions.push(params.exten);
+    }
+    // And from caller ID number when it clearly is an extension (internal calls).
+    if (looksLikeExtension(params.callerIDNum) && !call.extensions.includes(params.callerIDNum)) {
+      call.extensions.push(params.callerIDNum);
     }
 
     call.state = channelStateToCallState(params.channelState);
@@ -652,6 +662,20 @@ export class CallStateStore extends EventEmitter {
     // Populate from/to from CDR source/destination if missing
     if (params.source && !call.from) call.from = params.source;
     if (params.destination && !call.to) call.to = params.destination;
+
+    // Seed call.extensions from CDR source/destination when they are bare
+    // extensions. This backfills the extension set for calls whose channel
+    // strings didn't expose a dialable extension (e.g. trunk legs).
+    if (looksLikeExtension(params.source) && !call.extensions.includes(params.source!)) {
+      call.extensions.push(params.source!);
+    }
+    if (looksLikeExtension(params.destination) && !call.extensions.includes(params.destination!)) {
+      call.extensions.push(params.destination!);
+    }
+    if (params.channel) {
+      const chExt = normalizeExtensionFromChannel(params.channel);
+      if (chExt && !call.extensions.includes(chExt)) call.extensions.push(chExt);
+    }
 
     // Store raw CDR fields for downstream use
     if (params.dcontext) call.metadata["cdrDcontext"] = params.dcontext;
@@ -1138,10 +1162,6 @@ function shouldUpgradeState(current: CallState, next: CallState): boolean {
   return order.indexOf(next) > order.indexOf(current);
 }
 
-function extractExtension(channel: string): string | null {
-  const m = /(?:PJSIP|SIP|IAX2?)\/([^@-]+)/.exec(channel);
-  return m ? (m[1] ?? null) : null;
-}
 
 function isInternalExtension(dest: string): boolean {
   // Strip SIP URI parameters and get the base part before '@'

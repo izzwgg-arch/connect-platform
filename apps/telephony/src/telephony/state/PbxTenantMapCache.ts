@@ -18,6 +18,12 @@ export type PbxDidMapEntry = {
   tenantName: string | null;
 };
 
+export type PbxExtensionMapEntry = {
+  extNumber: string;
+  connectTenantId: string;
+  tenantName: string | null;
+};
+
 /**
  * Fetches /internal/telephony/pbx-tenant-map from the API (same secret as CDR ingest).
  */
@@ -28,6 +34,10 @@ export class PbxTenantMapCache {
   private didsByConnectId = new Map<string, string[]>();
   /** Slug → Connect tenant UUID (e.g. "gesheft" → "cmnlgnumu0001p9g6xyl1pbdd"). */
   private slugToConnectId = new Map<string, string>();
+  /** Extension number → { connectTenantId, tenantName }. Unambiguous extensions only
+   *  (numbers that appear under more than one tenant are intentionally omitted to
+   *  prevent cross-tenant leaks). */
+  private extToTenant = new Map<string, { connectTenantId: string; tenantName: string | null }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -67,7 +77,11 @@ export class PbxTenantMapCache {
         log.warn({ status: res.status }, "pbx-tenant-map fetch failed");
         return;
       }
-      const body = (await res.json()) as { entries?: PbxTenantMapEntry[]; didEntries?: PbxDidMapEntry[] };
+      const body = (await res.json()) as {
+        entries?: PbxTenantMapEntry[];
+        didEntries?: PbxDidMapEntry[];
+        extensionEntries?: PbxExtensionMapEntry[];
+      };
       if (Array.isArray(body.entries)) {
         this.entries = body.entries;
         log.debug({ count: this.entries.length }, "pbx-tenant-map refreshed");
@@ -110,6 +124,18 @@ export class PbxTenantMapCache {
         log.debug({ slugCount: slugMap.size }, "pbx-tenant-map slug index built");
       } else {
         this.didByE164 = new Map();
+      }
+      if (Array.isArray(body.extensionEntries)) {
+        const next = new Map<string, { connectTenantId: string; tenantName: string | null }>();
+        for (const e of body.extensionEntries) {
+          const n = (e.extNumber || "").trim();
+          if (!n || !e.connectTenantId) continue;
+          next.set(n, { connectTenantId: e.connectTenantId, tenantName: e.tenantName ?? null });
+        }
+        this.extToTenant = next;
+        log.debug({ extCount: next.size }, "pbx-tenant-map extension entries refreshed");
+      } else {
+        this.extToTenant = new Map();
       }
     } catch (err: any) {
       log.warn({ err: err?.message }, "pbx-tenant-map refresh error");
@@ -173,6 +199,23 @@ export class PbxTenantMapCache {
     if (!dids) return null;
     const first = this.didByE164.get(dids[0]!);
     return first?.tenantName ?? null;
+  }
+
+  /** Extension number → Connect tenant lookup. Returns null when the extension
+   *  is unknown OR ambiguous (same number registered under multiple tenants). */
+  resolveExtensionTenant(extNumber: string | null | undefined): {
+    tenantId: string;
+    tenantName: string | null;
+  } | null {
+    if (!extNumber) return null;
+    const hit = this.extToTenant.get(String(extNumber).trim());
+    if (!hit) return null;
+    return { tenantId: hit.connectTenantId, tenantName: hit.tenantName };
+  }
+
+  /** Count of unambiguous extension mappings (diagnostics). */
+  getExtensionMapSize(): number {
+    return this.extToTenant.size;
   }
 
   /** Ombutel-synced inbound DID → tenant (higher priority than context/trunk hints in TenantResolver). */

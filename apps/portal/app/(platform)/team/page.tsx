@@ -60,15 +60,22 @@ function mapAmiPresence(
   activeCalls: Set<string>,
   ringingCalls: Set<string>,
 ): PresenceState {
+  // Live-call state is the single source of truth for On Call / Ringing — the
+  // same rule the Dashboard + BLF panel use. AMI hints without a matching
+  // live call are treated as "available" (or offline when unknown) so the
+  // three surfaces never disagree.
   if (ringingCalls.has(ext)) return "ringing";
   if (activeCalls.has(ext)) return "on_call";
-  const s = rawState.toLowerCase();
+  const s = (rawState || "").toLowerCase();
   if (s === "not_inuse" || s === "idle" || s === "registered" || s === "0") return "available";
-  if (s === "inuse" || s === "1") return "on_call";
-  if (s === "ringing" || s === "2") return "ringing";
-  if (s === "busy" || s === "3") return "busy";
   if (s === "away") return "away";
   if (s === "dnd") return "dnd";
+  if (s === "inuse" || s === "busy" || s === "onhold" || s === "ringing" ||
+      s === "1" || s === "2" || s === "3") {
+    // AMI says busy but we don't see a live call for this extension. Don't
+    // show a phantom On-Call; fall back to Available.
+    return "available";
+  }
   return "offline";
 }
 

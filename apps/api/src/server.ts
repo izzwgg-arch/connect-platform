@@ -8457,6 +8457,280 @@ app.get("/admin/telephony/live-diagnostics", async (req, reply) => {
   });
 });
 
+/**
+ * GET /admin/telephony/live-sync-diagnostics?tenantId=<id>
+ *
+ * Used to prove BLF/Team Directory presence and Dashboard Live Calls agree
+ * for a given tenant. Compares three sources of truth in one place:
+ *   - Telephony live calls (AMI call engine, filtered per tenant)
+ *   - Telephony extension presence (AMI ExtensionStatus/PeerStatus)
+ *   - Connect Extension directory (DB)
+ *
+ * Admin-only. No PBX polling — everything served from the telephony service's
+ * in-memory state plus a single cached DB read.
+ */
+app.get("/admin/telephony/live-sync-diagnostics", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const selectedTenantId = query.tenantId?.trim() || null;
+  const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = String(process.env.CDR_INGEST_SECRET || "").trim();
+
+  async function tfetch<T>(path: string, ms = 3000): Promise<T | null> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    const headers: Record<string, string> = {};
+    if (secret) headers["x-cdr-secret"] = secret;
+    try {
+      const res = await fetch(`${telephonyBase}${path}`, { headers, signal: ctrl.signal });
+      return res.ok ? (await res.json() as T) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  type DiagCall = {
+    id: string;
+    linkedId: string;
+    state: string;
+    tenantId: string | null;
+    tenantName?: string | null;
+    direction?: string | null;
+    from?: string | null;
+    to?: string | null;
+    channels?: string[];
+    extensions?: string[];
+    startedAt?: string | null;
+    answeredAt?: string | null;
+    updatedAt?: string | null;
+    isActive?: boolean;
+  };
+  type TelephonyDiag = { calls?: DiagCall[]; activeCallCount?: number };
+  type TelephonyExtension = {
+    extension: string;
+    status: string;
+    tenantId: string | null;
+    hint?: string;
+    updatedAt?: string;
+  };
+
+  const [diag, liveExtensions, tenant, dbExtensions] = await Promise.all([
+    tfetch<TelephonyDiag>("/telephony/diag"),
+    tfetch<TelephonyExtension[]>("/telephony/extensions"),
+    selectedTenantId
+      ? db.tenant.findUnique({ where: { id: selectedTenantId }, select: { id: true, name: true } })
+      : Promise.resolve(null),
+    db.extension.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, tenantId: true, extNumber: true, displayName: true },
+      take: 5000,
+    }),
+  ]);
+
+  // Build the extension → tenant map the same way the resolver does: drop any
+  // extNumber that appears under multiple tenants (ambiguous) to avoid leaks.
+  const tenantsByExt = new Map<string, Set<string>>();
+  for (const row of dbExtensions) {
+    const n = row.extNumber.trim();
+    if (!n) continue;
+    const s = tenantsByExt.get(n) ?? new Set<string>();
+    s.add(row.tenantId);
+    tenantsByExt.set(n, s);
+  }
+  const extToTenant = new Map<string, string>();
+  const extIdByTenantExt = new Map<string, string>(); // `${tenantId}:${extNumber}` → extensionId
+  for (const row of dbExtensions) {
+    extIdByTenantExt.set(`${row.tenantId}:${row.extNumber.trim()}`, row.id);
+  }
+  for (const [ext, set] of tenantsByExt) {
+    if (set.size === 1) extToTenant.set(ext, [...set][0]!);
+  }
+
+  const normalizeExt = (s: string | null | undefined): string | null => {
+    if (!s) return null;
+    let t = String(s).trim();
+    if (!t) return null;
+    if (/^(?:mixing|Multicast|ConfBridge|Message|AsyncGoto)\//i.test(t)) return null;
+    t = t.replace(/^(?:PJSIP|SIP|IAX2?|Local)\//i, "");
+    const at = t.indexOf("@");
+    if (at >= 0) t = t.slice(0, at);
+    t = t.replace(/-[0-9a-f]{3,}$/i, "");
+    t = t.replace(/;[\d]+$/, "");
+    const p = /^[A-Za-z]\d+_(\d{2,6})$/.exec(t);
+    if (p) return p[1] ?? null;
+    if (/^\d{2,6}$/.test(t)) return t;
+    return null;
+  };
+  const extractCallExtensions = (call: DiagCall): string[] => {
+    const out = new Set<string>();
+    for (const v of call.extensions ?? []) {
+      const e = normalizeExt(v);
+      if (e) out.add(e);
+    }
+    for (const ch of call.channels ?? []) {
+      const e = normalizeExt(ch);
+      if (e) out.add(e);
+    }
+    const fromE = normalizeExt(call.from);
+    if (fromE) out.add(fromE);
+    const toE = normalizeExt(call.to);
+    if (toE) out.add(toE);
+    return [...out];
+  };
+
+  // Active calls only (match what the dashboard renders).
+  const activeCalls = (diag?.calls ?? []).filter((c) => {
+    const s = String(c.state || "").toLowerCase();
+    if (s === "hungup" || s === "unknown") return false;
+    return c.isActive !== false;
+  });
+  const callBelongsToTenant = (c: DiagCall): boolean => {
+    if (!selectedTenantId) return true;
+    if (c.tenantId === selectedTenantId) return true;
+    if (c.tenantId && c.tenantId !== selectedTenantId) return false;
+    // tenantId is null — match by involved extension.
+    for (const ext of extractCallExtensions(c)) {
+      if (extToTenant.get(ext) === selectedTenantId) return true;
+    }
+    return false;
+  };
+  const scopedCalls = activeCalls.filter(callBelongsToTenant);
+
+  // Presence: everything the extension store knows about, scoped to tenant.
+  const presenceScoped = (liveExtensions ?? []).filter((ext) => {
+    if (!selectedTenantId) return true;
+    if (ext.tenantId && ext.tenantId !== selectedTenantId) return false;
+    // tenantId null → fall back to the directory map.
+    if (!ext.tenantId) {
+      const viaDir = extToTenant.get(ext.extension);
+      return viaDir ? viaDir === selectedTenantId : false;
+    }
+    return ext.tenantId === selectedTenantId;
+  });
+
+  const onCallStatuses = new Set(["inuse", "busy", "onhold"]);
+  const ringingStatuses = new Set(["ringing"]);
+
+  const activeExtsSet = new Set<string>();
+  const ringingExtsSet = new Set<string>();
+  for (const c of scopedCalls) {
+    const s = String(c.state || "").toLowerCase();
+    const exts = extractCallExtensions(c);
+    if (s === "ringing" || s === "dialing") exts.forEach((e) => ringingExtsSet.add(e));
+    else if (s === "up" || s === "held") exts.forEach((e) => activeExtsSet.add(e));
+  }
+
+  const onCallPresenceList = presenceScoped.filter((ext) => onCallStatuses.has(String(ext.status).toLowerCase()));
+  const ringingPresenceList = presenceScoped.filter((ext) => ringingStatuses.has(String(ext.status).toLowerCase()));
+
+  const liveCallsOut = scopedCalls.map((c) => {
+    const s = String(c.state || "").toLowerCase();
+    let derived: "ringing" | "on_call" | "dialing" | "held" | "unknown" = "unknown";
+    if (s === "ringing") derived = "ringing";
+    else if (s === "dialing") derived = "dialing";
+    else if (s === "held") derived = "held";
+    else if (s === "up") derived = "on_call";
+    return {
+      id: c.id,
+      linkedId: c.linkedId,
+      tenantId: c.tenantId ?? null,
+      tenantName: c.tenantName ?? (c.tenantId ? null : null),
+      status: s,
+      derivedStatus: derived,
+      direction: c.direction ?? null,
+      from: c.from ?? null,
+      to: c.to ?? null,
+      caller: c.from ?? null,
+      callee: c.to ?? null,
+      involvedExtensions: extractCallExtensions(c),
+      startedAt: c.startedAt ?? null,
+      updatedAt: c.updatedAt ?? c.answeredAt ?? c.startedAt ?? null,
+    };
+  });
+
+  const findMatchingCallFor = (extension: string): typeof liveCallsOut[number] | null => {
+    for (const lc of liveCallsOut) {
+      if (lc.involvedExtensions.includes(extension)) return lc;
+    }
+    return null;
+  };
+
+  const describePresence = (ext: TelephonyExtension) => {
+    const extId = selectedTenantId
+      ? extIdByTenantExt.get(`${selectedTenantId}:${ext.extension}`) ?? null
+      : null;
+    const match = findMatchingCallFor(ext.extension);
+    return {
+      extension: ext.extension,
+      extensionId: extId,
+      tenantId: ext.tenantId ?? extToTenant.get(ext.extension) ?? null,
+      sourceStatus: ext.status,
+      updatedAt: ext.updatedAt ?? null,
+      linkedId: match?.linkedId ?? null,
+      matchedCallId: match?.id ?? null,
+      matchReason: match ? "matched_by_extension" : null,
+    };
+  };
+
+  const unmatchedPresenceOnCall = [...onCallPresenceList, ...ringingPresenceList]
+    .map(describePresence)
+    .filter((p) => !p.matchedCallId)
+    .map((p) => ({
+      ...p,
+      matchReason: "no_live_call_for_extension_in_tenant",
+    }));
+
+  const unmatchedLiveCalls = liveCallsOut.filter((c) => {
+    if (c.involvedExtensions.length === 0) return false;
+    const anyBusyInPresence = c.involvedExtensions.some((e) =>
+      [...onCallPresenceList, ...ringingPresenceList].some((p) => p.extension === e),
+    );
+    return !anyBusyInPresence;
+  });
+
+  const tenantMappingFailures = activeCalls
+    .filter((c) => !c.tenantId)
+    .map((c) => ({
+      id: c.id,
+      linkedId: c.linkedId,
+      from: c.from ?? null,
+      to: c.to ?? null,
+      extensions: extractCallExtensions(c),
+      reason:
+        extractCallExtensions(c).some((e) => extToTenant.has(e))
+          ? "extension_known_but_not_resolved_at_ingress"
+          : "no_did_no_extension_no_pbx_hint",
+    }));
+
+  return reply.send({
+    tenantId: selectedTenantId,
+    tenantName: tenant?.name ?? null,
+    generatedAt: new Date().toISOString(),
+    sourceOfTruth: "telephony.callStore.getActive via /telephony/diag + /telephony/extensions",
+    liveCalls: liveCallsOut,
+    presenceExtensions: presenceScoped.map(describePresence),
+    blfExtensions: presenceScoped
+      .filter((ext) => String(ext.status).toLowerCase() !== "unknown")
+      .map(describePresence),
+    unmatchedPresenceOnCall,
+    unmatchedLiveCalls,
+    tenantMappingFailures,
+    summary: {
+      liveCallsCount: liveCallsOut.length,
+      onCallPresenceCount: onCallPresenceList.length,
+      ringingPresenceCount: ringingPresenceList.length,
+      unmatchedCount: unmatchedPresenceOnCall.length + unmatchedLiveCalls.length,
+      extensionDirectorySize: extToTenant.size,
+      ambiguousExtensionsDropped: [...tenantsByExt.values()].filter((s) => s.size > 1).length,
+      globalActiveCallCount: activeCalls.length,
+    },
+  });
+});
+
 // ── Ops Center — comprehensive single-call data endpoint ───────────────────────
 app.get("/admin/ops-center", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);

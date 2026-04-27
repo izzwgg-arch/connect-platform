@@ -18,7 +18,10 @@ function normalizeTenantName(name: string | null | undefined): string {
 }
 
 export function isValidTenantExtension(ext: string): boolean {
-  return /^\d{3}$/.test(ext);
+  // Match the telephony normalizer: 2-6 digit dialplan extensions. Previously
+  // this was locked to exactly 3 digits which silently dropped 4-digit
+  // extensions (e.g. 1001) from tenant-scoped live-call filtering.
+  return /^\d{2,6}$/.test(ext);
 }
 
 export function isSystemExtensionName(name: string): boolean {
@@ -99,12 +102,30 @@ export function extensionSetsFromCalls(calls: LiveCall[]): { activeExts: Set<str
 }
 
 export function presenceFromLiveCalls(rawState: string, ext: string, activeExts: Set<string>, ringingExts: Set<string>): PresenceState {
+  // Live calls are the authoritative source of On-Call / Ringing. If an
+  // extension appears in a live call, that wins unconditionally.
   if (ringingExts.has(ext)) return "ringing";
   if (activeExts.has(ext)) return "on_call";
-  const state = rawState.toLowerCase();
-  if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") return "available";
-  if (state === "ringing" || state === "2") return "ringing";
-  if (state === "inuse" || state === "busy" || state === "onhold" || state === "1" || state === "3") return "on_call";
+
+  const state = (rawState || "").toLowerCase();
+
+  // Registered / idle → Available. Empty or unknown rawState is treated as
+  // offline so BLF doesn't display "Available" for extensions we have no
+  // state for at all.
+  if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") {
+    return "available";
+  }
+
+  // AMI sometimes reports "inuse"/"ringing"/"busy" without a matching live
+  // call (event ordering, missed AMI event, stale hint). When there is no
+  // corresponding live call we REFUSE to call the extension busy — otherwise
+  // BLF/Team Directory go out of sync with Dashboard Live Calls, which is
+  // the ground truth. Show Available instead.
+  if (state === "inuse" || state === "busy" || state === "onhold" || state === "ringing" ||
+      state === "1" || state === "2" || state === "3") {
+    return "available";
+  }
+
   return "offline";
 }
 

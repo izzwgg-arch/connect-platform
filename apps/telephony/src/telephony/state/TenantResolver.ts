@@ -1,6 +1,10 @@
 // TenantResolver: maps call metadata to a platform tenantId (Connect UUID or vpbx:slug).
 //
 // Priority (highest first):
+//   0. Unambiguous extension → tenant lookup (Connect Extension table). Wins
+//      first so internal/outbound calls without a DID still land on the right
+//      tenant. Candidates: `exten`, `callerIdNum`, extension extracted from
+//      channel name. Skipped when the number is ambiguous across tenants.
 //   1. Inbound DID lookup via PbxTenantInboundDid cache (toNumber, then fromNumber)
 //   2. VitalPBX tenant ID / T-code from dialplan channel (reliable structured data)
 //   3. Explicit admin-configured context prefix map
@@ -18,6 +22,7 @@ import {
   extractPbxTenantHintsFromContext,
   mergePbxTenantHints,
 } from "../pbx/pbxTenantHints";
+import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
 import type { PbxTenantMapCache } from "./PbxTenantMapCache";
 
 export interface TenantResolverConfig {
@@ -64,6 +69,34 @@ export class TenantResolver {
       params.dcontext ? extractPbxTenantHintsFromContext(params.dcontext) : {},
       params.channel ? extractPbxTenantHintsFromChannel(params.channel) : {},
     );
+
+    // 0. Extension → tenant lookup. The primary path for internal / outbound
+    //    calls that never hit an inbound DID. Uses the synced Connect
+    //    Extension table; extensions registered under multiple tenants are
+    //    intentionally skipped by the cache to avoid cross-tenant leakage.
+    if (this.mapCache) {
+      const extCandidates: string[] = [];
+      const push = (v: string | null | undefined) => {
+        if (!v) return;
+        const s = String(v).trim();
+        if (!s || extCandidates.includes(s)) return;
+        if (looksLikeExtension(s)) extCandidates.push(s);
+      };
+      push(params.exten);
+      push(params.callerIdNum);
+      push(normalizeExtensionFromChannel(params.channel));
+      for (const ext of extCandidates) {
+        const hit = this.mapCache.resolveExtensionTenant(ext);
+        if (hit) {
+          return {
+            tenantId: hit.tenantId,
+            pbxVitalTenantId: hints.vitalTenantId ?? hints.dialplanT ?? null,
+            pbxTenantCode: hints.tenantCode ?? (hints.dialplanT ? `T${hints.dialplanT}` : null),
+            tenantName: hit.tenantName,
+          };
+        }
+      }
+    }
 
     // 1. DID lookup — the only reliable way to map an inbound call to a Connect tenant.
     if (this.mapCache) {
