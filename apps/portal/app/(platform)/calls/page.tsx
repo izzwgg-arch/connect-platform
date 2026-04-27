@@ -392,7 +392,7 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   const initials = heroInitials();
 
   return (
-      <aside className="call-detail-panel ch-detail-panel" aria-label="Call details">
+      <aside className="call-detail-panel ch-detail-panel custom-scrollbar" aria-label="Call details">
 
         {/* Sticky header */}
         <div className="cdp-header">
@@ -877,7 +877,7 @@ export default function CallsPage() {
 
         <main className={`ch-workspace ${selectedRow ? "has-detail" : ""}`}>
           {/* ── Call feed ── */}
-          <section className="calls-history-section ch-feed-pane" aria-label="Call history">
+          <section className="calls-history-section ch-feed-pane custom-scrollbar" aria-label="Call history">
             {historyState.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
             {historyState.status === "error" ? (
               <ErrorState message={historyState.error || "Could not load call history."} />
@@ -935,7 +935,7 @@ export default function CallsPage() {
           {selectedRow ? (
             <CallDetailPanel row={selectedRow} onClose={() => setSelectedRow(null)} />
           ) : (
-            <aside className="ch-detail-placeholder">
+            <aside className="ch-detail-placeholder custom-scrollbar">
               <PhoneIncoming size={26} />
               <h2>Select a call</h2>
               <p>Open a conversation to review routing, outcomes, recordings, technical details, and follow-up actions.</p>
