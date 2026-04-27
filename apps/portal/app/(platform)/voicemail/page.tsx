@@ -468,7 +468,7 @@ function DetailPanel({
   const type = callerType(vm);
 
   return (
-    <aside className="vm-detail custom-scrollbar">
+    <aside className="vm-detail">
       <div className="vm-detail-head">
         <div className="vm-detail-contact">
           <div className="vm-avatar big">{initials(vm)}</div>
@@ -499,7 +499,7 @@ function DetailPanel({
             Copy
           </button>
         </div>
-        <div className="vm-transcript custom-scrollbar">
+        <div className="vm-transcript">
           {vm.transcription?.trim() ? vm.transcription : <span>No transcript available for this voicemail.</span>}
         </div>
       </section>
@@ -764,7 +764,7 @@ export default function VoicemailPage() {
       </section>
 
       <main className={`vm-workspace ${selected ? "has-detail" : ""}`}>
-        <section className="vm-feed custom-scrollbar" aria-label="Voicemail feed">
+        <section className="vm-feed" aria-label="Voicemail feed">
           {state.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
           {state.status === "error" ? <ErrorState message={state.error} /> : null}
           {state.status === "success" && filteredVoicemails.length === 0 ? (
@@ -834,7 +834,7 @@ export default function VoicemailPage() {
             onMarkUrgent={markUrgent}
           />
         ) : (
-          <aside className="vm-detail-placeholder custom-scrollbar">
+          <aside className="vm-detail-placeholder">
             <Archive size={26} />
             <h2>Select a voicemail</h2>
             <p>Open a message to play it, read transcripts, see call details, and capture follow-up notes.</p>
@@ -844,9 +844,8 @@ export default function VoicemailPage() {
 
       <style jsx global>{`
         .vm-shell {
-          height: 100%;
-          min-height: 0;
-          overflow: hidden;
+          min-height: 100%;
+          overflow: visible;
           display: flex;
           flex-direction: column;
           background:
@@ -1050,13 +1049,12 @@ export default function VoicemailPage() {
           grid-template-columns: minmax(0, 1fr) 390px;
           gap: 16px;
           padding: 16px 22px 20px;
-          overflow: hidden;
+          overflow: visible;
         }
 
         .vm-feed {
           min-width: 0;
           min-height: 0;
-          overflow-y: auto;
           padding-right: 2px;
         }
 
@@ -1464,7 +1462,6 @@ export default function VoicemailPage() {
         .vm-detail-placeholder {
           min-width: 0;
           min-height: 0;
-          overflow-y: auto;
           border: 1px solid var(--border);
           border-radius: 24px;
           background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -1557,8 +1554,6 @@ export default function VoicemailPage() {
         }
 
         .vm-transcript {
-          max-height: 180px;
-          overflow-y: auto;
           color: var(--text);
           font-size: 13px;
           line-height: 1.65;
@@ -1673,9 +1668,8 @@ export default function VoicemailPage() {
 
         @media (max-width: 900px) {
           .vm-shell {
-            height: 100%;
-            min-height: 0;
-            overflow: hidden;
+            min-height: 100%;
+            overflow: visible;
           }
 
           .vm-kpis {
@@ -1691,12 +1685,8 @@ export default function VoicemailPage() {
           }
 
           .vm-workspace {
-            overflow: hidden;
+            overflow: visible;
             padding: 14px;
-          }
-
-          .vm-feed {
-            overflow-y: auto;
           }
 
           .vm-row-main {

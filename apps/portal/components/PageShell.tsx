@@ -53,7 +53,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
         />
         <div className="console-workspace">
           {banners ? <div className="workspace-banners">{banners}</div> : null}
-          <main className="console-content">{children}</main>
+          <main className="console-content custom-scrollbar">{children}</main>
         </div>
       </div>
 
