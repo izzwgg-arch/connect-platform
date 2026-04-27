@@ -1724,3 +1724,152 @@ setInterval(() => {
 }, 60 * 1000);
 
 runMohScheduleCycle().catch((err) => console.error("initial moh reconcile cycle failed", err?.message || err));
+
+let _billingAutomationRunning = false;
+
+function billingMonthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
+  return {
+    periodStart: new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1, 0, 0, 0, 0)),
+    periodEnd: new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0, 23, 59, 59, 999)),
+  };
+}
+
+async function nextBillingInvoiceNumber(tenantId: string): Promise<string> {
+  const now = new Date();
+  const prefix = `CC-${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const count = await (db as any).billingInvoice.count({ where: { tenantId, invoiceNumber: { startsWith: prefix } } });
+  return `${prefix}-${String(count + 1).padStart(5, "0")}`;
+}
+
+async function getWorkerSolaAdapterForTenant(tenantId: string): Promise<SolaCardknoxAdapter> {
+  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+  if (row?.isEnabled) {
+    const secrets = decryptJson<{ apiKey: string; apiSecret?: string | null; webhookSecret?: string | null }>(row.credentialsEncrypted);
+    const paths = (row.pathOverrides && typeof row.pathOverrides === "object" ? row.pathOverrides : {}) as any;
+    return new SolaCardknoxAdapter({
+      baseUrl: row.apiBaseUrl,
+      apiKey: secrets.apiKey,
+      apiSecret: secrets.apiSecret || undefined,
+      webhookSecret: secrets.webhookSecret || undefined,
+      mode: row.mode === "PROD" ? "prod" : "sandbox",
+      simulate: !!row.simulate,
+      authMode: row.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
+      authHeaderName: row.authHeaderName || undefined,
+      transactionPath: paths.transactionPath || "/gatewayjson",
+    });
+  }
+  return getSolaAdapter();
+}
+
+async function runMonthlyBillingAutomation(): Promise<void> {
+  if (_billingAutomationRunning) return;
+  _billingAutomationRunning = true;
+  try {
+    const today = new Date().getUTCDate();
+    const { periodStart, periodEnd } = billingMonthBounds();
+    const settings = await (db as any).tenantBillingSettings.findMany({
+      where: { autoBillingEnabled: true, billingDayOfMonth: today },
+      include: { tenant: true, defaultPaymentMethod: true, taxProfile: true },
+    });
+    if (settings.length === 0) return;
+
+    const run = await (db as any).billingRun.create({ data: { periodStart, periodEnd, status: "RUNNING", dryRun: false } });
+    const results: any[] = [];
+    for (const setting of settings) {
+      try {
+        const existing = await (db as any).billingInvoice.findFirst({ where: { tenantId: setting.tenantId, periodStart, periodEnd, status: { not: "VOID" } } });
+        const invoice = existing || await createWorkerBillingInvoice(setting, periodStart, periodEnd);
+        let transaction = null;
+        if (setting.defaultPaymentMethod) {
+          transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);
+        } else {
+          await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, invoiceId: invoice.id, runId: run.id, type: "payment_method.missing", message: "Auto billing skipped because no default payment method is set." } });
+        }
+        results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: transaction?.id || null });
+      } catch (err: any) {
+        results.push({ tenantId: setting.tenantId, error: err?.message || "billing_failed" });
+        await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, runId: run.id, type: "billing_run.tenant_failed", message: err?.message || "billing_failed" } }).catch(() => null);
+      }
+    }
+    await (db as any).billingRun.update({ where: { id: run.id }, data: { status: "COMPLETED", finishedAt: new Date(), totals: { results } } });
+  } catch (err: any) {
+    console.error("monthly billing automation failed", err?.message || err);
+  } finally {
+    _billingAutomationRunning = false;
+  }
+}
+
+async function createWorkerBillingInvoice(setting: any, periodStart: Date, periodEnd: Date): Promise<any> {
+  const [extensions, phoneNumbers] = await Promise.all([
+    (db as any).extension.findMany({ where: { tenantId: setting.tenantId, status: "ACTIVE", billable: true } }),
+    (db as any).phoneNumber.findMany({ where: { tenantId: setting.tenantId, status: "ACTIVE" } }),
+  ]);
+  const billableExtensions = extensions.filter((ext: any) => /^\d{3}$/.test(String(ext.extNumber || "")) && !/\b(pbx user|invite lifecycle|system|provision|smoke|test)\b/i.test(String(ext.displayName || "")));
+  const extensionAmount = billableExtensions.length * Number(setting.extensionPriceCents || 3000);
+  const additionalNumbers = Math.max(0, phoneNumbers.length - (setting.firstPhoneNumberFree === false ? 0 : 1));
+  const numberAmount = additionalNumbers * Number(setting.additionalPhoneNumberPriceCents || 1000);
+  const smsAmount = setting.smsBillingEnabled ? Number(setting.smsPriceCents || 1000) : 0;
+  const subtotal = extensionAmount + numberAmount + smsAmount;
+  const salesTax = setting.taxEnabled && setting.taxProfile ? Math.round(subtotal * Number(setting.taxProfile.salesTaxRate || 0)) : 0;
+  const e911 = setting.taxEnabled && setting.taxProfile ? billableExtensions.length * Number(setting.taxProfile.e911FeePerExtension || 0) : 0;
+  const regulatory = setting.taxEnabled && setting.taxProfile?.regulatoryFeeEnabled !== false ? Math.round(subtotal * Number(setting.taxProfile?.regulatoryFeePercent || 0)) : 0;
+  const tax = salesTax + e911 + regulatory;
+  const dueDate = new Date();
+  dueDate.setUTCDate(dueDate.getUTCDate() + Number(setting.paymentTermsDays || 15));
+  const lineItems = [
+    extensionAmount > 0 ? { tenantId: setting.tenantId, type: "EXTENSION", description: "Billable extensions", quantity: billableExtensions.length, unitPriceCents: Number(setting.extensionPriceCents || 3000), amountCents: extensionAmount, taxable: true } : null,
+    numberAmount > 0 ? { tenantId: setting.tenantId, type: "PHONE_NUMBER", description: "Additional phone numbers", quantity: additionalNumbers, unitPriceCents: Number(setting.additionalPhoneNumberPriceCents || 1000), amountCents: numberAmount, taxable: true } : null,
+    smsAmount > 0 ? { tenantId: setting.tenantId, type: "SMS_PACKAGE", description: "SMS package", quantity: 1, unitPriceCents: smsAmount, amountCents: smsAmount, taxable: true } : null,
+    salesTax > 0 ? { tenantId: setting.tenantId, type: "SALES_TAX", description: "Sales tax", quantity: 1, unitPriceCents: salesTax, amountCents: salesTax, taxable: false } : null,
+    e911 > 0 ? { tenantId: setting.tenantId, type: "E911_FEE", description: "E911 fee", quantity: billableExtensions.length, unitPriceCents: Number(setting.taxProfile.e911FeePerExtension || 0), amountCents: e911, taxable: false } : null,
+    regulatory > 0 ? { tenantId: setting.tenantId, type: "REGULATORY_FEE", description: "Regulatory recovery fee", quantity: 1, unitPriceCents: regulatory, amountCents: regulatory, taxable: false } : null,
+  ].filter(Boolean);
+  return (db as any).billingInvoice.create({
+    data: {
+      tenantId: setting.tenantId,
+      invoiceNumber: await nextBillingInvoiceNumber(setting.tenantId),
+      status: "OPEN",
+      periodStart,
+      periodEnd,
+      dueDate,
+      subtotalCents: subtotal,
+      taxCents: tax,
+      totalCents: subtotal + tax,
+      balanceDueCents: subtotal + tax,
+      lineItems: { create: lineItems },
+    },
+    include: { lineItems: true },
+  });
+}
+
+async function chargeWorkerInvoice(invoice: any, method: any, runId: string): Promise<any> {
+  const token = decryptJson<string>(method.tokenEncrypted);
+  const adapter = await getWorkerSolaAdapterForTenant(invoice.tenantId);
+  const response = await adapter.chargeToken({ token, amountCents: invoice.balanceDueCents || invoice.totalCents, invoice: invoice.invoiceNumber, idempotencyKey: `worker:${invoice.id}:${Date.now()}` });
+  const transaction = await (db as any).paymentTransaction.create({
+    data: {
+      tenantId: invoice.tenantId,
+      invoiceId: invoice.id,
+      paymentMethodId: method.id,
+      amountCents: invoice.balanceDueCents || invoice.totalCents,
+      status: response.approved ? "APPROVED" : response.status === "DECLINED" ? "DECLINED" : "ERROR",
+      processorTransactionId: response.xRefNum,
+      responseCode: response.xResult,
+      responseMessage: response.xError || response.xStatus,
+      rawResponseSafeJson: response.safePayload,
+      idempotencyKey: `worker:${invoice.id}:${response.xRefNum || Date.now()}`,
+    },
+  });
+  await (db as any).billingInvoice.update({ where: { id: invoice.id }, data: response.approved ? { status: "PAID", amountPaidCents: invoice.totalCents, balanceDueCents: 0, paidAt: new Date(), paymentMethodId: method.id } : { status: "FAILED", failedAt: new Date(), paymentMethodId: method.id } });
+  await (db as any).billingEventLog.create({ data: { tenantId: invoice.tenantId, invoiceId: invoice.id, runId, type: response.approved ? "payment.approved" : "payment.failed", metadata: { transactionId: transaction.id } } });
+  if (!response.approved) {
+    await (db as any).alert.create({ data: { tenantId: invoice.tenantId, severity: "HIGH", category: "BILLING", message: `Payment failed for invoice ${invoice.invoiceNumber}`, metadata: { invoiceId: invoice.id, transactionId: transaction.id } } }).catch(() => null);
+  }
+  return transaction;
+}
+
+setInterval(() => {
+  runMonthlyBillingAutomation().catch((err) => console.error("monthly billing cycle failed", err?.message || err));
+}, 60 * 60 * 1000);
+
+runMonthlyBillingAutomation().catch((err) => console.error("initial monthly billing cycle failed", err?.message || err));
