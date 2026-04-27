@@ -91,6 +91,10 @@ services:
     build:
       context: .
       dockerfile: apps/portal/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+        NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
     environment:
       # Empty = browser uses same-origin `/api` (works for every hostname nginx serves; avoids
       # hard-coding one domain when users open an alternate spelling/alias host).

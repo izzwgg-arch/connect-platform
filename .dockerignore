@@ -1,0 +1,62 @@
+# Git and local editor metadata
+.git
+.gitignore
+.cursor
+.vscode
+
+# Dependency folders
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build outputs and framework caches
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+out
+**/out
+coverage
+**/coverage
+.turbo
+**/.turbo
+tsconfig.tsbuildinfo
+**/*.tsbuildinfo
+
+# Logs and process output
+logs
+**/logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime uploads, storage, and caches
+uploads
+**/uploads
+storage
+**/storage
+cache
+**/cache
+tmp
+**/tmp
+temp
+**/temp
+
+# Local environment and large generated artifacts
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.bak
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
