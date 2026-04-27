@@ -11,7 +11,11 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
-import { getWebIncomingRingtone } from "./telephonyAudioPreferences";
+import {
+  getWebIncomingRingtone,
+  getWebRingerEnabled,
+  WEB_RINGER_ENABLED_EVENT,
+} from "./telephonyAudioPreferences";
 
 // ─── DTMF frequency table ────────────────────────────────────────────────────
 const DTMF_FREQS: Record<string, [number, number]> = {
@@ -198,6 +202,10 @@ export function useTelephonyAudio() {
 
   /** Incoming ringtone: double-ring pattern. */
   const startRingtone = useCallback(() => {
+    if (!getWebRingerEnabled()) {
+      stopAll();
+      return;
+    }
     stopAll();
     const ringtonePreference = getWebIncomingRingtone();
     if (ringtonePreference === "connect-default" && typeof Audio !== "undefined") {
@@ -213,6 +221,15 @@ export function useTelephonyAudio() {
     const ctx = ensureCtx();
     if (!ctx) return;
     ringtoneRef.current = startIncomingRingtone(ctx);
+  }, [stopAll]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onPreferenceChange = () => {
+      if (!getWebRingerEnabled()) stopAll();
+    };
+    window.addEventListener(WEB_RINGER_ENABLED_EVENT, onPreferenceChange);
+    return () => window.removeEventListener(WEB_RINGER_ENABLED_EVENT, onPreferenceChange);
   }, [stopAll]);
 
   /**

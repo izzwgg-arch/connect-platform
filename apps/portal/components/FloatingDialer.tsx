@@ -1,217 +1,303 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useSipPhone } from "../hooks/useSipPhone";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Info, MessageSquare, Phone, Search, X } from "lucide-react";
+import { useTelephony } from "../contexts/TelephonyContext";
+import { useAppContext } from "../hooks/useAppContext";
+import { useAsyncResource } from "../hooks/useAsyncResource";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { useSipPhone, type SipRegState } from "../hooks/useSipPhone";
+import {
+  getWebRingerEnabled,
+  setWebRingerEnabled,
+} from "../hooks/telephonyAudioPreferences";
+import { loadPbxResource } from "../services/pbxData";
 
-// ─── Design tokens (match phone page) ────────────────────────────────────────
+type PresenceState = "available" | "ringing" | "on_call" | "offline";
 
-const T = {
-  bg:        "linear-gradient(160deg, #0d1117 0%, #161b2e 60%, #0d1117 100%)",
-  surface:   "rgba(255,255,255,0.05)",
-  border:    "rgba(255,255,255,0.08)",
-  text:      "#f1f5f9",
-  textSec:   "#94a3b8",
-  accent:    "#7c3aed",
-  accentSoft:"rgba(124,58,237,0.22)",
-  accentGlow:"rgba(124,58,237,0.30)",
-  green:     "#10b981",
-  greenSoft: "rgba(16,185,129,0.15)",
-  amber:     "#f59e0b",
-  amberSoft: "rgba(245,158,11,0.15)",
-  red:       "#ef4444",
-  redSoft:   "rgba(239,68,68,0.14)",
-  redGlow:   "rgba(239,68,68,0.45)",
+type BlfEntry = {
+  id: string;
+  name: string;
+  extension: string;
+  presence: PresenceState;
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const DIALPAD: [string, string][] = [
+  ["1", ""], ["2", "ABC"], ["3", "DEF"],
+  ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
+  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"],
+  ["*", ""], ["0", "+"], ["#", ""],
+];
+
+const PRESENCE_META: Record<PresenceState, { label: string; tone: string }> = {
+  available: { label: "Available", tone: "green" },
+  ringing: { label: "Ringing", tone: "yellow" },
+  on_call: { label: "On Call", tone: "red" },
+  offline: { label: "Offline", tone: "gray" },
+};
 
 function fmt(sec: number) {
-  return `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
+  return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
 }
 
-function initials(s: string | null) {
-  if (!s) return "?";
-  const w = s.trim().split(/[\s@._-]+/);
-  if (w.length >= 2) return (w[0][0]+w[1][0]).toUpperCase();
-  return (s.replace(/[^a-zA-Z0-9]/g,"")[0] ?? "?").toUpperCase();
+function initials(value: string | null) {
+  if (!value) return "?";
+  const words = value.trim().split(/[\s@._-]+/).filter(Boolean);
+  if (words.length > 1) return `${words[0]?.[0] ?? ""}${words[1]?.[0] ?? ""}`.toUpperCase();
+  return (value.replace(/[^a-zA-Z0-9]/g, "")[0] ?? "?").toUpperCase();
 }
 
-// ─── Compact circular control button ─────────────────────────────────────────
+function readString(row: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number") return String(value);
+  }
+  return undefined;
+}
 
-function Btn({
-  icon, label, onClick, active = false, danger = false, disabled = false,
+function normalizeTenantName(name: string | null | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null | undefined, tenantName: string | null | undefined): boolean {
+  if (!tenantId) return false;
+  const selectedTenantName = normalizeTenantName(tenantName);
+  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
+  if (selectedTenantName && rowTenantName) return rowTenantName === selectedTenantName;
+  const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
+  if (directTenant) return directTenant === tenantId;
+  const nestedTenant = row.tenant;
+  if (nestedTenant && typeof nestedTenant === "object") {
+    const nestedId = readString(nestedTenant as Record<string, unknown>, ["id", "tenantId", "tenant_id"]);
+    if (nestedId) return nestedId === tenantId;
+  }
+  return true;
+}
+
+function isValidTenantExtension(ext: string): boolean {
+  return /^\d{3}$/.test(ext);
+}
+
+function isSystemExtensionName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return (
+    normalized === "pbx user" ||
+    /^pbx user\s+\d+$/.test(normalized) ||
+    normalized.includes("invite lifecycle") ||
+    normalized.includes("provisioning") ||
+    normalized.includes("smoke") ||
+    normalized.includes("system") ||
+    normalized === "voice user" ||
+    /^voice user\s+\d+$/.test(normalized)
+  );
+}
+
+function mapPresence(rawState: string, ext: string, activeExts: Set<string>, ringingExts: Set<string>): PresenceState {
+  if (ringingExts.has(ext)) return "ringing";
+  if (activeExts.has(ext)) return "on_call";
+  const state = rawState.toLowerCase();
+  if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") return "available";
+  if (state === "inuse" || state === "busy" || state === "onhold" || state === "1" || state === "3") return "on_call";
+  if (state === "ringing" || state === "2") return "ringing";
+  return "offline";
+}
+
+function statusFromRegistration(regState: SipRegState, hasError: boolean): { label: string; tone: string } {
+  if (regState === "registered") return { label: "Ready", tone: "green" };
+  if (regState === "connecting" || regState === "registering" || regState === "unregistering") {
+    return { label: "Connecting", tone: "yellow" };
+  }
+  if (regState === "failed" || hasError) return { label: "Not registered", tone: "red" };
+  return { label: "Offline", tone: "gray" };
+}
+
+function friendlyError(error: string | null, micPermission: string, regState: SipRegState): string | null {
+  const raw = (error ?? "").toLowerCase();
+  if (raw.includes("extension_not_assigned") || raw.includes("extension not assigned")) return "No extension assigned";
+  if (raw.includes("microphone") || micPermission === "denied") return "Microphone permission needed";
+  if (raw.includes("register") || regState === "failed") return "Phone not registered";
+  if (raw.includes("connection") || raw.includes("transport") || raw.includes("websocket")) return "Connection issue";
+  if (error) return "Connection issue";
+  return null;
+}
+
+function MiniAvatar({ party }: { party: string | null }) {
+  return <div className="fd-avatar">{initials(party)}</div>;
+}
+
+function ControlButton({
+  label,
+  onClick,
+  active,
+  disabled,
 }: {
-  icon: React.ReactNode; label: string;
-  onClick?: () => void; active?: boolean; danger?: boolean; disabled?: boolean;
+  label: string;
+  onClick?: () => void;
+  active?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      title={label}
-      style={{
-        display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", gap: 4, padding: "10px 4px",
-        borderRadius: 14, border: "none", cursor: disabled ? "default" : "pointer",
-        background: danger ? (active ? T.redSoft : "rgba(239,68,68,0.07)")
-                  : active ? T.accentSoft : T.surface,
-        color: danger ? T.red : active ? "#a78bfa" : disabled ? "rgba(148,163,184,0.3)" : T.textSec,
-        boxShadow: active
-          ? (danger ? `0 0 0 1px ${T.red}55, 0 2px 12px ${T.redGlow}55`
-                    : `0 0 0 1px ${T.accent}66, 0 2px 10px ${T.accentGlow}`)
-          : `0 0 0 1px ${T.border}`,
-        opacity: disabled ? 0.38 : 1,
-        transition: "all 0.15s",
-        flex: 1, minWidth: 0,
-      }}
-    >
-      <span style={{ fontSize: 18, lineHeight: 1, display: "flex" }}>{icon}</span>
-      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.2px", lineHeight: 1 }}>{label}</span>
+    <button className="fd-control" data-active={active ? "true" : "false"} disabled={disabled} onClick={disabled ? undefined : onClick}>
+      {label}
     </button>
   );
 }
 
-// ─── Mini avatar ──────────────────────────────────────────────────────────────
-
-function MiniAvatar({ party }: { party: string | null }) {
+function Toggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
   return (
-    <div style={{
-      width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-      background: "linear-gradient(135deg, #7c3aed, #a855f7, #6366f1)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: 14, fontWeight: 700, color: "#fff",
-      boxShadow: "0 0 0 2px rgba(124,58,237,0.25), 0 3px 12px rgba(124,58,237,0.3)",
-    }}>
-      {initials(party)}
-    </div>
+    <button
+      type="button"
+      className="fd-toggle"
+      data-on={checked ? "true" : "false"}
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+    >
+      <span />
+    </button>
   );
 }
 
-// ─── DTMF grid (compact, shown inside active call) ────────────────────────────
-
-const DIALPAD: [string,string][] = [
-  ["1",""],["2","ABC"],["3","DEF"],
-  ["4","GHI"],["5","JKL"],["6","MNO"],
-  ["7","PQRS"],["8","TUV"],["9","WXYZ"],
-  ["*",""],["0","+"],["#",""],
-];
-
-function DtmfPad({ onKey }: { onKey: (d:string)=>void }) {
+function DiagnosticsPanel({
+  phone,
+}: {
+  phone: ReturnType<typeof useSipPhone>;
+}) {
+  const rows = [
+    ["TURN", phone.diag.hasTurn ? "Configured" : "Not configured"],
+    ["Microphone", phone.diag.micPermission],
+    ["Extension", phone.diag.extensionNumber ?? "Not assigned"],
+    ["Registration", phone.regState],
+    ["ICE", phone.diag.iceConnectionState ?? "Not connected"],
+    ["Audio", phone.diag.remoteAudioReceiving ? "Receiving" : "Idle"],
+  ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
-      {DIALPAD.map(([d,s]) => (
-        <button key={d} onClick={() => onKey(d)}
-          style={{
-            padding: "8px 0", borderRadius: 10,
-            border: `1px solid ${T.border}`,
-            background: "rgba(255,255,255,0.05)", color: T.text,
-            cursor: "pointer", display: "flex", flexDirection: "column",
-            alignItems: "center", gap: 1,
-          }}>
-          <span style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.1 }}>{d}</span>
-          {s && <span style={{ fontSize: 8, opacity: 0.4, letterSpacing: 1 }}>{s}</span>}
-        </button>
+    <div className="fd-diagnostics">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
       ))}
     </div>
   );
 }
 
-// ─── SVG Icons ────────────────────────────────────────────────────────────────
+function BlfPanel({
+  open,
+  entries,
+  search,
+  onSearch,
+  onDial,
+  onMessage,
+}: {
+  open: boolean;
+  entries: BlfEntry[];
+  search: string;
+  onSearch: (value: string) => void;
+  onDial: (extension: string) => void;
+  onMessage: (extension: string) => void;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const rowHeight = 58;
+  const viewportHeight = 430;
+  const overscan = 6;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const count = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const slice = entries.slice(start, start + count);
 
-function IcMic({ muted }: { muted: boolean }) {
-  return muted ? (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="1" y1="1" x2="23" y2="23"/>
-      <path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V4a3 3 0 00-5.94-.6"/>
-      <path d="M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23"/>
-      <line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
-    </svg>
-  ) : (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
-      <path d="M19 10v2a7 7 0 01-14 0v-2"/>
-      <line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
-    </svg>
-  );
-}
+  useEffect(() => {
+    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [search]);
 
-function IcKeypad() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9.5" y="2" width="5" height="5" rx="1"/>
-      <rect x="17" y="2" width="5" height="5" rx="1"/><rect x="2" y="9.5" width="5" height="5" rx="1"/>
-      <rect x="9.5" y="9.5" width="5" height="5" rx="1"/><rect x="17" y="9.5" width="5" height="5" rx="1"/>
-      <rect x="2" y="17" width="5" height="5" rx="1"/><rect x="9.5" y="17" width="5" height="5" rx="1"/>
-      <rect x="17" y="17" width="5" height="5" rx="1"/>
-    </svg>
+    <aside className="fd-blf" data-open={open ? "true" : "false"} aria-hidden={!open}>
+      <div className="fd-blf-head">
+        <div>
+          <strong>BLF</strong>
+          <span>{entries.length} extensions</span>
+        </div>
+      </div>
+      <label className="fd-search">
+        <Search size={15} />
+        <input value={search} onChange={(e) => onSearch(e.target.value)} placeholder="Search name or extension" />
+      </label>
+      <div className="fd-blf-list" ref={scrollerRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+        {entries.length === 0 ? (
+          <div className="fd-empty">No tenant extensions found.</div>
+        ) : (
+          <div style={{ height: entries.length * rowHeight, position: "relative" }}>
+            <div style={{ transform: `translateY(${start * rowHeight}px)` }}>
+              {slice.map((entry) => {
+                const meta = PRESENCE_META[entry.presence];
+                return (
+                  <div className="fd-blf-row" key={entry.id} style={{ height: rowHeight }}>
+                    <button type="button" onClick={() => onDial(entry.extension)}>
+                      <span className="fd-blf-ext">{entry.extension}</span>
+                      <span>
+                        <strong>{entry.name}</strong>
+                        <em data-tone={meta.tone}><i />{meta.label}</em>
+                      </span>
+                    </button>
+                    <button type="button" className="fd-blf-msg" title="Message" onClick={() => onMessage(entry.extension)}>
+                      <MessageSquare size={15} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
-
-function IcSpeaker({ on }: { on: boolean }) {
-  return on ? (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-      <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
-    </svg>
-  ) : (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-      <path d="M15.54 8.46a5 5 0 010 7.07"/>
-    </svg>
-  );
-}
-
-function IcHold({ held }: { held: boolean }) {
-  return held ? (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="5 3 19 12 5 21 5 3"/>
-    </svg>
-  ) : (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
-    </svg>
-  );
-}
-
-function IcTransfer() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="17 1 21 5 17 9"/>
-      <path d="M3 11V9a4 4 0 014-4h14"/>
-      <polyline points="7 23 3 19 7 15"/>
-      <path d="M21 13v2a4 4 0 01-4 4H3"/>
-    </svg>
-  );
-}
-
-function IcEndCall() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7a2 2 0 011.72 2v3a2 2 0 01-2.18 2A19.8 19.8 0 012 5.18 2 2 0 014 3h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 10.9a16 16 0 002.59 2.41z"/>
-      <line x1="23" y1="1" x2="1" y2="23"/>
-    </svg>
-  );
-}
-
-function IcAnswer() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07A19.5 19.5 0 013.07 10.8 19.8 19.8 0 01.02 2.18 2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.9.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.573 2.81.7A2 2 0 0122 14h0v2.92z"/>
-    </svg>
-  );
-}
-
-// ─── Main component ───────────────────────────────────────────────────────────
 
 export function FloatingDialer() {
-  const [open, setOpen]           = useState(false);
-  const [elapsed, setElapsed]     = useState(0);
-  const [showDtmf, setShowDtmf]   = useState(false);
-  const [showXfer, setShowXfer]   = useState(false);
-  const [xferTarget, setXferTarget] = useState("");
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const phone = useSipPhone();
+  const telephony = useTelephony();
+  const { tenantId, tenant } = useAppContext();
+  const router = useRouter();
 
-  // ── Timer ──────────────────────────────────────────────────────────────────
+  const [open, setOpen] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [showDtmf, setShowDtmf] = useState(false);
+  const [showXfer, setShowXfer] = useState(false);
+  const [xferTarget, setXferTarget] = useState("");
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [blfOpen, setBlfOpen] = useState(false);
+  const [rawBlfSearch, setRawBlfSearch] = useState("");
+  const [ringerOn, setRingerOn] = useState(true);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const blfSearch = useDebouncedValue(rawBlfSearch, 120);
+
+  const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
+    () => loadPbxResource("extensions"),
+    [tenantId, tenant?.name],
+  );
+
+  const isInCall = phone.callState !== "idle" && phone.callState !== "ended";
+  const isActive = phone.callState === "connected";
+  const isIncoming = phone.callState === "ringing" && phone.callDirection === "inbound";
+  const isOutgoing = phone.callState === "dialing" || (phone.callState === "ringing" && phone.callDirection === "outbound");
+  const canDial = phone.regState === "registered" && phone.dialpadInput.trim().length > 0;
+  const status = statusFromRegistration(phone.regState, Boolean(phone.error));
+  const cleanError = friendlyError(phone.error, phone.diag.micPermission, phone.regState);
+
+  useEffect(() => {
+    setRingerOn(getWebRingerEnabled());
+  }, []);
+
   useEffect(() => {
     if (phone.callState === "connected") {
       setElapsed(0);
@@ -220,16 +306,17 @@ export function FloatingDialer() {
       if (timerRef.current) clearInterval(timerRef.current);
       if (phone.callState === "idle" || phone.callState === "ended") setElapsed(0);
     }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, [phone.callState]);
 
-  // ── Auto-open ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (phone.callState === "ringing" && phone.callDirection === "inbound") setOpen(true);
-    if (phone.callState === "dialing") setOpen(true);
+    if ((phone.callState === "ringing" && phone.callDirection === "inbound") || phone.callState === "dialing") {
+      setOpen(true);
+    }
   }, [phone.callState, phone.callDirection]);
 
-  // ── Reset DTMF/xfer when call ends ────────────────────────────────────────
   useEffect(() => {
     if (phone.callState === "idle" || phone.callState === "ended") {
       setShowDtmf(false);
@@ -238,406 +325,371 @@ export function FloatingDialer() {
     }
   }, [phone.callState]);
 
-  // ── Key handler ───────────────────────────────────────────────────────────
-  function handleKey(digit: string) {
+  useEffect(() => {
+    if (!open || isInCall) return;
+    const id = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(id);
+  }, [open, isInCall]);
+
+  const { activeExts, ringingExts } = useMemo(() => {
+    const active = new Set<string>();
+    const ringing = new Set<string>();
+    const tenantCalls = tenantId ? telephony.activeCalls.filter((c) => c.tenantId === tenantId) : [];
+    tenantCalls.forEach((call) => {
+      const extensions = (call.extensions ?? []).filter(isValidTenantExtension);
+      if (call.state === "up" || call.state === "held") extensions.forEach((ext) => active.add(ext));
+      if (call.state === "ringing" || call.state === "dialing") extensions.forEach((ext) => ringing.add(ext));
+    });
+    return { activeExts: active, ringingExts: ringing };
+  }, [telephony.activeCalls, tenantId]);
+
+  const blfEntries = useMemo(() => {
+    const rows = extState.status === "success" ? extState.data.rows : [];
+    const mapped = rows.flatMap((row): BlfEntry[] => {
+      if (!rowTenantMatches(row, tenantId, tenant?.name)) return [];
+      const extension = readString(row, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
+      if (!extension || !isValidTenantExtension(extension)) return [];
+      const name = readString(row, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${extension}`;
+      if (isSystemExtensionName(name)) return [];
+      const live = telephony.extensionList.find((entry) => entry.extension === extension);
+      return [{
+        id: readString(row, ["id", "uuid"]) ?? extension,
+        name,
+        extension,
+        presence: mapPresence(live?.status ?? readString(row, ["state", "status"]) ?? "offline", extension, activeExts, ringingExts),
+      }];
+    });
+    const fallback = mapped.length > 0 ? mapped : telephony.extensionList.flatMap((entry): BlfEntry[] => {
+      if (entry.tenantId && entry.tenantId !== tenantId) return [];
+      if (!isValidTenantExtension(entry.extension) || isSystemExtensionName(entry.hint || entry.extension)) return [];
+      return [{
+        id: entry.extension,
+        name: entry.hint || `Extension ${entry.extension}`,
+        extension: entry.extension,
+        presence: mapPresence(entry.status ?? "offline", entry.extension, activeExts, ringingExts),
+      }];
+    });
+    return fallback.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
+  }, [activeExts, extState, ringingExts, telephony.extensionList, tenant?.name, tenantId]);
+
+  const visibleBlf = useMemo(() => {
+    const query = blfSearch.trim().toLowerCase();
+    if (!query) return blfEntries;
+    return blfEntries.filter((entry) => entry.extension.includes(query) || entry.name.toLowerCase().includes(query));
+  }, [blfEntries, blfSearch]);
+
+  const handleDigit = useCallback((digit: string) => {
     if (phone.callState === "connected") {
       phone.sendDtmf(digit);
-    } else {
-      phone.playDtmfTone(digit);
-      phone.setDialpadInput(phone.dialpadInput + digit);
+      return;
     }
-  }
+    phone.playDtmfTone(digit);
+    phone.setDialpadInput((prev) => `${prev}${digit}`);
+    inputRef.current?.focus();
+  }, [phone]);
 
-  const isInCall   = phone.callState !== "idle" && phone.callState !== "ended";
-  const isActive   = phone.callState === "connected";
-  const isIncoming = phone.callState === "ringing" && phone.callDirection === "inbound";
-  const isOutgoing = phone.callState === "dialing" ||
-    (phone.callState === "ringing" && phone.callDirection === "outbound");
-  const canDial    = phone.regState === "registered" && phone.dialpadInput.trim().length > 0;
+  const dialTarget = useCallback((target: string) => {
+    const trimmed = target.trim();
+    if (!trimmed) return;
+    phone.setDialpadInput(trimmed);
+    setOpen(true);
+    if (phone.regState === "registered") phone.dial(trimmed);
+  }, [phone]);
 
-  const regDotColor = phone.regState === "registered" ? T.green
-    : phone.regState === "failed" ? T.red
-    : T.amber;
+  const updateRinger = useCallback((next: boolean) => {
+    setRingerOn(next);
+    setWebRingerEnabled(next);
+  }, []);
 
   return (
     <>
-      <style>{`
-        @keyframes fp-pulse {
-          0%,100%{transform:scale(1);opacity:.7}
-          50%{transform:scale(1.15);opacity:1}
-        }
-        @keyframes fp-fadein {
-          from{opacity:0;transform:translateY(-6px)}
-          to{opacity:1;transform:translateY(0)}
-        }
-      `}</style>
+      <style>{DIALER_CSS}</style>
 
-      {/* ── Topbar phone button ──────────────────────────────────────────── */}
       <button
         className="icon-btn"
-        onClick={() => setOpen((v) => !v)}
-        title={`Softphone (${phone.regState})`}
-        aria-label="Toggle softphone"
+        onClick={() => setOpen((value) => !value)}
+        title={`Phone (${status.label})`}
+        aria-label="Toggle phone dialer"
         style={{ position: "relative" }}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07A19.5 19.5 0 013.07 10.8 19.8 19.8 0 01.02 2.18 2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.9.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.573 2.81.7A2 2 0 0122 14h0v2.92z"/>
-        </svg>
-        {/* Registration dot */}
-        <span style={{
-          position: "absolute", top: 3, right: 3,
-          width: 7, height: 7, borderRadius: "50%",
-          background: regDotColor,
-          border: "2px solid var(--panel)",
-          boxShadow: phone.regState === "registered" ? `0 0 4px ${T.green}` : undefined,
-        }} />
-        {/* Incoming ring pulse */}
-        {isIncoming && (
-          <span style={{
-            position: "absolute", inset: 0, borderRadius: 8,
-            background: "rgba(239,68,68,0.18)",
-            animation: "fp-pulse 1s ease-in-out infinite",
-          }} />
-        )}
+        <Phone size={18} />
+        <span className="fd-topbar-dot" data-tone={status.tone} />
+        {isIncoming && <span className="fd-topbar-pulse" />}
       </button>
 
-      {/* ── Dropdown panel ───────────────────────────────────────────────── */}
+      {open && <div className="fd-overlay" onClick={() => !isInCall && setOpen(false)} aria-hidden />}
+
       {open && (
-        <div style={{
-          position: "fixed", top: 58, right: 12,
-          width: 280,
-          background: T.bg,
-          border: `1px solid ${T.border}`,
-          borderRadius: 16,
-          boxShadow: "0 12px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04)",
-          zIndex: 200, overflow: "hidden",
-          animation: "fp-fadein 0.18s ease",
-        }}>
+        <section
+          className="fd-shell"
+          data-blf-open={blfOpen ? "true" : "false"}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !isInCall) setOpen(false);
+          }}
+        >
+          <BlfPanel
+            open={blfOpen}
+            entries={visibleBlf}
+            search={rawBlfSearch}
+            onSearch={setRawBlfSearch}
+            onDial={(extension) => dialTarget(extension)}
+            onMessage={(extension) => router.push(`/chat?ext=${encodeURIComponent(extension)}`)}
+          />
 
-          {/* ── Header bar ─────────────────────────────────────────────── */}
-          <div style={{
-            display: "flex", alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 12px 10px 14px",
-            borderBottom: `1px solid ${T.border}`,
-            background: "rgba(255,255,255,0.03)",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: regDotColor, flexShrink: 0,
-                boxShadow: phone.regState === "registered" ? `0 0 4px ${T.green}` : undefined }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>
-                {phone.regState === "registered"
-                  ? `Ext ${phone.diag.extensionNumber ?? "–"}`
-                  : phone.regState === "registering" ? "Registering…"
-                  : phone.regState === "connecting" ? "Connecting…"
-                  : phone.regState === "failed" ? "Reg Failed"
-                  : "Softphone"}
-              </span>
-            </div>
-            <button onClick={() => setOpen(false)}
-              style={{ background: "none", border: "none", color: T.textSec, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>
-              ✕
-            </button>
-          </div>
-
-          {/* ── IDLE / KEYPAD ──────────────────────────────────────────── */}
-          {!isInCall && (
-            <div style={{ padding: "12px 12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-              {/* Number input */}
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input
-                  className="input"
-                  type="tel"
-                  placeholder="Extension or number…"
-                  value={phone.dialpadInput}
-                  onChange={(e) => phone.setDialpadInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && canDial) phone.dial(phone.dialpadInput);
-                    if (e.key === "Backspace") phone.setDialpadInput(phone.dialpadInput.slice(0,-1));
-                    const keys=["0","1","2","3","4","5","6","7","8","9","*","#"];
-                    if (keys.includes(e.key)) { e.preventDefault(); handleKey(e.key); }
-                  }}
-                  style={{ flex: 1, fontSize: 17, letterSpacing: 2, fontWeight: 600, textAlign: "center",
-                    fontFamily: "monospace", background: "rgba(255,255,255,0.05)", color: T.text, border: `1px solid ${T.border}` }}
-                />
-                {phone.dialpadInput && (
-                  <button onClick={() => phone.setDialpadInput(phone.dialpadInput.slice(0,-1))}
-                    style={{ background: "none", border: "none", color: T.textSec, cursor: "pointer", fontSize: 16, padding: 4 }}>⌫</button>
-                )}
+          <div className="fd-card">
+            <header className="fd-header">
+              <div className="fd-status-pill" data-tone={status.tone}>
+                <i />
+                <span>{status.label}</span>
               </div>
-
-              {/* Compact dialpad */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
-                {DIALPAD.map(([d,s]) => (
-                  <button key={d} onClick={() => handleKey(d)}
-                    onMouseDown={(e) => e.preventDefault()}
-                    style={{
-                      padding: "8px 0", borderRadius: 10,
-                      border: `1px solid ${T.border}`,
-                      background: "rgba(255,255,255,0.05)", color: T.text,
-                      cursor: "pointer", display: "flex", flexDirection: "column",
-                      alignItems: "center", gap: 1, userSelect: "none",
-                    }}>
-                    <span style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>{d}</span>
-                    {s && <span style={{ fontSize: 8, opacity: 0.4, letterSpacing: 1 }}>{s}</span>}
-                  </button>
-                ))}
+              <div className="fd-header-actions">
+                <button className="fd-chip-btn" type="button" onClick={() => setBlfOpen((value) => !value)} data-active={blfOpen ? "true" : "false"}>
+                  BLF
+                </button>
+                <button className="fd-icon-plain" type="button" onClick={() => setShowDiagnostics((value) => !value)} title="Diagnostics">
+                  <Info size={16} />
+                </button>
+                <button className="fd-icon-plain" type="button" onClick={() => setOpen(false)} aria-label="Close dialer">
+                  <X size={17} />
+                </button>
               </div>
+            </header>
 
-              {/* Call button */}
-              <button
-                onClick={() => phone.dial(phone.dialpadInput)}
-                disabled={!canDial}
-                style={{
-                  padding: "11px", borderRadius: 50, border: "none",
-                  background: canDial
-                    ? "linear-gradient(135deg, #10b981, #059669)"
-                    : "rgba(255,255,255,0.06)",
-                  color: canDial ? "#fff" : T.textSec,
-                  fontSize: 14, fontWeight: 700, cursor: canDial ? "pointer" : "default",
-                  boxShadow: canDial ? "0 3px 16px rgba(16,185,129,0.45)" : "none",
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-                  transition: "all 0.15s",
-                }}>
-                <IcAnswer /> Call
-              </button>
+            {showDiagnostics && <DiagnosticsPanel phone={phone} />}
 
-              {/* Status footer */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 10, color: T.textSec,
-                borderTop: `1px solid ${T.border}`, paddingTop: 8 }}>
-                {!phone.diag.hasTurn
-                  ? <span style={{ color: T.amber }}>⚠ No TURN — audio may fail behind NAT</span>
-                  : <span style={{ color: T.green }}>✓ TURN configured</span>}
-                {phone.diag.micPermission === "denied" && <span style={{ color: T.red }}>✕ Microphone denied</span>}
-                {phone.diag.micPermission === "granted" && <span style={{ color: T.green }}>✓ Microphone ready</span>}
-                {phone.error && <span style={{ color: T.red }}>✕ {phone.error}</span>}
-              </div>
-            </div>
-          )}
-
-          {/* ── OUTGOING CALL ──────────────────────────────────────────── */}
-          {isOutgoing && (
-            <div style={{ padding: "20px 14px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-              {/* Pulsing glow */}
-              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div style={{
-                  position: "absolute", width: 80, height: 80, borderRadius: "50%",
-                  background: "radial-gradient(circle, rgba(124,58,237,0.25) 0%, transparent 70%)",
-                  animation: "fp-pulse 2s ease-in-out infinite",
-                }} />
-                <MiniAvatar party={phone.remoteParty ?? phone.dialpadInput} />
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>
-                  {phone.remoteParty ?? phone.dialpadInput}
-                </div>
-                <div style={{ fontSize: 11, color: T.textSec, marginTop: 3, letterSpacing: 1 }}>
-                  {phone.callState === "dialing" ? "Calling…" : "Ringing…"}
-                </div>
-              </div>
-              <button onClick={phone.hangup} style={{
-                width: 48, height: 48, borderRadius: "50%", border: "none",
-                background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                color: "#fff", cursor: "pointer", fontSize: 18,
-                boxShadow: `0 3px 16px ${T.redGlow}`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <IcEndCall />
-              </button>
-            </div>
-          )}
-
-          {/* ── INCOMING CALL ──────────────────────────────────────────── */}
-          {isIncoming && (
-            <div style={{ padding: "20px 14px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: T.textSec, textTransform: "uppercase" }}>
-                Incoming Call
-              </div>
-              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div style={{
-                  position: "absolute", width: 80, height: 80, borderRadius: "50%",
-                  background: "radial-gradient(circle, rgba(16,185,129,0.22) 0%, transparent 70%)",
-                  animation: "fp-pulse 1.5s ease-in-out infinite",
-                }} />
-                <MiniAvatar party={phone.remoteParty} />
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>
-                {phone.remoteParty ?? "Unknown"}
-              </div>
-              <div style={{ display: "flex", gap: 20, marginTop: 4 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
-                  <button onClick={phone.hangup} style={{
-                    width: 50, height: 50, borderRadius: "50%", border: "none",
-                    background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                    color: "#fff", cursor: "pointer",
-                    boxShadow: `0 3px 14px ${T.redGlow}`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}><IcEndCall /></button>
-                  <span style={{ fontSize: 10, color: T.textSec }}>Decline</span>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
-                  <button onClick={phone.answer} style={{
-                    width: 50, height: 50, borderRadius: "50%", border: "none",
-                    background: "linear-gradient(135deg, #10b981, #059669)",
-                    color: "#fff", cursor: "pointer",
-                    boxShadow: "0 3px 14px rgba(16,185,129,0.5)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}><IcAnswer /></button>
-                  <span style={{ fontSize: 10, color: T.textSec }}>Answer</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── ACTIVE CALL ────────────────────────────────────────────── */}
-          {isActive && (
-            <div style={{ padding: "14px 12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-
-              {/* Caller row */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <MiniAvatar party={phone.remoteParty} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: T.text,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {phone.remoteParty ?? "Unknown"}
-                  </div>
-                  <div style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-                    <span style={{ width: 5, height: 5, borderRadius: "50%",
-                      background: phone.onHold ? T.amber : T.green,
-                      boxShadow: phone.onHold ? undefined : `0 0 4px ${T.green}`,
-                      flexShrink: 0 }} />
-                    <span style={{ color: phone.onHold ? T.amber : T.green, fontWeight: 600 }}>
-                      {phone.onHold ? "On Hold" : fmt(elapsed)}
-                    </span>
-                    {phone.diag.qualityGrade && !phone.onHold && (
-                      <span style={{
-                        padding: "1px 5px", borderRadius: 4, fontSize: 9, fontWeight: 700,
-                        letterSpacing: "0.3px", textTransform: "uppercase",
-                        background: phone.diag.qualityGrade === "excellent" || phone.diag.qualityGrade === "good" ? T.greenSoft : T.amberSoft,
-                        color: phone.diag.qualityGrade === "excellent" || phone.diag.qualityGrade === "good" ? T.green : T.amber,
-                      }}>
-                        {phone.diag.qualityGrade}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* DTMF pad (expandable) */}
-              {showDtmf && <DtmfPad onKey={(d) => phone.sendDtmf(d)} />}
-
-              {/* Transfer input (expandable) */}
-              {showXfer && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 0" }}>
-                  <div style={{ fontSize: 11, color: T.textSec, fontWeight: 600 }}>Transfer to:</div>
+            {!isInCall && (
+              <div className="fd-body">
+                <div className="fd-number-wrap">
                   <input
-                    autoFocus
-                    className="input"
-                    placeholder="Extension…"
-                    value={xferTarget}
-                    onChange={(e) => setXferTarget(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && xferTarget.trim()) {
-                        phone.transfer(xferTarget.trim());
-                        setShowXfer(false); setXferTarget("");
+                    ref={inputRef}
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="Type a number"
+                    value={phone.dialpadInput}
+                    onChange={(event) => phone.setDialpadInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      const keys = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"];
+                      if (event.key === "Enter" && canDial) phone.dial(phone.dialpadInput);
+                      if (keys.includes(event.key)) {
+                        event.preventDefault();
+                        handleDigit(event.key);
                       }
-                      if (e.key === "Escape") { setShowXfer(false); setXferTarget(""); }
                     }}
-                    style={{ fontSize: 16, letterSpacing: 2, fontFamily: "monospace", textAlign: "center",
-                      background: "rgba(255,255,255,0.05)", color: T.text, border: `1px solid ${T.border}` }}
                   />
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => { setShowXfer(false); setXferTarget(""); }}
-                      style={{ flex: 1, padding: "7px", borderRadius: 8, border: `1px solid ${T.border}`,
-                        background: "none", color: T.textSec, cursor: "pointer", fontSize: 12 }}>Cancel</button>
-                    <button
-                      onClick={() => { if (xferTarget.trim()) { phone.transfer(xferTarget.trim()); setShowXfer(false); setXferTarget(""); }}}
-                      disabled={!xferTarget.trim()}
-                      style={{ flex: 2, padding: "7px", borderRadius: 8, border: "none",
-                        background: T.accent, color: "#fff", cursor: xferTarget.trim() ? "pointer" : "default",
-                        opacity: xferTarget.trim() ? 1 : 0.5, fontSize: 12, fontWeight: 600 }}>
+                  {phone.dialpadInput && (
+                    <button type="button" onClick={() => phone.setDialpadInput((value) => value.slice(0, -1))}>
+                      Back
+                    </button>
+                  )}
+                </div>
+
+                {cleanError && (
+                  <div className="fd-friendly-error">
+                    <span>{cleanError}</span>
+                    <button type="button" onClick={() => setShowDiagnostics(true)}>Details</button>
+                  </div>
+                )}
+
+                <div className="fd-keypad">
+                  {DIALPAD.map(([digit, letters]) => (
+                    <button key={digit} type="button" onClick={() => handleDigit(digit)} onMouseDown={(event) => event.preventDefault()}>
+                      <strong>{digit}</strong>
+                      <span>{letters}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="fd-preferences">
+                  <span>Ringer</span>
+                  <Toggle checked={ringerOn} onChange={updateRinger} />
+                </div>
+
+                <button className="fd-call-btn" type="button" disabled={!canDial} onClick={() => phone.dial(phone.dialpadInput)}>
+                  <Phone size={18} />
+                  Call
+                </button>
+              </div>
+            )}
+
+            {isOutgoing && (
+              <div className="fd-call-state">
+                <MiniAvatar party={phone.remoteParty ?? phone.dialpadInput} />
+                <strong>{phone.remoteParty ?? phone.dialpadInput}</strong>
+                <span>{phone.callState === "dialing" ? "Calling" : "Ringing"}</span>
+                <button className="fd-hangup" type="button" onClick={phone.hangup}>Hang up</button>
+              </div>
+            )}
+
+            {isIncoming && (
+              <div className="fd-call-state">
+                <span className="fd-eyebrow">Incoming call</span>
+                <MiniAvatar party={phone.remoteParty} />
+                <strong>{phone.remoteParty ?? "Unknown caller"}</strong>
+                <div className="fd-incoming-actions">
+                  <button className="fd-hangup" type="button" onClick={phone.hangup}>Decline</button>
+                  <button className="fd-answer" type="button" onClick={phone.answer}>Answer</button>
+                </div>
+              </div>
+            )}
+
+            {isActive && (
+              <div className="fd-active">
+                <div className="fd-active-party">
+                  <MiniAvatar party={phone.remoteParty} />
+                  <div>
+                    <strong>{phone.remoteParty ?? "Connected"}</strong>
+                    <span>{phone.onHold ? "On hold" : fmt(elapsed)}</span>
+                  </div>
+                </div>
+
+                {showDtmf && (
+                  <div className="fd-keypad fd-keypad-compact">
+                    {DIALPAD.map(([digit, letters]) => (
+                      <button key={digit} type="button" onClick={() => phone.sendDtmf(digit)}>
+                        <strong>{digit}</strong>
+                        <span>{letters}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {showXfer && (
+                  <div className="fd-transfer">
+                    <input
+                      autoFocus
+                      value={xferTarget}
+                      onChange={(event) => setXferTarget(event.target.value)}
+                      placeholder="Transfer to extension"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && xferTarget.trim()) {
+                          phone.transfer(xferTarget.trim());
+                          setShowXfer(false);
+                          setXferTarget("");
+                        }
+                        if (event.key === "Escape") {
+                          setShowXfer(false);
+                          setXferTarget("");
+                        }
+                      }}
+                    />
+                    <button type="button" disabled={!xferTarget.trim()} onClick={() => {
+                      if (!xferTarget.trim()) return;
+                      phone.transfer(xferTarget.trim());
+                      setShowXfer(false);
+                      setXferTarget("");
+                    }}>
                       Transfer
                     </button>
                   </div>
+                )}
+
+                <div className="fd-controls">
+                  <ControlButton label={phone.muted ? "Unmute" : "Mute"} active={phone.muted} onClick={() => phone.setMute(!phone.muted)} />
+                  <ControlButton label="Keypad" active={showDtmf} onClick={() => { setShowDtmf((value) => !value); setShowXfer(false); }} />
+                  <ControlButton label="Speaker" active={phone.speakerOn} onClick={phone.toggleSpeaker} />
+                  <ControlButton label={phone.onHold ? "Resume" : "Hold"} active={phone.onHold} onClick={phone.toggleHold} />
+                  <ControlButton label="Transfer" active={showXfer} onClick={() => { setShowXfer((value) => !value); setShowDtmf(false); }} />
                 </div>
-              )}
 
-              {/* Row 1: Mute | Keypad | Speaker */}
-              <div style={{ display: "flex", gap: 6 }}>
-                <Btn icon={<IcMic muted={phone.muted} />} label={phone.muted ? "Unmute" : "Mute"}
-                  active={phone.muted} onClick={() => phone.setMute(!phone.muted)} />
-                <Btn icon={<IcKeypad />} label="Keypad"
-                  active={showDtmf} onClick={() => { setShowDtmf(v=>!v); setShowXfer(false); }} />
-                <Btn icon={<IcSpeaker on={phone.speakerOn} />} label="Speaker"
-                  active={phone.speakerOn} onClick={() => phone.toggleSpeaker()} />
+                <button className="fd-hangup fd-hangup-wide" type="button" onClick={phone.hangup}>End call</button>
               </div>
-
-              {/* Row 2: Hold | Transfer */}
-              <div style={{ display: "flex", gap: 6 }}>
-                <Btn icon={<IcHold held={phone.onHold} />} label={phone.onHold ? "Resume" : "Hold"}
-                  active={phone.onHold} onClick={phone.toggleHold} />
-                <Btn icon={<IcTransfer />} label="Transfer"
-                  active={showXfer} onClick={() => { setShowXfer(v=>!v); setShowDtmf(false); }} />
-              </div>
-
-              {/* End Call */}
-              <button onClick={phone.hangup} style={{
-                padding: "11px", borderRadius: 50, border: "none",
-                background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                boxShadow: `0 3px 18px ${T.redGlow}`,
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                transition: "transform 0.1s",
-              }}
-                onMouseDown={(e) => { (e.currentTarget as HTMLElement).style.transform = "scale(0.97)"; }}
-                onMouseUp={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; }}
-              >
-                <IcEndCall /> End Call
-              </button>
-
-              {/* Live stats strip */}
-              {(phone.diag.rttMs != null || phone.diag.isUsingRelay || phone.diag.packetsLost) && (
-                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", borderTop: `1px solid ${T.border}`, paddingTop: 8 }}>
-                  {phone.diag.isUsingRelay && (
-                    <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
-                      background: T.greenSoft, color: T.green }}>TURN ✓</span>
-                  )}
-                  {phone.diag.rttMs != null && (
-                    <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9,
-                      background: "rgba(255,255,255,0.05)", color: phone.diag.rttMs > 300 ? T.amber : T.textSec }}>
-                      RTT {phone.diag.rttMs}ms
-                    </span>
-                  )}
-                  {phone.diag.jitterMs != null && (
-                    <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9,
-                      background: "rgba(255,255,255,0.05)", color: phone.diag.jitterMs > 30 ? T.amber : T.textSec }}>
-                      Jit {phone.diag.jitterMs}ms
-                    </span>
-                  )}
-                  {phone.diag.packetsLost != null && phone.diag.packetsLost > 0 && (
-                    <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9,
-                      background: T.redSoft, color: T.red }}>
-                      ✕ {phone.diag.packetsLost} lost
-                    </span>
-                  )}
-                  {phone.diag.audioCodec && (
-                    <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9,
-                      background: "rgba(255,255,255,0.05)", color: T.textSec }}>
-                      {phone.diag.audioCodec}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Click-outside to close */}
-      {open && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 199 }}
-          onClick={() => setOpen(false)} aria-hidden />
+            )}
+          </div>
+        </section>
       )}
     </>
   );
 }
+
+const DIALER_CSS = `
+@keyframes fdIn { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes fdPulse { 0%,100% { opacity: .45; transform: scale(1); } 50% { opacity: 1; transform: scale(1.16); } }
+.fd-overlay { position: fixed; inset: 0; z-index: 199; background: transparent; }
+.fd-topbar-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 999px; border: 2px solid var(--panel); }
+.fd-topbar-dot[data-tone="green"] { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,.8); }
+.fd-topbar-dot[data-tone="yellow"] { background: #f59e0b; }
+.fd-topbar-dot[data-tone="red"] { background: #ef4444; }
+.fd-topbar-dot[data-tone="gray"] { background: #64748b; }
+.fd-topbar-pulse { position: absolute; inset: 0; border-radius: 9px; background: rgba(239,68,68,.18); animation: fdPulse 1s ease-in-out infinite; }
+.fd-shell { --fd-bg: rgba(12,18,32,.88); --fd-card: rgba(15,23,42,.9); --fd-card-2: rgba(255,255,255,.06); --fd-border: rgba(148,163,184,.18); --fd-text: #f8fafc; --fd-muted: #9ca3af; --fd-soft: rgba(255,255,255,.08); --fd-shadow: 0 24px 70px rgba(0,0,0,.55); position: fixed; top: 62px; right: 12px; z-index: 200; width: min(calc(100vw - 24px), 690px); max-height: calc(100vh - 78px); display: flex; justify-content: flex-end; align-items: flex-start; gap: 10px; pointer-events: none; animation: fdIn .18s ease; }
+:root[data-theme="light"] .fd-shell { --fd-bg: rgba(248,250,252,.96); --fd-card: rgba(255,255,255,.98); --fd-card-2: rgba(15,23,42,.04); --fd-border: rgba(15,23,42,.12); --fd-text: #0f172a; --fd-muted: #64748b; --fd-soft: rgba(15,23,42,.06); --fd-shadow: 0 24px 70px rgba(15,23,42,.16); }
+.fd-card, .fd-blf { pointer-events: auto; border: 1px solid var(--fd-border); color: var(--fd-text); background: linear-gradient(145deg, var(--fd-card), var(--fd-bg)); box-shadow: var(--fd-shadow); backdrop-filter: blur(20px); }
+.fd-card { width: min(342px, calc(100vw - 24px)); border-radius: 26px; overflow: hidden; }
+.fd-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 15px; border-bottom: 1px solid var(--fd-border); }
+.fd-status-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--fd-border); background: var(--fd-card-2); border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
+.fd-status-pill i, .fd-blf-row em i { width: 8px; height: 8px; border-radius: 99px; display: inline-block; }
+.fd-status-pill[data-tone="green"] i, .fd-blf-row em[data-tone="green"] i { background: #22c55e; box-shadow: 0 0 10px rgba(34,197,94,.8); }
+.fd-status-pill[data-tone="yellow"] i, .fd-blf-row em[data-tone="yellow"] i { background: #f59e0b; }
+.fd-status-pill[data-tone="red"] i, .fd-blf-row em[data-tone="red"] i { background: #ef4444; }
+.fd-status-pill[data-tone="gray"] i, .fd-blf-row em[data-tone="gray"] i { background: #94a3b8; }
+.fd-header-actions { display: flex; align-items: center; gap: 6px; }
+.fd-chip-btn, .fd-icon-plain { border: 1px solid var(--fd-border); background: var(--fd-card-2); color: var(--fd-text); cursor: pointer; border-radius: 999px; height: 32px; }
+.fd-chip-btn { padding: 0 11px; font-weight: 800; font-size: 12px; }
+.fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
+.fd-icon-plain { width: 32px; display: inline-flex; align-items: center; justify-content: center; }
+.fd-body, .fd-active, .fd-call-state { padding: 16px; display: flex; flex-direction: column; gap: 13px; }
+.fd-number-wrap { display: flex; align-items: center; gap: 8px; padding: 12px; border-radius: 20px; background: var(--fd-soft); border: 1px solid var(--fd-border); }
+.fd-number-wrap input, .fd-transfer input, .fd-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--fd-text); }
+.fd-number-wrap input { text-align: center; font-size: 24px; font-weight: 850; letter-spacing: 1.6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; caret-color: #22c55e; }
+.fd-number-wrap button, .fd-friendly-error button { border: 0; background: transparent; color: var(--fd-muted); cursor: pointer; font-weight: 800; }
+.fd-friendly-error { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 14px; background: rgba(245,158,11,.12); color: #f59e0b; font-size: 12px; font-weight: 800; }
+.fd-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.fd-keypad button { border: 1px solid var(--fd-border); border-radius: 18px; background: linear-gradient(180deg, var(--fd-card-2), transparent); color: var(--fd-text); min-height: 61px; cursor: pointer; transition: transform .12s ease, border-color .12s ease, background .12s ease; }
+.fd-keypad button:hover { transform: translateY(-1px); border-color: rgba(99,102,241,.55); }
+.fd-keypad button:active { transform: scale(.96); }
+.fd-keypad strong { display: block; font-size: 24px; line-height: 1; }
+.fd-keypad span { display: block; min-height: 11px; margin-top: 5px; color: var(--fd-muted); font-size: 10px; letter-spacing: 1.6px; font-weight: 800; }
+.fd-keypad-compact button { min-height: 48px; border-radius: 14px; }
+.fd-keypad-compact strong { font-size: 18px; }
+.fd-preferences { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; border: 1px solid var(--fd-border); background: var(--fd-card-2); border-radius: 16px; color: var(--fd-muted); font-size: 13px; font-weight: 800; }
+.fd-toggle { width: 46px; height: 26px; border-radius: 999px; padding: 3px; border: 0; cursor: pointer; background: #64748b; transition: background .16s ease; }
+.fd-toggle span { display: block; width: 20px; height: 20px; border-radius: 999px; background: white; box-shadow: 0 3px 10px rgba(0,0,0,.25); transition: transform .16s ease; }
+.fd-toggle[data-on="true"] { background: linear-gradient(135deg, #22c55e, #10b981); }
+.fd-toggle[data-on="true"] span { transform: translateX(20px); }
+.fd-call-btn, .fd-answer, .fd-hangup { border: 0; cursor: pointer; color: white; font-weight: 900; border-radius: 999px; }
+.fd-call-btn { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; background: linear-gradient(135deg, #22c55e, #059669); box-shadow: 0 16px 38px rgba(34,197,94,.28); }
+.fd-call-btn:disabled { cursor: default; color: var(--fd-muted); background: var(--fd-soft); box-shadow: none; }
+.fd-call-state { align-items: center; text-align: center; padding: 26px 16px 20px; }
+.fd-call-state strong { font-size: 18px; }
+.fd-call-state span { color: var(--fd-muted); font-size: 13px; font-weight: 800; }
+.fd-eyebrow { text-transform: uppercase; letter-spacing: 1.8px; font-size: 11px !important; }
+.fd-avatar { width: 58px; height: 58px; border-radius: 22px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 950; background: linear-gradient(135deg, #6366f1, #8b5cf6 50%, #06b6d4); box-shadow: 0 18px 40px rgba(99,102,241,.28); }
+.fd-incoming-actions { display: flex; gap: 12px; width: 100%; }
+.fd-incoming-actions button { flex: 1; min-height: 46px; }
+.fd-answer { background: linear-gradient(135deg, #22c55e, #059669); }
+.fd-hangup { background: linear-gradient(135deg, #ef4444, #dc2626); min-height: 46px; padding: 0 18px; box-shadow: 0 16px 38px rgba(239,68,68,.28); }
+.fd-hangup-wide { width: 100%; }
+.fd-active-party { display: flex; align-items: center; gap: 12px; }
+.fd-active-party strong, .fd-active-party span { display: block; }
+.fd-active-party span { color: #22c55e; font-weight: 900; font-size: 13px; margin-top: 3px; }
+.fd-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fd-control { min-height: 44px; border: 1px solid var(--fd-border); border-radius: 15px; color: var(--fd-text); background: var(--fd-card-2); cursor: pointer; font-weight: 850; }
+.fd-control[data-active="true"] { color: #fff; border-color: transparent; background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+.fd-transfer { display: flex; gap: 8px; padding: 9px; border-radius: 15px; border: 1px solid var(--fd-border); background: var(--fd-card-2); }
+.fd-transfer button { border: 0; border-radius: 12px; padding: 0 12px; color: white; background: #6366f1; font-weight: 850; }
+.fd-transfer button:disabled { opacity: .45; }
+.fd-diagnostics { margin: 12px 14px 0; padding: 12px; border: 1px solid var(--fd-border); border-radius: 18px; background: var(--fd-card-2); display: grid; gap: 8px; }
+.fd-diagnostics div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--fd-muted); }
+.fd-diagnostics strong { color: var(--fd-text); text-align: right; }
+.fd-blf { width: 326px; max-width: calc(100vw - 24px); max-height: calc(100vh - 78px); border-radius: 24px; overflow: hidden; transform: translateX(24px) scale(.98); opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+.fd-blf[data-open="true"] { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
+.fd-blf-head { padding: 14px 15px 10px; }
+.fd-blf-head strong, .fd-blf-head span { display: block; }
+.fd-blf-head span { color: var(--fd-muted); font-size: 12px; margin-top: 2px; }
+.fd-search { display: flex; align-items: center; gap: 8px; margin: 0 12px 12px; padding: 10px 11px; border: 1px solid var(--fd-border); border-radius: 15px; background: var(--fd-card-2); color: var(--fd-muted); }
+.fd-blf-list { height: min(430px, calc(100vh - 226px)); overflow: auto; border-top: 1px solid var(--fd-border); }
+.fd-blf-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; }
+.fd-blf-row > button:first-child { flex: 1; min-width: 0; height: 44px; border: 0; border-radius: 14px; background: transparent; color: var(--fd-text); display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer; }
+.fd-blf-row > button:first-child:hover { background: var(--fd-card-2); }
+.fd-blf-ext { width: 48px; height: 34px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; background: var(--fd-soft); font-weight: 950; font-variant-numeric: tabular-nums; }
+.fd-blf-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.fd-blf-row em { display: inline-flex; align-items: center; gap: 5px; color: var(--fd-muted); font-style: normal; font-size: 11px; font-weight: 800; margin-top: 2px; }
+.fd-blf-msg { width: 34px; height: 34px; border: 1px solid var(--fd-border); border-radius: 12px; background: var(--fd-card-2); color: var(--fd-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.fd-empty { padding: 20px; color: var(--fd-muted); font-size: 13px; text-align: center; }
+@media (max-width: 720px) {
+  .fd-shell { width: calc(100vw - 20px); right: 10px; top: 58px; }
+  .fd-shell[data-blf-open="true"] { flex-direction: column-reverse; align-items: flex-end; }
+  .fd-blf { width: 100%; height: min(390px, calc(100vh - 430px)); }
+  .fd-card { width: 100%; }
+}
+`;

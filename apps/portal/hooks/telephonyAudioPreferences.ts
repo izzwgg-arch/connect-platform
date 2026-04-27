@@ -1,4 +1,6 @@
 export const WEB_RINGTONE_STORAGE_KEY = "connect_web_incoming_ringtone";
+export const WEB_RINGER_ENABLED_STORAGE_KEY = "connect_web_ringer_enabled";
+export const WEB_RINGER_ENABLED_EVENT = "connect:web-ringer-enabled";
 
 export const WEB_RINGTONE_OPTIONS = [
   { id: "connect-default", label: "Connect Default" },
@@ -26,4 +28,15 @@ export function setWebIncomingRingtone(next: WebRingtoneId): void {
 
 export function getWebIncomingRingtoneLabel(id: WebRingtoneId): string {
   return WEB_RINGTONE_OPTIONS.find((option) => option.id === id)?.label ?? "Connect Default";
+}
+
+export function getWebRingerEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(WEB_RINGER_ENABLED_STORAGE_KEY) !== "0";
+}
+
+export function setWebRingerEnabled(next: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(WEB_RINGER_ENABLED_STORAGE_KEY, next ? "1" : "0");
+  window.dispatchEvent(new CustomEvent(WEB_RINGER_ENABLED_EVENT, { detail: { enabled: next } }));
 }
