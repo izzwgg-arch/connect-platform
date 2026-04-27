@@ -161,19 +161,19 @@ _deploy_common_service_paths() {
   local service="$1"
   case "$service" in
     api)
-      echo "apps/api/ packages/db/ packages/shared/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/api/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     portal)
-      echo "apps/portal/ packages/shared/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/portal/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     telephony)
-      echo "apps/telephony/ packages/shared/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/telephony/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     realtime)
-      echo "apps/realtime/ packages/shared/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/realtime/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     worker)
-      echo "apps/worker/ packages/db/ packages/shared/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/worker/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     *)
       echo ""
