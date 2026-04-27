@@ -1454,7 +1454,7 @@ p {
   --dash-outgoing: #2ba5ff;
   --dash-internal: #a78bfa;
   --dash-missed: #e85b6b;
-  --dash-total-line: #38bdf8;
+  --dash-total-line: #5eead4;
 }
 
 :root[data-theme="light"] {
@@ -1479,7 +1479,7 @@ p {
   --dash-outgoing: #1f7fd8;
   --dash-internal: #7c3aed;
   --dash-missed: #cf4455;
-  --dash-total-line: #0ea5e9;
+  --dash-total-line: #0f766e;
 }
 
 body {

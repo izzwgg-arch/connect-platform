@@ -197,7 +197,7 @@ export default function DashboardPage() {
               </div>
               <div className="dash-hero-status-pill">
                 <Activity size={13} />
-                <span>30-minute buckets</span>
+                <span>Total calls trend</span>
               </div>
             </div>
             <div className="dash-hero-plot">

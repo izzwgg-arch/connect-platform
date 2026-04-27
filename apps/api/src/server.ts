@@ -17857,9 +17857,13 @@ function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal
       || input?.dir
       || ""
   ).toLowerCase();
-  if (raw.includes("internal")) return "internal";
-  if (raw.includes("in")) return "incoming";
-  if (raw.includes("out")) return "outgoing";
+  if (raw === "internal" || raw === "extension" || raw.includes("internal")) return "internal";
+  if (raw === "outgoing" || raw === "outbound" || raw === "out") return "outgoing";
+  if (raw === "incoming" || raw === "inbound" || raw === "in") return "incoming";
+  // Important: check outbound before inbound. "outgoing" contains "ing", so a
+  // broad `includes("in")` test would incorrectly classify outgoing calls.
+  if (raw.includes("outbound") || raw.includes("outgoing")) return "outgoing";
+  if (raw.includes("inbound") || raw.includes("incoming")) return "incoming";
   return "outgoing";
 }
 
