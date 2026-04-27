@@ -1796,7 +1796,7 @@ body {
 .ws-switcher-trigger-inner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -1815,8 +1815,7 @@ body {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
 }
 
 .ws-switcher-trigger-tenant {
@@ -1834,6 +1833,19 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ws-switcher-rail-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--console-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
 }
 
 .ws-switcher-trigger-chevron {
@@ -1886,8 +1898,14 @@ body {
   min-width: 0;
 }
 
+.ws-switcher-brand-text-only {
+  gap: 0;
+  width: 100%;
+}
+
 .ws-switcher-brand-text {
   min-width: 0;
+  width: 100%;
 }
 
 .ws-switcher-tenant-name {
@@ -2271,6 +2289,40 @@ body {
 
 .profile-trigger {
   color: var(--console-text);
+  width: auto;
+  min-width: 0;
+  padding: 0 9px 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  letter-spacing: 0;
+}
+
+.profile-trigger-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--console-accent) 18%, var(--console-panel));
+  border: 1px solid color-mix(in srgb, var(--console-accent) 32%, var(--console-border));
+  color: var(--console-text);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.profile-trigger-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--console-text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .workspace-banners {

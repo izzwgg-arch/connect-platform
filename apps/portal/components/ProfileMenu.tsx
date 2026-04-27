@@ -14,6 +14,8 @@ export function ProfileMenu() {
   const router = useRouter();
   const { user, tenant, role, setRole } = useAppContext();
   const closeMenu = useCallback(() => setOpen(false), []);
+  const displayName = formatTopbarUserName(user.name, user.email);
+  const avatarText = initialsFor(displayName);
 
   function logout() {
     clearAuthSession();
@@ -22,13 +24,9 @@ export function ProfileMenu() {
 
   return (
     <div className="menu-wrap">
-      <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={user.name}>
-        {user.name
-          .split(" ")
-          .map((part) => part[0])
-          .join("")
-          .slice(0, 2)
-          .toUpperCase()}
+      <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={displayName}>
+        <span className="profile-trigger-avatar" aria-hidden>{avatarText}</span>
+        <span className="profile-trigger-name">{displayName}</span>
       </button>
       <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closeMenu} width={280}>
           <div className="panel-headline">{tenant.name}</div>
@@ -49,4 +47,22 @@ export function ProfileMenu() {
       </ViewportDropdown>
     </div>
   );
+}
+
+function formatTopbarUserName(name?: string | null, email?: string | null): string {
+  const rawName = (name ?? "").trim();
+  const rawEmail = (email ?? "").trim();
+  const base = rawName && !rawName.includes("@")
+    ? rawName
+    : rawEmail.split("@")[0] || rawName.split("@")[0] || "User";
+  return base.replace(/\d{6,}$/, "") || base;
+}
+
+function initialsFor(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "U";
 }

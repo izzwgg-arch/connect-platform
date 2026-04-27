@@ -59,14 +59,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  const tenantInitials = useMemo(() => {
-    const n = tenant.name.trim();
-    if (!n) return "—";
-    const parts = n.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) return (parts[0]![0] + parts[1]![0]).toUpperCase();
-    return n.slice(0, 2).toUpperCase();
-  }, [tenant.name]);
-
   const displayName =
     adminScope === "GLOBAL" && canSwitch ? "All workspaces" : tenant.name || "Workspace";
 
@@ -113,16 +105,14 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
 
   const workspaceCard = (
     <div className={`ws-switcher-card ${railMode ? "ws-switcher-card-rail" : ""}`}>
-      <div className="ws-switcher-brand">
-        <div className="ws-switcher-logo" aria-hidden>
-          {tenantInitials}
-        </div>
+      <div className="ws-switcher-brand ws-switcher-brand-text-only">
         {!railMode ? (
           <div className="ws-switcher-brand-text">
             <div className="ws-switcher-tenant-name">{displayName}</div>
-            <div className="ws-switcher-user-email">Admin</div>
           </div>
-        ) : null}
+        ) : (
+          <span className="ws-switcher-rail-label" title={displayName}>{displayName.slice(0, 2).toUpperCase()}</span>
+        )}
       </div>
     </div>
   );
@@ -147,15 +137,13 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
         onClick={() => setOpen((v) => !v)}
       >
         <div className="ws-switcher-trigger-inner">
-          <div className="ws-switcher-logo ws-switcher-logo-sm" aria-hidden>
-            {tenantInitials}
-          </div>
           {!railMode ? (
             <div className="ws-switcher-trigger-text">
               <span className="ws-switcher-trigger-tenant">{displayName}</span>
-              <span className="ws-switcher-trigger-email">Admin</span>
             </div>
-          ) : null}
+          ) : (
+            <span className="ws-switcher-rail-label" title={displayName}>{displayName.slice(0, 2).toUpperCase()}</span>
+          )}
           {!railMode ? <ChevronDown className="ws-switcher-trigger-chevron" size={16} strokeWidth={2} /> : null}
         </div>
       </button>

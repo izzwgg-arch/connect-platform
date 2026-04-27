@@ -38,8 +38,9 @@ export function SidebarNav({
   const telephony = useTelephony();
   const { isExpanded, toggle } = useNavSectionExpansion();
   const isConnected = telephony.status === "connected";
+  const displayName = formatUserDisplayName(user.name, user.email);
 
-  const initials = user.name
+  const initials = displayName
     .split(" ")
     .map((p) => p[0])
     .join("")
@@ -65,14 +66,14 @@ export function SidebarNav({
               {initials}
             </div>
             <div className="drawer-user-details">
-              <span className="drawer-user-name">{user.name}</span>
+              <span className="drawer-user-name">{displayName}</span>
               <span className={`drawer-user-status ${isConnected ? "connected" : "disconnected"}`}>
                 {isConnected ? "● Connected" : "● Disconnected"}
               </span>
             </div>
           </div>
         ) : (
-          <div className="drawer-user-rail" title={`${user.name} — ${user.email || "Signed in"}`}>
+          <div className="drawer-user-rail" title={displayName}>
             <div className="drawer-user-avatar drawer-user-avatar-sm" aria-hidden>
               {initials}
             </div>
@@ -165,4 +166,13 @@ export function SidebarNav({
       ) : null}
     </aside>
   );
+}
+
+function formatUserDisplayName(name?: string | null, email?: string | null): string {
+  const rawName = (name ?? "").trim();
+  const rawEmail = (email ?? "").trim();
+  const base = rawName && !rawName.includes("@")
+    ? rawName
+    : rawEmail.split("@")[0] || rawName.split("@")[0] || "User";
+  return base.replace(/\d{6,}$/, "") || base;
 }
