@@ -5,6 +5,7 @@ import { computeBridgedActiveCalls } from "./ariBridgedActiveCalls";
 import type { NormalizedCall } from "../types";
 import { inferLiveCallDirection } from "../inferLiveCallDirection";
 import type { TenantResolver } from "../state/TenantResolver";
+import { normalizeExtensionFromChannel } from "../normalizers/normalizeExtension";
 import { env } from "../../config/env";
 import { childLogger } from "../../logging/logger";
 
@@ -62,6 +63,13 @@ function bridgeRowsToNormalizedCalls(
     // (e.g. PJSIP/344022_gesheft-XXXX) which TenantResolver uses via resolveBySlug().
     const tnChannel = b.channelNames.find((n) => /^PJSIP\/T\d+_/i.test(n));
     const channelHint = tnChannel ?? b.channelNames.find((n) => n.startsWith("PJSIP/")) ?? undefined;
+    const extensions = [
+      ...new Set(
+        b.channelNames
+          .map((name) => normalizeExtensionFromChannel(name))
+          .filter((ext): ext is string => Boolean(ext)),
+      ),
+    ];
 
     const tres =
       resolver?.resolveDetails({
@@ -106,11 +114,12 @@ function bridgeRowsToNormalizedCalls(
       direction,
       state: "up" as const,
       from: b.caller === "—" ? null : b.caller,
+      fromName: null,
       to: toField,
       connectedLine: null,
       channels: [],
       bridgeIds: b.sourceKind === "bridge" ? [b.bridgeId] : [],
-      extensions: [],
+      extensions,
       queueId: null,
       trunk: null,
       startedAt: firstSeenAt?.get(b.bridgeId) ?? now,

@@ -56,6 +56,10 @@ export function createTelephonyModule(server: http.Server) {
     pbxTenantMapCache: pbxMapCache,
   });
   const ariBridgedPoller = new AriBridgedActivePoller(ari, telephonyService.getResolver());
+  ariBridgedPoller.on("update", (result) => {
+    if (!ari._isConnected) return;
+    callStore.reconcileActiveBridges(result.bridges.map((bridge) => bridge.bridgeId));
+  });
   const healthService = new HealthService(ami, ari, callStore, extStore, queueStore, ariBridgedPoller);
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.

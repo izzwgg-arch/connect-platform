@@ -806,7 +806,7 @@ export class CallStateStore extends EventEmitter {
       // Buffer until the call is tracked.
       const pending = this.pendingRecordingPaths.get(linkedId);
       const chosen = this.preferLongerRecordingPath(pending, path);
-      if (chosen !== pending) {
+      if (chosen && chosen !== pending) {
         this.pendingRecordingPaths.set(linkedId, chosen);
         this.armPendingRecTimer(linkedId);
         if (env.ENABLE_TELEPHONY_DEBUG) {
@@ -1074,6 +1074,24 @@ export class CallStateStore extends EventEmitter {
     this.scheduleEvict(callId);
 
     return { channels, uniqueIds };
+  }
+
+  /**
+   * ARI bridges are the PBX's live-time truth for connected calls. AMI can miss
+   * a Hangup/BridgeLeave edge and leave a bridged call in `up`, which makes BLF
+   * stay red after the real PBX bridge is gone. Evict only calls that already
+   * had bridgeIds; ringing/unbridged calls remain AMI-driven.
+   */
+  reconcileActiveBridges(activeBridgeIds: Iterable<string>): void {
+    const active = new Set(activeBridgeIds);
+    for (const call of this.getActive()) {
+      if (call.bridgeIds.length === 0) continue;
+      if (call.bridgeIds.some((bridgeId) => active.has(bridgeId))) continue;
+      this.forceEvictZombie(
+        call.id,
+        `ari_bridge_absent bridgeIds=${call.bridgeIds.join(",")}`,
+      );
+    }
   }
 
   /**
