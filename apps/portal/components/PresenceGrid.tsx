@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useTelephony } from "../contexts/TelephonyContext";
+import { useAppContext } from "../hooks/useAppContext";
+import { callsForTenant } from "../services/liveCallState";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -130,14 +132,24 @@ export function PresenceGrid({
   showOffline = true,
 }: PresenceGridProps) {
   const telephony = useTelephony();
+  const { adminScope, tenantId } = useAppContext();
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<PresenceState | "all">("all");
+  const scopedCalls = useMemo(
+    () =>
+      callsForTenant(
+        telephony.activeCalls,
+        adminScope === "GLOBAL" ? null : tenantId,
+        telephony.extensionList.map((entry) => ({ extension: entry.extension, tenantId: entry.tenantId })),
+      ),
+    [adminScope, telephony.activeCalls, telephony.extensionList, tenantId],
+  );
 
   // Build active/ringing sets from live calls
   const { activeExtensions, ringingExtensions } = useMemo(() => {
     const active = new Set<string>();
     const ringing = new Set<string>();
-    telephony.activeCalls.forEach((call) => {
+    scopedCalls.forEach((call) => {
       const exts = call.extensions ?? [];
       if (call.state === "up" || call.state === "held") {
         exts.forEach((e) => active.add(e));
@@ -146,10 +158,12 @@ export function PresenceGrid({
       }
     });
     return { activeExtensions: active, ringingExtensions: ringing };
-  }, [telephony.activeCalls]);
+  }, [scopedCalls]);
 
   const tiles: ExtensionTile[] = useMemo(() => {
-    const extMap = telephony.extensionList ?? [];
+    const extMap = (telephony.extensionList ?? []).filter(
+      (ext) => adminScope === "GLOBAL" || !ext.tenantId || ext.tenantId === tenantId,
+    );
     let entries = extMap.map((ext): ExtensionTile => ({
       extension: ext.extension,
       displayName: ext.hint || ext.extension,
@@ -184,19 +198,19 @@ export function PresenceGrid({
 
     return entries;
   }, [
-    telephony.extensionList, activeExtensions, ringingExtensions,
+    telephony.extensionList, adminScope, tenantId, activeExtensions, ringingExtensions,
     filter, showOffline, search, stateFilter, limit,
   ]);
 
   const counts = useMemo(() => {
     return {
-      total: (telephony.extensionList ?? []).length,
+      total: tiles.length,
       active:     tiles.filter((t) => t.state === "active").length,
       ringing:    tiles.filter((t) => t.state === "ringing").length,
       registered: tiles.filter((t) => t.state === "registered").length,
       offline:    tiles.filter((t) => t.state === "offline").length,
     };
-  }, [telephony.extensionList, tiles]);
+  }, [tiles]);
 
   const isLive = telephony.isLive;
 

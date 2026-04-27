@@ -13,6 +13,7 @@ import {
   setWebRingerEnabled,
 } from "../hooks/telephonyAudioPreferences";
 import { loadPbxResource } from "../services/pbxData";
+import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls } from "../services/liveCallState";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
 
@@ -32,7 +33,7 @@ const DIALPAD: [string, string][] = [
 
 const PRESENCE_META: Record<PresenceState, { label: string; tone: string }> = {
   available: { label: "Available", tone: "green" },
-  ringing: { label: "Ringing", tone: "yellow" },
+  ringing: { label: "Ringing", tone: "red" },
   on_call: { label: "On Call", tone: "red" },
   offline: { label: "Offline", tone: "gray" },
 };
@@ -165,6 +166,15 @@ function Toggle({
   );
 }
 
+function RingerControl({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <div className="fd-ringer-control" title={checked ? "Incoming calls will ring" : "Incoming calls are silent"}>
+      <span>Ringer</span>
+      <Toggle checked={checked} onChange={onChange} />
+    </div>
+  );
+}
+
 function DiagnosticsPanel({
   phone,
 }: {
@@ -207,12 +217,15 @@ function BlfPanel({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const rowHeight = 50;
-  const viewportHeight = 350;
-  const overscan = 6;
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const count = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
-  const slice = entries.slice(start, start + count);
+  const columns = 3;
+  const rowHeight = 84;
+  const viewportHeight = 390;
+  const overscanRows = 3;
+  const totalRows = Math.ceil(entries.length / columns);
+  const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - overscanRows);
+  const rowCount = Math.ceil(viewportHeight / rowHeight) + overscanRows * 2;
+  const start = startRow * columns;
+  const slice = entries.slice(start, start + rowCount * columns);
 
   useEffect(() => {
     if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
@@ -223,8 +236,8 @@ function BlfPanel({
     <aside className="fd-blf" data-open={open ? "true" : "false"} aria-hidden={!open}>
       <div className="fd-blf-head">
         <div>
-          <strong>BLF</strong>
-          <span>{entries.length} extensions</span>
+          <strong>Desk BLF</strong>
+          <span>{entries.length} tenant extensions</span>
         </div>
       </div>
       <label className="fd-search">
@@ -235,18 +248,23 @@ function BlfPanel({
         {entries.length === 0 ? (
           <div className="fd-empty">No tenant extensions found.</div>
         ) : (
-          <div style={{ height: entries.length * rowHeight, position: "relative" }}>
-            <div style={{ transform: `translateY(${start * rowHeight}px)` }}>
+          <div style={{ height: totalRows * rowHeight, position: "relative" }}>
+            <div className="fd-blf-grid" style={{ transform: `translateY(${startRow * rowHeight}px)` }}>
               {slice.map((entry) => {
                 const meta = PRESENCE_META[entry.presence];
                 return (
-                  <div className="fd-blf-row" key={entry.id} style={{ height: rowHeight }}>
-                    <button type="button" onClick={() => onDial(entry.extension)}>
-                      <span className="fd-blf-ext">{entry.extension}</span>
-                      <span>
-                        <strong>{entry.name}</strong>
-                        <em data-tone={meta.tone}><i />{meta.label}</em>
-                      </span>
+                  <div className="fd-blf-tile-wrap" key={entry.id}>
+                    <button
+                      type="button"
+                      className="fd-blf-tile"
+                      data-presence={entry.presence}
+                      onClick={() => onDial(entry.extension)}
+                      title={`Call ${entry.name} (${entry.extension})`}
+                    >
+                      <span className="fd-blf-led" data-tone={meta.tone} data-presence={entry.presence} />
+                      <strong className="fd-blf-ext">{entry.extension}</strong>
+                      <span className="fd-blf-name">{entry.name}</span>
+                      <em>{meta.label}</em>
                     </button>
                     <button type="button" className="fd-blf-msg" title="Message" onClick={() => onMessage(entry.extension)}>
                       <MessageSquare size={15} />
@@ -277,6 +295,7 @@ export function FloatingDialer() {
   const [blfOpen, setBlfOpen] = useState(false);
   const [rawBlfSearch, setRawBlfSearch] = useState("");
   const [ringerOn, setRingerOn] = useState(true);
+  const [dialerMounted, setDialerMounted] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blfSearch = useDebouncedValue(rawBlfSearch, 120);
@@ -285,6 +304,7 @@ export function FloatingDialer() {
     () => loadPbxResource("extensions"),
     [tenantId, tenant?.name],
   );
+  const extensionRows = extState.status === "success" ? extState.data.rows : [];
 
   const isInCall = phone.callState !== "idle" && phone.callState !== "ended";
   const isActive = phone.callState === "connected";
@@ -297,6 +317,18 @@ export function FloatingDialer() {
   useEffect(() => {
     setRingerOn(getWebRingerEnabled());
   }, []);
+
+  useEffect(() => {
+    if (open) {
+      setDialerMounted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDialerMounted(false);
+      setBlfOpen(false);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [open]);
 
   useEffect(() => {
     if (phone.callState === "connected") {
@@ -332,26 +364,20 @@ export function FloatingDialer() {
   }, [open, isInCall]);
 
   const { activeExts, ringingExts } = useMemo(() => {
-    const active = new Set<string>();
-    const ringing = new Set<string>();
-    const tenantCalls = tenantId ? telephony.activeCalls.filter((c) => c.tenantId === tenantId) : [];
-    tenantCalls.forEach((call) => {
-      const extensions = (call.extensions ?? []).filter(isValidTenantExtension);
-      if (call.state === "up" || call.state === "held") extensions.forEach((ext) => active.add(ext));
-      if (call.state === "ringing" || call.state === "dialing") extensions.forEach((ext) => ringing.add(ext));
-    });
-    return { activeExts: active, ringingExts: ringing };
-  }, [telephony.activeCalls, tenantId]);
+    const tenantCalls = tenantId
+      ? scopeLiveCallsForTenant(telephony.activeCalls, tenantId, extensionRows, tenant?.name)
+      : [];
+    return extensionSetsFromCalls(tenantCalls);
+  }, [extensionRows, telephony.activeCalls, tenant?.name, tenantId]);
 
   const blfEntries = useMemo(() => {
-    const rows = extState.status === "success" ? extState.data.rows : [];
-    const mapped = rows.flatMap((row): BlfEntry[] => {
+    const mapped = extensionRows.flatMap((row): BlfEntry[] => {
       if (!rowTenantMatches(row, tenantId, tenant?.name)) return [];
       const extension = readString(row, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
       if (!extension || !isValidTenantExtension(extension)) return [];
       const name = readString(row, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${extension}`;
       if (isSystemExtensionName(name)) return [];
-      const live = telephony.extensionList.find((entry) => entry.extension === extension);
+      const live = telephony.extensionList.find((entry) => entry.extension === extension && (!tenantId || !entry.tenantId || entry.tenantId === tenantId));
       return [{
         id: readString(row, ["id", "uuid"]) ?? extension,
         name,
@@ -370,7 +396,7 @@ export function FloatingDialer() {
       }];
     });
     return fallback.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
-  }, [activeExts, extState, ringingExts, telephony.extensionList, tenant?.name, tenantId]);
+  }, [activeExts, extensionRows, ringingExts, telephony.extensionList, tenant?.name, tenantId]);
 
   const visibleBlf = useMemo(() => {
     const query = blfSearch.trim().toLowerCase();
@@ -401,6 +427,10 @@ export function FloatingDialer() {
     setWebRingerEnabled(next);
   }, []);
 
+  const requestClose = useCallback(() => {
+    if (!isInCall) setOpen(false);
+  }, [isInCall]);
+
   return (
     <>
       <style>{DIALER_CSS}</style>
@@ -417,14 +447,15 @@ export function FloatingDialer() {
         {isIncoming && <span className="fd-topbar-pulse" />}
       </button>
 
-      {open && <div className="fd-overlay" onClick={() => !isInCall && setOpen(false)} aria-hidden />}
+      {dialerMounted && <div className="fd-overlay" data-state={open ? "open" : "closing"} onClick={requestClose} aria-hidden />}
 
-      {open && (
+      {dialerMounted && (
         <section
           className="fd-shell"
           data-blf-open={blfOpen ? "true" : "false"}
+          data-state={open ? "open" : "closing"}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && !isInCall) setOpen(false);
+            if (event.key === "Escape") requestClose();
           }}
         >
           <BlfPanel
@@ -443,13 +474,14 @@ export function FloatingDialer() {
                 <span>{status.label}</span>
               </div>
               <div className="fd-header-actions">
+                <RingerControl checked={ringerOn} onChange={updateRinger} />
                 <button className="fd-chip-btn" type="button" onClick={() => setBlfOpen((value) => !value)} data-active={blfOpen ? "true" : "false"}>
                   BLF
                 </button>
                 <button className="fd-icon-plain" type="button" onClick={() => setShowDiagnostics((value) => !value)} title="Diagnostics">
                   <Info size={16} />
                 </button>
-                <button className="fd-icon-plain" type="button" onClick={() => setOpen(false)} aria-label="Close dialer">
+                <button className="fd-icon-plain" type="button" onClick={requestClose} aria-label="Close dialer">
                   <X size={17} />
                 </button>
               </div>
@@ -497,11 +529,6 @@ export function FloatingDialer() {
                       <span>{letters}</span>
                     </button>
                   ))}
-                </div>
-
-                <div className="fd-preferences">
-                  <span>Ringer</span>
-                  <Toggle checked={ringerOn} onChange={updateRinger} />
                 </div>
 
                 <button className="fd-call-btn" type="button" disabled={!canDial} onClick={() => phone.dial(phone.dialpadInput)}>
@@ -603,26 +630,32 @@ export function FloatingDialer() {
 
 const DIALER_CSS = `
 @keyframes fdIn { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes fdOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-6px) scale(.985); } }
 @keyframes fdPulse { 0%,100% { opacity: .45; transform: scale(1); } 50% { opacity: 1; transform: scale(1.16); } }
-.fd-overlay { position: fixed; inset: 0; z-index: 199; background: transparent; }
+.fd-overlay { position: fixed; inset: 0; z-index: 199; background: transparent; opacity: 1; transition: opacity .2s ease-in-out; }
+.fd-overlay[data-state="closing"] { opacity: 0; pointer-events: none; }
 .fd-topbar-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 999px; border: 2px solid var(--panel); }
 .fd-topbar-dot[data-tone="green"] { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,.8); }
 .fd-topbar-dot[data-tone="yellow"] { background: #f59e0b; }
 .fd-topbar-dot[data-tone="red"] { background: #ef4444; }
 .fd-topbar-dot[data-tone="gray"] { background: #64748b; }
 .fd-topbar-pulse { position: absolute; inset: 0; border-radius: 9px; background: rgba(239,68,68,.18); animation: fdPulse 1s ease-in-out infinite; }
-.fd-shell { --fd-bg: rgba(12,18,32,.88); --fd-card: rgba(15,23,42,.9); --fd-card-2: rgba(255,255,255,.06); --fd-border: rgba(148,163,184,.18); --fd-text: #f8fafc; --fd-muted: #9ca3af; --fd-soft: rgba(255,255,255,.08); --fd-shadow: 0 20px 54px rgba(0,0,0,.50); position: fixed; top: 58px; right: 10px; z-index: 200; width: min(calc(100vw - 20px), 586px); max-height: calc(100vh - 70px); display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; pointer-events: none; animation: fdIn .18s ease; }
+.fd-shell { --fd-bg: rgba(12,18,32,.88); --fd-card: rgba(15,23,42,.9); --fd-card-2: rgba(255,255,255,.06); --fd-border: rgba(148,163,184,.18); --fd-text: #f8fafc; --fd-muted: #9ca3af; --fd-soft: rgba(255,255,255,.08); --fd-shadow: 0 20px 54px rgba(0,0,0,.50); position: fixed; top: 58px; right: 10px; z-index: 200; width: min(calc(100vw - 20px), 650px); max-height: calc(100vh - 70px); display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; pointer-events: none; animation: fdIn .2s ease-in-out both; transform-origin: top right; }
+.fd-shell[data-state="closing"] { animation: fdOut .2s ease-in-out both; pointer-events: none; }
 :root[data-theme="light"] .fd-shell { --fd-bg: rgba(248,250,252,.96); --fd-card: rgba(255,255,255,.98); --fd-card-2: rgba(15,23,42,.04); --fd-border: rgba(15,23,42,.12); --fd-text: #0f172a; --fd-muted: #64748b; --fd-soft: rgba(15,23,42,.06); --fd-shadow: 0 24px 70px rgba(15,23,42,.16); }
 .fd-card, .fd-blf { pointer-events: auto; border: 1px solid var(--fd-border); color: var(--fd-text); background: linear-gradient(145deg, var(--fd-card), var(--fd-bg)); box-shadow: var(--fd-shadow); backdrop-filter: blur(20px); }
 .fd-card { width: min(286px, calc(100vw - 20px)); border-radius: 20px; overflow: hidden; }
-.fd-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 11px; border-bottom: 1px solid var(--fd-border); }
+.fd-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--fd-border); }
 .fd-status-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--fd-border); background: var(--fd-card-2); border-radius: 999px; padding: 5px 8px; font-size: 11px; font-weight: 800; }
-.fd-status-pill i, .fd-blf-row em i { width: 7px; height: 7px; border-radius: 99px; display: inline-block; }
-.fd-status-pill[data-tone="green"] i, .fd-blf-row em[data-tone="green"] i { background: #22c55e; box-shadow: 0 0 10px rgba(34,197,94,.8); }
-.fd-status-pill[data-tone="yellow"] i, .fd-blf-row em[data-tone="yellow"] i { background: #f59e0b; }
-.fd-status-pill[data-tone="red"] i, .fd-blf-row em[data-tone="red"] i { background: #ef4444; }
-.fd-status-pill[data-tone="gray"] i, .fd-blf-row em[data-tone="gray"] i { background: #94a3b8; }
+.fd-status-pill i, .fd-blf-led { width: 7px; height: 7px; border-radius: 99px; display: inline-block; }
+.fd-status-pill[data-tone="green"] i, .fd-blf-led[data-tone="green"] { background: #22c55e; box-shadow: 0 0 10px rgba(34,197,94,.8); }
+.fd-status-pill[data-tone="yellow"] i { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,.6); }
+.fd-status-pill[data-tone="red"] i, .fd-blf-led[data-tone="red"] { background: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,.82); }
+.fd-status-pill[data-tone="gray"] i, .fd-blf-led[data-tone="gray"] { background: #334155; box-shadow: none; }
+.fd-blf-led[data-presence="ringing"] { animation: fdLedBlink .75s ease-in-out infinite; }
+@keyframes fdLedBlink { 0%,100% { opacity: .35; box-shadow: 0 0 3px rgba(239,68,68,.3); } 50% { opacity: 1; box-shadow: 0 0 14px rgba(239,68,68,.95); } }
 .fd-header-actions { display: flex; align-items: center; gap: 5px; }
+.fd-ringer-control { display: inline-flex; align-items: center; gap: 7px; height: 27px; padding: 0 8px; border: 1px solid var(--fd-border); border-radius: 999px; background: var(--fd-card-2); color: var(--fd-muted); font-size: 10px; font-weight: 900; letter-spacing: .02em; }
 .fd-chip-btn, .fd-icon-plain { border: 1px solid var(--fd-border); background: var(--fd-card-2); color: var(--fd-text); cursor: pointer; border-radius: 999px; height: 27px; }
 .fd-chip-btn { padding: 0 9px; font-weight: 800; font-size: 11px; }
 .fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
@@ -641,11 +674,10 @@ const DIALER_CSS = `
 .fd-keypad span { display: block; min-height: 9px; margin-top: 3px; color: var(--fd-muted); font-size: 8px; letter-spacing: 1.2px; font-weight: 800; }
 .fd-keypad-compact button { min-height: 40px; border-radius: 12px; }
 .fd-keypad-compact strong { font-size: 16px; }
-.fd-preferences { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; border: 1px solid var(--fd-border); background: var(--fd-card-2); border-radius: 13px; color: var(--fd-muted); font-size: 12px; font-weight: 800; }
-.fd-toggle { width: 38px; height: 22px; border-radius: 999px; padding: 3px; border: 0; cursor: pointer; background: #64748b; transition: background .16s ease; }
-.fd-toggle span { display: block; width: 16px; height: 16px; border-radius: 999px; background: white; box-shadow: 0 3px 10px rgba(0,0,0,.25); transition: transform .16s ease; }
+.fd-toggle { width: 34px; height: 19px; border-radius: 999px; padding: 2px; border: 0; cursor: pointer; background: #475569; transition: background .18s ease-in-out; }
+.fd-toggle span { display: block; width: 15px; height: 15px; border-radius: 999px; background: white; box-shadow: 0 3px 10px rgba(0,0,0,.25); transition: transform .18s ease-in-out; }
 .fd-toggle[data-on="true"] { background: linear-gradient(135deg, #22c55e, #10b981); }
-.fd-toggle[data-on="true"] span { transform: translateX(16px); }
+.fd-toggle[data-on="true"] span { transform: translateX(15px); }
 .fd-call-btn, .fd-answer, .fd-hangup { border: 0; cursor: pointer; color: white; font-weight: 900; border-radius: 999px; }
 .fd-call-btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: linear-gradient(135deg, #22c55e, #059669); box-shadow: 0 12px 26px rgba(34,197,94,.24); font-size: 12px; }
 .fd-call-btn:disabled { cursor: default; color: var(--fd-muted); background: var(--fd-soft); box-shadow: none; }
@@ -671,25 +703,32 @@ const DIALER_CSS = `
 .fd-diagnostics { margin: 9px 10px 0; padding: 9px; border: 1px solid var(--fd-border); border-radius: 14px; background: var(--fd-card-2); display: grid; gap: 6px; }
 .fd-diagnostics div { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--fd-muted); }
 .fd-diagnostics strong { color: var(--fd-text); text-align: right; }
-.fd-blf { width: 292px; max-width: calc(100vw - 20px); max-height: calc(100vh - 70px); border-radius: 20px; overflow: hidden; transform: translateX(20px) scale(.98); opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
-.fd-blf[data-open="true"] { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
+.fd-blf { width: 350px; max-width: calc(100vw - 20px); max-height: calc(100vh - 70px); border-radius: 20px; overflow: hidden; transform: translateX(18px) translateY(4px) scale(.985); opacity: 0; pointer-events: none; transition: opacity .2s ease-in-out, transform .2s ease-in-out; }
+.fd-blf[data-open="true"] { opacity: 1; transform: translateX(0) translateY(0) scale(1); pointer-events: auto; }
 .fd-blf-head { padding: 11px 12px 8px; }
 .fd-blf-head strong, .fd-blf-head span { display: block; }
 .fd-blf-head span { color: var(--fd-muted); font-size: 12px; margin-top: 2px; }
 .fd-search { display: flex; align-items: center; gap: 7px; margin: 0 9px 9px; padding: 8px 9px; border: 1px solid var(--fd-border); border-radius: 12px; background: var(--fd-card-2); color: var(--fd-muted); }
-.fd-blf-list { height: min(350px, calc(100vh - 198px)); overflow: auto; border-top: 1px solid var(--fd-border); }
-.fd-blf-row { display: flex; align-items: center; gap: 6px; padding: 5px 7px; }
-.fd-blf-row > button:first-child { flex: 1; min-width: 0; height: 40px; border: 0; border-radius: 12px; background: transparent; color: var(--fd-text); display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer; }
-.fd-blf-row > button:first-child:hover { background: var(--fd-card-2); }
-.fd-blf-ext { width: 42px; height: 30px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--fd-soft); font-weight: 950; font-variant-numeric: tabular-nums; font-size: 12px; }
-.fd-blf-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.fd-blf-row em { display: inline-flex; align-items: center; gap: 5px; color: var(--fd-muted); font-style: normal; font-size: 10px; font-weight: 800; margin-top: 1px; }
-.fd-blf-msg { width: 30px; height: 30px; border: 1px solid var(--fd-border); border-radius: 10px; background: var(--fd-card-2); color: var(--fd-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.fd-blf-list { height: min(390px, calc(100vh - 198px)); overflow: auto; border-top: 1px solid var(--fd-border); padding: 8px; }
+.fd-blf-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.fd-blf-tile-wrap { position: relative; height: 76px; }
+.fd-blf-tile { position: relative; width: 100%; height: 76px; border: 1px solid rgba(148,163,184,.18); border-radius: 13px; color: var(--fd-text); background: linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.025)); box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 10px 18px rgba(0,0,0,.14); text-align: left; cursor: pointer; padding: 9px 9px 8px; transition: transform .16s ease-in-out, border-color .16s ease-in-out, background .16s ease-in-out; }
+.fd-blf-tile:hover { transform: translateY(-1px); border-color: rgba(99,102,241,.48); background: linear-gradient(180deg, rgba(99,102,241,.18), rgba(255,255,255,.04)); }
+.fd-blf-tile:active { transform: translateY(0) scale(.985); }
+.fd-blf-tile[data-presence="offline"] { opacity: .58; filter: saturate(.7); }
+.fd-blf-led { position: absolute; top: 9px; right: 9px; width: 9px; height: 9px; }
+.fd-blf-ext { display: block; padding-right: 14px; font-size: 16px; line-height: 1; font-weight: 950; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.fd-blf-name { display: block; margin-top: 6px; color: var(--fd-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 850; }
+.fd-blf-tile em { display: block; margin-top: 7px; color: color-mix(in srgb, var(--fd-muted) 75%, white 25%); font-style: normal; font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.fd-blf-msg { position: absolute; right: 6px; bottom: 6px; width: 24px; height: 22px; border: 1px solid var(--fd-border); border-radius: 8px; background: rgba(15,23,42,.52); color: var(--fd-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transform: translateY(2px); transition: opacity .15s ease, transform .15s ease; }
+.fd-blf-tile-wrap:hover .fd-blf-msg { opacity: 1; transform: translateY(0); }
 .fd-empty { padding: 20px; color: var(--fd-muted); font-size: 13px; text-align: center; }
 @media (max-width: 720px) {
   .fd-shell { width: calc(100vw - 20px); right: 10px; top: 58px; }
   .fd-shell[data-blf-open="true"] { flex-direction: column-reverse; align-items: flex-end; }
   .fd-blf { width: 100%; height: min(340px, calc(100vh - 390px)); }
+  .fd-blf-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fd-ringer-control span { display: none; }
   .fd-card { width: 100%; }
 }
 `;

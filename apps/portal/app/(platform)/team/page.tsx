@@ -23,6 +23,7 @@ import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { loadPbxResource } from "../../../services/pbxData";
+import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls } from "../../../services/liveCallState";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -531,32 +532,23 @@ export default function TeamDirectoryPage() {
     () => loadPbxResource("extensions"),
     [tenantId, tenant?.name, adminScope],
   );
+  const extensionRows = extState.status === "success" ? extState.data.rows : [];
 
   // Tenant-scoped live calls for presence (not cross-tenant)
   const tenantCalls = useMemo(
     () =>
       tenantId
-        ? telephony.activeCalls.filter((c) => c.tenantId === tenantId)
+        ? scopeLiveCallsForTenant(telephony.activeCalls, tenantId, extensionRows, tenant?.name)
         : [],
-    [telephony.activeCalls, tenantId],
+    [extensionRows, telephony.activeCalls, tenant?.name, tenantId],
   );
 
   // Build active/ringing extension sets from live calls
-  const { activeExts, ringingExts } = useMemo(() => {
-    const active = new Set<string>();
-    const ringing = new Set<string>();
-    tenantCalls.forEach((c) => {
-      const exts = (c.extensions ?? []).filter(isValidTenantExtension);
-      if (c.state === "up" || c.state === "held") exts.forEach((e) => active.add(e));
-      else if (c.state === "ringing" || c.state === "dialing") exts.forEach((e) => ringing.add(e));
-    });
-    return { activeExts: active, ringingExts: ringing };
-  }, [tenantCalls]);
+  const { activeExts, ringingExts } = useMemo(() => extensionSetsFromCalls(tenantCalls), [tenantCalls]);
 
   // Build member list — merge VitalPBX directory + live AMI presence
   const members: TeamMember[] = useMemo(() => {
-    const extRows = extState.status === "success" ? extState.data.rows : [];
-    const mapped = extRows.flatMap((r, i): TeamMember[] => {
+    const mapped = extensionRows.flatMap((r, i): TeamMember[] => {
       if (!rowTenantMatches(r, tenantId, tenant?.name)) return [];
 
       const ext = readString(r, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
@@ -565,7 +557,7 @@ export default function TeamDirectoryPage() {
       const name = readString(r, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${ext}`;
       if (isSystemExtensionName(name)) return [];
 
-      const amiState = telephony.extensionList.find((e) => e.extension === ext);
+      const amiState = telephony.extensionList.find((e) => e.extension === ext && (!tenantId || !e.tenantId || e.tenantId === tenantId));
       return [{
         id: readString(r, ["id", "uuid"]) ?? ext,
         name,
@@ -587,6 +579,7 @@ export default function TeamDirectoryPage() {
     // 3-digit extensions so system or cross-tenant junk never enters the UI.
     if (mapped.length === 0 && extState.status === "loading") {
       return telephony.extensionList.flatMap((e): TeamMember[] => {
+        if (tenantId && e.tenantId && e.tenantId !== tenantId) return [];
         if (!isValidTenantExtension(e.extension) || isSystemExtensionName(e.hint || e.extension)) return [];
         return [{
         id: e.extension,
@@ -597,7 +590,7 @@ export default function TeamDirectoryPage() {
       }).sort(byExtensionAsc);
     }
     return mapped.sort(byExtensionAsc);
-  }, [extState, tenantId, tenant?.name, telephony.extensionList, activeExts, ringingExts]);
+  }, [activeExts, extensionRows, extState.status, ringingExts, tenant?.name, tenantId, telephony.extensionList]);
 
   // Keep detail panel in sync with live presence updates
   useEffect(() => {

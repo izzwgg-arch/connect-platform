@@ -8321,6 +8321,140 @@ app.get("/admin/healing/log", async (req, reply) => {
   } catch { return reply.send([]); }
 });
 
+app.get("/admin/telephony/live-diagnostics", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const tenantId = query.tenantId?.trim() || null;
+  const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = String(process.env.CDR_INGEST_SECRET || "").trim();
+
+  async function tfetch<T>(path: string, ms = 3000): Promise<T | null> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    const headers: Record<string, string> = {};
+    if (secret) headers["x-cdr-secret"] = secret;
+    try {
+      const res = await fetch(`${telephonyBase}${path}`, { headers, signal: ctrl.signal });
+      return res.ok ? (await res.json() as T) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  type DiagCall = {
+    id: string;
+    linkedId: string;
+    state: string;
+    tenantId: string | null;
+    tenantName?: string | null;
+    from?: string | null;
+    to?: string | null;
+    channels?: string[];
+    isActive?: boolean;
+  };
+  type TelephonyDiag = {
+    timestamp?: string;
+    activeCallCount?: number;
+    unresolvedTenantCount?: number;
+    calls?: DiagCall[];
+  };
+  type TelephonyExtension = {
+    extension: string;
+    status: string;
+    tenantId: string | null;
+    hint?: string;
+    updatedAt?: string;
+  };
+
+  const [diag, liveExtensions, dbExtensions] = await Promise.all([
+    tfetch<TelephonyDiag>("/telephony/diag"),
+    tfetch<TelephonyExtension[]>("/telephony/extensions"),
+    db.extension.findMany({
+      where: tenantId ? { tenantId, status: "ACTIVE" } : { status: "ACTIVE" },
+      select: { tenantId: true, extNumber: true, displayName: true },
+      orderBy: [{ tenantId: "asc" }, { extNumber: "asc" }],
+      take: 1000,
+    }),
+  ]);
+
+  const extensionTenantByExt = new Map<string, Set<string>>();
+  for (const row of dbExtensions) {
+    const set = extensionTenantByExt.get(row.extNumber) ?? new Set<string>();
+    set.add(row.tenantId);
+    extensionTenantByExt.set(row.extNumber, set);
+  }
+
+  const extractExtensions = (call: DiagCall): string[] => {
+    const values = [
+      ...(Array.isArray(call.channels) ? call.channels : []),
+      call.from ?? "",
+      call.to ?? "",
+    ].join(" ");
+    return [...new Set((values.match(/\b\d{3}\b/g) ?? []))];
+  };
+  const activeCalls = (diag?.calls ?? []).filter((call) => call.isActive !== false && !["hungup", "unknown"].includes(String(call.state).toLowerCase()));
+  const callMatchesTenant = (call: DiagCall): boolean => {
+    if (!tenantId) return true;
+    if (call.tenantId === tenantId) return true;
+    if (call.tenantId && call.tenantId !== tenantId) return false;
+    return extractExtensions(call).some((ext) => extensionTenantByExt.get(ext)?.has(tenantId));
+  };
+  const scopedCalls = activeCalls.filter(callMatchesTenant);
+  const scopedCallExts = new Set(scopedCalls.flatMap(extractExtensions));
+  const busyStatuses = new Set(["inuse", "busy", "ringing", "onhold"]);
+  const scopedLiveExtensions = (liveExtensions ?? []).filter((ext) => !tenantId || !ext.tenantId || ext.tenantId === tenantId);
+  const presenceOnCallExtensions = scopedLiveExtensions
+    .filter((ext) => busyStatuses.has(String(ext.status).toLowerCase()))
+    .map((ext) => ({ extension: ext.extension, status: ext.status, tenantId: ext.tenantId, updatedAt: ext.updatedAt ?? null }));
+
+  const unmatchedPresenceExtensions = presenceOnCallExtensions.filter((ext) => !scopedCallExts.has(ext.extension));
+  const unmatchedLiveCalls = scopedCalls
+    .map((call) => ({ ...call, extensions: extractExtensions(call) }))
+    .filter((call) => call.extensions.length > 0 && !call.extensions.some((ext) => presenceOnCallExtensions.some((p) => p.extension === ext)));
+  const tenantMappingFailures = activeCalls
+    .map((call) => ({ call, extensions: extractExtensions(call) }))
+    .filter(({ call, extensions }) => !call.tenantId && !extensions.some((ext) => extensionTenantByExt.has(ext)))
+    .map(({ call, extensions }) => ({ id: call.id, linkedId: call.linkedId, state: call.state, from: call.from ?? null, to: call.to ?? null, extensions }));
+
+  return reply.send({
+    tenantId,
+    generatedAt: new Date().toISOString(),
+    telephonyTimestamp: diag?.timestamp ?? null,
+    sourceOfTruth: "telephony.callStore.getActive via /telephony/diag",
+    liveCallsCount: scopedCalls.length,
+    globalLiveCallsCount: activeCalls.length,
+    unresolvedTenantCount: diag?.unresolvedTenantCount ?? activeCalls.filter((call) => !call.tenantId).length,
+    activeCalls: scopedCalls.map((call) => ({
+      id: call.id,
+      linkedId: call.linkedId,
+      state: call.state,
+      tenantId: call.tenantId,
+      tenantName: call.tenantName ?? null,
+      from: call.from ?? null,
+      to: call.to ?? null,
+      extensions: extractExtensions(call),
+    })),
+    presenceOnCallExtensions,
+    unmatchedPresenceExtensions,
+    unmatchedLiveCalls: unmatchedLiveCalls.map((call) => ({
+      id: call.id,
+      linkedId: call.linkedId,
+      state: call.state,
+      tenantId: call.tenantId,
+      from: call.from ?? null,
+      to: call.to ?? null,
+      extensions: call.extensions,
+    })),
+    tenantMappingFailures,
+    extensionDirectoryCount: dbExtensions.length,
+    telephonyReachable: Boolean(diag),
+  });
+});
+
 // ── Ops Center — comprehensive single-call data endpoint ───────────────────────
 app.get("/admin/ops-center", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);

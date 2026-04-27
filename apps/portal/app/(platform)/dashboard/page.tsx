@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, ArrowLeftRight, Phone, TrendingUp, ShieldCheck, AlertTriangle, BarChart3,
   Workflow, Users, Voicemail, Mic, CreditCard, Activity, Clock, GitMerge, ListOrdered,
@@ -25,6 +25,9 @@ import {
   type PbxLiveCombined,
   type AdminPbxLiveCombined,
 } from "../../../services/pbxLive";
+import { loadPbxResource } from "../../../services/pbxData";
+import { callsForTenant, extensionSetsFromCalls, presenceFromLiveCalls } from "../../../services/liveCallState";
+import type { LiveCall } from "../../../types/liveCall";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -80,12 +83,9 @@ type ConnectKpis = {
 
 export default function DashboardPage() {
   // ── Context & scope ──
-  const { adminScope, tenantId: contextTenantId } = useAppContext();
+  const { adminScope, tenantId: contextTenantId, tenant } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
   const telephony = useTelephony();
-  // Use reactive contextTenantId from AppContext (not direct localStorage read) so the
-  // live-call list updates correctly when the user switches tenants via TenantSwitcher.
-  const liveCalls = telephony.callsByTenant(isGlobal ? null : contextTenantId);
 
   // ── Refresh ticks ──
   const [combinedTick, setCombinedTick] = useState(0);
@@ -101,22 +101,10 @@ export default function DashboardPage() {
     return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
   }, [isGlobal]);
 
-  // Refresh KPIs when a call ends
-  const prevActiveCount = useRef<number | null>(null);
-  useEffect(() => {
-    const count = liveCalls.length;
-    if (prevActiveCount.current !== null && count < prevActiveCount.current) {
-      const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 4_000);
-      prevActiveCount.current = count;
-      return () => clearTimeout(timer);
-    }
-    prevActiveCount.current = count;
-  }, [liveCalls.length]);
-
   // ── Data fetching ──
   const pbxCombinedState = useAsyncResource<PbxLiveCombined | AdminPbxLiveCombined>(
     () => isGlobal ? loadAdminPbxLiveCombined() : loadPbxLiveCombined(),
-    [adminScope, combinedTick]
+    [adminScope, contextTenantId, combinedTick]
   );
 
   const kpiParam = (() => {
@@ -138,12 +126,35 @@ export default function DashboardPage() {
     () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic${trafficParam}`),
     [adminScope, contextTenantId, trafficTick]
   );
+  const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
+    () => loadPbxResource("extensions"),
+    [adminScope, contextTenantId, tenant?.name],
+  );
 
   // ── Derived values ──
   const combined     = pbxCombinedState.status === "success" ? pbxCombinedState.data : null;
   const pbxLive      = combined?.summary ?? null;
   const activeCalls  = combined?.activeCalls ?? null;
   const traffic      = trafficState.status === "success" ? trafficState.data : null;
+  const extensionRows = extState.status === "success" ? extState.data.rows : [];
+  // Use the AMI live-call store as the source of truth, then tenant-scope it
+  // with the extension directory when the PBX event did not resolve tenantId.
+  const liveCalls = useMemo(
+    () => callsForTenant(telephony.activeCalls, isGlobal ? null : contextTenantId, extensionRows, tenant?.name),
+    [contextTenantId, extensionRows, isGlobal, telephony.activeCalls, tenant?.name],
+  );
+
+  // Refresh KPIs when a call ends
+  const prevActiveCount = useRef<number | null>(null);
+  useEffect(() => {
+    const count = liveCalls.length;
+    if (prevActiveCount.current !== null && count < prevActiveCount.current) {
+      const timer = window.setTimeout(() => setKpiTick((v) => v + 1), 4_000);
+      prevActiveCount.current = count;
+      return () => clearTimeout(timer);
+    }
+    prevActiveCount.current = count;
+  }, [liveCalls.length]);
 
   const isAdminSummary = (s: PbxLiveSummary | AdminPbxLiveSummary | null): s is AdminPbxLiveSummary =>
     s !== null && "totalCallsToday" in s;
@@ -193,11 +204,11 @@ export default function DashboardPage() {
             <div className="dash-hero-header">
               <div>
                 <h2 className="dash-hero-title">Call activity</h2>
-                <p className="dash-hero-sub">Today · total call volume · {traffic?.timezone ?? "local PBX time"}</p>
+                <p className="dash-hero-sub">Today · incoming, outgoing, internal, and missed · {traffic?.timezone ?? "local PBX time"}</p>
               </div>
               <div className="dash-hero-status-pill">
                 <Activity size={13} />
-                <span>Total calls trend</span>
+                <span>4-category activity</span>
               </div>
             </div>
             <div className="dash-hero-plot">
@@ -304,9 +315,9 @@ export default function DashboardPage() {
         <section className="dash-section" aria-label="Extension presence">
           <div className="dash-section-hdr">
             <h3 className="dash-section-title">Extension presence</h3>
-            <span className="dash-shell-badge">Preview — wire up when live</span>
+            <span className="dash-shell-badge">Live via AMI</span>
             </div>
-          <ExtensionPresenceGrid />
+          <ExtensionPresenceGrid calls={liveCalls} />
         </section>
 
         {/* ── QUEUE + IVR + VOICEMAIL ROW ── */}
@@ -366,7 +377,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ) : (
-                <LiveCallsEmptyState />
+                <LiveCallsEmptyState tenantScoped={!isGlobal} />
               )
             ) : pbxCombinedState.status === "loading" ? (
               <LoadingSkeleton rows={1} />
@@ -394,7 +405,7 @@ export default function DashboardPage() {
               </div>
               </div>
             ) : (
-              <LiveCallsEmptyState />
+              <LiveCallsEmptyState tenantScoped={!isGlobal} />
             )}
           </div>
         </section>
@@ -570,21 +581,26 @@ function TimeConditionCard() {
 }
 
 // ── Extension Presence Grid ───────────────────────────────────────────────────
-function ExtensionPresenceGrid() {
-  const PLACEHOLDER_EXTS = [
-    { ext: "101", name: "Alice M.", status: "available" },
-    { ext: "102", name: "Bob K.",   status: "on-call"   },
-    { ext: "103", name: "Carol T.", status: "available" },
-    { ext: "104", name: "Dan W.",   status: "offline"   },
-    { ext: "105", name: "Eve S.",   status: "on-call"   },
-    { ext: "106", name: "Frank L.", status: "available" },
-    { ext: "107", name: "Grace H.", status: "ringing"   },
-    { ext: "108", name: "Hank J.",  status: "offline"   },
-    { ext: "109", name: "Iris P.",  status: "available" },
-    { ext: "110", name: "Jake R.",  status: "on-call"   },
-    { ext: "111", name: "Kim T.",   status: "available" },
-    { ext: "112", name: "Leo V.",   status: "offline"   },
-  ];
+function ExtensionPresenceGrid({ calls }: { calls: LiveCall[] }) {
+  const telephony = useTelephony();
+  const { adminScope, tenantId } = useAppContext();
+  const { activeExts, ringingExts } = useMemo(() => extensionSetsFromCalls(calls), [calls]);
+  const liveExtensions = useMemo(
+    () =>
+      telephony.extensionList
+        .filter((entry) => (adminScope === "GLOBAL" ? true : !entry.tenantId || entry.tenantId === tenantId))
+        .map((entry) => {
+          const status = presenceFromLiveCalls(entry.status ?? "offline", entry.extension, activeExts, ringingExts);
+          return {
+            ext: entry.extension,
+            name: entry.hint || `Extension ${entry.extension}`,
+            status: status === "on_call" ? "on-call" : status,
+          };
+        })
+        .sort((a, b) => a.ext.localeCompare(b.ext, undefined, { numeric: true }))
+        .slice(0, 12),
+    [activeExts, adminScope, ringingExts, telephony.extensionList, tenantId],
+  );
   const STATUS: Record<string, { label: string; color: string }> = {
     "available": { label: "Available", color: "var(--console-success)" },
     "on-call":   { label: "On Call",   color: "var(--dash-outgoing)"   },
@@ -593,7 +609,9 @@ function ExtensionPresenceGrid() {
   };
   return (
     <div className="dash-presence-grid">
-      {PLACEHOLDER_EXTS.map((e) => {
+      {liveExtensions.length === 0 ? (
+        <div className="dash-support-empty">No live extension presence yet.</div>
+      ) : liveExtensions.map((e) => {
         const s = STATUS[e.status];
         const initials = e.name.split(" ").map((p) => p[0]).join("").toUpperCase();
         return (
@@ -864,14 +882,16 @@ function AnswerRateCard({
   );
 }
 
-function LiveCallsEmptyState() {
+function LiveCallsEmptyState({ tenantScoped = false }: { tenantScoped?: boolean }) {
   return (
     <div className="dash-live-empty">
       <div className="dash-live-empty-ring">
         <Phone size={22} className="dash-live-empty-icon" />
       </div>
       <p className="dash-live-empty-title">All quiet</p>
-      <p className="dash-live-empty-sub">No active calls right now. Live updates are on.</p>
+      <p className="dash-live-empty-sub">
+        {tenantScoped ? "No live calls for this tenant right now." : "No active calls right now. Live updates are on."}
+      </p>
     </div>
   );
 }
@@ -1210,7 +1230,14 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const iH  = H - PAD.top  - PAD.bottom;
   const bY  = PAD.top + iH;
 
-  const peak = Math.max(1, ...points.map((p) => p.total));
+  const series = [
+    { key: "incoming", label: "Incoming", color: "var(--dash-incoming)" },
+    { key: "outgoing", label: "Outgoing", color: "var(--dash-outgoing)" },
+    { key: "internal", label: "Internal", color: "var(--dash-internal)" },
+    { key: "missed", label: "Missed", color: "var(--dash-missed)" },
+  ] as const;
+
+  const peak = Math.max(1, ...points.flatMap((p) => series.map((s) => p[s.key])));
   const yMax = (() => {
     const raw = peak * 1.2;
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -1220,8 +1247,10 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const xOf = (i: number) => PAD.left + (i / Math.max(1, points.length - 1)) * iW;
   const yOf = (v: number) => PAD.top  + iH - (v / yMax) * iH;
 
-  const totalPts:  [number, number][] = points.map((p, i) => [xOf(i), yOf(p.total)]);
-  const missedPts: [number, number][] = points.map((p, i) => [xOf(i), yOf(p.missed)]);
+  const seriesPoints = series.map((s) => ({
+    ...s,
+    pts: points.map((p, i): [number, number] => [xOf(i), yOf(p[s.key])]),
+  }));
 
   const maxLabels = points.length > 24 ? 8 : 10;
   const step      = Math.max(1, Math.ceil(points.length / maxLabels));
@@ -1236,7 +1265,8 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
 
   const hov = hovIdx !== null ? points[hovIdx] : null;
   const hovX = hovIdx !== null ? xOf(hovIdx) : null;
-  const hovTotalY = hov ? yOf(hov.total) : null;
+  const hoverPeakValue = hov ? Math.max(hov.incoming, hov.outgoing, hov.internal, hov.missed) : null;
+  const hoverPeakY = hoverPeakValue !== null ? yOf(hoverPeakValue) : null;
 
   // Tooltip: flip to left when in the right third
   const tooltipLeft = hovIdx !== null && hovIdx > points.length * 0.65;
@@ -1261,11 +1291,13 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
       aria-label="Call activity chart"
     >
       <defs>
-        <linearGradient id="hg-total" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.34" />
-          <stop offset="56%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.10" />
-          <stop offset="100%" stopColor="var(--dash-total-line, #38bdf8)" stopOpacity="0.00" />
-        </linearGradient>
+        {series.map((s) => (
+          <linearGradient key={s.key} id={`hg-${s.key}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={s.color} stopOpacity="0.20" />
+            <stop offset="68%" stopColor={s.color} stopOpacity="0.05" />
+            <stop offset="100%" stopColor={s.color} stopOpacity="0.00" />
+          </linearGradient>
+        ))}
         <filter id="hg-glow" x="-20%" y="-40%" width="140%" height="180%">
           <feGaussianBlur stdDeviation="4" result="blur" />
           <feMerge>
@@ -1302,35 +1334,53 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
         </text>
       ))}
 
-      {/* Area fill */}
+      {/* Subtle area fills. Incoming is intentionally strongest; the other
+          fills are low-opacity so four series stay readable. */}
       <g clipPath="url(#hg-clip)">
-        <path d={smoothArea(totalPts, bY)} fill="url(#hg-total)" className="hg-area hg-area--total" />
+        {seriesPoints.map((s, idx) => (
+          <path
+            key={s.key}
+            d={smoothArea(s.pts, bY)}
+            fill={`url(#hg-${s.key})`}
+            className={`hg-area hg-area--${s.key}`}
+            style={{ animationDelay: `${idx * 70}ms` }}
+          />
+        ))}
       </g>
 
       {/* Lines */}
       <g clipPath="url(#hg-clip)">
-        {points.some((p) => p.missed > 0) && (
-          <path d={smoothCurve(missedPts)} fill="none" stroke="var(--dash-missed)" strokeWidth="1.5"
+        {seriesPoints.map((s, idx) => (
+          <g key={s.key}>
+            <path d={smoothCurve(s.pts)} fill="none" stroke={s.color} strokeWidth={s.key === "missed" ? "4.5" : "5.5"}
+              strokeLinecap="round" strokeLinejoin="round"
+              pathLength="1" className={`hg-line hg-line--glow hg-line--${s.key}`}
+              style={{ animationDelay: `${80 + idx * 70}ms` }}
+              filter="url(#hg-glow)" />
+            <path d={smoothCurve(s.pts)} fill="none" stroke={s.color} strokeWidth={s.key === "missed" ? "2" : "2.75"}
             strokeLinecap="round" strokeLinejoin="round"
-            pathLength="1" className="hg-line hg-line--missed" />
-        )}
-        <path d={smoothCurve(totalPts)} fill="none" stroke="var(--dash-total-line, #38bdf8)" strokeWidth="7"
-          strokeLinecap="round" strokeLinejoin="round"
-          pathLength="1" className="hg-line hg-line--glow" filter="url(#hg-glow)" />
-        <path d={smoothCurve(totalPts)} fill="none" stroke="var(--dash-total-line, #38bdf8)" strokeWidth="3.25"
-          strokeLinecap="round" strokeLinejoin="round"
-          pathLength="1" className="hg-line hg-line--total" />
+              pathLength="1" className={`hg-line hg-line--${s.key}`}
+              style={{ animationDelay: `${120 + idx * 70}ms` }} />
+          </g>
+        ))}
       </g>
 
       {/* Hover crosshair */}
-      {hovX !== null && hov !== null && hovTotalY !== null && (
+      {hovX !== null && hov !== null && hoverPeakY !== null && (
         <g>
           <line x1={hovX} y1={PAD.top} x2={hovX} y2={bY}
             className="hg-hover-line" />
 
-          {/* Hover point */}
-          <circle cx={hovX} cy={hovTotalY} r="10" className="hg-hover-pulse" />
-          <circle cx={hovX} cy={hovTotalY} r="4.5" className="hg-hover-dot" />
+          {/* Hover points */}
+          {seriesPoints.map((s) => {
+            const value = hov[s.key];
+            return (
+              <g key={s.key}>
+                <circle cx={hovX} cy={yOf(value)} r="8" className="hg-hover-pulse" style={{ fill: s.color }} />
+                <circle cx={hovX} cy={yOf(value)} r="3.8" className="hg-hover-dot" style={{ stroke: s.color }} />
+              </g>
+            );
+          })}
 
           {/* Tooltip box */}
           {(() => {
