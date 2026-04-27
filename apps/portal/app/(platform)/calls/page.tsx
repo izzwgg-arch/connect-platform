@@ -17,15 +17,20 @@ import { formatDurationSec, directionLabel, directionClass } from "../../../serv
 import {
   ArrowDown, ArrowLeftRight, ArrowUp,
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
-  ChevronDown, ChevronRight, Clock, User, Voicemail,
-  Radio, GitBranch, CheckCircle2, XCircle, AlertCircle, Info,
-  X, Mic, Download, Copy,
+  ChevronDown, ChevronRight, Voicemail,
+  Radio, CheckCircle2, XCircle, AlertCircle, Info,
+  X, Mic, Download,
+  Search, MoreHorizontal, Copy, SlidersHorizontal, PhoneCall,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type CallDirection = "incoming" | "outgoing" | "internal";
 type CallStatus = "answered" | "missed" | "canceled" | "failed";
 type AnsweredByType = "human" | "ivr" | "voicemail" | "system" | null;
+type FeedTab = "all" | "answered" | "missed" | "voicemail" | "internal";
+type DatePreset = "today" | "yesterday" | "last7" | "custom";
 
 type JourneyStep = {
   label: string;
@@ -51,10 +56,8 @@ type CallHistoryRow = {
   tenantId: string | null;
   tenantName: string;
   rangExtension: string | null;
-  // Recording
   recordingAvailable: boolean;
   recordingPath: string | null;
-  // Derived outcome fields
   answeredByType: AnsweredByType;
   humanAnswered: boolean;
   ivrAnswered: boolean;
@@ -87,6 +90,12 @@ function todayDateInput(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+function dateInputFor(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function toIsoRange(startDate: string, endDate: string) {
   const s = new Date(`${startDate}T00:00:00`);
   const e = new Date(`${endDate}T00:00:00`);
@@ -100,24 +109,16 @@ function formatDuration(sec: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const abs = Math.abs(ms);
-  const suffix = ms >= 0 ? "ago" : "from now";
-  if (abs < 60_000) {
-    const value = Math.max(1, Math.round(abs / 1_000));
-    return `${value} sec${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  if (abs < 3_600_000) {
-    const value = Math.max(1, Math.round(abs / 60_000));
-    return `${value} min${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  if (abs < 86_400_000) {
-    const value = Math.max(1, Math.round(abs / 3_600_000));
-    return `${value} hour${value === 1 ? "" : "s"} ${suffix}`;
-  }
-  const value = Math.max(1, Math.round(abs / 86_400_000));
-  return `${value} day${value === 1 ? "" : "s"} ${suffix}`;
+function smartTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const isYest = d.toDateString() === yest.toDateString();
+  const timePart = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (isToday) return timePart;
+  if (isYest) return `Yest. ${timePart}`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatAbsTime(iso: string): string {
@@ -133,7 +134,40 @@ function formatPhone(num: string): string {
   return num || "—";
 }
 
-// ─── Direction & status display ───────────────────────────────────────────────
+function callDescription(row: CallHistoryRow): string {
+  const dir = row.direction === "incoming" ? "Incoming" : row.direction === "outgoing" ? "Outgoing" : "Internal";
+  if (row.voicemailAnswered) return `${dir} · Voicemail`;
+  if (row.humanAnswered) return `${dir} · Answered`;
+  if (row.ivrAnswered && !row.humanAnswered && row.status === "missed") return `${dir} · IVR then missed`;
+  if (row.ivrAnswered && !row.humanAnswered) return `${dir} · IVR only`;
+  if (row.status === "missed") return `${dir} · Missed`;
+  if (row.status === "canceled") return `${dir} · Canceled`;
+  if (row.status === "failed") return `${dir} · Failed`;
+  return dir;
+}
+
+type CallGroup = { key: string; label: string; items: CallHistoryRow[] };
+
+function groupCalls(items: CallHistoryRow[]): CallGroup[] {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today.getTime() - 86_400_000);
+  const groups = new Map<string, CallGroup>();
+  for (const row of items) {
+    const d = new Date(row.startedAt); d.setHours(0, 0, 0, 0);
+    let key: string; let label: string;
+    if (d.getTime() === today.getTime()) { key = "today"; label = "Today"; }
+    else if (d.getTime() === yesterday.getTime()) { key = "yesterday"; label = "Yesterday"; }
+    else {
+      key = d.toISOString().slice(0, 10);
+      label = d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+    }
+    if (!groups.has(key)) groups.set(key, { key, label, items: [] });
+    groups.get(key)!.items.push(row);
+  }
+  return [...groups.values()];
+}
+
+// ─── Direction & outcome helpers ──────────────────────────────────────────────
 
 function DirectionIcon({ direction, size = 14 }: { direction: CallDirection; size?: number }) {
   if (direction === "incoming") return <ArrowDown className="call-dir-icon incoming" size={size} />;
@@ -179,17 +213,196 @@ function StepIcon({ result }: { result: JourneyStep["result"] }) {
   return <Info size={15} className="step-icon info" />;
 }
 
-// ─── Call detail panel ────────────────────────────────────────────────────────
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+
+function CallAvatar({ row }: { row: CallHistoryRow }) {
+  const { direction, fromName, voicemailAnswered, status } = row;
+  const dotClass = voicemailAnswered ? "voicemail" : status === "missed" ? "missed" : direction;
+
+  let initials: string | null = null;
+  if (direction === "incoming" && fromName) {
+    const parts = fromName.trim().split(/\s+/);
+    initials = parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : fromName.slice(0, 2).toUpperCase();
+  }
+
+  return (
+    <div className={`ch-avatar ${direction}`} aria-hidden="true">
+      {initials ? initials : (
+        direction === "incoming" ? <PhoneIncoming size={17} /> :
+        direction === "outgoing" ? <Phone size={17} /> :
+        <ArrowLeftRight size={17} />
+      )}
+      <span className={`ch-avatar-dot ${dotClass}`} />
+    </div>
+  );
+}
+
+// ─── Feed item ────────────────────────────────────────────────────────────────
+
+function CallFeedItem({
+  row,
+  isSelected,
+  onClick,
+  isGlobal,
+  onCopy,
+}: {
+  row: CallHistoryRow;
+  isSelected: boolean;
+  onClick: () => void;
+  isGlobal: boolean;
+  onCopy: (num: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const contactNumber = row.direction === "outgoing" ? row.toNumber : row.fromNumber;
+
+  const displayName =
+    row.direction === "incoming" && row.fromName
+      ? row.fromName
+      : row.direction === "outgoing"
+        ? formatPhone(row.toNumber)
+        : formatPhone(row.fromNumber);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
+
+  return (
+    <div
+      className={`ch-item ${isSelected ? "selected" : ""} ${row.status === "missed" ? "is-missed-call" : ""}`}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      aria-label={`${callDescription(row)} — ${displayName}`}
+    >
+      <CallAvatar row={row} />
+
+      <div className="ch-item-main">
+        <div className="ch-item-name">
+          {displayName}
+          {isGlobal && row.tenantName !== "Unassigned" ? (
+            <span className="ch-item-tenant"> · {row.tenantName}</span>
+          ) : null}
+        </div>
+        <div className="ch-item-sub">
+          <span className={`ch-item-status ${outcomeClass(row)}`}>
+            <OutcomeIcon row={row} />
+            {callDescription(row)}
+          </span>
+          {row.rangExtension ? (
+            <>
+              <span className="ch-item-sub-sep" aria-hidden="true">·</span>
+              <span className="ch-item-ext">ext {row.rangExtension}</span>
+            </>
+          ) : null}
+        </div>
+        {row.journeySummary ? (
+          <div className="ch-item-journey">{row.journeySummary}</div>
+        ) : null}
+      </div>
+
+      <div className="ch-item-right">
+        <span className="ch-item-time">{smartTime(row.startedAt)}</span>
+        <span className="ch-item-duration">{formatDuration(row.durationSec)}</span>
+        <div className="ch-item-actions" onClick={(e) => e.stopPropagation()}>
+          {row.recordingAvailable ? (
+            <button
+              className="ch-action-btn rec"
+              title="Open recording"
+              onClick={(e) => { e.stopPropagation(); onClick(); }}
+            >
+              <Mic size={13} />
+            </button>
+          ) : null}
+          <div className="ch-menu-wrap" ref={menuRef}>
+            <button
+              className="ch-action-btn"
+              title="More actions"
+              aria-label="More actions"
+              onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+            >
+              <MoreHorizontal size={13} />
+            </button>
+            {menuOpen ? (
+              <div className="ch-menu" role="menu">
+                <a
+                  className="ch-menu-item"
+                  href={`tel:${contactNumber}`}
+                  onClick={(e) => e.stopPropagation()}
+                  role="menuitem"
+                >
+                  <PhoneCall size={14} />
+                  Call back
+                </a>
+                <button
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={(e) => { e.stopPropagation(); onCopy(contactNumber); setMenuOpen(false); }}
+                >
+                  <Copy size={14} />
+                  Copy number
+                </button>
+                <button
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={(e) => { e.stopPropagation(); onClick(); setMenuOpen(false); }}
+                >
+                  <ChevronRight size={14} />
+                  View details
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Detail panel ─────────────────────────────────────────────────────────────
 
 function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () => void }) {
   const [techExpanded, setTechExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const dir = row.direction;
+
+  const contactName = dir === "incoming"
+    ? (row.fromName || formatPhone(row.fromNumber))
+    : formatPhone(row.toNumber);
+  const contactNumber = dir === "outgoing" ? row.toNumber : row.fromNumber;
+
+  function heroInitials(): string | null {
+    if (dir !== "incoming" || !row.fromName) return null;
+    const parts = row.fromName.trim().split(/\s+/);
+    return parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : row.fromName.slice(0, 2).toUpperCase();
+  }
+
+  function copyNumber() {
+    if (typeof navigator === "undefined") return;
+    navigator.clipboard.writeText(contactNumber).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }
+
+  const initials = heroInitials();
 
   return (
     <div className="call-detail-overlay" onClick={onClose} role="dialog" aria-modal aria-label="Call details">
       <div className="call-detail-panel" onClick={(e) => e.stopPropagation()}>
 
-        {/* Header */}
+        {/* Sticky header */}
         <div className="cdp-header">
           <div className="cdp-header-left">
             <div className={`cdp-dir-badge ${dir}`}>
@@ -204,39 +417,85 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
           <button className="cdp-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
 
-        {/* Call identity */}
-        <div className="cdp-identity">
-          <div className="cdp-number-row">
-            <div className="cdp-number-block">
-              <span className="cdp-number-label">From</span>
-              {row.fromName && <span className="cdp-caller-name">{row.fromName}</span>}
-              <span className="cdp-number">{formatPhone(row.fromNumber)}</span>
-            </div>
-            <div className="cdp-arrow">→</div>
-            <div className="cdp-number-block">
-              <span className="cdp-number-label">To</span>
-              <span className="cdp-number">{formatPhone(row.toNumber)}</span>
-            </div>
+        {/* Hero */}
+        <div className="cdp-hero">
+          <div className={`cdp-hero-avatar ${dir}`}>
+            {initials ? initials : <Phone size={22} />}
           </div>
-          <div className="cdp-meta-row">
-            {row.tenantName !== "Unassigned" ? (
-              <span className="cdp-meta-chip"><User size={12} />{row.tenantName}</span>
-            ) : null}
-            <span className="cdp-meta-chip"><Clock size={12} />{formatAbsTime(row.startedAt)}</span>
-            {row.durationSec > 0 ? (
-              <span className="cdp-meta-chip"><Phone size={12} />{formatDuration(row.durationSec)} total</span>
-            ) : null}
-            {row.talkSec > 0 ? (
-              <span className="cdp-meta-chip talk"><CheckCircle2 size={12} />{formatDuration(row.talkSec)} talk</span>
-            ) : null}
+          <div className="cdp-hero-body">
+            <div className="cdp-hero-name">{contactName}</div>
+            <div className="cdp-hero-number">{formatPhone(contactNumber)}</div>
+            <div className="cdp-hero-time">{formatAbsTime(row.startedAt)}</div>
+            <div className="cdp-hero-actions">
+              <a className="cdp-hero-action-btn" href={`tel:${contactNumber}`}>
+                <PhoneCall size={13} />
+                Call back
+              </a>
+              <button className="cdp-hero-action-btn" onClick={copyNumber}>
+                <Copy size={13} />
+                {copied ? "Copied!" : "Copy number"}
+              </button>
+              {row.recordingAvailable ? (
+                <span className="cdp-hero-rec-badge">
+                  <Mic size={12} />
+                  Recording
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
 
-        {/* Outcome summary card */}
-        <div className={`cdp-outcome-card ${outcomeClass(row)}`}>
-          <div className="cdp-outcome-icon-wrap">
-            <OutcomeIcon row={row} />
+        {/* Info grid */}
+        <div className="cdp-info-grid">
+          <div className="cdp-info-item">
+            <span className="cdp-info-label">Direction</span>
+            <span className="cdp-info-value">
+              {dir === "incoming" ? "Inbound" : dir === "outgoing" ? "Outbound" : "Internal"}
+            </span>
           </div>
+          <div className="cdp-info-item">
+            <span className="cdp-info-label">Status</span>
+            <span className={`cdp-info-value cdp-info-status ${outcomeClass(row)}`}>{outcomeLabel(row)}</span>
+          </div>
+          <div className="cdp-info-item">
+            <span className="cdp-info-label">Duration</span>
+            <span className="cdp-info-value">{formatDuration(row.durationSec)}</span>
+          </div>
+          {row.talkSec > 0 ? (
+            <div className="cdp-info-item">
+              <span className="cdp-info-label">Talk time</span>
+              <span className="cdp-info-value">{formatDuration(row.talkSec)}</span>
+            </div>
+          ) : null}
+          {row.answeredByType ? (
+            <div className="cdp-info-item">
+              <span className="cdp-info-label">Answered by</span>
+              <span className="cdp-info-value" style={{ textTransform: "capitalize" }}>{row.answeredByType}</span>
+            </div>
+          ) : null}
+          {row.rangExtension ? (
+            <div className="cdp-info-item">
+              <span className="cdp-info-label">Extension</span>
+              <span className="cdp-info-value">ext {row.rangExtension}</span>
+            </div>
+          ) : null}
+          {row.tenantName && row.tenantName !== "Unassigned" ? (
+            <div className="cdp-info-item">
+              <span className="cdp-info-label">Tenant</span>
+              <span className="cdp-info-value">{row.tenantName}</span>
+            </div>
+          ) : null}
+          {row.endedAt ? (
+            <div className="cdp-info-item">
+              <span className="cdp-info-label">Ended at</span>
+              <span className="cdp-info-value">{new Date(row.endedAt).toLocaleTimeString()}</span>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Outcome summary */}
+        <div className={`cdp-outcome-card ${outcomeClass(row)}`}>
+          <div className="cdp-outcome-icon-wrap"><OutcomeIcon row={row} /></div>
           <p className="cdp-outcome-text">{row.journeySummary || "No summary available."}</p>
         </div>
 
@@ -258,13 +517,16 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
           </div>
         ) : null}
 
-        {/* Attempted extensions */}
+        {/* Extensions involved */}
         {row.attemptedExtensions.length > 0 ? (
           <div className="cdp-section">
             <h4 className="cdp-section-title">Extensions involved</h4>
             <div className="cdp-ext-list">
               {row.attemptedExtensions.map((ext) => (
-                <span key={ext} className={`cdp-ext-chip ${row.humanAnswered && row.rangExtension === ext ? "answered" : "rang"}`}>
+                <span
+                  key={ext}
+                  className={`cdp-ext-chip ${row.humanAnswered && row.rangExtension === ext ? "answered" : "rang"}`}
+                >
                   <Phone size={11} />
                   {ext}
                   {row.humanAnswered && row.rangExtension === ext ? " ✓" : ""}
@@ -274,8 +536,7 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
           </div>
         ) : null}
 
-        {/* Recording — shown only when recordingPath is present. Audio is fetched on-demand
-            (preload="none") so opening call details does not trigger any PBX request. */}
+        {/* Recording — preload="none" so opening the panel does NOT trigger a PBX request until play */}
         {row.recordingAvailable ? (
           <div className="cdp-section">
             <h4 className="cdp-section-title">
@@ -333,6 +594,20 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+const TABS: { id: FeedTab; label: string }[] = [
+  { id: "all",      label: "All" },
+  { id: "answered", label: "Answered" },
+  { id: "missed",   label: "Missed" },
+  { id: "voicemail",label: "Voicemail" },
+  { id: "internal", label: "Internal" },
+];
+
+const DATE_PRESETS: { id: DatePreset; label: string }[] = [
+  { id: "today",     label: "Today" },
+  { id: "yesterday", label: "Yesterday" },
+  { id: "last7",     label: "Last 7 days" },
+];
+
 export default function CallsPage() {
   const { adminScope, tenantId } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
@@ -340,240 +615,155 @@ export default function CallsPage() {
   const scopedTenantId = isGlobal ? null : tenantId;
   const liveCalls = telephony.callsByTenant(scopedTenantId);
 
-  // Modern filter state
-  const [searchDraft, setSearchDraft] = useState("");
-  const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"all" | "missed" | "answered" | "voicemail" | "internal">("all");
-  const [quickDate, setQuickDate] = useState<"today" | "yesterday" | "week" | "all">("today");
-  const [selectedRow, setSelectedRow] = useState<CallHistoryRow | null>(null);
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  // Filter state
+  const [searchDraft, setSearchDraft]   = useState("");
+  const [search, setSearch]             = useState("");
+  const [activeTab, setActiveTab]       = useState<FeedTab>("all");
+  const [datePreset, setDatePreset]     = useState<DatePreset>("today");
+  const [startDate, setStartDate]       = useState(todayDateInput());
+  const [endDate, setEndDate]           = useState(todayDateInput());
+  const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [pageSize, setPageSize]         = useState(100);
+  const [page, setPage]                 = useState(1);
+  const [selectedRow, setSelectedRow]   = useState<CallHistoryRow | null>(null);
+  const [copyToast, setCopyToast]       = useState<string | null>(null);
 
-  const [startDate, setStartDate] = useState(todayDateInput());
-  const [endDate, setEndDate] = useState(todayDateInput());
-  const [page, setPage] = useState(1);
-  const pageSize = 50; // optimized for modern feed
-
-  // Update search with debounce
+  // Search debounce
   useEffect(() => {
-    const t = window.setTimeout(() => { 
-      setSearch(searchDraft.trim()); 
-      setPage(1); 
-    }, 300);
+    const t = window.setTimeout(() => { setSearch(searchDraft.trim()); setPage(1); }, 220);
     return () => clearTimeout(t);
   }, [searchDraft]);
 
-  // Reset page on filter changes (tenant aware)
-  useEffect(() => { 
-    setPage(1); 
-  }, [activeTab, quickDate, search, adminScope, scopedTenantId]);
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [activeTab, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
 
-  // Smart date range based on quick chips (respects tenant)
-  const effectiveDateRange = useMemo(() => {
-    const now = new Date();
-    let s = startDate;
-    let e = endDate;
+  // Date preset → update date range
+  useEffect(() => {
+    if (datePreset === "today")     { const t = todayDateInput(); setStartDate(t); setEndDate(t); }
+    if (datePreset === "yesterday") { const y = dateInputFor(1);  setStartDate(y); setEndDate(y); }
+    if (datePreset === "last7")     { setStartDate(dateInputFor(6)); setEndDate(todayDateInput()); }
+  }, [datePreset]);
 
-    if (quickDate === "today") {
-      s = todayDateInput();
-      e = todayDateInput();
-    } else if (quickDate === "yesterday") {
-      const yesterday = new Date(now.getTime() - 86400000);
-      s = yesterday.toISOString().split('T')[0];
-      e = s;
-    } else if (quickDate === "week") {
-      const weekAgo = new Date(now.getTime() - 7 * 86400000);
-      s = weekAgo.toISOString().split('T')[0];
-      e = todayDateInput();
-    }
-
-    return { startDate: s, endDate: e };
-  }, [quickDate, startDate, endDate]);
-
+  // Build API query — tenant filtering is preserved via scopedTenantId param
   const historyQuery = useMemo(() => {
-    const { startDate: sd, endDate: ed } = effectiveDateRange;
-    const { startIso, endIso } = toIsoRange(sd, ed);
-    
-    const p = new URLSearchParams({ 
-      startDate: startIso, 
-      endDate: endIso, 
-      page: String(page), 
-      pageSize: String(pageSize) 
+    const { startIso, endIso } = toIsoRange(startDate, endDate);
+    const dir  = activeTab === "internal" ? "internal" : "all";
+    const stat = activeTab === "missed" ? "missed"
+      : (activeTab === "answered" || activeTab === "voicemail") ? "answered"
+      : "all";
+    const p = new URLSearchParams({
+      startDate: startIso, endDate: endIso,
+      direction: dir, status: stat,
+      page: String(page), pageSize: String(pageSize),
     });
-    
     if (search) p.set("search", search);
     if (scopedTenantId) p.set("tenantId", scopedTenantId);
-    
-    // Map modern tabs to legacy filters for backend compatibility
-    if (activeTab === "missed") p.set("status", "missed");
-    if (activeTab === "answered") p.set("status", "answered");
-    if (activeTab === "voicemail") p.set("status", "missed"); // voicemail is derived
-    if (activeTab === "internal") p.set("direction", "internal");
-    
+    if (hasRecording !== "all") p.set("hasRecording", hasRecording);
     return p.toString();
-  }, [effectiveDateRange, search, activeTab, page, pageSize, scopedTenantId]);
+  }, [activeTab, endDate, hasRecording, page, pageSize, scopedTenantId, search, startDate]);
 
   const historyState = useAsyncResource<CallHistoryResponse>(
     () => apiGet<CallHistoryResponse>(`/calls/history?${historyQuery}`),
-    [historyQuery]
+    [historyQuery],
   );
 
   const history = historyState.status === "success" ? historyState.data : null;
 
-  // Compute premium KPIs from loaded data (preserves all existing CDR data)
-  const kpis = useMemo(() => {
-    if (!history || !history.items.length) {
-      return {
-        total: 0,
-        answeredPct: 0,
-        missedPct: 0,
-        avgDuration: "0:00",
-        voicemail: 0,
-        trend: { total: "0%", answered: "0%", missed: "0%" }
-      };
-    }
+  // Client-side voicemail filter (API has no voicemail-only filter param)
+  const rawItems    = history?.items ?? [];
+  const displayItems = activeTab === "voicemail"
+    ? rawItems.filter((r) => r.voicemailAnswered)
+    : rawItems;
 
-    const total = history.items.length;
-    const answered = history.items.filter(r => r.humanAnswered || r.status === "answered").length;
-    const missed = history.items.filter(r => r.status === "missed" || r.voicemailAnswered).length;
-    const voicemail = history.items.filter(r => r.voicemailAnswered).length;
-    
-    const totalDuration = history.items.reduce((sum, r) => sum + (r.durationSec || 0), 0);
-    const avgSec = total > 0 ? Math.round(totalDuration / total) : 0;
-    const avgDuration = formatDuration(avgSec);
+  // Group feed by date
+  const groups = useMemo(() => groupCalls(displayItems), [displayItems]);
 
-    const answeredPct = total > 0 ? Math.round((answered / total) * 100) : 0;
-    const missedPct = total > 0 ? Math.round((missed / total) * 100) : 0;
-
+  // KPI stats — computed from current page for "this filter" context
+  const kpiStats = useMemo(() => {
+    if (!rawItems.length) return null;
+    const answered  = rawItems.filter((r) => r.humanAnswered).length;
+    const missed    = rawItems.filter((r) => r.status === "missed").length;
+    const voicemails = rawItems.filter((r) => r.voicemailAnswered).length;
+    const avgDur    = Math.round(rawItems.reduce((a, r) => a + (r.durationSec || 0), 0) / rawItems.length);
     return {
-      total,
-      answeredPct,
-      missedPct,
-      avgDuration,
-      voicemail,
-      trend: {
-        total: "+12%",
-        answered: answeredPct > 65 ? "↑" : "↓",
-        missed: missedPct < 25 ? "↓" : "↑"
-      }
+      total:       history?.total ?? rawItems.length,
+      answeredPct: Math.round((answered  / rawItems.length) * 100),
+      missedPct:   Math.round((missed    / rawItems.length) * 100),
+      avgDuration: avgDur,
+      voicemails,
     };
-  }, [history]);
+  }, [rawItems, history?.total]);
 
-  // Date grouping for conversation feed (Today, Yesterday, Earlier)
-  const groupedCalls = useMemo(() => {
-    if (!history?.items) return [];
-    
-    const groups: Array<{ dateLabel: string; calls: CallHistoryRow[] }> = [];
-    const today = new Date().toDateString();
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
-    
-    const byDay = new Map<string, CallHistoryRow[]>();
-    
-    history.items.forEach(row => {
-      const d = new Date(row.startedAt);
-      const dayKey = d.toDateString();
-      if (!byDay.has(dayKey)) byDay.set(dayKey, []);
-      byDay.get(dayKey)!.push(row);
-    });
-    
-    // Sort days and label them
-    const sortedDays = Array.from(byDay.keys()).sort().reverse();
-    
-    sortedDays.forEach(dayKey => {
-      const calls = byDay.get(dayKey)!;
-      let label = "Earlier";
-      const d = new Date(dayKey);
-      
-      if (d.toDateString() === today) label = "Today";
-      else if (d.toDateString() === yesterday) label = "Yesterday";
-      else label = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-      
-      groups.push({ dateLabel: label, calls });
-    });
-    
-    return groups;
-  }, [history]);
-
-  // Filter calls for active tab (client-side refinement for modern UX)
-  const filteredGroups = useMemo(() => {
-    if (!groupedCalls.length) return groupedCalls;
-    
-    return groupedCalls.map(group => ({
-      ...group,
-      calls: group.calls.filter(row => {
-        if (activeTab === "all") return true;
-        if (activeTab === "missed") return row.status === "missed" || row.voicemailAnswered;
-        if (activeTab === "answered") return row.humanAnswered || row.status === "answered";
-        if (activeTab === "voicemail") return row.voicemailAnswered;
-        if (activeTab === "internal") return row.direction === "internal";
-        return true;
-      })
-    })).filter(g => g.calls.length > 0);
-  }, [groupedCalls, activeTab]);
-
-  // Close drawer on Escape
+  // Escape closes detail panel
   useEffect(() => {
     if (!selectedRow) return;
-    const handler = (e: KeyboardEvent) => { 
-      if (e.key === "Escape") setSelectedRow(null); 
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedRow(null); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
   }, [selectedRow]);
 
-  // Quick actions
-  const handleCallBack = (number: string) => {
-    // Open the floating dialer if available, otherwise fall back to tel: link
-    const clean = number.replace(/\D/g, "");
-    if (clean) {
-      window.open(`tel:${clean}`, "_self");
-    }
-  };
-
-  const handleMessage = (number: string) => {
-    alert(`Opening chat with ${number}... (SMS integration ready)`);
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    // Could integrate with toast system
-    console.log("Copied:", text);
-  };
-
-  const getAvatarInitials = (name: string | null, number: string) => {
-    if (name) return name.slice(0, 1).toUpperCase();
-    const digits = number.replace(/\D/g, '');
-    return digits.slice(-2) || "?";
-  };
-
-  const getCallStatus = (row: CallHistoryRow) => {
-    if (row.voicemailAnswered) return { label: "Voicemail", className: "voicemail" };
-    if (row.humanAnswered || row.status === "answered") return { label: "Answered", className: "answered" };
-    if (row.status === "missed") return { label: "Missed", className: "missed" };
-    return { label: outcomeLabel(row), className: "neutral" };
-  };
+  function handleCopy(num: string) {
+    if (typeof navigator === "undefined") return;
+    navigator.clipboard.writeText(num).then(() => {
+      setCopyToast("Number copied!");
+      setTimeout(() => setCopyToast(null), 2000);
+    }).catch(() => {});
+  }
 
   return (
     <PermissionGate permission="can_view_calls" fallback={<div className="state-box">You do not have permission to view calls.</div>}>
-      <div className="calls-page stack">
+      <div className="calls-page stack compact-stack">
+
         <PageHeader
           title="Call History"
-          subtitle="Premium conversation log • Real-time • Tenant isolated"
-          badges={
-            <>
-              <ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} />
-              <LiveBadge status={telephony.status} />
-            </>
-          }
+          subtitle="All calls routed through the platform."
+          badges={<><ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} /><LiveBadge status={telephony.status} /></>}
         />
 
         {isGlobal ? <GlobalScopeNotice /> : null}
 
-        {/* LIVE CALLS - preserved */}
-        {liveCalls.length > 0 && (
+        {/* ── KPI bar ── */}
+        {historyState.status === "success" && kpiStats ? (
+          <div className="ch-kpi-bar" aria-label="Call statistics">
+            <div className="ch-kpi-card ch-kpi-total" style={{ animationDelay: "0ms" }}>
+              <span className="ch-kpi-value">{kpiStats.total.toLocaleString()}</span>
+              <span className="ch-kpi-label">Total Calls</span>
+            </div>
+            <div className="ch-kpi-card ch-kpi-answered" style={{ animationDelay: "55ms" }}>
+              <span className="ch-kpi-value">{kpiStats.answeredPct}%</span>
+              <span className="ch-kpi-label">Answered</span>
+            </div>
+            <div className="ch-kpi-card ch-kpi-missed" style={{ animationDelay: "110ms" }}>
+              <span className="ch-kpi-value">{kpiStats.missedPct}%</span>
+              <span className="ch-kpi-label">Missed</span>
+            </div>
+            <div className="ch-kpi-card ch-kpi-duration" style={{ animationDelay: "165ms" }}>
+              <span className="ch-kpi-value">{formatDuration(kpiStats.avgDuration)}</span>
+              <span className="ch-kpi-label">Avg Duration</span>
+            </div>
+            <div className="ch-kpi-card ch-kpi-voicemail" style={{ animationDelay: "220ms" }}>
+              <span className="ch-kpi-value">{kpiStats.voicemails}</span>
+              <span className="ch-kpi-label">Voicemail</span>
+            </div>
+          </div>
+        ) : historyState.status === "loading" ? (
+          <div className="ch-kpi-bar ch-kpi-bar--loading" aria-hidden="true">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="ch-kpi-card ch-kpi-skeleton">
+                <div className="ch-kpi-skeleton-val" />
+                <div className="ch-kpi-skeleton-lbl" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* ── Live calls strip ── */}
+        {liveCalls.length > 0 ? (
           <section className="calls-live-section" aria-label="Live calls">
             <div className="calls-live-header">
               <span className="calls-live-dot" />
-              <h3 className="calls-live-title">LIVE CALLS</h3>
+              <h3 className="calls-live-title">Live calls</h3>
               <span className="calls-live-count">{liveCalls.length}</span>
             </div>
             <div className="calls-live-list">
@@ -582,7 +772,9 @@ export default function CallsPage() {
                 const elapsed = call.answeredAt
                   ? Math.floor((Date.now() - new Date(call.answeredAt).getTime()) / 1000)
                   : Math.floor((Date.now() - new Date(call.startedAt).getTime()) / 1000);
-                const displayTo = call.to || "Resolving…";
+                const displayTo = call.to
+                  ? call.to
+                  : <span style={{ fontStyle: "italic", color: "var(--console-muted)", fontSize: "0.8rem" }}>Resolving…</span>;
                 const displayTenant = call.tenantName ?? call.tenantId ?? null;
                 return (
                   <div key={call.id} className="calls-live-row">
@@ -596,280 +788,209 @@ export default function CallsPage() {
                     <span className={`chip ${directionClass(dir)}`}>{directionLabel(dir)}</span>
                     <span className="chip info">{call.state}</span>
                     <span className="mono muted">{formatDurationSec(elapsed)}</span>
-                    {isGlobal && displayTenant && <span className="muted">{displayTenant}</span>}
+                    {isGlobal && displayTenant ? <span className="muted">{displayTenant}</span> : null}
                     <LiveCallBadge active />
                   </div>
                 );
               })}
             </div>
           </section>
-        )}
-
-        {/* KPI HEADER - ALIVE WITH GLOW */}
-        <div className="kpi-grid">
-          <div className="kpi-card">
-            <div className="kpi-glow" />
-            <div className="kpi-label">TOTAL CALLS</div>
-            <div className="kpi-value">{kpis.total.toLocaleString()}</div>
-            <div className="kpi-meta">
-              <span className="kpi-trend-up">{kpis.trend.total}</span>
-              <span className="text-[10px] text-[var(--text-dim)]">this period</span>
+        ) : telephony.status === "connected" ? (
+          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+            <div className="calls-live-header">
+              <span className="calls-live-dot idle" />
+              <h3 className="calls-live-title">Live calls</h3>
+              <span className="calls-live-idle-label">No active calls right now</span>
             </div>
-          </div>
-          
-          <div className="kpi-card">
-            <div className="kpi-glow" />
-            <div className="kpi-label">ANSWERED</div>
-            <div className="kpi-value text-[#22c55e]">{kpis.answeredPct}%</div>
-            <div className="kpi-meta">
-              <span className="kpi-trend-up">{kpis.trend.answered}</span>
-              <span className="text-[10px] text-[var(--text-dim)]">success rate</span>
+          </section>
+        ) : telephony.status === "failed" ? (
+          <section className="calls-live-section calls-live-idle" aria-label="Live calls">
+            <div className="calls-live-header">
+              <span className="calls-live-dot error" />
+              <h3 className="calls-live-title">Live calls</h3>
+              <span className="calls-live-idle-label">Connection lost — refresh the page to reconnect</span>
             </div>
-          </div>
-          
-          <div className="kpi-card">
-            <div className="kpi-glow" />
-            <div className="kpi-label">MISSED</div>
-            <div className="kpi-value text-[#ef4444]">{kpis.missedPct}%</div>
-            <div className="kpi-meta">
-              <span className={`kpi-trend-${kpis.missedPct > 30 ? "down" : "up"}`}>{kpis.trend.missed}</span>
-              <span className="text-[10px] text-[var(--text-dim)]">lost opportunities</span>
+          </section>
+        ) : null}
+
+        {/* ── Smart filter bar ── */}
+        <section className="ch-filter-bar" aria-label="Filters">
+          <div className="ch-filter-top">
+            {/* Search */}
+            <div className="ch-search-wrap">
+              <Search size={14} className="ch-search-icon" aria-hidden="true" />
+              <input
+                className="ch-search-input"
+                type="search"
+                placeholder="Search by name, number, extension…"
+                value={searchDraft}
+                onChange={(e) => setSearchDraft(e.target.value)}
+                aria-label="Search calls"
+              />
             </div>
-          </div>
-          
-          <div className="kpi-card">
-            <div className="kpi-glow" />
-            <div className="kpi-label">AVG DURATION</div>
-            <div className="kpi-value">{kpis.avgDuration}</div>
-            <div className="kpi-meta">
-              <span className="text-emerald-400">↗︎</span>
-              <span className="text-[10px] text-[var(--text-dim)]">talk time</span>
+
+            {/* Outcome tabs */}
+            <div className="ch-tab-row" role="tablist" aria-label="Filter by outcome">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  className={`ch-tab ${activeTab === tab.id ? "active" : ""}`}
+                  onClick={() => setActiveTab(tab.id)}
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
-          </div>
-          
-          <div className="kpi-card">
-            <div className="kpi-glow" />
-            <div className="kpi-label">VOICEMAILS</div>
-            <div className="kpi-value text-[#a855f7]">{kpis.voicemail}</div>
-            <div className="kpi-meta">
-              <span className="text-violet-400">📼</span>
-              <span className="text-[10px] text-[var(--text-dim)]">left today</span>
+
+            {/* Date chips */}
+            <div className="ch-chip-row" role="group" aria-label="Date range presets">
+              {DATE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  className={`ch-chip ${datePreset === preset.id ? "active" : ""}`}
+                  onClick={() => setDatePreset(preset.id)}
+                >
+                  {preset.label}
+                </button>
+              ))}
             </div>
-          </div>
-        </div>
 
-        {/* SMART FILTER BAR */}
-        <div className="call-filter-bar">
-          <div className="call-tabs">
-            {(["all", "missed", "answered", "voicemail", "internal"] as const).map((tab) => (
-              <button
-                key={tab}
-                className={`call-tab ${activeTab === tab ? 'active' : ''} ${tab}`}
-                onClick={() => setActiveTab(tab)}
-              >
-                {tab === "all" && "All"}
-                {tab === "missed" && "Missed"}
-                {tab === "answered" && "Answered"}
-                {tab === "voicemail" && "Voicemail"}
-                {tab === "internal" && "Internal"}
-              </button>
-            ))}
-          </div>
+            {/* Advanced toggle */}
+            <button
+              className={`ch-adv-toggle ${advancedOpen ? "open" : ""}`}
+              onClick={() => setAdvancedOpen((v) => !v)}
+              aria-expanded={advancedOpen}
+            >
+              <SlidersHorizontal size={13} />
+              <span>Filters</span>
+              <ChevronDown size={12} className={`ch-adv-chevron ${advancedOpen ? "up" : ""}`} />
+            </button>
 
-          <input
-            className="call-search"
-            type="text"
-            placeholder="Search name, number, or extension..."
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-          />
-
-          <div className="call-chips">
-            {(["today", "yesterday", "week", "all"] as const).map((chip) => (
-              <button
-                key={chip}
-                className={`call-chip ${quickDate === chip ? 'active' : ''}`}
-                onClick={() => setQuickDate(chip)}
-              >
-                {chip === "today" && "Today"}
-                {chip === "yesterday" && "Yesterday"}
-                {chip === "week" && "7 days"}
-                {chip === "all" && "All time"}
-              </button>
-            ))}
+            {/* Total count */}
+            {history ? (
+              <span className="calls-filter-count">
+                {history.total.toLocaleString()} call{history.total !== 1 ? "s" : ""}
+              </span>
+            ) : null}
           </div>
 
-          {history && (
-            <div className="ml-auto text-xs text-[var(--text-dim)] font-mono">
-              {history.total.toLocaleString()} calls • page {page}
-            </div>
-          )}
-        </div>
-
-        {/* CALL FEED - CONVERSATION STYLE WITH GROUPING */}
-        <section className="call-feed" aria-label="Call history feed">
-          {historyState.status === "loading" && <LoadingSkeleton rows={5} />}
-          
-          {historyState.status === "error" && (
-            <ErrorState message={historyState.error || "Could not load call history."} />
-          )}
-
-          {historyState.status === "success" && filteredGroups.length === 0 && (
-            <div className="call-empty">
-              <div className="call-empty-icon">
-                <Phone size={32} />
+          {/* Advanced panel */}
+          {advancedOpen ? (
+            <div className="ch-adv-panel">
+              <div className="ch-adv-row">
+                <label className="ch-adv-label">Custom date range</label>
+                <div className="calls-date-range">
+                  <input
+                    type="date"
+                    className="calls-date-input"
+                    value={startDate}
+                    onChange={(e) => { setStartDate(e.target.value); setDatePreset("custom"); }}
+                    aria-label="Start date"
+                  />
+                  <span className="calls-date-sep">—</span>
+                  <input
+                    type="date"
+                    className="calls-date-input"
+                    value={endDate}
+                    onChange={(e) => { setEndDate(e.target.value); setDatePreset("custom"); }}
+                    aria-label="End date"
+                  />
+                </div>
               </div>
-              <div className="call-empty-title">
-                {search || activeTab !== "all" 
-                  ? "No calls match your filters" 
-                  : "No calls yet"}
+              <div className="ch-adv-row">
+                <label className="ch-adv-label">Recording</label>
+                <select
+                  className="calls-filter-select"
+                  value={hasRecording}
+                  onChange={(e) => setHasRecording(e.target.value as typeof hasRecording)}
+                  aria-label="Recording filter"
+                >
+                  <option value="all">All calls</option>
+                  <option value="yes">Has recording</option>
+                  <option value="no">No recording</option>
+                </select>
               </div>
-              <div className="call-empty-subtitle">
-                {search || activeTab !== "all" 
-                  ? "Try different dates, tabs, or clear search" 
-                  : "Calls will appear here as they are completed. Your tenant data is fully isolated."}
+              <div className="ch-adv-row">
+                <label className="ch-adv-label">Per page</label>
+                <select
+                  className="calls-filter-select"
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                  aria-label="Page size"
+                >
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
               </div>
             </div>
-          )}
-
-          {historyState.status === "success" && filteredGroups.length > 0 && filteredGroups.map((group, gIdx) => (
-            <div key={gIdx}>
-              <div className="call-group-header">
-                {group.dateLabel}
-                <div className="flex-1 h-px bg-[var(--border)] ml-3" />
-                <span className="text-[10px] font-mono text-[var(--text-dim)]">
-                  {group.calls.length} calls
-                </span>
-              </div>
-              
-              {group.calls.map((row) => {
-                const statusInfo = getCallStatus(row);
-                const initials = getAvatarInitials(row.fromName, row.fromNumber);
-                const isVoicemail = row.voicemailAnswered;
-                
-                return (
-                  <div 
-                    key={row.rowId}
-                    className="conversation-call-card"
-                    onClick={() => setSelectedRow(row)}
-                  >
-                    {/* LEFT: AVATAR */}
-                    <div className={`call-avatar ${row.direction}`}>
-                      {initials}
-                      {isVoicemail && <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center text-[8px]">📼</div>}
-                    </div>
-
-                    {/* CENTER: CONVERSATION CONTENT */}
-                    <div className="call-content">
-                      <div className="call-primary">
-                        <span className="call-name">
-                          {row.fromName || formatPhone(row.fromNumber)}
-                        </span>
-                        {row.rangExtension && (
-                          <span className="px-2 py-0.5 text-[10px] bg-[var(--panel-2)] text-[var(--accent)] rounded font-mono">ext {row.rangExtension}</span>
-                        )}
-                      </div>
-                      
-                      <div className="call-secondary">
-                        <span className={`call-direction ${row.direction}`}>
-                          {row.direction === "incoming" ? "↓" : row.direction === "outgoing" ? "↑" : "↔"}
-                        </span>
-                        <span className={`call-status ${statusInfo.className}`}>
-                          {statusInfo.label}
-                        </span>
-                        <span className="text-[var(--text-dim)]">•</span>
-                        <span>{row.journeySummary || outcomeLabel(row)}</span>
-                      </div>
-                    </div>
-
-                    {/* RIGHT: TIME, DURATION, ACTIONS */}
-                    <div className="flex flex-col items-end gap-1.5">
-                      <div className="call-time">
-                        {new Date(row.startedAt).toLocaleTimeString([], { 
-                          hour: 'numeric', 
-                          minute: '2-digit' 
-                        })}
-                      </div>
-                      <div className="call-duration">
-                        {formatDuration(row.durationSec)}
-                      </div>
-                      
-                      <div className="call-actions">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleCallBack(row.fromNumber); }}
-                          className="call-action-btn"
-                          title="Call back"
-                        >
-                          <Phone size={14} />
-                        </button>
-                        {row.recordingAvailable && (
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); setSelectedRow(row); }}
-                            className="call-action-btn"
-                            title="Play recording"
-                          >
-                            <Mic size={14} />
-                          </button>
-                        )}
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            copyToClipboard(row.fromNumber); 
-                          }}
-                          className="call-action-btn"
-                          title="Copy number"
-                        >
-                          <Copy size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          ) : null}
         </section>
 
-        {/* Pagination preserved for backend safety */}
-        {history && history.totalPages > 1 && (
-          <div className="calls-pagination flex justify-center gap-3 mt-8">
-            <button 
-              className="btn ghost btn-sm px-6" 
-              disabled={page <= 1} 
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-            >
-              ← Previous
-            </button>
-            <div className="px-6 py-2 bg-[var(--panel)] rounded-xl text-sm font-mono border border-[var(--border)]">
-              Page {page} of {history.totalPages}
-            </div>
-            <button 
-              className="btn ghost btn-sm px-6" 
-              disabled={page >= history.totalPages} 
-              onClick={() => setPage(p => p + 1)}
-            >
-              Next →
-            </button>
-          </div>
-        )}
+        {/* ── Call feed ── */}
+        <section className="calls-history-section" aria-label="Call history">
+          {historyState.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
+          {historyState.status === "error" ? (
+            <ErrorState message={historyState.error || "Could not load call history."} />
+          ) : null}
 
-        {/* MODERN SIDE DRAWER */}
-        {selectedRow && (
-          <div 
-            className={`call-drawer ${selectedRow ? 'open' : ''}`}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setSelectedRow(null);
-            }}
-          >
-            <CallDetailPanel 
-              row={selectedRow} 
-              onClose={() => setSelectedRow(null)} 
+          {historyState.status === "success" && displayItems.length === 0 ? (
+            <EmptyState
+              title={activeTab === "voicemail" ? "No voicemails" : "No calls found"}
+              message={
+                search || activeTab !== "all"
+                  ? "Try adjusting your filters or search query."
+                  : "No calls recorded for this period."
+              }
             />
-            
-            {/* Additional modern drawer enhancements could be overlaid, but we reuse existing panel 
-                with updated styling via CSS. Recording, notes, actions fully functional. */}
-          </div>
-        )}
+          ) : null}
+
+          {historyState.status === "success" && displayItems.length > 0 ? (
+            <div className="ch-feed">
+              {groups.map((group) => (
+                <div key={group.key} className="ch-group">
+                  <div className="ch-group-header" aria-label={group.label}>
+                    <span className="ch-group-label">{group.label}</span>
+                    <span className="ch-group-count">{group.items.length}</span>
+                    <div className="ch-group-line" aria-hidden="true" />
+                  </div>
+                  <div className="ch-group-items">
+                    {group.items.map((row) => (
+                      <CallFeedItem
+                        key={row.rowId}
+                        row={row}
+                        isSelected={selectedRow?.rowId === row.rowId}
+                        onClick={() => setSelectedRow(row)}
+                        isGlobal={isGlobal}
+                        onCopy={handleCopy}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Pagination */}
+          {history && history.totalPages > 1 ? (
+            <div className="calls-pagination">
+              <button className="btn ghost btn-sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</button>
+              <span className="calls-page-info">Page {page} of {history.totalPages}</span>
+              <button className="btn ghost btn-sm" disabled={page >= history.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</button>
+            </div>
+          ) : null}
+        </section>
+
+        {/* Copy toast */}
+        {copyToast ? <div className="ch-copy-toast" role="status">{copyToast}</div> : null}
+
+        {/* Detail panel */}
+        {selectedRow ? (
+          <CallDetailPanel row={selectedRow} onClose={() => setSelectedRow(null)} />
+        ) : null}
+
       </div>
     </PermissionGate>
   );
