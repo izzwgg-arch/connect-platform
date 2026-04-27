@@ -48,6 +48,7 @@ type ExtensionResponse = {
   rows: Record<string, unknown>[];
 };
 
+// Keep this page as the single Team Directory surface: scoped PBX directory data plus live presence.
 const STATUS_META: Record<PresenceState, { label: string; tone: string; sort: number }> = {
   ringing: { label: "Ringing", tone: "ringing", sort: 0 },
   on_call: { label: "On Call", tone: "on-call", sort: 1 },
