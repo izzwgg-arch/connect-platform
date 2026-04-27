@@ -22,7 +22,7 @@ import { useTelephony } from "../../../contexts/TelephonyContext";
 import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
-import { apiGet } from "../../../services/apiClient";
+import { loadPbxResource } from "../../../services/pbxData";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -84,8 +84,16 @@ function readString(row: Record<string, unknown>, keys: string[]): string | unde
   return undefined;
 }
 
-function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null | undefined): boolean {
+function normalizeTenantName(name: string | null | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null | undefined, tenantName: string | null | undefined): boolean {
   if (!tenantId) return false;
+
+  const selectedTenantName = normalizeTenantName(tenantName);
+  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
+  if (selectedTenantName && rowTenantName) return rowTenantName === selectedTenantName;
 
   const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
   if (directTenant) return directTenant === tenantId;
@@ -96,8 +104,8 @@ function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null 
     if (nestedId) return nestedId === tenantId;
   }
 
-  // The PBX resource endpoint is tenant-scoped by apiClient headers. If the row
-  // carries no tenant marker, trust the scoped response instead of leaking global rows.
+  // Non-super-admin responses are already tenant-scoped. If a row carries no
+  // tenant marker at all, keep it so valid tenant extensions are not hidden.
   return true;
 }
 
@@ -487,7 +495,7 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function TeamDirectoryPage() {
-  const { tenantId, adminScope } = useAppContext();
+  const { tenantId, adminScope, tenant } = useAppContext();
   const telephony = useTelephony();
   const phone = useSipPhone();
   const router = useRouter();
@@ -517,12 +525,11 @@ export default function TeamDirectoryPage() {
     toastTimer.current = setTimeout(() => setToast(null), 2500);
   }, []);
 
-  // Fetch extensions from VitalPBX (tenant-scoped via x-tenant-context header).
-  // Re-run when tenantId or adminScope changes — apiClient reads localStorage
-  // which useAppContext updates in an effect that runs before this child's effects.
+  // Fetch the same extension source as PBX Extensions. For super-admins this
+  // returns all extension rows, then we filter by selected tenant name/id below.
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
-    () => apiGet("/voice/pbx/resources/extensions"),
-    [tenantId, adminScope],
+    () => loadPbxResource("extensions"),
+    [tenantId, tenant?.name, adminScope],
   );
 
   // Tenant-scoped live calls for presence (not cross-tenant)
@@ -550,7 +557,7 @@ export default function TeamDirectoryPage() {
   const members: TeamMember[] = useMemo(() => {
     const extRows = extState.status === "success" ? extState.data.rows : [];
     const mapped = extRows.flatMap((r, i): TeamMember[] => {
-      if (!rowTenantMatches(r, tenantId)) return [];
+      if (!rowTenantMatches(r, tenantId, tenant?.name)) return [];
 
       const ext = readString(r, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
       if (!ext || !isValidTenantExtension(ext)) return [];
@@ -590,7 +597,7 @@ export default function TeamDirectoryPage() {
       }).sort(byExtensionAsc);
     }
     return mapped.sort(byExtensionAsc);
-  }, [extState, tenantId, telephony.extensionList, activeExts, ringingExts]);
+  }, [extState, tenantId, tenant?.name, telephony.extensionList, activeExts, ringingExts]);
 
   // Keep detail panel in sync with live presence updates
   useEffect(() => {
