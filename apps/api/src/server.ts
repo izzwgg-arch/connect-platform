@@ -11049,10 +11049,15 @@ app.get("/voice/voicemail", async (req, reply) => {
   if (!user) return;
 
   const q = z.object({
-    folder:    z.enum(["inbox", "old", "urgent"]).optional().default("inbox"),
-    extension: z.string().optional(),
-    tenantId:  z.string().optional(),
-    page:      z.coerce.number().int().min(1).optional().default(1),
+    folder:        z.enum(["inbox", "old", "urgent"]).optional(),
+    listened:      z.enum(["true", "false"]).optional(),
+    extension:     z.string().optional(),
+    tenantId:      z.string().optional(),
+    page:          z.coerce.number().int().min(1).optional().default(1),
+    dateFrom:      z.string().optional(),
+    dateTo:        z.string().optional(),
+    olderThanDays: z.coerce.number().int().min(1).max(3650).optional(),
+    search:        z.string().max(120).optional(),
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
@@ -11069,7 +11074,47 @@ app.get("/voice/voicemail", async (req, reply) => {
     tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
   }
 
-  const where: Record<string, any> = { deletedAt: null, folder: q.folder };
+  const where: Record<string, any> = { deletedAt: null };
+
+  const rawSearch = q.search?.trim();
+
+  // Default folder=inbox when no other scope filters are present (backward compatible).
+  const hasScopeFilters =
+    q.listened !== undefined ||
+    q.olderThanDays !== undefined ||
+    Boolean(q.dateFrom) ||
+    Boolean(q.dateTo) ||
+    Boolean(rawSearch);
+  const effectiveFolder = q.folder ?? (!hasScopeFilters ? "inbox" : undefined);
+  if (effectiveFolder) where.folder = effectiveFolder;
+
+  if (q.listened === "true") where.listened = true;
+  if (q.listened === "false") where.listened = false;
+
+  const receivedFilter: Record<string, Date> = {};
+  if (q.dateFrom) {
+    const d = new Date(q.dateFrom);
+    if (!Number.isNaN(d.getTime())) receivedFilter.gte = d;
+  }
+  if (q.dateTo) {
+    const d = new Date(q.dateTo);
+    if (!Number.isNaN(d.getTime())) receivedFilter.lte = d;
+  }
+  if (q.olderThanDays != null) {
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - q.olderThanDays);
+    receivedFilter.lt = cutoff;
+  }
+  if (Object.keys(receivedFilter).length) where.receivedAt = receivedFilter;
+
+  if (rawSearch) {
+    where.OR = [
+      { callerNumber: { contains: rawSearch, mode: "insensitive" } },
+      { callerName: { contains: rawSearch, mode: "insensitive" } },
+      { extension: { contains: rawSearch, mode: "insensitive" } },
+    ];
+  }
+
   if (tenantIdFilter) {
     where.tenantId = tenantIdFilter.length === 1
       ? tenantIdFilter[0]
@@ -11136,16 +11181,18 @@ app.get("/voice/voicemail", async (req, reply) => {
         }
       }
       return {
-        id:          vm.id,
-        callerId:    vm.callerNumber ?? "Unknown",
-        callerName:  vm.callerName   ?? null,
-        receivedAt:  vm.receivedAt.toISOString(),
-        durationSec: vm.durationSec,
-        folder:      vm.folder as "inbox" | "old" | "urgent",
-        listened:    vm.listened,
-        extension:   vm.extension,
-        tenantId:    vm.tenantId,
+        id:            vm.id,
+        callerId:      vm.callerNumber ?? "Unknown",
+        callerName:    vm.callerName   ?? null,
+        receivedAt:    vm.receivedAt.toISOString(),
+        durationSec:   vm.durationSec,
+        folder:        vm.folder as "inbox" | "old" | "urgent",
+        listened:      vm.listened,
+        extension:     vm.extension,
+        tenantId:      vm.tenantId,
         tenantName,
+        pbxMessageId:  vm.pbxMessageId,
+        readAt:        vm.readAt?.toISOString() ?? null,
       };
     }),
     total,
@@ -11162,7 +11209,7 @@ app.get("/voice/voicemail", async (req, reply) => {
  */
 async function canAccessVoicemail(
   vm: { tenantId: string | null; extension: string },
-  user: JwtUser,
+  user: { sub: string; role?: string | null; tenantId?: string | null },
   reply: any,
 ): Promise<boolean> {
   if (isRole(user, ["SUPER_ADMIN"])) return true;
@@ -11186,7 +11233,7 @@ async function canAccessVoicemail(
   return true;
 }
 
-// ── PATCH /voice/voicemail/:id — mark listened/unlistened or move folders ────
+// ── PATCH /voice/voicemail/:id — mark as listened / unlistened ───────────────
 app.patch("/voice/voicemail/:id", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -11194,19 +11241,24 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
-  const body = z.object({
-    listened: z.boolean().optional(),
-    folder: z.enum(["inbox", "old", "urgent"]).optional(),
-  }).parse(req.body || {});
-  const listened = body.listened ?? (body.folder ? vm.listened : true);
-  await db.voicemail.update({
-    where: { id },
-    data:  {
-      listened,
-      readAt: listened ? (vm.readAt ?? new Date()) : null,
-      ...(body.folder ? { folder: body.folder } : {}),
-    },
-  });
+  const body = z
+    .object({
+      listened: z.boolean().optional(),
+      folder:   z.enum(["inbox", "old", "urgent"]).optional(),
+    })
+    .parse(req.body || {});
+  if (body.listened === undefined && body.folder === undefined) {
+    return reply.code(400).send({ error: "no_updates" });
+  }
+  const data: { listened?: boolean; readAt?: Date | null; folder?: string } = {};
+  if (body.listened !== undefined) {
+    data.listened = body.listened;
+    data.readAt = body.listened ? (vm.readAt ?? new Date()) : null;
+  }
+  if (body.folder !== undefined) {
+    data.folder = body.folder;
+  }
+  await db.voicemail.update({ where: { id }, data });
   return reply.send({ ok: true });
 });
 
@@ -22958,102 +23010,6 @@ app.post("/admin/deploy/jobs/:id/cancel", async (req, reply) => {
       app.log.warn("deploy cancel audit log failed (non-blocking)");
     }
   }
-  return reply.status(r.status).send(r.data);
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /internal/deploy/auto — agent-driven deployment trigger
-//
-// Security model:
-//  • The route lives under /internal/* which nginx blocks from the public
-//    internet (same as /internal/cdr-ingest, /internal/mobile-ring-notify etc.)
-//  • Callers supply either:
-//      - A valid admin JWT (SUPER_ADMIN) — for UI/admin tool usage
-//      - The INTERNAL_DEPLOY_SECRET header — for server-side scripts/agents
-//      - Neither is required when the request originates from 127.0.0.1 since
-//        the deploy queue itself also grants localhost trust.
-//  • The route always forwards to the queue with the server-side token, so
-//    DEPLOY_QUEUE_TOKEN is never visible to callers.
-//  • source is forced to "auto" so the UI labels these jobs "Agent".
-// ─────────────────────────────────────────────────────────────────────────────
-
-const internalDeploySecret = process.env.INTERNAL_DEPLOY_SECRET ?? "";
-
-function isInternalDeployAuthorized(req: any): boolean {
-  // Admin JWT path (SUPER_ADMIN) — handled by the explicit check below.
-  // IP trust: loopback or Docker bridge subnets (172.16–31.x, 10.x)
-  const raw: string = req.ip ?? req.socket?.remoteAddress ?? "";
-  const ip = raw.replace(/^::ffff:/, "");
-  if (ip === "127.0.0.1" || ip === "::1") return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
-  if (/^10\./.test(ip)) return true;
-  // Secret header (for CI / agent callers that can't do JWT)
-  const hdr = String(req.headers["x-internal-deploy-secret"] ?? "").trim();
-  if (internalDeploySecret && hdr === internalDeploySecret) return true;
-  return false;
-}
-
-// POST /internal/deploy/auto
-app.post("/internal/deploy/auto", async (req, reply) => {
-  // Accept either a valid SUPER_ADMIN JWT or internal trust (IP / secret header)
-  let actorId = "agent";
-  let tenantId = "";
-  const authHeader = String(req.headers.authorization ?? "").trim();
-  if (authHeader.startsWith("Bearer ")) {
-    // Try to verify as admin JWT — if it fails, fall through to IP trust
-    try {
-      const admin = await requireSuperAdmin(req, reply);
-      if (admin) {
-        actorId = admin.email ?? admin.sub;
-        tenantId = admin.tenantId;
-      } else {
-        // requireSuperAdmin already sent a reply
-        return;
-      }
-    } catch {
-      // JWT invalid — fall through to IP trust
-    }
-  } else if (!isInternalDeployAuthorized(req)) {
-    return reply.status(401).send({
-      error: "unauthorized",
-      detail: "Supply a SUPER_ADMIN Bearer token, INTERNAL_DEPLOY_SECRET header, or call from an internal network.",
-    });
-  }
-
-  const body = req.body as Record<string, unknown>;
-  const service = String(body.service ?? "").trim();
-  const branch = String(body.branch ?? body.tag ?? "main").trim();
-  const commitHash = body.commitHash != null ? String(body.commitHash).trim() : undefined;
-  const dryRun = body.dryRun === true || body.dryRun === "true" || body.dryRun === 1;
-  const reason = String(body.reason ?? "agent-triggered deploy").trim().slice(0, 500);
-  const requestedBy = String(body.requestedBy ?? actorId ?? "agent").trim().slice(0, 200);
-
-  const payload = JSON.stringify({
-    service,
-    branch,
-    ...(commitHash ? { commitHash } : {}),
-    requestedBy,
-    reason,
-    dryRun,
-    source: "auto",
-  });
-
-  const r = await dqFetch("/ops/deploy/enqueue", { method: "POST", body: payload });
-
-  if (r.ok) {
-    try {
-      await audit({
-        tenantId,
-        actorUserId: actorId,
-        action: dryRun ? "DEPLOY_DRY_RUN_ENQUEUED" : "DEPLOY_AUTO_ENQUEUED",
-        entityType: "DeployJob",
-        entityId: (r.data as { job?: { id?: string } })?.job?.id ?? "unknown",
-      });
-    } catch {
-      app.log.warn("auto-deploy audit log failed (non-blocking)");
-    }
-  }
-
   return reply.status(r.status).send(r.data);
 });
 
