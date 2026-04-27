@@ -951,25 +951,31 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const user = req.user as JwtUser;
     if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
     if (!requireCrypto(reply)) return;
-    const body = z
+    const raw = z
       .object({
         from: z.string().min(1),
         to: z.string().min(1),
         message: z.string().min(1).max(1600),
       })
       .parse(req.body || {});
+    // Normalize to E.164 — accept any US/Canada format from the form
+    const fromN = canonicalSmsPhone(raw.from);
+    const toN = canonicalSmsPhone(raw.to);
+    if (!fromN.ok) return reply.status(400).send({ error: "INVALID_FROM", message: `From number invalid: ${fromN.error}` });
+    if (!toN.ok) return reply.status(400).send({ error: "INVALID_TO", message: `To number invalid: ${toN.error}` });
     const creds = await loadVoipMsCreds();
-    if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED" });
+    if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED", message: "VoIP.ms credentials not configured." });
     const cfg = await getOrCreateGlobalVoipConfig();
     const provider = new VoipMsSmsProvider(
-      { username: creds.username, password: creds.password, fromNumber: body.from, apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl },
+      { username: creds.username, password: creds.password, fromNumber: fromN.e164, apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl },
       false, // real send, not test mode
     );
     try {
-      const r = await provider.sendMessage({ tenantId: "test", from: body.from, to: body.to, body: body.message });
-      return { ok: true, messageId: r.providerMessageId };
+      const r = await provider.sendMessage({ tenantId: "test", from: fromN.e164, to: toN.e164, body: raw.message });
+      return { ok: true, messageId: r.providerMessageId, from: fromN.e164, to: toN.e164 };
     } catch (e: unknown) {
-      return reply.status(502).send({ error: "SEND_FAILED", detail: String((e as Error)?.message || e) });
+      const detail = String((e as Error)?.message || e);
+      return reply.status(502).send({ error: "SEND_FAILED", message: `VoIP.ms rejected the send: ${detail}` });
     }
   });
 

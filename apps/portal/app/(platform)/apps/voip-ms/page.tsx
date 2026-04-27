@@ -179,12 +179,11 @@ export default function VoipMsIntegrationPage() {
     setTestSending(true);
     setMsg(null);
     try {
-      const r = await apiPost<{ ok: boolean; messageId?: string }>("/admin/apps/voip-ms/send-test-sms", {
-        from: testFrom,
-        to: testTo,
-        message: testMsg,
-      });
-      notify(`Test SMS sent! Message ID: ${r.messageId || "—"}`);
+      const r = await apiPost<{ ok: boolean; messageId?: string; from?: string; to?: string }>(
+        "/admin/apps/voip-ms/send-test-sms",
+        { from: testFrom, to: testTo, message: testMsg },
+      );
+      notify(`Test SMS sent from ${r.from || testFrom} → ${r.to || testTo}. Message ID: ${r.messageId || "—"}`);
     } catch (e: unknown) {
       notify(String((e as Error)?.message || e), "err");
     } finally {
@@ -364,23 +363,23 @@ export default function VoipMsIntegrationPage() {
               <div className="panel stack">
                 <h3 style={{ marginTop: 0 }}>Send test SMS</h3>
                 <p style={{ fontSize: 13, color: "var(--text-dim)", margin: "0 0 10px" }}>
-                  Send a real SMS via VoIP.ms to verify the credentials work end-to-end. Use an E.164 number.
+                  Send a real SMS via VoIP.ms to verify credentials end-to-end. US/Canada formats are accepted — the API normalizes them to E.164 automatically.
                 </p>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <div style={{ flex: "1 1 160px" }}>
-                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>From (your DID)</label>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>From (your VoIP.ms DID)</label>
                     <input
                       className="input"
-                      placeholder="+1xxxxxxxxxx"
+                      placeholder="e.g. +16471234567 or 6471234567"
                       value={testFrom}
                       onChange={(e) => setTestFrom(e.target.value)}
                     />
                   </div>
                   <div style={{ flex: "1 1 160px" }}>
-                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>To (destination)</label>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>To (destination number)</label>
                     <input
                       className="input"
-                      placeholder="+1xxxxxxxxxx"
+                      placeholder="e.g. +19051234567 or 9051234567"
                       value={testTo}
                       onChange={(e) => setTestTo(e.target.value)}
                     />
