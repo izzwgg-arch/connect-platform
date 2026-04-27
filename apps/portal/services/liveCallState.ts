@@ -134,5 +134,15 @@ export function liveExtensionForTenant(
   extension: string,
   tenantId: string | null | undefined,
 ): LiveExtensionState | undefined {
-  return extensions.find((entry) => entry.extension === extension && (!tenantId || !entry.tenantId || entry.tenantId === tenantId));
+  // Strict tenant match first (avoids cross-tenant leak when two tenants
+  // share the same extension number). Fall back to a tenantless entry only
+  // if no tenant-specific state exists, since a tenantless row is usually an
+  // unresolved AMI event and is better than nothing.
+  if (tenantId) {
+    const strict = extensions.find((entry) => entry.extension === extension && entry.tenantId === tenantId);
+    if (strict) return strict;
+    const untagged = extensions.find((entry) => entry.extension === extension && !entry.tenantId);
+    return untagged;
+  }
+  return extensions.find((entry) => entry.extension === extension);
 }

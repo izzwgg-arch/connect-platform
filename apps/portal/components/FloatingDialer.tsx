@@ -13,7 +13,7 @@ import {
   setWebRingerEnabled,
 } from "../hooks/telephonyAudioPreferences";
 import { loadPbxResource } from "../services/pbxData";
-import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls } from "../services/liveCallState";
+import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../services/liveCallState";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
 
@@ -383,7 +383,7 @@ export function FloatingDialer() {
       if (!extension || !isValidTenantExtension(extension)) return [];
       const name = readString(row, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${extension}`;
       if (isSystemExtensionName(name)) return [];
-      const live = telephony.extensionList.find((entry) => entry.extension === extension && (!tenantId || !entry.tenantId || entry.tenantId === tenantId));
+      const live = liveExtensionForTenant(telephony.extensionList, extension, tenantId);
       return [{
         id: readString(row, ["id", "uuid"]) ?? extension,
         name,

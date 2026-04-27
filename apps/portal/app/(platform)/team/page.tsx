@@ -23,7 +23,7 @@ import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { loadPbxResource } from "../../../services/pbxData";
-import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls } from "../../../services/liveCallState";
+import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../../../services/liveCallState";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -564,7 +564,7 @@ export default function TeamDirectoryPage() {
       const name = readString(r, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? `Extension ${ext}`;
       if (isSystemExtensionName(name)) return [];
 
-      const amiState = telephony.extensionList.find((e) => e.extension === ext && (!tenantId || !e.tenantId || e.tenantId === tenantId));
+      const amiState = liveExtensionForTenant(telephony.extensionList, ext, tenantId);
       return [{
         id: readString(r, ["id", "uuid"]) ?? ext,
         name,

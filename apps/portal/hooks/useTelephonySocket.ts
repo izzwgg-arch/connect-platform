@@ -44,6 +44,16 @@ function getToken(): string {
   );
 }
 
+// Composite keys so the Map can hold multiple tenants' same-number entries
+// without overwriting. Null tenant falls back to a sentinel.
+function extKey(tenantId: string | null | undefined, extension: string): string {
+  return `${tenantId ?? "__none__"}|${extension}`;
+}
+
+function queueKey(tenantId: string | null | undefined, queueName: string): string {
+  return `${tenantId ?? "__none__"}|${queueName}`;
+}
+
 export function useTelephonySocket(): TelephonySocketState {
   const [status, setStatus] = useState<TelephonySocketStatus>("idle");
   const [calls, setCalls] = useState<Map<string, LiveCall>>(new Map());
@@ -64,8 +74,13 @@ export function useTelephonySocket(): TelephonySocketState {
       calls: snap.calls.map((c) => ({ id: c.id, state: c.state, tenantId: c.tenantId, from: c.from, to: c.to })),
     });
     setCalls(new Map(snap.calls.map((c) => [c.id, c])));
-    setExtensions(new Map(snap.extensions.map((e) => [e.extension, e])));
-    setQueues(new Map(snap.queues.map((q) => [q.queueName, q])));
+    // Key extensions and queues by (tenantId, name) so two tenants that share
+    // an extension/queue number do not overwrite each other's presence in the
+    // client-side map. Without this, a SUPER_ADMIN (global) socket that
+    // receives both tenants' "106" upserts would collapse them into a single
+    // entry and break BLF/Team Directory tenant filtering.
+    setExtensions(new Map(snap.extensions.map((e) => [extKey(e.tenantId, e.extension), e])));
+    setQueues(new Map(snap.queues.map((q) => [queueKey(q.tenantId, q.queueName), q])));
     setHealth(snap.health);
     setLastSnapshotAt(new Date().toISOString());
   }, []);
@@ -113,7 +128,7 @@ export function useTelephonySocket(): TelephonySocketState {
           const ext = envelope.data as LiveExtensionState;
           setExtensions((prev: Map<string, LiveExtensionState>) => {
             const next = new Map(prev);
-            next.set(ext.extension, ext);
+            next.set(extKey(ext.tenantId, ext.extension), ext);
             return next;
           });
           break;
@@ -123,7 +138,7 @@ export function useTelephonySocket(): TelephonySocketState {
           const queue = envelope.data as LiveQueueState;
           setQueues((prev: Map<string, LiveQueueState>) => {
             const next = new Map(prev);
-            next.set(queue.queueName, queue);
+            next.set(queueKey(queue.tenantId, queue.queueName), queue);
             return next;
           });
           break;

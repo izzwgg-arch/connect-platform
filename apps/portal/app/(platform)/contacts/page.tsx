@@ -25,6 +25,7 @@ import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useTelephony } from "../../../contexts/TelephonyContext";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUploadContactAvatar } from "../../../services/apiClient";
+import { liveExtensionForTenant } from "../../../services/liveCallState";
 
 type ContactType = "internal_extension" | "external" | "company";
 type PhoneType = "mobile" | "office" | "home" | "other";
@@ -158,14 +159,22 @@ function contactSubtitle(contact: Contact): string {
 function presenceFor(contact: Contact, telephony: ReturnType<typeof useTelephony>): "available" | "ringing" | "on_call" | "offline" {
   if (contact.type !== "internal_extension" || !contact.extension) return "offline";
   const ext = contact.extension;
-  const call = telephony.activeCalls.find((c) => (c.extensions ?? []).includes(ext));
+  // Only consider live calls belonging to this contact's tenant, otherwise
+  // two tenants that share an extension number (e.g. both have "106") would
+  // leak presence across tenants.
+  const call = telephony.activeCalls.find((c) =>
+    (c.extensions ?? []).includes(ext) &&
+    (!contact.tenantId || !c.tenantId || c.tenantId === contact.tenantId),
+  );
   if (call?.state === "ringing" || call?.state === "dialing") return "ringing";
   if (call?.state === "up" || call?.state === "held") return "on_call";
-  const live = telephony.extensionList.find((entry) => entry.extension === ext && (!entry.tenantId || entry.tenantId === contact.tenantId));
+  const live = liveExtensionForTenant(telephony.extensionList, ext, contact.tenantId);
   const status = String(live?.status ?? "").toLowerCase();
   if (["idle", "not_inuse", "registered", "0"].includes(status)) return "available";
-  if (["inuse", "busy", "onhold", "1", "3"].includes(status)) return "on_call";
-  if (["ringing", "2"].includes(status)) return "ringing";
+  // AMI "busy" without a matching live call is unreliable when multiple
+  // tenants share a number; treat it as available to keep BLF/Dashboard
+  // consistent.
+  if (["inuse", "busy", "onhold", "1", "2", "3", "ringing"].includes(status)) return "available";
   return "offline";
 }
 

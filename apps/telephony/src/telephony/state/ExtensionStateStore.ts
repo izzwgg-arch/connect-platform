@@ -6,6 +6,14 @@ export declare interface ExtensionStateStore {
   on(event: "extensionUpsert", listener: (ext: NormalizedExtensionState) => void): this;
 }
 
+// Key extensions by (tenantId ?? "__none__"):extension so that two different
+// tenants that happen to use the same extension number (e.g. both have "106")
+// do NOT overwrite each other's presence. Without this, a call on Tenant B's
+// 106 would flip Tenant A's 106 to "On Call" in BLF/Team Directory.
+function keyFor(tenantId: string | null | undefined, ext: string): string {
+  return `${tenantId ?? "__none__"}:${ext}`;
+}
+
 export class ExtensionStateStore extends EventEmitter {
   private extensions = new Map<string, NormalizedExtensionState>();
 
@@ -13,11 +21,22 @@ export class ExtensionStateStore extends EventEmitter {
     return [...this.extensions.values()];
   }
 
+  /** Deprecated: returns the first match regardless of tenant. Prefer getByTenantExtension. */
   getByExtension(ext: string): NormalizedExtensionState | undefined {
-    return this.extensions.get(ext);
+    for (const v of this.extensions.values()) {
+      if (v.extension === ext) return v;
+    }
+    return undefined;
   }
 
-  // Called on ExtensionStatus AMI event
+  getByTenantExtension(tenantId: string | null, ext: string): NormalizedExtensionState | undefined {
+    return this.extensions.get(keyFor(tenantId, ext));
+  }
+
+  getAllForTenant(tenantId: string | null): NormalizedExtensionState[] {
+    return this.getAll().filter((e) => e.tenantId === tenantId);
+  }
+
   onExtensionStatus(params: {
     exten: string;
     context: string;
@@ -33,11 +52,10 @@ export class ExtensionStateStore extends EventEmitter {
       tenantId: params.tenantId,
       updatedAt: new Date().toISOString(),
     };
-    this.extensions.set(params.exten, state);
+    this.extensions.set(keyFor(params.tenantId, params.exten), state);
     this.emit("extensionUpsert", { ...state });
   }
 
-  // Called on PeerStatus / ContactStatus (registration status)
   onPeerStatus(params: {
     peer: string;
     peerStatus: string;
@@ -46,7 +64,8 @@ export class ExtensionStateStore extends EventEmitter {
     const ext = extractPeer(params.peer);
     if (!ext) return;
 
-    const existing = this.extensions.get(ext);
+    const key = keyFor(params.tenantId, ext);
+    const existing = this.extensions.get(key);
     const status = peerStatusToExtStatus(params.peerStatus);
 
     const state: NormalizedExtensionState = {
@@ -57,22 +76,18 @@ export class ExtensionStateStore extends EventEmitter {
       updatedAt: new Date().toISOString(),
     };
 
-    // Unregistered peer overrides any current status
     if (params.peerStatus === "Unregistered" || params.peerStatus === "Unreachable") {
       state.status = "unavailable";
     }
 
-    this.extensions.set(ext, state);
+    this.extensions.set(key, state);
     this.emit("extensionUpsert", { ...state });
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
 function amiStatusToExtStatus(status: string, statusText: string): ExtensionStatus {
   const n = parseInt(status, 10);
   if (isNaN(n)) return statusTextToExtStatus(statusText);
-  // Asterisk ExtensionStatus numeric codes
   switch (n) {
     case -2: return "unavailable";
     case -1: return "unavailable";
@@ -81,9 +96,9 @@ function amiStatusToExtStatus(status: string, statusText: string): ExtensionStat
     case 2: return "busy";
     case 4: return "unavailable";
     case 8: return "ringing";
-    case 9: return "ringing"; // ringing + inuse
+    case 9: return "ringing";
     case 16: return "onhold";
-    case 17: return "onhold"; // onhold + inuse
+    case 17: return "onhold";
     default: return "unknown";
   }
 }
@@ -110,7 +125,5 @@ function peerStatusToExtStatus(peerStatus: string): ExtensionStatus {
 }
 
 function extractPeer(peer: string): string | null {
-  // Shared normalizer handles "PJSIP/105", "SIP/105-000b1", "PJSIP/T11_105",
-  // "Local/105@ctx" etc. and rejects trunk peers ("PJSIP/344022_gesheft-xxx").
   return normalizeExtensionFromChannel(peer);
 }

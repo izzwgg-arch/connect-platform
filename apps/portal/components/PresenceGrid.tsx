@@ -19,14 +19,19 @@ interface ExtensionTile {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function mapAmiState(rawState: string, activeCalls: Set<string>, ringingCalls: Set<string>): PresenceState {
-  if (ringingCalls.has(rawState)) return "ringing";
-  if (activeCalls.has(rawState)) return "active";
+function mapAmiState(rawState: string, extension: string, activeCalls: Set<string>, ringingCalls: Set<string>): PresenceState {
+  // Live-call state is the single source of truth for Ringing / On Call. If
+  // the extension appears in a live call, that wins — AMI hints are ignored.
+  // Without this the grid cross-contaminates presence across tenants that
+  // share an extension number (e.g. two tenants both using "106").
+  if (ringingCalls.has(extension)) return "ringing";
+  if (activeCalls.has(extension)) return "active";
   const s = String(rawState ?? "").toLowerCase();
   if (s === "not_inuse" || s === "idle" || s === "registered" || s === "0") return "registered";
-  if (s === "inuse" || s === "1") return "active";
-  if (s === "ringing" || s === "2") return "ringing";
-  if (s === "busy" || s === "3") return "busy";
+  // AMI "busy"/"inuse"/"ringing" without a matching live call is ambiguous
+  // (may come from another tenant's same-number extension). Show Registered
+  // so the grid stays aligned with Dashboard Live Calls.
+  if (s === "inuse" || s === "1" || s === "ringing" || s === "2" || s === "busy" || s === "3") return "registered";
   if (s === "unavailable" || s === "5" || s === "unregistered") return "offline";
   return "offline";
 }
@@ -167,7 +172,7 @@ export function PresenceGrid({
     let entries = extMap.map((ext): ExtensionTile => ({
       extension: ext.extension,
       displayName: ext.hint || ext.extension,
-      state: mapAmiState(ext.status ?? "offline", activeExtensions, ringingExtensions),
+      state: mapAmiState(ext.status ?? "offline", ext.extension, activeExtensions, ringingExtensions),
       callerId: undefined,
     }));
 
