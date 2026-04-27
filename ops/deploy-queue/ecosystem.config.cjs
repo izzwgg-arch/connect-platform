@@ -30,7 +30,10 @@ module.exports = {
       // DEPLOY_QUEUE_TOKEN must be present in the shell environment (see README).
       env: {
         NODE_ENV: "production",
-        DEPLOY_QUEUE_BIND: "127.0.0.1",
+        // Bind to all interfaces so the Connect API Docker container can reach
+        // the host deploy-queue via the Docker bridge gateway (172.x.x.1).
+        // Port 3910 is NOT exposed externally (ufw denies all except 22/80/443).
+        DEPLOY_QUEUE_BIND: "0.0.0.0",
         DEPLOY_QUEUE_PORT: "3910",
         DEPLOY_QUEUE_LOG_DIR: "/var/log/connect-deploys",
         DEPLOY_QUEUE_STATE_DIR: "/opt/connectcomms/app/ops/deploy-queue/var",
