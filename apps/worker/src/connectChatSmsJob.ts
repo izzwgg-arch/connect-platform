@@ -48,7 +48,9 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
 
   const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: data.tenantId } });
   const hasMedia = msg.attachments.length > 0;
-  if (hasMedia && (!cfg.mmsEnabled || !smsRow?.mmsCapable)) {
+  const metadata = msg.metadata && typeof msg.metadata === "object" && !Array.isArray(msg.metadata) ? msg.metadata as Record<string, any> : {};
+  const linkFallback = Boolean(metadata.smsLinkFallback);
+  if (hasMedia && !linkFallback && (!cfg.mmsEnabled || !smsRow?.mmsCapable)) {
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: { deliveryStatus: "failed", deliveryError: "MMS_NOT_AVAILABLE" },
@@ -76,7 +78,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
 
   try {
     let r: { providerMessageId?: string };
-    if (hasMedia) {
+    if (hasMedia && !linkFallback) {
       const mediaUrls = msg.attachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 3600));
       r = await provider.sendMms({
         tenantId: data.tenantId,

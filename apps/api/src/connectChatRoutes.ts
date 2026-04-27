@@ -3,7 +3,7 @@
  * Registered from server.ts — keeps PBX/voice code isolated.
  */
 
-import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { Queue } from "bullmq";
 import { z } from "zod";
@@ -16,7 +16,8 @@ import {
   assertStorageKeyForThread,
   isAllowedChatMime,
   maxBytesForThread,
-  resolveChatStoragePath,
+  readChatAttachment,
+  statChatAttachment,
   writeChatAttachmentFile,
 } from "./chatAttachmentStorage";
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
@@ -64,6 +65,8 @@ async function getOrCreateGlobalVoipConfig() {
 }
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
+type ChatAttachmentInput = { storageKey: string; mimeType: string; sizeBytes: number; fileName: string };
+type ChatDirectoryExtension = { id: string; extNumber: string; displayName: string; ownerUserId: string | null };
 
 async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
   const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
@@ -175,6 +178,22 @@ function inferAttachmentMessageType(attachments: Array<{ mimeType: string }>): "
   return "FILE";
 }
 
+function metadataObject(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, any>) : {};
+}
+
+function displayUserName(user: { email: string }): string {
+  return user.email.split("@")[0] || user.email;
+}
+
+function threadKindLabel(type: string): string {
+  if (type === "TENANT_GROUP") return "Tenant Group";
+  if (type === "GROUP") return "Group";
+  if (type === "DM") return "DM";
+  if (type === "SMS") return "SMS";
+  return "Chat";
+}
+
 async function persistMessageAttachments(
   tenantId: string,
   threadId: string,
@@ -183,15 +202,9 @@ async function persistMessageAttachments(
 ): Promise<void> {
   for (const row of rows) {
     assertStorageKeyForThread(row.storageKey, tenantId, threadId);
-    let abs: string;
-    try {
-      abs = resolveChatStoragePath(row.storageKey);
-    } catch {
-      throw new Error("INVALID_STORAGE_KEY");
-    }
-    if (!fs.existsSync(abs)) throw new Error("ATTACHMENT_NOT_FOUND");
-    const st = await fs.promises.stat(abs);
-    if (st.size !== row.sizeBytes) throw new Error("SIZE_MISMATCH");
+    const st = await statChatAttachment(row.storageKey);
+    if (!st) throw new Error("ATTACHMENT_NOT_FOUND");
+    if (st.sizeBytes !== row.sizeBytes) throw new Error("SIZE_MISMATCH");
     await db.connectChatMessageAttachment.create({
       data: {
         messageId,
@@ -200,6 +213,7 @@ async function persistMessageAttachments(
         mimeType: row.mimeType,
         sizeBytes: row.sizeBytes,
         storageKey: row.storageKey,
+        scanStatus: "pending",
       },
     });
   }
@@ -244,18 +258,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     if (!storageKey) return reply.code(400).send({ error: "missing_key" });
     const q = req.query as { exp?: string; sig?: string };
     const verified = verifyChatSignedDownload(storageKey, q.exp, q.sig);
-    if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: verified.reason });
-    let absolutePath: string;
+    if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: "reason" in verified ? verified.reason : "invalid" });
     try {
-      absolutePath = resolveChatStoragePath(storageKey);
+      const stored = await readChatAttachment(storageKey);
+      if (!stored) return reply.code(404).send({ error: "not_found" });
+      if (stored.sizeBytes) reply.header("content-length", stored.sizeBytes);
+      reply.header("content-type", stored.contentType || "application/octet-stream");
+      return reply.send(stored.body);
     } catch {
       return reply.code(400).send({ error: "invalid_key" });
     }
-    if (!fs.existsSync(absolutePath)) return reply.code(404).send({ error: "not_found" });
-    const stat = await fs.promises.stat(absolutePath);
-    reply.header("content-length", stat.size);
-    reply.header("content-type", "application/octet-stream");
-    return reply.send(fs.createReadStream(absolutePath));
   });
 
   // ── Chat threads (JWT) ─────────────────────────────────────────────────────
@@ -276,7 +288,19 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       include: {
         thread: {
           include: {
-            messages: { orderBy: { createdAt: "desc" }, take: 1, select: { body: true, createdAt: true } },
+            messages: {
+              where: { deletedForEveryoneAt: null },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { body: true, createdAt: true, type: true, deliveryStatus: true, deliveryError: true },
+            },
+            participants: {
+              where: { leftAt: null },
+              include: {
+                user: { select: { id: true, email: true } },
+                extension: { select: { id: true, extNumber: true, displayName: true } },
+              },
+            },
           },
         },
       },
@@ -293,22 +317,75 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         participantExtension = t.tenantSmsE164 || "";
       } else if (t.type === "TENANT_GROUP") {
         participantName = t.title || "Tenant Group";
+      } else if (t.type === "DM") {
+        const peer = t.participants.find((row) => row.userId && row.userId !== user.sub);
+        if (peer?.user) participantName = displayUserName(peer.user);
+        if (peer?.extension) participantExtension = peer.extension.extNumber;
+      } else if (t.type === "GROUP") {
+        participantName = t.title || "Group Chat";
       }
       return {
         id: t.id,
         type: t.type,
         title: t.title,
+        isDefaultTenantGroup: t.isDefaultTenantGroup,
         participantName,
         participantExtension,
-        lastMessage: last?.body || "",
+        lastMessage: last?.body || (last?.type && last.type !== "TEXT" ? `[${String(last.type).toLowerCase()}]` : ""),
         lastAt: (last?.createdAt || t.lastMessageAt).toISOString(),
         unread: 0,
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
+        deliveryStatus: last?.deliveryStatus || null,
+        deliveryError: last?.deliveryError || null,
       };
+    }).sort((a, b) => {
+      if (a.isDefaultTenantGroup !== b.isDefaultTenantGroup) return a.isDefaultTenantGroup ? -1 : 1;
+      return new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
     });
 
     return { threads };
+  });
+
+  app.get("/chat/directory", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const tenantId = effectiveChatTenantId(req, user);
+    const users = await db.user.findMany({
+      where: { tenantId },
+      select: { id: true, email: true, role: true },
+      orderBy: { email: "asc" },
+      take: 500,
+    });
+    const extensions = await db.extension.findMany({
+      where: { tenantId, status: "ACTIVE" },
+      select: { id: true, extNumber: true, displayName: true, ownerUserId: true },
+      orderBy: { extNumber: "asc" },
+      take: 500,
+    });
+    const byOwner = new Map<string, ChatDirectoryExtension>(
+      (extensions as ChatDirectoryExtension[]).filter((e) => e.ownerUserId).map((e) => [e.ownerUserId!, e]),
+    );
+    return {
+      users: users.map((u) => {
+        const ext = byOwner.get(u.id);
+        return {
+          id: u.id,
+          name: displayUserName(u),
+          email: u.email,
+          role: u.role,
+          extensionId: ext?.id || null,
+          extensionNumber: ext?.extNumber || null,
+          extensionName: ext?.displayName || null,
+          self: u.id === user.sub,
+        };
+      }),
+      extensions: extensions.map((e) => ({
+        id: e.id,
+        extNumber: e.extNumber,
+        displayName: e.displayName,
+        ownerUserId: e.ownerUserId,
+      })),
+    };
   });
 
   app.post("/chat/threads", async (req, reply) => {
@@ -318,6 +395,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       .object({
         type: z.enum(["dm", "sms", "group"]),
         peerUserId: z.string().optional(),
+        peerUserIds: z.array(z.string()).max(100).optional(),
+        extensionIds: z.array(z.string()).max(100).optional(),
         externalPhone: z.string().optional(),
         title: z.string().optional(),
       })
@@ -358,11 +437,57 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return { threadId: thread.id };
     }
 
+    if (body.type === "group") {
+      const peerIds = [...new Set([...(body.peerUserIds || []), ...(body.peerUserId ? [body.peerUserId] : [])])].filter((id) => id !== user.sub);
+      const extensionIds = [...new Set(body.extensionIds || [])];
+      if (peerIds.length === 0 && extensionIds.length === 0) {
+        return reply.status(400).send({ error: "participants required" });
+      }
+      const peers = peerIds.length
+        ? await db.user.findMany({ where: { id: { in: peerIds }, tenantId }, select: { id: true, email: true } })
+        : [];
+      if (peers.length !== peerIds.length) return reply.status(404).send({ error: "PEER_NOT_FOUND" });
+      const extensions = extensionIds.length
+        ? await db.extension.findMany({ where: { id: { in: extensionIds }, tenantId, status: "ACTIVE" }, select: { id: true, extNumber: true } })
+        : [];
+      if (extensions.length !== extensionIds.length) return reply.status(404).send({ error: "EXTENSION_NOT_FOUND" });
+
+      const title = (body.title || "").trim() || `Group: ${peers.slice(0, 3).map(displayUserName).join(", ") || "Extensions"}`;
+      const thread = await db.connectChatThread.create({
+        data: {
+          tenantId,
+          type: "GROUP",
+          title: title.slice(0, 120),
+          dedupeKey: `group:${tenantId}:${crypto.randomUUID()}`,
+          createdByUserId: user.sub,
+          lastMessageAt: new Date(),
+        },
+      });
+      await db.connectChatParticipant.create({
+        data: { threadId: thread.id, participantKey: `u:${user.sub}`, userId: user.sub, role: "OWNER" },
+      });
+      for (const peer of peers) {
+        await db.connectChatParticipant.upsert({
+          where: { threadId_participantKey: { threadId: thread.id, participantKey: `u:${peer.id}` } },
+          create: { threadId: thread.id, participantKey: `u:${peer.id}`, userId: peer.id, role: "MEMBER" },
+          update: { leftAt: null },
+        });
+      }
+      for (const ext of extensions) {
+        await db.connectChatParticipant.upsert({
+          where: { threadId_participantKey: { threadId: thread.id, participantKey: `e:${ext.id}` } },
+          create: { threadId: thread.id, participantKey: `e:${ext.id}`, extensionId: ext.id, role: "MEMBER" },
+          update: { leftAt: null },
+        });
+      }
+      return { threadId: thread.id };
+    }
+
     if (body.type === "sms") {
       if (!canSendSmsRole(user)) return reply.status(403).send({ error: "FORBIDDEN" });
       if (!body.externalPhone) return reply.status(400).send({ error: "externalPhone required" });
       const extNorm = canonicalSmsPhone(body.externalPhone);
-      if (!extNorm.ok) return reply.status(400).send({ error: "INVALID_PHONE", detail: extNorm.error });
+      if (!extNorm.ok) return reply.status(400).send({ error: "INVALID_PHONE", detail: "error" in extNorm ? extNorm.error : "invalid phone" });
 
       const extLink = await db.extension.findFirst({
         where: { tenantId, ownerUserId: user.sub, status: "ACTIVE" },
@@ -462,38 +587,56 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
     });
     if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
-    const rows = await db.connectChatMessage.findMany({
-      where: { threadId, deletedForEveryoneAt: null },
+    const rowsRaw = await db.connectChatMessage.findMany({
+      where: { threadId },
       orderBy: { createdAt: "asc" },
       take: 200,
       include: {
         reactions: true,
         senderUser: { select: { email: true } },
         attachments: { orderBy: { createdAt: "asc" } },
+        replyTo: { select: { id: true, body: true, type: true, senderUser: { select: { email: true } } } },
       },
+    });
+    const rows = rowsRaw.filter((m) => {
+      const deletedFor = Array.isArray(m.deletedForUserIds) ? m.deletedForUserIds as unknown[] : [];
+      return !deletedFor.includes(user.sub);
     });
     const base = publicChatDownloadBase();
     const messages = rows.map((m) => {
-      const meta = m.metadata as { mms?: { urls?: string[] } } | null;
+      const meta = metadataObject(m.metadata);
       const mmsUrls = Array.isArray(meta?.mms?.urls) ? meta!.mms!.urls! : [];
+      const deletedForEveryone = Boolean(m.deletedForEveryoneAt);
       return {
         id: m.id,
         threadId: m.threadId,
         senderId: m.senderUserId || "",
         senderName: m.senderUser?.email?.split("@")[0] || "System",
-        body: m.body,
+        body: deletedForEveryone ? "" : m.body,
         sentAt: m.createdAt.toISOString(),
         mine: m.senderUserId === user.sub,
         type: m.type,
         editedAt: m.editedAt?.toISOString() || null,
+        deletedForEveryoneAt: m.deletedForEveryoneAt?.toISOString() || null,
         deliveryStatus: m.deliveryStatus,
+        deliveryError: m.deliveryError,
         reactions: m.reactions,
         mmsUrls,
+        location: meta.location || null,
+        replyTo: m.replyTo
+          ? {
+              id: m.replyTo.id,
+              body: m.replyTo.body,
+              type: m.replyTo.type,
+              senderName: m.replyTo.senderUser?.email?.split("@")[0] || "System",
+            }
+          : null,
         attachments: (m.attachments || []).map((a) => ({
           id: a.id,
           fileName: a.fileName,
           mimeType: a.mimeType,
           sizeBytes: a.sizeBytes,
+          scanStatus: a.scanStatus,
           downloadUrl: base ? buildChatSignedDownloadUrl(base, a.storageKey, 900) : null,
         })),
       };
@@ -520,14 +663,27 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const input = z
       .object({
         body: z.string().max(16000).default(""),
-        type: z.enum(["TEXT", "VOICE_NOTE", "IMAGE", "FILE", "LOCATION"]).optional(),
+        type: z.enum(["TEXT", "VOICE_NOTE", "IMAGE", "VIDEO", "AUDIO", "FILE", "LOCATION"]).optional(),
         replyToMessageId: z.string().optional(),
+        location: z.object({
+          lat: z.number(),
+          lng: z.number(),
+          label: z.string().max(500).optional(),
+          address: z.string().max(1000).optional(),
+        }).optional(),
         attachments: z.array(attachmentSchema).max(3).optional(),
       })
       .parse(req.body || {});
 
     const thread = await db.connectChatThread.findFirst({ where: { id: threadId, tenantId } });
     if (!thread) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    if (input.replyToMessageId) {
+      const replyTo = await db.connectChatMessage.findFirst({
+        where: { id: input.replyToMessageId, threadId, tenantId },
+        select: { id: true },
+      });
+      if (!replyTo) return reply.status(400).send({ error: "INVALID_REPLY_TO" });
+    }
 
     if (thread.type === "SMS") {
       if (!canSendSmsRole(user)) return reply.status(403).send({ error: "FORBIDDEN" });
@@ -540,16 +696,20 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       const cfg = await getOrCreateGlobalVoipConfig();
       if (!cfg.smsEnabled) return reply.status(503).send({ error: "VOIPMS_SMS_DISABLED" });
 
-      const atts = input.attachments || [];
+      const atts = (input.attachments || []) as ChatAttachmentInput[];
+      let smsLinkFallback = false;
       if (atts.length > 0) {
         const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId } });
         if (!cfg.mmsEnabled || !smsRow?.mmsCapable) {
-          return reply.status(400).send({ error: "MMS_NOT_AVAILABLE", message: "Enable MMS globally and sync an MMS-capable DID." });
+          if (!publicChatDownloadBase()) {
+            return reply.status(400).send({ error: "MEDIA_LINK_BASE_UNAVAILABLE", message: "Set PUBLIC_API_BASE_URL or PORTAL_PUBLIC_URL to send secure media links by SMS." });
+          }
+          smsLinkFallback = true;
         }
       }
 
       const msgType =
-        atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
+        smsLinkFallback ? "TEXT" : atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
 
       const msg = await db.connectChatMessage.create({
         data: {
@@ -560,6 +720,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           type: msgType,
           body: input.body,
           replyToMessageId: input.replyToMessageId,
+          metadata: input.location ? { location: input.location } : smsLinkFallback ? { smsLinkFallback: true } : undefined,
           deliveryStatus: "queued",
           deliveryError: null,
         },
@@ -573,6 +734,18 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           return reply.status(400).send({ error: code });
         }
         throw e;
+      }
+      if (smsLinkFallback && atts.length) {
+        const base = publicChatDownloadBase();
+        const links = atts.map((a) => buildChatSignedDownloadUrl(base, a.storageKey, 86400));
+        const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+        await db.connectChatMessage.update({
+          where: { id: msg.id },
+          data: {
+            body: fallbackBody,
+            metadata: { ...(input.location ? { location: input.location } : {}), smsLinkFallback: true, smsMediaLinks: links },
+          },
+        });
       }
 
       await db.connectChatThread.update({
@@ -589,9 +762,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return { ok: true, messageId: msg.id, deliveryStatus: "queued" };
     }
 
+    const internalAttachments = (input.attachments || []) as ChatAttachmentInput[];
     const msgType =
-      (input.attachments?.length || 0) > 0
-        ? inferAttachmentMessageType(input.attachments!)
+      internalAttachments.length > 0
+        ? inferAttachmentMessageType(internalAttachments)
         : ((input.type as any) || "TEXT");
 
     const msg = await db.connectChatMessage.create({
@@ -603,11 +777,12 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         type: msgType,
         body: input.body,
         replyToMessageId: input.replyToMessageId,
+        metadata: input.location ? { location: input.location } : undefined,
         deliveryStatus: "sent",
       },
     });
     try {
-      if (input.attachments?.length) await persistMessageAttachments(tenantId, threadId, msg.id, input.attachments);
+      if (internalAttachments.length) await persistMessageAttachments(tenantId, threadId, msg.id, internalAttachments);
     } catch (e: any) {
       const code = String(e?.message || e);
       await db.connectChatMessage.delete({ where: { id: msg.id } }).catch(() => {});
@@ -632,6 +807,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     });
     if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
     const { emoji } = z.object({ emoji: z.string().min(1).max(32) }).parse(req.body || {});
+    const message = await db.connectChatMessage.findFirst({ where: { id: messageId, threadId, tenantId }, select: { id: true } });
+    if (!message) return reply.status(404).send({ error: "MESSAGE_NOT_FOUND" });
+    await db.connectChatMessageReaction.deleteMany({ where: { messageId, userId: user.sub, emoji: { not: emoji } } });
     const n = await db.connectChatMessageReaction.count({ where: { messageId, userId: user.sub, emoji } });
     if (n > 0) {
       await db.connectChatMessageReaction.updateMany({
@@ -655,6 +833,36 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const dec = decodeURIComponent(emoji);
     await db.connectChatMessageReaction.deleteMany({ where: { messageId, userId: user.sub, emoji: dec } });
     return { ok: true };
+  });
+
+  app.delete("/chat/threads/:threadId/messages/:messageId", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const { threadId, messageId } = req.params as { threadId: string; messageId: string };
+    const tenantId = effectiveChatTenantId(req, user);
+    const mode = z.object({ mode: z.enum(["me", "everyone"]).default("me") }).parse(req.query || {}).mode;
+    const part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+    });
+    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const msg = await db.connectChatMessage.findFirst({ where: { id: messageId, threadId, tenantId } });
+    if (!msg) return reply.status(404).send({ error: "MESSAGE_NOT_FOUND" });
+
+    if (mode === "everyone") {
+      if (msg.senderUserId !== user.sub && !isTenantAdmin(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+      await db.connectChatMessage.update({
+        where: { id: messageId },
+        data: { deletedForEveryoneAt: new Date(), body: "", updatedAt: new Date() },
+      });
+      return { ok: true, mode };
+    }
+
+    const current = Array.isArray(msg.deletedForUserIds) ? msg.deletedForUserIds as unknown[] : [];
+    const next = [...new Set([...current.map(String), user.sub])];
+    await db.connectChatMessage.update({
+      where: { id: messageId },
+      data: { deletedForUserIds: next, updatedAt: new Date() },
+    });
+    return { ok: true, mode };
   });
 
   app.patch("/chat/threads/:threadId/messages/:messageId", async (req, reply) => {
@@ -961,8 +1169,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     // Normalize to E.164 — accept any US/Canada format from the form
     const fromN = canonicalSmsPhone(raw.from);
     const toN = canonicalSmsPhone(raw.to);
-    if (!fromN.ok) return reply.status(400).send({ error: "INVALID_FROM", message: `From number invalid: ${fromN.error}` });
-    if (!toN.ok) return reply.status(400).send({ error: "INVALID_TO", message: `To number invalid: ${toN.error}` });
+    if (!fromN.ok) return reply.status(400).send({ error: "INVALID_FROM", message: `From number invalid: ${"error" in fromN ? fromN.error : "invalid phone"}` });
+    if (!toN.ok) return reply.status(400).send({ error: "INVALID_TO", message: `To number invalid: ${"error" in toN ? toN.error : "invalid phone"}` });
     const creds = await loadVoipMsCreds();
     if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED", message: "VoIP.ms credentials not configured." });
     const cfg = await getOrCreateGlobalVoipConfig();
@@ -1021,7 +1229,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           normalizedTo: null,
           direction: "inbound",
           status: "invalid_to",
-          error: nt.error,
+          error: "error" in nt ? nt.error : "invalid phone",
           payload: payload as object,
         },
       });

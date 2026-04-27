@@ -1,277 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAppContext } from "../../../hooks/useAppContext";
-import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import { apiGet, apiPost, apiUploadChatAttachment } from "../../../services/apiClient";
-import { normalizeUsCanadaToE164 } from "@connect/shared";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface ChatThread {
-  id: string;
-  type?: string;
-  title?: string | null;
-  tenantSmsE164?: string | null;
-  externalSmsE164?: string | null;
-  participantName: string;
-  participantExtension: string;
-  lastMessage: string;
-  lastAt: string;
-  unread: number;
-  presence?: "available" | "on_call" | "offline" | "away";
-}
-
-interface ChatMessage {
-  id: string;
-  threadId: string;
-  senderId: string;
-  senderName: string;
-  body: string;
-  sentAt: string;
-  mine: boolean;
-  editedAt?: string | null;
-  deliveryStatus?: string | null;
-  reactions?: Array<{ emoji: string; userId: string }>;
-  mmsUrls?: string[];
-  attachments?: Array<{
-    id: string;
-    fileName: string;
-    mimeType: string;
-    sizeBytes: number;
-    downloadUrl: string | null;
-  }>;
-}
-
-const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
-
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffDays = Math.floor(diffMs / 86400000);
-  if (diffDays === 0) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return d.toLocaleDateString([], { weekday: "short" });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-const PRESENCE_DOT: Record<string, string> = {
-  available: "var(--success)",
-  on_call:   "var(--danger)",
-  away:      "var(--warning)",
-  offline:   "var(--text-dim)",
-};
-
-function initials(name: string): string {
-  return name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
-}
-
-// ── Thread List Item ──────────────────────────────────────────────────────────
-
-function ThreadItem({
-  thread,
-  active,
-  onSelect,
-}: {
-  thread: ChatThread;
-  active: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <div
-      onClick={onSelect}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "11px 14px",
-        cursor: "pointer",
-        background: active ? "var(--panel-2)" : "transparent",
-        borderBottom: "1px solid var(--border)",
-        transition: "background 0.12s",
-      }}
-    >
-      {/* Avatar */}
-      <div style={{ position: "relative", flexShrink: 0 }}>
-        <div style={{
-          width: 40, height: 40,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          opacity: 0.85,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 13,
-          fontWeight: 700,
-          color: "#fff",
-        }}>
-          {initials(thread.participantName)}
-        </div>
-        <span style={{
-          position: "absolute",
-          bottom: 1, right: 1,
-          width: 10, height: 10,
-          borderRadius: "50%",
-          background: PRESENCE_DOT[thread.presence ?? "offline"],
-          border: "2px solid var(--panel)",
-        }} />
-      </div>
-
-      {/* Content */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-          <span style={{ fontWeight: thread.unread > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {thread.type === "SMS" ? "SMS · " : thread.type === "TENANT_GROUP" ? "Group · " : thread.type === "DM" ? "DM · " : ""}
-            {thread.participantName}
-          </span>
-          <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, marginLeft: 8 }}>
-            {fmtTime(thread.lastAt)}
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{
-            fontSize: 12,
-            color: thread.unread > 0 ? "var(--text)" : "var(--text-dim)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flex: 1,
-          }}>
-            {thread.lastMessage || "No messages yet"}
-          </span>
-          {thread.unread > 0 ? (
-            <span style={{
-              background: "var(--accent)",
-              color: "#fff",
-              borderRadius: 20,
-              padding: "1px 7px",
-              fontSize: 11,
-              fontWeight: 700,
-              flexShrink: 0,
-              marginLeft: 8,
-            }}>
-              {thread.unread}
-            </span>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Message Bubble ────────────────────────────────────────────────────────────
-
-function MessageBubble({
-  msg,
-  onReact,
-}: {
-  msg: ChatMessage;
-  onReact: (emoji: string) => void;
-}) {
-  return (
-    <div style={{
-      display: "flex",
-      justifyContent: msg.mine ? "flex-end" : "flex-start",
-      marginBottom: 8,
-    }}>
-      {!msg.mine ? (
-        <div style={{
-          width: 28, height: 28,
-          borderRadius: "50%",
-          background: "var(--panel-2)",
-          border: "1px solid var(--border)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 11, fontWeight: 700, color: "var(--text-dim)",
-          marginRight: 8, flexShrink: 0,
-          alignSelf: "flex-end",
-        }}>
-          {initials(msg.senderName)}
-        </div>
-      ) : null}
-      <div style={{ maxWidth: "68%" }}>
-        {!msg.mine ? (
-          <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 3, paddingLeft: 2 }}>
-            {msg.senderName}
-          </div>
-        ) : null}
-        <div style={{
-          background: msg.mine ? "var(--accent)" : "var(--panel-2)",
-          color: msg.mine ? "#fff" : "var(--text)",
-          borderRadius: msg.mine ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-          padding: "8px 13px",
-          fontSize: 13,
-          lineHeight: 1.5,
-          border: msg.mine ? "none" : "1px solid var(--border)",
-          wordBreak: "break-word",
-        }}>
-          {msg.body}
-          {msg.mmsUrls && msg.mmsUrls.length > 0 ? (
-            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              {msg.mmsUrls.map((u) => (
-                <a key={u} href={u} target="_blank" rel="noreferrer" style={{ color: msg.mine ? "#e8f4ff" : "var(--accent)", fontSize: 12 }}>
-                  Media link
-                </a>
-              ))}
-            </div>
-          ) : null}
-          {msg.attachments && msg.attachments.length > 0 ? (
-            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              {msg.attachments.map((a) =>
-                a.downloadUrl && a.mimeType.startsWith("image/") ? (
-                  <img key={a.id} src={a.downloadUrl} alt={a.fileName} style={{ maxWidth: "100%", borderRadius: 8, maxHeight: 220 }} />
-                ) : a.downloadUrl ? (
-                  <a key={a.id} href={a.downloadUrl} style={{ color: msg.mine ? "#e8f4ff" : "var(--accent)", fontSize: 12 }}>
-                    {a.fileName}
-                  </a>
-                ) : (
-                  <span key={a.id} style={{ fontSize: 12, opacity: 0.85 }}>{a.fileName}</span>
-                ),
-              )}
-            </div>
-          ) : null}
-        </div>
-        <div style={{
-          fontSize: 10,
-          color: "var(--text-dim)",
-          marginTop: 3,
-          textAlign: msg.mine ? "right" : "left",
-          paddingLeft: 2, paddingRight: 2,
-        }}>
-          {new Date(msg.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          {msg.editedAt ? " · edited" : ""}
-          {msg.deliveryStatus ? ` · ${msg.deliveryStatus}` : ""}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, justifyContent: msg.mine ? "flex-end" : "flex-start" }}>
-          {QUICK_REACTIONS.map((e) => (
-            <button key={e} type="button" className="icon-btn" style={{ fontSize: 14, padding: "0 4px" }} title="React" onClick={() => onReact(e)}>
-              {e}
-            </button>
-          ))}
-        </div>
-        {msg.reactions && msg.reactions.length > 0 ? (
-          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, textAlign: msg.mine ? "right" : "left" }}>
-            {Object.entries(
-              msg.reactions.reduce<Record<string, number>>((acc, r) => {
-                acc[r.emoji] = (acc[r.emoji] || 0) + 1;
-                return acc;
-              }, {}),
-            )
-              .map(([emoji, n]) => `${emoji}${n}`)
-              .join("  ")}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
+import { ChatConversation } from "../../../components/chat/ChatConversation";
+import { ChatInbox } from "../../../components/chat/ChatInbox";
+import { NewChatDialog } from "../../../components/chat/NewChatDialog";
+import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "../../../components/chat/types";
+import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment } from "../../../services/apiClient";
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
-  const { user } = useAppContext();
-  const phone = useSipPhone();
+  const { tenantId, adminScope } = useAppContext();
+  const searchParams = useSearchParams();
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -279,373 +22,228 @@ export default function ChatPage() {
     Array<{ storageKey: string; mimeType: string; sizeBytes: number; fileName: string }>
   >([]);
   const [sending, setSending] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [showNewChat, setShowNewChat] = useState(false);
-  const [newChatKind, setNewChatKind] = useState<"sms" | "dm" | null>(null);
-  const [newSmsPhone, setNewSmsPhone] = useState("");
-  const [newDmPeerUserId, setNewDmPeerUserId] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [msgReload, setMsgReload] = useState(0);
   const [threadReload, setThreadReload] = useState(0);
+  const [pendingThreadId, setPendingThreadId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [messageLoading, setMessageLoading] = useState(false);
+  const [toast, setToast] = useState("");
+  const [handledExt, setHandledExt] = useState("");
 
   const threadsState = useAsyncResource<{ threads: ChatThread[] }>(
     () => apiGet("/chat/threads"),
-    [threadReload]
+    [threadReload, tenantId, adminScope]
+  );
+  const directoryState = useAsyncResource<{ users: ChatDirectoryUser[] }>(
+    () => apiGet("/chat/directory"),
+    [tenantId, adminScope, threadReload]
   );
 
   const threads: ChatThread[] = threadsState.status === "success"
     ? (threadsState.data.threads ?? [])
     : [];
 
-  const filtered = threads.filter((t) =>
-    !search.trim() ||
-    t.participantName.toLowerCase().includes(search.toLowerCase()) ||
-    t.participantExtension.includes(search) ||
-    (t.type || "").toLowerCase().includes(search.toLowerCase())
-  );
+  const users = directoryState.status === "success" ? directoryState.data.users ?? [] : [];
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return threads.filter((t) =>
+      !q ||
+      t.participantName.toLowerCase().includes(q) ||
+      t.participantExtension.includes(q) ||
+      (t.externalSmsE164 || "").includes(q) ||
+      (t.type || "").toLowerCase().includes(q)
+    );
+  }, [threads, search]);
 
-  const smsPreview = newSmsPhone.trim() ? normalizeUsCanadaToE164(newSmsPhone.trim()) : null;
+  const loadMessages = useCallback(async () => {
+    if (!activeThread) return;
+    setMessageLoading(true);
+    try {
+      const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${activeThread.id}/messages`);
+      setMessages(res.messages ?? []);
+    } catch {
+      setMessages([]);
+    } finally {
+      setMessageLoading(false);
+    }
+  }, [activeThread]);
 
-  // Load messages for active thread
+  useEffect(() => {
+    loadMessages();
+  }, [loadMessages, msgReload]);
+
+  useEffect(() => {
+    setActiveThread((current) => {
+      if (!current) return threads[0] || null;
+      return threads.find((t) => t.id === current.id) || current;
+    });
+    if (pendingThreadId) {
+      const found = threads.find((t) => t.id === pendingThreadId);
+      if (found) {
+        setActiveThread(found);
+        setPendingThreadId(null);
+      }
+    }
+  }, [threads, pendingThreadId]);
+
+  useEffect(() => {
+    const targetExt = searchParams.get("ext");
+    if (!targetExt || targetExt === handledExt || users.length === 0) return;
+    const peer = users.find((u) => u.extensionNumber === targetExt);
+    if (!peer) return;
+    setHandledExt(targetExt);
+    apiPost<{ threadId: string }>("/chat/threads", { type: "dm", peerUserId: peer.id })
+      .then((res) => {
+        setPendingThreadId(res.threadId);
+        setThreadReload((k) => k + 1);
+      })
+      .catch(() => {});
+  }, [searchParams, users, handledExt]);
+
   useEffect(() => {
     if (!activeThread) return;
-    apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${activeThread.id}/messages`)
-      .then((res) => setMessages(res.messages ?? []))
-      .catch(() => setMessages([]));
-  }, [activeThread?.id, msgReload]);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      setMsgReload((k) => k + 1);
+      setThreadReload((k) => k + 1);
+    }, 7000);
+    return () => window.clearInterval(timer);
+  }, [activeThread?.id]);
 
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  function showToast(message: string) {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2500);
+  }
 
-  async function sendMessage() {
-    if ((!draft.trim() && pendingAttachments.length === 0) || !activeThread || sending) return;
+  async function sendMessage(options?: { type?: string; location?: { lat: number; lng: number; label?: string; address?: string } }) {
+    if ((!draft.trim() && pendingAttachments.length === 0 && !options?.location) || !activeThread || sending) return;
     const body = draft.trim();
     const atts = [...pendingAttachments];
+    const reply = replyingTo;
     setDraft("");
     setPendingAttachments([]);
+    setReplyingTo(null);
     setSending(true);
     try {
       const payload: Record<string, unknown> = { body };
       if (atts.length) payload.attachments = atts;
+      if (options?.type) payload.type = options.type;
+      if (options?.location) payload.location = options.location;
+      if (reply) payload.replyToMessageId = reply.id;
       await apiPost(`/chat/threads/${activeThread.id}/messages`, payload);
       setMsgReload((k) => k + 1);
+      setThreadReload((k) => k + 1);
     } catch {
       setDraft(body);
       setPendingAttachments(atts);
+      setReplyingTo(reply);
+      showToast("Message failed to send");
     } finally {
       setSending(false);
     }
   }
 
+  async function attachFiles(files: File[]) {
+    if (!activeThread) return;
+    for (const file of files.slice(0, 3)) {
+      try {
+        const r = await apiUploadChatAttachment(activeThread.id, file);
+        setPendingAttachments((prev) => [...prev, { storageKey: r.storageKey, mimeType: r.mimeType, sizeBytes: r.sizeBytes, fileName: r.fileName }].slice(0, 3));
+      } catch (err) {
+        showToast(String((err as Error)?.message || "Upload failed"));
+      }
+    }
+  }
+
+  async function createSms(phone: string) {
+    const res = await apiPost<{ threadId: string }>("/chat/threads", { type: "sms", externalPhone: phone });
+    setPendingThreadId(res.threadId);
+    setThreadReload((k) => k + 1);
+  }
+
+  async function createDm(userId: string) {
+    const res = await apiPost<{ threadId: string }>("/chat/threads", { type: "dm", peerUserId: userId });
+    setPendingThreadId(res.threadId);
+    setThreadReload((k) => k + 1);
+  }
+
+  async function createGroup(title: string, userIds: string[]) {
+    const res = await apiPost<{ threadId: string }>("/chat/threads", { type: "group", title, peerUserIds: userIds });
+    setPendingThreadId(res.threadId);
+    setThreadReload((k) => k + 1);
+  }
+
+  async function react(message: ChatMessage, emoji: string) {
+    if (!activeThread) return;
+    await apiPost(`/chat/threads/${activeThread.id}/messages/${message.id}/reactions`, { emoji });
+    setMsgReload((k) => k + 1);
+  }
+
+  async function removeReaction(message: ChatMessage, emoji: string) {
+    if (!activeThread) return;
+    await apiDelete(`/chat/threads/${activeThread.id}/messages/${message.id}/reactions/${encodeURIComponent(emoji)}`);
+    setMsgReload((k) => k + 1);
+  }
+
+  async function editMessage(message: ChatMessage) {
+    if (!activeThread) return;
+    const next = window.prompt("Edit message", message.body);
+    if (!next || next.trim() === message.body.trim()) return;
+    await apiPatch(`/chat/threads/${activeThread.id}/messages/${message.id}`, { body: next.trim() });
+    setMsgReload((k) => k + 1);
+  }
+
+  async function deleteMessage(message: ChatMessage, mode: "me" | "everyone") {
+    if (!activeThread) return;
+    await apiDelete(`/chat/threads/${activeThread.id}/messages/${message.id}?mode=${mode}`);
+    setMsgReload((k) => k + 1);
+    setThreadReload((k) => k + 1);
+  }
+
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 54px)", overflow: "hidden" }}>
-      {/* Thread list */}
-      <div style={{
-        width: 300,
-        flexShrink: 0,
-        borderRight: "1px solid var(--border)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
-        {/* Header */}
-        <div style={{
-          padding: "10px 12px",
-          borderBottom: "1px solid var(--border)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h3 style={{ fontSize: 15, fontWeight: 650 }}>Chat</h3>
-            <button
-              className="icon-btn"
-              onClick={() => {
-                setShowNewChat((v) => !v);
-                if (showNewChat) setNewChatKind(null);
-              }}
-              title="New conversation"
-              style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}
-            >
-              +
-            </button>
-          </div>
-
-          {showNewChat ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" className={`btn ${newChatKind === "sms" ? "" : "ghost"}`} style={{ flex: 1, fontSize: 12 }} onClick={() => setNewChatKind("sms")}>
-                  SMS
-                </button>
-                <button type="button" className={`btn ${newChatKind === "dm" ? "" : "ghost"}`} style={{ flex: 1, fontSize: 12 }} onClick={() => setNewChatKind("dm")}>
-                  DM / Internal
-                </button>
-              </div>
-              {newChatKind === "sms" ? (
-                <>
-                  <input
-                    className="input"
-                    style={{ fontSize: 12 }}
-                    placeholder="Destination phone"
-                    value={newSmsPhone}
-                    onChange={(e) => setNewSmsPhone(e.target.value)}
-                  />
-                  {smsPreview && smsPreview.ok ? (
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Will send to <code>{smsPreview.e164}</code></div>
-                  ) : smsPreview && !smsPreview.ok ? (
-                    <div style={{ fontSize: 11, color: "var(--danger)" }}>Invalid number</div>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ fontSize: 12 }}
-                    disabled={!smsPreview?.ok}
-                    onClick={async () => {
-                      if (!smsPreview?.ok) return;
-                      const r = await apiPost<{ threadId: string }>("/chat/threads", { type: "sms", externalPhone: newSmsPhone.trim() });
-                      setShowNewChat(false);
-                      setNewChatKind(null);
-                      setNewSmsPhone("");
-                      setThreadReload((k) => k + 1);
-                      setActiveThread({
-                        id: r.threadId,
-                        type: "SMS",
-                        participantName: smsPreview.e164,
-                        participantExtension: "",
-                        lastMessage: "",
-                        lastAt: new Date().toISOString(),
-                        unread: 0,
-                      });
-                    }}
-                  >
-                    Open SMS thread
-                  </button>
-                </>
-              ) : null}
-              {newChatKind === "dm" ? (
-                <>
-                  <input
-                    className="input"
-                    style={{ fontSize: 12 }}
-                    placeholder="Peer user id (UUID)"
-                    value={newDmPeerUserId}
-                    onChange={(e) => setNewDmPeerUserId(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ fontSize: 12 }}
-                    disabled={!newDmPeerUserId.trim()}
-                    onClick={async () => {
-                      const r = await apiPost<{ threadId: string }>("/chat/threads", { type: "dm", peerUserId: newDmPeerUserId.trim() });
-                      setShowNewChat(false);
-                      setNewChatKind(null);
-                      setNewDmPeerUserId("");
-                      setThreadReload((k) => k + 1);
-                      setActiveThread({ id: r.threadId, type: "DM", participantName: "DM", participantExtension: "", lastMessage: "", lastAt: new Date().toISOString(), unread: 0 });
-                    }}
-                  >
-                    Open DM
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div style={{ position: "relative" }}>
-            <input
-              className="input"
-              style={{ paddingLeft: 30, fontSize: 13 }}
-              placeholder="Search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", fontSize: 13 }}>🔍</span>
-          </div>
-
-          {/* Filter tabs */}
-          <div style={{ display: "flex", gap: 0, fontSize: 12 }}>
-            <button style={{ flex: 1, padding: "4px 0", border: "none", background: "transparent", borderBottom: "2px solid var(--accent)", color: "var(--accent)", fontWeight: 650, cursor: "pointer" }}>Recents</button>
-            <button style={{ flex: 1, padding: "4px 0", border: "none", background: "transparent", borderBottom: "2px solid transparent", color: "var(--text-dim)", cursor: "pointer" }}>Unread</button>
-          </div>
-        </div>
-
-        {/* List */}
-        <div style={{ flex: 1, overflowY: "auto" }}>
-          {filtered.length === 0 ? (
-            <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-              No chats
-            </div>
-          ) : (
-            filtered.map((t) => (
-              <ThreadItem
-                key={t.id}
-                thread={t}
-                active={activeThread?.id === t.id}
-                onSelect={() => setActiveThread(t)}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Message area */}
-      {activeThread ? (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* Chat header */}
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "10px 16px",
-            borderBottom: "1px solid var(--border)",
-            background: "var(--panel)",
-            flexShrink: 0,
-          }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: "50%",
-              background: "var(--accent)", opacity: 0.85,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 13, fontWeight: 700, color: "#fff",
-            }}>
-              {initials(activeThread.participantName)}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 650, fontSize: 14 }}>{activeThread.participantName}</div>
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Ext {activeThread.participantExtension}</div>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="icon-btn"
-                title="Call"
-                onClick={() => phone.dial(activeThread.participantExtension)}
-                style={{ color: "var(--success)" }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07A19.5 19.5 0 013.07 10.8 19.8 19.8 0 01.02 2.18 2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.9.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.573 2.81.7A2 2 0 0122 14h0v2.92z"/>
-                </svg>
-              </button>
-              <button className="icon-btn" title="Close" onClick={() => setActiveThread(null)}>✕</button>
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
-            {messages.length === 0 ? (
-              <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: 13, marginTop: 40 }}>
-                No messages yet. Send a message below.
-              </div>
-            ) : (
-              messages.map((msg) => (
-                <MessageBubble
-                  key={msg.id}
-                  msg={msg}
-                  onReact={async (emoji) => {
-                    if (!activeThread) return;
-                    await apiPost(`/chat/threads/${activeThread.id}/messages/${msg.id}/reactions`, { emoji });
-                    setMsgReload((k) => k + 1);
-                  }}
-                />
-              ))
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input bar */}
-          <div style={{
-            display: "flex",
-            gap: 10,
-            padding: "10px 14px",
-            borderTop: "1px solid var(--border)",
-            background: "var(--panel)",
-            flexShrink: 0,
-            alignItems: "center",
-          }}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,audio/*,video/mp4,application/pdf"
-              style={{ display: "none" }}
-              multiple
-              onChange={async (e) => {
-                const files = Array.from(e.target.files || []).slice(0, 3);
-                e.target.value = "";
-                if (!activeThread || files.length === 0) return;
-                for (const f of files) {
-                  try {
-                    const r = await apiUploadChatAttachment(activeThread.id, f);
-                    setPendingAttachments((prev) => {
-                      const next = [...prev, { storageKey: r.storageKey, mimeType: r.mimeType, sizeBytes: r.sizeBytes, fileName: r.fileName }];
-                      return next.slice(0, 3);
-                    });
-                  } catch {
-                    /* ignore per-file */
-                  }
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="icon-btn"
-              title="Attach file"
-              onClick={() => fileInputRef.current?.click()}
-              style={{ flexShrink: 0 }}
-            >
-              📎
-            </button>
-            <input
-              className="input"
-              style={{ flex: 1, fontSize: 13 }}
-              placeholder={`Message ${activeThread.participantName}…`}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-              }}
-            />
-            {pendingAttachments.length > 0 ? (
-              <span style={{ fontSize: 11, color: "var(--text-dim)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {pendingAttachments.length} file{pendingAttachments.length > 1 ? "s" : ""}
-              </span>
-            ) : null}
-            <button
-              className="btn"
-              style={{
-                background: draft.trim() || pendingAttachments.length > 0 ? "var(--accent)" : "var(--border)",
-                border: "none",
-                padding: "0 16px",
-                fontSize: 13,
-                transition: "background 0.15s",
-              }}
-              onClick={sendMessage}
-              disabled={(!draft.trim() && pendingAttachments.length === 0) || sending}
-            >
-              {sending ? "…" : "Send"}
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* Empty state when no thread selected */
-        <div style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "var(--text-dim)",
-          gap: 12,
-        }}>
-          <div style={{ fontSize: 40 }}>💬</div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>No conversation selected</div>
-          <div style={{ fontSize: 13 }}>Select a conversation from the left or start a new one</div>
-          <button className="btn" style={{ marginTop: 8, fontSize: 13 }} onClick={() => setShowNewChat(true)}>
-            + New Conversation
-          </button>
-        </div>
-      )}
+    <div className={`cc-shell ${activeThread ? "has-active" : ""}`}>
+      <ChatInbox
+        threads={filtered}
+        activeThreadId={activeThread?.id}
+        search={search}
+        onSearch={setSearch}
+        onSelect={setActiveThread}
+        onNewChat={() => setShowNewChat(true)}
+        loading={threadsState.status === "loading"}
+      />
+      <ChatConversation
+        thread={activeThread}
+        messages={messages}
+        loading={messageLoading}
+        draft={draft}
+        onDraft={setDraft}
+        replyingTo={replyingTo}
+        onReply={setReplyingTo}
+        onCancelReply={() => setReplyingTo(null)}
+        onEdit={editMessage}
+        onDeleteMe={(message) => deleteMessage(message, "me")}
+        onDeleteEveryone={(message) => deleteMessage(message, "everyone")}
+        onReact={react}
+        onRemoveReaction={removeReaction}
+        pendingAttachments={pendingAttachments}
+        onAttachFiles={attachFiles}
+        onRemovePending={(index) => setPendingAttachments((prev) => prev.filter((_, i) => i !== index))}
+        onSend={sendMessage}
+        sending={sending}
+        onBack={() => setActiveThread(null)}
+        onRefresh={() => { setMsgReload((k) => k + 1); setThreadReload((k) => k + 1); }}
+      />
+      <NewChatDialog
+        open={showNewChat}
+        users={users}
+        onClose={() => setShowNewChat(false)}
+        onCreateSms={createSms}
+        onCreateDm={createDm}
+        onCreateGroup={createGroup}
+      />
+      {toast ? <div className="cc-toast">{toast}</div> : null}
     </div>
   );
 }
