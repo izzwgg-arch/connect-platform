@@ -31,7 +31,6 @@ import {
   Phone,
   PhoneForwarded,
   Plane,
-  Radio,
   Receipt,
   Rocket,
   Route,
@@ -59,7 +58,6 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: "OV", lucide: LayoutDashboard, section: "dashboard", permission: "can_view_dashboard" },
-  { href: "/dashboard/presence", label: "Extension Presence", icon: "EP", lucide: Radio, section: "dashboard", permission: "can_view_live_calls" },
   { href: "/team", label: "Team Directory", icon: "TM", lucide: Users, section: "dashboard", permission: "can_view_team" },
   { href: "/calls", label: "Call History", icon: "CL", lucide: Phone, section: "dashboard", permission: "can_view_calls" },
   { href: "/calls/health", label: "System Health", icon: "SH", lucide: Activity, section: "dashboard", permission: "can_view_calls" },

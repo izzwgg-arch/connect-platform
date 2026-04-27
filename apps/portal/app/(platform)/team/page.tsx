@@ -1,469 +1,549 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  Copy,
+  Grid3X3,
+  List,
+  MessageSquare,
+  MoreHorizontal,
+  Phone,
+  Search,
+  UserRound,
+  X
+} from "lucide-react";
+import { LiveBadge } from "../../../components/LiveBadge";
 import { PageHeader } from "../../../components/PageHeader";
 import { useTelephony } from "../../../contexts/TelephonyContext";
-import { useSipPhone } from "../../../hooks/useSipPhone";
+import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
+import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
+import { useSipPhone } from "../../../hooks/useSipPhone";
 import { apiGet } from "../../../services/apiClient";
+import type { LiveCall, LiveExtensionState } from "../../../types/liveCall";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+type PresenceState = "available" | "ringing" | "on_call" | "busy" | "offline" | "unknown";
+type ViewMode = "cards" | "list";
+type StatusFilter = "all" | "available" | "on_call" | "ringing" | "offline";
+type SortKey = "name" | "extension" | "status";
 
-type PresenceState = "available" | "ringing" | "on_call" | "busy" | "away" | "dnd" | "offline";
-
-interface TeamMember {
+type TeamMember = {
   id: string;
   name: string;
   extension: string;
   email?: string;
+  phone?: string;
   department?: string;
   title?: string;
-  avatar?: string;
+  tenantName?: string;
+  tenantId?: string | null;
   presence: PresenceState;
-  callerId?: string;
-}
-
-const PRESENCE_META: Record<PresenceState, { label: string; color: string; dot: string; animate: boolean }> = {
-  available: { label: "Available",  color: "var(--success)",  dot: "var(--success)",  animate: false },
-  ringing:   { label: "Ringing",    color: "var(--danger)",   dot: "var(--danger)",   animate: true  },
-  on_call:   { label: "On Call",    color: "var(--danger)",   dot: "var(--danger)",   animate: false },
-  busy:      { label: "Busy",       color: "var(--warning)",  dot: "var(--warning)",  animate: false },
-  away:      { label: "Away",       color: "var(--warning)",  dot: "var(--warning)",  animate: false },
-  dnd:       { label: "Do Not Disturb", color: "var(--danger)", dot: "var(--danger)", animate: false },
-  offline:   { label: "Not Registered", color: "var(--text-dim)", dot: "#555", animate: false },
+  currentCall?: string;
+  lastSeen?: string;
 };
 
-function mapAmiPresence(
-  rawState: string,
-  ext: string,
-  activeCalls: Set<string>,
-  ringingCalls: Set<string>,
-): PresenceState {
-  if (ringingCalls.has(ext)) return "ringing";
-  if (activeCalls.has(ext)) return "on_call";
-  const s = rawState.toLowerCase();
-  if (s === "not_inuse" || s === "idle" || s === "registered" || s === "0") return "available";
-  if (s === "inuse" || s === "1") return "on_call";
-  if (s === "ringing" || s === "2") return "ringing";
-  if (s === "busy" || s === "3") return "busy";
-  if (s === "away") return "away";
-  if (s === "dnd") return "dnd";
-  return "offline";
+type ExtensionResponse = {
+  rows: Record<string, unknown>[];
+};
+
+const STATUS_META: Record<PresenceState, { label: string; tone: string; sort: number }> = {
+  ringing: { label: "Ringing", tone: "ringing", sort: 0 },
+  on_call: { label: "On Call", tone: "on-call", sort: 1 },
+  available: { label: "Available", tone: "available", sort: 2 },
+  busy: { label: "Busy", tone: "busy", sort: 3 },
+  offline: { label: "Offline", tone: "offline", sort: 4 },
+  unknown: { label: "Unknown", tone: "unknown", sort: 5 }
+};
+
+const FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "available", label: "Available" },
+  { key: "on_call", label: "On Call" },
+  { key: "ringing", label: "Ringing" },
+  { key: "offline", label: "Offline" }
+];
+
+function cleanValue(value: unknown): string | undefined {
+  const next = String(value ?? "").trim();
+  return next ? next : undefined;
 }
 
 function initials(name: string): string {
-  return name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0]![0]}${parts[1]![0]}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
 }
 
-// ── Avatar ────────────────────────────────────────────────────────────────────
-
-function Avatar({ member, size = 44 }: { member: TeamMember; size?: number }) {
-  const meta = PRESENCE_META[member.presence];
-  return (
-    <div style={{ position: "relative", flexShrink: 0, width: size, height: size }}>
-      {member.avatar ? (
-        <img
-          src={member.avatar}
-          alt={member.name}
-          style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover" }}
-        />
-      ) : (
-        <div style={{
-          width: size, height: size,
-          borderRadius: "50%",
-          background: "var(--panel-2)",
-          border: "1px solid var(--border)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: size * 0.33,
-          fontWeight: 700,
-          color: "var(--text-dim)",
-        }}>
-          {initials(member.name)}
-        </div>
-      )}
-      {/* Presence dot */}
-      <span style={{
-        position: "absolute",
-        bottom: 1,
-        right: 1,
-        width: size * 0.27,
-        height: size * 0.27,
-        borderRadius: "50%",
-        background: meta.dot,
-        border: `2px solid var(--panel)`,
-        animation: meta.animate ? "presence-pulse 1.2s ease-in-out infinite" : undefined,
-      }} />
-    </div>
-  );
+function extensionFromRow(row: Record<string, unknown>, fallback: number): string {
+  return cleanValue(row.extension) ?? cleanValue(row.number) ?? cleanValue(row.ext) ?? String(fallback);
 }
 
-// ── Member Row ────────────────────────────────────────────────────────────────
+function rowTenantMatches(row: Record<string, unknown>, scopedTenantId: string | null): boolean {
+  if (!scopedTenantId) return true;
+  const raw =
+    cleanValue(row.tenantId) ??
+    cleanValue(row.tenant_id) ??
+    cleanValue(row.pbxTenantId) ??
+    cleanValue(row.vpbxTenantId);
+  if (!raw) return true; // REST calls are scoped by x-tenant-context; only filter when the row exposes tenant identity.
+  return raw === scopedTenantId || `vpbx:${raw}` === scopedTenantId || raw === scopedTenantId.replace(/^vpbx:/, "");
+}
 
-function MemberRow({
+function mapPresence(
+  rawState: string | undefined,
+  extension: string,
+  activeExts: Set<string>,
+  ringingExts: Set<string>,
+  presenceUnavailable: boolean
+): PresenceState {
+  if (ringingExts.has(extension)) return "ringing";
+  if (activeExts.has(extension)) return "on_call";
+  const state = String(rawState ?? "").toLowerCase();
+  if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") return "available";
+  if (state === "inuse" || state === "onhold" || state === "1") return "on_call";
+  if (state === "ringing" || state === "2") return "ringing";
+  if (state === "busy" || state === "3") return "busy";
+  if (state === "unavailable" || state === "offline" || state === "unregistered" || state === "5") return "offline";
+  return presenceUnavailable ? "unknown" : "offline";
+}
+
+function formatLastSeen(value?: string): string | undefined {
+  if (!value) return undefined;
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return undefined;
+  const diff = Math.max(0, Date.now() - ts);
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function currentCallLabel(call: LiveCall | undefined, extension: string): string | undefined {
+  if (!call) return undefined;
+  const other = [call.fromName, call.from, call.to, call.connectedLine].find((v) => v && v !== extension);
+  if (call.state === "ringing" || call.state === "dialing") return other ? `Ringing: ${other}` : "Ringing";
+  return other ? `In call with ${other}` : "In active call";
+}
+
+function TeamActions({
   member,
+  open,
+  onToggle,
   onCall,
-  selected,
-  onSelect,
+  onCopy,
+  onDetails
 }: {
   member: TeamMember;
-  onCall: (ext: string) => void;
-  selected: boolean;
-  onSelect: (m: TeamMember) => void;
+  open: boolean;
+  onToggle: () => void;
+  onCall: (member: TeamMember) => void;
+  onCopy: (member: TeamMember) => void;
+  onDetails: (member: TeamMember) => void;
 }) {
-  const meta = PRESENCE_META[member.presence];
   return (
-    <div
-      onClick={() => onSelect(member)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "10px 14px",
-        cursor: "pointer",
-        borderBottom: "1px solid var(--border)",
-        background: selected ? "var(--panel-2)" : "transparent",
-        transition: "background 0.12s",
-      }}
-      onMouseEnter={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.02)"; }}
-      onMouseLeave={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-    >
-      <Avatar member={member} size={40} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {member.name}
-        </div>
-        <div style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ color: meta.color, fontWeight: 500 }}>{meta.label}</span>
-          <span style={{ color: "var(--text-dim)" }}>· Ext {member.extension}</span>
-        </div>
-      </div>
-      <button
-        className="icon-btn"
-        onClick={(e) => { e.stopPropagation(); onCall(member.extension); }}
-        title={`Call ${member.name}`}
-        style={{
-          width: 32, height: 32,
-          borderRadius: "50%",
-          background: member.presence === "available" ? "rgba(52,194,123,0.12)" : "var(--panel-2)",
-          border: "1px solid var(--border)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07A19.5 19.5 0 013.07 10.8 19.8 19.8 0 01.02 2.18 2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.9.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.573 2.81.7A2 2 0 0122 14h0v2.92z"/>
-        </svg>
+    <div className="team-actions-menu">
+      <button className="team-icon-btn" type="button" onClick={onToggle} aria-label={`Actions for ${member.name}`}>
+        <MoreHorizontal size={18} />
       </button>
+      {open ? (
+        <div className="team-actions-popover">
+          <button type="button" onClick={() => onCall(member)}>
+            <Phone size={15} /> Call
+          </button>
+          <Link href={`/chat?user=${encodeURIComponent(member.id)}`}>
+            <MessageSquare size={15} /> Message
+          </Link>
+          <button type="button" onClick={() => onDetails(member)}>
+            <UserRound size={15} /> View details
+          </button>
+          <button type="button" onClick={() => onCopy(member)}>
+            <Copy size={15} /> Copy extension
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-// ── Detail Panel ──────────────────────────────────────────────────────────────
+function StatusPill({ state }: { state: PresenceState }) {
+  const meta = STATUS_META[state];
+  return (
+    <span className={`team-status-pill team-status-${meta.tone}`}>
+      <span className="team-status-dot" />
+      {meta.label}
+    </span>
+  );
+}
 
-function MemberDetail({
+function MemberCard({
   member,
+  menuOpen,
+  onToggleMenu,
   onCall,
-  onClose,
+  onCopy,
+  onDetails
 }: {
   member: TeamMember;
-  onCall: (ext: string) => void;
-  onClose: () => void;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+  onCall: (member: TeamMember) => void;
+  onCopy: (member: TeamMember) => void;
+  onDetails: (member: TeamMember) => void;
 }) {
-  const meta = PRESENCE_META[member.presence];
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: 20,
-      padding: "24px 20px",
-    }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button className="icon-btn" onClick={onClose} style={{ fontSize: 18 }}>✕</button>
+    <article className={`team-card team-card-${STATUS_META[member.presence].tone}`}>
+      <div className="team-card-top">
+        <div className="team-avatar" aria-hidden>{initials(member.name)}</div>
+        <TeamActions
+          member={member}
+          open={menuOpen}
+          onToggle={onToggleMenu}
+          onCall={onCall}
+          onCopy={onCopy}
+          onDetails={onDetails}
+        />
       </div>
-
-      {/* Profile */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
-        <Avatar member={member} size={72} />
+      <div className="team-card-main">
         <div>
-          <div style={{ fontSize: 18, fontWeight: 650, marginBottom: 4 }}>{member.name}</div>
-          {member.title ? <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 2 }}>{member.title}</div> : null}
-          {member.department ? <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{member.department}</div> : null}
+          <h3>{member.name}</h3>
+          <p>Ext {member.extension}</p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{
-            width: 8, height: 8, borderRadius: "50%",
-            background: meta.dot,
-            display: "inline-block",
-            animation: meta.animate ? "presence-pulse 1.2s ease-in-out infinite" : undefined,
-          }} />
-          <span style={{ fontSize: 13, color: meta.color, fontWeight: 600 }}>{meta.label}</span>
-        </div>
+        <StatusPill state={member.presence} />
       </div>
-
-      {/* Actions */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <button
-          className="btn"
-          style={{ width: "100%", background: "var(--success)", border: "none", fontSize: 14 }}
-          onClick={() => onCall(member.extension)}
-        >
-          📞 Call Ext {member.extension}
+      <div className="team-card-meta">
+        <span>{member.title || "Team member"}</span>
+        {member.department ? <span>{member.department}</span> : null}
+        {member.email ? <span>{member.email}</span> : null}
+      </div>
+      <div className="team-card-footer">
+        <span>{member.currentCall || member.lastSeen || "Directory profile"}</span>
+        <button type="button" onClick={() => onCall(member)}>
+          <Phone size={15} /> Call
         </button>
-        {member.email ? (
-          <a
-            href={`mailto:${member.email}`}
-            className="btn ghost"
-            style={{ width: "100%", textAlign: "center", display: "block", fontSize: 14 }}
-          >
-            ✉ {member.email}
-          </a>
-        ) : null}
       </div>
-
-      {/* Details */}
-      <div style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
-          <span style={{ color: "var(--text-dim)" }}>Extension</span>
-          <span style={{ fontWeight: 600 }}>{member.extension}</span>
-        </div>
-        {member.email ? (
-          <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
-            <span style={{ color: "var(--text-dim)" }}>Email</span>
-            <span style={{ fontWeight: 500, fontSize: 12 }}>{member.email}</span>
-          </div>
-        ) : null}
-        {member.callerId ? (
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ color: "var(--text-dim)" }}>Current call</span>
-            <span style={{ color: meta.color, fontWeight: 600, fontSize: 12 }}>{member.callerId}</span>
-          </div>
-        ) : null}
-      </div>
-    </div>
+    </article>
   );
 }
 
-// ── Presence Filter ───────────────────────────────────────────────────────────
-
-const FILTERS: { key: PresenceState | "all"; label: string }[] = [
-  { key: "all",       label: "All" },
-  { key: "available", label: "Available" },
-  { key: "on_call",   label: "On Call" },
-  { key: "ringing",   label: "Ringing" },
-  { key: "offline",   label: "Offline" },
-];
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
+function DetailsPanel({ member, onClose, onCall, onCopy }: { member: TeamMember; onClose: () => void; onCall: (member: TeamMember) => void; onCopy: (member: TeamMember) => void }) {
+  return (
+    <aside className="team-detail-panel" aria-label="Team member details">
+      <div className="team-detail-head">
+        <button className="team-icon-btn" type="button" onClick={onClose} aria-label="Close details">
+          <X size={18} />
+        </button>
+      </div>
+      <div className="team-detail-profile">
+        <div className="team-avatar team-avatar-lg" aria-hidden>{initials(member.name)}</div>
+        <div>
+          <h2>{member.name}</h2>
+          <p>{member.title || member.department || "Team member"}</p>
+        </div>
+        <StatusPill state={member.presence} />
+      </div>
+      <div className="team-detail-actions">
+        <button className="btn" type="button" onClick={() => onCall(member)}>
+          <Phone size={16} /> Call Ext {member.extension}
+        </button>
+        <Link className="btn ghost" href={`/chat?user=${encodeURIComponent(member.id)}`}>
+          <MessageSquare size={16} /> Message
+        </Link>
+        <button className="btn ghost" type="button" onClick={() => onCopy(member)}>
+          <Copy size={16} /> Copy extension
+        </button>
+      </div>
+      <dl className="team-detail-list">
+        <div><dt>Extension</dt><dd>{member.extension}</dd></div>
+        <div><dt>Status</dt><dd>{STATUS_META[member.presence].label}</dd></div>
+        <div><dt>Role</dt><dd>{member.title || "—"}</dd></div>
+        <div><dt>Department</dt><dd>{member.department || "—"}</dd></div>
+        <div><dt>Email</dt><dd>{member.email || "—"}</dd></div>
+        <div><dt>Tenant</dt><dd>{member.tenantName || member.tenantId || "Selected tenant"}</dd></div>
+        <div><dt>Current call</dt><dd>{member.currentCall || "—"}</dd></div>
+        <div><dt>Last seen</dt><dd>{member.lastSeen || "—"}</dd></div>
+      </dl>
+    </aside>
+  );
+}
 
 export default function TeamPage() {
   const telephony = useTelephony();
   const phone = useSipPhone();
+  const { adminScope, tenantId, tenant, user } = useAppContext();
+  const scopedTenantId = adminScope === "GLOBAL" ? null : tenantId;
   const [search, setSearch] = useState("");
-  const [presenceFilter, setPresenceFilter] = useState<PresenceState | "all">("all");
+  const debouncedSearch = useDebouncedValue(search, 180);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("status");
+  const [view, setView] = useState<ViewMode>("cards");
   const [selected, setSelected] = useState<TeamMember | null>(null);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
-  // Load extensions from VitalPBX
-  const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
-    () => apiGet("/voice/pbx/resources/extensions"),
-    []
-  );
+  const viewKey = `cc-team-directory-view:${user.id}`;
 
-  // Build active/ringing maps from live call data
-  const { activeExts, ringingExts } = useMemo(() => {
-    const active = new Set<string>();
-    const ringing = new Set<string>();
-    telephony.activeCalls.forEach((c) => {
-      const exts = c.extensions ?? [];
-      if (c.state === "up" || c.state === "held") exts.forEach((e) => active.add(e));
-      else if (c.state === "ringing" || c.state === "dialing") exts.forEach((e) => ringing.add(e));
-    });
-    return { activeExts: active, ringingExts: ringing };
-  }, [telephony.activeCalls]);
+  useEffect(() => {
+    const stored = localStorage.getItem(viewKey);
+    if (stored === "cards" || stored === "list") setView(stored);
+  }, [viewKey]);
 
-  // Merge VitalPBX extension data with AMI presence
-  const members: TeamMember[] = useMemo(() => {
-    const extRows = extState.status === "success" ? extState.data.rows : [];
-    const extMap = extRows.map((r, i): TeamMember => {
-      const ext = String(r.extension ?? r.number ?? i);
-      const amiState = telephony.extensionList.find((e) => e.extension === ext);
-      return {
-        id: String(r.id ?? r.uuid ?? i),
-        name: String(r.name ?? r.display_name ?? r.callerid ?? `Extension ${ext}`),
-        extension: ext,
-        email: r.email ? String(r.email) : undefined,
-        department: r.department ? String(r.department) : undefined,
-        title: r.title ? String(r.title) : undefined,
-        presence: mapAmiPresence(
-          amiState?.status ?? String(r.state ?? "offline"),
-          ext,
-          activeExts,
-          ringingExts,
-        ),
-        callerId: undefined,
-      };
-    });
-
-    // If no VitalPBX data yet, fall back to AMI extension list
-    if (extMap.length === 0) {
-      return telephony.extensionList.map((e): TeamMember => ({
-        id: e.extension,
-        name: e.hint || e.extension,
-        extension: e.extension,
-        presence: mapAmiPresence(e.status ?? "offline", e.extension, activeExts, ringingExts),
-        callerId: undefined,
-      }));
-    }
-    return extMap;
-  }, [extState, telephony.extensionList, activeExts, ringingExts]);
-
-  // Filter + sort
-  const visible = useMemo(() => {
-    const ORDER: Record<PresenceState, number> = {
-      ringing: 0, on_call: 1, available: 2, busy: 3, away: 4, dnd: 5, offline: 6
-    };
-    let list = [...members];
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((m) =>
-        m.name.toLowerCase().includes(q) ||
-        m.extension.includes(q) ||
-        (m.email ?? "").toLowerCase().includes(q) ||
-        (m.department ?? "").toLowerCase().includes(q)
-      );
-    }
-    if (presenceFilter !== "all") {
-      list = list.filter((m) => m.presence === presenceFilter);
-    }
-    return list.sort((a, b) => ORDER[a.presence] - ORDER[b.presence] || a.name.localeCompare(b.name));
-  }, [members, search, presenceFilter]);
-
-  function handleCall(ext: string) {
-    phone.setDialpadInput(ext);
-    phone.dial(ext);
+  function setViewMode(next: ViewMode) {
+    setView(next);
+    localStorage.setItem(viewKey, next);
   }
 
-  // Count by presence
+  const extState = useAsyncResource<ExtensionResponse>(
+    () => apiGet("/voice/pbx/resources/extensions"),
+    [scopedTenantId, adminScope]
+  );
+
+  const scopedCalls = useMemo(() => {
+    return scopedTenantId ? telephony.callsByTenant(scopedTenantId) : telephony.activeCalls;
+  }, [scopedTenantId, telephony]);
+
+  const scopedExtensions = useMemo(() => {
+    if (!scopedTenantId) return telephony.extensionList;
+    return telephony.extensionList.filter((entry) => entry.tenantId === scopedTenantId);
+  }, [scopedTenantId, telephony.extensionList]);
+
+  const { activeExts, ringingExts, callByExt } = useMemo(() => {
+    const active = new Set<string>();
+    const ringing = new Set<string>();
+    const byExt = new Map<string, LiveCall>();
+    scopedCalls.forEach((call) => {
+      call.extensions.forEach((ext) => {
+        byExt.set(ext, call);
+        if (call.state === "up" || call.state === "held") active.add(ext);
+        if (call.state === "ringing" || call.state === "dialing") ringing.add(ext);
+      });
+    });
+    return { activeExts: active, ringingExts: ringing, callByExt: byExt };
+  }, [scopedCalls]);
+
+  const presenceUnavailable = telephony.status !== "connected";
+
+  const members = useMemo<TeamMember[]>(() => {
+    const extRows = extState.status === "success" ? extState.data.rows.filter((row) => rowTenantMatches(row, scopedTenantId)) : [];
+    const liveByExt = new Map<string, LiveExtensionState>(scopedExtensions.map((entry) => [entry.extension, entry]));
+
+    if (extRows.length === 0) {
+      return scopedExtensions.map((entry) => {
+        const call = callByExt.get(entry.extension);
+        return {
+          id: entry.extension,
+          name: entry.hint || `Extension ${entry.extension}`,
+          extension: entry.extension,
+          tenantId: entry.tenantId,
+          tenantName: tenant.name,
+          presence: mapPresence(entry.status, entry.extension, activeExts, ringingExts, presenceUnavailable),
+          currentCall: currentCallLabel(call, entry.extension),
+          lastSeen: formatLastSeen(entry.updatedAt)
+        };
+      });
+    }
+
+    return extRows.map((row, index) => {
+      const ext = extensionFromRow(row, index);
+      const live = liveByExt.get(ext);
+      const call = callByExt.get(ext);
+      const name =
+        cleanValue(row.name) ??
+        cleanValue(row.display_name) ??
+        cleanValue(row.callerid) ??
+        cleanValue(row.fullName) ??
+        `Extension ${ext}`;
+      return {
+        id: cleanValue(row.id) ?? cleanValue(row.uuid) ?? ext,
+        name,
+        extension: ext,
+        email: cleanValue(row.email),
+        phone: cleanValue(row.phone) ?? cleanValue(row.mobile),
+        department: cleanValue(row.department) ?? cleanValue(row.team),
+        title: cleanValue(row.title) ?? cleanValue(row.role),
+        tenantId: cleanValue(row.tenantId) ?? cleanValue(row.tenant_id) ?? live?.tenantId ?? scopedTenantId,
+        tenantName: cleanValue(row.tenantName) ?? tenant.name,
+        presence: mapPresence(live?.status ?? cleanValue(row.state), ext, activeExts, ringingExts, presenceUnavailable),
+        currentCall: currentCallLabel(call, ext),
+        lastSeen: formatLastSeen(live?.updatedAt)
+      };
+    });
+  }, [activeExts, callByExt, extState, presenceUnavailable, ringingExts, scopedExtensions, scopedTenantId, tenant.name]);
+
+  const visible = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    let list = members.filter((member) => {
+      const matchesSearch =
+        !q ||
+        member.name.toLowerCase().includes(q) ||
+        member.extension.toLowerCase().includes(q) ||
+        (member.email ?? "").toLowerCase().includes(q);
+      const matchesStatus =
+        statusFilter === "all" ||
+        member.presence === statusFilter ||
+        (statusFilter === "offline" && member.presence === "unknown");
+      return matchesSearch && matchesStatus;
+    });
+
+    list = [...list].sort((a, b) => {
+      if (sortKey === "extension") return a.extension.localeCompare(b.extension, undefined, { numeric: true });
+      if (sortKey === "name") return a.name.localeCompare(b.name);
+      return STATUS_META[a.presence].sort - STATUS_META[b.presence].sort || a.name.localeCompare(b.name);
+    });
+    return list;
+  }, [debouncedSearch, members, sortKey, statusFilter]);
+
   const counts = useMemo(() => ({
+    all: members.length,
     available: members.filter((m) => m.presence === "available").length,
-    on_call:   members.filter((m) => m.presence === "on_call").length,
-    ringing:   members.filter((m) => m.presence === "ringing").length,
-    offline:   members.filter((m) => m.presence === "offline").length,
+    on_call: members.filter((m) => m.presence === "on_call").length,
+    ringing: members.filter((m) => m.presence === "ringing").length,
+    offline: members.filter((m) => m.presence === "offline" || m.presence === "unknown").length
   }), [members]);
 
+  function handleCall(member: TeamMember) {
+    phone.setDialpadInput(member.extension);
+    phone.dial(member.extension);
+    setOpenMenu(null);
+  }
+
+  async function copyExtension(member: TeamMember) {
+    try {
+      await navigator.clipboard.writeText(member.extension);
+      setToast(`Copied extension ${member.extension}`);
+    } catch {
+      setToast("Copy failed");
+    }
+    setOpenMenu(null);
+    window.setTimeout(() => setToast(null), 1800);
+  }
+
+  function showDetails(member: TeamMember) {
+    setSelected(member);
+    setOpenMenu(null);
+  }
+
+  const emptyText = debouncedSearch || statusFilter !== "all"
+    ? "No matching team members."
+    : "No team members found for this tenant.";
+
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 54px)", overflow: "hidden" }}>
-      {/* Left panel — member list */}
-      <div style={{
-        width: selected ? 320 : "100%",
-        maxWidth: selected ? 320 : undefined,
-        flexShrink: 0,
-        display: "flex",
-        flexDirection: "column",
-        borderRight: selected ? "1px solid var(--border)" : undefined,
-        overflow: "hidden",
-      }}>
-        {/* Search + filter header */}
-        <div style={{
-          padding: "10px 12px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--panel)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}>
-          {/* Search row */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <div style={{ flex: 1, position: "relative" }}>
-              <input
-                className="input"
-                style={{ paddingLeft: 32, fontSize: 13 }}
-                placeholder="Search people or enter number"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", fontSize: 14 }}>
-                🔍
-              </span>
-            </div>
-          </div>
+    <div className="team-directory-page">
+      <PageHeader
+        title="Team Directory"
+        subtitle={`Live presence and directory info for ${adminScope === "GLOBAL" ? "all workspaces" : tenant.name}.`}
+        actions={<LiveBadge status={telephony.status} />}
+      />
 
-          {/* Presence filters */}
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setPresenceFilter(f.key)}
-                style={{
-                  padding: "3px 10px",
-                  borderRadius: 20,
-                  border: "1px solid var(--border)",
-                  background: presenceFilter === f.key ? "var(--accent)" : "transparent",
-                  color: presenceFilter === f.key ? "#fff" : "var(--text-dim)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  transition: "all 0.15s",
-                }}
-              >
-                {f.label}
-                {f.key !== "all" && counts[f.key as keyof typeof counts] !== undefined ? (
-                  <span style={{ marginLeft: 4, opacity: 0.7 }}>
-                    {counts[f.key as keyof typeof counts]}
-                  </span>
-                ) : f.key === "all" ? (
-                  <span style={{ marginLeft: 4, opacity: 0.7 }}>{members.length}</span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        </div>
+      {presenceUnavailable ? (
+        <div className="team-warning">Presence is temporarily unavailable. Directory data is still shown.</div>
+      ) : null}
 
-        {/* Live indicator */}
-        <div style={{
-          display: "flex",
-          justifyContent: "space-between",
-          padding: "5px 14px",
-          fontSize: 11,
-          color: "var(--text-dim)",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--bg)",
-        }}>
-          <span>{visible.length} of {members.length}</span>
-          <span style={{ color: telephony.isLive ? "var(--success)" : "var(--warning)" }}>
-            {telephony.isLive ? "● Live" : "⚠ Reconnecting"}
-          </span>
+      <section className="team-toolbar">
+        <div className="team-search">
+          <Search size={17} />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by name, extension, email..."
+          />
         </div>
+        <div className="team-filter-row">
+          {FILTERS.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              className={statusFilter === filter.key ? "active" : ""}
+              onClick={() => setStatusFilter(filter.key)}
+            >
+              {filter.label}
+              <span>{counts[filter.key]}</span>
+            </button>
+          ))}
+        </div>
+        <select className="team-sort" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)} aria-label="Sort team directory">
+          <option value="status">Sort by status</option>
+          <option value="name">Sort by name</option>
+          <option value="extension">Sort by extension</option>
+        </select>
+        <div className="team-view-toggle" aria-label="Team directory view">
+          <button type="button" className={view === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>
+            <Grid3X3 size={16} /> Cards
+          </button>
+          <button type="button" className={view === "list" ? "active" : ""} onClick={() => setViewMode("list")}>
+            <List size={16} /> List
+          </button>
+        </div>
+      </section>
 
-        {/* Member list */}
-        <div style={{ flex: 1, overflowY: "auto" }}>
-          {visible.length === 0 ? (
-            <div style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-              {search ? "No members match your search." : "No extensions found."}
-            </div>
-          ) : (
-            visible.map((m) => (
-              <MemberRow
-                key={m.id}
-                member={m}
-                onCall={handleCall}
-                selected={selected?.id === m.id}
-                onSelect={setSelected}
-              />
-            ))
-          )}
-        </div>
+      <div className="team-summary-line">
+        <span>{visible.length} of {members.length} team members</span>
+        <span>{scopedTenantId ? "Tenant scoped" : "Global admin view"}</span>
       </div>
 
-      {/* Right panel — detail */}
+      {extState.status === "loading" ? (
+        <div className="team-empty-state">Loading team directory...</div>
+      ) : visible.length === 0 ? (
+        <div className="team-empty-state">{emptyText}</div>
+      ) : view === "cards" ? (
+        <section className="team-card-grid">
+          {visible.map((member) => (
+            <MemberCard
+              key={member.id}
+              member={member}
+              menuOpen={openMenu === member.id}
+              onToggleMenu={() => setOpenMenu(openMenu === member.id ? null : member.id)}
+              onCall={handleCall}
+              onCopy={copyExtension}
+              onDetails={showDetails}
+            />
+          ))}
+        </section>
+      ) : (
+        <section className="team-list-panel">
+          <div className="team-list-head">
+            <span>Status</span>
+            <span>Name</span>
+            <span>Extension</span>
+            <span>Role</span>
+            <span>Department</span>
+            <span>Current state</span>
+            <span>Actions</span>
+          </div>
+          {visible.map((member) => (
+            <div className="team-list-row" key={member.id}>
+              <StatusPill state={member.presence} />
+              <div className="team-list-name">
+                <strong>{member.name}</strong>
+                {member.email ? <span>{member.email}</span> : null}
+              </div>
+              <span>Ext {member.extension}</span>
+              <span>{member.title || "—"}</span>
+              <span>{member.department || "—"}</span>
+              <span>{member.currentCall || member.lastSeen || STATUS_META[member.presence].label}</span>
+              <TeamActions
+                member={member}
+                open={openMenu === member.id}
+                onToggle={() => setOpenMenu(openMenu === member.id ? null : member.id)}
+                onCall={handleCall}
+                onCopy={copyExtension}
+                onDetails={showDetails}
+              />
+            </div>
+          ))}
+        </section>
+      )}
+
       {selected ? (
-        <div style={{
-          flex: 1,
-          overflowY: "auto",
-          background: "var(--panel)",
-        }}>
-          <MemberDetail member={selected} onCall={handleCall} onClose={() => setSelected(null)} />
+        <DetailsPanel member={selected} onClose={() => setSelected(null)} onCall={handleCall} onCopy={copyExtension} />
+      ) : null}
+
+      {toast ? (
+        <div className="team-toast">
+          <Check size={16} /> {toast}
         </div>
       ) : null}
     </div>
