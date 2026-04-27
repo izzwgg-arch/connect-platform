@@ -130,24 +130,28 @@ deploy_common_git_sync() {
   export GIT_TERMINAL_PROMPT=0
   cd "$ROOT" || deploy_common_fail "cd $ROOT"
 
-  git fetch origin --prune
+  # Redirect all git output to stderr so the command substitution that captures
+  # the return value of this function (the old HEAD SHA) is not polluted by
+  # git's fast-forward summary, fetch progress, or checkout messages.
+  git fetch origin --prune >&2
 
   local old_head
   old_head="$(git rev-parse HEAD)"
 
   if [[ -n "$COMMIT" ]]; then
     git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || deploy_common_fail "unknown commit: $COMMIT"
-    git checkout --detach "$COMMIT"
+    git checkout --detach "$COMMIT" >&2
   else
     git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1 || deploy_common_fail "origin/${BRANCH} not found (git fetch origin?)"
-    git checkout -B "$BRANCH" "origin/${BRANCH}"
-    git pull --ff-only origin "$BRANCH" || deploy_common_fail "git pull --ff-only failed"
+    git checkout -B "$BRANCH" "origin/${BRANCH}" >&2
+    git pull --ff-only origin "$BRANCH" >&2 || deploy_common_fail "git pull --ff-only failed"
   fi
 
   local new_head
   new_head="$(git rev-parse HEAD)"
   deploy_common_emit_deployed_commit "$new_head"
 
+  # Only the SHA reaches stdout — the caller captures it via $()
   echo "$old_head"
 }
 
