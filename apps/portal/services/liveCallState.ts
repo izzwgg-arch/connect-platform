@@ -55,15 +55,24 @@ export function rowTenantMatches(row: ExtensionRow, tenantId: string | null | un
 
 function rowStrongTenantMatches(row: ExtensionRow, tenantId: string | null | undefined, tenantName: string | null | undefined): boolean {
   if (!tenantId) return false;
+  const selectedTenantName = normalizeTenantName(tenantName);
+  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
   const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
-  if (directTenant) return directTenant === tenantId;
+  if (directTenant) {
+    if (directTenant === tenantId) return true;
+    // Super-admin tenant switching often uses synthetic VitalPBX ids such as
+    // `vpbx:gesheft`, while extension rows carry the Connect tenant CUID.
+    // In that mode the display name is the bridge between namespaces.
+    return Boolean(selectedTenantName && rowTenantName && rowTenantName === selectedTenantName);
+  }
   const nestedTenant = row.tenant;
   if (nestedTenant && typeof nestedTenant === "object") {
     const nestedId = readString(nestedTenant as ExtensionRow, ["id", "tenantId", "tenant_id"]);
-    if (nestedId) return nestedId === tenantId;
+    if (nestedId) {
+      if (nestedId === tenantId) return true;
+      return Boolean(selectedTenantName && rowTenantName && rowTenantName === selectedTenantName);
+    }
   }
-  const selectedTenantName = normalizeTenantName(tenantName);
-  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
   return Boolean(selectedTenantName && rowTenantName && rowTenantName === selectedTenantName);
 }
 
@@ -77,9 +86,17 @@ export function tenantExtensionSet(rows: ExtensionRow[], tenantId: string | null
   return out;
 }
 
-export function callBelongsToTenant(call: LiveCall, tenantId: string | null, tenantExtensions: Set<string>): boolean {
+export function callBelongsToTenant(
+  call: LiveCall,
+  tenantId: string | null,
+  tenantExtensions: Set<string>,
+  tenantName?: string | null,
+): boolean {
   if (tenantId === null) return true;
   if (call.tenantId === tenantId) return true;
+  const selectedTenantName = normalizeTenantName(tenantName);
+  const callTenantName = normalizeTenantName(call.tenantName);
+  if (selectedTenantName && callTenantName && selectedTenantName === callTenantName) return true;
   if (call.tenantId && call.tenantId !== tenantId) return false;
   return (call.extensions ?? []).some((ext) => tenantExtensions.has(ext));
 }
@@ -87,7 +104,7 @@ export function callBelongsToTenant(call: LiveCall, tenantId: string | null, ten
 export function callsForTenant(calls: LiveCall[], tenantId: string | null, extensionRows: ExtensionRow[], tenantName?: string | null): LiveCall[] {
   if (tenantId === null) return calls;
   const tenantExtensions = tenantExtensionSet(extensionRows, tenantId, tenantName);
-  return calls.filter((call) => callBelongsToTenant(call, tenantId, tenantExtensions));
+  return calls.filter((call) => callBelongsToTenant(call, tenantId, tenantExtensions, tenantName));
 }
 
 export function extensionSetsFromCalls(calls: LiveCall[]): { activeExts: Set<string>; ringingExts: Set<string> } {
