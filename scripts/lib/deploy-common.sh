@@ -159,6 +159,58 @@ deploy_common_head_sha() {
   git rev-parse HEAD
 }
 
+# --------------------------------------------------------------------------
+# Per-service "last successfully deployed" commit tracker.
+#
+# The shared checkout means `git rev-parse HEAD` before a sync only reflects
+# what the *previous deploy job* left behind — not what this service itself
+# last rebuilt. When three services deploy back-to-back for the same new
+# commit, the first advances HEAD; the second and third see OLD_HEAD ==
+# NEW_HEAD and falsely skip their own build/restart.
+#
+# Fix: persist each service's last-deployed SHA to
+#   ${DEPLOY_QUEUE_STATE_DIR}/last-deployed/<service>.sha
+# Deploy scripts should use this value (when present) as OLD_HEAD, and
+# call `deploy_common_mark_deployed <service>` at the very end of a
+# successful build/restart cycle.
+# --------------------------------------------------------------------------
+
+_deploy_common_last_deployed_path() {
+  local service="$1"
+  [[ -n "${DEPLOY_QUEUE_STATE_DIR:-}" ]] || return 1
+  echo "${DEPLOY_QUEUE_STATE_DIR%/}/last-deployed/${service}.sha"
+}
+
+# Echo the SHA of the last successful deploy for the given service, or empty
+# string if no state file exists yet (first-ever deploy, or state dir unset).
+deploy_common_last_deployed_commit() {
+  local service="$1"
+  local f
+  if ! f="$(_deploy_common_last_deployed_path "$service" 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -n "$f" && -f "$f" ]] || return 0
+  local sha
+  sha="$(tr -d '[:space:]' < "$f")"
+  echo "$sha"
+}
+
+# Record that <service> is now deployed at <sha>. Call this on the success
+# path of deploy-<service>.sh only — never after a failure or rollback.
+deploy_common_mark_deployed() {
+  local service="$1"
+  local sha="$2"
+  local f
+  if ! f="$(_deploy_common_last_deployed_path "$service" 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -n "$f" && -n "$sha" ]] || return 0
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  local tmp="${f}.tmp"
+  printf '%s' "$sha" > "$tmp" 2>/dev/null || return 0
+  mv -f "$tmp" "$f" 2>/dev/null || true
+}
+
 # Paths that should trigger a rebuild for a given service. Keep in sync with
 # AGENTS.md "change detection" section.
 _deploy_common_service_paths() {

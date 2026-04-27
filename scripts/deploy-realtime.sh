@@ -37,7 +37,11 @@ JOB_START_NS="$(deploy_common_stopwatch_start)"
 deploy_common_emit_stage "git-sync"
 LOCK_BEFORE="$(deploy_common_lock_hash)"
 PKG_BEFORE="$(deploy_common_pkg_hash)"
-OLD_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+# Track what *this service* last shipped, not the checkout HEAD — a prior deploy
+# job may have already advanced the shared working tree to the new commit.
+PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
+PRE_SYNC_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
 NEW_HEAD="$(deploy_common_head_sha)"
 LOCK_AFTER="$(deploy_common_lock_hash)"
 PKG_AFTER="$(deploy_common_pkg_hash)"
@@ -51,6 +55,7 @@ if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
 fi
 
 if ! deploy_common_needs_rebuild "$SERVICE" "$OLD_HEAD"; then
+  deploy_common_mark_deployed "$SERVICE" "$NEW_HEAD"
   deploy_common_emit_stage "done"
   deploy_common_emit_skip "unrelated_paths"
   log "commit changed ${OLD_HEAD:0:12}..${NEW_HEAD:0:12} but no realtime-relevant paths changed — skipping build/restart"
@@ -97,6 +102,7 @@ fi
 deploy_common_log_timing "health" "$(deploy_common_stopwatch_elapsed_ms "$HEALTH_START")"
 
 trap - ERR
+deploy_common_mark_deployed "$SERVICE" "$NEW_HEAD"
 deploy_common_emit_stage "done"
 deploy_common_log_timing "total" "$(deploy_common_stopwatch_elapsed_ms "$JOB_START_NS")"
 log "done $(git rev-parse --short HEAD) requested_by=${REQ}"
