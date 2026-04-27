@@ -1,23 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { ViewportDropdown } from "./ViewportDropdown";
 
 export function ActionDropdown({ label, actions }: { label: string; actions: string[] }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const closeDropdown = useCallback(() => setOpen(false), []);
   return (
     <div className="menu-wrap">
-      <button className="btn ghost" onClick={() => setOpen((v) => !v)}>
+      <button ref={triggerRef} className="btn ghost" onClick={() => setOpen((v) => !v)}>
         {label}
       </button>
-      {open ? (
-        <div className="dropdown-panel">
+      <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closeDropdown}>
           {actions.map((action) => (
             <button key={action} className="dropdown-action">
               {action}
             </button>
           ))}
-        </div>
-      ) : null}
+      </ViewportDropdown>
     </div>
   );
 }
