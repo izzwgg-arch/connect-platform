@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   Copy,
   LayoutGrid,
   LayoutList,
@@ -10,6 +11,7 @@ import {
   Phone,
   Search,
   User,
+  Users,
   Wifi,
   WifiOff,
   X,
@@ -40,8 +42,8 @@ interface TeamMember {
 
 const PRESENCE_META: Record<PresenceState, { label: string; color: string; dotColor: string; animate: boolean }> = {
   available: { label: "Available",      color: "var(--success)",  dotColor: "var(--success)",  animate: false },
-  ringing:   { label: "Ringing",        color: "var(--danger)",   dotColor: "var(--danger)",   animate: true  },
-  on_call:   { label: "On Call",        color: "var(--danger)",   dotColor: "var(--danger)",   animate: false },
+  ringing:   { label: "Ringing",        color: "var(--warning)",  dotColor: "var(--warning)",  animate: true  },
+  on_call:   { label: "On Call",        color: "var(--danger)",   dotColor: "var(--danger)",   animate: true  },
   busy:      { label: "Busy",           color: "var(--warning)",  dotColor: "var(--warning)",  animate: false },
   away:      { label: "Away",           color: "var(--warning)",  dotColor: "var(--warning)",  animate: false },
   dnd:       { label: "Do Not Disturb", color: "var(--danger)",   dotColor: "var(--danger)",   animate: false },
@@ -80,7 +82,7 @@ type StatusFilter = PresenceState | "all";
 
 function getStoredView(): ViewMode {
   if (typeof window === "undefined") return "card";
-  return localStorage.getItem("cc-team-view") === "list" ? "list" : "card";
+  return localStorage.getItem("cc-team-hub-view") === "list" ? "list" : "card";
 }
 
 // ── Action Menu ────────────────────────────────────────────────────────────────
@@ -155,7 +157,7 @@ function MemberAvatar({ member, size = 48 }: { member: TeamMember; size?: number
   const meta = PRESENCE_META[member.presence];
   const dotSize = Math.max(8, Math.round(size * 0.265));
   return (
-    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+    <div className={`td-avatar-wrap td-presence-${member.presence}`} style={{ width: size, height: size }}>
       <div
         className="td-avatar-circle"
         style={{ width: size, height: size, fontSize: Math.round(size * 0.34) }}
@@ -186,6 +188,7 @@ function DetailPanel({
   onClose: () => void;
 }) {
   const meta = PRESENCE_META[member.presence];
+  const activeNow = member.presence === "on_call" || member.presence === "ringing";
   return (
     <>
       <div className="td-detail-backdrop" onClick={onClose} />
@@ -195,7 +198,7 @@ function DetailPanel({
         </button>
 
         <div className="td-detail-profile">
-          <MemberAvatar member={member} size={72} />
+          <MemberAvatar member={member} size={86} />
           <div className="td-detail-name">{member.name}</div>
           {member.title ? <div className="td-detail-title">{member.title}</div> : null}
           {member.department ? <div className="td-detail-dept">{member.department}</div> : null}
@@ -219,6 +222,30 @@ function DetailPanel({
           <button className="btn ghost td-detail-cta" onClick={() => onMessage(member)}>
             <MessageSquare size={15} /> Message
           </button>
+        </div>
+
+        <div className="td-detail-insights">
+          <div className="td-detail-insight">
+            <Activity size={16} />
+            <span>
+              <strong>{activeNow ? "Active now" : member.presence === "available" ? "Ready to connect" : "Quiet"}</strong>
+              <small>{member.callerId || `${meta.label} on extension ${member.extension}`}</small>
+            </span>
+          </div>
+          <div className="td-detail-mini-stats">
+            <div>
+              <strong>{member.extension}</strong>
+              <small>Extension</small>
+            </div>
+            <div>
+              <strong>{activeNow ? "Live" : "Idle"}</strong>
+              <small>Activity</small>
+            </div>
+            <div>
+              <strong>{member.department || "Team"}</strong>
+              <small>Group</small>
+            </div>
+          </div>
         </div>
 
         <dl className="td-detail-dl">
@@ -288,28 +315,16 @@ function MemberCard({
 
   return (
     <div
-      className={`td-card${isActive ? " td-card-active" : ""}`}
+      className={`td-card td-smart-card td-presence-${member.presence}${isActive ? " td-card-active" : ""}`}
       role="button"
       tabIndex={0}
       onClick={() => onDetails(member)}
       onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
     >
       <div className="td-card-top">
-        <MemberAvatar member={member} size={52} />
-        <ActionMenu
-          onCall={() => onCall(member.extension)}
-          onMessage={() => onMessage(member)}
-          onCopy={() => onCopy(member.extension)}
-          onDetails={() => onDetails(member)}
-        />
-      </div>
-      <div className="td-card-name">{member.name}</div>
-      {member.title ? <div className="td-card-role">{member.title}</div> : null}
-      {member.department ? <div className="td-card-dept">{member.department}</div> : null}
-      <div className="td-card-footer">
-        <span className="td-ext-badge">Ext {member.extension}</span>
+        <MemberAvatar member={member} size={68} />
         <span
-          className="td-status-pill"
+          className="td-status-pill td-status-pill-float"
           style={{
             background: `color-mix(in srgb, ${meta.dotColor} 16%, transparent)`,
             color: meta.color,
@@ -321,6 +336,24 @@ function MemberCard({
           />
           {meta.label}
         </span>
+      </div>
+      <div className="td-card-name">{member.name}</div>
+      <div className="td-card-ext">Ext {member.extension}</div>
+      {member.title ? <div className="td-card-role">{member.title}</div> : null}
+      {member.department ? <div className="td-card-dept">{member.department}</div> : null}
+      <div className="td-card-footer">
+        <button className="td-hover-action" type="button" onClick={(e) => { e.stopPropagation(); onCall(member.extension); }}>
+          <Phone size={15} /> Call
+        </button>
+        <button className="td-hover-action" type="button" onClick={(e) => { e.stopPropagation(); onMessage(member); }}>
+          <MessageSquare size={15} /> Message
+        </button>
+        <ActionMenu
+          onCall={() => onCall(member.extension)}
+          onMessage={() => onMessage(member)}
+          onCopy={() => onCopy(member.extension)}
+          onDetails={() => onDetails(member)}
+        />
       </div>
     </div>
   );
@@ -345,58 +378,52 @@ function MemberListRow({
   const isActive = member.presence === "on_call" || member.presence === "ringing";
 
   return (
-    <tr
-      className={`td-list-row${isActive ? " td-list-row-active" : ""}`}
+    <div
+      className={`td-list-row td-clean-row td-presence-${member.presence}${isActive ? " td-list-row-active" : ""}`}
       role="button"
       tabIndex={0}
       onClick={() => onDetails(member)}
       onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
     >
-      <td className="td-col-status">
-        <span
-          className={`td-presence-dot-sm${meta.animate ? " td-presence-dot-pulse" : ""}`}
-          style={{ background: meta.dotColor }}
-          title={meta.label}
-        />
-      </td>
-      <td className="td-col-name">
-        <div className="td-list-name-cell">
-          <MemberAvatar member={member} size={34} />
-          <div>
-            <div className="td-list-name">{member.name}</div>
-            {member.email ? <div className="td-list-email">{member.email}</div> : null}
-          </div>
+      <div className="td-list-name-cell">
+        <MemberAvatar member={member} size={46} />
+        <div>
+          <div className="td-list-name">{member.name}</div>
+          <div className="td-list-email">Ext {member.extension}{member.email ? ` · ${member.email}` : ""}</div>
         </div>
-      </td>
-      <td className="td-col-ext">
-        <span className="td-ext-badge">{member.extension}</span>
-      </td>
-      <td className="td-col-role">{member.title ?? <span className="td-muted">—</span>}</td>
-      <td className="td-col-dept">{member.department ?? <span className="td-muted">—</span>}</td>
-      <td className="td-col-state">
+      </div>
+      <div className="td-list-meta">
+        <span>{member.title || "Team member"}</span>
+        <small>{member.department || "Live Team"}</small>
+      </div>
+      <span
+        className="td-status-pill"
+        style={{
+          background: `color-mix(in srgb, ${meta.dotColor} 15%, transparent)`,
+          color: meta.color,
+        }}
+      >
         <span
-          className="td-status-pill"
-          style={{
-            background: `color-mix(in srgb, ${meta.dotColor} 15%, transparent)`,
-            color: meta.color,
-          }}
-        >
-          <span
-            className={`td-presence-dot-xs${meta.animate ? " td-presence-dot-pulse" : ""}`}
-            style={{ background: meta.dotColor }}
-          />
-          {meta.label}
-        </span>
-      </td>
-      <td className="td-col-actions" onClick={(e) => e.stopPropagation()}>
+          className={`td-presence-dot-xs${meta.animate ? " td-presence-dot-pulse" : ""}`}
+          style={{ background: meta.dotColor }}
+        />
+        {meta.label}
+      </span>
+      <div className="td-row-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="td-action-btn" type="button" onClick={() => onCall(member.extension)} aria-label={`Call ${member.name}`}>
+          <Phone size={15} />
+        </button>
+        <button className="td-action-btn" type="button" onClick={() => onMessage(member)} aria-label={`Message ${member.name}`}>
+          <MessageSquare size={15} />
+        </button>
         <ActionMenu
           onCall={() => onCall(member.extension)}
           onMessage={() => onMessage(member)}
           onCopy={() => onCopy(member.extension)}
           onDetails={() => onDetails(member)}
         />
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
@@ -406,7 +433,6 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all",       label: "All"       },
   { key: "available", label: "Available" },
   { key: "on_call",   label: "On Call"   },
-  { key: "ringing",   label: "Ringing"   },
   { key: "offline",   label: "Offline"   },
 ];
 
@@ -422,7 +448,7 @@ export default function TeamDirectoryPage() {
   const [view, setView] = useState<ViewMode>(getStoredView);
   const setViewPersist = useCallback((v: ViewMode) => {
     setView(v);
-    localStorage.setItem("cc-team-view", v);
+    localStorage.setItem("cc-team-hub-view", v);
   }, []);
 
   // Search / filter / sort
@@ -554,6 +580,11 @@ export default function TeamDirectoryPage() {
     offline:   members.filter((m) => m.presence === "offline").length,
   }), [members]);
 
+  const liveMembers = useMemo(
+    () => members.filter((m) => m.presence === "available" || m.presence === "on_call" || m.presence === "ringing").slice(0, 16),
+    [members],
+  );
+
   // Actions
   const handleCall = useCallback((ext: string) => {
     phone.setDialpadInput(ext);
@@ -581,6 +612,48 @@ export default function TeamDirectoryPage() {
           Presence is temporarily unavailable. Directory data is still shown.
         </div>
       ) : null}
+
+      <section className="td-hub-hero">
+        <div className="td-hub-title">
+          <span className="td-kicker"><Activity size={14} /> Live Team Hub</span>
+          <h1>Team Directory</h1>
+          <p>Every extension is an active communication node with live state, instant actions, and tenant-scoped presence.</p>
+        </div>
+        <div className="td-hub-metrics">
+          <div className="td-hub-metric">
+            <strong>{counts.available}</strong>
+            <span>Available</span>
+          </div>
+          <div className="td-hub-metric danger">
+            <strong>{counts.on_call}</strong>
+            <span>On call</span>
+          </div>
+          <div className="td-hub-metric warning">
+            <strong>{counts.ringing}</strong>
+            <span>Ringing</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="td-live-strip" aria-label="Live activity">
+        <div className="td-live-strip-head">
+          <Users size={15} />
+          <span>Live Activity</span>
+        </div>
+        <div className="td-live-avatars">
+          {liveMembers.length === 0 ? (
+            <span className="td-live-empty">No active users right now</span>
+          ) : liveMembers.map((member) => {
+            const meta = PRESENCE_META[member.presence];
+            return (
+              <button key={member.id} className={`td-live-avatar td-presence-${member.presence}`} onClick={() => setDetail(member)} title={`${member.name} · ${meta.label}`}>
+                <MemberAvatar member={member} size={38} />
+                <span>{member.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {/* Toolbar */}
       <div className="td-toolbar">
@@ -646,6 +719,7 @@ export default function TeamDirectoryPage() {
               title="Card view"
             >
               <LayoutGrid size={15} strokeWidth={2} />
+              <span>Cards</span>
             </button>
             <button
               type="button"
@@ -655,6 +729,7 @@ export default function TeamDirectoryPage() {
               title="List view"
             >
               <LayoutList size={15} strokeWidth={2} />
+              <span>List</span>
             </button>
           </div>
 
@@ -716,32 +791,17 @@ export default function TeamDirectoryPage() {
             ))}
           </div>
         ) : (
-          <div className="td-list-wrap">
-            <table className="td-table" cellSpacing={0}>
-              <thead className="td-thead">
-                <tr>
-                  <th className="td-th td-col-status" />
-                  <th className="td-th td-col-name">Name</th>
-                  <th className="td-th td-col-ext">Extension</th>
-                  <th className="td-th td-col-role">Title</th>
-                  <th className="td-th td-col-dept">Department</th>
-                  <th className="td-th td-col-state">Status</th>
-                  <th className="td-th td-col-actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((m) => (
-                  <MemberListRow
-                    key={m.id}
-                    member={m}
-                    onCall={handleCall}
-                    onMessage={handleMessage}
-                    onCopy={handleCopy}
-                    onDetails={setDetail}
-                  />
-                ))}
-              </tbody>
-            </table>
+          <div className="td-list-wrap td-clean-list">
+            {visible.map((m) => (
+              <MemberListRow
+                key={m.id}
+                member={m}
+                onCall={handleCall}
+                onMessage={handleMessage}
+                onCopy={handleCopy}
+                onDetails={setDetail}
+              />
+            ))}
           </div>
         )}
       </div>
