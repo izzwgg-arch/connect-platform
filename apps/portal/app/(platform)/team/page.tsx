@@ -1,550 +1,780 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check,
   Copy,
-  Grid3X3,
-  List,
+  LayoutGrid,
+  LayoutList,
   MessageSquare,
   MoreHorizontal,
   Phone,
   Search,
-  UserRound,
-  X
+  User,
+  Wifi,
+  WifiOff,
+  X,
+  Check,
 } from "lucide-react";
-import { LiveBadge } from "../../../components/LiveBadge";
-import { PageHeader } from "../../../components/PageHeader";
-import { useTelephony } from "../../../contexts/TelephonyContext";
+import { useRouter } from "next/navigation";
 import { useAppContext } from "../../../hooks/useAppContext";
+import { useTelephony } from "../../../contexts/TelephonyContext";
+import { useSipPhone } from "../../../hooks/useSipPhone";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
-import { useSipPhone } from "../../../hooks/useSipPhone";
 import { apiGet } from "../../../services/apiClient";
-import type { LiveCall, LiveExtensionState } from "../../../types/liveCall";
 
-type PresenceState = "available" | "ringing" | "on_call" | "busy" | "offline" | "unknown";
-type ViewMode = "cards" | "list";
-type StatusFilter = "all" | "available" | "on_call" | "ringing" | "offline";
-type SortKey = "name" | "extension" | "status";
+// ── Types ──────────────────────────────────────────────────────────────────────
 
-type TeamMember = {
+type PresenceState = "available" | "ringing" | "on_call" | "busy" | "away" | "dnd" | "offline";
+
+interface TeamMember {
   id: string;
   name: string;
   extension: string;
   email?: string;
-  phone?: string;
   department?: string;
   title?: string;
-  tenantName?: string;
-  tenantId?: string | null;
   presence: PresenceState;
-  currentCall?: string;
-  lastSeen?: string;
+  callerId?: string;
+}
+
+const PRESENCE_META: Record<PresenceState, { label: string; color: string; dotColor: string; animate: boolean }> = {
+  available: { label: "Available",      color: "var(--success)",  dotColor: "var(--success)",  animate: false },
+  ringing:   { label: "Ringing",        color: "var(--danger)",   dotColor: "var(--danger)",   animate: true  },
+  on_call:   { label: "On Call",        color: "var(--danger)",   dotColor: "var(--danger)",   animate: false },
+  busy:      { label: "Busy",           color: "var(--warning)",  dotColor: "var(--warning)",  animate: false },
+  away:      { label: "Away",           color: "var(--warning)",  dotColor: "var(--warning)",  animate: false },
+  dnd:       { label: "Do Not Disturb", color: "var(--danger)",   dotColor: "var(--danger)",   animate: false },
+  offline:   { label: "Offline",        color: "var(--text-dim)", dotColor: "#555e6e",         animate: false },
 };
 
-type ExtensionResponse = {
-  rows: Record<string, unknown>[];
+const PRESENCE_ORDER: Record<PresenceState, number> = {
+  ringing: 0, on_call: 1, available: 2, busy: 3, away: 4, dnd: 5, offline: 6,
 };
 
-// Keep this page as the single Team Directory surface: scoped PBX directory data plus live presence.
-const STATUS_META: Record<PresenceState, { label: string; tone: string; sort: number }> = {
-  ringing: { label: "Ringing", tone: "ringing", sort: 0 },
-  on_call: { label: "On Call", tone: "on-call", sort: 1 },
-  available: { label: "Available", tone: "available", sort: 2 },
-  busy: { label: "Busy", tone: "busy", sort: 3 },
-  offline: { label: "Offline", tone: "offline", sort: 4 },
-  unknown: { label: "Unknown", tone: "unknown", sort: 5 }
-};
-
-const FILTERS: { key: StatusFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "available", label: "Available" },
-  { key: "on_call", label: "On Call" },
-  { key: "ringing", label: "Ringing" },
-  { key: "offline", label: "Offline" }
-];
-
-function cleanValue(value: unknown): string | undefined {
-  const next = String(value ?? "").trim();
-  return next ? next : undefined;
-}
-
-function initials(name: string): string {
-  const parts = name.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0]![0]}${parts[1]![0]}`.toUpperCase();
-  return name.slice(0, 2).toUpperCase();
-}
-
-function extensionFromRow(row: Record<string, unknown>, fallback: number): string {
-  return cleanValue(row.extension) ?? cleanValue(row.number) ?? cleanValue(row.ext) ?? String(fallback);
-}
-
-function rowTenantMatches(row: Record<string, unknown>, scopedTenantId: string | null): boolean {
-  if (!scopedTenantId) return true;
-  const raw =
-    cleanValue(row.tenantId) ??
-    cleanValue(row.tenant_id) ??
-    cleanValue(row.pbxTenantId) ??
-    cleanValue(row.vpbxTenantId);
-  if (!raw) return true; // REST calls are scoped by x-tenant-context; only filter when the row exposes tenant identity.
-  return raw === scopedTenantId || `vpbx:${raw}` === scopedTenantId || raw === scopedTenantId.replace(/^vpbx:/, "");
-}
-
-function mapPresence(
-  rawState: string | undefined,
-  extension: string,
-  activeExts: Set<string>,
-  ringingExts: Set<string>,
-  presenceUnavailable: boolean
+function mapAmiPresence(
+  rawState: string,
+  ext: string,
+  activeCalls: Set<string>,
+  ringingCalls: Set<string>,
 ): PresenceState {
-  if (ringingExts.has(extension)) return "ringing";
-  if (activeExts.has(extension)) return "on_call";
-  const state = String(rawState ?? "").toLowerCase();
-  if (state === "not_inuse" || state === "idle" || state === "registered" || state === "0") return "available";
-  if (state === "inuse" || state === "onhold" || state === "1") return "on_call";
-  if (state === "ringing" || state === "2") return "ringing";
-  if (state === "busy" || state === "3") return "busy";
-  if (state === "unavailable" || state === "offline" || state === "unregistered" || state === "5") return "offline";
-  return presenceUnavailable ? "unknown" : "offline";
+  if (ringingCalls.has(ext)) return "ringing";
+  if (activeCalls.has(ext)) return "on_call";
+  const s = rawState.toLowerCase();
+  if (s === "not_inuse" || s === "idle" || s === "registered" || s === "0") return "available";
+  if (s === "inuse" || s === "1") return "on_call";
+  if (s === "ringing" || s === "2") return "ringing";
+  if (s === "busy" || s === "3") return "busy";
+  if (s === "away") return "away";
+  if (s === "dnd") return "dnd";
+  return "offline";
 }
 
-function formatLastSeen(value?: string): string | undefined {
-  if (!value) return undefined;
-  const ts = Date.parse(value);
-  if (!Number.isFinite(ts)) return undefined;
-  const diff = Math.max(0, Date.now() - ts);
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return new Date(ts).toLocaleDateString();
+function mkInitials(name: string): string {
+  return name.trim().split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
 }
 
-function currentCallLabel(call: LiveCall | undefined, extension: string): string | undefined {
-  if (!call) return undefined;
-  const other = [call.fromName, call.from, call.to, call.connectedLine].find((v) => v && v !== extension);
-  if (call.state === "ringing" || call.state === "dialing") return other ? `Ringing: ${other}` : "Ringing";
-  return other ? `In call with ${other}` : "In active call";
+type ViewMode = "card" | "list";
+type SortKey = "name" | "extension" | "status";
+type StatusFilter = PresenceState | "all";
+
+function getStoredView(): ViewMode {
+  if (typeof window === "undefined") return "card";
+  return localStorage.getItem("cc-team-view") === "list" ? "list" : "card";
 }
 
-function TeamActions({
-  member,
-  open,
-  onToggle,
+// ── Action Menu ────────────────────────────────────────────────────────────────
+
+function ActionMenu({
   onCall,
+  onMessage,
   onCopy,
-  onDetails
+  onDetails,
 }: {
-  member: TeamMember;
-  open: boolean;
-  onToggle: () => void;
-  onCall: (member: TeamMember) => void;
-  onCopy: (member: TeamMember) => void;
-  onDetails: (member: TeamMember) => void;
+  onCall: () => void;
+  onMessage: () => void;
+  onCopy: () => void;
+  onDetails: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const run = (fn: () => void) => { fn(); setOpen(false); };
+
+  const items = [
+    { icon: <Phone size={14} />, label: "Call",           fn: onCall    },
+    { icon: <MessageSquare size={14} />, label: "Message",fn: onMessage  },
+    { icon: <User size={14} />, label: "View Details",    fn: onDetails  },
+    { icon: <Copy size={14} />, label: "Copy Extension",  fn: onCopy     },
+  ];
+
   return (
-    <div className="team-actions-menu">
-      <button className="team-icon-btn" type="button" onClick={onToggle} aria-label={`Actions for ${member.name}`}>
-        <MoreHorizontal size={18} />
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="td-action-btn"
+        aria-label="More actions"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      >
+        <MoreHorizontal size={16} strokeWidth={2} />
       </button>
       {open ? (
-        <div className="team-actions-popover">
-          <button type="button" onClick={() => onCall(member)}>
-            <Phone size={15} /> Call
-          </button>
-          <Link href={`/chat?user=${encodeURIComponent(member.id)}`}>
-            <MessageSquare size={15} /> Message
-          </Link>
-          <button type="button" onClick={() => onDetails(member)}>
-            <UserRound size={15} /> View details
-          </button>
-          <button type="button" onClick={() => onCopy(member)}>
-            <Copy size={15} /> Copy extension
-          </button>
+        <div className="td-action-menu" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              className="td-action-item"
+              role="menuitem"
+              onClick={(e) => { e.stopPropagation(); run(item.fn); }}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
         </div>
       ) : null}
     </div>
   );
 }
 
-function StatusPill({ state }: { state: PresenceState }) {
-  const meta = STATUS_META[state];
+// ── Avatar with presence dot ───────────────────────────────────────────────────
+
+function MemberAvatar({ member, size = 48 }: { member: TeamMember; size?: number }) {
+  const meta = PRESENCE_META[member.presence];
+  const dotSize = Math.max(8, Math.round(size * 0.265));
   return (
-    <span className={`team-status-pill team-status-${meta.tone}`}>
-      <span className="team-status-dot" />
-      {meta.label}
-    </span>
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <div
+        className="td-avatar-circle"
+        style={{ width: size, height: size, fontSize: Math.round(size * 0.34) }}
+      >
+        {mkInitials(member.name)}
+      </div>
+      <span
+        className={`td-presence-dot${meta.animate ? " td-presence-dot-pulse" : ""}`}
+        style={{ width: dotSize, height: dotSize, background: meta.dotColor, bottom: 1, right: 1 }}
+      />
+    </div>
   );
 }
+
+// ── Detail Panel ───────────────────────────────────────────────────────────────
+
+function DetailPanel({
+  member,
+  onCall,
+  onMessage,
+  onCopy,
+  onClose,
+}: {
+  member: TeamMember;
+  onCall: (ext: string) => void;
+  onMessage: (m: TeamMember) => void;
+  onCopy: (ext: string) => void;
+  onClose: () => void;
+}) {
+  const meta = PRESENCE_META[member.presence];
+  return (
+    <>
+      <div className="td-detail-backdrop" onClick={onClose} />
+      <aside className="td-detail-panel" aria-label="Member details">
+        <button className="td-detail-close" onClick={onClose} aria-label="Close details">
+          <X size={18} />
+        </button>
+
+        <div className="td-detail-profile">
+          <MemberAvatar member={member} size={72} />
+          <div className="td-detail-name">{member.name}</div>
+          {member.title ? <div className="td-detail-title">{member.title}</div> : null}
+          {member.department ? <div className="td-detail-dept">{member.department}</div> : null}
+          <div className="td-detail-status-row">
+            <span
+              className={`td-presence-dot-xs${meta.animate ? " td-presence-dot-pulse" : ""}`}
+              style={{ background: meta.dotColor, position: "relative", top: 0, left: 0, display: "inline-block" }}
+            />
+            <span style={{ color: meta.color, fontWeight: 600, fontSize: 13 }}>{meta.label}</span>
+          </div>
+        </div>
+
+        <div className="td-detail-actions">
+          <button
+            className="btn td-detail-cta"
+            style={{ background: "var(--success)", border: "none", color: "#fff" }}
+            onClick={() => onCall(member.extension)}
+          >
+            <Phone size={15} /> Call Ext {member.extension}
+          </button>
+          <button className="btn ghost td-detail-cta" onClick={() => onMessage(member)}>
+            <MessageSquare size={15} /> Message
+          </button>
+        </div>
+
+        <dl className="td-detail-dl">
+          <div className="td-detail-row">
+            <dt>Extension</dt>
+            <dd>
+              <span className="td-ext-badge">{member.extension}</span>
+              <button
+                type="button"
+                className="td-copy-inline"
+                onClick={() => onCopy(member.extension)}
+                title="Copy extension"
+              >
+                <Copy size={13} />
+              </button>
+            </dd>
+          </div>
+          {member.email ? (
+            <div className="td-detail-row">
+              <dt>Email</dt>
+              <dd>
+                <a href={`mailto:${member.email}`} className="td-email-link">{member.email}</a>
+              </dd>
+            </div>
+          ) : null}
+          {member.title ? (
+            <div className="td-detail-row">
+              <dt>Title</dt>
+              <dd>{member.title}</dd>
+            </div>
+          ) : null}
+          {member.department ? (
+            <div className="td-detail-row">
+              <dt>Department</dt>
+              <dd>{member.department}</dd>
+            </div>
+          ) : null}
+          {member.callerId ? (
+            <div className="td-detail-row">
+              <dt>Current call</dt>
+              <dd style={{ color: meta.color, fontWeight: 600 }}>{member.callerId}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </aside>
+    </>
+  );
+}
+
+// ── Member Card ────────────────────────────────────────────────────────────────
 
 function MemberCard({
   member,
-  menuOpen,
-  onToggleMenu,
   onCall,
+  onMessage,
   onCopy,
-  onDetails
+  onDetails,
 }: {
   member: TeamMember;
-  menuOpen: boolean;
-  onToggleMenu: () => void;
-  onCall: (member: TeamMember) => void;
-  onCopy: (member: TeamMember) => void;
-  onDetails: (member: TeamMember) => void;
+  onCall: (ext: string) => void;
+  onMessage: (m: TeamMember) => void;
+  onCopy: (ext: string) => void;
+  onDetails: (m: TeamMember) => void;
 }) {
+  const meta = PRESENCE_META[member.presence];
+  const isActive = member.presence === "on_call" || member.presence === "ringing";
+
   return (
-    <article className={`team-card team-card-${STATUS_META[member.presence].tone}`}>
-      <div className="team-card-top">
-        <div className="team-avatar" aria-hidden>{initials(member.name)}</div>
-        <TeamActions
-          member={member}
-          open={menuOpen}
-          onToggle={onToggleMenu}
-          onCall={onCall}
-          onCopy={onCopy}
-          onDetails={onDetails}
+    <div
+      className={`td-card${isActive ? " td-card-active" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onDetails(member)}
+      onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
+    >
+      <div className="td-card-top">
+        <MemberAvatar member={member} size={52} />
+        <ActionMenu
+          onCall={() => onCall(member.extension)}
+          onMessage={() => onMessage(member)}
+          onCopy={() => onCopy(member.extension)}
+          onDetails={() => onDetails(member)}
         />
       </div>
-      <div className="team-card-main">
-        <div>
-          <h3>{member.name}</h3>
-          <p>Ext {member.extension}</p>
-        </div>
-        <StatusPill state={member.presence} />
+      <div className="td-card-name">{member.name}</div>
+      {member.title ? <div className="td-card-role">{member.title}</div> : null}
+      {member.department ? <div className="td-card-dept">{member.department}</div> : null}
+      <div className="td-card-footer">
+        <span className="td-ext-badge">Ext {member.extension}</span>
+        <span
+          className="td-status-pill"
+          style={{
+            background: `color-mix(in srgb, ${meta.dotColor} 16%, transparent)`,
+            color: meta.color,
+          }}
+        >
+          <span
+            className={`td-presence-dot-xs${meta.animate ? " td-presence-dot-pulse" : ""}`}
+            style={{ background: meta.dotColor }}
+          />
+          {meta.label}
+        </span>
       </div>
-      <div className="team-card-meta">
-        <span>{member.title || "Team member"}</span>
-        {member.department ? <span>{member.department}</span> : null}
-        {member.email ? <span>{member.email}</span> : null}
-      </div>
-      <div className="team-card-footer">
-        <span>{member.currentCall || member.lastSeen || "Directory profile"}</span>
-        <button type="button" onClick={() => onCall(member)}>
-          <Phone size={15} /> Call
-        </button>
-      </div>
-    </article>
+    </div>
   );
 }
 
-function DetailsPanel({ member, onClose, onCall, onCopy }: { member: TeamMember; onClose: () => void; onCall: (member: TeamMember) => void; onCopy: (member: TeamMember) => void }) {
+// ── List Row ───────────────────────────────────────────────────────────────────
+
+function MemberListRow({
+  member,
+  onCall,
+  onMessage,
+  onCopy,
+  onDetails,
+}: {
+  member: TeamMember;
+  onCall: (ext: string) => void;
+  onMessage: (m: TeamMember) => void;
+  onCopy: (ext: string) => void;
+  onDetails: (m: TeamMember) => void;
+}) {
+  const meta = PRESENCE_META[member.presence];
+  const isActive = member.presence === "on_call" || member.presence === "ringing";
+
   return (
-    <aside className="team-detail-panel" aria-label="Team member details">
-      <div className="team-detail-head">
-        <button className="team-icon-btn" type="button" onClick={onClose} aria-label="Close details">
-          <X size={18} />
-        </button>
-      </div>
-      <div className="team-detail-profile">
-        <div className="team-avatar team-avatar-lg" aria-hidden>{initials(member.name)}</div>
-        <div>
-          <h2>{member.name}</h2>
-          <p>{member.title || member.department || "Team member"}</p>
+    <tr
+      className={`td-list-row${isActive ? " td-list-row-active" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onDetails(member)}
+      onKeyDown={(e) => e.key === "Enter" && onDetails(member)}
+    >
+      <td className="td-col-status">
+        <span
+          className={`td-presence-dot-sm${meta.animate ? " td-presence-dot-pulse" : ""}`}
+          style={{ background: meta.dotColor }}
+          title={meta.label}
+        />
+      </td>
+      <td className="td-col-name">
+        <div className="td-list-name-cell">
+          <MemberAvatar member={member} size={34} />
+          <div>
+            <div className="td-list-name">{member.name}</div>
+            {member.email ? <div className="td-list-email">{member.email}</div> : null}
+          </div>
         </div>
-        <StatusPill state={member.presence} />
-      </div>
-      <div className="team-detail-actions">
-        <button className="btn" type="button" onClick={() => onCall(member)}>
-          <Phone size={16} /> Call Ext {member.extension}
-        </button>
-        <Link className="btn ghost" href={`/chat?user=${encodeURIComponent(member.id)}`}>
-          <MessageSquare size={16} /> Message
-        </Link>
-        <button className="btn ghost" type="button" onClick={() => onCopy(member)}>
-          <Copy size={16} /> Copy extension
-        </button>
-      </div>
-      <dl className="team-detail-list">
-        <div><dt>Extension</dt><dd>{member.extension}</dd></div>
-        <div><dt>Status</dt><dd>{STATUS_META[member.presence].label}</dd></div>
-        <div><dt>Role</dt><dd>{member.title || "—"}</dd></div>
-        <div><dt>Department</dt><dd>{member.department || "—"}</dd></div>
-        <div><dt>Email</dt><dd>{member.email || "—"}</dd></div>
-        <div><dt>Tenant</dt><dd>{member.tenantName || member.tenantId || "Selected tenant"}</dd></div>
-        <div><dt>Current call</dt><dd>{member.currentCall || "—"}</dd></div>
-        <div><dt>Last seen</dt><dd>{member.lastSeen || "—"}</dd></div>
-      </dl>
-    </aside>
+      </td>
+      <td className="td-col-ext">
+        <span className="td-ext-badge">{member.extension}</span>
+      </td>
+      <td className="td-col-role">{member.title ?? <span className="td-muted">—</span>}</td>
+      <td className="td-col-dept">{member.department ?? <span className="td-muted">—</span>}</td>
+      <td className="td-col-state">
+        <span
+          className="td-status-pill"
+          style={{
+            background: `color-mix(in srgb, ${meta.dotColor} 15%, transparent)`,
+            color: meta.color,
+          }}
+        >
+          <span
+            className={`td-presence-dot-xs${meta.animate ? " td-presence-dot-pulse" : ""}`}
+            style={{ background: meta.dotColor }}
+          />
+          {meta.label}
+        </span>
+      </td>
+      <td className="td-col-actions" onClick={(e) => e.stopPropagation()}>
+        <ActionMenu
+          onCall={() => onCall(member.extension)}
+          onMessage={() => onMessage(member)}
+          onCopy={() => onCopy(member.extension)}
+          onDetails={() => onDetails(member)}
+        />
+      </td>
+    </tr>
   );
 }
 
-export default function TeamPage() {
+// ── Filter config ──────────────────────────────────────────────────────────────
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "all",       label: "All"       },
+  { key: "available", label: "Available" },
+  { key: "on_call",   label: "On Call"   },
+  { key: "ringing",   label: "Ringing"   },
+  { key: "offline",   label: "Offline"   },
+];
+
+// ── Main Page ──────────────────────────────────────────────────────────────────
+
+export default function TeamDirectoryPage() {
+  const { tenantId, adminScope } = useAppContext();
   const telephony = useTelephony();
   const phone = useSipPhone();
-  const { adminScope, tenantId, tenant, user } = useAppContext();
-  const scopedTenantId = adminScope === "GLOBAL" ? null : tenantId;
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 180);
+  const router = useRouter();
+
+  // Persistent view mode
+  const [view, setView] = useState<ViewMode>(getStoredView);
+  const setViewPersist = useCallback((v: ViewMode) => {
+    setView(v);
+    localStorage.setItem("cc-team-view", v);
+  }, []);
+
+  // Search / filter / sort
+  const [rawSearch, setRawSearch] = useState("");
+  const search = useDebouncedValue(rawSearch, 180);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("status");
-  const [view, setView] = useState<ViewMode>("cards");
-  const [selected, setSelected] = useState<TeamMember | null>(null);
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("name");
 
-  const viewKey = `cc-team-directory-view:${user.id}`;
+  // Detail panel
+  const [detail, setDetail] = useState<TeamMember | null>(null);
 
-  useEffect(() => {
-    const stored = localStorage.getItem(viewKey);
-    if (stored === "cards" || stored === "list") setView(stored);
-  }, [viewKey]);
+  // Toast
+  const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ msg, key: Date.now() });
+    toastTimer.current = setTimeout(() => setToast(null), 2500);
+  }, []);
 
-  function setViewMode(next: ViewMode) {
-    setView(next);
-    localStorage.setItem(viewKey, next);
-  }
-
-  const extState = useAsyncResource<ExtensionResponse>(
+  // Fetch extensions from VitalPBX (tenant-scoped via x-tenant-context header).
+  // Re-run when tenantId or adminScope changes — apiClient reads localStorage
+  // which useAppContext updates in an effect that runs before this child's effects.
+  const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
     () => apiGet("/voice/pbx/resources/extensions"),
-    [scopedTenantId, adminScope]
+    [tenantId, adminScope],
   );
 
-  const scopedCalls = useMemo(() => {
-    return scopedTenantId ? telephony.callsByTenant(scopedTenantId) : telephony.activeCalls;
-  }, [scopedTenantId, telephony]);
+  // Tenant-scoped live calls for presence (not cross-tenant)
+  const tenantCalls = useMemo(
+    () =>
+      adminScope === "GLOBAL"
+        ? telephony.activeCalls
+        : telephony.activeCalls.filter((c) => c.tenantId === tenantId),
+    [telephony.activeCalls, tenantId, adminScope],
+  );
 
-  const scopedExtensions = useMemo(() => {
-    if (!scopedTenantId) return telephony.extensionList;
-    return telephony.extensionList.filter((entry) => entry.tenantId === scopedTenantId);
-  }, [scopedTenantId, telephony.extensionList]);
-
-  const { activeExts, ringingExts, callByExt } = useMemo(() => {
+  // Build active/ringing extension sets from live calls
+  const { activeExts, ringingExts } = useMemo(() => {
     const active = new Set<string>();
     const ringing = new Set<string>();
-    const byExt = new Map<string, LiveCall>();
-    scopedCalls.forEach((call) => {
-      call.extensions.forEach((ext) => {
-        byExt.set(ext, call);
-        if (call.state === "up" || call.state === "held") active.add(ext);
-        if (call.state === "ringing" || call.state === "dialing") ringing.add(ext);
-      });
+    tenantCalls.forEach((c) => {
+      const exts = c.extensions ?? [];
+      if (c.state === "up" || c.state === "held") exts.forEach((e) => active.add(e));
+      else if (c.state === "ringing" || c.state === "dialing") exts.forEach((e) => ringing.add(e));
     });
-    return { activeExts: active, ringingExts: ringing, callByExt: byExt };
-  }, [scopedCalls]);
+    return { activeExts: active, ringingExts: ringing };
+  }, [tenantCalls]);
 
-  const presenceUnavailable = telephony.status !== "connected";
-
-  const members = useMemo<TeamMember[]>(() => {
-    const extRows = extState.status === "success" ? extState.data.rows.filter((row) => rowTenantMatches(row, scopedTenantId)) : [];
-    const liveByExt = new Map<string, LiveExtensionState>(scopedExtensions.map((entry) => [entry.extension, entry]));
-
-    if (extRows.length === 0) {
-      return scopedExtensions.map((entry) => {
-        const call = callByExt.get(entry.extension);
-        return {
-          id: entry.extension,
-          name: entry.hint || `Extension ${entry.extension}`,
-          extension: entry.extension,
-          tenantId: entry.tenantId,
-          tenantName: tenant.name,
-          presence: mapPresence(entry.status, entry.extension, activeExts, ringingExts, presenceUnavailable),
-          currentCall: currentCallLabel(call, entry.extension),
-          lastSeen: formatLastSeen(entry.updatedAt)
-        };
-      });
-    }
-
-    return extRows.map((row, index) => {
-      const ext = extensionFromRow(row, index);
-      const live = liveByExt.get(ext);
-      const call = callByExt.get(ext);
-      const name =
-        cleanValue(row.name) ??
-        cleanValue(row.display_name) ??
-        cleanValue(row.callerid) ??
-        cleanValue(row.fullName) ??
-        `Extension ${ext}`;
+  // Build member list — merge VitalPBX directory + live AMI presence
+  const members: TeamMember[] = useMemo(() => {
+    const extRows = extState.status === "success" ? extState.data.rows : [];
+    const mapped = extRows.map((r, i): TeamMember => {
+      const ext = String(r.extension ?? r.number ?? i);
+      const amiState = telephony.extensionList.find((e) => e.extension === ext);
       return {
-        id: cleanValue(row.id) ?? cleanValue(row.uuid) ?? ext,
-        name,
+        id: String(r.id ?? r.uuid ?? i),
+        name: String(r.name ?? r.display_name ?? r.callerid ?? `Extension ${ext}`),
         extension: ext,
-        email: cleanValue(row.email),
-        phone: cleanValue(row.phone) ?? cleanValue(row.mobile),
-        department: cleanValue(row.department) ?? cleanValue(row.team),
-        title: cleanValue(row.title) ?? cleanValue(row.role),
-        tenantId: cleanValue(row.tenantId) ?? cleanValue(row.tenant_id) ?? live?.tenantId ?? scopedTenantId,
-        tenantName: cleanValue(row.tenantName) ?? tenant.name,
-        presence: mapPresence(live?.status ?? cleanValue(row.state), ext, activeExts, ringingExts, presenceUnavailable),
-        currentCall: currentCallLabel(call, ext),
-        lastSeen: formatLastSeen(live?.updatedAt)
+        email: r.email ? String(r.email) : undefined,
+        department: r.department ? String(r.department) : undefined,
+        title: r.title ? String(r.title) : undefined,
+        presence: mapAmiPresence(
+          amiState?.status ?? String(r.state ?? "offline"),
+          ext,
+          activeExts,
+          ringingExts,
+        ),
+        callerId: undefined,
       };
     });
-  }, [activeExts, callByExt, extState, presenceUnavailable, ringingExts, scopedExtensions, scopedTenantId, tenant.name]);
 
+    // Fall back to AMI extension list when VitalPBX directory hasn't loaded yet
+    if (mapped.length === 0) {
+      return telephony.extensionList.map((e): TeamMember => ({
+        id: e.extension,
+        name: e.hint || e.extension,
+        extension: e.extension,
+        presence: mapAmiPresence(e.status ?? "offline", e.extension, activeExts, ringingExts),
+      }));
+    }
+    return mapped;
+  }, [extState, telephony.extensionList, activeExts, ringingExts]);
+
+  // Keep detail panel in sync with live presence updates
+  useEffect(() => {
+    setDetail((prev) => {
+      if (!prev) return null;
+      return members.find((m) => m.id === prev.id) ?? prev;
+    });
+  }, [members]);
+
+  // Filter + sort
   const visible = useMemo(() => {
-    const q = debouncedSearch.trim().toLowerCase();
-    let list = members.filter((member) => {
-      const matchesSearch =
-        !q ||
-        member.name.toLowerCase().includes(q) ||
-        member.extension.toLowerCase().includes(q) ||
-        (member.email ?? "").toLowerCase().includes(q);
-      const matchesStatus =
-        statusFilter === "all" ||
-        member.presence === statusFilter ||
-        (statusFilter === "offline" && member.presence === "unknown");
-      return matchesSearch && matchesStatus;
-    });
-
-    list = [...list].sort((a, b) => {
-      if (sortKey === "extension") return a.extension.localeCompare(b.extension, undefined, { numeric: true });
-      if (sortKey === "name") return a.name.localeCompare(b.name);
-      return STATUS_META[a.presence].sort - STATUS_META[b.presence].sort || a.name.localeCompare(b.name);
-    });
+    let list = [...members];
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (m) =>
+          m.name.toLowerCase().includes(q) ||
+          m.extension.includes(q) ||
+          (m.email ?? "").toLowerCase().includes(q) ||
+          (m.department ?? "").toLowerCase().includes(q) ||
+          (m.title ?? "").toLowerCase().includes(q),
+      );
+    }
+    if (statusFilter !== "all") {
+      list = list.filter((m) => m.presence === statusFilter);
+    }
+    switch (sortKey) {
+      case "extension":
+        list.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
+        break;
+      case "status":
+        list.sort((a, b) => PRESENCE_ORDER[a.presence] - PRESENCE_ORDER[b.presence] || a.name.localeCompare(b.name));
+        break;
+      default:
+        list.sort((a, b) => a.name.localeCompare(b.name));
+    }
     return list;
-  }, [debouncedSearch, members, sortKey, statusFilter]);
+  }, [members, search, statusFilter, sortKey]);
 
+  // Counts for filter chips
   const counts = useMemo(() => ({
-    all: members.length,
+    total:     members.length,
     available: members.filter((m) => m.presence === "available").length,
-    on_call: members.filter((m) => m.presence === "on_call").length,
-    ringing: members.filter((m) => m.presence === "ringing").length,
-    offline: members.filter((m) => m.presence === "offline" || m.presence === "unknown").length
+    on_call:   members.filter((m) => m.presence === "on_call").length,
+    ringing:   members.filter((m) => m.presence === "ringing").length,
+    offline:   members.filter((m) => m.presence === "offline").length,
   }), [members]);
 
-  function handleCall(member: TeamMember) {
-    phone.setDialpadInput(member.extension);
-    phone.dial(member.extension);
-    setOpenMenu(null);
-  }
+  // Actions
+  const handleCall = useCallback((ext: string) => {
+    phone.setDialpadInput(ext);
+    phone.dial(ext);
+  }, [phone]);
 
-  async function copyExtension(member: TeamMember) {
-    try {
-      await navigator.clipboard.writeText(member.extension);
-      setToast(`Copied extension ${member.extension}`);
-    } catch {
-      setToast("Copy failed");
-    }
-    setOpenMenu(null);
-    window.setTimeout(() => setToast(null), 1800);
-  }
+  const handleMessage = useCallback((member: TeamMember) => {
+    router.push(`/chat?ext=${encodeURIComponent(member.extension)}`);
+  }, [router]);
 
-  function showDetails(member: TeamMember) {
-    setSelected(member);
-    setOpenMenu(null);
-  }
+  const handleCopy = useCallback((ext: string) => {
+    navigator.clipboard.writeText(ext).catch(() => {});
+    showToast(`Extension ${ext} copied`);
+  }, [showToast]);
 
-  const emptyText = debouncedSearch || statusFilter !== "all"
-    ? "No matching team members."
-    : "No team members found for this tenant.";
+  const presenceLive = telephony.isLive;
+  const isInitialLoad = extState.status === "loading" && members.length === 0;
 
   return (
-    <div className="team-directory-page">
-      <PageHeader
-        title="Team Directory"
-        subtitle={`Live presence and directory info for ${adminScope === "GLOBAL" ? "all workspaces" : tenant.name}.`}
-        actions={<LiveBadge status={telephony.status} />}
-      />
-
-      {presenceUnavailable ? (
-        <div className="team-warning">Presence is temporarily unavailable. Directory data is still shown.</div>
+    <div className="td-page">
+      {/* Presence unavailable banner */}
+      {!presenceLive && members.length > 0 ? (
+        <div className="td-presence-banner">
+          <WifiOff size={14} />
+          Presence is temporarily unavailable. Directory data is still shown.
+        </div>
       ) : null}
 
-      <section className="team-toolbar">
-        <div className="team-search">
-          <Search size={17} />
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by name, extension, email..."
-          />
-        </div>
-        <div className="team-filter-row">
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={statusFilter === filter.key ? "active" : ""}
-              onClick={() => setStatusFilter(filter.key)}
-            >
-              {filter.label}
-              <span>{counts[filter.key]}</span>
-            </button>
-          ))}
-        </div>
-        <select className="team-sort" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)} aria-label="Sort team directory">
-          <option value="status">Sort by status</option>
-          <option value="name">Sort by name</option>
-          <option value="extension">Sort by extension</option>
-        </select>
-        <div className="team-view-toggle" aria-label="Team directory view">
-          <button type="button" className={view === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>
-            <Grid3X3 size={16} /> Cards
-          </button>
-          <button type="button" className={view === "list" ? "active" : ""} onClick={() => setViewMode("list")}>
-            <List size={16} /> List
-          </button>
-        </div>
-      </section>
+      {/* Toolbar */}
+      <div className="td-toolbar">
+        <div className="td-toolbar-left">
+          {/* Search */}
+          <div className="td-search-wrap">
+            <Search className="td-search-icon" size={15} strokeWidth={2} aria-hidden />
+            <input
+              className="td-search"
+              placeholder="Search name, extension, email…"
+              value={rawSearch}
+              onChange={(e) => setRawSearch(e.target.value)}
+              autoComplete="off"
+              aria-label="Search team members"
+            />
+            {rawSearch ? (
+              <button className="td-search-clear" onClick={() => setRawSearch("")} aria-label="Clear search">
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
 
-      <div className="team-summary-line">
-        <span>{visible.length} of {members.length} team members</span>
-        <span>{scopedTenantId ? "Tenant scoped" : "Global admin view"}</span>
+          {/* Status filter chips */}
+          <div className="td-filters" role="group" aria-label="Filter by status">
+            {STATUS_FILTERS.map((f) => {
+              const count = f.key === "all" ? counts.total : (counts[f.key as keyof typeof counts] ?? 0);
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  className={`td-filter-chip${statusFilter === f.key ? " active" : ""}`}
+                  onClick={() => setStatusFilter(f.key)}
+                  aria-pressed={statusFilter === f.key}
+                >
+                  {f.label}
+                  <span className="td-filter-count">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="td-toolbar-right">
+          {/* Sort */}
+          <select
+            className="td-sort-select"
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value as SortKey)}
+            aria-label="Sort by"
+          >
+            <option value="name">Name</option>
+            <option value="extension">Extension</option>
+            <option value="status">Status</option>
+          </select>
+
+          {/* View toggle */}
+          <div className="td-view-toggle" role="group" aria-label="View mode">
+            <button
+              type="button"
+              className={`td-view-btn${view === "card" ? " active" : ""}`}
+              onClick={() => setViewPersist("card")}
+              aria-pressed={view === "card"}
+              title="Card view"
+            >
+              <LayoutGrid size={15} strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              className={`td-view-btn${view === "list" ? " active" : ""}`}
+              onClick={() => setViewPersist("list")}
+              aria-pressed={view === "list"}
+              title="List view"
+            >
+              <LayoutList size={15} strokeWidth={2} />
+            </button>
+          </div>
+
+          {/* Live badge */}
+          <div
+            className="td-live-badge"
+            style={{ color: presenceLive ? "var(--success)" : "var(--warning)" }}
+            title={presenceLive ? "Presence data live" : "Presence reconnecting"}
+          >
+            {presenceLive
+              ? <><Wifi size={13} /><span>Live</span></>
+              : <><WifiOff size={13} /><span>Offline</span></>}
+          </div>
+        </div>
       </div>
 
-      {extState.status === "loading" ? (
-        <div className="team-empty-state">Loading team directory...</div>
-      ) : visible.length === 0 ? (
-        <div className="team-empty-state">{emptyText}</div>
-      ) : view === "cards" ? (
-        <section className="team-card-grid">
-          {visible.map((member) => (
-            <MemberCard
-              key={member.id}
-              member={member}
-              menuOpen={openMenu === member.id}
-              onToggleMenu={() => setOpenMenu(openMenu === member.id ? null : member.id)}
-              onCall={handleCall}
-              onCopy={copyExtension}
-              onDetails={showDetails}
-            />
-          ))}
-        </section>
-      ) : (
-        <section className="team-list-panel">
-          <div className="team-list-head">
-            <span>Status</span>
-            <span>Name</span>
-            <span>Extension</span>
-            <span>Role</span>
-            <span>Department</span>
-            <span>Current state</span>
-            <span>Actions</span>
-          </div>
-          {visible.map((member) => (
-            <div className="team-list-row" key={member.id}>
-              <StatusPill state={member.presence} />
-              <div className="team-list-name">
-                <strong>{member.name}</strong>
-                {member.email ? <span>{member.email}</span> : null}
-              </div>
-              <span>Ext {member.extension}</span>
-              <span>{member.title || "—"}</span>
-              <span>{member.department || "—"}</span>
-              <span>{member.currentCall || member.lastSeen || STATUS_META[member.presence].label}</span>
-              <TeamActions
-                member={member}
-                open={openMenu === member.id}
-                onToggle={() => setOpenMenu(openMenu === member.id ? null : member.id)}
-                onCall={handleCall}
-                onCopy={copyExtension}
-                onDetails={showDetails}
-              />
+      {/* Main content */}
+      <div className="td-content">
+        {isInitialLoad ? (
+          <div className="td-empty">
+            <div className="td-empty-title" style={{ color: "var(--text-dim)", fontWeight: 400 }}>
+              Loading team directory…
             </div>
-          ))}
-        </section>
-      )}
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="td-empty">
+            <User className="td-empty-icon-svg" size={42} strokeWidth={1.1} />
+            <div className="td-empty-title">
+              {rawSearch || statusFilter !== "all"
+                ? "No matching team members"
+                : "No team members found for this tenant"}
+            </div>
+            <div className="td-empty-sub">
+              {rawSearch || statusFilter !== "all"
+                ? "Try a different search term or filter."
+                : "Extensions will appear here once provisioned in VitalPBX."}
+            </div>
+            {rawSearch || statusFilter !== "all" ? (
+              <button
+                className="btn ghost"
+                style={{ marginTop: 12, fontSize: 13 }}
+                onClick={() => { setRawSearch(""); setStatusFilter("all"); }}
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        ) : view === "card" ? (
+          <div className="td-card-grid">
+            {visible.map((m) => (
+              <MemberCard
+                key={m.id}
+                member={m}
+                onCall={handleCall}
+                onMessage={handleMessage}
+                onCopy={handleCopy}
+                onDetails={setDetail}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="td-list-wrap">
+            <table className="td-table" cellSpacing={0}>
+              <thead className="td-thead">
+                <tr>
+                  <th className="td-th td-col-status" />
+                  <th className="td-th td-col-name">Name</th>
+                  <th className="td-th td-col-ext">Extension</th>
+                  <th className="td-th td-col-role">Title</th>
+                  <th className="td-th td-col-dept">Department</th>
+                  <th className="td-th td-col-state">Status</th>
+                  <th className="td-th td-col-actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((m) => (
+                  <MemberListRow
+                    key={m.id}
+                    member={m}
+                    onCall={handleCall}
+                    onMessage={handleMessage}
+                    onCopy={handleCopy}
+                    onDetails={setDetail}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      {selected ? (
-        <DetailsPanel member={selected} onClose={() => setSelected(null)} onCall={handleCall} onCopy={copyExtension} />
+      {/* Status bar */}
+      <div className="td-status-bar">
+        <span>{visible.length} of {members.length}</span>
+        {counts.on_call > 0 ? (
+          <span className="td-stat-badge td-stat-oncall">{counts.on_call} on call</span>
+        ) : null}
+        {counts.ringing > 0 ? (
+          <span className="td-stat-badge td-stat-ringing">{counts.ringing} ringing</span>
+        ) : null}
+        <span className="td-stat-badge td-stat-avail">{counts.available} available</span>
+        <span className="td-stat-badge td-stat-offline">{counts.offline} offline</span>
+      </div>
+
+      {/* Detail panel */}
+      {detail ? (
+        <DetailPanel
+          member={detail}
+          onCall={handleCall}
+          onMessage={handleMessage}
+          onCopy={handleCopy}
+          onClose={() => setDetail(null)}
+        />
       ) : null}
 
+      {/* Toast */}
       {toast ? (
-        <div className="team-toast">
-          <Check size={16} /> {toast}
+        <div key={toast.key} className="td-toast" role="status">
+          <Check size={14} />
+          {toast.msg}
         </div>
       ) : null}
     </div>

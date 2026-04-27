@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
-export default function PresenceDashboardPage() {
+// Extension Presence has been merged into Team Directory at /team.
+export default function PresenceRedirectPage() {
   redirect("/team");
 }
