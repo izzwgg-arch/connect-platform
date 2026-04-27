@@ -11049,15 +11049,10 @@ app.get("/voice/voicemail", async (req, reply) => {
   if (!user) return;
 
   const q = z.object({
-    folder:        z.enum(["inbox", "old", "urgent"]).optional(),
-    listened:      z.enum(["true", "false"]).optional(),
-    extension:     z.string().optional(),
-    tenantId:      z.string().optional(),
-    page:          z.coerce.number().int().min(1).optional().default(1),
-    dateFrom:      z.string().optional(),
-    dateTo:        z.string().optional(),
-    olderThanDays: z.coerce.number().int().min(1).max(3650).optional(),
-    search:        z.string().max(120).optional(),
+    folder:    z.enum(["inbox", "old", "urgent"]).optional().default("inbox"),
+    extension: z.string().optional(),
+    tenantId:  z.string().optional(),
+    page:      z.coerce.number().int().min(1).optional().default(1),
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
@@ -11074,47 +11069,7 @@ app.get("/voice/voicemail", async (req, reply) => {
     tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
   }
 
-  const where: Record<string, any> = { deletedAt: null };
-
-  const rawSearch = q.search?.trim();
-
-  // Default folder=inbox when no other scope filters are present (backward compatible).
-  const hasScopeFilters =
-    q.listened !== undefined ||
-    q.olderThanDays !== undefined ||
-    Boolean(q.dateFrom) ||
-    Boolean(q.dateTo) ||
-    Boolean(rawSearch);
-  const effectiveFolder = q.folder ?? (!hasScopeFilters ? "inbox" : undefined);
-  if (effectiveFolder) where.folder = effectiveFolder;
-
-  if (q.listened === "true") where.listened = true;
-  if (q.listened === "false") where.listened = false;
-
-  const receivedFilter: Record<string, Date> = {};
-  if (q.dateFrom) {
-    const d = new Date(q.dateFrom);
-    if (!Number.isNaN(d.getTime())) receivedFilter.gte = d;
-  }
-  if (q.dateTo) {
-    const d = new Date(q.dateTo);
-    if (!Number.isNaN(d.getTime())) receivedFilter.lte = d;
-  }
-  if (q.olderThanDays != null) {
-    const cutoff = new Date();
-    cutoff.setUTCDate(cutoff.getUTCDate() - q.olderThanDays);
-    receivedFilter.lt = cutoff;
-  }
-  if (Object.keys(receivedFilter).length) where.receivedAt = receivedFilter;
-
-  if (rawSearch) {
-    where.OR = [
-      { callerNumber: { contains: rawSearch, mode: "insensitive" } },
-      { callerName: { contains: rawSearch, mode: "insensitive" } },
-      { extension: { contains: rawSearch, mode: "insensitive" } },
-    ];
-  }
-
+  const where: Record<string, any> = { deletedAt: null, folder: q.folder };
   if (tenantIdFilter) {
     where.tenantId = tenantIdFilter.length === 1
       ? tenantIdFilter[0]
@@ -11181,18 +11136,16 @@ app.get("/voice/voicemail", async (req, reply) => {
         }
       }
       return {
-        id:            vm.id,
-        callerId:      vm.callerNumber ?? "Unknown",
-        callerName:    vm.callerName   ?? null,
-        receivedAt:    vm.receivedAt.toISOString(),
-        durationSec:   vm.durationSec,
-        folder:        vm.folder as "inbox" | "old" | "urgent",
-        listened:      vm.listened,
-        extension:     vm.extension,
-        tenantId:      vm.tenantId,
+        id:          vm.id,
+        callerId:    vm.callerNumber ?? "Unknown",
+        callerName:  vm.callerName   ?? null,
+        receivedAt:  vm.receivedAt.toISOString(),
+        durationSec: vm.durationSec,
+        folder:      vm.folder as "inbox" | "old" | "urgent",
+        listened:    vm.listened,
+        extension:   vm.extension,
+        tenantId:    vm.tenantId,
         tenantName,
-        pbxMessageId:  vm.pbxMessageId,
-        readAt:        vm.readAt?.toISOString() ?? null,
       };
     }),
     total,
@@ -11209,7 +11162,7 @@ app.get("/voice/voicemail", async (req, reply) => {
  */
 async function canAccessVoicemail(
   vm: { tenantId: string | null; extension: string },
-  user: { sub: string; role?: string | null; tenantId?: string | null },
+  user: JwtUser,
   reply: any,
 ): Promise<boolean> {
   if (isRole(user, ["SUPER_ADMIN"])) return true;
@@ -11233,7 +11186,7 @@ async function canAccessVoicemail(
   return true;
 }
 
-// ── PATCH /voice/voicemail/:id — mark as listened / unlistened ───────────────
+// ── PATCH /voice/voicemail/:id — mark as listened / move folder ──────────────
 app.patch("/voice/voicemail/:id", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -11241,24 +11194,23 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
-  const body = z
-    .object({
-      listened: z.boolean().optional(),
-      folder:   z.enum(["inbox", "old", "urgent"]).optional(),
-    })
-    .parse(req.body || {});
-  if (body.listened === undefined && body.folder === undefined) {
-    return reply.code(400).send({ error: "no_updates" });
-  }
-  const data: { listened?: boolean; readAt?: Date | null; folder?: string } = {};
-  if (body.listened !== undefined) {
-    data.listened = body.listened;
-    data.readAt = body.listened ? (vm.readAt ?? new Date()) : null;
+  const body = z.object({
+    listened: z.boolean().optional(),
+    folder: z.enum(["inbox", "old", "urgent"]).optional(),
+  }).parse(req.body || {});
+  const listened = body.listened ?? true;
+  const data: Record<string, any> = {};
+  if (body.listened !== undefined || body.folder === undefined) {
+    data.listened = listened;
+    data.readAt = listened ? (vm.readAt ?? new Date()) : null;
   }
   if (body.folder !== undefined) {
     data.folder = body.folder;
   }
-  await db.voicemail.update({ where: { id }, data });
+  await db.voicemail.update({
+    where: { id },
+    data,
+  });
   return reply.send({ ok: true });
 });
 

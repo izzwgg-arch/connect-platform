@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { DetailCard } from "../../../components/DetailCard";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
@@ -42,6 +43,8 @@ function timeLabel(iso: string) {
 }
 
 export default function SmsPage() {
+  const searchParams = useSearchParams();
+  const requestedPhone = searchParams.get("phone")?.trim() || "";
   const { adminScope } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
   const state = useAsyncResource(() => loadSmsThreads(adminScope), [adminScope]);
@@ -52,6 +55,7 @@ export default function SmsPage() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const handledPhoneRef = useRef("");
 
   // Auto-select first thread on data load
   useEffect(() => {
@@ -59,6 +63,20 @@ export default function SmsPage() {
       setSelected(state.data.threads[0]);
     }
   }, [state.status]);
+
+  // Deep-link from voicemail quick actions into a usable SMS composer.
+  useEffect(() => {
+    if (state.status !== "success" || !requestedPhone || handledPhoneRef.current === requestedPhone) return;
+    const normalized = requestedPhone.replace(/[^\d+]/g, "");
+    const existing = state.data.threads.find((thread) => thread.phone.replace(/[^\d+]/g, "") === normalized);
+    setSelected(existing ?? {
+      id: `compose-${normalized || requestedPhone}`,
+      phone: requestedPhone,
+      preview: "New message",
+      status: "READY",
+    });
+    handledPhoneRef.current = requestedPhone;
+  }, [requestedPhone, state.status]);
 
   // Load thread messages when selection changes
   useEffect(() => {
