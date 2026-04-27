@@ -17,28 +17,44 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #edf4fb;
-  --bg-soft: #f8fbff;
-  --panel: #ffffff;
-  --panel-2: #f4f8fc;
-  --text: #162235;
-  --text-dim: #5b6f86;
-  --accent: #0f75d3;
+  --bg-app: #f6f8fb;
+  --bg-gradient-start: #f8fafc;
+  --bg-gradient-end: #eef2f7;
+  --surface-1: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #f1f5f9;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --border-soft: rgba(15, 23, 42, 0.08);
+  --accent: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --success: #22c55e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.08);
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --bg: var(--bg-app);
+  --bg-soft: var(--bg-gradient-start);
+  --panel: var(--surface-1);
+  --panel-2: var(--surface-2);
+  --text: var(--text-primary);
+  --text-dim: var(--text-secondary);
   --accent-2: #2563eb;
-  --border: #cfdae8;
-  --success: #168a55;
-  --warning: #bf7817;
-  --danger: #c83d55;
-  --info: #0f6fc5;
-  --shadow: 0 18px 48px rgba(31, 53, 78, 0.11);
-  --light-surface: #ffffff;
-  --light-surface-raised: #ffffff;
-  --light-surface-soft: #f6f9fd;
-  --light-border-strong: #c9d7e8;
-  --light-ring: rgba(31, 127, 216, 0.18);
-  --light-shadow-sm: 0 8px 22px rgba(31, 53, 78, 0.08);
-  --light-shadow-md: 0 18px 50px rgba(31, 53, 78, 0.12);
-  --light-shadow-lg: 0 28px 80px rgba(31, 53, 78, 0.16);
+  --border: color-mix(in srgb, var(--border-soft) 78%, var(--text-muted));
+  --info: var(--accent);
+  --shadow: var(--shadow-lg);
+  --light-surface: var(--surface-1);
+  --light-surface-raised: var(--surface-1);
+  --light-surface-soft: var(--surface-2);
+  --light-border-strong: color-mix(in srgb, var(--border-soft) 72%, var(--text-secondary));
+  --light-ring: rgba(59, 130, 246, 0.15);
+  --light-shadow-sm: var(--shadow-sm);
+  --light-shadow-md: var(--shadow-md);
+  --light-shadow-lg: var(--shadow-lg);
 }
 
 *,
@@ -1493,28 +1509,28 @@ p {
 }
 
 :root[data-theme="light"] {
-  --console-bg: #edf4fb;
-  --console-bg-soft: #f8fbff;
-  --console-panel: #ffffff;
-  --console-panel-soft: #f4f8fc;
-  --console-border: #cfdae8;
-  --console-text: #162235;
-  --console-muted: #5b6f86;
-  --console-accent: #0f75d3;
-  --console-success: #168a55;
-  --console-warning: #bf7817;
-  --console-danger: #c83d55;
+  --console-bg: var(--bg-app);
+  --console-bg-soft: var(--bg-gradient-start);
+  --console-panel: var(--surface-1);
+  --console-panel-soft: var(--surface-2);
+  --console-border: var(--border-soft);
+  --console-text: var(--text-primary);
+  --console-muted: var(--text-secondary);
+  --console-accent: var(--accent);
+  --console-success: var(--success);
+  --console-warning: var(--warning);
+  --console-danger: var(--danger);
   /* Dashboard 2026 — warm SaaS light mode */
-  --dash-bg: #edf4fb;
-  --dash-card: #ffffff;
-  --dash-card-border: #cfdae8;
-  --dash-radius: 14px;
-  --dash-shadow: 0 18px 50px rgba(31, 53, 78, 0.11);
-  --dash-incoming: #168a55;
-  --dash-outgoing: #0f75d3;
-  --dash-internal: #6d5bd0;
-  --dash-missed: #c83d55;
-  --dash-total-line: #0f8d8f;
+  --dash-bg: var(--bg-app);
+  --dash-card: var(--surface-1);
+  --dash-card-border: var(--border-soft);
+  --dash-radius: var(--radius-lg);
+  --dash-shadow: var(--shadow-md);
+  --dash-incoming: var(--accent);
+  --dash-outgoing: #14b8a6;
+  --dash-internal: #8b5cf6;
+  --dash-missed: var(--danger);
+  --dash-total-line: #0ea5e9;
 }
 
 body {
@@ -6441,7 +6457,7 @@ table tr:hover {
 :root[data-theme="light"] .profile-trigger:hover {
   color: #102238;
   border-color: rgba(118, 173, 225, 0.88);
-  background: linear-gradient(180deg, #ffffff, #edf6ff);
+  background: linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--accent-soft) 32%, var(--surface-2)));
   box-shadow: 0 12px 28px rgba(31, 127, 216, 0.13);
   transform: translateY(-1px);
 }
@@ -6459,7 +6475,7 @@ table tr:hover {
 :root[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-theme="light"] textarea,
 :root[data-theme="light"] select {
-  background: linear-gradient(180deg, #ffffff, #f7faff);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(195, 211, 230, 0.96);
   color: #152439;
   box-shadow:
@@ -6481,7 +6497,7 @@ table tr:hover {
 :root[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]):focus {
   outline: none;
   border-color: rgba(31, 127, 216, 0.72);
-  background: #ffffff;
+  background: var(--surface-1);
   box-shadow:
     0 0 0 4px var(--light-ring),
     inset 0 1px 2px rgba(31, 53, 78, 0.05);
@@ -6489,7 +6505,7 @@ table tr:hover {
 
 :root[data-theme="light"] .ws-switcher-trigger,
 :root[data-theme="light"] .ws-switcher-card {
-  background: linear-gradient(180deg, #ffffff, #f5f9fd);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(194, 211, 231, 0.96);
   box-shadow:
     0 10px 26px rgba(31, 53, 78, 0.08),
@@ -6497,7 +6513,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .ws-switcher-trigger:hover {
-  background: linear-gradient(180deg, #ffffff, #eef7ff);
+  background: linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--accent-soft) 30%, var(--surface-2)));
   border-color: rgba(105, 166, 225, 0.82);
   box-shadow: 0 16px 36px rgba(31, 127, 216, 0.14);
 }
@@ -6514,14 +6530,14 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .ws-switcher-search-wrap {
-  background: linear-gradient(180deg, #ffffff, #f6faff);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(194, 211, 231, 0.96);
   box-shadow: inset 0 1px 2px rgba(31, 53, 78, 0.06);
 }
 
 :root[data-theme="light"] .ws-switcher-search-wrap:focus-within {
   border-color: rgba(31, 127, 216, 0.7);
-  background: #ffffff;
+  background: var(--surface-1);
   box-shadow: 0 0 0 4px var(--light-ring);
 }
 
@@ -6607,7 +6623,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .btn {
-  background: linear-gradient(180deg, #ffffff, #f3f8fe);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(193, 211, 231, 0.98);
   color: #17263a;
   box-shadow: 0 8px 20px rgba(31, 53, 78, 0.07);
@@ -6629,7 +6645,7 @@ table tr:hover {
 :root[data-theme="light"] .td-view-btn.active {
   background: linear-gradient(135deg, #0f75d3, #278ce8);
   border-color: rgba(15, 117, 211, 0.92);
-  color: #ffffff;
+  color: var(--surface-1);
   box-shadow: 0 14px 30px rgba(31, 127, 216, 0.22);
 }
 
@@ -6708,7 +6724,7 @@ table tr:hover {
 :root[data-theme="light"] .cc-pending-chip,
 :root[data-theme="light"] .cc-new-options button,
 :root[data-theme="light"] .cc-people-list button {
-  background: linear-gradient(180deg, #ffffff, #f6faff);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(199, 214, 232, 0.94);
 }
 
@@ -6738,7 +6754,7 @@ table tr:hover {
 :root[data-theme="light"] .ch-shell .ch-search-wrap,
 :root[data-theme="light"] .ch-shell .calls-filter-select,
 :root[data-theme="light"] .ch-shell .calls-date-input {
-  background: linear-gradient(180deg, #ffffff, #f7faff);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border-color: rgba(194, 211, 231, 0.96);
   box-shadow: inset 0 1px 2px rgba(31, 53, 78, 0.05);
 }
@@ -7036,6 +7052,689 @@ table tr:hover {
     radial-gradient(circle at 12% 0%, rgba(31, 127, 216, 0.1), transparent 34%),
     rgba(255, 255, 255, 0.86);
   box-shadow: 0 18px 46px rgba(31, 53, 78, 0.1);
+}
+
+/* Premium SaaS light layer — intentionally light-scoped only. */
+:root[data-theme="light"] {
+  --light-premium-glow: rgba(31, 127, 216, 0.24);
+  --light-premium-cyan: rgba(45, 212, 191, 0.16);
+  --light-premium-violet: rgba(99, 102, 241, 0.13);
+  --light-premium-amber: rgba(245, 158, 11, 0.12);
+  --light-premium-card-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 18px 38px rgba(31, 53, 78, 0.10),
+    0 44px 90px rgba(31, 127, 216, 0.08);
+  --light-premium-card-shadow-hover:
+    0 1px 0 rgba(255, 255, 255, 0.96) inset,
+    0 24px 50px rgba(31, 53, 78, 0.13),
+    0 56px 110px rgba(31, 127, 216, 0.13);
+}
+
+:root[data-theme="light"] body,
+:root[data-theme="light"] .console-shell {
+  background:
+    radial-gradient(circle at 8% -12%, rgba(31, 127, 216, 0.22), transparent 34%),
+    radial-gradient(circle at 88% -8%, rgba(99, 102, 241, 0.15), transparent 30%),
+    radial-gradient(circle at 92% 92%, rgba(45, 212, 191, 0.12), transparent 28%),
+    linear-gradient(135deg, #fbfdff 0%, #edf5ff 42%, #eaf2fb 100%);
+}
+
+:root[data-theme="light"] .console-workspace,
+:root[data-theme="light"] .console-content {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.34) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    radial-gradient(circle at 14% 0%, rgba(31, 127, 216, 0.14), transparent 32%),
+    radial-gradient(circle at 92% 18%, rgba(99, 102, 241, 0.10), transparent 30%),
+    linear-gradient(180deg, rgba(249, 252, 255, 0.95), rgba(237, 245, 253, 0.98));
+  background-size: 48px 48px, 48px 48px, auto, auto, auto;
+}
+
+:root[data-theme="light"] .console-content:has(> .ch-shell),
+:root[data-theme="light"] .console-content:has(> .vm-shell) {
+  background:
+    radial-gradient(circle at 14% 0%, rgba(31, 127, 216, 0.14), transparent 30%),
+    linear-gradient(180deg, #f9fcff, #edf5fd);
+}
+
+:root[data-theme="light"] .console-nav {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(31, 127, 216, 0.16), transparent 34%),
+    radial-gradient(circle at 100% 18%, rgba(45, 212, 191, 0.11), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 247, 254, 0.96) 50%, rgba(232, 241, 251, 0.98));
+  box-shadow:
+    16px 0 46px rgba(31, 53, 78, 0.11),
+    inset -1px 0 0 rgba(255, 255, 255, 0.9),
+    inset -18px 0 50px rgba(31, 127, 216, 0.035);
+}
+
+:root[data-theme="light"] .drawer-profile {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(235, 245, 255, 0.88)),
+    radial-gradient(circle at 14% 0%, rgba(31, 127, 216, 0.12), transparent 34%);
+}
+
+:root[data-theme="light"] .drawer-nav-link {
+  transition:
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease;
+}
+
+:root[data-theme="light"] .drawer-nav-link:hover {
+  transform: translateX(3px);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active {
+  background:
+    radial-gradient(circle at 0% 50%, rgba(31, 127, 216, 0.2), transparent 42%),
+    linear-gradient(135deg, rgba(216, 237, 255, 0.98), rgba(247, 251, 255, 0.96));
+  border-left-color: transparent;
+  box-shadow:
+    0 14px 32px rgba(31, 127, 216, 0.16),
+    0 2px 8px rgba(31, 53, 78, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1492ff, #2dd4bf);
+  box-shadow: 0 0 18px rgba(31, 127, 216, 0.48);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active .drawer-nav-icon {
+  box-shadow:
+    0 10px 22px rgba(31, 127, 216, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+:root[data-theme="light"] .topbar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 250, 255, 0.78));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 12px 36px rgba(31, 53, 78, 0.10);
+}
+
+:root[data-theme="light"] .panel,
+:root[data-theme="light"] .metric-card,
+:root[data-theme="light"] .state-box,
+:root[data-theme="light"] .settings-nav,
+:root[data-theme="light"] .dash-card,
+:root[data-theme="light"] .dashboard-card,
+:root[data-theme="light"] .dash-hero-card,
+:root[data-theme="light"] .dash-kpi2,
+:root[data-theme="light"] .dash-ingest-panel,
+:root[data-theme="light"] .td-card,
+:root[data-theme="light"] .td-toolbar,
+:root[data-theme="light"] .td-presence-banner,
+:root[data-theme="light"] .ch-shell .ch-kpi-card,
+:root[data-theme="light"] .ch-shell .ch-item,
+:root[data-theme="light"] .ch-detail-panel,
+:root[data-theme="light"] .ch-detail-placeholder,
+:root[data-theme="light"] .vm-kpi,
+:root[data-theme="light"] .vm-row,
+:root[data-theme="light"] .vm-detail,
+:root[data-theme="light"] .vm-detail-placeholder,
+:root[data-theme="light"] .billing-tenant-rail,
+:root[data-theme="light"] .billing-tenant-hero,
+:root[data-theme="light"] .billing-tenant-workspace .detail-card,
+:root[data-theme="light"] .billing-preview-total,
+:root[data-theme="light"] .billing-line-list > div,
+:root[data-theme="light"] .billing-invoice-row,
+:root[data-theme="light"] .cc-thread,
+:root[data-theme="light"] .cc-conversation,
+:root[data-theme="light"] .cc-inbox {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(31, 127, 216, 0.075), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 250, 255, 0.94));
+  border-color: rgba(184, 204, 226, 0.96);
+  box-shadow: var(--light-premium-card-shadow);
+  transition:
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+:root[data-theme="light"] .dash-hero-card,
+:root[data-theme="light"] .billing-tenant-hero {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(31, 127, 216, 0.15), transparent 34%),
+    radial-gradient(circle at 92% 8%, rgba(45, 212, 191, 0.12), transparent 32%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.99), rgba(239, 247, 255, 0.95));
+}
+
+:root[data-theme="light"] .panel:hover,
+:root[data-theme="light"] .metric-card:hover,
+:root[data-theme="light"] .dash-card:hover,
+:root[data-theme="light"] .dashboard-card:hover,
+:root[data-theme="light"] .dash-kpi2:hover,
+:root[data-theme="light"] .td-card:hover,
+:root[data-theme="light"] .ch-shell .ch-item:hover,
+:root[data-theme="light"] .vm-row:hover,
+:root[data-theme="light"] .billing-tenant-item:hover,
+:root[data-theme="light"] .billing-invoice-row:hover,
+:root[data-theme="light"] .cc-thread:hover {
+  transform: translateY(-3px);
+  border-color: rgba(96, 163, 226, 0.9);
+  box-shadow: var(--light-premium-card-shadow-hover);
+}
+
+:root[data-theme="light"] .ch-shell .ch-item.selected,
+:root[data-theme="light"] .vm-row.selected,
+:root[data-theme="light"] .cc-thread.active,
+:root[data-theme="light"] .ws-switcher-row.is-active,
+:root[data-theme="light"] .billing-tenant-item.active {
+  background:
+    radial-gradient(circle at 0% 50%, rgba(31, 127, 216, 0.18), transparent 40%),
+    linear-gradient(135deg, rgba(222, 240, 255, 0.98), rgba(249, 252, 255, 0.96)) !important;
+  border-color: rgba(82, 154, 224, 0.9);
+  box-shadow:
+    0 18px 44px rgba(31, 127, 216, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.9) inset;
+}
+
+:root[data-theme="light"] .topbar-center .global-search .input:focus,
+:root[data-theme="light"] .input:focus,
+:root[data-theme="light"] textarea:focus,
+:root[data-theme="light"] select:focus,
+:root[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]):focus,
+:root[data-theme="light"] .td-search-wrap:focus-within,
+:root[data-theme="light"] .vm-search:focus-within,
+:root[data-theme="light"] .ch-shell .ch-search-wrap:focus-within,
+:root[data-theme="light"] .ws-switcher-search-wrap:focus-within {
+  box-shadow:
+    0 0 0 4px rgba(31, 127, 216, 0.16),
+    0 0 28px rgba(31, 127, 216, 0.16),
+    inset 0 1px 2px rgba(31, 53, 78, 0.05);
+}
+
+:root[data-theme="light"] .page-header h2,
+:root[data-theme="light"] .dash-hero-title,
+:root[data-theme="light"] .ch-title-block h1,
+:root[data-theme="light"] .vm-title-block h1,
+:root[data-theme="light"] .billing-tenant-hero h2 {
+  color: #0d1f33;
+  font-weight: 820;
+  letter-spacing: -0.045em;
+}
+
+:root[data-theme="light"] .metric-value,
+:root[data-theme="light"] .dash-kpi2-value,
+:root[data-theme="light"] .ch-shell .ch-kpi-value,
+:root[data-theme="light"] .vm-kpi strong,
+:root[data-theme="light"] .billing-preview-total strong,
+:root[data-theme="light"] .billing-hero-metrics strong {
+  color: #0b1f35;
+  font-weight: 860;
+  letter-spacing: -0.045em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+:root[data-theme="light"] .metric-label,
+:root[data-theme="light"] .metric-meta,
+:root[data-theme="light"] .dash-hero-sub,
+:root[data-theme="light"] .dash-kpi2-label,
+:root[data-theme="light"] .ch-shell .ch-kpi-label,
+:root[data-theme="light"] .ch-shell .ch-kpi-card small,
+:root[data-theme="light"] .vm-kpi span,
+:root[data-theme="light"] .vm-kpi small,
+:root[data-theme="light"] .billing-hero-metrics small {
+  color: #64788f;
+  font-weight: 640;
+}
+
+:root[data-theme="light"] .btn,
+:root[data-theme="light"] .icon-btn,
+:root[data-theme="light"] .profile-trigger,
+:root[data-theme="light"] .td-filter-chip,
+:root[data-theme="light"] .td-view-btn,
+:root[data-theme="light"] .ch-shell .ch-tab,
+:root[data-theme="light"] .vm-tabs button,
+:root[data-theme="light"] .ws-switcher-trigger,
+:root[data-theme="light"] .ws-switcher-row {
+  transition:
+    transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+:root[data-theme="light"] .btn:hover,
+:root[data-theme="light"] .td-filter-chip:hover,
+:root[data-theme="light"] .td-view-btn:hover,
+:root[data-theme="light"] .ch-shell .ch-tab:hover,
+:root[data-theme="light"] .vm-tabs button:hover,
+:root[data-theme="light"] .ws-switcher-row:hover {
+  transform: translateY(-1px);
+}
+
+:root[data-theme="light"] .btn.ghost.active,
+:root[data-theme="light"] .td-filter-chip.active,
+:root[data-theme="light"] .td-view-btn.active,
+:root[data-theme="light"] .ch-shell .ch-tab.active,
+:root[data-theme="light"] .vm-tabs button.active,
+:root[data-theme="light"] .dash-hero-status-pill {
+  box-shadow:
+    0 14px 32px rgba(31, 127, 216, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.72) inset;
+}
+
+:root[data-theme="light"] .dash-section,
+:root[data-theme="light"] .ch-workspace,
+:root[data-theme="light"] .vm-workspace,
+:root[data-theme="light"] .td-content,
+:root[data-theme="light"] .billing-tenant-workspace,
+:root[data-theme="light"] .cc-shell {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(31, 127, 216, 0.055), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(232, 241, 251, 0.2));
+  border-radius: 22px;
+}
+
+:root[data-theme="light"] .hg-grid-line {
+  stroke: rgba(141, 161, 184, 0.20);
+}
+
+:root[data-theme="light"] .hg-baseline {
+  stroke: rgba(108, 129, 153, 0.32);
+}
+
+:root[data-theme="light"] .hg-area {
+  opacity: 0.68;
+  filter: drop-shadow(0 18px 28px rgba(31, 127, 216, 0.12));
+}
+
+:root[data-theme="light"] .hg-area--incoming { opacity: 0.56; }
+:root[data-theme="light"] .hg-area--outgoing { opacity: 0.46; }
+:root[data-theme="light"] .hg-area--internal { opacity: 0.38; }
+:root[data-theme="light"] .hg-area--missed { opacity: 0.30; }
+
+:root[data-theme="light"] .hg-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 8px 12px rgba(31, 127, 216, 0.18));
+}
+
+:root[data-theme="light"] .hg-line--glow {
+  opacity: 0.34;
+  filter:
+    drop-shadow(0 0 9px currentColor)
+    drop-shadow(0 14px 20px rgba(31, 127, 216, 0.18));
+}
+
+:root[data-theme="light"] .hg-hover-line {
+  stroke: rgba(31, 127, 216, 0.34);
+  filter: drop-shadow(0 0 8px rgba(31, 127, 216, 0.2));
+}
+
+:root[data-theme="light"] .dash-hero-plot {
+  background:
+    radial-gradient(circle at 50% 90%, rgba(31, 127, 216, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(234, 243, 253, 0.34));
+  border-radius: 18px;
+}
+
+:root[data-theme="light"] .dash-chart-empty {
+  background:
+    radial-gradient(circle at center, rgba(31, 127, 216, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(240, 247, 255, 0.74));
+}
+
+:root[data-theme="light"] .ch-hero,
+:root[data-theme="light"] .vm-hero,
+:root[data-theme="light"] .ch-shell .ch-filter-bar,
+:root[data-theme="light"] .vm-filter-bar,
+:root[data-theme="light"] .cc-composer,
+:root[data-theme="light"] .billing-panel-head {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(241, 247, 254, 0.72));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.86) inset,
+    0 12px 32px rgba(31, 53, 78, 0.07);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="light"] .panel,
+  :root[data-theme="light"] .metric-card,
+  :root[data-theme="light"] .dash-card,
+  :root[data-theme="light"] .dashboard-card,
+  :root[data-theme="light"] .dash-kpi2,
+  :root[data-theme="light"] .td-card,
+  :root[data-theme="light"] .ch-shell .ch-item,
+  :root[data-theme="light"] .vm-row,
+  :root[data-theme="light"] .drawer-nav-link,
+  :root[data-theme="light"] .btn {
+    transition: none;
+  }
+}
+
+/* Light mode design system enforcement — tokenized 2026 SaaS standard. */
+:root[data-theme="light"] body,
+:root[data-theme="light"] .console-shell {
+  background:
+    radial-gradient(circle at 12% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 34%),
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, #8b5cf6 12%, transparent), transparent 30%),
+    linear-gradient(to bottom, var(--bg-gradient-start), var(--bg-gradient-end));
+}
+
+:root[data-theme="light"] .console-workspace,
+:root[data-theme="light"] .console-content {
+  background:
+    radial-gradient(circle at 14% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
+    linear-gradient(to bottom, color-mix(in srgb, var(--bg-gradient-start) 88%, var(--surface-1)), var(--bg-gradient-end));
+}
+
+:root[data-theme="light"] .console-nav {
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%),
+    linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--surface-2) 88%, var(--surface-3)));
+  border-right: 1px solid var(--border-soft);
+  box-shadow:
+    inset -1px 0 0 color-mix(in srgb, var(--surface-1) 82%, transparent),
+    12px 0 34px rgba(15, 23, 42, 0.05);
+}
+
+:root[data-theme="light"] .drawer-nav-link {
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    transform 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+:root[data-theme="light"] .drawer-nav-link:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  transform: translateX(2px);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active {
+  background:
+    linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--surface-1) 78%, var(--accent-soft)));
+  color: var(--accent);
+  border-left-color: transparent;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent-soft);
+}
+
+:root[data-theme="light"] .drawer-nav-link.active .drawer-nav-icon,
+:root[data-theme="light"] .drawer-nav-link:hover .drawer-nav-icon {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+:root[data-theme="light"] .panel,
+:root[data-theme="light"] .metric-card,
+:root[data-theme="light"] .state-box,
+:root[data-theme="light"] .settings-nav,
+:root[data-theme="light"] .dash-card,
+:root[data-theme="light"] .dashboard-card,
+:root[data-theme="light"] .dash-hero-card,
+:root[data-theme="light"] .dash-kpi2,
+:root[data-theme="light"] .dash-ingest-panel,
+:root[data-theme="light"] .td-card,
+:root[data-theme="light"] .td-toolbar,
+:root[data-theme="light"] .td-presence-banner,
+:root[data-theme="light"] .ch-shell .ch-kpi-card,
+:root[data-theme="light"] .ch-shell .ch-item,
+:root[data-theme="light"] .ch-detail-panel,
+:root[data-theme="light"] .ch-detail-placeholder,
+:root[data-theme="light"] .vm-kpi,
+:root[data-theme="light"] .vm-row,
+:root[data-theme="light"] .vm-detail,
+:root[data-theme="light"] .vm-detail-placeholder,
+:root[data-theme="light"] .billing-tenant-rail,
+:root[data-theme="light"] .billing-tenant-hero,
+:root[data-theme="light"] .billing-tenant-workspace .detail-card,
+:root[data-theme="light"] .billing-tenant-workspace .state-box,
+:root[data-theme="light"] .billing-preview-total,
+:root[data-theme="light"] .billing-line-list > div,
+:root[data-theme="light"] .billing-invoice-row,
+:root[data-theme="light"] .cc-thread,
+:root[data-theme="light"] .cc-conversation,
+:root[data-theme="light"] .cc-inbox {
+  background:
+    linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--surface-1) 72%, var(--surface-2)));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+:root[data-theme="light"] .panel:hover,
+:root[data-theme="light"] .metric-card:hover,
+:root[data-theme="light"] .dash-card:hover,
+:root[data-theme="light"] .dashboard-card:hover,
+:root[data-theme="light"] .dash-kpi2:hover,
+:root[data-theme="light"] .td-card:hover,
+:root[data-theme="light"] .ch-shell .ch-item:hover,
+:root[data-theme="light"] .vm-row:hover,
+:root[data-theme="light"] .billing-tenant-item:hover,
+:root[data-theme="light"] .billing-invoice-row:hover,
+:root[data-theme="light"] .cc-thread:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme="light"] .metric-card::after,
+:root[data-theme="light"] .dash-kpi2-accent,
+:root[data-theme="light"] .ch-shell .ch-kpi-card::after,
+:root[data-theme="light"] .vm-kpi::after {
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 58%, #14b8a6));
+  box-shadow: 0 0 18px var(--accent-soft);
+}
+
+:root[data-theme="light"] .dash-kpi2--incoming .dash-kpi2-accent,
+:root[data-theme="light"] .ch-kpi-answered::after,
+:root[data-theme="light"] .vm-kpi.accent::after {
+  background: var(--accent);
+}
+
+:root[data-theme="light"] .dash-kpi2--outgoing .dash-kpi2-accent {
+  background: #14b8a6;
+}
+
+:root[data-theme="light"] .dash-kpi2--internal .dash-kpi2-accent {
+  background: #8b5cf6;
+}
+
+:root[data-theme="light"] .dash-kpi2--missed .dash-kpi2-accent,
+:root[data-theme="light"] .ch-kpi-missed::after,
+:root[data-theme="light"] .vm-kpi.danger::after {
+  background: var(--danger);
+}
+
+:root[data-theme="light"] .metric-value,
+:root[data-theme="light"] .dash-kpi2-value,
+:root[data-theme="light"] .ch-shell .ch-kpi-value,
+:root[data-theme="light"] .vm-kpi strong,
+:root[data-theme="light"] .billing-preview-total strong,
+:root[data-theme="light"] .billing-hero-metrics strong {
+  color: var(--text-primary);
+  font-weight: 850;
+}
+
+:root[data-theme="light"] .metric-label,
+:root[data-theme="light"] .metric-meta,
+:root[data-theme="light"] .dash-kpi2-label,
+:root[data-theme="light"] .ch-shell .ch-kpi-label,
+:root[data-theme="light"] .ch-shell .ch-kpi-card small,
+:root[data-theme="light"] .vm-kpi span,
+:root[data-theme="light"] .vm-kpi small {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .table-wrap,
+:root[data-theme="light"] .calls-history-wrap,
+:root[data-theme="light"] .table th,
+:root[data-theme="light"] .calls-history-table thead th {
+  border-color: var(--border-soft);
+}
+
+:root[data-theme="light"] .table td,
+:root[data-theme="light"] .calls-history-table tbody td {
+  border-color: color-mix(in srgb, var(--border-soft) 70%, transparent);
+}
+
+:root[data-theme="light"] table tr:hover,
+:root[data-theme="light"] .calls-history-row:hover,
+:root[data-theme="light"] .ws-switcher-row:hover {
+  background: var(--surface-2) !important;
+}
+
+:root[data-theme="light"] .ch-shell .ch-item.selected,
+:root[data-theme="light"] .vm-row.selected,
+:root[data-theme="light"] .cc-thread.active,
+:root[data-theme="light"] .ws-switcher-row.is-active,
+:root[data-theme="light"] .billing-tenant-item.active {
+  background: var(--accent-soft) !important;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-soft));
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08), var(--shadow-md);
+}
+
+:root[data-theme="light"] .topbar-center .global-search .input,
+:root[data-theme="light"] .input,
+:root[data-theme="light"] .select,
+:root[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-theme="light"] textarea,
+:root[data-theme="light"] select,
+:root[data-theme="light"] .td-search-wrap,
+:root[data-theme="light"] .td-sort-select,
+:root[data-theme="light"] .vm-search,
+:root[data-theme="light"] .vm-select-wrap,
+:root[data-theme="light"] .vm-date-select,
+:root[data-theme="light"] .ch-shell .ch-search-wrap,
+:root[data-theme="light"] .ch-shell .calls-filter-select,
+:root[data-theme="light"] .ch-shell .calls-date-input {
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] .topbar-center .global-search .input:focus,
+:root[data-theme="light"] .input:focus,
+:root[data-theme="light"] textarea:focus,
+:root[data-theme="light"] select:focus,
+:root[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]):focus,
+:root[data-theme="light"] .td-search-wrap:focus-within,
+:root[data-theme="light"] .vm-search:focus-within,
+:root[data-theme="light"] .ch-shell .ch-search-wrap:focus-within,
+:root[data-theme="light"] .ws-switcher-search-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), var(--shadow-sm);
+}
+
+:root[data-theme="light"] .topbar-center .global-search .input::placeholder,
+:root[data-theme="light"] .input::placeholder,
+:root[data-theme="light"] input::placeholder,
+:root[data-theme="light"] textarea::placeholder {
+  color: var(--text-muted);
+}
+
+:root[data-theme="light"] .btn:not(.ghost):not(.danger) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface-1);
+  box-shadow: var(--shadow-sm), 0 10px 22px var(--accent-soft);
+}
+
+:root[data-theme="light"] .btn:not(.ghost):not(.danger):hover {
+  filter: brightness(1.04);
+  transform: scale(1.02);
+  box-shadow: var(--shadow-md), 0 14px 28px var(--accent-soft);
+}
+
+:root[data-theme="light"] .btn.ghost,
+:root[data-theme="light"] .secondary,
+:root[data-theme="light"] .icon-btn,
+:root[data-theme="light"] .profile-trigger {
+  background: var(--surface-2);
+  border-color: var(--border-soft);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .btn.danger,
+:root[data-theme="light"] .btn.ghost.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--border-soft));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface-1));
+}
+
+:root[data-theme="light"] * {
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 62%, transparent) color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+:root[data-theme="light"] *::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+:root[data-theme="light"] *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 62%, transparent);
+  border-color: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+:root[data-theme="light"] *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 68%, transparent);
+}
+
+:root[data-theme="light"] .hg-grid-line {
+  stroke: color-mix(in srgb, var(--text-muted) 24%, transparent);
+}
+
+:root[data-theme="light"] .hg-baseline {
+  stroke: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+}
+
+:root[data-theme="light"] .hg-area {
+  opacity: 0.62;
+  filter: drop-shadow(0 16px 24px var(--accent-soft));
+}
+
+:root[data-theme="light"] .hg-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 20%, transparent));
+}
+
+:root[data-theme="light"] .hg-line--glow {
+  opacity: 0.32;
+  filter: drop-shadow(0 0 10px currentColor);
+}
+
+:root[data-theme="light"] .dash-section,
+:root[data-theme="light"] .ch-workspace,
+:root[data-theme="light"] .vm-workspace,
+:root[data-theme="light"] .td-content,
+:root[data-theme="light"] .billing-tenant-workspace,
+:root[data-theme="light"] .cc-shell {
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+  border-radius: var(--radius-lg);
 }
 
 @media (max-width: 1120px) {
