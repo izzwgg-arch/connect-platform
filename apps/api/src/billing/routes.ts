@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
+import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
+import { SolaCardknoxAdapter, type SolaCardknoxConfig } from "@connect/integrations";
 import { buildBillingInvoicePreview, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
 import { getBillingSolaAdapter, storeSolaPaymentMethod, decryptPaymentToken } from "./solaGateway";
@@ -46,6 +48,98 @@ async function requirePlatformBilling(req: any, reply: any): Promise<BillingUser
 
 function publicPortalBase(): string {
   return process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com";
+}
+
+function ensureCredentialCrypto(reply: any): boolean {
+  if (hasCredentialsMasterKey()) return true;
+  reply.code(503).send({ error: "provider_settings_unavailable", message: "Credential encryption is not configured." });
+  return false;
+}
+
+function maskValue(value: string | undefined | null, start = 4, end = 2): string | null {
+  if (!value) return null;
+  if (value.length <= start + end) return "*".repeat(Math.max(4, value.length));
+  return `${value.slice(0, start)}${"*".repeat(value.length - start - end)}${value.slice(-end)}`;
+}
+
+type SolaCredentialPayload = {
+  apiKey: string;
+  apiSecret?: string | null;
+  webhookSecret?: string | null;
+  ifieldsKey?: string | null;
+};
+
+function normalizePathOverrides(input: unknown) {
+  const src = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const pick = (key: string) => {
+    const value = String(src[key] || "").trim();
+    return value || undefined;
+  };
+  const out: Record<string, string> = { transactionPath: pick("transactionPath") || "/gatewayjson" };
+  for (const key of ["customerPath", "subscriptionPath", "hostedSessionPath", "chargePath", "cancelPath"]) {
+    const value = pick(key);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+function maskSolaConfig(record: any, secrets?: SolaCredentialPayload | null) {
+  if (!record) return null;
+  return {
+    id: record.id,
+    tenantId: record.tenantId,
+    configured: true,
+    isEnabled: !!record.isEnabled,
+    apiBaseUrl: record.apiBaseUrl,
+    mode: record.mode === "PROD" ? "prod" : "sandbox",
+    simulate: !!record.simulate,
+    authMode: record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
+    authHeaderName: record.authHeaderName || null,
+    pathOverrides: normalizePathOverrides(record.pathOverrides || {}),
+    masked: {
+      apiKey: maskValue(secrets?.apiKey || null),
+      apiSecret: secrets?.apiSecret ? "********" : null,
+      webhookSecret: secrets?.webhookSecret ? "********" : null,
+      ifieldsKey: maskValue(secrets?.ifieldsKey || null, 6, 3),
+    },
+    status: {
+      lastTestAt: record.lastTestAt,
+      lastTestResult: record.lastTestResult || null,
+      lastTestErrorCode: record.lastTestErrorCode || null,
+    },
+    updatedAt: record.updatedAt,
+  };
+}
+
+async function getMaskedSolaConfigForTenant(tenantId: string) {
+  const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+  if (!record) return { configured: false, config: null };
+  try {
+    const secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
+    return { configured: true, config: maskSolaConfig(record, secrets) };
+  } catch {
+    return { configured: true, config: maskSolaConfig(record, null), decryptFailed: true };
+  }
+}
+
+function buildAdapterConfig(record: any, secrets: SolaCredentialPayload): SolaCardknoxConfig {
+  const paths = normalizePathOverrides(record.pathOverrides || {});
+  return {
+    baseUrl: record.apiBaseUrl,
+    apiKey: secrets.apiKey,
+    apiSecret: secrets.apiSecret || undefined,
+    webhookSecret: secrets.webhookSecret || undefined,
+    mode: record.mode === "PROD" ? "prod" : "sandbox",
+    simulate: !!record.simulate,
+    authMode: record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
+    authHeaderName: record.authHeaderName || undefined,
+    customerPath: paths.customerPath,
+    subscriptionPath: paths.subscriptionPath,
+    transactionPath: paths.transactionPath || "/gatewayjson",
+    hostedSessionPath: paths.hostedSessionPath,
+    chargePath: paths.chargePath,
+    cancelPath: paths.cancelPath,
+  };
 }
 
 async function queueBillingEmail(input: { tenantId: string; to: string; type: string; subject: string; html: string; text: string; invoiceId?: string }) {
@@ -191,6 +285,27 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.get("/billing/sola/public-config", async (req, reply) => {
+    const u = await requireTenantBilling(req, reply);
+    if (!u) return;
+    if (!ensureCredentialCrypto(reply)) return;
+    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId: u.tenantId } });
+    if (!record) return { configured: false, enabled: false, ifieldsKey: null, ifieldsVersion: "3.4.2602.2001" };
+    let secrets: SolaCredentialPayload;
+    try {
+      secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
+    } catch {
+      return reply.code(400).send({ error: "sola_decrypt_failed" });
+    }
+    return {
+      configured: true,
+      enabled: !!record.isEnabled,
+      mode: record.mode === "PROD" ? "prod" : "sandbox",
+      ifieldsKey: secrets.ifieldsKey || null,
+      ifieldsVersion: "3.4.2602.2001",
+    };
+  });
+
   app.get("/admin/billing/overview", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
@@ -228,6 +343,33 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     }));
   });
 
+  app.get("/admin/billing/platform/tenants/:tenantId", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true, createdAt: true } });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+    const settings = await ensureTenantBillingSettings(tenantId);
+    const [usage, preview, invoices, paymentMethods, taxProfiles, sola] = await Promise.all([
+      calculateTenantBillingUsage(tenantId, settings),
+      buildBillingInvoicePreview({ tenantId }),
+      (db as any).billingInvoice.findMany({
+        where: { tenantId },
+        include: { lineItems: true, transactions: { orderBy: { createdAt: "desc" }, take: 3 } },
+        orderBy: { createdAt: "desc" },
+        take: 12,
+      }),
+      (db as any).paymentMethod.findMany({
+        where: { tenantId, active: true },
+        select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, cardholderName: true, billingZip: true, isDefault: true, lastUsedAt: true, createdAt: true },
+        orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      }),
+      (db as any).taxProfile.findMany({ where: { enabled: true }, orderBy: [{ state: "asc" }, { county: "asc" }] }),
+      getMaskedSolaConfigForTenant(tenantId),
+    ]);
+    return { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola };
+  });
+
   app.get("/admin/billing/tenants/:tenantId/settings", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
@@ -251,10 +393,154 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingDayOfMonth: z.number().int().min(1).max(28).optional(),
       paymentTermsDays: z.number().int().min(0).max(90).optional(),
       billingEmail: z.string().email().nullable().optional(),
+      creditsCents: z.number().int().optional(),
+      discountPercent: z.number().min(0).max(1).optional(),
       billingAddress: z.any().optional(),
       serviceAddress: z.any().optional(),
     }).parse(req.body || {});
     return (db as any).tenantBillingSettings.upsert({ where: { tenantId }, create: { tenantId, ...input }, update: input });
+  });
+
+  app.put("/admin/billing/platform/tenants/:tenantId/sola-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if (!ensureCredentialCrypto(reply)) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+    const input = z.object({
+      apiBaseUrl: z.string().url(),
+      mode: z.enum(["sandbox", "prod"]),
+      simulate: z.boolean().default(false),
+      authMode: z.enum(["xkey_body", "authorization_header"]).default("xkey_body"),
+      authHeaderName: z.string().min(1).max(64).optional().nullable(),
+      apiKey: z.string().min(1).optional(),
+      apiSecret: z.string().min(1).optional().nullable(),
+      webhookSecret: z.string().min(1).optional().nullable(),
+      ifieldsKey: z.string().min(1).optional().nullable(),
+      pathOverrides: z.object({
+        customerPath: z.string().optional(),
+        subscriptionPath: z.string().optional(),
+        transactionPath: z.string().optional(),
+        hostedSessionPath: z.string().optional(),
+        chargePath: z.string().optional(),
+        cancelPath: z.string().optional(),
+      }).optional(),
+    }).parse(req.body || {});
+    if (input.mode === "prod" && input.simulate) {
+      return reply.code(400).send({ error: "invalid_sola_mode", message: "Simulation must be disabled for production SOLA mode." });
+    }
+
+    const existing = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+    let existingSecrets: SolaCredentialPayload = { apiKey: "", apiSecret: null, webhookSecret: null };
+    if (existing) {
+      try {
+        existingSecrets = decryptJson<SolaCredentialPayload>(existing.credentialsEncrypted);
+      } catch {
+        return reply.code(400).send({ error: "sola_decrypt_failed" });
+      }
+    }
+    const nextSecrets: SolaCredentialPayload = {
+      apiKey: input.apiKey || existingSecrets.apiKey || "",
+      apiSecret: input.apiSecret !== undefined ? (input.apiSecret || null) : (existingSecrets.apiSecret || null),
+      webhookSecret: input.webhookSecret !== undefined ? (input.webhookSecret || null) : (existingSecrets.webhookSecret || null),
+      ifieldsKey: input.ifieldsKey !== undefined ? (input.ifieldsKey || null) : (existingSecrets.ifieldsKey || null),
+    };
+    if (!nextSecrets.apiKey) return reply.code(400).send({ error: "sola_api_key_required" });
+
+    const pathOverrides = normalizePathOverrides(input.pathOverrides || existing?.pathOverrides || {});
+    const saved = await (db as any).billingSolaConfig.upsert({
+      where: { tenantId },
+      create: {
+        tenantId,
+        apiBaseUrl: input.apiBaseUrl,
+        mode: input.mode === "prod" ? "PROD" : "SANDBOX",
+        simulate: input.simulate,
+        authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
+        authHeaderName: input.authHeaderName || null,
+        pathOverrides,
+        credentialsEncrypted: encryptJson(nextSecrets),
+        credentialsKeyId: "v1",
+        isEnabled: false,
+        createdByUserId: u.sub,
+        updatedByUserId: u.sub,
+        lastTestAt: null,
+        lastTestResult: null,
+        lastTestErrorCode: null,
+      },
+      update: {
+        apiBaseUrl: input.apiBaseUrl,
+        mode: input.mode === "prod" ? "PROD" : "SANDBOX",
+        simulate: input.simulate,
+        authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
+        authHeaderName: input.authHeaderName || null,
+        pathOverrides,
+        credentialsEncrypted: encryptJson(nextSecrets),
+        credentialsKeyId: "v1",
+        isEnabled: false,
+        updatedByUserId: u.sub,
+        lastTestAt: null,
+        lastTestResult: null,
+        lastTestErrorCode: null,
+      },
+    });
+    await logBillingEvent({ tenantId, type: existing ? "sola.updated" : "sola.created", message: "SOLA gateway settings saved by platform admin." });
+    return { ok: true, config: maskSolaConfig(saved, nextSecrets) };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/sola-config/test", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if (!ensureCredentialCrypto(reply)) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+    if (!record) return reply.code(404).send({ error: "sola_not_configured" });
+    let secrets: SolaCredentialPayload;
+    try {
+      secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
+    } catch {
+      return reply.code(400).send({ error: "sola_decrypt_failed" });
+    }
+    try {
+      const result = await new SolaCardknoxAdapter(buildAdapterConfig(record, secrets)).testConnection();
+      const updated = await (db as any).billingSolaConfig.update({
+        where: { tenantId },
+        data: { lastTestAt: new Date(), lastTestResult: "SUCCESS", lastTestErrorCode: null, updatedByUserId: u.sub },
+      });
+      await logBillingEvent({ tenantId, type: "sola.test_success", message: "SOLA gateway test succeeded.", metadata: { simulated: result.simulated } });
+      return { ok: true, simulated: result.simulated, config: maskSolaConfig(updated, secrets) };
+    } catch (err: any) {
+      const code = String(err?.code || "SOLA_VALIDATION_FAILED");
+      const updated = await (db as any).billingSolaConfig.update({
+        where: { tenantId },
+        data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: code, updatedByUserId: u.sub },
+      });
+      await logBillingEvent({ tenantId, type: "sola.test_failed", message: "SOLA gateway test failed.", metadata: { code } });
+      return reply.code(400).send({ error: "sola_validation_failed", code, config: maskSolaConfig(updated, secrets) });
+    }
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/sola-config/enable", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+    if (!record) return reply.code(404).send({ error: "sola_not_configured" });
+    if (record.lastTestResult !== "SUCCESS") return reply.code(400).send({ error: "sola_test_required" });
+    const updated = await (db as any).billingSolaConfig.update({ where: { tenantId }, data: { isEnabled: true, updatedByUserId: u.sub } });
+    await logBillingEvent({ tenantId, type: "sola.enabled", message: "SOLA gateway enabled." });
+    return { ok: true, config: maskSolaConfig(updated, null) };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/sola-config/disable", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+    if (!record) return reply.code(404).send({ error: "sola_not_configured" });
+    const updated = await (db as any).billingSolaConfig.update({ where: { tenantId }, data: { isEnabled: false, updatedByUserId: u.sub } });
+    await logBillingEvent({ tenantId, type: "sola.disabled", message: "SOLA gateway disabled." });
+    return { ok: true, config: maskSolaConfig(updated, null) };
   });
 
   app.post("/admin/billing/tenants/:tenantId/invoices/preview", async (req, reply) => {
