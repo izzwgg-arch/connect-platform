@@ -4,17 +4,85 @@
 > agents (Composer, Background, CLI, subagents) and to any human running agent
 > commands on their behalf.
 
+## Agent auto-enqueue (no token required)
+
+Agents can enqueue deployments **without knowing `DEPLOY_QUEUE_TOKEN`** using
+two safe paths:
+
+### Path A — direct queue call (on the server via SSH)
+
+The deploy queue grants trust to requests originating from `127.0.0.1` (the
+host loopback) and the Docker bridge subnets (`172.16.0.0/12`, `10.0.0.0/8`).
+No Authorization header needed from these origins.
+
+```bash
+# SSH onto the server, then:
+curl -s -X POST http://127.0.0.1:3910/ops/deploy/enqueue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "api",
+    "branch": "main",
+    "requestedBy": "cursor:agent",
+    "reason": "deploy updated API routes",
+    "dryRun": true,
+    "source": "auto"
+  }'
+```
+
+### Path B — Connect API internal route (from any networked caller)
+
+```
+POST /internal/deploy/auto
+```
+
+This endpoint is **blocked externally by nginx** (same as `/internal/cdr-ingest`).
+Call it from a server-side script, via SSH tunnel, or with an admin JWT:
+
+```bash
+curl -s -X POST https://app.connectcomunications.com/api/internal/deploy/auto \
+  -H "Content-Type: application/json" \
+  -H "x-internal-deploy-secret: <INTERNAL_DEPLOY_SECRET>" \
+  -d '{
+    "service": "portal",
+    "branch": "main",
+    "requestedBy": "cursor:agent",
+    "reason": "agent deploy after code change",
+    "dryRun": false
+  }'
+```
+
+Or with an admin Bearer token:
+```bash
+curl -s -X POST https://app.connectcomunications.com/api/internal/deploy/auto \
+  -H "Authorization: Bearer <SUPER_ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{ "service": "api", "branch": "main", "dryRun": false }'
+```
+
+### Auto-enqueue safety limits
+
+- **Rate limit**: 1 auto-enqueue per service per **30 seconds**. Returns
+  `429 auto_enqueue_rate_limited` with `retryAfterMs` if too fast.
+- **Same-commit skip**: If `commitHash` is supplied and was already
+  successfully deployed, returns `200 { skipped: true, reason: "commit_already_deployed" }`.
+- **Duplicate guard**: Only one active job per service — a second call for
+  the same service returns `409 duplicate_active_job_for_service`.
+- Jobs enqueued via these paths are labelled `source: "auto"` and show
+  an **⚡ Auto** badge in the Deploy Center UI.
+
+---
+
 ## Hard rules
 
 1. **NEVER deploy manually** via SSH commands, `git pull`, `npm/pnpm build`,
    `docker compose up --build`, `pm2 restart`, or `scripts/release/deploy-tag.sh`
    on the server. No exceptions for "just this once".
-2. **ALL deployments MUST go through the deploy queue API** at
-   `http://127.0.0.1:3910` on the production server (SSH port-forward
-   `-L 3910:127.0.0.1:3910` when triggering from a workstation).
+2. **ALL deployments MUST go through the deploy queue API.** Use Path A (direct
+   localhost call) or Path B (`/internal/deploy/auto`) above.
 3. Enqueue with:
    ```
-   POST /ops/deploy/enqueue
+   POST /ops/deploy/enqueue        (no token needed from localhost)
+   POST /internal/deploy/auto      (via Connect API, admin JWT or secret)
    ```
 4. Required payload:
    - `service` — one of `api | portal | telephony | realtime | worker | full-stack`
@@ -22,6 +90,7 @@
    - `commitHash` — optional; pins a specific SHA (wins over branch)
    - `requestedBy` — e.g. `cursor:<session-id>` or `human:<name>`
    - `reason` — one-line free-form note for the log
+   - `source` — `"auto"` for agent triggers; `"manual"` for human UI (inferred if omitted)
 5. Check status:
    ```
    GET /ops/deploy/jobs/:id

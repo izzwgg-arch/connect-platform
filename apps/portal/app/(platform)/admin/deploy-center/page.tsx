@@ -29,6 +29,8 @@ type JobRow = {
   skipReason: string | null;
   logPath: string | null;
   errorMessage: string | null;
+  /** 'auto' = enqueued by agent; 'manual' = enqueued via UI/admin. */
+  source: "auto" | "manual";
 };
 
 type QueueStatus = {
@@ -575,7 +577,7 @@ function JobsTable({
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr>
-              {["Service", "Branch / Tag", "Status", "Dry Run", "Requested By", "Queued", "Started", "Finished", "Duration", "Stage", "Skip Reason", "Deployed Commit", "Actions"].map((h) => (
+              {["Service", "Branch / Tag", "Status", "Dry Run", "Requested By", "Source", "Queued", "Started", "Finished", "Duration", "Stage", "Skip Reason", "Deployed Commit", "Actions"].map((h) => (
                 <th key={h} style={TH_STYLE}>{h}</th>
               ))}
             </tr>
@@ -618,6 +620,20 @@ function JobRow({
       </td>
       <td style={{ ...TD_STYLE, color: C.textMuted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {job.requestedBy}
+      </td>
+      <td style={{ ...TD_STYLE, whiteSpace: "nowrap" }}>
+        {job.source === "auto" ? (
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+            color: C.teal, background: "#042f2e55",
+            border: `1px solid #0d534433`, padding: "2px 7px", borderRadius: 4,
+          }}>
+            ⚡ Auto
+          </span>
+        ) : (
+          <span style={{ fontSize: 11, color: C.textDim }}>Manual</span>
+        )}
       </td>
       <td style={{ ...TD_STYLE, color: C.textDim, whiteSpace: "nowrap" }}>{fmtAgo(job.queuedAt)}</td>
       <td style={{ ...TD_STYLE, color: C.textDim, whiteSpace: "nowrap", fontFamily: "monospace" }}>{fmtTs(job.startedAt)}</td>

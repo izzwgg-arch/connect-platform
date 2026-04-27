@@ -9,7 +9,7 @@ import { startWorkerLoop } from "./worker.js";
 
 const JOB_COLUMNS = `id, service, branch, commit_hash, deployed_commit, requested_by, status, dry_run,
                      created_at, started_at, finished_at, log_path, error_message,
-                     current_stage, skip_reason, duration_ms`;
+                     current_stage, skip_reason, duration_ms, source`;
 
 /** Add camelCase aliases + derived `duration` so HTTP clients (and AGENTS.md) don't have to know SQLite column naming. */
 function decorateJob(row: JobRow): Record<string, unknown> {
@@ -32,7 +32,51 @@ function decorateJob(row: JobRow): Record<string, unknown> {
     skipReason: row.skip_reason,
     duration: computedDuration,
     durationMs: computedDuration,
+    source: row.source ?? "manual",
   };
+}
+
+/**
+ * Returns true for requests that originate from the same host or internal
+ * Docker bridge networks. These callers are allowed to skip the bearer token:
+ *  - 127.0.0.1 / ::1        loopback (scripts, cron, Cursor agent via SSH)
+ *  - ::ffff:127.0.0.1        IPv4-mapped loopback
+ *  - 172.16.0.0/12           Docker bridge subnets (Connect API container)
+ *  - 10.0.0.0/8              Private LAN / VPN
+ * External internet callers still require the bearer token.
+ */
+function isInternalRequest(req: express.Request): boolean {
+  const raw = req.socket?.remoteAddress ?? (req as { ip?: string }).ip ?? "";
+  // strip IPv6-mapped IPv4 prefix
+  const ip = raw.replace(/^::ffff:/, "");
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
+  // Docker bridge / RFC-1918 ranges (172.16–31.x.x, 10.x.x.x)
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (/^10\./.test(ip)) return true;
+  // Explicit trusted header (e.g. set by Connect API before forwarding)
+  if (req.headers["x-internal-agent"] === "true") return true;
+  return false;
+}
+
+/**
+ * Per-service rate limit for *auto* (agent) enqueues: max 1 request per
+ * AUTO_ENQUEUE_COOLDOWN_MS per service. Manual/authenticated enqueues bypass this.
+ * Stored in-process — fine because there is only one PM2 instance.
+ */
+const AUTO_ENQUEUE_COOLDOWN_MS = 30_000;
+const autoEnqueueLastMs = new Map<string, number>();
+
+function checkAutoRateLimit(service: string): { allowed: boolean; retryAfterMs: number } {
+  const last = autoEnqueueLastMs.get(service) ?? 0;
+  const elapsed = Date.now() - last;
+  if (elapsed < AUTO_ENQUEUE_COOLDOWN_MS) {
+    return { allowed: false, retryAfterMs: AUTO_ENQUEUE_COOLDOWN_MS - elapsed };
+  }
+  return { allowed: true, retryAfterMs: 0 };
+}
+
+function recordAutoEnqueue(service: string): void {
+  autoEnqueueLastMs.set(service, Date.now());
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
@@ -163,6 +207,14 @@ export function createApp(opts: CreateAppOptions) {
   });
 
   const auth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Internal callers (localhost, Docker bridge) bypass the token entirely.
+    // This lets Cursor agents and the Connect API container enqueue jobs without
+    // needing to know the secret. External callers still require the bearer token.
+    if (isInternalRequest(req)) {
+      next();
+      return;
+    }
+
     const want = (token || "").trim();
     if (!want) {
       res.status(503).json({ error: "deploy_queue_token_not_configured" });
@@ -260,6 +312,12 @@ export function createApp(opts: CreateAppOptions) {
     const requestedBy = String(body.requestedBy || "unknown").trim().slice(0, 200);
     const dryRun = body.dryRun === true || body.dryRun === "true" || body.dryRun === 1;
 
+    // Determine source: callers can declare "auto", or we infer from origin.
+    const declaredSource = String(body.source || "").trim();
+    const isInternal = isInternalRequest(req);
+    const source: "auto" | "manual" =
+      declaredSource === "auto" || isInternal ? "auto" : "manual";
+
     if (!isDeployService(service)) {
       res.status(400).json({ error: "invalid_service", allowed: DEPLOY_SERVICES });
       return;
@@ -278,6 +336,35 @@ export function createApp(opts: CreateAppOptions) {
       return;
     }
 
+    // Auto-enqueues (agent-driven) are rate-limited to 1 per 30s per service to
+    // prevent runaway loops. Manual (token-authenticated) enqueues skip this.
+    if (source === "auto") {
+      const rl = checkAutoRateLimit(service);
+      if (!rl.allowed) {
+        res.status(429).json({
+          error: "auto_enqueue_rate_limited",
+          detail: `Auto-enqueues for '${service}' are limited to once per ${AUTO_ENQUEUE_COOLDOWN_MS / 1000}s. Retry in ${Math.ceil(rl.retryAfterMs / 1000)}s.`,
+          retryAfterMs: rl.retryAfterMs,
+        });
+        return;
+      }
+    }
+
+    // Skip if this exact commit is already deployed (success) for this service.
+    if (commitHash) {
+      const lastSuccess = db.prepare(
+        `SELECT deployed_commit FROM jobs WHERE service = ? AND status = 'success' ORDER BY finished_at DESC LIMIT 1`
+      ).get(service) as { deployed_commit: string | null } | undefined;
+      if (lastSuccess?.deployed_commit === commitHash) {
+        res.status(200).json({
+          skipped: true,
+          reason: "commit_already_deployed",
+          detail: `Commit ${commitHash} was already successfully deployed for '${service}'.`,
+        });
+        return;
+      }
+    }
+
     const q = countQueued(db);
     if (q >= maxQueued) {
       res.status(429).json({
@@ -294,8 +381,8 @@ export function createApp(opts: CreateAppOptions) {
     const dryInt = dryRun ? 1 : 0;
     try {
       db.prepare(
-        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run, current_stage, skip_reason, deployed_commit, duration_ms)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL)`,
+        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run, current_stage, skip_reason, deployed_commit, duration_ms, source)
+         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?)`,
       ).run(
         id,
         service,
@@ -304,6 +391,7 @@ export function createApp(opts: CreateAppOptions) {
         requestedBy || "unknown",
         now,
         dryInt,
+        source,
       );
     } catch (e: unknown) {
       const err = e as { code?: string };
@@ -316,6 +404,9 @@ export function createApp(opts: CreateAppOptions) {
       }
       throw e;
     }
+
+    if (source === "auto") recordAutoEnqueue(service);
+
     const job = db
       .prepare(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?`)
       .get(id) as JobRow;

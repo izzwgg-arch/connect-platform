@@ -27,6 +27,8 @@ export type JobRow = {
   skip_reason: string | null;
   /** started_at → finished_at difference, cached at completion for easy querying. */
   duration_ms: number | null;
+  /** 'auto' = enqueued by agent/system; 'manual' = enqueued via UI or authenticated admin call. */
+  source: "auto" | "manual";
 };
 
 export const DEPLOY_SERVICES: DeployService[] = [
@@ -60,6 +62,9 @@ function migrateJobsTable(db: Database.Database): void {
   if (!names.has("duration_ms")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN duration_ms INTEGER`);
   }
+  if (!names.has("source")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`);
+  }
 }
 
 export function openQueueDb(filePath: string): Database.Database {
@@ -84,7 +89,8 @@ export function openQueueDb(filePath: string): Database.Database {
       current_stage TEXT,
       skip_reason TEXT,
       deployed_commit TEXT,
-      duration_ms INTEGER
+      duration_ms INTEGER,
+      source TEXT NOT NULL DEFAULT 'manual'
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_service
