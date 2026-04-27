@@ -90,7 +90,8 @@ deploy_common_log_timing "restart" "$(deploy_common_stopwatch_elapsed_ms "$RESTA
 deploy_common_emit_stage "health"
 HEALTH_START="$(deploy_common_stopwatch_start)"
 log "health check portal /login"
-if ! deploy_common_wait_http_2xx_3xx "http://127.0.0.1:3000/login" "app.connectcomunications.com" 45 2; then
+# The portal container builds Next.js on startup, so cold starts can exceed 90s on the production host.
+if ! deploy_common_wait_http_2xx_3xx "http://127.0.0.1:3000/login" "app.connectcomunications.com" 180 2; then
   rollback
   fail "portal health check failed (requested by ${REQ})"
 fi
