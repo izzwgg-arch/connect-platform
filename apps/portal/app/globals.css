@@ -3699,7 +3699,7 @@ table tr:hover {
   .dash-presence-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* ── Team Directory 2026 ────────────────────────────────────────────────────── */
+/* ── Team Directory ─────────────────────────────────────────────────────────── */
 
 @keyframes presence-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
