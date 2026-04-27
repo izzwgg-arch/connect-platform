@@ -64,6 +64,14 @@ type DashboardCallTraffic = {
   }>;
 };
 
+type CallActivityKey = "incoming" | "outgoing" | "internal" | "missed";
+
+type NormalizedCallActivity = {
+  points: ChartPoint[];
+  totals: Record<CallActivityKey, number>;
+  hasData: boolean;
+};
+
 type ConnectKpis = {
   incomingToday: number;
   outgoingToday: number;
@@ -124,7 +132,7 @@ export default function DashboardPage() {
   })();
   const trafficState = useAsyncResource<DashboardCallTraffic>(
     () => apiGet<DashboardCallTraffic>(`/dashboard/call-traffic${trafficParam}`),
-    [adminScope, contextTenantId, trafficTick]
+    [adminScope, contextTenantId, trafficTick, kpiTick]
   );
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
     () => loadPbxResource("extensions"),
@@ -163,10 +171,11 @@ export default function DashboardPage() {
   const activeCallsSource = isAdminSummary(pbxLive) ? "global" : pbxLive?.activeCallsSource ?? null;
 
   const connectKpis   = connectKpisState.status === "success" ? connectKpisState.data : null;
-  const incomingToday = connectKpis?.incomingToday ?? null;
-  const outgoingToday = connectKpis?.outgoingToday ?? null;
-  const internalToday = connectKpis?.internalToday ?? null;
-  const missedToday   = connectKpis?.missedToday ?? null;
+  const callActivity = useMemo(() => normalizeDashboardCallActivity(traffic), [traffic]);
+  const incomingToday = callActivity.hasData ? callActivity.totals.incoming : connectKpis?.incomingToday ?? null;
+  const outgoingToday = callActivity.hasData ? callActivity.totals.outgoing : connectKpis?.outgoingToday ?? null;
+  const internalToday = callActivity.hasData ? callActivity.totals.internal : connectKpis?.internalToday ?? null;
+  const missedToday   = callActivity.hasData ? callActivity.totals.missed : connectKpis?.missedToday ?? null;
 
   // 1-second tick for duration counters (UI only)
   const [, setDurationTick] = useState(0);
@@ -214,10 +223,10 @@ export default function DashboardPage() {
             <div className="dash-hero-plot">
               {trafficState.status === "loading" ? (
                 <LoadingSkeleton rows={5} />
-              ) : !traffic || traffic.points.length === 0 || traffic.totals.total === 0 ? (
+              ) : !callActivity.hasData ? (
                 <ChartEmptyState />
               ) : (
-                <CallVolumeChart points={traffic.points} />
+                <CallVolumeChart points={callActivity.points} />
               )}
               </div>
               </div>
@@ -1198,9 +1207,42 @@ type ChartPoint = {
   missed: number;
 };
 
-function smoothCurve(pts: [number, number][]): string {
+const CALL_ACTIVITY_SERIES = [
+  { key: "incoming", label: "Incoming", color: "var(--dash-incoming)", fill: "rgba(24, 211, 164, 0.52)" },
+  { key: "outgoing", label: "Outgoing", color: "var(--dash-outgoing)", fill: "rgba(56, 189, 248, 0.46)" },
+  { key: "internal", label: "Internal", color: "var(--dash-internal)", fill: "rgba(167, 139, 250, 0.42)" },
+  { key: "missed", label: "Missed", color: "var(--dash-missed)", fill: "rgba(251, 113, 133, 0.48)" },
+] as const;
+
+function normalizeDashboardCallActivity(traffic: DashboardCallTraffic | null): NormalizedCallActivity {
+  const points: ChartPoint[] = (traffic?.points ?? []).map((point) => ({
+    label: point.label,
+    total: Math.max(0, Number(point.total || 0)),
+    incoming: Math.max(0, Number(point.incoming || 0)),
+    outgoing: Math.max(0, Number(point.outgoing || 0)),
+    internal: Math.max(0, Number(point.internal || 0)),
+    missed: Math.max(0, Number(point.missed || 0)),
+  }));
+  const totals = points.reduce(
+    (acc, point) => {
+      acc.incoming += point.incoming;
+      acc.outgoing += point.outgoing;
+      acc.internal += point.internal;
+      acc.missed += point.missed;
+      return acc;
+    },
+    { incoming: 0, outgoing: 0, internal: 0, missed: 0 },
+  );
+  return {
+    points,
+    totals,
+    hasData: CALL_ACTIVITY_SERIES.some((series) => totals[series.key] > 0),
+  };
+}
+
+function smoothPath(pts: [number, number][], startCommand: "M" | "L" = "M"): string {
   if (pts.length < 2) return pts.length === 1 ? `M ${pts[0][0]} ${pts[0][1]}` : "";
-  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  let d = `${startCommand} ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
   for (let i = 0; i < pts.length - 1; i++) {
     const p0 = pts[Math.max(0, i - 1)];
     const p1 = pts[i];
@@ -1215,13 +1257,18 @@ function smoothCurve(pts: [number, number][]): string {
   return d;
 }
 
-function smoothArea(pts: [number, number][], baseY: number): string {
-  if (pts.length === 0) return "";
-  return `${smoothCurve(pts)} L ${pts[pts.length - 1][0].toFixed(1)} ${baseY.toFixed(1)} L ${pts[0][0].toFixed(1)} ${baseY.toFixed(1)} Z`;
+function smoothCurve(pts: [number, number][]): string {
+  return smoothPath(pts, "M");
+}
+
+function smoothStackedArea(upper: [number, number][], lower: [number, number][]): string {
+  if (upper.length === 0 || lower.length === 0) return "";
+  return `${smoothPath(upper, "M")} ${smoothPath([...lower].reverse(), "L")} Z`;
 }
 
 function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const [hovIdx, setHovIdx] = useState<number | null>(null);
+  const [activeSeries, setActiveSeries] = useState<CallActivityKey | null>(null);
 
   const W   = 900;
   const H   = 300;
@@ -1230,16 +1277,10 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const iH  = H - PAD.top  - PAD.bottom;
   const bY  = PAD.top + iH;
 
-  const series = [
-    { key: "incoming", label: "Incoming", color: "var(--dash-incoming)" },
-    { key: "outgoing", label: "Outgoing", color: "var(--dash-outgoing)" },
-    { key: "internal", label: "Internal", color: "var(--dash-internal)" },
-    { key: "missed", label: "Missed", color: "var(--dash-missed)" },
-  ] as const;
-
-  const peak = Math.max(1, ...points.flatMap((p) => series.map((s) => p[s.key])));
+  const stackedValues = points.map((point) => CALL_ACTIVITY_SERIES.reduce((sum, series) => sum + point[series.key], 0));
+  const peak = Math.max(1, ...stackedValues);
   const yMax = (() => {
-    const raw = peak * 1.2;
+    const raw = peak <= 4 ? Math.max(4, peak + 1) : peak * 1.18;
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
     return Math.ceil(raw / mag) * mag;
   })();
@@ -1247,9 +1288,20 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
   const xOf = (i: number) => PAD.left + (i / Math.max(1, points.length - 1)) * iW;
   const yOf = (v: number) => PAD.top  + iH - (v / yMax) * iH;
 
-  const seriesPoints = series.map((s) => ({
-    ...s,
-    pts: points.map((p, i): [number, number] => [xOf(i), yOf(p[s.key])]),
+  const seriesPoints = CALL_ACTIVITY_SERIES.map((series, seriesIndex) => ({
+    ...series,
+    upper: points.map((point, pointIndex): [number, number] => {
+      const lowerValue = CALL_ACTIVITY_SERIES
+        .slice(0, seriesIndex)
+        .reduce((sum, previousSeries) => sum + point[previousSeries.key], 0);
+      return [xOf(pointIndex), yOf(lowerValue + point[series.key])];
+    }),
+    lower: points.map((point, pointIndex): [number, number] => {
+      const lowerValue = CALL_ACTIVITY_SERIES
+        .slice(0, seriesIndex)
+        .reduce((sum, previousSeries) => sum + point[previousSeries.key], 0);
+      return [xOf(pointIndex), yOf(lowerValue)];
+    }),
   }));
 
   const maxLabels = points.length > 24 ? 8 : 10;
@@ -1265,7 +1317,7 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
 
   const hov = hovIdx !== null ? points[hovIdx] : null;
   const hovX = hovIdx !== null ? xOf(hovIdx) : null;
-  const hoverPeakValue = hov ? Math.max(hov.incoming, hov.outgoing, hov.internal, hov.missed) : null;
+  const hoverPeakValue = hov ? CALL_ACTIVITY_SERIES.reduce((sum, series) => sum + hov[series.key], 0) : null;
   const hoverPeakY = hoverPeakValue !== null ? yOf(hoverPeakValue) : null;
 
   // Tooltip: flip to left when in the right third
@@ -1286,16 +1338,16 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
       preserveAspectRatio="none"
       className="dash-hero-svg"
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => setHovIdx(null)}
+      onMouseLeave={() => { setHovIdx(null); setActiveSeries(null); }}
       role="img"
       aria-label="Call activity chart"
     >
       <defs>
-        {series.map((s) => (
+        {CALL_ACTIVITY_SERIES.map((s) => (
           <linearGradient key={s.key} id={`hg-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={s.color} stopOpacity="0.20" />
-            <stop offset="68%" stopColor={s.color} stopOpacity="0.05" />
-            <stop offset="100%" stopColor={s.color} stopOpacity="0.00" />
+            <stop offset="0%" stopColor={s.fill} stopOpacity="1" />
+            <stop offset="58%" stopColor={s.fill} stopOpacity="0.42" />
+            <stop offset="100%" stopColor={s.fill} stopOpacity="0.08" />
           </linearGradient>
         ))}
         <filter id="hg-glow" x="-20%" y="-40%" width="140%" height="180%">
@@ -1334,33 +1386,35 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
         </text>
       ))}
 
-      {/* Subtle area fills. Incoming is intentionally strongest; the other
-          fills are low-opacity so four series stay readable. */}
+      {/* Transparent stacked bands keep each category readable without scribbles. */}
       <g clipPath="url(#hg-clip)">
         {seriesPoints.map((s, idx) => (
           <path
             key={s.key}
-            d={smoothArea(s.pts, bY)}
+            d={smoothStackedArea(s.upper, s.lower)}
             fill={`url(#hg-${s.key})`}
-            className={`hg-area hg-area--${s.key}`}
+            className={`hg-area hg-area--${s.key} ${activeSeries && activeSeries !== s.key ? "is-dimmed" : ""} ${activeSeries === s.key ? "is-active" : ""}`}
             style={{ animationDelay: `${idx * 70}ms` }}
+            onMouseEnter={() => setActiveSeries(s.key)}
           />
         ))}
       </g>
 
-      {/* Lines */}
+      {/* Top boundary strokes for each stacked layer */}
       <g clipPath="url(#hg-clip)">
         {seriesPoints.map((s, idx) => (
           <g key={s.key}>
-            <path d={smoothCurve(s.pts)} fill="none" stroke={s.color} strokeWidth={s.key === "missed" ? "4.5" : "5.5"}
+            <path d={smoothCurve(s.upper)} fill="none" stroke={s.color} strokeWidth="5"
               strokeLinecap="round" strokeLinejoin="round"
-              pathLength="1" className={`hg-line hg-line--glow hg-line--${s.key}`}
+              pathLength="1" className={`hg-line hg-line--glow hg-line--${s.key} ${activeSeries && activeSeries !== s.key ? "is-dimmed" : ""} ${activeSeries === s.key ? "is-active" : ""}`}
               style={{ animationDelay: `${80 + idx * 70}ms` }}
-              filter="url(#hg-glow)" />
-            <path d={smoothCurve(s.pts)} fill="none" stroke={s.color} strokeWidth={s.key === "missed" ? "2" : "2.75"}
+              filter="url(#hg-glow)"
+              onMouseEnter={() => setActiveSeries(s.key)} />
+            <path d={smoothCurve(s.upper)} fill="none" stroke={s.color} strokeWidth="2.6"
             strokeLinecap="round" strokeLinejoin="round"
-              pathLength="1" className={`hg-line hg-line--${s.key}`}
-              style={{ animationDelay: `${120 + idx * 70}ms` }} />
+              pathLength="1" className={`hg-line hg-line--${s.key} ${activeSeries && activeSeries !== s.key ? "is-dimmed" : ""} ${activeSeries === s.key ? "is-active" : ""}`}
+              style={{ animationDelay: `${120 + idx * 70}ms` }}
+              onMouseEnter={() => setActiveSeries(s.key)} />
           </g>
         ))}
       </g>
@@ -1372,8 +1426,10 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
             className="hg-hover-line" />
 
           {/* Hover points */}
-          {seriesPoints.map((s) => {
-            const value = hov[s.key];
+          {seriesPoints.map((s, seriesIndex) => {
+            const value = CALL_ACTIVITY_SERIES
+              .slice(0, seriesIndex + 1)
+              .reduce((sum, series) => sum + hov[series.key], 0);
             return (
               <g key={s.key}>
                 <circle cx={hovX} cy={yOf(value)} r="8" className="hg-hover-pulse" style={{ fill: s.color }} />
@@ -1390,18 +1446,13 @@ function CallVolumeChart({ points }: { points: ChartPoint[] }) {
               <g className="hg-tooltip">
                 <rect x={tx} y={ty} width="162" height="126" rx="12" className="hg-tooltip-bg" />
                 <text x={tx + 14} y={ty + 22} className="hg-tooltip-title">{hov.label}</text>
-                <text x={tx + 14} y={ty + 45} className="hg-tooltip-total">{hov.total.toLocaleString()} total calls</text>
-                {[
-                  ["Incoming", hov.incoming, "var(--dash-incoming)"],
-                  ["Outgoing", hov.outgoing, "var(--dash-outgoing)"],
-                  ["Internal", hov.internal, "var(--dash-internal)"],
-                  ["Missed", hov.missed, "var(--dash-missed)"],
-                ].map(([label, value, color], idx) => (
+                <text x={tx + 14} y={ty + 45} className="hg-tooltip-total">{(hov.total || hov.incoming + hov.outgoing + hov.internal).toLocaleString()} total calls</text>
+                {CALL_ACTIVITY_SERIES.map(({ label, key, color }, idx) => (
                   <g key={String(label)} transform={`translate(${tx + 14} ${ty + 68 + idx * 14})`}>
                     <circle cx="0" cy="-3.5" r="3" fill={String(color)} />
                     <text x="10" y="0" className="hg-tooltip-label">{label}</text>
                     <text x="134" y="0" textAnchor="end" className="hg-tooltip-value">
-                      {Number(value).toLocaleString()}
+                      {Number(hov[key]).toLocaleString()}
                     </text>
                   </g>
                 ))}
