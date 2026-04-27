@@ -6,7 +6,6 @@ import { GlobalScopeNotice } from "../../../components/GlobalScopeNotice";
 import { LiveBadge } from "../../../components/LiveBadge";
 import { LiveCallBadge } from "../../../components/LiveCallBadge";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { ScopeBadge } from "../../../components/ScopeBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
@@ -399,8 +398,7 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   const initials = heroInitials();
 
   return (
-    <div className="call-detail-overlay" onClick={onClose} role="dialog" aria-modal aria-label="Call details">
-      <div className="call-detail-panel" onClick={(e) => e.stopPropagation()}>
+      <aside className="call-detail-panel ch-detail-panel" aria-label="Call details">
 
         {/* Sticky header */}
         <div className="cdp-header">
@@ -587,8 +585,7 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
             </dl>
           ) : null}
         </div>
-      </div>
-    </div>
+      </aside>
   );
 }
 
@@ -681,7 +678,15 @@ export default function CallsPage() {
 
   // KPI stats — computed from current page for "this filter" context
   const kpiStats = useMemo(() => {
-    if (!rawItems.length) return null;
+    if (!rawItems.length) {
+      return {
+        total: history?.total ?? 0,
+        answeredPct: 0,
+        missedPct: 0,
+        avgDuration: 0,
+        voicemails: 0,
+      };
+    }
     const answered  = rawItems.filter((r) => r.humanAnswered).length;
     const missed    = rawItems.filter((r) => r.status === "missed").length;
     const voicemails = rawItems.filter((r) => r.voicemailAnswered).length;
@@ -713,50 +718,62 @@ export default function CallsPage() {
 
   return (
     <PermissionGate permission="can_view_calls" fallback={<div className="state-box">You do not have permission to view calls.</div>}>
-      <div className="calls-page stack compact-stack">
-
-        <PageHeader
-          title="Call History"
-          subtitle="All calls routed through the platform."
-          badges={<><ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} /><LiveBadge status={telephony.status} /></>}
-        />
-
-        {isGlobal ? <GlobalScopeNotice /> : null}
-
-        {/* ── KPI bar ── */}
-        {historyState.status === "success" && kpiStats ? (
-          <div className="ch-kpi-bar" aria-label="Call statistics">
-            <div className="ch-kpi-card ch-kpi-total" style={{ animationDelay: "0ms" }}>
-              <span className="ch-kpi-value">{kpiStats.total.toLocaleString()}</span>
-              <span className="ch-kpi-label">Total Calls</span>
+      <div className="ch-shell">
+        <header className="ch-hero">
+          <div className="ch-title-block">
+            <div>
+              <p className="ch-eyebrow">Communication history</p>
+              <h1>Call History</h1>
+              <p className="ch-subtitle">Conversations, outcomes, recordings, and follow-ups for the selected tenant.</p>
             </div>
-            <div className="ch-kpi-card ch-kpi-answered" style={{ animationDelay: "55ms" }}>
-              <span className="ch-kpi-value">{kpiStats.answeredPct}%</span>
-              <span className="ch-kpi-label">Answered</span>
-            </div>
-            <div className="ch-kpi-card ch-kpi-missed" style={{ animationDelay: "110ms" }}>
-              <span className="ch-kpi-value">{kpiStats.missedPct}%</span>
-              <span className="ch-kpi-label">Missed</span>
-            </div>
-            <div className="ch-kpi-card ch-kpi-duration" style={{ animationDelay: "165ms" }}>
-              <span className="ch-kpi-value">{formatDuration(kpiStats.avgDuration)}</span>
-              <span className="ch-kpi-label">Avg Duration</span>
-            </div>
-            <div className="ch-kpi-card ch-kpi-voicemail" style={{ animationDelay: "220ms" }}>
-              <span className="ch-kpi-value">{kpiStats.voicemails}</span>
-              <span className="ch-kpi-label">Voicemail</span>
+            <div className="ch-hero-badges">
+              <ScopeBadge scope={adminScope === "GLOBAL" ? "GLOBAL" : "TENANT"} />
+              <LiveBadge status={telephony.status} />
             </div>
           </div>
-        ) : historyState.status === "loading" ? (
-          <div className="ch-kpi-bar ch-kpi-bar--loading" aria-hidden="true">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <div key={i} className="ch-kpi-card ch-kpi-skeleton">
-                <div className="ch-kpi-skeleton-val" />
-                <div className="ch-kpi-skeleton-lbl" />
+
+          {isGlobal ? <GlobalScopeNotice /> : null}
+
+          {/* ── KPI bar ── */}
+          {historyState.status === "success" && kpiStats ? (
+            <div className="ch-kpi-bar" aria-label="Call statistics">
+              <div className="ch-kpi-card ch-kpi-total" style={{ animationDelay: "0ms" }}>
+                <span className="ch-kpi-label">Total Calls</span>
+                <span className="ch-kpi-value">{kpiStats.total.toLocaleString()}</span>
+                <small>Across selected tenant</small>
               </div>
-            ))}
-          </div>
-        ) : null}
+              <div className="ch-kpi-card ch-kpi-answered" style={{ animationDelay: "55ms" }}>
+                <span className="ch-kpi-label">Answered</span>
+                <span className="ch-kpi-value">{kpiStats.answeredPct}%</span>
+                <small>Connected calls</small>
+              </div>
+              <div className="ch-kpi-card ch-kpi-missed" style={{ animationDelay: "110ms" }}>
+                <span className="ch-kpi-label">Missed</span>
+                <span className="ch-kpi-value">{kpiStats.missedPct}%</span>
+                <small>Needs follow-up</small>
+              </div>
+              <div className="ch-kpi-card ch-kpi-duration" style={{ animationDelay: "165ms" }}>
+                <span className="ch-kpi-label">Avg Duration</span>
+                <span className="ch-kpi-value">{formatDuration(kpiStats.avgDuration)}</span>
+                <small>Current page average</small>
+              </div>
+              <div className="ch-kpi-card ch-kpi-voicemail" style={{ animationDelay: "220ms" }}>
+                <span className="ch-kpi-label">Voicemail</span>
+                <span className="ch-kpi-value">{kpiStats.voicemails}</span>
+                <small>Recorded outcomes</small>
+              </div>
+            </div>
+          ) : historyState.status === "loading" ? (
+            <div className="ch-kpi-bar ch-kpi-bar--loading" aria-hidden="true">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div key={i} className="ch-kpi-card ch-kpi-skeleton">
+                  <div className="ch-kpi-skeleton-val" />
+                  <div className="ch-kpi-skeleton-lbl" />
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </header>
 
         {/* ── Live calls strip ── */}
         {liveCalls.length > 0 ? (
@@ -929,67 +946,76 @@ export default function CallsPage() {
           ) : null}
         </section>
 
-        {/* ── Call feed ── */}
-        <section className="calls-history-section" aria-label="Call history">
-          {historyState.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
-          {historyState.status === "error" ? (
-            <ErrorState message={historyState.error || "Could not load call history."} />
-          ) : null}
+        <main className={`ch-workspace ${selectedRow ? "has-detail" : ""}`}>
+          {/* ── Call feed ── */}
+          <section className="calls-history-section ch-feed-pane" aria-label="Call history">
+            {historyState.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
+            {historyState.status === "error" ? (
+              <ErrorState message={historyState.error || "Could not load call history."} />
+            ) : null}
 
-          {historyState.status === "success" && displayItems.length === 0 ? (
-            <EmptyState
-              title={activeTab === "voicemail" ? "No voicemails" : "No calls found"}
-              message={
-                search || activeTab !== "all"
-                  ? "Try adjusting your filters or search query."
-                  : "No calls recorded for this period."
-              }
-            />
-          ) : null}
+            {historyState.status === "success" && displayItems.length === 0 ? (
+              <div className="ch-empty">
+                <EmptyState
+                  title={activeTab === "voicemail" ? "No voicemails" : "No calls found"}
+                  message={
+                    search || activeTab !== "all"
+                      ? "Try adjusting your filters or search query."
+                      : "No calls recorded for this period."
+                  }
+                />
+              </div>
+            ) : null}
 
-          {historyState.status === "success" && displayItems.length > 0 ? (
-            <div className="ch-feed">
-              {groups.map((group) => (
-                <div key={group.key} className="ch-group">
-                  <div className="ch-group-header" aria-label={group.label}>
-                    <span className="ch-group-label">{group.label}</span>
-                    <span className="ch-group-count">{group.items.length}</span>
-                    <div className="ch-group-line" aria-hidden="true" />
+            {historyState.status === "success" && displayItems.length > 0 ? (
+              <div className="ch-feed">
+                {groups.map((group) => (
+                  <div key={group.key} className="ch-group">
+                    <div className="ch-group-header" aria-label={group.label}>
+                      <span className="ch-group-label">{group.label}</span>
+                      <span className="ch-group-count">{group.items.length}</span>
+                      <div className="ch-group-line" aria-hidden="true" />
+                    </div>
+                    <div className="ch-group-items">
+                      {group.items.map((row) => (
+                        <CallFeedItem
+                          key={row.rowId}
+                          row={row}
+                          isSelected={selectedRow?.rowId === row.rowId}
+                          onClick={() => setSelectedRow(row)}
+                          isGlobal={isGlobal}
+                          onCopy={handleCopy}
+                        />
+                      ))}
+                    </div>
                   </div>
-                  <div className="ch-group-items">
-                    {group.items.map((row) => (
-                      <CallFeedItem
-                        key={row.rowId}
-                        row={row}
-                        isSelected={selectedRow?.rowId === row.rowId}
-                        onClick={() => setSelectedRow(row)}
-                        isGlobal={isGlobal}
-                        onCopy={handleCopy}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
+                ))}
+              </div>
+            ) : null}
 
-          {/* Pagination */}
-          {history && history.totalPages > 1 ? (
-            <div className="calls-pagination">
-              <button className="btn ghost btn-sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</button>
-              <span className="calls-page-info">Page {page} of {history.totalPages}</span>
-              <button className="btn ghost btn-sm" disabled={page >= history.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</button>
-            </div>
-          ) : null}
-        </section>
+            {/* Pagination */}
+            {history && history.totalPages > 1 ? (
+              <div className="calls-pagination">
+                <button className="btn ghost btn-sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</button>
+                <span className="calls-page-info">Page {page} of {history.totalPages}</span>
+                <button className="btn ghost btn-sm" disabled={page >= history.totalPages} onClick={() => setPage((p) => p + 1)}>Next</button>
+              </div>
+            ) : null}
+          </section>
+
+          {selectedRow ? (
+            <CallDetailPanel row={selectedRow} onClose={() => setSelectedRow(null)} />
+          ) : (
+            <aside className="ch-detail-placeholder">
+              <PhoneIncoming size={26} />
+              <h2>Select a call</h2>
+              <p>Open a conversation to review routing, outcomes, recordings, technical details, and follow-up actions.</p>
+            </aside>
+          )}
+        </main>
 
         {/* Copy toast */}
         {copyToast ? <div className="ch-copy-toast" role="status">{copyToast}</div> : null}
-
-        {/* Detail panel */}
-        {selectedRow ? (
-          <CallDetailPanel row={selectedRow} onClose={() => setSelectedRow(null)} />
-        ) : null}
 
       </div>
     </PermissionGate>
