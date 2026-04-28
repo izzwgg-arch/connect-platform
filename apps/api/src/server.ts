@@ -14816,7 +14816,10 @@ app.get("/voice/did/mappings", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  const wantAll = isSuperAdmin && q.tenantId === "__all__";
+  const rawTid = wantAll
+    ? null
+    : (isSuperAdmin ? (q.tenantId ?? null) : (user.tenantId ?? null));
   const tid = rawTid && rawTid.startsWith("vpbx:")
     ? await resolveConnectTenantIdFromScope(rawTid)
     : rawTid;
@@ -14896,7 +14899,32 @@ app.post("/voice/did/mappings", async (req, reply) => {
     });
     return reply.send({ ok: true, mapping: created });
   } catch (err: any) {
-    if (String(err?.code) === "P2002") return reply.code(409).send({ error: "e164_already_mapped" });
+    if (String(err?.code) === "P2002") {
+      const existing = await (db as any).didRouteMapping.findUnique({
+        where: { e164: normalized },
+        include: {
+          tenant: { select: { id: true, name: true } },
+          ivrProfile: { select: { id: true, name: true } },
+          mohProfile: { select: { id: true, name: true, vitalPbxMohClassName: true } },
+        },
+      });
+      return reply.code(409).send({
+        error: "e164_already_mapped",
+        detail: existing
+          ? `${normalized} is already mapped to tenant "${existing.tenant?.name ?? existing.tenantId}"${existing.ivrProfile ? ` → IVR "${existing.ivrProfile.name}"` : ""}. Edit the existing mapping instead of creating a new one.`
+          : `${normalized} is already mapped.`,
+        existing: existing
+          ? {
+              id: existing.id,
+              tenantId: existing.tenantId,
+              tenantName: existing.tenant?.name ?? null,
+              ivrProfile: existing.ivrProfile,
+              mohProfile: existing.mohProfile,
+              enabled: existing.enabled,
+            }
+          : null,
+      });
+    }
     throw err;
   }
 });
@@ -15017,14 +15045,20 @@ app.post("/voice/did/publish", async (req, reply) => {
   try {
     await publishDidmapToAstDb(tenantSlug, e164, values);
 
-    // Optional: auto-provision VitalPBX inbound route.
+    // Optional: auto-provision VitalPBX inbound route. The flag is opt-in
+    // because early deployments pointed inbound routes by hand; when it's on
+    // we resolve the PbxInstance via TenantPbxLink (not via mapping.pbxInstanceId,
+    // which may be null until the first takeover) so Publish can also heal
+    // an under-linked mapping after the fact.
     const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
     let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
-    if (inboundApiEnabled && mapping.pbxInstanceId) {
-      try {
-        const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
-        if (link?.pbxTenantId) {
-          const pbxClient = getVitalPbxClient();
+    let resolvedPbxInstanceId: string | null = mapping.pbxInstanceId ?? null;
+    if (inboundApiEnabled) {
+      const resolved = await resolveTenantPbxClient(mapping.tenantId);
+      if ("error" in resolved) {
+        app.log.warn({ tenantId: mapping.tenantId, e164, reason: resolved.error }, "did: skipping inbound_numbers upsert — tenant not fully linked");
+      } else {
+        try {
           const payload = {
             phone_number: e164,
             description: `Connect-managed DID (${tenantSlug})`,
@@ -15032,26 +15066,31 @@ app.post("/voice/did/publish", async (req, reply) => {
             destination: `connect-tenant-ivr,${e164},1`,
             channel_variables: { TENANT_SLUG: tenantSlug },
           };
-          const result = await pbxClient.addTenantInboundNumber(link.pbxTenantId, payload);
+          const result = await resolved.client.addTenantInboundNumber(resolved.pbxTenantId, payload);
           if (result?.id) pbxInboundRouteId = String(result.id);
+          resolvedPbxInstanceId = resolved.pbxInstanceId;
           app.log.info({ tenantId: mapping.tenantId, e164, pbxInboundRouteId }, "did: inbound route upserted");
-        } else {
-          app.log.warn({ tenantId: mapping.tenantId, e164 }, "did: pbxInstance linked but no pbxTenantId — skipping inbound_numbers upsert");
+        } catch (err: any) {
+          // PBX REST failure is non-fatal: AstDB write already succeeded so the
+          // call flow still works once the operator creates the inbound route
+          // manually. Record the failure on the publish record for triage.
+          app.log.warn({ err: err?.message, e164 }, "did: inbound_numbers upsert failed (non-fatal)");
+          await (db as any).ivrPublishRecord.update({
+            where: { id: record.id }, data: { error: `inbound_route_upsert_failed: ${err?.message ?? "unknown"}` },
+          });
         }
-      } catch (err: any) {
-        // PBX REST failure is non-fatal: AstDB write already succeeded so the
-        // call flow still works once the operator creates the inbound route
-        // manually. Record the failure on the publish record for triage.
-        app.log.warn({ err: err?.message, e164 }, "did: inbound_numbers upsert failed (non-fatal)");
-        await (db as any).ivrPublishRecord.update({
-          where: { id: record.id }, data: { error: `inbound_route_upsert_failed: ${err?.message ?? "unknown"}` },
-        });
       }
     }
 
     await (db as any).didRouteMapping.update({
       where: { id: mapping.id },
-      data: { lastPublishedAt: new Date(), pbxInboundRouteId },
+      data: {
+        lastPublishedAt: new Date(),
+        pbxInboundRouteId,
+        ...(resolvedPbxInstanceId && resolvedPbxInstanceId !== mapping.pbxInstanceId
+          ? { pbxInstanceId: resolvedPbxInstanceId }
+          : {}),
+      },
     });
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
     app.log.info({ e164, tenantSlug, keysWritten: keysWritten.length, pbxInboundRouteId }, "did: publish success");
@@ -15214,11 +15253,19 @@ function didNormalizePbxPhoneNumber(raw: unknown): string | null {
 // Pull the PBX-side inbound_number record that matches this DID. Returns
 // null (not throws) when the PBX has no entry for the number yet — so
 // /inspect can render a clean "not provisioned" state instead of 500.
+//
+// The `client` parameter MUST be a VitalPbxClient bound to the specific
+// PbxInstance that owns this tenant — otherwise we'd hit whatever PBX the
+// process-wide env vars (PBX_BASE_URL/PBX_API_TOKEN) point at, which is
+// empty in production and silently targets the wrong host in multi-PBX
+// deployments. We only keep the fallback so legacy call sites don't break.
 async function didFetchLivePbxInboundNumber(
   pbxTenantId: string,
   e164: string,
+  client?: VitalPbxClient,
 ): Promise<Record<string, unknown> | null> {
-  const rows = await getVitalPbxClient().listTenantInboundNumbers(pbxTenantId);
+  const pbx = client ?? getVitalPbxClient();
+  const rows = await pbx.listTenantInboundNumbers(pbxTenantId);
   if (!Array.isArray(rows)) return null;
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
@@ -15226,6 +15273,39 @@ async function didFetchLivePbxInboundNumber(
     if (candidate && candidate === e164) return row as Record<string, unknown>;
   }
   return null;
+}
+
+// Resolve the VitalPBX client for a given Connect tenant, scoped to the
+// PbxInstance the tenant is actually linked to (via TenantPbxLink). This
+// is the ONLY way to talk to the PBX for per-tenant operations (inbound
+// routes, voicemail, etc.) in multi-PBX deployments — never use a bare
+// `getVitalPbxClient()` because the process-wide env vars aren't wired.
+async function resolveTenantPbxClient(tenantId: string): Promise<
+  | {
+      client: VitalPbxClient;
+      pbxTenantId: string;
+      pbxInstanceId: string;
+      pbxInstance: any;
+    }
+  | { error: "tenant_not_linked" | "pbx_instance_disabled" | "pbx_auth_missing" }
+> {
+  const link = await (db as any).tenantPbxLink.findUnique({
+    where: { tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!link?.pbxTenantId) return { error: "tenant_not_linked" };
+  const inst = link.pbxInstance;
+  if (!inst) return { error: "tenant_not_linked" };
+  if (!inst.isEnabled) return { error: "pbx_instance_disabled" };
+  if (!inst.apiAuthEncrypted) return { error: "pbx_auth_missing" };
+  const auth = decryptJson<{ token: string; secret?: string }>(inst.apiAuthEncrypted);
+  if (!auth?.token) return { error: "pbx_auth_missing" };
+  const client = getVitalPbxClient({
+    baseUrl: inst.baseUrl,
+    token:   auth.token,
+    secret:  auth.secret,
+  });
+  return { client, pbxTenantId: String(link.pbxTenantId), pbxInstanceId: String(inst.id), pbxInstance: inst };
 }
 
 // Compare the stashed originalPbx* on the mapping against what VitalPBX is
@@ -15259,21 +15339,21 @@ app.get("/voice/did/:id/inspect", async (req, reply) => {
   if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
   assertIvrTenantAccess(user, mapping.tenantId);
 
-  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
-  if (!link?.pbxTenantId) {
+  const resolved = await resolveTenantPbxClient(mapping.tenantId);
+  if ("error" in resolved) {
     return reply.send({
       ok: true,
       mapping,
       pbxLive: null,
       driftDetected: false,
-      driftReason: "tenant_not_linked",
+      driftReason: resolved.error,
     });
   }
 
   let pbxLive: Record<string, unknown> | null = null;
   let fetchError: string | null = null;
   try {
-    pbxLive = await didFetchLivePbxInboundNumber(link.pbxTenantId, String(mapping.e164));
+    pbxLive = await didFetchLivePbxInboundNumber(resolved.pbxTenantId, String(mapping.e164), resolved.client);
   } catch (err: any) {
     fetchError = err?.message ?? "pbx_read_failed";
     app.log.warn({ id, err: fetchError }, "did.inspect: live PBX read failed");
@@ -15326,10 +15406,17 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
     });
   }
 
-  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
-  if (!link?.pbxTenantId) {
-    return reply.code(409).send({ error: "tenant_not_linked", detail: "This tenant has no TenantPbxLink.pbxTenantId." });
+  const resolved = await resolveTenantPbxClient(mapping.tenantId);
+  if ("error" in resolved) {
+    const detail =
+      resolved.error === "tenant_not_linked"
+        ? "This tenant has no TenantPbxLink.pbxTenantId. Link it via the VitalPBX Connection page first."
+        : resolved.error === "pbx_instance_disabled"
+          ? "The linked PbxInstance is disabled. Re-enable it in VitalPBX Connection before taking over DIDs."
+          : "The linked PbxInstance has no stored API credentials. Re-save them in VitalPBX Connection.";
+    return reply.code(409).send({ error: resolved.error, detail });
   }
+  const { client: pbxClient, pbxTenantId: resolvedPbxTenantId } = resolved;
 
   const tenantSlug = await getIvrSlugForTenant(mapping.tenantId);
   const e164 = String(mapping.e164);
@@ -15337,7 +15424,7 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
   // Step 1 — read the current PBX destination so we can restore it later.
   let pbxSnapshot: Record<string, unknown> | null = null;
   try {
-    pbxSnapshot = await didFetchLivePbxInboundNumber(link.pbxTenantId, e164);
+    pbxSnapshot = await didFetchLivePbxInboundNumber(resolvedPbxTenantId, e164, pbxClient);
   } catch (err: any) {
     return reply.code(502).send({ error: "pbx_read_failed", detail: err?.message ?? "unknown" });
   }
@@ -15406,7 +15493,7 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
 
   let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
   try {
-    const result = await getVitalPbxClient().addTenantInboundNumber(link.pbxTenantId, pbxPayload);
+    const result = await pbxClient.addTenantInboundNumber(resolvedPbxTenantId, pbxPayload);
     if (result?.id) pbxInboundRouteId = String(result.id);
   } catch (err: any) {
     await (db as any).didRouteSwitchLog.update({
@@ -15423,7 +15510,8 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
   // Step 5 — commit routingMode="connect". AstDB + PBX are now in sync; if
   // this DB write somehow fails we're technically "out of sync", but the
   // switchLog row already proves what we did, and the next inspect will
-  // reconcile.
+  // reconcile. We also stamp pbxInstanceId onto the mapping so subsequent
+  // publish/rollback calls route to the correct PBX without re-resolving.
   const updated = await (db as any).didRouteMapping.update({
     where: { id: mapping.id },
     data: {
@@ -15433,6 +15521,7 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
       lastPublishedAt:   new Date(),
       lastSwitchError:   null,
       pbxInboundRouteId,
+      pbxInstanceId:     resolved.pbxInstanceId,
     },
   });
   await (db as any).didRouteSwitchLog.update({
@@ -15472,10 +15561,17 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
   if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
   assertIvrTenantAccess(user, mapping.tenantId);
 
-  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId: mapping.tenantId } });
-  if (!link?.pbxTenantId) {
-    return reply.code(409).send({ error: "tenant_not_linked" });
+  const resolved = await resolveTenantPbxClient(mapping.tenantId);
+  if ("error" in resolved) {
+    const detail =
+      resolved.error === "tenant_not_linked"
+        ? "This tenant has no TenantPbxLink.pbxTenantId."
+        : resolved.error === "pbx_instance_disabled"
+          ? "The linked PbxInstance is disabled."
+          : "The linked PbxInstance has no stored API credentials.";
+    return reply.code(409).send({ error: resolved.error, detail });
   }
+  const { client: pbxClient, pbxTenantId: resolvedPbxTenantId } = resolved;
 
   // Resolve destination: override wins, else stored original. If neither is
   // present we refuse to guess — the operator should /inspect and pass
@@ -15495,7 +15591,7 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
   // Snapshot the current PBX state so the audit log records what we overwrote.
   let pbxSnapshot: Record<string, unknown> | null = null;
   try {
-    pbxSnapshot = await didFetchLivePbxInboundNumber(link.pbxTenantId, e164);
+    pbxSnapshot = await didFetchLivePbxInboundNumber(resolvedPbxTenantId, e164, pbxClient);
   } catch (err: any) {
     app.log.warn({ id, err: err?.message }, "did.switch-to-pbx: snapshot read failed (non-fatal)");
   }
@@ -15524,7 +15620,7 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
 
   let pbxInboundRouteId: string | null = mapping.pbxInboundRouteId ?? null;
   try {
-    const result = await getVitalPbxClient().addTenantInboundNumber(link.pbxTenantId, pbxPayload);
+    const result = await pbxClient.addTenantInboundNumber(resolvedPbxTenantId, pbxPayload);
     if (result?.id) pbxInboundRouteId = String(result.id);
   } catch (err: any) {
     await (db as any).didRouteSwitchLog.update({
@@ -15546,6 +15642,7 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
       lastSwitchedBy:  performedBy,
       lastSwitchError: null,
       pbxInboundRouteId,
+      pbxInstanceId:   resolved.pbxInstanceId,
     },
   });
   await (db as any).didRouteSwitchLog.update({
