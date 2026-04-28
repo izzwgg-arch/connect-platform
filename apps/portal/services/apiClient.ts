@@ -204,3 +204,50 @@ export async function apiUploadContactAvatar(
     clearTimeout(timeout);
   }
 }
+
+/** Multipart upload for the signed-in user's extension voicemail greeting. */
+export async function apiUploadVoicemailGreeting(
+  file: File,
+  token?: string,
+): Promise<{
+  ok: boolean;
+  status: "default" | "custom";
+  durationSec: number | null;
+  updatedAt: string | null;
+  originalFilename: string | null;
+  previewUrl: string | null;
+  publishStatus: string;
+  publishDetail: string | null;
+}> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch(`${baseUrl()}/voice/extensions/me/voicemail-greeting`, {
+      method: "POST",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+      },
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: unknown = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
+      const ep = errPayload as { error?: string; message?: string } | null;
+      const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
+      throw new ApiError(detail || `Upload failed (${res.status})`, res.status);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}

@@ -114,8 +114,11 @@ export function ViewportDropdown({
         top: position?.top ?? -9999,
         width: position?.width ?? width,
         maxWidth: `calc(100vw - ${collisionPadding * 2}px)`,
+        maxHeight: `calc(100vh - ${collisionPadding * 2}px)`,
+        overflowY: "auto",
         zIndex: 1000,
       }}
+      tabIndex={-1}
     >
       {children}
     </div>,

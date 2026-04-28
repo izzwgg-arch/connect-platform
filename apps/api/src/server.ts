@@ -141,6 +141,7 @@ type BillingSolaCredentialPayload = {
   apiKey: string;
   apiSecret?: string | null;
   webhookSecret?: string | null;
+  ifieldsKey?: string | null;
 };
 
 type BillingSolaPathOverrides = {
@@ -832,7 +833,8 @@ function maskSolaConfigForResponse(input: {
     masked: {
       apiKey: maskValue(input.secrets.apiKey, 4, 2),
       apiSecret: input.secrets.apiSecret ? "********" : null,
-      webhookSecret: input.secrets.webhookSecret ? "********" : null
+      webhookSecret: input.secrets.webhookSecret ? "********" : null,
+      ifieldsKey: input.secrets.ifieldsKey ? maskValue(input.secrets.ifieldsKey, 6, 3) : null
     },
     status: {
       lastTestAt: input.record.lastTestAt,
@@ -11662,6 +11664,231 @@ app.delete("/voice/voicemail/:id", async (req, reply) => {
   return reply.send({ ok: true });
 });
 
+type ExtensionGreetingMetadata = {
+  originalFilename: string;
+  originalContentType: string;
+  originalStorageKey: string;
+  convertedStorageKey: string;
+  sha256: string;
+  sizeBytes: number;
+  durationSec: number | null;
+  updatedAt: string;
+  publishStatus: "stored" | "published" | "publish_unavailable";
+  publishDetail?: string | null;
+};
+
+function extensionGreetingRoot(): string {
+  return (process.env.VOICEMAIL_GREETING_STORAGE_DIR || path.resolve(process.cwd(), "data/voicemail-greetings")).replace(/\/+$/, "");
+}
+
+function safeGreetingSegment(raw: string): string {
+  return String(raw || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 96) || "unknown";
+}
+
+function extensionGreetingDir(tenantId: string, extensionId: string): string {
+  return path.join(extensionGreetingRoot(), "tenants", safeGreetingSegment(tenantId), "extensions", safeGreetingSegment(extensionId));
+}
+
+function extensionGreetingStorageKey(tenantId: string, extensionId: string, filename: string): string {
+  return path.posix.join("tenants", safeGreetingSegment(tenantId), "extensions", safeGreetingSegment(extensionId), filename);
+}
+
+function resolveExtensionGreetingPath(storageKey: string): string {
+  const clean = String(storageKey || "").replace(/\\/g, "/");
+  if (clean.includes("..")) throw new Error("invalid_storage_key");
+  const root = extensionGreetingRoot();
+  const full = path.resolve(root, clean);
+  if (!full.startsWith(root + path.sep) && full !== root) throw new Error("invalid_storage_key_scope");
+  return full;
+}
+
+async function loadOwnedExtensionForGreeting(user: JwtUser) {
+  if (!user.tenantId) return null;
+  return db.extension.findFirst({
+    where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+    include: { pbxLink: true },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+async function readExtensionGreetingMetadata(tenantId: string, extensionId: string): Promise<ExtensionGreetingMetadata | null> {
+  try {
+    const raw = await fsp.readFile(path.join(extensionGreetingDir(tenantId, extensionId), "metadata.json"), "utf8");
+    return JSON.parse(raw) as ExtensionGreetingMetadata;
+  } catch {
+    return null;
+  }
+}
+
+async function probeAudioDurationSec(filePath: string): Promise<number | null> {
+  try {
+    const out = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ], { timeout: 8000 });
+    const value = Number(String(out.stdout || "").trim());
+    return Number.isFinite(value) ? Math.round(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function convertGreetingToPbxWav(sourcePath: string, targetPath: string): Promise<void> {
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-i", sourcePath,
+      "-ac", "1",
+      "-ar", "8000",
+      "-sample_fmt", "s16",
+      targetPath,
+    ], { timeout: 45_000 });
+  } catch (err: any) {
+    throw new Error(`audio_conversion_failed:${err?.message || "ffmpeg failed"}`);
+  }
+}
+
+function formatExtensionControlPanel(extension: any, metadata: ExtensionGreetingMetadata | null) {
+  const hasCustomGreeting = Boolean(metadata?.convertedStorageKey);
+  return {
+    extension: extension ? {
+      id: extension.id,
+      tenantId: extension.tenantId,
+      number: extension.extNumber,
+      displayName: extension.displayName,
+      status: extension.status,
+    } : null,
+    presence: "AVAILABLE",
+    greeting: {
+      status: hasCustomGreeting ? "custom" : "default",
+      durationSec: metadata?.durationSec ?? null,
+      updatedAt: metadata?.updatedAt ?? null,
+      originalFilename: metadata?.originalFilename ?? null,
+      previewUrl: hasCustomGreeting ? `/api/voice/extensions/me/voicemail-greeting/stream?v=${metadata?.sha256}` : null,
+      publishStatus: metadata?.publishStatus ?? "publish_unavailable",
+      publishDetail: metadata?.publishDetail ?? null,
+    },
+  };
+}
+
+app.get("/voice/extensions/me/control-panel", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const extension = await loadOwnedExtensionForGreeting(user);
+  if (!extension || !user.tenantId) return reply.send(formatExtensionControlPanel(null, null));
+  const metadata = await readExtensionGreetingMetadata(user.tenantId, extension.id);
+  return reply.send(formatExtensionControlPanel(extension, metadata));
+});
+
+app.get("/voice/extensions/me/voicemail-greeting/stream", async (req, reply) => {
+  const tokenParam = (req.query as Record<string, string | undefined>)["token"];
+  if (tokenParam && !(req.headers as any).authorization) {
+    (req as any).headers.authorization = `Bearer ${tokenParam}`;
+  }
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const extension = await loadOwnedExtensionForGreeting(user);
+  if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const metadata = await readExtensionGreetingMetadata(user.tenantId, extension.id);
+  if (!metadata?.convertedStorageKey) return reply.code(404).send({ error: "greeting_not_found" });
+  try {
+    const bytes = await fsp.readFile(resolveExtensionGreetingPath(metadata.convertedStorageKey));
+    reply.header("content-type", "audio/wav");
+    reply.header("cache-control", "private, max-age=300");
+    return reply.send(bytes);
+  } catch {
+    return reply.code(404).send({ error: "greeting_not_found" });
+  }
+});
+
+app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const extension = await loadOwnedExtensionForGreeting(user);
+  if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+
+  const part = await (req as any).file();
+  if (!part) return reply.code(400).send({ error: "file_required" });
+  const originalFilename = String(part.filename || "greeting.wav");
+  const mime = String(part.mimetype || "").toLowerCase();
+  const ext = path.extname(originalFilename).toLowerCase();
+  const allowed = mime === "audio/wav" || mime === "audio/x-wav" || mime === "audio/mpeg" || mime === "audio/mp3" || ext === ".wav" || ext === ".mp3";
+  if (!allowed) return reply.code(400).send({ error: "unsupported_audio_type", allowed: ["wav", "mp3"] });
+
+  const bytes = await part.toBuffer();
+  const maxBytes = 8 * 1024 * 1024;
+  if (!bytes || bytes.length === 0) return reply.code(400).send({ error: "file_required" });
+  if (bytes.length > maxBytes) return reply.code(413).send({ error: "file_too_large", limit: maxBytes });
+
+  const dir = extensionGreetingDir(user.tenantId, extension.id);
+  await fsp.mkdir(dir, { recursive: true });
+  const originalExt = ext === ".mp3" ? ".mp3" : ".wav";
+  const originalPath = path.join(dir, `original${originalExt}`);
+  const convertedPath = path.join(dir, "greeting.wav");
+  await fsp.writeFile(originalPath, bytes);
+
+  try {
+    await convertGreetingToPbxWav(originalPath, convertedPath);
+  } catch (err: any) {
+    return reply.code(422).send({
+      error: "audio_conversion_failed",
+      message: "Could not convert greeting to PBX WAV format. Ensure ffmpeg is installed on the API host.",
+      detail: String(err?.message || err),
+    });
+  }
+
+  const converted = await fsp.readFile(convertedPath);
+  const sha256 = createHash("sha256").update(converted).digest("hex");
+  const durationSec = await probeAudioDurationSec(convertedPath);
+  const convertedStorageKey = extensionGreetingStorageKey(user.tenantId, extension.id, "greeting.wav");
+  const originalStorageKey = extensionGreetingStorageKey(user.tenantId, extension.id, `original${originalExt}`);
+
+  const metadata: ExtensionGreetingMetadata = {
+    originalFilename,
+    originalContentType: mime || (originalExt === ".mp3" ? "audio/mpeg" : "audio/wav"),
+    originalStorageKey,
+    convertedStorageKey,
+    sha256,
+    sizeBytes: converted.length,
+    durationSec,
+    updatedAt: new Date().toISOString(),
+    publishStatus: "publish_unavailable",
+    publishDetail: "PBX extension greeting publish endpoint is not available in the current VitalPBX integration registry.",
+  };
+  await fsp.writeFile(path.join(dir, "metadata.json"), JSON.stringify(metadata, null, 2));
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    action: "VOICEMAIL_GREETING_UPLOADED",
+    entityType: "Extension",
+    entityId: extension.id,
+  });
+
+  return reply.send({
+    ok: true,
+    ...formatExtensionControlPanel(extension, metadata).greeting,
+  });
+});
+
+app.delete("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const extension = await loadOwnedExtensionForGreeting(user);
+  if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  await fsp.rm(extensionGreetingDir(user.tenantId, extension.id), { recursive: true, force: true });
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    action: "VOICEMAIL_GREETING_RESET",
+    entityType: "Extension",
+    entityId: extension.id,
+  });
+  return reply.send({ ok: true, ...formatExtensionControlPanel(extension, null).greeting });
+});
+
 // ── Audio helper — fetches voicemail audio from PBX and streams to client ────
 async function streamVoicemailAudio(
   vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; readAt: Date | null },
@@ -15339,7 +15566,8 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
 // telephony service.  VitalPBX reads AstDB at hold/queue time.
 //
 // AstDB keys per tenant (family: connect/t_{slug}):
-//   active_moh_class           — VitalPBX MOH class name string
+//   active_moh_class           — Asterisk runtime MOH class, e.g. moh3
+//   moh_class                  — runtime alias read by the PBX dialplan
 //   hold_mode                  — current routing mode label (weekly/holiday/override/…)
 //   hold_announcement_enabled  — "1" | "0"
 //   hold_announcement_ref      — VitalPBX recording name (empty = none)
@@ -15359,6 +15587,14 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
 
 function canManageMoh(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+}
+
+function normalizeMohRuntimeClass(value: string | null | undefined): string {
+  return String(value ?? "").trim();
+}
+
+function isMohRuntimeClass(value: string): boolean {
+  return /^moh\d+$/i.test(value);
 }
 
 /** Full shape of a Hold Profile as needed for AstDB key construction. */
@@ -15401,7 +15637,37 @@ async function getMohSlugForTenant(tenantId: string): Promise<string> {
   return (tenant?.name ?? tenantId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-/** Build all 6 AstDB key-value pairs for a Hold Profile publish. */
+async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
+  const runtimeClass = normalizeMohRuntimeClass(value);
+  if (!isMohRuntimeClass(runtimeClass)) {
+    throw Object.assign(new Error("invalid_moh_runtime_class"), {
+      statusCode: 400,
+      detail: "MOH profiles must store the Asterisk runtime class, e.g. moh3. VitalPBX display names such as main are not valid.",
+    });
+  }
+
+  const row = await (db as any).pbxMohClass.findFirst({
+    where: {
+      mohClassName: runtimeClass,
+      isActive: true,
+      OR: [
+        { tenantId },
+        { tenantId: null },
+        { pbxTenantId: "1" },
+      ],
+    },
+    select: { id: true, name: true, mohClassName: true, pbxGroupId: true, tenantId: true, tenantSlug: true },
+  });
+  if (!row) {
+    throw Object.assign(new Error("moh_runtime_class_not_synced"), {
+      statusCode: 409,
+      detail: `Runtime MOH class ${runtimeClass} is not present in the synced VitalPBX MOH catalog for this tenant.`,
+    });
+  }
+  return runtimeClass;
+}
+
+/** Build the AstDB key-value pairs for a Hold Profile publish. */
 function buildMohKeys(
   slug: string,
   profile: HoldProfileData,
@@ -15410,6 +15676,8 @@ function buildMohKeys(
   const fam = `connect/t_${slug}`;
   return [
     { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
+    // Runtime alias consumed by [connect-tenant-router] / [connect-tenant-ivr].
+    { family: fam, key: "moh_class",                  value: profile.vitalPbxMohClassName },
     { family: fam, key: "hold_mode",                  value: mode },
     { family: fam, key: "hold_announcement_enabled",  value: profile.holdAnnouncementEnabled ? "1" : "0" },
     { family: fam, key: "hold_announcement_ref",      value: profile.holdAnnouncementRef ?? "" },
@@ -15546,6 +15814,7 @@ async function doMohPublish(
   const { profile, mode } = computeCurrentMohProfile(config, rulesRaw, overrideRaw, profileMap);
   if (!profile) throw Object.assign(new Error("no_hold_profile_resolved"), { statusCode: 409 });
 
+  profile.vitalPbxMohClassName = await assertSyncedMohRuntimeClass(tenantId, profile.vitalPbxMohClassName);
   const slug = await getMohSlugForTenant(tenantId);
   const keys = buildMohKeys(slug, profile, mode);
   const previousMohClass = lastPublish?.newMohClass ?? null;
@@ -15613,8 +15882,14 @@ app.post("/voice/moh/profiles", async (req, reply) => {
     });
   }
   assertMohTenantAccess(user, connectTenantId);
+  let runtimeClass: string;
+  try {
+    runtimeClass = await assertSyncedMohRuntimeClass(connectTenantId, body.data.vitalPbxMohClassName);
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail });
+  }
   const profile = await (db as any).mohProfile.create({
-    data: { ...body.data, tenantId: connectTenantId, holdAnnouncementRef: body.data.holdAnnouncementRef ?? null, introAnnouncementRef: body.data.introAnnouncementRef ?? null, isActive: true, createdBy: (user as any).id ?? null },
+    data: { ...body.data, tenantId: connectTenantId, vitalPbxMohClassName: runtimeClass, holdAnnouncementRef: body.data.holdAnnouncementRef ?? null, introAnnouncementRef: body.data.introAnnouncementRef ?? null, isActive: true, createdBy: (user as any).id ?? null },
   });
   return reply.code(201).send({ profile });
 });
@@ -15637,7 +15912,15 @@ app.patch("/voice/moh/profiles/:id", async (req, reply) => {
     introAnnouncementRef:        z.string().max(200).nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  const updated = await (db as any).mohProfile.update({ where: { id }, data: { ...body.data, updatedBy: (user as any).id ?? null } });
+  const updateData: Record<string, unknown> = { ...body.data, updatedBy: (user as any).id ?? null };
+  if (body.data.vitalPbxMohClassName !== undefined) {
+    try {
+      updateData.vitalPbxMohClassName = await assertSyncedMohRuntimeClass(existing.tenantId, body.data.vitalPbxMohClassName);
+    } catch (err: any) {
+      return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail });
+    }
+  }
+  const updated = await (db as any).mohProfile.update({ where: { id }, data: updateData });
   return reply.send({ profile: updated });
 });
 
@@ -15897,7 +16180,7 @@ app.get("/voice/moh/publish-history", async (req, reply) => {
 });
 
 // ── POST /voice/moh/publish ───────────────────────────────────────────────────
-// Immediately computes effective Hold Profile and writes all 6 AstDB keys.
+// Immediately computes effective Hold Profile and writes the MOH AstDB keys.
 app.post("/voice/moh/publish", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
   if (!user) return;
@@ -15920,7 +16203,7 @@ app.post("/voice/moh/publish", async (req, reply) => {
 
 // ── POST /voice/moh/rollback/:publishId ──────────────────────────────────────
 // Restores the AstDB state to what it was BEFORE the target publish record.
-// Replays previousKeysSnapshot (full 6-key snapshot stored at publish time).
+// Replays previousKeysSnapshot (full MOH key snapshot stored at publish time).
 app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
   if (!user) return;
@@ -15946,6 +16229,7 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
     restoredClass = target.previousMohClass;
     restoreKeys = [
       { family: fam, key: "active_moh_class",           value: target.previousMohClass },
+      { family: fam, key: "moh_class",                  value: target.previousMohClass },
       { family: fam, key: "hold_mode",                  value: "rollback" },
       { family: fam, key: "hold_announcement_enabled",  value: "0" },
       { family: fam, key: "hold_announcement_ref",      value: "" },
@@ -15956,6 +16240,16 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
     ];
   } else {
     return reply.code(409).send({ error: "no_previous_state_to_restore" });
+  }
+
+  // Older snapshots predate the runtime `moh_class` alias. Preserve rollback
+  // semantics by restoring both aliases to the same class when only one exists.
+  const activeAlias = restoreKeys.find((k) => k.key === "active_moh_class");
+  const runtimeAlias = restoreKeys.find((k) => k.key === "moh_class");
+  if (activeAlias && !runtimeAlias) {
+    restoreKeys.push({ family: activeAlias.family, key: "moh_class", value: activeAlias.value });
+  } else if (runtimeAlias && !activeAlias) {
+    restoreKeys.push({ family: runtimeAlias.family, key: "active_moh_class", value: runtimeAlias.value });
   }
 
   const record = await (db as any).mohPublishRecord.create({
@@ -16262,7 +16556,13 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
     },
   });
-  return reply.send({ classes: rows });
+  return reply.send({
+    classes: rows.map((row: any) => ({
+      ...row,
+      displayName: row.name,
+      runtimeClass: row.mohClassName,
+    })),
+  });
 });
 
 // ── POST /voice/moh/pbx-classes/auto-sync ─────────────────────────────────────
@@ -17096,7 +17396,7 @@ app.get("/billing/sola/config", async (req, reply) => {
         authMode: record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
         authHeaderName: record.authHeaderName || null,
         pathOverrides: normalizeSolaPathOverrides(record.pathOverrides || {}),
-        masked: { apiKey: null, apiSecret: null, webhookSecret: null },
+        masked: { apiKey: null, apiSecret: null, webhookSecret: null, ifieldsKey: null },
         status: {
           lastTestAt: record.lastTestAt,
           lastTestResult: record.lastTestResult || null,
@@ -17127,6 +17427,7 @@ app.put("/billing/sola/config", async (req, reply) => {
     apiKey: z.string().min(1).optional(),
     apiSecret: z.string().min(1).optional().nullable(),
     webhookSecret: z.string().min(1).optional().nullable(),
+    ifieldsKey: z.string().min(1).optional().nullable(),
     pathOverrides: z.object({
       customerPath: z.string().min(1).optional(),
       subscriptionPath: z.string().min(1).optional(),
@@ -17142,7 +17443,7 @@ app.put("/billing/sola/config", async (req, reply) => {
   }
 
   const existing = await db.billingSolaConfig.findUnique({ where: { tenantId: admin.tenantId } });
-  let existingSecrets: BillingSolaCredentialPayload = { apiKey: "", apiSecret: null, webhookSecret: null };
+  let existingSecrets: BillingSolaCredentialPayload = { apiKey: "", apiSecret: null, webhookSecret: null, ifieldsKey: null };
   if (existing) {
     try {
       existingSecrets = decryptJson<BillingSolaCredentialPayload>(existing.credentialsEncrypted);
@@ -17154,7 +17455,8 @@ app.put("/billing/sola/config", async (req, reply) => {
   const nextSecrets: BillingSolaCredentialPayload = {
     apiKey: input.apiKey || existingSecrets.apiKey || "",
     apiSecret: input.apiSecret !== undefined ? (input.apiSecret || null) : (existingSecrets.apiSecret || null),
-    webhookSecret: input.webhookSecret !== undefined ? (input.webhookSecret || null) : (existingSecrets.webhookSecret || null)
+    webhookSecret: input.webhookSecret !== undefined ? (input.webhookSecret || null) : (existingSecrets.webhookSecret || null),
+    ifieldsKey: input.ifieldsKey !== undefined ? (input.ifieldsKey || null) : (existingSecrets.ifieldsKey || null)
   };
 
   if (!nextSecrets.apiKey) {
