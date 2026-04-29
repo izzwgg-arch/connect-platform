@@ -60,6 +60,13 @@ import {
   getEffectivePortalPermissionSetForJwtRole,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
+import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
+import {
+  PORTAL_ROLE_BUCKETS,
+  dbRoleFromPortalBucket,
+  canAssignPortalBucket,
+  type PortalRoleBucket,
+} from "./userManagementRoles";
 import {
   inspectPbxInboundRoute,
   resolvePbxRouteHelperConfig,
@@ -3716,7 +3723,21 @@ app.get("/admin/users", async (req, reply) => {
   });
   if (reply.sent) return;
   const where: any = { tenantId };
-  if (query.role && query.role !== "all") where.role = query.role;
+  if (query.role && query.role !== "all") {
+    // The UI now sends portal buckets (END_USER / TENANT_ADMIN / SUPER_ADMIN).
+    // Expand each bucket into the DB roles that map to it so existing rows
+    // (role=USER, role=ADMIN, etc.) still show up under the new filter.
+    const roleUpper = String(query.role).toUpperCase();
+    if (roleUpper === "END_USER") {
+      where.role = { in: ["USER", "EXTENSION_USER", "READ_ONLY"] };
+    } else if (roleUpper === "TENANT_ADMIN") {
+      where.role = { in: ["TENANT_ADMIN", "ADMIN", "MANAGER", "BILLING", "BILLING_ADMIN", "MESSAGING", "SUPPORT"] };
+    } else if (roleUpper === "SUPER_ADMIN") {
+      where.role = "SUPER_ADMIN";
+    } else {
+      where.role = query.role;
+    }
+  }
   if (query.status && query.status !== "all") where.status = query.status;
   const search = String(query.search || "").trim();
   if (search) {
@@ -3785,7 +3806,7 @@ app.post("/admin/users", async (req, reply) => {
   const input = z.object({
     tenantId: z.string().optional(),
     extensionId: z.string().min(1),
-    role: z.enum(USER_MANAGEMENT_ROLES),
+    role: z.string().min(1),
     email: z.string().email(),
     firstName: z.string().min(1).max(80),
     lastName: z.string().min(1).max(80),
@@ -3797,10 +3818,18 @@ app.post("/admin/users", async (req, reply) => {
     active: z.boolean().optional(),
     sendInvite: z.boolean().default(true),
   }).parse(req.body || {});
-  if (!canAssignRole(admin, input.role)) return reply.status(403).send({ error: "forbidden" });
+  const incomingRoleRaw = String(input.role || "").toUpperCase();
+  const isPortalBucket = (PORTAL_ROLE_BUCKETS as readonly string[]).includes(incomingRoleRaw);
+  if (isPortalBucket) {
+    if (!canAssignPortalBucket(admin.role, incomingRoleRaw as PortalRoleBucket)) return reply.status(403).send({ error: "forbidden" });
+  } else {
+    if (!(USER_MANAGEMENT_ROLES as readonly string[]).includes(incomingRoleRaw)) return reply.status(400).send({ error: "invalid_role" });
+    if (!canAssignRole(admin, incomingRoleRaw as UserManagementRole)) return reply.status(403).send({ error: "forbidden" });
+  }
+  const effectiveDbRole = isPortalBucket ? dbRoleFromPortalBucket(incomingRoleRaw as PortalRoleBucket) : incomingRoleRaw;
   const tenantId = await resolveManagedTenant(admin, input.tenantId).catch(() => null);
   if (!tenantId) return reply.status(404).send({ error: "tenant_not_found" });
-  const extension = await db.extension.findFirst({ where: { id: input.extensionId, tenantId }, include: { tenant: { select: { name: true } } } });
+  const extension = await db.extension.findFirst({ where: { id: input.extensionId, tenantId }, include: { tenant: { select: { name: true } }, pbxLink: true } as any }) as any;
   if (!extension) return reply.status(404).send({ error: "extension_not_found" });
   if (extension.ownerUserId) return reply.status(409).send({ error: "extension_already_assigned" });
   const email = normalizeEmail(input.email);
@@ -3814,7 +3843,7 @@ app.post("/admin/users", async (req, reply) => {
         tenantId,
         email,
         passwordHash,
-        role: input.role as any,
+        role: effectiveDbRole as any,
         status: status as any,
         firstName: input.firstName.trim(),
         lastName: input.lastName.trim(),
@@ -3827,6 +3856,22 @@ app.post("/admin/users", async (req, reply) => {
       } as any,
     });
     await tx.extension.update({ where: { id: extension.id }, data: { ownerUserId: user.id } });
+    // Lazy auto-provisioning snapshot. If the PBX sync previously populated an
+    // encrypted SIP password on the link, mark it PROVISIONED from PBX_EXISTING
+    // so the portal softphone can register on first login. If not, stay PENDING
+    // and let the admin click "Regenerate" explicitly (avoids surprise resets
+    // that would log desk phones out).
+    if (extension.pbxLink) {
+      const hasPassword = !!extension.pbxLink.sipPasswordEncrypted;
+      await tx.pbxExtensionLink.update({
+        where: { id: extension.pbxLink.id },
+        data: {
+          provisionStatus: (hasPassword ? "PROVISIONED" : "PENDING") as any,
+          provisionSource: (hasPassword ? "PBX_EXISTING" : null) as any,
+          lastProvisionedAt: hasPassword ? new Date() : null,
+        } as any,
+      });
+    }
     return user;
   });
   let inviteSent = false;
@@ -3835,7 +3880,22 @@ app.post("/admin/users", async (req, reply) => {
     await queueUserWelcomeEmail({ user: created, tenantName: extension.tenant.name, extensionNumber: extension.extNumber, token });
     inviteSent = true;
   }
-  await audit({ tenantId, actorUserId: admin.sub, targetUserId: created.id, action: "USER_CREATED", entityType: "User", entityId: created.id, metadata: { role: input.role, extensionId: extension.id, inviteSent } });
+  await audit({
+    tenantId,
+    actorUserId: admin.sub,
+    targetUserId: created.id,
+    action: "USER_CREATED",
+    entityType: "User",
+    entityId: created.id,
+    metadata: {
+      role: effectiveDbRole,
+      portalBucket: isPortalBucket ? incomingRoleRaw : undefined,
+      extensionId: extension.id,
+      pbxExtensionLinkId: extension.pbxLink?.id || null,
+      provisioned: !!extension.pbxLink?.sipPasswordEncrypted,
+      inviteSent,
+    },
+  });
   return { ok: true, user: formatAdminUser({ ...created, tenant: { id: tenantId, name: extension.tenant.name }, ownedExtensions: [extension], passwordTokens: [] }), inviteSent };
 });
 
@@ -25747,6 +25807,49 @@ const port = Number(process.env.PORT || 3001);
 
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
+  registerUserExtensionProvisioningRoutes(app, {
+    getUser: getUser as any,
+    requirePermission: requirePermission as any,
+    canManageUsers: canManageUsers as any,
+    resolveManagedTenant: resolveManagedTenant as any,
+    // Wrap the real sync signature (db, pbxInstanceId, client, options) into a
+    // tenantId-only callable. Returns a no-op result if the tenant has no PBX
+    // link, so an admin clicking "Re-sync credentials" never crashes.
+    syncExtensionsFromPbx: async (tenantId: string) => {
+      const link = await db.tenantPbxLink.findUnique({
+        where: { tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!link) return { skipped: "pbx_not_linked" };
+      const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+      const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const vitalTenantId = link.pbxTenantId || undefined;
+      return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, vitalTenantId ? { vitalTenantId } : undefined);
+    },
+    audit: audit as any,
+    encryptJson,
+    resetSipPasswordOnPbx: async (linkId) => {
+      const link = await db.pbxExtensionLink.findUnique({
+        where: { id: linkId },
+        include: { tenant: { select: { id: true } } },
+      });
+      if (!link) return null;
+      const tenantPbxLink = await db.tenantPbxLink.findUnique({
+        where: { tenantId: link.tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!tenantPbxLink) return null;
+      const auth = decryptJson<{ token: string; secret?: string }>(
+        tenantPbxLink.pbxInstance.apiAuthEncrypted,
+      );
+      const out = await getWirePbxClient({
+        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
+        token: auth.token,
+        secret: auth.secret,
+      }).resetPassword(link.pbxExtensionId);
+      return { sipPassword: out.sipPassword };
+    },
+  });
   registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();

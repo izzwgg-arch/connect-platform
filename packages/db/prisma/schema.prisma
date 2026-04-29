@@ -278,6 +278,8 @@ enum CallInviteStatus {
 model Tenant {
   id                              String                    @id @default(cuid())
   name                            String
+  /// Customer-facing business tenant vs. internal/test workspaces. Admin dropdowns default to CUSTOMER.
+  kind                            TenantKind                @default(CUSTOMER)
   isApproved                      Boolean                   @default(false)
   dailySmsCap                     Int                       @default(100)
   perSecondRate                   Float                     @default(1.0)
@@ -463,6 +465,25 @@ enum UserRole {
   READ_ONLY
   EXTENSION_USER
   USER
+}
+
+enum TenantKind {
+  CUSTOMER
+  INTERNAL
+  TEST
+}
+
+enum ExtensionProvisionStatus {
+  PENDING
+  PROVISIONED
+  FAILED
+  DISABLED
+}
+
+enum ExtensionProvisionSource {
+  PBX_EXISTING
+  PBX_GENERATED
+  CONNECT_GENERATED
 }
 
 enum UserStatus {
@@ -1553,6 +1574,11 @@ model PbxExtensionLink {
   /// True when this extension has a device with a WebRTC profile assigned in VitalPBX.
   webrtcEnabled        Boolean   @default(false)
   isSuspended          Boolean   @default(false)
+  /// Connect-side provisioning state for the user's softphone (independent of desk-phone registrations).
+  provisionStatus      ExtensionProvisionStatus  @default(PENDING)
+  /// Where the current sipPasswordEncrypted came from. PBX_EXISTING = reused from sync, PBX_GENERATED = Wire reset, CONNECT_GENERATED = never used today.
+  provisionSource      ExtensionProvisionSource?
+  lastProvisionedAt    DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

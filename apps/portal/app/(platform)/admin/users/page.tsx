@@ -7,8 +7,29 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
-type TenantOption = { id: string; name: string; status: string };
-type ExtensionOption = { id: string; extNumber: string; displayName: string; pbxUserEmail?: string | null; ownerUserId?: string | null; status?: string };
+type TenantOption = { id: string; name: string; status: string; kind?: string };
+type ExtensionOption = {
+  id: string;
+  extNumber: string;
+  displayName: string;
+  pbxUserEmail?: string | null;
+  ownerUserId?: string | null;
+  status?: string;
+  webrtcEnabled?: boolean;
+  pbxDeviceName?: string | null;
+  provisionStatus?: string | null;
+  isUserFacing?: boolean;
+};
+type RoleOption = { id: string; label: string };
+type CatalogResponse = {
+  tenantId: string | null;
+  tenants: TenantOption[];
+  roles: RoleOption[];
+  extensions: ExtensionOption[];
+  userFacingOnly: boolean;
+  totalExtensions: number;
+  filteredOut: number;
+};
 type AdminUser = {
   id: string;
   tenantId: string;
@@ -31,32 +52,32 @@ type AdminUser = {
 };
 type UsersResponse = { users: AdminUser[]; tenants: TenantOption[]; extensions: ExtensionOption[]; roles: string[]; tenantId: string };
 
+// Portal-bucket labels are the source of truth now (the API's /admin/users/catalog
+// returns { id, label } for each bucket). We keep this map around so legacy rows
+// still display a friendly name when the API returns DB enum values.
 const ROLE_LABEL: Record<string, string> = {
-  SUPER_ADMIN: "Super Admin",
+  SUPER_ADMIN: "Platform Admin",
   TENANT_ADMIN: "Tenant Admin",
+  END_USER: "End User",
   ADMIN: "Tenant Admin",
-  MANAGER: "Manager",
-  BILLING_ADMIN: "Billing Admin",
-  BILLING: "Billing Admin",
-  READ_ONLY: "Read Only",
-  EXTENSION_USER: "Extension User",
-  USER: "User",
+  MANAGER: "Tenant Admin",
+  BILLING_ADMIN: "Tenant Admin",
+  BILLING: "Tenant Admin",
+  READ_ONLY: "End User",
+  EXTENSION_USER: "End User",
+  USER: "End User",
 };
 
-const DEFAULT_ROLES = [
-  "SUPER_ADMIN",
-  "TENANT_ADMIN",
-  "MANAGER",
-  "USER",
-  "EXTENSION_USER",
-  "BILLING_ADMIN",
-  "READ_ONLY",
+const DEFAULT_PORTAL_ROLES: RoleOption[] = [
+  { id: "END_USER", label: "End User" },
+  { id: "TENANT_ADMIN", label: "Tenant Admin" },
+  { id: "SUPER_ADMIN", label: "Platform Admin" },
 ];
 
 const emptyForm = {
   tenantId: "",
   extensionId: "",
-  role: "USER",
+  role: "END_USER",
   email: "",
   firstName: "",
   lastName: "",
@@ -73,6 +94,16 @@ function statusTone(status: AdminUser["status"]) {
   if (status === "ACTIVE") return "success";
   if (status === "INVITED") return "warning";
   return "danger";
+}
+
+// The API still stores DB UserRole values (USER, TENANT_ADMIN, SUPER_ADMIN, ADMIN,
+// BILLING, …). The Users UI only speaks in the 3 portal buckets, so we collapse
+// anything richer than that for the role dropdown.
+function portalBucketForRole(role: string): string {
+  const r = String(role || "").toUpperCase();
+  if (r === "SUPER_ADMIN") return "SUPER_ADMIN";
+  if (r === "TENANT_ADMIN" || r === "ADMIN" || r === "BILLING" || r === "BILLING_ADMIN" || r === "MESSAGING" || r === "SUPPORT" || r === "MANAGER") return "TENANT_ADMIN";
+  return "END_USER";
 }
 
 function formatDate(value: string | null) {
@@ -156,7 +187,7 @@ export default function AdminUsersPage() {
             ) : null}
             <select className="input" style={{ width: 170 }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
               <option value="all">All roles</option>
-              {(data?.roles || []).map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+              {DEFAULT_PORTAL_ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
             <select className="input" style={{ width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="all">All status</option>
@@ -200,8 +231,8 @@ export default function AdminUsersPage() {
         </section>
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
-        {creating ? <UserModal mode="create" tenants={data?.tenants || []} extensions={data?.extensions || []} roles={data?.roles || []} defaultTenantId={effectiveTenantId} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); load(); }} /> : null}
-        {editing ? <UserModal mode="edit" user={editing} tenants={data?.tenants || []} extensions={data?.extensions || []} roles={data?.roles || []} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
+        {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); load(); }} /> : null}
+        {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
     </PermissionGate>
   );
@@ -214,7 +245,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
 function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => void; onEdit: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <aside className="modal" style={{ marginLeft: "auto", width: "min(460px, 94vw)", height: "100vh", borderRadius: "22px 0 0 22px" }} onClick={(e) => e.stopPropagation()}>
+      <aside className="modal" style={{ marginLeft: "auto", width: "min(460px, 94vw)", height: "100vh", borderRadius: "22px 0 0 22px", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
         <button className="btn ghost" style={{ float: "right" }} onClick={onClose}>Close</button>
         <div style={{ width: 64, height: 64, borderRadius: 22, background: "linear-gradient(135deg,#2563eb,#7c3aed)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 24 }}>{user.displayName.slice(0, 1).toUpperCase()}</div>
         <h2>{user.displayName}</h2>
@@ -231,8 +262,109 @@ function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => 
           <Info label="Notes" value={user.notes || "—"} />
         </div>
         <button className="btn" style={{ marginTop: 18 }} onClick={onEdit}><UserCog size={16} /> Edit User</button>
+        {user.extension ? <PhoneProvisioningPanel userId={user.id} /> : null}
       </aside>
     </div>
+  );
+}
+
+type PhoneStatus = {
+  provisionStatus: "PENDING" | "PROVISIONED" | "FAILED" | "DISABLED" | string;
+  provisionSource: string | null;
+  hasSipPassword: boolean;
+  webrtcEnabled: boolean;
+  endpointName: string | null;
+  extensionNumber: string | null;
+  lastProvisionedAt: string | null;
+};
+
+function provisionTone(status: string): string {
+  if (status === "PROVISIONED") return "success";
+  if (status === "FAILED") return "danger";
+  if (status === "DISABLED") return "info";
+  return "warning";
+}
+
+function PhoneProvisioningPanel({ userId }: { userId: string }) {
+  const [status, setStatus] = useState<PhoneStatus | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const r = await apiGet<any>(`/admin/users/${userId}/phone/status`);
+      setStatus({
+        provisionStatus: r.provisionStatus || "PENDING",
+        provisionSource: r.provisionSource || null,
+        hasSipPassword: !!r.hasSipPassword,
+        webrtcEnabled: !!r.webrtcEnabled,
+        endpointName: r.endpointName || null,
+        extensionNumber: r.extensionNumber || null,
+        lastProvisionedAt: r.lastProvisionedAt || null,
+      });
+    } catch {
+      setStatus(null);
+    }
+  }, [userId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function run(action: "provision" | "sync" | "disable", body: Record<string, unknown> = {}) {
+    setBusy(action);
+    setMessage("");
+    try {
+      const r = await apiPost<any>(`/admin/users/${userId}/phone/${action}`, body);
+      setMessage(r?.message || `Phone ${action} succeeded`);
+      await load();
+    } catch (e: any) {
+      setMessage(e?.message || `Phone ${action} failed`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runRegenerate() {
+    const confirmed = typeof window !== "undefined" && window.confirm("Regenerate the SIP password? Any desk phone still using the old secret will stop registering until it is updated.");
+    if (!confirmed) return;
+    setBusy("regenerate");
+    setMessage("");
+    try {
+      const r = await apiPost<any>(`/admin/users/${userId}/phone/regenerate`, { confirm: true, acknowledgeBreaksExistingPhones: true });
+      setMessage(r?.message || "SIP password regenerated");
+      await load();
+    } catch (e: any) {
+      setMessage(e?.message || "Regenerate failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 18, padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0 }}>Portal Phone</h3>
+        {status ? <span className={`chip ${provisionTone(status.provisionStatus)}`}>{String(status.provisionStatus).toLowerCase()}</span> : null}
+      </div>
+      {status ? (
+        <div className="stack" style={{ gap: 6, marginTop: 10 }}>
+          <Info label="Endpoint" value={status.endpointName || "—"} />
+          <Info label="Extension" value={status.extensionNumber || "—"} />
+          <Info label="WebRTC" value={status.webrtcEnabled ? "Enabled" : "Disabled"} />
+          <Info label="SIP password" value={status.hasSipPassword ? "Encrypted at rest" : "Not set"} />
+          <Info label="Source" value={status.provisionSource ? status.provisionSource.toLowerCase() : "—"} />
+          <Info label="Last sync" value={formatDate(status.lastProvisionedAt)} />
+        </div>
+      ) : (
+        <p className="muted" style={{ marginTop: 8 }}>No PBX link for this user yet. Sync the extension from the PBX to activate the portal softphone.</p>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <button className="btn ghost" disabled={busy !== null} onClick={() => run("provision")}>{busy === "provision" ? "Working..." : "Provision"}</button>
+        <button className="btn ghost" disabled={busy !== null} onClick={() => run("sync")}>{busy === "sync" ? "Syncing..." : "Re-sync credentials"}</button>
+        <button className="btn ghost" disabled={busy !== null} onClick={runRegenerate} style={{ borderColor: "var(--danger, #ef4444)", color: "var(--danger, #ef4444)" }}>{busy === "regenerate" ? "Resetting..." : "Regenerate password"}</button>
+        <button className="btn ghost" disabled={busy !== null} onClick={() => run("disable")}>{busy === "disable" ? "Working..." : "Disable portal phone"}</button>
+      </div>
+      {message ? <div className="chip info" style={{ marginTop: 10 }}>{message}</div> : null}
+    </section>
   );
 }
 
@@ -240,13 +372,13 @@ function Info({ label, value }: { label: string; value: string }) {
   return <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: "1px solid var(--border)" }}><span className="muted">{label}</span><strong style={{ textAlign: "right" }}>{value}</strong></div>;
 }
 
-function UserModal({ mode, user, tenants, extensions, roles, defaultTenantId, onClose, onSaved }: {
-  mode: "create" | "edit"; user?: AdminUser; tenants: TenantOption[]; extensions: ExtensionOption[]; roles: string[]; defaultTenantId: string; onClose: () => void; onSaved: () => void;
+function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
+  mode: "create" | "edit"; user?: AdminUser; defaultTenantId: string; onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState(() => user ? {
     tenantId: user.tenantId,
     extensionId: user.extension?.id || "",
-    role: user.role,
+    role: portalBucketForRole(user.role),
     email: user.email,
     firstName: user.firstName,
     lastName: user.lastName,
@@ -257,28 +389,53 @@ function UserModal({ mode, user, tenants, extensions, roles, defaultTenantId, on
     notes: user.notes,
     active: user.status !== "DISABLED",
     sendInvite: false,
-  } : { ...emptyForm, tenantId: defaultTenantId || tenants[0]?.id || "" });
+  } : { ...emptyForm, tenantId: defaultTenantId || "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>(extensions);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
+  const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);
+  const [userFacingOnly, setUserFacingOnly] = useState(true);
+  const [extensionFilterStats, setExtensionFilterStats] = useState<{ total: number; hidden: number }>({ total: 0, hidden: 0 });
   const selectedExtension = extensionOptions.find((e) => e.id === form.extensionId);
-  const roleOptions = roles.length ? roles : DEFAULT_ROLES;
+  const roleOptions = roles.length ? roles : DEFAULT_PORTAL_ROLES;
 
+  // Bootstrap: fetch tenants + portal-bucket roles the first time the modal opens.
   useEffect(() => {
-    if (!tenants.length) return;
-    if (tenants.some((t) => t.id === form.tenantId)) return;
-    const nextTenantId = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : tenants[0].id;
-    setForm((f) => ({ ...f, tenantId: nextTenantId, extensionId: "" }));
-  }, [defaultTenantId, form.tenantId, tenants]);
+    let active = true;
+    apiGet<CatalogResponse>(`/admin/users/catalog?userFacingOnly=${userFacingOnly ? "true" : "false"}`)
+      .then((r) => {
+        if (!active) return;
+        setTenants(r.tenants || []);
+        if (r.roles?.length) setRoles(r.roles);
+        if (!form.tenantId) {
+          const initial = r.tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (r.tenants[0]?.id || "");
+          if (initial) setForm((f) => ({ ...f, tenantId: initial }));
+        }
+      })
+      .catch((e: any) => { if (active) setError(e?.message || "Failed to load tenants"); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Refresh the extension dropdown every time the tenant or the user-facing
+  // toggle changes. The server already filters for us.
   useEffect(() => {
     let active = true;
     if (!form.tenantId) return;
-    apiGet<UsersResponse>(`/admin/users?tenantId=${encodeURIComponent(form.tenantId)}`)
-      .then((r) => { if (active) setExtensionOptions(r.extensions || []); })
-      .catch(() => { if (active) setExtensionOptions(extensions); });
+    const qs = new URLSearchParams({
+      tenantId: form.tenantId,
+      userFacingOnly: userFacingOnly ? "true" : "false",
+    });
+    apiGet<CatalogResponse>(`/admin/users/catalog?${qs.toString()}`)
+      .then((r) => {
+        if (!active) return;
+        setExtensionOptions(r.extensions || []);
+        setExtensionFilterStats({ total: r.totalExtensions, hidden: r.filteredOut });
+      })
+      .catch(() => { if (active) setExtensionOptions([]); });
     return () => { active = false; };
-  }, [extensions, form.tenantId]);
+  }, [form.tenantId, userFacingOnly]);
 
   async function pickExtension(id: string) {
     setForm((f) => ({ ...f, extensionId: id }));
@@ -323,9 +480,39 @@ function UserModal({ mode, user, tenants, extensions, roles, defaultTenantId, on
           <button className="btn ghost" onClick={onClose}>Close</button>
         </div>
         <div className="grid two" style={{ marginTop: 16 }}>
-          <Field label="Tenant"><select className="input" value={form.tenantId} disabled={mode === "edit"} onChange={(e) => setForm({ ...form, tenantId: e.target.value, extensionId: "" })}>{tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>
-          <Field label="Extension"><select className="input" value={form.extensionId} onChange={(e) => pickExtension(e.target.value)}><option value="">Select extension</option>{extensionOptions.map((e) => <option key={e.id} value={e.id}>{e.extNumber} · {e.displayName}{e.ownerUserId && e.ownerUserId !== user?.id ? " (assigned)" : ""}</option>)}</select></Field>
-          <Field label="Role"><select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}</select></Field>
+          <Field label="Tenant">
+            <select className="input" value={form.tenantId} disabled={mode === "edit"} onChange={(e) => setForm({ ...form, tenantId: e.target.value, extensionId: "" })}>
+              <option value="">Select tenant</option>
+              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}{t.status === "SUSPENDED" ? " (suspended)" : ""}</option>)}
+            </select>
+          </Field>
+          <Field label="Extension">
+            <select className="input" value={form.extensionId} onChange={(e) => pickExtension(e.target.value)}>
+              <option value="">Select extension</option>
+              {extensionOptions.map((e) => {
+                const assigned = e.ownerUserId && e.ownerUserId !== user?.id;
+                const pieces = [
+                  `${e.extNumber} \u00b7 ${e.displayName}`,
+                  e.pbxDeviceName ? `(${e.pbxDeviceName})` : null,
+                  assigned ? "\u2014 assigned" : null,
+                  !e.webrtcEnabled ? "\u2014 webrtc off" : null,
+                ].filter(Boolean);
+                return <option key={e.id} value={e.id} disabled={!!assigned}>{pieces.join(" ")}</option>;
+              })}
+            </select>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                <input type="checkbox" checked={userFacingOnly} onChange={(e) => setUserFacingOnly(e.target.checked)} />
+                <span className="muted">User-facing only{extensionFilterStats.total ? ` \u00b7 showing ${extensionOptions.length}/${extensionFilterStats.total}` : ""}</span>
+              </label>
+              {selectedExtension?.provisionStatus ? <span className="muted" style={{ fontSize: 12 }}>Provision: {selectedExtension.provisionStatus.toLowerCase()}</span> : null}
+            </div>
+          </Field>
+          <Field label="Role">
+            <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+              {roleOptions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </Field>
           <Field label="Email"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="First name"><input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></Field>
           <Field label="Last name"><input className="input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></Field>

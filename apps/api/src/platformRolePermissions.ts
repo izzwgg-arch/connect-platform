@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
+import { portalBucketFromJwtRole, PORTAL_ROLE_BUCKETS as SHARED_PORTAL_ROLE_BUCKETS } from "./userManagementRoles";
 
 const SNAPSHOT_ID = "default";
 
@@ -51,7 +52,7 @@ export const PORTAL_PERMISSION_KEYS = [
 
 const PORTAL_PERMISSION_KEYS_SET = new Set<string>(PORTAL_PERMISSION_KEYS);
 
-const PORTAL_ROLE_BUCKETS = ["END_USER", "TENANT_ADMIN", "SUPER_ADMIN"] as const;
+const PORTAL_ROLE_BUCKETS = SHARED_PORTAL_ROLE_BUCKETS;
 type PortalRoleBucket = (typeof PORTAL_ROLE_BUCKETS)[number];
 
 type PortalUser = { sub?: string; tenantId?: string; email?: string; role?: string };
@@ -70,10 +71,7 @@ async function requireSuperAdminPortal(req: any, reply: any): Promise<PortalUser
 }
 
 export function jwtRoleToPortalPermissionBucket(jwtRole: string | undefined): PortalRoleBucket {
-  const r = String(jwtRole || "").toUpperCase();
-  if (r === "SUPER_ADMIN") return "SUPER_ADMIN";
-  if (["ADMIN", "BILLING", "MESSAGING", "SUPPORT"].includes(r)) return "TENANT_ADMIN";
-  return "END_USER";
+  return portalBucketFromJwtRole(jwtRole);
 }
 
 function normalizePermissionList(input: unknown): string[] {
