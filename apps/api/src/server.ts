@@ -603,7 +603,16 @@ async function logInvoiceEvent(params: { tenantId: string; invoiceId: string; ty
 }
 
 async function sendEmailJobNow(job: any): Promise<void> {
-  const provider = await db.emailProviderConfig.findUnique({ where: { tenantId: job.tenantId } });
+  // Try the job's own tenant first; fall back to any enabled system provider so that
+  // users invited to tenants without their own email config still receive emails.
+  let provider = await db.emailProviderConfig.findUnique({ where: { tenantId: job.tenantId } });
+  if (!provider || (!provider.isEnabled && job.type !== "EMAIL_TEST")) {
+    const fallback = await db.emailProviderConfig.findFirst({
+      where: { isEnabled: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (fallback) provider = fallback;
+  }
   if (!provider) {
     const err: any = new Error("EMAIL_PROVIDER_NOT_CONFIGURED");
     err.code = "EMAIL_PROVIDER_NOT_CONFIGURED";
