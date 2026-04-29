@@ -18850,6 +18850,313 @@ app.post("/settings/email/test", async (req, reply) => {
   }
 });
 
+// ── Admin: Email settings (Google Workspace + provider summary) ─────────────
+app.get("/admin/email-settings", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const tenantId = getEffectiveEmailTenantId(req, admin);
+  const row = await db.emailProviderConfig.findUnique({ where: { tenantId } });
+  if (!row) {
+    return {
+      tenantId,
+      currentProvider: { type: null, fromName: null, fromEmail: null, isEnabled: false },
+      googleWorkspace: {
+        integrationType: "SMTP" as const,
+        fromName: null,
+        fromEmail: null,
+        googleWorkspaceMailboxMasked: null,
+        hasMailboxConfigured: false,
+        smtpHost: "smtp.gmail.com",
+        smtpPort: 587,
+        hasAppPassword: false,
+        hasOAuthRefresh: false,
+        oauthClientIdMasked: null,
+        status: "NOT_CONNECTED" as const,
+        lastTestedAt: null,
+        lastTestErrorCode: null,
+      },
+    };
+  }
+  let creds: EmailProviderCredentialPayload = {};
+  try {
+    creds = decryptJson<EmailProviderCredentialPayload>(row.credentialsEncrypted);
+  } catch {
+    creds = {};
+  }
+  const st = readEmailProviderSettings(row);
+  const gwStatus =
+    row.provider !== "GOOGLE_WORKSPACE"
+      ? ("NOT_CONNECTED" as const)
+      : row.lastTestResult === "SUCCESS" || row.isEnabled
+        ? ("CONNECTED" as const)
+        : row.lastTestResult === "FAILED"
+          ? ("FAILED" as const)
+          : ("NOT_CONNECTED" as const);
+  return {
+    tenantId,
+    currentProvider: {
+      type: row.provider,
+      fromName: row.fromName,
+      fromEmail: row.fromEmail,
+      replyTo: row.replyTo,
+      isEnabled: row.isEnabled,
+      lastTestAt: row.lastTestAt,
+      lastTestResult: row.lastTestResult,
+      lastTestErrorCode: row.lastTestErrorCode,
+      masked: {
+        sendgridApiKey: creds.sendgridApiKey ? "********" : null,
+        smtpHost: maskValue(creds.smtpHost || null, 2, 2),
+        smtpPort: creds.smtpPort || null,
+        smtpUser: maskValue(creds.smtpUser || null, 2, 2),
+        smtpPass: creds.smtpPass ? "********" : null,
+        googleWorkspaceMailbox: maskValue(creds.googleWorkspaceMailbox || creds.smtpUser || null, 2, 2),
+        oauthRefreshToken: creds.oauthRefreshToken ? "********" : null,
+      },
+    },
+    googleWorkspace: {
+      integrationType: (st.googleIntegrationType || "SMTP") as "SMTP" | "OAUTH",
+      fromName: row.fromName,
+      fromEmail: row.fromEmail,
+      googleWorkspaceMailboxMasked: maskValue(creds.googleWorkspaceMailbox || creds.smtpUser || null, 2, 2),
+      hasMailboxConfigured: !!(creds.googleWorkspaceMailbox || creds.smtpUser),
+      smtpHost: creds.smtpHost || (row.provider === "GOOGLE_WORKSPACE" ? "smtp.gmail.com" : null),
+      smtpPort: creds.smtpPort || (row.provider === "GOOGLE_WORKSPACE" ? 587 : null),
+      hasAppPassword: !!creds.smtpPass,
+      hasOAuthRefresh: !!creds.oauthRefreshToken,
+      oauthClientIdMasked: st.oauthClientId ? maskValue(String(st.oauthClientId), 4, 4) : null,
+      status: row.provider === "GOOGLE_WORKSPACE" ? gwStatus : ("NOT_CONNECTED" as const),
+      lastTestedAt: row.lastTestAt,
+      lastTestErrorCode: row.lastTestErrorCode,
+    },
+  };
+});
+
+app.patch("/admin/email-settings/google-workspace", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const tenantId = getEffectiveEmailTenantId(req, admin);
+  const input = z
+    .object({
+      fromName: z.string().max(120).optional().nullable(),
+      fromEmail: z.string().email().optional().nullable(),
+      googleWorkspaceMailbox: z.union([z.string().email(), z.null()]).optional(),
+      integrationType: z.enum(["SMTP", "OAUTH"]).optional(),
+      smtpHost: z.string().min(1).max(200).optional().nullable(),
+      smtpPort: z.coerce.number().int().min(1).max(65535).optional().nullable(),
+      smtpUser: z.string().min(1).max(200).optional().nullable(),
+      smtpAppPassword: z.string().min(8).optional(),
+      oauthClientId: z.string().max(400).optional().nullable(),
+      oauthRefreshToken: z.string().min(1).optional(),
+    })
+    .parse(req.body || {});
+
+  const existing = await db.emailProviderConfig.findUnique({ where: { tenantId } });
+  let existingCreds: EmailProviderCredentialPayload = {};
+  if (existing) {
+    try {
+      existingCreds = decryptJson<EmailProviderCredentialPayload>(existing.credentialsEncrypted);
+    } catch {
+      existingCreds = {};
+    }
+  }
+  const prevSettings = readEmailProviderSettings(existing);
+  const mergedSettings: EmailProviderSettingsJson = {
+    ...prevSettings,
+    ...(input.integrationType ? { googleIntegrationType: input.integrationType } : {}),
+    ...(input.oauthClientId !== undefined ? { oauthClientId: input.oauthClientId } : {}),
+  };
+  if (!mergedSettings.googleIntegrationType) mergedSettings.googleIntegrationType = "SMTP";
+
+  const mailbox =
+    input.googleWorkspaceMailbox !== undefined && input.googleWorkspaceMailbox !== null && input.googleWorkspaceMailbox !== ""
+      ? input.googleWorkspaceMailbox
+      : input.googleWorkspaceMailbox === null
+        ? null
+        : existingCreds.googleWorkspaceMailbox ?? existingCreds.smtpUser ?? null;
+  const smtpUser =
+    input.smtpUser !== undefined && input.smtpUser !== null && input.smtpUser !== ""
+      ? input.smtpUser
+      : input.smtpUser === null
+        ? null
+        : existingCreds.smtpUser ?? mailbox;
+  const creds: EmailProviderCredentialPayload = {
+    sendgridApiKey: existingCreds.sendgridApiKey || null,
+    smtpHost: input.smtpHost ?? existingCreds.smtpHost ?? "smtp.gmail.com",
+    smtpPort: input.smtpPort ?? existingCreds.smtpPort ?? 587,
+    smtpUser: smtpUser || null,
+    smtpPass: input.smtpAppPassword || existingCreds.smtpPass || null,
+    smtpSecure: typeof existingCreds.smtpSecure === "boolean" ? existingCreds.smtpSecure : false,
+    googleWorkspaceMailbox: mailbox,
+    oauthRefreshToken: input.oauthRefreshToken || existingCreds.oauthRefreshToken || null,
+  };
+  if (mailbox && !creds.smtpUser) creds.smtpUser = mailbox;
+
+  if (mergedSettings.googleIntegrationType === "SMTP") {
+    if (!creds.smtpHost || !creds.smtpPort || !creds.smtpUser || !creds.smtpPass) {
+      return reply.status(400).send({ error: "SMTP_INCOMPLETE", message: "SMTP host, port, mailbox user, and app password are required for SMTP mode." });
+    }
+  } else if (mergedSettings.googleIntegrationType === "OAUTH") {
+    if (!creds.oauthRefreshToken) {
+      return reply.status(400).send({
+        error: "OAUTH_NOT_AVAILABLE",
+        message: "Gmail OAuth is not enabled yet. Choose SMTP and a Google app password, or wait for the OAuth rollout.",
+      });
+    }
+  }
+
+  const fromName = input.fromName !== undefined ? input.fromName : existing?.fromName ?? null;
+  const fromEmail = input.fromEmail !== undefined ? input.fromEmail : existing?.fromEmail ?? null;
+
+  const row = await db.emailProviderConfig.upsert({
+    where: { tenantId },
+    create: {
+      tenantId,
+      provider: "GOOGLE_WORKSPACE",
+      fromName,
+      fromEmail,
+      replyTo: existing?.replyTo || null,
+      logoUrl: existing?.logoUrl || null,
+      footerText: existing?.footerText || null,
+      settings: mergedSettings as object,
+      credentialsEncrypted: encryptJson(creds),
+      credentialsKeyId: "v1",
+      isEnabled: false,
+      createdByUserId: admin.sub,
+      updatedByUserId: admin.sub,
+      lastTestAt: null,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+    },
+    update: {
+      provider: "GOOGLE_WORKSPACE",
+      fromName: fromName ?? existing?.fromName ?? null,
+      fromEmail: fromEmail ?? existing?.fromEmail ?? null,
+      settings: mergedSettings as object,
+      credentialsEncrypted: encryptJson(creds),
+      isEnabled: false,
+      updatedByUserId: admin.sub,
+      lastTestAt: null,
+      lastTestResult: null,
+      lastTestErrorCode: null,
+    },
+  });
+  await audit({
+    tenantId,
+    actorUserId: admin.sub,
+    action: existing ? "EMAIL_PROVIDER_GOOGLE_PATCHED" : "EMAIL_PROVIDER_GOOGLE_CREATED",
+    entityType: "EmailProviderConfig",
+    entityId: row.id,
+  });
+  return { ok: true, provider: row.provider, updatedAt: row.updatedAt };
+});
+
+app.post("/admin/email-settings/google-workspace/test", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const tenantId = getEffectiveEmailTenantId(req, admin);
+  const body = z.object({ testRecipientEmail: z.string().email() }).parse(req.body || {});
+  const row = await db.emailProviderConfig.findUnique({ where: { tenantId } });
+  if (!row || row.provider !== "GOOGLE_WORKSPACE") {
+    return reply.status(400).send({ error: "GOOGLE_WORKSPACE_NOT_CONFIGURED", message: "Save Google Workspace SMTP settings first." });
+  }
+  const sentAt = new Date().toISOString();
+  const fromAddr = (row.fromEmail || "noreply@connectcomunications.com").trim();
+  const subject = "Connect Communications test email";
+  const htmlBody = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
+<p><strong>Your Google Workspace email integration is working.</strong></p>
+<p>This message was sent from Connect using your configured mailbox.</p>
+<ul>
+<li><strong>From:</strong> ${fromAddr}</li>
+<li><strong>Sent:</strong> ${sentAt}</li>
+<li><strong>Tenant:</strong> ${tenantId}</li>
+</ul>
+<p style="color:#666;font-size:13px">If you did not request this test, you can ignore this email.</p>
+</body></html>`;
+  const textBody = `Your Google Workspace email integration is working.\nFrom: ${fromAddr}\nSent: ${sentAt}\nTenant: ${tenantId}`;
+  try {
+    await sendEmailJobNow({
+      tenantId,
+      type: "EMAIL_TEST",
+      toEmail: body.testRecipientEmail,
+      subject,
+      htmlBody,
+      textBody,
+    } as any);
+    await db.emailProviderConfig.update({
+      where: { tenantId },
+      data: {
+        isEnabled: true,
+        lastTestAt: new Date(),
+        lastTestResult: "SUCCESS",
+        lastTestErrorCode: null,
+        updatedByUserId: admin.sub,
+      },
+    });
+    await audit({ tenantId, actorUserId: admin.sub, action: "EMAIL_PROVIDER_TEST_SUCCESS", entityType: "EmailProviderConfig", entityId: row.id });
+    return { ok: true, sentAt, to: body.testRecipientEmail, subject };
+  } catch (e: any) {
+    const code = String(e?.code || "EMAIL_TEST_FAILED");
+    const safeMsg = String(e?.message || "send failed").slice(0, 400);
+    await db.emailProviderConfig.update({
+      where: { tenantId },
+      data: {
+        lastTestAt: new Date(),
+        lastTestResult: "FAILED",
+        lastTestErrorCode: code,
+        updatedByUserId: admin.sub,
+      },
+    });
+    await audit({ tenantId, actorUserId: admin.sub, action: "EMAIL_PROVIDER_TEST_FAILED", entityType: "EmailProviderConfig", entityId: row.id });
+    return reply.status(400).send({ ok: false, error: "EMAIL_TEST_FAILED", code, message: safeMsg });
+  }
+});
+
+app.post("/admin/email-settings/google-workspace/disconnect", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageBilling);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const tenantId = getEffectiveEmailTenantId(req, admin);
+  const row = await db.emailProviderConfig.findUnique({ where: { tenantId } });
+  if (!row || row.provider !== "GOOGLE_WORKSPACE") {
+    return reply.status(400).send({ error: "NOT_GOOGLE_WORKSPACE" });
+  }
+  let creds: EmailProviderCredentialPayload = {};
+  try {
+    creds = decryptJson<EmailProviderCredentialPayload>(row.credentialsEncrypted);
+  } catch {
+    creds = {};
+  }
+  const preserved: EmailProviderCredentialPayload = {
+    sendgridApiKey: creds.sendgridApiKey || null,
+    smtpHost: null,
+    smtpPort: null,
+    smtpUser: null,
+    smtpPass: null,
+    smtpSecure: null,
+    googleWorkspaceMailbox: null,
+    oauthRefreshToken: null,
+  };
+  const nextProvider = preserved.sendgridApiKey ? "SENDGRID" : "SMTP";
+  await db.emailProviderConfig.update({
+    where: { tenantId },
+    data: {
+      provider: nextProvider,
+      isEnabled: false,
+      credentialsEncrypted: encryptJson(preserved),
+      settings: { googleIntegrationType: "SMTP", oauthClientId: null } as object,
+      lastTestAt: new Date(),
+      lastTestResult: "NOT_CONNECTED",
+      lastTestErrorCode: null,
+      updatedByUserId: admin.sub,
+    },
+  });
+  await audit({ tenantId, actorUserId: admin.sub, action: "EMAIL_PROVIDER_GOOGLE_DISCONNECTED", entityType: "EmailProviderConfig", entityId: row.id });
+  return { ok: true, provider: nextProvider };
+});
+
 const CONTACT_INCLUDE = {
   phones: true,
   emails: true,
