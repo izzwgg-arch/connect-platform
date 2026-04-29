@@ -1652,13 +1652,66 @@ function roleLabel(role: string): string {
   return role;
 }
 
+function normalizeTenantLookupValue(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^vpbx:/, "")
+    .replace(/[_\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+}
+
 async function resolveManagedTenant(actor: JwtUser, requestedTenantId?: string | null): Promise<string> {
   if (actor.role === "SUPER_ADMIN") {
-    const tenantId = String(requestedTenantId || actor.tenantId || "").trim();
-    if (!tenantId || tenantId.startsWith("vpbx:")) throw new Error("TENANT_REQUIRED");
-    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
-    if (!tenant) throw new Error("TENANT_NOT_FOUND");
-    return tenant.id;
+    const rawTenantId = String(requestedTenantId || actor.tenantId || "").trim();
+    if (rawTenantId && !rawTenantId.startsWith("vpbx:")) {
+      const tenant = await db.tenant.findUnique({ where: { id: rawTenantId }, select: { id: true } });
+      if (tenant) return tenant.id;
+    }
+
+    if (rawTenantId.startsWith("vpbx:")) {
+      const slug = rawTenantId.slice(5).trim();
+      const normalized = normalizeTenantLookupValue(slug);
+      const links = await db.tenantPbxLink.findMany({
+        where: { status: "LINKED" },
+        include: { tenant: { select: { id: true, name: true } } },
+        take: 500,
+      });
+      const direct = links.find((link) => {
+        const candidates = [
+          link.pbxTenantId,
+          link.pbxTenantCode,
+          link.tenant?.name,
+        ].map((v) => normalizeTenantLookupValue(String(v || "")));
+        return candidates.includes(normalized);
+      });
+      if (direct) return direct.tenantId;
+
+      const directory = await db.pbxTenantDirectory.findFirst({
+        where: {
+          OR: [
+            { tenantSlug: slug },
+            { tenantCode: slug },
+            { vitalTenantId: slug },
+            { tenantSlug: normalized },
+            { tenantCode: normalized },
+          ],
+        },
+      }).catch(() => null);
+      if (directory) {
+        const byDirectory = links.find((link) => {
+          if (link.pbxInstanceId !== directory.pbxInstanceId) return false;
+          return [link.pbxTenantId, link.pbxTenantCode]
+            .map((v) => normalizeTenantLookupValue(String(v || "")))
+            .some((v) => v === normalizeTenantLookupValue(directory.vitalTenantId) || v === normalizeTenantLookupValue(directory.tenantCode));
+        });
+        if (byDirectory) return byDirectory.tenantId;
+      }
+    }
+
+    const fallback = await db.tenant.findFirst({ orderBy: { name: "asc" }, select: { id: true } });
+    if (!fallback) throw new Error("TENANT_REQUIRED");
+    return fallback.id;
   }
   return actor.tenantId;
 }

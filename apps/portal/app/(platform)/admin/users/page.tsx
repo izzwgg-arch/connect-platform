@@ -43,6 +43,16 @@ const ROLE_LABEL: Record<string, string> = {
   USER: "User",
 };
 
+const DEFAULT_ROLES = [
+  "SUPER_ADMIN",
+  "TENANT_ADMIN",
+  "MANAGER",
+  "USER",
+  "EXTENSION_USER",
+  "BILLING_ADMIN",
+  "READ_ONLY",
+];
+
 const emptyForm = {
   tenantId: "",
   extensionId: "",
@@ -93,7 +103,9 @@ export default function AdminUsersPage() {
     if (statusFilter !== "all") params.set("status", statusFilter);
     const result = await apiGet<UsersResponse>(`/admin/users?${params.toString()}`);
     setData(result);
-    if (!selectedTenantId && result.tenantId) setSelectedTenantId(result.tenantId);
+    if (result.tenantId && (!selectedTenantId || !result.tenants.some((t) => t.id === selectedTenantId))) {
+      setSelectedTenantId(result.tenantId);
+    }
   }, [effectiveTenantId, query, roleFilter, selectedTenantId, statusFilter]);
 
   useEffect(() => { load().catch((e: any) => setMessage(e?.message || "Failed to load users")); }, [load]);
@@ -250,6 +262,14 @@ function UserModal({ mode, user, tenants, extensions, roles, defaultTenantId, on
   const [error, setError] = useState("");
   const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>(extensions);
   const selectedExtension = extensionOptions.find((e) => e.id === form.extensionId);
+  const roleOptions = roles.length ? roles : DEFAULT_ROLES;
+
+  useEffect(() => {
+    if (!tenants.length) return;
+    if (tenants.some((t) => t.id === form.tenantId)) return;
+    const nextTenantId = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : tenants[0].id;
+    setForm((f) => ({ ...f, tenantId: nextTenantId, extensionId: "" }));
+  }, [defaultTenantId, form.tenantId, tenants]);
 
   useEffect(() => {
     let active = true;
@@ -305,7 +325,7 @@ function UserModal({ mode, user, tenants, extensions, roles, defaultTenantId, on
         <div className="grid two" style={{ marginTop: 16 }}>
           <Field label="Tenant"><select className="input" value={form.tenantId} disabled={mode === "edit"} onChange={(e) => setForm({ ...form, tenantId: e.target.value, extensionId: "" })}>{tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>
           <Field label="Extension"><select className="input" value={form.extensionId} onChange={(e) => pickExtension(e.target.value)}><option value="">Select extension</option>{extensionOptions.map((e) => <option key={e.id} value={e.id}>{e.extNumber} · {e.displayName}{e.ownerUserId && e.ownerUserId !== user?.id ? " (assigned)" : ""}</option>)}</select></Field>
-          <Field label="Role"><select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}</select></Field>
+          <Field label="Role"><select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}</select></Field>
           <Field label="Email"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="First name"><input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></Field>
           <Field label="Last name"><input className="input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></Field>
