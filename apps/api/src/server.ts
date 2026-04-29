@@ -1725,16 +1725,43 @@ async function resolveConnectTenantIdForAdminExtensionPairing(
     return { tenantId: admin.tenantId };
   }
   const raw = String((req.headers as any)["x-tenant-context"] || "").trim();
-  if (!raw) return { error: "TENANT_CONTEXT_REQUIRED", status: 400 };
+  if (!raw || raw === "local") return { error: "TENANT_CONTEXT_REQUIRED", status: 400 };
+
   if (raw.startsWith("vpbx:")) {
+    const slug = raw.slice(5).trim();
+    const normalized = normalizeTenantLookupValue(slug);
+
+    // Try the standard resolver first (prefers LINKED links). resolveManagedTenant never
+    // throws for SUPER_ADMIN — it falls back to the first tenant alphabetically when the
+    // slug has no LINKED link match. Verify the returned tenant name actually matches the
+    // slug so we don't silently use the wrong tenant.
     try {
       const tenantId = await resolveManagedTenant(admin, raw);
-      return { tenantId };
+      const t = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } });
+      if (t && normalizeTenantLookupValue(t.name) === normalized) {
+        return { tenantId };
+      }
     } catch {
-      return { error: "TENANT_NOT_FOUND", status: 404 };
+      // fall through
     }
+
+    // Broader fallback: match against any TenantPbxLink regardless of status.
+    // This covers tenants whose link is in ERROR/PENDING state — the link status
+    // only governs PBX connectivity, not whether we can identify the tenant.
+    const allLinks = await db.tenantPbxLink.findMany({
+      include: { tenant: { select: { id: true, name: true } } },
+      take: 500,
+    });
+    const matchedLink = allLinks.find((link) => {
+      const candidates = [link.pbxTenantId, link.pbxTenantCode, link.tenant?.name]
+        .map((v) => normalizeTenantLookupValue(String(v || "")));
+      return candidates.includes(normalized);
+    });
+    if (matchedLink) return { tenantId: matchedLink.tenantId };
+
+    return { error: "TENANT_NOT_FOUND", status: 404 };
   }
-  if (raw === "local") return { error: "TENANT_CONTEXT_REQUIRED", status: 400 };
+
   const row = await db.tenant.findUnique({ where: { id: raw }, select: { id: true } });
   if (!row) return { error: "TENANT_NOT_FOUND", status: 404 };
   return { tenantId: row.id };
