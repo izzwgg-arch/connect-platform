@@ -122,6 +122,8 @@ export default function AdminUsersPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [message, setMessage] = useState("");
+  const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
+  const [syncResults, setSyncResults] = useState<Record<string, string>>({});
 
   const isSuper = role === "SUPER_ADMIN";
   const effectiveTenantId = isSuper ? selectedTenantId : contextTenantId;
@@ -159,6 +161,20 @@ export default function AdminUsersPage() {
       await load();
     } catch (e: any) {
       setMessage(e?.message || "Action failed");
+    }
+  }
+
+  async function syncUser(userId: string) {
+    setSyncingIds((prev) => new Set(prev).add(userId));
+    setSyncResults((prev) => ({ ...prev, [userId]: "" }));
+    try {
+      await apiPost(`/admin/users/${userId}/phone/sync`, {});
+      setSyncResults((prev) => ({ ...prev, [userId]: "✓ synced" }));
+      await load();
+    } catch (e: any) {
+      setSyncResults((prev) => ({ ...prev, [userId]: e?.message || "sync failed" }));
+    } finally {
+      setSyncingIds((prev) => { const s = new Set(prev); s.delete(userId); return s; });
     }
   }
 
@@ -214,12 +230,27 @@ export default function AdminUsersPage() {
                     <td><span className={`chip ${statusTone(u.status)}`}>{u.status.toLowerCase()}</span></td>
                     <td>{formatDate(u.lastLoginAt)}</td>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                         <button className="btn ghost" onClick={() => setEditing(u)}>Edit</button>
                         {u.status === "DISABLED"
                           ? <button className="btn ghost" onClick={() => action(`/admin/users/${u.id}/enable`, "User enabled")}>Enable</button>
                           : <button className="btn ghost" onClick={() => action(`/admin/users/${u.id}/disable`, "User disabled")}>Disable</button>}
                         <button className="btn ghost" onClick={() => action(`/admin/users/${u.id}/resend-invite`, "Invite queued")}>Resend</button>
+                        {u.extension ? (
+                          <button
+                            className="btn ghost"
+                            disabled={syncingIds.has(u.id)}
+                            onClick={() => syncUser(u.id)}
+                            title="Sync SIP/WebRTC credentials from VitalPBX"
+                          >
+                            {syncingIds.has(u.id) ? "Syncing…" : "Sync SIP"}
+                          </button>
+                        ) : null}
+                        {syncResults[u.id] ? (
+                          <span className={`chip ${syncResults[u.id].startsWith("✓") ? "success" : "danger"}`} style={{ fontSize: 11 }}>
+                            {syncResults[u.id]}
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
