@@ -231,7 +231,7 @@ export default function AdminUsersPage() {
         </section>
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
-        {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); load(); }} /> : null}
+        {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); if (createdTenantId && createdTenantId !== selectedTenantId) setSelectedTenantId(createdTenantId); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
     </PermissionGate>
@@ -373,7 +373,7 @@ function Info({ label, value }: { label: string; value: string }) {
 }
 
 function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
-  mode: "create" | "edit"; user?: AdminUser; defaultTenantId: string; onClose: () => void; onSaved: () => void;
+  mode: "create" | "edit"; user?: AdminUser; defaultTenantId: string; onClose: () => void; onSaved: (tenantId?: string) => void;
 }) {
   const [form, setForm] = useState(() => user ? {
     tenantId: user.tenantId,
@@ -464,7 +464,7 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
     try {
       if (mode === "create") await apiPost("/admin/users", form);
       else if (user) await apiPatch(`/admin/users/${user.id}`, { ...form, status: form.active ? "ACTIVE" : "DISABLED" });
-      onSaved();
+      onSaved(mode === "create" ? form.tenantId : undefined);
     } catch (e: any) {
       setError(e?.message || "Save failed");
     } finally {

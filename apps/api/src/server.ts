@@ -3967,6 +3967,23 @@ app.post("/admin/users", async (req, reply) => {
       inviteSent,
     },
   });
+  // Fire-and-forget PBX sync so SIP/WebRTC credentials are populated immediately
+  // without delaying the user-creation response.
+  setImmediate(async () => {
+    try {
+      const tpLink = await db.tenantPbxLink.findUnique({
+        where: { tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!tpLink) return;
+      const auth = decryptJson<{ token: string; secret?: string }>(tpLink.pbxInstance.apiAuthEncrypted);
+      const vital = getVitalPbxClient({ baseUrl: tpLink.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const vitalTenantId = tpLink.pbxTenantId || undefined;
+      await syncExtensionsFromPbx(db, tpLink.pbxInstanceId, vital, vitalTenantId ? { vitalTenantId } : undefined);
+    } catch {
+      // sync failure is non-fatal — admin can click "Re-sync credentials" in the user panel
+    }
+  });
   return { ok: true, user: formatAdminUser({ ...created, tenant: { id: tenantId, name: extension.tenant.name }, ownedExtensions: [extension], passwordTokens: [] }), inviteSent };
 });
 
