@@ -44,6 +44,158 @@ export type CallRecord = {
   disposition?: string; // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
 };
 
+export type VoicemailFolder = "inbox" | "old" | "urgent";
+
+export type Voicemail = {
+  id: string;
+  callerId: string;
+  callerName?: string | null;
+  receivedAt: string;
+  durationSec: number;
+  folder: VoicemailFolder;
+  listened: boolean;
+  extension: string;
+  tenantId: string | null;
+  tenantName?: string | null;
+  transcription?: string | null;
+  streamUrl?: string;
+};
+
+export type VoicemailResponse = {
+  voicemails: Voicemail[];
+  total: number;
+  page: number;
+};
+
+export type TeamPresence = "available" | "ringing" | "on_call" | "offline";
+
+export type TeamDirectoryMember = {
+  id: string;
+  name: string;
+  extension: string;
+  email?: string | null;
+  department?: string | null;
+  title?: string | null;
+  tenantId?: string | null;
+  tenantName?: string | null;
+  presence: TeamPresence;
+};
+
+export type LiveCallState = "ringing" | "dialing" | "up" | "held" | "hungup" | "unknown";
+
+export type LiveCall = {
+  id: string;
+  linkedId?: string | null;
+  tenantId: string | null;
+  tenantName: string | null;
+  direction: "inbound" | "outbound" | "internal" | "unknown";
+  state: LiveCallState;
+  from: string | null;
+  fromName: string | null;
+  to: string | null;
+  connectedLine: string | null;
+  channels: string[];
+  bridgeIds: string[];
+  extensions: string[];
+  startedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSec: number;
+  billableSec: number;
+};
+
+export type LiveExtensionState = {
+  extension: string;
+  hint: string;
+  status: string;
+  tenantId: string | null;
+  updatedAt: string;
+};
+
+export type TelephonySnapshot = {
+  calls: LiveCall[];
+  extensions: LiveExtensionState[];
+};
+
+export type ContactPhone = { id?: string; type: string; numberRaw: string; numberNormalized?: string; isPrimary?: boolean };
+export type ContactEmail = { id?: string; type: string; email: string; isPrimary?: boolean };
+export type ContactTag = { id: string; name: string; color?: string | null };
+
+export type Contact = {
+  id: string;
+  tenantId: string;
+  type: "internal_extension" | "external" | "company";
+  extensionId?: string | null;
+  extension?: string;
+  displayName: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
+  title?: string | null;
+  avatarUrl?: string | null;
+  notes?: string | null;
+  favorite: boolean;
+  source: "manual" | "extension" | "imported";
+  phones: ContactPhone[];
+  emails: ContactEmail[];
+  addresses: Array<Record<string, string | null | undefined>>;
+  tags: ContactTag[];
+  primaryPhone?: ContactPhone | null;
+  primaryEmail?: ContactEmail | null;
+};
+
+export type ContactsResponse = {
+  tenantId: string;
+  rows: Contact[];
+  tags: ContactTag[];
+  stats: { total: number; internalExtensions: number; external: number; companies: number; favorites: number };
+};
+
+export type ChatThreadType = "SMS" | "DM" | "GROUP" | "TENANT_GROUP";
+export type ChatMessageType = "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "VOICE_NOTE" | "FILE" | "LOCATION" | "SYSTEM";
+
+export type ChatThread = {
+  id: string;
+  type: ChatThreadType;
+  title?: string | null;
+  isDefaultTenantGroup?: boolean;
+  tenantSmsE164?: string | null;
+  externalSmsE164?: string | null;
+  participantName: string;
+  participantExtension: string;
+  lastMessage: string;
+  lastAt: string;
+  unread: number;
+  deliveryStatus?: string | null;
+  deliveryError?: string | null;
+};
+
+export type ChatMessage = {
+  id: string;
+  threadId: string;
+  senderId: string;
+  senderName: string;
+  body: string;
+  sentAt: string;
+  mine: boolean;
+  type: ChatMessageType;
+  editedAt?: string | null;
+  deletedForEveryoneAt?: string | null;
+  deliveryStatus?: string | null;
+  deliveryError?: string | null;
+};
+
+export type ChatDirectoryUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  extensionId?: string | null;
+  extensionNumber?: string | null;
+  extensionName?: string | null;
+  self?: boolean;
+};
+
 export type CallInvite = {
   id: string;
   tenantId: string;

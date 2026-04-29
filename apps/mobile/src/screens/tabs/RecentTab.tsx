@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
   View,
   Text,
   FlatList,
@@ -7,6 +9,10 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  PanResponder,
+  TextInput,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,28 +22,49 @@ import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { HeaderBar } from '../../components/HeaderBar';
+import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { getCallHistory } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
-import { spacing } from '../../theme/spacing';
+import { teamFilterChipColors } from '../../theme/filterChipColors';
+import { radius, spacing } from '../../theme/spacing';
+
+type CallFilter = 'all' | 'missed' | 'incoming' | 'outgoing' | 'internal';
+type CallKind = 'missed' | 'incoming' | 'outgoing' | 'internal' | 'voicemail';
+
+type CallGroup = {
+  type: 'group';
+  id: string;
+  calls: CallRecord[];
+  canonicalNumber: string;
+  displayName: string;
+  kind: CallKind;
+  latestAt: string;
+  earliestAt: string;
+  count: number;
+  totalDurationSec: number;
+  maxDurationSec: number;
+  unknown: boolean;
+};
+
+type TimelineItem =
+  | { type: 'section'; id: string; title: string }
+  | CallGroup;
 
 function isInboundCall(call: CallRecord): boolean {
   const d = call.direction?.toLowerCase();
   return d === 'inbound' || d === 'incoming';
 }
 
-function isMissedCall(call: CallRecord): boolean {
-  const d = normalizeDisposition(call);
-  return d === 'missed' || d === 'no_answer';
+function isInternalDirection(call: CallRecord): boolean {
+  const d = call.direction?.toLowerCase();
+  if (d === 'internal') return true;
+  const fromIsExt = /^\d{2,5}$/.test((call.fromNumber || '').trim());
+  const toIsExt = /^\d{2,5}$/.test((call.toNumber || '').trim());
+  return fromIsExt && toIsExt;
 }
 
-/**
- * Map the raw CDR disposition strings into a small, stable set we render
- * as tags. Handles the many server-side spellings ("NO ANSWER", "ANSWERED
- * ELSEWHERE", "BUSY", "CANCELED" / "CANCELLED", "VOICEMAIL", etc.).
- */
 type NormalizedDisposition =
   | 'answered'
   | 'answered_elsewhere'
@@ -53,15 +80,12 @@ type NormalizedDisposition =
 function normalizeDisposition(call: CallRecord): NormalizedDisposition {
   const raw = (call.disposition || '').toString().trim().toLowerCase();
   if (!raw) {
-    // Legacy rows w/o disposition — infer from direction + duration.
     if (isInboundCall(call) && call.durationSec === 0) return 'missed';
     if (!isInboundCall(call) && call.durationSec === 0) return 'canceled';
     return call.durationSec > 0 ? 'answered' : 'unknown';
   }
   if (raw === 'answered' || raw === 'answer') return 'answered';
-  if (raw.includes('answered_elsewhere') || raw.includes('answered elsewhere')) {
-    return 'answered_elsewhere';
-  }
+  if (raw.includes('answered_elsewhere') || raw.includes('answered elsewhere')) return 'answered_elsewhere';
   if (raw === 'voicemail' || raw === 'vm' || raw.includes('voicemail')) return 'voicemail';
   if (raw === 'missed') return 'missed';
   if (raw === 'no_answer' || raw === 'noanswer' || raw.includes('no answer')) return 'no_answer';
@@ -72,216 +96,152 @@ function normalizeDisposition(call: CallRecord): NormalizedDisposition {
   return 'unknown';
 }
 
+function callKind(call: CallRecord): CallKind {
+  const disposition = normalizeDisposition(call);
+  if (disposition === 'voicemail') return 'voicemail';
+  if (disposition === 'missed' || disposition === 'no_answer' || (isInboundCall(call) && call.durationSec === 0)) return 'missed';
+  if (isInternalDirection(call)) return 'internal';
+  return isInboundCall(call) ? 'incoming' : 'outgoing';
+}
+
+function canonicalNumber(raw: string): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+  // Short code / extension: keep as-is so 103 != 103xxxx
+  if (/^\d{2,5}$/.test(trimmed)) return trimmed;
+  // Otherwise reduce to digits for dedup
+  const digits = trimmed.replace(/\D/g, '');
+  return digits || trimmed;
+}
+
 function formatDuration(sec: number): string {
   if (sec <= 0) return '';
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function formatTimestamp(iso: string): string {
+function formatTimeOfDay(iso: string): string {
   try {
     const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffH = diffMs / 3600000;
-    if (diffH < 1) {
-      const mins = Math.round(diffMs / 60000);
-      return mins <= 0 ? 'Just now' : `${mins}m ago`;
-    }
-    if (diffH < 24) return `${Math.floor(diffH)}h ago`;
-    if (diffH < 48) return 'Yesterday';
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   } catch {
     return '';
   }
 }
 
-type TagSpec = { label: string; fg: string; bg: string; border: string };
+function formatFullDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
 
-function tagForDisposition(
-  d: NormalizedDisposition,
-  colors: ReturnType<typeof useTheme>['colors'],
-): TagSpec {
-  // Pill palette. Low-chroma translucent fills + 1-pixel border for a
-  // muted "2026 SaaS" look; tag text uses the vivid accent so the label
-  // reads cleanly on both light and dark themes.
-  const withAlpha = (c: string, pct: number) => c + pct.toString(16).padStart(2, '0');
+function sectionLabel(iso: string): string {
+  const d = new Date(iso);
+  const startOf = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const today = startOf(new Date());
+  const day = startOf(d);
+  if (day === today) return 'Today';
+  if (day === today - 86400000) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
 
-  switch (d) {
-    case 'answered':
-      return {
-        label: 'Answered',
-        fg: colors.success,
-        bg: withAlpha(colors.success, 0x1a),
-        border: withAlpha(colors.success, 0x33),
-      };
-    case 'answered_elsewhere':
-      return {
-        label: 'Answered',
-        fg: colors.textSecondary,
-        bg: withAlpha(colors.textSecondary, 0x1a),
-        border: withAlpha(colors.textSecondary, 0x33),
-      };
-    case 'voicemail': {
-      // Theme has no dedicated "info" colour — use a stable teal so the
-      // voicemail pill reads distinct from both Answered (green) and
-      // Missed (red) on either theme.
-      const teal = '#06b6d4';
-      return {
-        label: 'Voicemail',
-        fg: teal,
-        bg: withAlpha(teal, 0x1a),
-        border: withAlpha(teal, 0x33),
-      };
+function dayKey(iso: string): number {
+  const d = new Date(iso);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function callDisplayNumber(call: CallRecord): string {
+  return isInboundCall(call) ? call.fromNumber : call.toNumber;
+}
+
+function callDisplayName(call: CallRecord): string {
+  const number = callDisplayNumber(call);
+  return call.fromName && call.fromName !== call.fromNumber ? call.fromName : number || 'Unknown';
+}
+
+function isUnknownCaller(call: CallRecord): boolean {
+  const number = callDisplayNumber(call);
+  const name = call.fromName;
+  return !name || name === number || name.trim() === '';
+}
+
+function kindAccent(kind: CallKind, colors: ReturnType<typeof useTheme>['colors']): string {
+  switch (kind) {
+    case 'missed': return colors.danger;
+    case 'incoming': return colors.teal;
+    case 'outgoing': return colors.success;
+    case 'internal': return colors.purple;
+    case 'voicemail': return colors.indigo;
+  }
+}
+
+function kindIcon(kind: CallKind): keyof typeof Ionicons.glyphMap {
+  switch (kind) {
+    case 'missed': return 'call-outline';
+    case 'incoming': return 'arrow-down';
+    case 'outgoing': return 'arrow-up';
+    case 'internal': return 'swap-horizontal-outline';
+    case 'voicemail': return 'recording-outline';
+  }
+}
+
+function kindLabel(kind: CallKind): string {
+  switch (kind) {
+    case 'missed': return 'Missed';
+    case 'incoming': return 'Incoming';
+    case 'outgoing': return 'Outgoing';
+    case 'internal': return 'Internal';
+    case 'voicemail': return 'Voicemail';
+  }
+}
+
+/**
+ * Fold consecutive calls (ordered newest → oldest) that share the same day,
+ * canonical number, and kind. Preserves every underlying CallRecord inside
+ * `calls` so the detail sheet can still list individual attempts.
+ */
+function buildGroups(rows: CallRecord[]): CallGroup[] {
+  const groups: CallGroup[] = [];
+  for (const call of rows) {
+    const kind = callKind(call);
+    const number = canonicalNumber(callDisplayNumber(call));
+    const day = dayKey(call.startedAt);
+    const prev = groups[groups.length - 1];
+    const canJoin =
+      prev &&
+      prev.kind === kind &&
+      prev.canonicalNumber === number &&
+      dayKey(prev.latestAt) === day;
+    if (canJoin) {
+      prev.calls.push(call);
+      prev.count += 1;
+      prev.totalDurationSec += Math.max(0, call.durationSec || 0);
+      prev.maxDurationSec = Math.max(prev.maxDurationSec, Math.max(0, call.durationSec || 0));
+      if (new Date(call.startedAt).getTime() < new Date(prev.earliestAt).getTime()) {
+        prev.earliestAt = call.startedAt;
+      }
+    } else {
+      groups.push({
+        type: 'group',
+        id: `grp:${kind}:${number}:${day}:${call.id}`,
+        calls: [call],
+        canonicalNumber: number,
+        displayName: callDisplayName(call),
+        kind,
+        latestAt: call.startedAt,
+        earliestAt: call.startedAt,
+        count: 1,
+        totalDurationSec: Math.max(0, call.durationSec || 0),
+        maxDurationSec: Math.max(0, call.durationSec || 0),
+        unknown: isUnknownCaller(call),
+      });
     }
-    case 'missed':
-    case 'no_answer':
-      return {
-        label: 'Missed',
-        fg: colors.danger,
-        bg: withAlpha(colors.danger, 0x1a),
-        border: withAlpha(colors.danger, 0x33),
-      };
-    case 'busy':
-      return {
-        label: 'Busy',
-        fg: colors.warning,
-        bg: withAlpha(colors.warning, 0x1a),
-        border: withAlpha(colors.warning, 0x33),
-      };
-    case 'declined':
-      return {
-        label: 'Declined',
-        fg: colors.warning,
-        bg: withAlpha(colors.warning, 0x1a),
-        border: withAlpha(colors.warning, 0x33),
-      };
-    case 'canceled':
-      return {
-        label: 'Canceled',
-        fg: colors.textTertiary,
-        bg: withAlpha(colors.textTertiary, 0x14),
-        border: withAlpha(colors.textTertiary, 0x33),
-      };
-    case 'failed':
-      return {
-        label: 'Failed',
-        fg: colors.danger,
-        bg: withAlpha(colors.danger, 0x1a),
-        border: withAlpha(colors.danger, 0x33),
-      };
-    default:
-      return {
-        label: '—',
-        fg: colors.textTertiary,
-        bg: withAlpha(colors.textTertiary, 0x14),
-        border: withAlpha(colors.textTertiary, 0x33),
-      };
   }
-}
-
-function directionTag(
-  inbound: boolean,
-  colors: ReturnType<typeof useTheme>['colors'],
-): TagSpec {
-  const withAlpha = (c: string, pct: number) => c + pct.toString(16).padStart(2, '0');
-  if (inbound) {
-    return {
-      label: 'Inbound',
-      fg: colors.textSecondary,
-      bg: withAlpha(colors.textSecondary, 0x14),
-      border: withAlpha(colors.textSecondary, 0x26),
-    };
-  }
-  return {
-    label: 'Outbound',
-    fg: colors.primary,
-    bg: withAlpha(colors.primary, 0x1a),
-    border: withAlpha(colors.primary, 0x33),
-  };
-}
-
-function Tag({ spec }: { spec: TagSpec }) {
-  return (
-    <View
-      style={[
-        styles.tag,
-        { backgroundColor: spec.bg, borderColor: spec.border },
-      ]}
-    >
-      <Text style={[styles.tagText, { color: spec.fg }]}>{spec.label}</Text>
-    </View>
-  );
-}
-
-function CallRow({ call, onCall }: { call: CallRecord; onCall: (number: string) => void }) {
-  const { colors } = useTheme();
-
-  const inbound = isInboundCall(call);
-  const disposition = normalizeDisposition(call);
-  const missed = disposition === 'missed' || disposition === 'no_answer';
-  const displayNumber = inbound ? call.fromNumber : call.toNumber;
-  const displayName =
-    call.fromName && call.fromName !== call.fromNumber
-      ? call.fromName
-      : displayNumber || '—';
-  const avatarSeed = displayName || displayNumber || 'Unknown';
-  const dirSpec = directionTag(inbound, colors);
-  const dispSpec = tagForDisposition(disposition, colors);
-  const duration = formatDuration(call.durationSec);
-
-  return (
-    <TouchableOpacity
-      style={[styles.row, { borderBottomColor: colors.borderSubtle }]}
-      activeOpacity={0.7}
-      onPress={() => onCall(displayNumber)}
-    >
-      <View style={styles.avatarWrap}>
-        <Avatar name={avatarSeed} size="md" />
-      </View>
-
-      <View style={styles.rowInfo}>
-        <Text
-          style={[typography.labelLg, { color: missed ? colors.danger : colors.text }]}
-          numberOfLines={1}
-        >
-          {displayName}
-        </Text>
-        <View style={styles.tagRow}>
-          <Tag spec={dirSpec} />
-          <Tag spec={dispSpec} />
-        </View>
-        <View style={styles.metaRow}>
-          <Text style={[typography.caption, { color: colors.textTertiary }]}>
-            {formatTimestamp(call.startedAt)}
-          </Text>
-          {!!duration && (
-            <Text
-              style={[typography.caption, { color: colors.textTertiary, marginLeft: 6 }]}
-            >
-              · {duration}
-            </Text>
-          )}
-        </View>
-      </View>
-
-      <TouchableOpacity
-        style={[
-          styles.callBtn,
-          {
-            backgroundColor: colors.primaryMuted,
-            borderColor: colors.primary + '30',
-          },
-        ]}
-        onPress={() => onCall(displayNumber)}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        <Ionicons name="call-outline" size={17} color={colors.primary} />
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
+  return groups;
 }
 
 export function RecentTab() {
@@ -293,8 +253,10 @@ export function RecentTab() {
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'missed'>('all');
+  const [filter, setFilter] = useState<CallFilter>('all');
+  const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [detailGroup, setDetailGroup] = useState<CallGroup | null>(null);
 
   const load = useCallback(
     async (isRefresh = false) => {
@@ -306,7 +268,6 @@ export function RecentTab() {
       const local = await loadLocalCallHistory();
       if (local.length > 0) {
         setCalls(local);
-        // Only show loading spinner if we have nothing local to show yet
         setLoading(false);
       }
 
@@ -318,11 +279,9 @@ export function RecentTab() {
             const merged = mergeCallRecords(remote, local);
             setCalls(merged);
           } else if (local.length === 0) {
-            // Both empty — no error, just empty state
             setCalls([]);
           }
         } catch {
-          // API failed — local history is still shown, no error shown
           if (local.length === 0) {
             setError('Could not load call history from server.');
           }
@@ -335,14 +294,13 @@ export function RecentTab() {
     [token],
   );
 
-  // Reload every time this tab gains focus (catches calls that just ended)
   useFocusEffect(
     useCallback(() => {
       load(false);
     }, [load]),
   );
 
-  // Also reload 3 seconds after a call ends (gives the append a moment to settle)
+  // Reload 3 seconds after a call ends (gives the append a moment to settle)
   const { callState } = useSip();
   const prevCallRef = useRef(callState);
   useEffect(() => {
@@ -354,50 +312,120 @@ export function RecentTab() {
     }
   }, [callState, load]);
 
-  const handleCall = (number: string) => {
+  const handleCall = useCallback((number: string) => {
     if (!number) return;
     if (sip.registrationState === 'registered') {
       sip.dial(number);
     }
-  };
+  }, [sip]);
 
-  const filtered = calls.filter((c) => {
-    if (filter === 'missed') return isMissedCall(c);
-    return true;
-  });
+  const handleMessage = useCallback((group: CallGroup) => {
+    Alert.alert('Message', `Open Chat to message ${group.displayName}.`);
+  }, []);
 
-  const missedCount = calls.filter(isMissedCall).length;
+  const handleAddContact = useCallback((group: CallGroup) => {
+    Alert.alert('Add to contacts', `Saving ${group.displayName} to contacts is coming soon.`);
+  }, []);
+
+  const counts = useMemo(() => ({
+    all: calls.length,
+    missed: calls.filter((c) => callKind(c) === 'missed').length,
+    incoming: calls.filter((c) => callKind(c) === 'incoming').length,
+    outgoing: calls.filter((c) => callKind(c) === 'outgoing').length,
+    internal: calls.filter((c) => callKind(c) === 'internal').length,
+  }), [calls]);
+
+  const todayCount = useMemo(() => {
+    const today = dayKey(new Date().toISOString());
+    return calls.filter((c) => dayKey(c.startedAt) === today).length;
+  }, [calls]);
+
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = calls
+      .filter((call) => {
+        if (filter === 'all') return true;
+        return callKind(call) === filter;
+      })
+      .filter((call) => {
+        if (!q) return true;
+        return (
+          callDisplayName(call).toLowerCase().includes(q) ||
+          callDisplayNumber(call).toLowerCase().includes(q) ||
+          call.fromNumber.toLowerCase().includes(q) ||
+          call.toNumber.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+
+    const groups = buildGroups(filtered);
+    const out: TimelineItem[] = [];
+    let current = '';
+    for (const group of groups) {
+      const label = sectionLabel(group.latestAt);
+      if (label !== current) {
+        current = label;
+        out.push({ type: 'section', id: `section:${label}`, title: label });
+      }
+      out.push(group);
+    }
+    return out;
+  }, [calls, filter, query]);
+
+  const emptyIcon: keyof typeof Ionicons.glyphMap = query.trim() ? 'search-outline' : 'time-outline';
+  const emptyTitle = query.trim()
+    ? 'No matching calls'
+    : filter === 'all'
+      ? 'No recent calls'
+      : 'No calls in this view';
+  const emptySubtitle = query.trim()
+    ? 'Try a different name, number, or extension.'
+    : filter === 'all'
+      ? 'Your call history will appear here.'
+      : 'Try another filter or search.';
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <HeaderBar title="Recent Calls" />
-
-      {/* Filter chips */}
-      <View style={[styles.filterRow, { borderBottomColor: colors.border }]}>
-        {(['all', 'missed'] as const).map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[
-              styles.filterChip,
-              {
-                backgroundColor: filter === f ? colors.primary : colors.surfaceElevated,
-                borderColor: filter === f ? colors.primary : colors.border,
-              },
-            ]}
-            onPress={() => setFilter(f)}
-            activeOpacity={0.75}
-          >
-            <Text style={[typography.labelSm, { color: filter === f ? '#fff' : colors.textSecondary }]}>
-              {f === 'all' ? 'All' : 'Missed'}
-            </Text>
-            {f === 'missed' && missedCount > 0 && (
-              <View style={[styles.badge, { backgroundColor: filter === f ? 'rgba(255,255,255,0.3)' : colors.danger }]}>
-                <Text style={styles.badgeText}>{missedCount > 99 ? '99+' : missedCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        ))}
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <View style={styles.headerTitleWrap}>
+          <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>Recent Calls</Text>
+          <Text style={[styles.headerSub, { color: colors.textSecondary }]} numberOfLines={1}>
+            {todayCount > 0 ? `Today · ${todayCount} ${todayCount === 1 ? 'call' : 'calls'}` : `${calls.length} total calls`}
+          </Text>
+        </View>
+        <TouchableOpacity
+          activeOpacity={0.78}
+          style={[styles.headerIcon, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}
+        >
+          <Ionicons name="options-outline" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
       </View>
+
+      <View style={[styles.searchBox, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}>
+        <Ionicons name="search-outline" size={17} color={colors.textTertiary} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search name, number, or extension"
+          placeholderTextColor={colors.textTertiary}
+          style={[styles.searchInput, { color: colors.text }]}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {query.length > 0 && (
+          <TouchableOpacity onPress={() => setQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      <HorizontalFilterScroll marginBottom={spacing['3']}>
+        <FilterChip id="all" label="All" icon="list" value={filter} count={counts.all} color={colors.primary} onPress={setFilter} />
+        <FilterChip id="missed" label="Missed" icon="call-outline" value={filter} count={counts.missed} color={colors.danger} onPress={setFilter} />
+        <FilterChip id="incoming" label="Incoming" icon="arrow-down" value={filter} count={counts.incoming} color={colors.teal} onPress={setFilter} />
+        <FilterChip id="outgoing" label="Outgoing" icon="arrow-up" value={filter} count={counts.outgoing} color={colors.success} onPress={setFilter} />
+        <FilterChip id="internal" label="Internal" icon="swap-horizontal-outline" value={filter} count={counts.internal} color={colors.purple} onPress={setFilter} />
+      </HorizontalFilterScroll>
 
       {loading ? (
         <View style={styles.loadingArea}>
@@ -407,27 +435,34 @@ export function RecentTab() {
           </Text>
         </View>
       ) : error ? (
-        <EmptyState
-          icon="alert-circle-outline"
-          title="Could not load calls"
-          subtitle={error}
-        />
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon="time-outline"
-          title={filter === 'missed' ? 'No missed calls' : 'No recent calls'}
-          subtitle={
-            filter === 'missed'
-              ? 'All your calls were answered.'
-              : 'Your call history will appear here after your first call.'
-          }
-        />
+        <EmptyState icon="alert-circle-outline" title="Could not load calls" subtitle={error} />
+      ) : timeline.length === 0 ? (
+        <EmptyState icon={emptyIcon} title={emptyTitle} subtitle={emptySubtitle} />
       ) : (
         <FlatList
-          data={filtered}
+          data={timeline}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <CallRow call={item} onCall={handleCall} />}
-          contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
+          renderItem={({ item }) =>
+            item.type === 'section' ? (
+              <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>{item.title}</Text>
+            ) : (
+              <CallCard
+                group={item}
+                onOpen={() => setDetailGroup(item)}
+                onCall={() => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0]))}
+                onMessage={() => handleMessage(item)}
+                onMore={() =>
+                  Alert.alert(item.displayName, `${kindLabel(item.kind)} · ${formatFullDateTime(item.latestAt)}`, [
+                    { text: 'Call back', onPress: () => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0])) },
+                    { text: 'Message', onPress: () => handleMessage(item) },
+                    { text: 'Add to contacts', onPress: () => handleAddContact(item) },
+                    { text: 'Cancel', style: 'cancel' },
+                  ])
+                }
+              />
+            )
+          }
+          contentContainerStyle={{ paddingBottom: insets.bottom + 100, paddingHorizontal: spacing['5'] }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -438,83 +473,659 @@ export function RecentTab() {
           }
         />
       )}
+
+      <CallDetailModal
+        group={detailGroup}
+        onClose={() => setDetailGroup(null)}
+        onCall={handleCall}
+        onMessage={() => detailGroup && handleMessage(detailGroup)}
+        onAddContact={() => detailGroup && handleAddContact(detailGroup)}
+      />
     </View>
+  );
+}
+
+const FilterChip = memo(function FilterChip({
+  id,
+  label,
+  icon,
+  value,
+  count,
+  color,
+  onPress,
+}: {
+  id: CallFilter;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  value: CallFilter;
+  count: number;
+  color: string;
+  onPress: (next: CallFilter) => void;
+}) {
+  const { colors } = useTheme();
+  const active = value === id;
+  const surface = teamFilterChipColors(active, color, colors);
+  return (
+    <TouchableOpacity
+      activeOpacity={0.76}
+      onPress={() => onPress(id)}
+      style={[styles.filterChip, surface]}
+    >
+      <Ionicons name={icon} size={14} color={active ? color : colors.textTertiary} />
+      <Text
+        numberOfLines={1}
+        style={[styles.filterText, { color: active ? color : colors.textSecondary }]}
+      >
+        {label}
+      </Text>
+      {count > 0 && (
+        <View
+          style={[
+            styles.badge,
+            {
+              backgroundColor: active ? `${color}26` : colors.surfaceElevated,
+              borderColor: active ? 'transparent' : colors.borderSubtle,
+            },
+          ]}
+        >
+          <Text style={[styles.badgeText, { color: active ? color : colors.textTertiary }]}>{count > 99 ? '99+' : count}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
+
+function KindBadge({ kind, accent }: { kind: CallKind; accent: string }) {
+  return (
+    <View style={[styles.kindBadge, { backgroundColor: accent + '1f', borderColor: accent + '40' }]}>
+      <Ionicons name={kindIcon(kind)} size={10} color={accent} />
+      <Text style={[styles.kindBadgeText, { color: accent }]} numberOfLines={1}>
+        {kindLabel(kind)}
+      </Text>
+    </View>
+  );
+}
+
+function UnknownAvatar({ size = 40 }: { size?: number }) {
+  const { colors } = useTheme();
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: colors.surfaceElevated,
+        borderWidth: 1,
+        borderColor: colors.borderSubtle,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <Ionicons name="call-outline" size={Math.round(size * 0.45)} color={colors.textTertiary} />
+    </View>
+  );
+}
+
+const CallCard = memo(function CallCard({
+  group,
+  onOpen,
+  onCall,
+  onMessage,
+  onMore,
+}: {
+  group: CallGroup;
+  onOpen: () => void;
+  onCall: () => void;
+  onMessage: () => void;
+  onMore: () => void;
+}) {
+  const { colors } = useTheme();
+  const scale = useRef(new Animated.Value(1)).current;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const accent = kindAccent(group.kind, colors);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          Math.abs(gesture.dx) > 14 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+        onPanResponderMove: (_, gesture) => {
+          translateX.setValue(Math.max(-92, Math.min(gesture.dx, 82)));
+        },
+        onPanResponderRelease: (_, gesture) => {
+          const action = gesture.dx > 54 ? 'call' : gesture.dx < -54 ? 'message' : null;
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
+          if (action === 'call') onCall();
+          if (action === 'message') onMessage();
+        },
+      }),
+    [onCall, onMessage, translateX],
+  );
+
+  const pressIn = useCallback(() => {
+    Animated.spring(scale, { toValue: 0.98, speed: 30, bounciness: 0, useNativeDriver: true }).start();
+  }, [scale]);
+  const pressOut = useCallback(() => {
+    Animated.spring(scale, { toValue: 1, speed: 25, bounciness: 4, useNativeDriver: true }).start();
+  }, [scale]);
+
+  /**
+   * Subtitle copy avoids the noisy "Missed call · Missed call · ..." pattern:
+   * when a caller was attempted multiple times we show "{n} calls" as the only
+   * secondary signal; the accent-tinted badge already conveys the kind.
+   */
+  const subtitle = useMemo(() => {
+    if (group.count > 1) {
+      return `${group.count} calls`;
+    }
+    if (group.kind === 'missed') return 'Missed';
+    const duration = formatDuration(group.maxDurationSec);
+    if (group.kind === 'voicemail') return duration ? `Voicemail · ${duration}` : 'Voicemail';
+    if (duration) return `${kindLabel(group.kind)} · ${duration}`;
+    return kindLabel(group.kind);
+  }, [group]);
+
+  const primaryCall = group.calls[0];
+  const primaryName = group.displayName;
+
+  return (
+    <View style={styles.swipeWrap}>
+      <View style={styles.swipeBg}>
+        <View style={[styles.swipeHint, { backgroundColor: colors.successMuted }]}>
+          <Ionicons name="call-outline" size={16} color={colors.success} />
+        </View>
+        <View style={[styles.swipeHint, { backgroundColor: colors.tealMuted }]}>
+          <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
+        </View>
+      </View>
+      <Animated.View style={{ transform: [{ translateX }, { scale }] }} {...panResponder.panHandlers}>
+        <TouchableOpacity
+          activeOpacity={0.92}
+          onPress={onOpen}
+          onPressIn={pressIn}
+          onPressOut={pressOut}
+          onLongPress={onMore}
+          style={[
+            styles.card,
+            {
+              backgroundColor: colors.surface,
+              borderColor:
+                group.kind === 'missed' ? colors.danger + '33' : colors.borderSubtle,
+            },
+          ]}
+        >
+          <View style={[styles.avatarRing, { borderColor: accent + '55' }]}>
+            {group.unknown ? (
+              <UnknownAvatar size={40} />
+            ) : (
+              <Avatar name={primaryName || callDisplayNumber(primaryCall) || 'Unknown'} size="md" />
+            )}
+            <View
+              style={[
+                styles.kindMark,
+                { backgroundColor: colors.surface, borderColor: accent },
+              ]}
+            >
+              <Ionicons name={kindIcon(group.kind)} size={10} color={accent} />
+            </View>
+          </View>
+
+          <View style={styles.info}>
+            <Text
+              style={[
+                styles.nameText,
+                { color: group.kind === 'missed' ? colors.dangerText : colors.text },
+              ]}
+              numberOfLines={1}
+            >
+              {primaryName}
+            </Text>
+            <View style={styles.metaRow}>
+              <KindBadge kind={group.kind} accent={accent} />
+              <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.rightCol}>
+            <Text style={[styles.timeText, { color: colors.textTertiary }]} numberOfLines={1}>
+              {formatTimeOfDay(group.latestAt)}
+            </Text>
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                onPress={onMessage}
+                activeOpacity={0.74}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                style={[styles.actionBtn, { backgroundColor: colors.tealMuted, borderColor: colors.teal + '33' }]}
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onCall}
+                activeOpacity={0.74}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                style={[
+                  styles.actionBtn,
+                  styles.actionBtnPrimary,
+                  { backgroundColor: colors.primary, borderColor: colors.primary, shadowColor: colors.primary },
+                ]}
+              >
+                <Ionicons name="call" size={17} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+});
+
+function CallDetailModal({
+  group,
+  onClose,
+  onCall,
+  onMessage,
+  onAddContact,
+}: {
+  group: CallGroup | null;
+  onClose: () => void;
+  onCall: (number: string) => void;
+  onMessage: () => void;
+  onAddContact: () => void;
+}) {
+  const { colors } = useTheme();
+  if (!group) {
+    return (
+      <Modal visible={false} transparent animationType="slide" onRequestClose={onClose}>
+        <View />
+      </Modal>
+    );
+  }
+  const accent = kindAccent(group.kind, colors);
+  const target = group.canonicalNumber || callDisplayNumber(group.calls[0]);
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+        <View style={[styles.detailSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.sheetHandleWrap}>
+            <View style={[styles.sheetHandle, { backgroundColor: colors.borderLight }]} />
+          </View>
+          <TouchableOpacity style={styles.closeButton} onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <View style={styles.detailHeader}>
+            <View style={[styles.avatarRing, styles.avatarRingLarge, { borderColor: accent + '55' }]}>
+              {group.unknown ? <UnknownAvatar size={72} /> : <Avatar name={group.displayName} size="xl" />}
+            </View>
+            <Text style={[typography.h2, { color: colors.text, marginTop: 14, textAlign: 'center' }]} numberOfLines={1}>
+              {group.displayName}
+            </Text>
+            <Text style={[typography.bodySm, { color: colors.textSecondary, textAlign: 'center' }]} numberOfLines={1}>
+              {target}
+            </Text>
+            <View style={{ marginTop: 10 }}>
+              <KindBadge kind={group.kind} accent={accent} />
+            </View>
+          </View>
+
+          <View style={styles.detailActions}>
+            <TouchableOpacity
+              style={[styles.detailAction, { backgroundColor: colors.successMuted }]}
+              onPress={() => {
+                onCall(target);
+                onClose();
+              }}
+            >
+              <Ionicons name="call" size={18} color={colors.success} />
+              <Text style={[styles.detailActionText, { color: colors.success }]}>Call</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.detailAction, { backgroundColor: colors.tealMuted }]}
+              onPress={() => {
+                onMessage();
+                onClose();
+              }}
+            >
+              <Ionicons name="chatbubble" size={18} color={colors.teal} />
+              <Text style={[styles.detailActionText, { color: colors.teal }]}>Message</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.detailAction, { backgroundColor: colors.primaryMuted }]}
+              onPress={() => {
+                onAddContact();
+                onClose();
+              }}
+            >
+              <Ionicons name="person-add" size={18} color={colors.primary} />
+              <Text style={[styles.detailActionText, { color: colors.primary }]}>Add</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[styles.attemptsHeader, { color: colors.textTertiary }]}>
+            Attempts · {group.count}
+          </Text>
+          <ScrollView style={styles.attemptsList} contentContainerStyle={{ paddingBottom: spacing['4'] }}>
+            {group.calls.map((call) => {
+              const kind = callKind(call);
+              const c = kindAccent(kind, colors);
+              const duration = formatDuration(call.durationSec);
+              return (
+                <View
+                  key={call.id}
+                  style={[styles.attemptRow, { borderColor: colors.borderSubtle, backgroundColor: colors.surfaceElevated }]}
+                >
+                  <View style={[styles.attemptDot, { backgroundColor: c }]} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.attemptLabel, { color: colors.text }]} numberOfLines={1}>
+                      {kindLabel(kind)}
+                      {duration ? ` · ${duration}` : ''}
+                    </Text>
+                    <Text style={[styles.attemptTime, { color: colors.textSecondary }]} numberOfLines={1}>
+                      {formatFullDateTime(call.startedAt)}
+                    </Text>
+                  </View>
+                  <Ionicons name={kindIcon(kind)} size={14} color={c} />
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  filterRow: {
+
+  header: {
+    paddingHorizontal: spacing['5'],
+    paddingBottom: spacing['3'],
     flexDirection: 'row',
-    paddingHorizontal: spacing['4'],
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
+  headerTitleWrap: { flex: 1, minWidth: 0, paddingRight: spacing['3'] },
+  headerTitle: {
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+  },
+  headerSub: {
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  headerIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  searchBox: {
+    height: 44,
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    marginHorizontal: spacing['5'],
+    marginBottom: spacing['3'],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14.5,
+    letterSpacing: 0,
+    paddingVertical: 0,
+  },
+
+  /** Do NOT set `overflow: 'hidden'` — Android clips fully-rounded bordered pills. */
   filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    height: 34,
     paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: radius.full,
     borderWidth: 1,
     gap: 6,
+  },
+  filterText: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.1,
   },
   badge: {
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
+    minWidth: 22,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
   },
   badgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing['4'],
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  avatarWrap: {
-    marginRight: 12,
-  },
-  rowInfo: { flex: 1, minWidth: 0 },
-  tagRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    gap: 6,
-  },
-  tag: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  tagText: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+
+  sectionLabel: {
+    marginTop: spacing['4'],
+    marginBottom: spacing['2'],
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.9,
     textTransform: 'uppercase',
+    opacity: 0.7,
   },
-  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
-  callBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+
+  swipeWrap: { overflow: 'hidden', borderRadius: 18, marginBottom: 10 },
+  swipeBg: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  swipeHint: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    marginLeft: 8,
   },
+
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 72,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 1,
+  },
+
+  avatarRing: {
+    position: 'relative',
+    borderWidth: 2,
+    borderRadius: 999,
+    padding: 2,
+    marginRight: 12,
+  },
+  avatarRingLarge: {
+    padding: 3,
+    alignSelf: 'center',
+  },
+  kindMark: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  info: { flex: 1, minWidth: 0 },
+  nameText: {
+    fontSize: 15.5,
+    lineHeight: 20,
+    fontWeight: '800',
+    letterSpacing: -0.15,
+    marginBottom: 4,
+  },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  metaText: {
+    flexShrink: 1,
+    fontSize: 12.5,
+    lineHeight: 16,
+    fontWeight: '600',
+    opacity: 0.8,
+  },
+
+  kindBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
+  kindBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.25,
+  },
+
+  rightCol: {
+    alignSelf: 'stretch',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingTop: 2,
+    paddingBottom: 2,
+    marginLeft: 10,
+  },
+  timeText: {
+    fontSize: 11.5,
+    lineHeight: 15,
+    fontWeight: '700',
+    opacity: 0.7,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  actionBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnPrimary: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+
   loadingArea: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  detailSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    paddingHorizontal: spacing['5'],
+    paddingBottom: spacing['8'],
+    paddingTop: spacing['3'],
+    maxHeight: '85%',
+  },
+  sheetHandleWrap: { alignItems: 'center', marginBottom: 10 },
+  sheetHandle: { width: 42, height: 5, borderRadius: 999 },
+  closeButton: { position: 'absolute', top: 18, right: 18, zIndex: 2 },
+  detailHeader: { alignItems: 'center', paddingTop: spacing['3'] },
+  detailActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: spacing['5'],
+    marginBottom: spacing['4'],
+  },
+  detailAction: {
+    flex: 1,
+    borderRadius: radius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 5,
+  },
+  detailActionText: { fontSize: 12, fontWeight: '800', letterSpacing: 0.2 },
+
+  attemptsHeader: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+    marginBottom: spacing['2'],
+    opacity: 0.7,
+  },
+  attemptsList: {
+    maxHeight: 260,
+  },
+  attemptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  attemptDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  attemptLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: -0.1,
+  },
+  attemptTime: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+    opacity: 0.85,
   },
 });

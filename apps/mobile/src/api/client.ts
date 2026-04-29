@@ -1,6 +1,18 @@
-import type { AuthResponse, CallRecord, VoiceExtension } from "../types";
+import type {
+  AuthResponse,
+  CallRecord,
+  ChatDirectoryUser,
+  ChatMessage,
+  ChatThread,
+  ContactsResponse,
+  TeamDirectoryMember,
+  VoiceExtension,
+  Voicemail,
+  VoicemailFolder,
+  VoicemailResponse,
+} from "../types";
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
+export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
 
 async function parseJson(res: Response) {
   const text = await res.text();
@@ -49,6 +61,174 @@ export async function getCallHistory(token: string): Promise<CallRecord[]> {
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "VOICE_CALLS_FAILED");
   return Array.isArray(json) ? (json as CallRecord[]) : [];
+}
+
+export const mobileQueryKeys = {
+  callHistory: ["mobile", "callHistory"] as const,
+  voicemails: (folder: VoicemailFolder | "all" = "all") => ["mobile", "voicemails", folder] as const,
+  teamDirectory: ["mobile", "teamDirectory"] as const,
+  contacts: (query = "") => ["mobile", "contacts", query] as const,
+  chatThreads: ["mobile", "chatThreads"] as const,
+  chatMessages: (threadId: string) => ["mobile", "chatMessages", threadId] as const,
+};
+
+export async function getVoicemails(
+  token: string,
+  input: { folders?: VoicemailFolder[]; page?: number } = {},
+): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number> }> {
+  const folders = input.folders ?? ["inbox", "urgent", "old"];
+  const page = input.page ?? 1;
+  const responses = await Promise.all(
+    folders.map(async (folder) => {
+      const params = new URLSearchParams({ folder, page: String(page) });
+      const res = await fetch(`${API_BASE}/voice/voicemail?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await parseJson(res);
+      if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
+      return { folder, data: json as VoicemailResponse };
+    }),
+  );
+  const totals = { inbox: 0, urgent: 0, old: 0 } as Record<VoicemailFolder, number>;
+  const seen = new Set<string>();
+  const voicemails: Voicemail[] = [];
+  for (const { folder, data } of responses) {
+    totals[folder] = data.total ?? 0;
+    for (const vm of data.voicemails ?? []) {
+      if (seen.has(vm.id)) continue;
+      seen.add(vm.id);
+      voicemails.push({
+        ...vm,
+        streamUrl: vm.streamUrl ?? `${API_BASE}/voice/voicemail/${encodeURIComponent(vm.id)}/stream?token=${encodeURIComponent(token)}`,
+      });
+    }
+  }
+  voicemails.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+  return { voicemails, totals };
+}
+
+export async function markVoicemailListened(token: string, id: string, listened: boolean) {
+  const res = await fetch(`${API_BASE}/voice/voicemail/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ listened }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICEMAIL_UPDATE_FAILED");
+  return json;
+}
+
+export async function getTeamDirectory(token: string): Promise<TeamDirectoryMember[]> {
+  // IMPORTANT — tenant isolation:
+  // We intentionally do NOT send `?global=1`. The Connect API
+  // (/voice/pbx/resources/extensions) hard-scopes this response to the JWT's
+  // tenantId for every non-SUPER_ADMIN role; the `global=1` flag is only
+  // honored when the authenticated user is a SUPER_ADMIN. Omitting it makes
+  // the mobile client's intent explicit: ask for the caller's tenant.
+  const res = await fetch(`${API_BASE}/voice/pbx/resources/extensions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "TEAM_DIRECTORY_FAILED");
+  const rows = Array.isArray(json?.rows) ? json.rows : [];
+  return rows
+    .map((row: any): TeamDirectoryMember | null => {
+      const extension = String(row.extension ?? row.extNumber ?? row.ext_number ?? row.number ?? row.sipExtension ?? "").trim();
+      if (!/^\d{2,6}$/.test(extension)) return null;
+      const name = String(row.displayName ?? row.display_name ?? row.name ?? row.callerid ?? row.callerId ?? `Extension ${extension}`).trim();
+      const lower = name.toLowerCase();
+      if (
+        lower === "pbx user" ||
+        /^pbx user\s+\d+$/.test(lower) ||
+        lower.includes("invite lifecycle") ||
+        lower.includes("provisioning") ||
+        lower.includes("smoke") ||
+        lower.includes("system") ||
+        lower === "voice user" ||
+        /^voice user\s+\d+$/.test(lower)
+      ) {
+        return null;
+      }
+      return {
+        id: String(row.connectExtensionId ?? row.id ?? extension),
+        name,
+        extension,
+        email: row.email ?? row.assignedUser ?? row.pbxUserEmail ?? null,
+        department: row.department ?? row.team ?? null,
+        title: row.title ?? row.role ?? null,
+        tenantId: row.tenantId ?? row.tenant_id ?? null,
+        tenantName: row.tenantName ?? row.tenant_name ?? null,
+        presence: "offline",
+      };
+    })
+    .filter(Boolean)
+    .sort((a: TeamDirectoryMember, b: TeamDirectoryMember) =>
+      a.extension.localeCompare(b.extension, undefined, { numeric: true }),
+    ) as TeamDirectoryMember[];
+}
+
+export async function getContacts(token: string, query = ""): Promise<ContactsResponse> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set("q", query.trim());
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/contacts${qs ? `?${qs}` : ""}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CONTACTS_FAILED");
+  return json as ContactsResponse;
+}
+
+export async function getChatThreads(token: string): Promise<ChatThread[]> {
+  const res = await fetch(`${API_BASE}/chat/threads`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_THREADS_FAILED");
+  return Array.isArray(json?.threads) ? (json.threads as ChatThread[]) : [];
+}
+
+export async function getMessages(token: string, threadId: string): Promise<ChatMessage[]> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_MESSAGES_FAILED");
+  return Array.isArray(json?.messages) ? (json.messages as ChatMessage[]) : [];
+}
+
+export async function getChatDirectory(token: string): Promise<ChatDirectoryUser[]> {
+  const res = await fetch(`${API_BASE}/chat/directory`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_DIRECTORY_FAILED");
+  return Array.isArray(json?.users) ? (json.users as ChatDirectoryUser[]) : [];
+}
+
+export async function createChatThread(
+  token: string,
+  input: { type: "dm" | "sms" | "group"; peerUserId?: string; externalPhone?: string; title?: string; peerUserIds?: string[] },
+): Promise<{ threadId: string }> {
+  const res = await fetch(`${API_BASE}/chat/threads`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_THREAD_CREATE_FAILED");
+  return json as { threadId: string };
+}
+
+export async function sendChatMessage(token: string, threadId: string, body: string): Promise<{ ok: boolean; messageId?: string }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_SEND_FAILED");
+  return json;
 }
 
 export async function registerMobileDevice(token: string, input: {

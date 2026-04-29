@@ -295,6 +295,8 @@ interface PbxMohClassRow {
   pbxTenantId: string | null;
   name: string;
   mohClassName: string;
+  displayName?: string;
+  runtimeClass?: string;
   classType: string | null;
   isDefault: boolean;
   fileCount: number;
@@ -308,12 +310,10 @@ interface PbxMohClassRow {
 //   2. The PBX-wide "system" classes the admin tenant ships (default / main /
 //      No Music) — always appended so a tenant with zero own classes still has
 //      working options to pick from.
-//   3. Classes materialised from uploaded MOH assets (each asset's
-//      deterministic mohClassName) — rare in practice.
+//   3. Runtime values are always the synced Asterisk class names (moh<groupId>).
 // Legacy-safe: if the saved value isn't in the merged catalog we still render
-// it at the top of the options as "(legacy)" so saving the profile doesn't
-// wipe it. Super-admins get a "Refresh from PBX" action inline and a toggle to
-// peek at other tenants' classes (read-only).
+// it at the top of the options, but the API will block saving until a synced
+// runtime class is selected.
 function MohClassPicker({
   value, onChange, pbxClasses, assets, loading, placeholder,
   tenantSlug, canSyncPbx, onSync, syncing,
@@ -350,6 +350,8 @@ function MohClassPicker({
 
   const options: Opt[] = [];
   const seen = new Set<string>();
+  void placeholder;
+  void assets;
 
   const classify = (c: PbxMohClassRow): Opt["group"] => {
     // tenantSlug "vitalpbx" / pbxTenantId "1" is the PBX-admin tenant —
@@ -361,7 +363,9 @@ function MohClassPicker({
   };
 
   const labelFor = (c: PbxMohClassRow): string => {
-    const parts: string[] = [c.mohClassName];
+    const displayName = c.displayName ?? c.name;
+    const runtimeClass = c.runtimeClass ?? c.mohClassName;
+    const parts: string[] = [displayName === runtimeClass ? runtimeClass : `${displayName} -> ${runtimeClass}`];
     if (c.fileCount) parts.push(`${c.fileCount} file${c.fileCount === 1 ? "" : "s"}`);
     if (c.isDefault) parts.push("default");
     return parts.join(" · ");
@@ -369,7 +373,7 @@ function MohClassPicker({
 
   for (const c of pbxClasses) {
     if (!c.isActive) continue;
-    const v = c.mohClassName;
+    const v = c.runtimeClass ?? c.mohClassName;
     if (seen.has(v)) continue;
     seen.add(v);
     options.push({
@@ -379,15 +383,9 @@ function MohClassPicker({
       tenantLabel: c.tenantSlug ?? null,
     });
   }
-  for (const a of assets) {
-    const v = a.mohClassName;
-    if (seen.has(v)) continue;
-    seen.add(v);
-    options.push({ value: v, label: `${v} · uploaded "${a.name}"`, group: "upload" });
-  }
   const hasCurrent = !!value && seen.has(value);
   if (value && !hasCurrent) {
-    options.unshift({ value, label: `${value} (legacy — not in catalog)`, group: "legacy" });
+    options.unshift({ value, label: `${value} (not in synced PBX catalog — save blocked)`, group: "legacy" });
     seen.add(value);
   }
 
@@ -402,17 +400,12 @@ function MohClassPicker({
   const ownCount    = (grouped.get("yours") ?? []).length;
   const systemCount = (grouped.get("system") ?? []).length;
   const otherCount  = (grouped.get("other") ?? []).length;
-  const uploadCount = (grouped.get("upload") ?? []).length;
-
-  const [manual, setManual] = useState(() => options.length === 0 && !value);
-  const effectiveManual = manual || (options.length === 0 && !value);
 
   const controls = (
     <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
       <span>
         {ownCount} yours · {systemCount} system
         {otherCount ? ` · ${otherCount} other` : ""}
-        {uploadCount ? ` · ${uploadCount} uploaded` : ""}
       </span>
       {canSyncPbx && onSync && (
         <button
@@ -436,33 +429,8 @@ function MohClassPicker({
           <span>Show all tenants</span>
         </label>
       )}
-      {!effectiveManual && options.length > 0 && (
-        <button type="button" onClick={() => setManual(true)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
-          Type custom
-        </button>
-      )}
-      {effectiveManual && options.length > 0 && (
-        <button type="button" onClick={() => setManual(false)} style={{ background: "transparent", border: "none", color: "#818cf8", cursor: "pointer", fontSize: 11, padding: 0 }}>
-          Use dropdown
-        </button>
-      )}
     </div>
   );
-
-  if (effectiveManual) {
-    const empty = options.length === 0 && !loading;
-    return (
-      <div>
-        <input style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? "e.g. default or holiday_jazz"} />
-        {empty && (
-          <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 4, marginBottom: 4 }}>
-            No MOH classes indexed for this tenant yet. Click <strong>Refresh from PBX</strong> below, upload a MOH asset on the <strong>Assets</strong> tab, or type an existing class name.
-          </div>
-        )}
-        {controls}
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -667,7 +635,7 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
               {(Object.entries(TYPE_LABELS) as [HoldType, string][]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
 
-            <label style={labelStyle}>VitalPBX MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(pick from your PBX or uploaded assets)</span></label>
+            <label style={labelStyle}>VitalPBX MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(runtime class from synced PBX catalog)</span></label>
             <MohClassPicker
               value={form.vitalPbxMohClassName}
               onChange={(v) => setForm((f) => ({ ...f, vitalPbxMohClassName: v }))}

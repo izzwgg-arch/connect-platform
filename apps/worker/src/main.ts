@@ -1593,6 +1593,32 @@ type WorkerHoldProfile = {
   introAnnouncementRef: string | null;
 };
 
+function normalizeWorkerMohRuntimeClass(value: string | null | undefined): string {
+  return String(value ?? "").trim();
+}
+
+function isWorkerMohRuntimeClass(value: string): boolean {
+  return /^moh\d+$/i.test(value);
+}
+
+async function workerHasSyncedMohRuntimeClass(tenantId: string, value: string): Promise<boolean> {
+  const runtimeClass = normalizeWorkerMohRuntimeClass(value);
+  if (!isWorkerMohRuntimeClass(runtimeClass)) return false;
+  const row = await (db as any).pbxMohClass.findFirst({
+    where: {
+      mohClassName: runtimeClass,
+      isActive: true,
+      OR: [
+        { tenantId },
+        { tenantId: null },
+        { pbxTenantId: "1" },
+      ],
+    },
+    select: { id: true },
+  });
+  return !!row;
+}
+
 function workerComputeHoldProfile(
   config: { timezone: string; defaultProfileId: string | null; afterHoursProfileId: string | null; holidayProfileId: string | null },
   rules: Array<{ ruleType: string; weekday: number | null; startTime: string | null; endTime: string | null; startAt: Date | null; endAt: Date | null; priority: number; isActive: boolean; profileId: string }>,
@@ -1671,6 +1697,12 @@ async function runMohScheduleCycle(): Promise<void> {
 
         const { profile, mode } = workerComputeHoldProfile(sched, rules, override, profileMap, now);
         if (!profile) continue;
+        const runtimeClass = normalizeWorkerMohRuntimeClass(profile.vitalPbxMohClassName);
+        if (!(await workerHasSyncedMohRuntimeClass(tenantId, runtimeClass))) {
+          console.error(`moh reconcile: blocked invalid or unsynced runtime class="${profile.vitalPbxMohClassName}" for tenant ${tenantId}`);
+          continue;
+        }
+        profile.vitalPbxMohClassName = runtimeClass;
 
         // Skip if last published state matches â€” no drift, no transition
         const lastClass = lastState?.mohClass ?? null;
@@ -1679,11 +1711,14 @@ async function runMohScheduleCycle(): Promise<void> {
 
         const keys = [
           { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
+          { family: fam, key: "moh_class",                  value: profile.vitalPbxMohClassName },
           { family: fam, key: "hold_mode",                  value: mode },
           { family: fam, key: "hold_announcement_enabled",  value: profile.holdAnnouncementEnabled ? "1" : "0" },
           { family: fam, key: "hold_announcement_ref",      value: profile.holdAnnouncementRef ?? "" },
           { family: fam, key: "hold_announcement_interval", value: String(profile.holdAnnouncementIntervalSec ?? 30) },
           { family: fam, key: "intro_announcement_ref",     value: profile.introAnnouncementRef ?? "" },
+          { family: fam, key: "hold_announce",              value: profile.holdAnnouncementEnabled ? (profile.holdAnnouncementRef ?? "") : "" },
+          { family: fam, key: "hold_repeat",                value: String(profile.holdAnnouncementIntervalSec ?? 30) },
         ];
 
         const record: any = await (db as any).mohPublishRecord.create({

@@ -13,10 +13,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useSip } from '../../context/SipContext';
 import { useTheme } from '../../context/ThemeContext';
-import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
 
@@ -37,11 +37,11 @@ const KEYS = [
   { digit: '#', sub: '' },
 ];
 
-// Key size: 3 keys per row with comfortable gutters.
-// Scaled to ~88% of the maximum possible size for better one-handed ergonomics.
-const PAD_H_PADDING = spacing['6'] as number ?? 24;
-const KEY_GAP = 12;
-const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3 * 0.88);
+// Key sizing: 3 keys per row with comfortable gutters; slightly smaller than max
+// so the entire pad sits comfortably above the bottom nav on small devices.
+const PAD_H_PADDING = (spacing['6'] as number) ?? 24;
+const KEY_GAP = 14;
+const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3 * 0.90);
 
 function DialKey({
   digit,
@@ -63,7 +63,7 @@ function DialKey({
   const handlePressIn = useCallback(() => {
     Animated.parallel([
       Animated.spring(scaleAnim, {
-        toValue: 0.90,
+        toValue: 0.93,
         useNativeDriver: true,
         speed: 40,
         bounciness: 0,
@@ -81,12 +81,12 @@ function DialKey({
       Animated.spring(scaleAnim, {
         toValue: 1,
         useNativeDriver: true,
-        speed: 20,
-        bounciness: 6,
+        speed: 22,
+        bounciness: 8,
       }),
       Animated.timing(opacityAnim, {
         toValue: 1,
-        duration: 100,
+        duration: 110,
         useNativeDriver: true,
       }),
     ]).start();
@@ -105,11 +105,11 @@ function DialKey({
   };
 
   const keyBg = isDark
-    ? 'rgba(255, 255, 255, 0.07)'
-    : 'rgba(0, 0, 0, 0.04)';
+    ? 'rgba(255, 255, 255, 0.05)'
+    : 'rgba(15, 23, 42, 0.035)';
   const keyBorder = isDark
-    ? 'rgba(255, 255, 255, 0.09)'
-    : 'rgba(0, 0, 0, 0.07)';
+    ? 'rgba(255, 255, 255, 0.07)'
+    : 'rgba(15, 23, 42, 0.06)';
 
   return (
     <Pressable
@@ -125,7 +125,8 @@ function DialKey({
           styles.key,
           {
             width: KEY_SIZE,
-            height: KEY_SIZE * 0.74,
+            height: KEY_SIZE,
+            borderRadius: KEY_SIZE / 2,
             backgroundColor: keyBg,
             borderColor: keyBorder,
             transform: [{ scale: scaleAnim }],
@@ -142,6 +143,50 @@ function DialKey({
   );
 }
 
+/** Soft pulsing ring behind the call button. Cheap: single scale + opacity loop. */
+function CallGlow({ color, active }: { color: string; active: boolean }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const opacity = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    if (!active) {
+      scale.setValue(1);
+      opacity.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(scale, { toValue: 1.35, duration: 1500, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0, duration: 1500, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0.35, duration: 0, useNativeDriver: true }),
+        ]),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, opacity, scale]);
+
+  if (!active) return null;
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        {
+          borderRadius: 999,
+          backgroundColor: color,
+          transform: [{ scale }],
+          opacity,
+        },
+      ]}
+    />
+  );
+}
+
 export function KeypadTab() {
   const { colors, isDark } = useTheme();
   const sip = useSip();
@@ -151,6 +196,7 @@ export function KeypadTab() {
   // Two-tap redial: first tap fills the last-dialed number, second tap calls it
   const [redialFilled, setRedialFilled] = useState(false);
   const prevCallStateRef = useRef(sip.callState);
+  const callScale = useRef(new Animated.Value(1)).current;
 
   // Clear number when call ends and return to idle
   useEffect(() => {
@@ -263,6 +309,13 @@ export function KeypadTab() {
     await sip.hangup();
   };
 
+  const callPressIn = useCallback(() => {
+    Animated.spring(callScale, { toValue: 0.93, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
+  }, [callScale]);
+  const callPressOut = useCallback(() => {
+    Animated.spring(callScale, { toValue: 1, useNativeDriver: true, speed: 22, bounciness: 8 }).start();
+  }, [callScale]);
+
   // Format display number nicely
   const formatDisplay = (n: string): string => {
     if (!n) return '';
@@ -270,21 +323,18 @@ export function KeypadTab() {
     if (n.length <= 5 && /^\d+$/.test(n)) return n;
     const digits = n.replace(/\D/g, '');
     if (digits.length <= 3) return digits;
-    if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    if (digits.length <= 6) return `${digits.slice(0, 3)} ${digits.slice(3)}`;
     if (digits.length <= 10)
-      return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+      return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
     return n;
   };
 
   const displayValue = formatDisplay(number);
   const registered = sip.registrationState === 'registered';
 
-  // When redialFilled, show a subtle "tap to call" cue under the number
   const subHint = redialFilled ? 'Tap call to dial' : null;
 
-  const callButtonDisabled = callActive
-    ? false
-    : dialing;
+  const callButtonDisabled = callActive ? false : dialing;
 
   const callButtonColor = callActive
     ? colors.callRed
@@ -292,13 +342,62 @@ export function KeypadTab() {
     ? colors.callGreen
     : colors.textTertiary;
 
+  const statusLabel = callActive
+    ? sip.callState === 'connected'
+      ? 'On Call'
+      : sip.callState === 'dialing'
+      ? 'Calling…'
+      : sip.callState === 'ringing'
+      ? 'Incoming…'
+      : 'Ending…'
+    : registered
+    ? 'Ready'
+    : 'Not registered';
+
+  const gradientTop = colors.bg;
+  const gradientBottom = isDark ? colors.bgSecondary : colors.bgSecondary;
+
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      {/* Layered background: vertical gradient + bottom-center glow for depth. */}
+      <LinearGradient
+        pointerEvents="none"
+        colors={[gradientTop, gradientBottom]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <LinearGradient
+        pointerEvents="none"
+        colors={[colors.transparent, callButtonColor + (isDark ? '1f' : '14')]}
+        start={{ x: 0.5, y: 0.4 }}
+        end={{ x: 0.5, y: 1 }}
+        style={[StyleSheet.absoluteFill, { opacity: callActive ? 0.9 : 0.65 }]}
+      />
+
+      {/* ── Top bar ── */}
+      <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
+        <View style={styles.topBarSide} />
+        <View style={styles.topBarActions}>
+          <TouchableOpacity
+            activeOpacity={0.78}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={[styles.topBarIcon, { backgroundColor: colors.surfaceElevated + 'aa', borderColor: colors.border }]}
+          >
+            <Ionicons name="search-outline" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.78}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={[styles.topBarIcon, { backgroundColor: colors.surfaceElevated + 'aa', borderColor: colors.border }]}
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      </View>
 
       {/* ── Display Area ── */}
-      <View style={[styles.displayArea, { paddingTop: insets.top + 8 }]}>
-
-        {/* Number input */}
+      <View style={styles.displayArea}>
         <View style={styles.numberRow}>
           <Text
             style={[
@@ -307,12 +406,12 @@ export function KeypadTab() {
                 color: colors.text,
                 fontSize:
                   displayValue.length > 14
-                    ? 24
+                    ? 28
                     : displayValue.length > 10
-                    ? 30
+                    ? 34
                     : displayValue.length > 6
-                    ? 36
-                    : 44,
+                    ? 40
+                    : 46,
               },
             ]}
             numberOfLines={1}
@@ -321,7 +420,7 @@ export function KeypadTab() {
             {displayValue || ' '}
           </Text>
 
-          {/* Backspace button — inline with display */}
+          {/* Backspace inline with display — only shown when something is typed. */}
           {number.length > 0 && (
             <Pressable
               onPress={handleBackspace}
@@ -335,35 +434,30 @@ export function KeypadTab() {
           )}
         </View>
 
-        {/* Redial cue — only shown after first tap auto-filled the number */}
         {subHint && (
           <Text style={[styles.hintText, { color: colors.textTertiary }]} numberOfLines={1}>
             {subHint}
           </Text>
         )}
 
-        {/* SIP registration status pill */}
-        <View style={[
-          styles.statusPill,
-          {
-            backgroundColor: registered
-              ? (isDark ? 'rgba(46,125,50,0.22)' : 'rgba(46,125,50,0.10)')
-              : (isDark ? 'rgba(183,28,28,0.22)' : 'rgba(183,28,28,0.10)'),
-          },
-        ]}>
+        <View
+          style={[
+            styles.statusPill,
+            {
+              backgroundColor: registered
+                ? isDark
+                  ? 'rgba(34,197,94,0.14)'
+                  : 'rgba(22,163,74,0.09)'
+                : isDark
+                ? 'rgba(244,63,94,0.14)'
+                : 'rgba(225,29,72,0.09)',
+              borderColor: registered ? colors.callGreen + '40' : colors.danger + '40',
+            },
+          ]}
+        >
           <View style={[styles.statusDot, { backgroundColor: registered ? colors.callGreen : colors.danger }]} />
-          <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]}>
-            {callActive
-              ? sip.callState === 'connected'
-                ? 'On Call'
-                : sip.callState === 'dialing'
-                ? 'Calling…'
-                : sip.callState === 'ringing'
-                ? 'Incoming…'
-                : 'Ending…'
-              : registered
-              ? 'Ready'
-              : 'Not registered'}
+          <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]} numberOfLines={1}>
+            {statusLabel}
           </Text>
           {sip.lastError && !callActive && (
             <Text style={[styles.statusText, { color: colors.danger, marginLeft: 6 }]} numberOfLines={1}>
@@ -373,11 +467,11 @@ export function KeypadTab() {
         </View>
       </View>
 
-      {/* Flex spacer — pushes the entire keypad block down toward the bottom nav */}
+      {/* Flex spacer — absorbs free vertical space above the keypad. */}
       <View style={styles.spacer} />
 
       {/* ── Keypad Grid ── */}
-      <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING, paddingBottom: insets.bottom + 16 }]}>
+      <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING }]}>
         <View style={styles.keyGrid}>
           {KEYS.map(({ digit, sub }) => (
             <DialKey
@@ -391,45 +485,36 @@ export function KeypadTab() {
           ))}
         </View>
 
-        {/* ── Action Row ── */}
-        <View style={styles.actionRow}>
-
-          {/* Left spacer / clear all */}
-          <View style={styles.actionSide}>
-            {number.length > 1 && (
+        {/* ── Call Button ── */}
+        <View style={[styles.callRow, { paddingBottom: insets.bottom + 18 }]}>
+          <View style={styles.callBtnWrap}>
+            <CallGlow color={callButtonColor} active={registered && !callActive} />
+            <Animated.View style={{ transform: [{ scale: callScale }] }}>
               <TouchableOpacity
-                onPress={() => setNumber('')}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                style={[styles.ghostBtn, { borderColor: colors.border }]}
+                style={[
+                  styles.callBtn,
+                  {
+                    backgroundColor: callButtonColor,
+                    shadowColor: callButtonColor,
+                  },
+                ]}
+                onPress={callActive ? handleHangup : handleDial}
+                onPressIn={callPressIn}
+                onPressOut={callPressOut}
+                activeOpacity={0.9}
+                disabled={callButtonDisabled}
+                accessibilityRole="button"
+                accessibilityLabel={callActive ? 'End call' : 'Call'}
               >
-                <Ionicons name="close" size={20} color={colors.textTertiary} />
+                <Ionicons
+                  name="call"
+                  size={32}
+                  color="#fff"
+                  style={callActive ? { transform: [{ rotate: '135deg' }] } : undefined}
+                />
               </TouchableOpacity>
-            )}
+            </Animated.View>
           </View>
-
-          {/* Call / Hangup button */}
-          <TouchableOpacity
-            style={[
-              styles.callBtn,
-              {
-                backgroundColor: callButtonColor,
-                shadowColor: callButtonColor,
-              },
-            ]}
-            onPress={callActive ? handleHangup : handleDial}
-            activeOpacity={0.82}
-            disabled={callButtonDisabled}
-          >
-            <Ionicons
-              name={callActive ? 'call' : 'call'}
-              size={30}
-              color="#fff"
-              style={callActive ? { transform: [{ rotate: '135deg' }] } : undefined}
-            />
-          </TouchableOpacity>
-
-          {/* Right spacer (balanced) */}
-          <View style={styles.actionSide} />
         </View>
       </View>
     </View>
@@ -439,17 +524,37 @@ export function KeypadTab() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
 
+  // ── Top bar ─────────────────────────────────────────
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing['5'],
+    paddingBottom: 4,
+  },
+  topBarSide: { width: 40, height: 40 },
+  topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  topBarIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   // ── Display ──────────────────────────────────────────
   displayArea: {
     alignItems: 'center',
     paddingHorizontal: PAD_H_PADDING,
-    paddingBottom: 10,
+    paddingTop: 6,
+    paddingBottom: 12,
   },
   numberRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: 56,
     width: '100%',
     gap: 8,
   },
@@ -472,8 +577,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 5,
-    borderRadius: 20,
-    marginTop: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 10,
     gap: 6,
   },
   statusDot: {
@@ -483,12 +589,12 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     letterSpacing: 0.3,
   },
 
-  // Flexible spacer — absorbs all free vertical space and pushes the keypad
-  // block down toward the bottom navigation bar for ergonomic thumb reach.
+  // Flex spacer — absorbs all free vertical space and pushes the keypad block
+  // down toward the bottom navigation bar for ergonomic thumb reach.
   spacer: {
     flex: 1,
     minHeight: 8,
@@ -496,7 +602,7 @@ const styles = StyleSheet.create({
 
   // ── Keys ─────────────────────────────────────────────
   keypad: {
-    // No flex — size is determined by content; spacer above handles positioning
+    // No flex — height determined by content; spacer above handles positioning
   },
   keyGrid: {
     flexDirection: 'row',
@@ -507,53 +613,44 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   key: {
-    borderRadius: 16,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyDigit: {
-    fontSize: 23,
-    fontWeight: '400',
-    letterSpacing: 0.5,
-    lineHeight: 27,
+    fontSize: 30,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+    lineHeight: 34,
   },
   keySub: {
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1.8,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 2.0,
     marginTop: 1,
+    opacity: 0.8,
   },
 
-  // ── Action Row ───────────────────────────────────────
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-  },
-  actionSide: {
-    width: 52,
+  // ── Call Button ─────────────────────────────────────
+  callRow: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ghostBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
+  callBtnWrap: {
+    width: 78,
+    height: 78,
     alignItems: 'center',
     justifyContent: 'center',
   },
   callBtn: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    width: 74,
+    height: 74,
+    borderRadius: 37,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    elevation: 9,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 18,
+    elevation: 10,
   },
 });

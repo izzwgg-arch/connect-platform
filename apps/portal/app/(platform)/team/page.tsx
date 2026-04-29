@@ -9,6 +9,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Phone,
+  QrCode,
   Search,
   User,
   Wifi,
@@ -24,6 +25,9 @@ import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { loadPbxResource } from "../../../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../../../services/liveCallState";
+import { AdminExtensionPairingQrModal } from "../../../components/AdminExtensionPairingQrModal";
+import type { AdminScope } from "../../../types/app";
+import { readJwtPayload } from "../../../services/session";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -38,6 +42,9 @@ interface TeamMember {
   title?: string;
   presence: PresenceState;
   callerId?: string;
+  /** Connect `Extension.id` — required for admin pairing QR (not the VitalPBX numeric id). */
+  connectExtensionId?: string;
+  pairingCapable?: boolean;
 }
 
 const PRESENCE_META: Record<PresenceState, { label: string; color: string; dotColor: string; animate: boolean }> = {
@@ -138,6 +145,13 @@ function isSystemExtensionName(name: string): boolean {
 
 function byExtensionAsc(a: TeamMember, b: TeamMember): number {
   return Number(a.extension) - Number(b.extension);
+}
+
+/** Align with API `canManageUsers` — not portal-mapped roles (e.g. SUPPORT → TENANT_ADMIN). */
+function canShowAdminExtensionPairingQr(jwtRoleRaw: string | undefined, adminScope: AdminScope): boolean {
+  const r = String(jwtRoleRaw || "").toUpperCase();
+  if (r === "SUPER_ADMIN") return adminScope === "TENANT";
+  return r === "TENANT_ADMIN" || r === "ADMIN";
 }
 
 type ViewMode = "card" | "list";
@@ -244,12 +258,16 @@ function DetailPanel({
   onMessage,
   onCopy,
   onClose,
+  showAdminPairingQr,
+  onAdminPairingQr,
 }: {
   member: TeamMember;
   onCall: (ext: string) => void;
   onMessage: (m: TeamMember) => void;
   onCopy: (ext: string) => void;
   onClose: () => void;
+  showAdminPairingQr: boolean;
+  onAdminPairingQr: (m: TeamMember) => void;
 }) {
   const meta = PRESENCE_META[member.presence];
   const activeNow = member.presence === "on_call" || member.presence === "ringing";
@@ -286,6 +304,16 @@ function DetailPanel({
           <button className="btn ghost td-detail-cta" onClick={() => onMessage(member)}>
             <MessageSquare size={15} /> Message
           </button>
+          {showAdminPairingQr && member.pairingCapable && member.connectExtensionId ? (
+            <button
+              type="button"
+              className="btn ghost td-detail-cta"
+              title="Show pairing QR"
+              onClick={() => onAdminPairingQr(member)}
+            >
+              <QrCode size={15} /> Pairing QR
+            </button>
+          ) : null}
         </div>
 
         <div className="td-detail-insights">
@@ -367,12 +395,16 @@ function MemberCard({
   onMessage,
   onCopy,
   onDetails,
+  showAdminPairingQr,
+  onAdminPairingQr,
 }: {
   member: TeamMember;
   onCall: (ext: string) => void;
   onMessage: (m: TeamMember) => void;
   onCopy: (ext: string) => void;
   onDetails: (m: TeamMember) => void;
+  showAdminPairingQr: boolean;
+  onAdminPairingQr: (m: TeamMember) => void;
 }) {
   const meta = PRESENCE_META[member.presence];
   const isActive = member.presence === "on_call" || member.presence === "ringing";
@@ -418,6 +450,20 @@ function MemberCard({
           onCopy={() => onCopy(member.extension)}
           onDetails={() => onDetails(member)}
         />
+        {showAdminPairingQr && member.pairingCapable && member.connectExtensionId ? (
+          <button
+            type="button"
+            className="td-hover-action td-qr-pill"
+            title="Show pairing QR"
+            aria-label="Show pairing QR"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAdminPairingQr(member);
+            }}
+          >
+            <QrCode size={15} strokeWidth={2} />
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -431,12 +477,16 @@ function MemberListRow({
   onMessage,
   onCopy,
   onDetails,
+  showAdminPairingQr,
+  onAdminPairingQr,
 }: {
   member: TeamMember;
   onCall: (ext: string) => void;
   onMessage: (m: TeamMember) => void;
   onCopy: (ext: string) => void;
   onDetails: (m: TeamMember) => void;
+  showAdminPairingQr: boolean;
+  onAdminPairingQr: (m: TeamMember) => void;
 }) {
   const meta = PRESENCE_META[member.presence];
   const isActive = member.presence === "on_call" || member.presence === "ringing";
@@ -486,6 +536,17 @@ function MemberListRow({
           onCopy={() => onCopy(member.extension)}
           onDetails={() => onDetails(member)}
         />
+        {showAdminPairingQr && member.pairingCapable && member.connectExtensionId ? (
+          <button
+            type="button"
+            className="td-action-btn"
+            title="Show pairing QR"
+            aria-label="Show pairing QR"
+            onClick={() => onAdminPairingQr(member)}
+          >
+            <QrCode size={15} strokeWidth={2} />
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -523,6 +584,26 @@ export default function TeamDirectoryPage() {
 
   // Detail panel
   const [detail, setDetail] = useState<TeamMember | null>(null);
+
+  const [pairingTarget, setPairingTarget] = useState<{
+    connectExtensionId: string;
+    memberName: string;
+    extensionNumber: string;
+    tenantName: string;
+  } | null>(null);
+
+  const jwtRole = readJwtPayload()?.role;
+  const showAdminPairingQr = canShowAdminExtensionPairingQr(jwtRole, adminScope);
+
+  const openAdminPairing = useCallback((m: TeamMember) => {
+    if (!m.connectExtensionId) return;
+    setPairingTarget({
+      connectExtensionId: m.connectExtensionId,
+      memberName: m.name,
+      extensionNumber: m.extension,
+      tenantName: tenant?.name ?? "",
+    });
+  }, [tenant?.name]);
 
   // Toast
   const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
@@ -565,6 +646,13 @@ export default function TeamDirectoryPage() {
       if (isSystemExtensionName(name)) return [];
 
       const amiState = liveExtensionForTenant(telephony.extensionList, ext, tenantId);
+      const connectExtensionId = readString(r, ["connectExtensionId", "connect_extension_id"]);
+      const ownerUserId = readString(r, ["ownerUserId", "owner_user_id"]);
+      const rowStatus = readString(r, ["status"]) ?? "";
+      const webrtcRaw = r["webrtcEnabled"];
+      const webrtcOn = webrtcRaw === true || webrtcRaw === "true" || webrtcRaw === 1;
+      const pairingCapable = Boolean(connectExtensionId && ownerUserId && webrtcOn && rowStatus !== "disabled");
+
       return [{
         id: readString(r, ["id", "uuid"]) ?? ext,
         name,
@@ -579,6 +667,8 @@ export default function TeamDirectoryPage() {
           ringingExts,
         ),
         callerId: undefined,
+        connectExtensionId: connectExtensionId ?? undefined,
+        pairingCapable,
       }];
     });
 
@@ -831,6 +921,8 @@ export default function TeamDirectoryPage() {
                 onMessage={handleMessage}
                 onCopy={handleCopy}
                 onDetails={setDetail}
+                showAdminPairingQr={showAdminPairingQr}
+                onAdminPairingQr={openAdminPairing}
               />
             ))}
           </div>
@@ -844,6 +936,8 @@ export default function TeamDirectoryPage() {
                 onMessage={handleMessage}
                 onCopy={handleCopy}
                 onDetails={setDetail}
+                showAdminPairingQr={showAdminPairingQr}
+                onAdminPairingQr={openAdminPairing}
               />
             ))}
           </div>
@@ -871,8 +965,16 @@ export default function TeamDirectoryPage() {
           onMessage={handleMessage}
           onCopy={handleCopy}
           onClose={() => setDetail(null)}
+          showAdminPairingQr={showAdminPairingQr}
+          onAdminPairingQr={openAdminPairing}
         />
       ) : null}
+
+      <AdminExtensionPairingQrModal
+        open={pairingTarget !== null}
+        target={pairingTarget}
+        onClose={() => setPairingTarget(null)}
+      />
 
       {/* Toast */}
       {toast ? (

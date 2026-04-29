@@ -165,10 +165,10 @@ export default function DidRoutingPage() {
 
   // Capabilities flag: when PBX_INBOUND_API is off, the Take-over / Restore
   // buttons can't succeed — we surface a banner so super-admins know why.
-  const [capabilities, setCapabilities] = useState<{ inboundApiEnabled: boolean; howToEnable: string | null } | null>(null);
+  const [capabilities, setCapabilities] = useState<{ inboundApiEnabled: boolean; routeHelperEnabled?: boolean; howToEnable: string | null } | null>(null);
   useEffect(() => {
-    apiGet<{ ok: true; inboundApiEnabled: boolean; howToEnable: string | null }>("/voice/did/capabilities")
-      .then((res) => setCapabilities({ inboundApiEnabled: !!res.inboundApiEnabled, howToEnable: res.howToEnable ?? null }))
+    apiGet<{ ok: true; inboundApiEnabled: boolean; routeHelperEnabled?: boolean; howToEnable: string | null }>("/voice/did/capabilities")
+      .then((res) => setCapabilities({ inboundApiEnabled: !!res.inboundApiEnabled, routeHelperEnabled: !!res.routeHelperEnabled, howToEnable: res.howToEnable ?? null }))
       .catch(() => setCapabilities(null));
   }, []);
 
@@ -186,8 +186,9 @@ export default function DidRoutingPage() {
     setLoading(true);
     setError(null);
     try {
-      // Mappings list: tenant-admin = scoped; super-admin = unscoped (all tenants).
-      const qs = tenantId && !isSuper ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+      const qs = tenantId
+        ? `?tenantId=${encodeURIComponent(tenantId)}`
+        : (isSuper ? `?tenantId=__all__` : "");
       const m = await apiGet<{ mappings: DidMapping[] }>(`/voice/did/mappings${qs}`);
       setMappings(m.mappings ?? []);
 
@@ -402,7 +403,7 @@ export default function DidRoutingPage() {
       {/* Super-admin warning when the PBX inbound-numbers REST API is disabled
           — without it, Take-over and Restore cannot mutate VitalPBX. Hidden
           for tenant-admins who can't fix it anyway. */}
-      {isSuper && capabilities && !capabilities.inboundApiEnabled && (
+      {isSuper && capabilities && !capabilities.inboundApiEnabled && !capabilities.routeHelperEnabled && (
         <div style={{
           background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.35)",
           borderRadius: 8, padding: "10px 16px", marginBottom: 20, fontSize: 13, color: "#fde68a",

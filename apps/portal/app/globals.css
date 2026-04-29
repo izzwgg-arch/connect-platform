@@ -6000,6 +6000,13 @@ table tr:hover {
   cursor: pointer;
 }
 .td-hover-action:hover { background: color-mix(in srgb, var(--accent) 13%, var(--panel-2)); }
+.td-qr-pill {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
 .td-avatar-wrap {
   position: relative;
   flex-shrink: 0;

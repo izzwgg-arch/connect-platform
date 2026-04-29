@@ -190,7 +190,29 @@ type EmailProviderCredentialPayload = {
   smtpUser?: string | null;
   smtpPass?: string | null;
   smtpSecure?: boolean | null;
+  /** Workspace mailbox used for SMTP auth (often same as smtpUser). */
+  googleWorkspaceMailbox?: string | null;
+  /** Gmail API OAuth refresh token (encrypted at rest with other creds). Reserved for future OAuth flow. */
+  oauthRefreshToken?: string | null;
 };
+
+type EmailProviderSettingsJson = {
+  googleIntegrationType?: "SMTP" | "OAUTH";
+  oauthClientId?: string | null;
+};
+
+function readEmailProviderSettings(row: { settings?: unknown } | null | undefined): EmailProviderSettingsJson {
+  const s = row?.settings;
+  if (!s || typeof s !== "object" || Array.isArray(s)) return {};
+  return s as EmailProviderSettingsJson;
+}
+
+function getEffectiveEmailTenantId(req: any, user: JwtUser): string {
+  if (!isRole(user, ["SUPER_ADMIN"])) return user.tenantId;
+  const ctx = String((req.headers as any)?.["x-tenant-context"] || "").trim();
+  if (/^[0-9a-f-]{36}$/i.test(ctx)) return ctx;
+  return user.tenantId;
+}
 
 type CampaignDecision = {
   status: "QUEUED" | "NEEDS_APPROVAL";
@@ -622,11 +644,14 @@ async function sendEmailJobNow(job: any): Promise<void> {
     throw err;
   }
 
-  const smtpHost = provider.provider === "GOOGLE_WORKSPACE" ? (creds.smtpHost || "smtp-relay.gmail.com") : (creds.smtpHost || null);
+  const smtpHost =
+    provider.provider === "GOOGLE_WORKSPACE"
+      ? (creds.smtpHost || "smtp.gmail.com")
+      : (creds.smtpHost || null);
   const smtpPort = provider.provider === "GOOGLE_WORKSPACE" ? (creds.smtpPort || 587) : (creds.smtpPort || null);
   const smtpSecure = provider.provider === "GOOGLE_WORKSPACE" ? (typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : false) : !!creds.smtpSecure;
 
-  await fetch(endpoint, {
+  const smtpResp = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -644,6 +669,12 @@ async function sendEmailJobNow(job: any): Promise<void> {
       replyTo: provider.replyTo || null
     })
   });
+  if (!smtpResp.ok) {
+    const err: any = new Error(`SMTP_BRIDGE_HTTP_${smtpResp.status}`);
+    err.code = "SMTP_BRIDGE_FAILED";
+    err.detail = (await smtpResp.text().catch(() => "")).slice(0, 500);
+    throw err;
+  }
 }
 
 let emailJobProcessorRunning = false;
@@ -1666,6 +1697,34 @@ function normalizeTenantLookupValue(value: string): string {
     .replace(/^vpbx:/, "")
     .replace(/[_\s-]+/g, "_")
     .replace(/[^a-z0-9_]/g, "");
+}
+
+/**
+ * Connect tenant id for admin-only actions that must never use SUPER_ADMIN's
+ * ambiguous "first tenant" fallback. Requires an explicit workspace context
+ * for super-admins (x-tenant-context or vpbx: slug).
+ */
+async function resolveConnectTenantIdForAdminExtensionPairing(
+  req: any,
+  admin: JwtUser
+): Promise<{ tenantId: string } | { error: string; status: number }> {
+  if (admin.role !== "SUPER_ADMIN") {
+    return { tenantId: admin.tenantId };
+  }
+  const raw = String((req.headers as any)["x-tenant-context"] || "").trim();
+  if (!raw) return { error: "TENANT_CONTEXT_REQUIRED", status: 400 };
+  if (raw.startsWith("vpbx:")) {
+    try {
+      const tenantId = await resolveManagedTenant(admin, raw);
+      return { tenantId };
+    } catch {
+      return { error: "TENANT_NOT_FOUND", status: 404 };
+    }
+  }
+  if (raw === "local") return { error: "TENANT_CONTEXT_REQUIRED", status: 400 };
+  const row = await db.tenant.findUnique({ where: { id: raw }, select: { id: true } });
+  if (!row) return { error: "TENANT_NOT_FOUND", status: 404 };
+  return { tenantId: row.id };
 }
 
 async function resolveManagedTenant(actor: JwtUser, requestedTenantId?: string | null): Promise<string> {
@@ -6555,6 +6614,109 @@ app.post("/voice/mobile-provisioning/redeem", async (req, reply) => {
     const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
     return reply.status(code === "EXTENSION_NOT_ASSIGNED" ? 404 : 400).send({ error: code });
   }
+});
+
+// Admin / tenant-admin: issue a mobile provisioning QR token for another user's
+// extension (same HMAC + DB row shape as POST /voice/mobile-provisioning/token).
+// Redeem path remains POST /auth/mobile-qr-exchange (owner user on token).
+app.post("/admin/extensions/:extensionId/pairing-qr", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+
+  const { extensionId } = req.params as { extensionId: string };
+  if (!extensionId || extensionId.length < 8) {
+    return reply.status(400).send({ error: "INVALID_EXTENSION_ID" });
+  }
+
+  if (!checkBillingRateLimit(`admin-ext-pairing-qr:${admin.sub}`, 120, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+
+  const scope = await resolveConnectTenantIdForAdminExtensionPairing(req, admin);
+  if ("error" in scope) {
+    return reply.status(scope.status).send({ error: scope.error });
+  }
+  const effectiveTenantId = scope.tenantId;
+
+  const ext = await db.extension.findFirst({
+    where: { id: extensionId, tenantId: effectiveTenantId },
+    include: {
+      pbxLink: true,
+      tenant: { select: { id: true, name: true } },
+    },
+  });
+  if (!ext || !ext.tenant) return reply.status(404).send({ error: "extension_not_found" });
+
+  if (ext.status !== "ACTIVE" || ext.billable === false) {
+    return reply.status(400).send({ error: "EXTENSION_NOT_PAIRABLE" });
+  }
+  if (!ext.ownerUserId) {
+    return reply.status(400).send({ error: "EXTENSION_NOT_ASSIGNED" });
+  }
+  if (!ext.pbxLink || ext.pbxLink.isSuspended) {
+    return reply.status(400).send({ error: "EXTENSION_SUSPENDED" });
+  }
+  if (!ext.pbxLink.webrtcEnabled) {
+    return reply.status(400).send({ error: "WEBRTC_DISABLED" });
+  }
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId: ext.tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  const tenantRow = await db.tenant.findUnique({ where: { id: ext.tenantId } });
+  if (!tenantRow) return reply.status(404).send({ error: "TENANT_NOT_FOUND" });
+
+  const cfg = resolveWebrtcConfig(tenantRow, link);
+  if (!cfg.webrtcEnabled || !cfg.sipWsUrl || !cfg.sipDomain) {
+    return reply.status(400).send({ error: "WEBRTC_DISABLED" });
+  }
+
+  const hasSip = !!(ext.pbxLink as any).sipPasswordEncrypted || voiceSimulate;
+  if (!hasSip) {
+    return reply.status(400).send({ error: "SIP_CREDENTIAL_NOT_SET" });
+  }
+
+  const tokenId = randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+  const token = signMobileProvisioningToken({
+    tokenId,
+    tenantId: ext.tenantId,
+    userId: ext.ownerUserId,
+    expMs: expiresAt.getTime(),
+  });
+  const tokenHash = hashToken(token);
+
+  await db.mobileProvisioningToken.create({
+    data: {
+      tenantId: ext.tenantId,
+      userId: ext.ownerUserId,
+      tokenHash,
+      expiresAt,
+    },
+  });
+
+  await audit({
+    tenantId: ext.tenantId,
+    actorUserId: admin.sub,
+    action: "extension_pairing_qr_generated",
+    entityType: "Extension",
+    entityId: ext.id,
+    metadata: { extensionNumber: ext.extNumber },
+  });
+
+  return {
+    token,
+    expiresAt,
+    extension: {
+      id: ext.id,
+      displayName: ext.displayName,
+      extensionNumber: ext.extNumber,
+    },
+    tenant: { id: ext.tenant.id, name: ext.tenant.name },
+  };
 });
 
 app.post("/voice/webrtc/test-config", async (req, reply) => {
@@ -18534,14 +18696,16 @@ app.get("/settings/email", async (req, reply) => {
       replyTo: row.replyTo,
       logoUrl: row.logoUrl,
       footerText: row.footerText,
-      settings: row.settings || {},
+      settings: readEmailProviderSettings(row),
       masked: {
         sendgridApiKey: creds.sendgridApiKey ? "********" : null,
         smtpHost: maskValue(creds.smtpHost || null, 2, 2),
         smtpPort: creds.smtpPort || null,
         smtpUser: maskValue(creds.smtpUser || null, 2, 2),
         smtpPass: creds.smtpPass ? "********" : null,
-        smtpSecure: typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : null
+        smtpSecure: typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : null,
+        googleWorkspaceMailbox: maskValue(creds.googleWorkspaceMailbox || creds.smtpUser || null, 2, 2),
+        oauthRefreshToken: creds.oauthRefreshToken ? "********" : null,
       },
       lastTestAt: row.lastTestAt,
       lastTestResult: row.lastTestResult,
@@ -18568,7 +18732,11 @@ app.put("/settings/email", async (req, reply) => {
     smtpPort: z.number().int().min(1).max(65535).optional(),
     smtpUser: z.string().min(1).optional(),
     smtpPass: z.string().min(1).optional(),
-    smtpSecure: z.boolean().optional()
+    smtpSecure: z.boolean().optional(),
+    googleWorkspaceMailbox: z.string().email().optional().nullable(),
+    oauthRefreshToken: z.string().min(1).optional(),
+    oauthClientId: z.string().max(200).optional().nullable(),
+    googleIntegrationType: z.enum(["SMTP", "OAUTH"]).optional()
   }).parse(req.body || {});
 
   const existing = await db.emailProviderConfig.findUnique({ where: { tenantId: admin.tenantId } });
@@ -18577,22 +18745,36 @@ app.put("/settings/email", async (req, reply) => {
     try { existingCreds = decryptJson<EmailProviderCredentialPayload>(existing.credentialsEncrypted); } catch {}
   }
 
+  const prevSettings = readEmailProviderSettings(existing);
+
   const creds: EmailProviderCredentialPayload = {
     sendgridApiKey: input.sendgridApiKey || existingCreds.sendgridApiKey || null,
     smtpHost: input.smtpHost || existingCreds.smtpHost || null,
     smtpPort: input.smtpPort ?? existingCreds.smtpPort ?? null,
     smtpUser: input.smtpUser || existingCreds.smtpUser || null,
     smtpPass: input.smtpPass || existingCreds.smtpPass || null,
-    smtpSecure: input.smtpSecure ?? existingCreds.smtpSecure ?? null
+    smtpSecure: input.smtpSecure ?? existingCreds.smtpSecure ?? null,
+    googleWorkspaceMailbox: input.googleWorkspaceMailbox !== undefined ? input.googleWorkspaceMailbox : (existingCreds.googleWorkspaceMailbox ?? null),
+    oauthRefreshToken: input.oauthRefreshToken || existingCreds.oauthRefreshToken || null
+  };
+  if (input.googleWorkspaceMailbox !== undefined && input.googleWorkspaceMailbox) {
+    creds.smtpUser = creds.smtpUser || input.googleWorkspaceMailbox;
+  }
+
+  const mergedSettings: EmailProviderSettingsJson = {
+    ...prevSettings,
+    ...(input.googleIntegrationType ? { googleIntegrationType: input.googleIntegrationType } : {}),
+    ...(input.oauthClientId !== undefined ? { oauthClientId: input.oauthClientId } : {})
   };
 
   if (input.provider === "SENDGRID" && !creds.sendgridApiKey) {
     return reply.status(400).send({ error: "SENDGRID_API_KEY_REQUIRED" });
   }
   if (input.provider === "GOOGLE_WORKSPACE") {
-    creds.smtpHost = creds.smtpHost || "smtp-relay.gmail.com";
+    creds.smtpHost = creds.smtpHost || "smtp.gmail.com";
     creds.smtpPort = creds.smtpPort || 587;
     if (creds.smtpSecure === null || creds.smtpSecure === undefined) creds.smtpSecure = false;
+    if (!mergedSettings.googleIntegrationType) mergedSettings.googleIntegrationType = "SMTP";
   }
   if ((input.provider === "SMTP" || input.provider === "GOOGLE_WORKSPACE") && (!creds.smtpHost || !creds.smtpPort || !creds.smtpUser || !creds.smtpPass)) {
     return reply.status(400).send({ error: "SMTP_CONFIG_INCOMPLETE" });
@@ -18608,7 +18790,7 @@ app.put("/settings/email", async (req, reply) => {
       replyTo: input.replyTo || null,
       logoUrl: input.logoUrl || null,
       footerText: input.footerText || null,
-      settings: {},
+      settings: mergedSettings as object,
       credentialsEncrypted: encryptJson(creds),
       credentialsKeyId: "v1",
       isEnabled: false,
@@ -18625,6 +18807,7 @@ app.put("/settings/email", async (req, reply) => {
       replyTo: input.replyTo || null,
       logoUrl: input.logoUrl || null,
       footerText: input.footerText || null,
+      settings: mergedSettings as object,
       credentialsEncrypted: encryptJson(creds),
       credentialsKeyId: "v1",
       isEnabled: false,

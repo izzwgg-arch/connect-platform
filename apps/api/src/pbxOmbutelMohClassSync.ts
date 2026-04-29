@@ -29,7 +29,7 @@ export type MohClassSyncResult =
       deactivated: number;
       unassigned: number;
       perTenant: Array<{ tenantId: string | null; tenantSlug: string | null; count: number }>;
-      sample: Array<{ pbxGroupId: number; name: string; rawTenant: string | null; resolvedTenantId: string | null }>;
+      sample: Array<{ pbxGroupId: number; displayName: string; runtimeClass: string; rawTenant: string | null; resolvedTenantId: string | null }>;
       errors: string[];
     }
   | {
@@ -217,7 +217,7 @@ export async function syncMohClassesFromOmbutelMysql(
     let unassigned = 0;
     const seenGroupIds: number[] = [];
     const perTenantCounts = new Map<string, { tenantId: string | null; tenantSlug: string | null; count: number }>();
-    const sample: Array<{ pbxGroupId: number; name: string; rawTenant: string | null; resolvedTenantId: string | null }> = [];
+    const sample: Array<{ pbxGroupId: number; displayName: string; runtimeClass: string; rawTenant: string | null; resolvedTenantId: string | null }> = [];
 
     for (const g of groups) {
       const pbxGroupId = Number(g.music_group_id);
@@ -237,16 +237,12 @@ export async function syncMohClassesFromOmbutelMysql(
       if (bucket) bucket.count += 1;
       else perTenantCounts.set(bucketKey, { tenantId: connectTenantId, tenantSlug, count: 1 });
 
+      // VitalPBX stores the human label in `name` but exposes the runtime
+      // Asterisk class as `moh<group_id>` in musiconhold.conf.
+      const mohClassName = `moh${pbxGroupId}`;
       if (sample.length < 8) {
-        sample.push({ pbxGroupId, name, rawTenant: rawTenant || null, resolvedTenantId: connectTenantId });
+        sample.push({ pbxGroupId, displayName: name, runtimeClass: mohClassName, rawTenant: rawTenant || null, resolvedTenantId: connectTenantId });
       }
-
-      // VitalPBX typically exposes Asterisk class names equal to the raw
-      // `name` for single-tenant clusters. For multi-tenant, users often see
-      // `<slug>_<name>` in musiconhold.conf. We store the raw `name` as
-      // `mohClassName` (the common case) and also persist tenantSlug so the
-      // UI can offer a secondary rendering if needed.
-      const mohClassName = name;
       const classType = (g.type || "").toString().trim().toLowerCase() || null;
       const isDefault = String(g.is_default || "").toLowerCase() === "yes";
 

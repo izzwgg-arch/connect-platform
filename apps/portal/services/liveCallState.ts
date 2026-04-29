@@ -107,11 +107,30 @@ export function callsForTenant(calls: LiveCall[], tenantId: string | null, exten
   return calls.filter((call) => callBelongsToTenant(call, tenantId, tenantExtensions, tenantName));
 }
 
+export function involvedExtensionsFromCall(call: LiveCall): string[] {
+  const out = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const trimmed = value.trim();
+    if (isValidTenantExtension(trimmed)) out.add(trimmed);
+  };
+
+  for (const ext of call.extensions ?? []) add(ext);
+  // Some PBX event paths produce a visible live call before `extensions[]` is
+  // populated. Dashboard still shows that call from `from`/`to`, so BLF must
+  // derive from those same fields too or the two surfaces will disagree.
+  add(call.from);
+  add(call.to);
+  add(call.connectedLine);
+
+  return [...out];
+}
+
 export function extensionSetsFromCalls(calls: LiveCall[]): { activeExts: Set<string>; ringingExts: Set<string> } {
   const activeExts = new Set<string>();
   const ringingExts = new Set<string>();
   for (const call of calls) {
-    const exts = (call.extensions ?? []).filter(isValidTenantExtension);
+    const exts = involvedExtensionsFromCall(call);
     if (call.state === "up" || call.state === "held") exts.forEach((ext) => activeExts.add(ext));
     else if (call.state === "ringing" || call.state === "dialing") exts.forEach((ext) => ringingExts.add(ext));
   }

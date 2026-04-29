@@ -44,11 +44,13 @@ so operators don't have to remember what the DID pointed at before.
 ## API surface
 
 All three endpoints require the `can_publish_did_routing` permission
-(`SUPER_ADMIN` + `ADMIN`) and `PBX_INBOUND_API=true`.
+(`SUPER_ADMIN` + `ADMIN`). PBX mutation is performed through the PBX-side
+route helper when configured (`PBX_ROUTE_HELPER_*`), with the old
+`PBX_INBOUND_API=true` VitalPBX endpoint kept only as a legacy fallback.
 
 | Method | Path                              | Purpose                                                            |
 | ------ | --------------------------------- | ------------------------------------------------------------------ |
-| GET    | `/voice/did/capabilities`         | Report whether `PBX_INBOUND_API` is enabled (UI banner driver)     |
+| GET    | `/voice/did/capabilities`         | Report whether the PBX route helper or legacy inbound API is enabled |
 | GET    | `/voice/did/:id/inspect`          | Read live PBX inbound-number + compute drift vs. stashed original  |
 | POST   | `/voice/did/:id/switch-to-connect`| Capture → publish AstDB → PATCH PBX, atomic, inserts audit row     |
 | POST   | `/voice/did/:id/switch-to-pbx`    | Restore original (or override) PBX destination, inserts audit row  |
@@ -130,10 +132,21 @@ row shows a yellow warning. The fix is either:
 
 ## Gating / environment
 
-- `PBX_INBOUND_API=true` in the Connect API's environment is **required**
-  for both switch endpoints. When unset or `false`:
+- Preferred: install the PBX-side helper from
+  [`inbound-route-helper.md`](./inbound-route-helper.md) and set either:
+  - `PBX_ROUTE_HELPER_BASE_URL`, `PBX_ROUTE_HELPER_SECRET`,
+    `PBX_ROUTE_HELPER_CONNECT_DESTINATION_ID`
+  - or `PBX_ROUTE_HELPER_BY_INSTANCE_JSON` for per-PBX configuration.
+
+- Legacy fallback: `PBX_INBOUND_API=true` in the Connect API environment uses
+  VitalPBX's `/tenants/:id/inbound_numbers` endpoint. This endpoint does not
+  work on every VitalPBX build and may only add/remove tenant numbers rather
+  than change route destinations.
+
+- When neither helper nor legacy API is configured:
   - Switch endpoints return `503 pbx_inbound_api_disabled`
-  - `/voice/did/capabilities` reports `inboundApiEnabled: false`
+  - `/voice/did/capabilities` reports `routeHelperEnabled: false` and
+    `inboundApiEnabled: false`
   - The DID Routing portal page renders a yellow banner for super-admins
   - Take-over and Restore buttons still render, but fail on click with a
     clear error toast
@@ -147,8 +160,9 @@ row shows a yellow warning. The fix is either:
 - **Bulk switch**: per-DID only. Bulk tools are trivial to add on top of
   the single-DID endpoint but were intentionally scoped out to avoid
   "click once, break 100 lines" mistakes.
-- **Writing to Ombutel MariaDB directly**: everything goes through the
-  documented `PATCH /api/tenants/:id/inbound_numbers` REST endpoint.
+- **Broad Ombutel writes**: Connect never receives direct MySQL write access.
+  The PBX helper uses a narrowly-scoped local MySQL user that can only
+  `SELECT` route/destination rows and `UPDATE ombu_inbound_routes.destination_id`.
 - **Editing `/etc/asterisk/extensions_custom.conf`**: zero dialplan
   changes at runtime. `[connect-tenant-ivr]` is installed once at PBX
   provisioning time; takeover just repoints existing routes at it.

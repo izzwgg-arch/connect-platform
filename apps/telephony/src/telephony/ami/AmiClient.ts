@@ -189,6 +189,68 @@ export class AmiClient extends EventEmitter {
     });
   }
 
+  getVar(
+    channel: string,
+    variable: string,
+    timeoutMs = 3_000,
+  ): Promise<{ ok: true; value: string } | { ok: false }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.authenticated) {
+        reject(new Error("AMI not connected"));
+        return;
+      }
+      const id = `cc-${++this.actionSeq}`;
+      let settled = false;
+
+      const onResponse = (frame: AmiFrame) => {
+        if (frame["ActionID"] !== id) return;
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const status = frame["Response"] ?? "";
+        if (status === "Success") {
+          resolve({ ok: true, value: frame["Value"] ?? frame["Val"] ?? "" });
+        } else {
+          resolve({ ok: false });
+        }
+      };
+
+      const onDisconnect = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("AMI disconnected before Getvar completed"));
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ ok: false });
+      }, timeoutMs);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("response", onResponse);
+        this.off("disconnected", onDisconnect);
+      };
+      this.on("response", onResponse);
+      this.once("disconnected", onDisconnect);
+
+      const msg =
+        `Action: Getvar\r\nActionID: ${id}\r\nChannel: ${channel}\r\nVariable: ${variable}\r\n\r\n`;
+      try {
+        this.socket.write(msg);
+      } catch (err) {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    });
+  }
+
   private connect(): void {
     if (isAborted(this.reconnect)) return;
     log.info({ host: this.cfg.host, port: this.cfg.port }, "AMI connecting");

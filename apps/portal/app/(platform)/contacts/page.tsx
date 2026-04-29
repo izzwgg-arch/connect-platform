@@ -351,7 +351,7 @@ function ContactModal({ contact, onClose, onSaved }: { contact?: Contact | null;
             <p>Full tenant-scoped profile for calling, messaging, and CRM context.</p>
           </div>
           <button type="button" onClick={onClose}><X size={18} /></button>
-        </div>
+          </div>
         <div className="cx-form-grid">
           <label className="cx-upload">
             <Upload size={17} />
@@ -365,7 +365,7 @@ function ContactModal({ contact, onClose, onSaved }: { contact?: Contact | null;
           <label><span>Company</span><input value={form.company} onChange={(e) => update("company", e.target.value)} /></label>
           <label><span>Title / role</span><input value={form.title} onChange={(e) => update("title", e.target.value)} /></label>
           <label className="cx-check"><input type="checkbox" checked={form.favorite} onChange={(e) => update("favorite", e.target.checked)} /> Favorite</label>
-        </div>
+          </div>
         <DynamicPhones phones={form.phones} onChange={(phones) => update("phones", phones)} />
         <DynamicEmails emails={form.emails} onChange={(emails) => update("emails", emails)} />
         <div className="cx-form-grid">
@@ -539,8 +539,8 @@ export default function ContactsPage() {
             onArchive={() => archiveContact(selected)}
             onCall={callContact}
             onMessage={messageContact}
-          />
-        ) : null}
+        />
+      ) : null}
 
         {editing !== undefined ? (
           <ContactModal
@@ -551,7 +551,7 @@ export default function ContactsPage() {
               if (contact) setSelected(contact);
             }}
           />
-        ) : null}
+      ) : null}
       </div>
     </PermissionGate>
   );
