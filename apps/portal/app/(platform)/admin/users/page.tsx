@@ -119,18 +119,8 @@ export default function AdminUsersPage() {
 
   const isSuper = role === "SUPER_ADMIN";
 
-  // For super admins, persist the last-selected tenant so page reloads
-  // don't reset to the admin's own INTERNAL tenant (which isn't in the
-  // CUSTOMER dropdown and causes a silent fall-through to "Actual Home Care").
-  const SESSION_KEY = "adminUsersSelectedTenantId";
-  const [selectedTenantId, _setSelectedTenantId] = useState<string>(() => {
-    if (!isSuper) return contextTenantId;
-    try { return sessionStorage.getItem(SESSION_KEY) || contextTenantId; } catch { return contextTenantId; }
-  });
-  const setSelectedTenantId = (id: string) => {
-    try { sessionStorage.setItem(SESSION_KEY, id); } catch { /* noop */ }
-    _setSelectedTenantId(id);
-  };
+  // Super admins default to "ALL" so they see every customer tenant at once.
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(() => isSuper ? "ALL" : contextTenantId);
 
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
@@ -144,18 +134,14 @@ export default function AdminUsersPage() {
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
-    if (effectiveTenantId) params.set("tenantId", effectiveTenantId);
+    // "ALL" means no tenantId param → API returns all customer tenants for super admins
+    if (effectiveTenantId && effectiveTenantId !== "ALL") params.set("tenantId", effectiveTenantId);
     if (query.trim()) params.set("search", query.trim());
     if (roleFilter !== "all") params.set("role", roleFilter);
     if (statusFilter !== "all") params.set("status", statusFilter);
     const result = await apiGet<UsersResponse>(`/admin/users?${params.toString()}`);
     setData(result);
-    // If the API resolved a different tenant (e.g. our stored id was stale),
-    // snap the dropdown to match — but only if our stored id isn't in the list.
-    if (result.tenantId && (!selectedTenantId || !result.tenants.some((t) => t.id === selectedTenantId))) {
-      setSelectedTenantId(result.tenantId);
-    }
-  }, [effectiveTenantId, query, roleFilter, selectedTenantId, statusFilter]);
+  }, [effectiveTenantId, query, roleFilter, statusFilter]);
 
   useEffect(() => { load().catch((e: any) => setMessage(e?.message || "Failed to load users")); }, [load]);
 
@@ -214,6 +200,7 @@ export default function AdminUsersPage() {
             </div>
             {isSuper ? (
               <select className="input" style={{ width: 230 }} value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)}>
+                <option value="ALL">All tenants</option>
                 {(data?.tenants || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             ) : null}
@@ -278,7 +265,7 @@ export default function AdminUsersPage() {
         </section>
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
-        {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); if (createdTenantId && createdTenantId !== selectedTenantId) setSelectedTenantId(createdTenantId); load(); }} /> : null}
+        {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId === "ALL" ? "" : effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
     </PermissionGate>

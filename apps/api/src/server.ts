@@ -3788,16 +3788,26 @@ app.get("/admin/users", async (req, reply) => {
   const admin = await requirePermission(req, reply, canManageUsers);
   if (!admin) return;
   const query = z.object({ tenantId: z.string().optional(), search: z.string().optional(), role: z.string().optional(), status: z.string().optional() }).parse(req.query || {});
-  const tenantId = await resolveManagedTenant(admin, query.tenantId).catch((e) => {
-    const err = String((e as Error).message || "TENANT_NOT_FOUND");
-    return reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err }) as any;
-  });
-  if (reply.sent) return;
-  const where: any = { tenantId };
+
+  // Super admins can send tenantId="" or omit it entirely to view all customer tenants at once.
+  const allTenants = admin.role === "SUPER_ADMIN" && (!query.tenantId || query.tenantId === "ALL" || query.tenantId === "");
+
+  let tenantId: string | null = null;
+  if (!allTenants) {
+    const resolved = await resolveManagedTenant(admin, query.tenantId).catch((e) => {
+      const err = String((e as Error).message || "TENANT_NOT_FOUND");
+      reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err });
+      return null;
+    });
+    if (reply.sent) return;
+    tenantId = resolved as string;
+  }
+
+  const where: any = allTenants
+    ? { tenant: { kind: "CUSTOMER" as any, isApproved: true } }
+    : { tenantId };
+
   if (query.role && query.role !== "all") {
-    // The UI now sends portal buckets (END_USER / TENANT_ADMIN / SUPER_ADMIN).
-    // Expand each bucket into the DB roles that map to it so existing rows
-    // (role=USER, role=ADMIN, etc.) still show up under the new filter.
     const roleUpper = String(query.role).toUpperCase();
     if (roleUpper === "END_USER") {
       where.role = { in: ["USER", "EXTENSION_USER", "READ_ONLY"] };
@@ -3821,7 +3831,7 @@ app.get("/admin/users", async (req, reply) => {
       { ownedExtensions: { some: { extNumber: { contains: search, mode: "insensitive" } } } },
     ];
   }
-  const [users, tenants, extensions] = await Promise.all([
+  const [users, tenants] = await Promise.all([
     db.user.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -3835,19 +3845,20 @@ app.get("/admin/users", async (req, reply) => {
     admin.role === "SUPER_ADMIN"
       ? db.tenant.findMany({ where: { kind: "CUSTOMER" as any, isApproved: true }, orderBy: { name: "asc" }, select: { id: true, name: true, isApproved: true } })
       : db.tenant.findMany({ where: { id: admin.tenantId }, select: { id: true, name: true, isApproved: true } }),
-    db.extension.findMany({
-      where: { tenantId, status: { not: "DELETED" } },
-      orderBy: { extNumber: "asc" },
-      select: { id: true, extNumber: true, displayName: true, pbxUserEmail: true, ownerUserId: true, status: true },
-      take: 1000,
-    }),
   ]);
+  // Only load extensions for single-tenant view (not useful in all-tenants mode)
+  const extensions = allTenants ? [] : await db.extension.findMany({
+    where: { tenantId: tenantId!, status: { not: "DELETED" } },
+    orderBy: { extNumber: "asc" },
+    select: { id: true, extNumber: true, displayName: true, pbxUserEmail: true, ownerUserId: true, status: true },
+    take: 1000,
+  });
   return {
     users: users.map(formatAdminUser),
     tenants: tenants.map((t) => ({ id: t.id, name: t.name, status: t.isApproved === false ? "SUSPENDED" : "ACTIVE" })),
     extensions,
     roles: USER_MANAGEMENT_ROLES,
-    tenantId,
+    tenantId: allTenants ? "ALL" : tenantId,
   };
 });
 
