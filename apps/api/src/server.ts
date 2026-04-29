@@ -6638,13 +6638,31 @@ app.post("/admin/extensions/:extensionId/pairing-qr", async (req, reply) => {
   }
   const effectiveTenantId = scope.tenantId;
 
-  const ext = await db.extension.findFirst({
-    where: { id: extensionId, tenantId: effectiveTenantId },
-    include: {
-      pbxLink: true,
-      tenant: { select: { id: true, name: true } },
-    },
-  });
+  // Prefer Connect Extension.id (cuid). The portal may still send VitalPBX
+  // `pbxExtensionId` when rows use PBX id as display `id` — resolve safely
+  // within the scoped tenant only.
+  const extInclude = {
+    pbxLink: true,
+    tenant: { select: { id: true, name: true } },
+  } as const;
+
+  let ext =
+    (await db.extension.findFirst({
+      where: { id: extensionId, tenantId: effectiveTenantId },
+      include: extInclude,
+    })) ||
+    (await db.extension.findFirst({
+      where: { tenantId: effectiveTenantId, extNumber: extensionId },
+      include: extInclude,
+    })) ||
+    (await db.extension.findFirst({
+      where: {
+        tenantId: effectiveTenantId,
+        pbxLink: { pbxExtensionId: extensionId },
+      },
+      include: extInclude,
+    }));
+
   if (!ext || !ext.tenant) return reply.status(404).send({ error: "extension_not_found" });
 
   if (ext.status !== "ACTIVE" || ext.billable === false) {
