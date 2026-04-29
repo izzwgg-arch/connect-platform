@@ -15152,8 +15152,10 @@ app.get("/voice/ivr/schedule", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = rawTid.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(rawTid) : rawTid;
+  if (!tid) return reply.send({ schedule: null });
   const schedule = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } });
   return reply.send({ schedule: schedule ?? null });
 });
@@ -15174,7 +15176,18 @@ app.put("/voice/ivr/schedule", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
-  assertIvrTenantAccess(user, d.tenantId);
+  // Same vpbx:<slug> → connect tenant resolution used by DID/MOH/profile endpoints.
+  const connectTenantId = d.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(d.tenantId)
+    : d.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving an IVR schedule.",
+    });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
+  d.tenantId = connectTenantId;
 
   // Tenant-isolation hardening: every referenced profile ID must belong to
   // the same tenant. Prevents a Tenant A admin from attaching Tenant B's
@@ -15224,8 +15237,10 @@ app.get("/voice/ivr/override", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = rawTid.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(rawTid) : rawTid;
+  if (!tid) return reply.send({ override: null });
   const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: tid } });
   return reply.send({ override: override ?? null });
 });
@@ -15242,7 +15257,14 @@ app.post("/voice/ivr/override/activate", async (req, reply) => {
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
   const d = body.data;
-  assertIvrTenantAccess(user, d.tenantId);
+  const connectTenantId = d.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(d.tenantId)
+    : d.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Connect before using IVR overrides." });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
+  d.tenantId = connectTenantId;
   const profile = await (db as any).ivrRouteProfile.findUnique({ where: { id: d.profileId } });
   if (!profile || profile.tenantId !== d.tenantId) return reply.code(404).send({ error: "profile_not_found" });
   const override = await (db as any).ivrOverrideState.upsert({
@@ -15269,10 +15291,16 @@ app.post("/voice/ivr/override/deactivate", async (req, reply) => {
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  assertIvrTenantAccess(user, body.data.tenantId);
+  const connectTenantId = body.data.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(body.data.tenantId)
+    : body.data.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Connect before using IVR overrides." });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
   const override = await (db as any).ivrOverrideState.upsert({
-    where: { tenantId: body.data.tenantId },
-    create: { tenantId: body.data.tenantId, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
+    where: { tenantId: connectTenantId },
+    create: { tenantId: connectTenantId, isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
     update: { isActive: false, deactivatedAt: new Date(), deactivatedBy: (user as any).id ?? null },
   });
   return reply.send({ override });
@@ -15303,8 +15331,12 @@ app.get("/voice/ivr/preview", async (req, reply) => {
     at:       z.string().optional(),
   }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = rawTid.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(rawTid) : rawTid;
+  if (!tid) {
+    return reply.send({ mode: "business", reason: "tenant_not_linked", activeProfile: null, override: null, at: new Date().toISOString() });
+  }
   const [schedule, override, profiles] = await Promise.all([
     (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } }),
     (db as any).ivrOverrideState.findUnique({ where: { tenantId: tid } }),
@@ -15382,8 +15414,16 @@ app.get("/voice/ivr/publish-history", async (req, reply) => {
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional(), limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query || {});
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const tid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!tid) return reply.code(400).send({ error: "tenantId required" });
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  // Accept `vpbx:<slug>` scope identifiers from the super-admin tenant switcher
+  // and resolve them to the real Connect tenant cuid (same pattern used by IVR
+  // route-profiles/DID/MOH). Returning [] for unlinked tenants keeps the UI
+  // quiet instead of 400-ing on every visit to the page.
+  const tid = rawTid.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(rawTid)
+    : rawTid;
+  if (!tid) return reply.send({ records: [] });
   const records = await (db as any).ivrPublishRecord.findMany({
     where: { tenantId: tid },
     orderBy: { publishedAt: "desc" },
@@ -15399,8 +15439,25 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  const { tenantId } = body.data;
-  assertIvrTenantAccess(user, tenantId);
+  // The portal's super-admin tenant switcher passes `vpbx:<slug>` when a
+  // VitalPBX tenant is selected that hasn't been explicitly linked in
+  // Admin → PBX yet. Every other IVR/MOH/DID write endpoint resolves this
+  // through `resolveConnectTenantIdFromScope` before touching Prisma — without
+  // that step, the `IvrPublishRecord_tenantId_fkey` constraint blows up with a
+  // confusing "Foreign key constraint deleted" error that surfaces as a 500
+  // to the admin. Mirror the existing pattern so publish behaves like the
+  // sibling endpoints already do.
+  const connectTenantId = body.data.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(body.data.tenantId)
+    : body.data.tenantId;
+  if (!connectTenantId) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before publishing IVR routing.",
+    });
+  }
+  assertIvrTenantAccess(user, connectTenantId);
+  const tenantId = connectTenantId;
 
   const [schedule, override, profiles] = await Promise.all([
     (db as any).ivrScheduleConfig.findUnique({ where: { tenantId } }),
