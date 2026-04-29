@@ -207,7 +207,9 @@ export async function syncExtensionsFromPbx(
             },
           });
 
-          // 4b. Upsert PbxExtensionLink — stores WebRTC device identity and encrypted SIP password
+          // 4b. Upsert PbxExtensionLink — stores WebRTC device identity and encrypted SIP password.
+          // If VitalPBX only returns a desk-phone device, do not turn off an already-enabled
+          // portal/WebRTC link. Admin/user provisioning may have enabled it after a prior sync.
           await db.pbxExtensionLink.upsert({
             where: { extensionId: connectExt.id },
             create: {
@@ -225,7 +227,7 @@ export async function syncExtensionsFromPbx(
               pbxExtensionId,
               pbxSipUsername,
               pbxDeviceName: pbxDeviceName ?? undefined,
-              webrtcEnabled,
+              ...(webrtcEnabled ? { webrtcEnabled: true } : {}),
               pbxDeviceId: pbxDeviceIdFromSync ?? undefined,
               ...(sipPasswordEncrypted ? { sipPasswordEncrypted, sipPasswordIssuedAt: new Date() } : {}),
               updatedAt: new Date(),
