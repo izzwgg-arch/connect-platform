@@ -3833,7 +3833,7 @@ app.get("/admin/users", async (req, reply) => {
       take: 500,
     }),
     admin.role === "SUPER_ADMIN"
-      ? db.tenant.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, isApproved: true } })
+      ? db.tenant.findMany({ where: { kind: "CUSTOMER" as any, isApproved: true }, orderBy: { name: "asc" }, select: { id: true, name: true, isApproved: true } })
       : db.tenant.findMany({ where: { id: admin.tenantId }, select: { id: true, name: true, isApproved: true } }),
     db.extension.findMany({
       where: { tenantId, status: { not: "DELETED" } },
