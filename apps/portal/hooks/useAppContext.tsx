@@ -12,6 +12,8 @@ type ThemeMode = "dark" | "light";
 type AppContextType = {
   user: User;
   role: Role;
+  /** Raw `role` claim from the JWT (e.g. ADMIN, SUPER_ADMIN) — not portal-mapped `Role`. */
+  backendJwtRole: string | undefined;
   theme: ThemeMode;
   tenantId: string;
   tenant: Tenant;
@@ -31,6 +33,7 @@ const AppContext = createContext<AppContextType | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>("dark");
   const [role, setRole] = useState<Role>("SUPER_ADMIN");
+  const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(undefined);
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
@@ -53,6 +56,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if (jwt?.role) setRole(resolvedRole);
+    setBackendJwtRole(jwt?.role ? String(jwt.role) : undefined);
     const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
     const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
     setTenantId(resolvedTenantId);
@@ -154,6 +158,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => ({
       user: { ...user, tenantId },
       role,
+      backendJwtRole,
       theme,
       tenantId,
       tenant,
@@ -167,7 +172,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAdminScopeState(scope);
       }
     }),
-    [adminScope, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
+    [adminScope, backendJwtRole, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

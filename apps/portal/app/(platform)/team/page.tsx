@@ -27,7 +27,6 @@ import { loadPbxResource } from "../../../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../../../services/liveCallState";
 import { AdminExtensionPairingQrModal } from "../../../components/AdminExtensionPairingQrModal";
 import type { AdminScope } from "../../../types/app";
-import { readJwtPayload } from "../../../services/session";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -564,7 +563,7 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function TeamDirectoryPage() {
-  const { tenantId, adminScope, tenant } = useAppContext();
+  const { tenantId, adminScope, tenant, backendJwtRole } = useAppContext();
   const telephony = useTelephony();
   const phone = useSipPhone();
   const router = useRouter();
@@ -592,8 +591,7 @@ export default function TeamDirectoryPage() {
     tenantName: string;
   } | null>(null);
 
-  const jwtRole = readJwtPayload()?.role;
-  const showAdminPairingQr = canShowAdminExtensionPairingQr(jwtRole, adminScope);
+  const showAdminPairingQr = canShowAdminExtensionPairingQr(backendJwtRole, adminScope);
 
   const openAdminPairing = useCallback((m: TeamMember) => {
     if (!m.connectExtensionId) return;
@@ -649,9 +647,9 @@ export default function TeamDirectoryPage() {
       const connectExtensionId = readString(r, ["connectExtensionId", "connect_extension_id"]);
       const ownerUserId = readString(r, ["ownerUserId", "owner_user_id"]);
       const rowStatus = readString(r, ["status"]) ?? "";
-      const webrtcRaw = r["webrtcEnabled"];
-      const webrtcOn = webrtcRaw === true || webrtcRaw === "true" || webrtcRaw === 1;
-      const pairingCapable = Boolean(connectExtensionId && ownerUserId && webrtcOn && rowStatus !== "disabled");
+      // Do not require pbxLink.webrtcEnabled here — it is often unset in DB even when
+      // mobile pairing works; POST /admin/extensions/:id/pairing-qr enforces WebRTC + SIP.
+      const pairingCapable = Boolean(connectExtensionId && ownerUserId && rowStatus !== "disabled");
 
       return [{
         id: readString(r, ["id", "uuid"]) ?? ext,
