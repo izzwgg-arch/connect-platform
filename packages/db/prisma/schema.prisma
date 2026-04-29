@@ -403,11 +403,25 @@ model User {
   id                             String                    @id @default(cuid())
   tenantId                       String
   email                          String                    @unique
+  firstName                      String?
+  lastName                       String?
+  displayName                    String?
+  phone                          String?
+  title                          String?
+  department                     String?
+  notes                          String?
   passwordHash                   String
   role                           UserRole                  @default(USER)
+  status                         UserStatus                @default(ACTIVE)
+  emailVerifiedAt                DateTime?
+  lastLoginAt                    DateTime?
+  forcePasswordReset             Boolean                   @default(false)
+  updatedAt                      DateTime                  @updatedAt
   createdAt                      DateTime                  @default(now())
   tenant                         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   auditEvents                    AuditLog[]                @relation("AuditActor")
+  passwordTokens                 UserPasswordToken[]       @relation("UserPasswordTokens")
+  createdPasswordTokens          UserPasswordToken[]       @relation("UserPasswordTokenCreator")
   createdProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialCreatedBy")
   updatedProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialUpdatedBy")
   createdBillingSolaConfigs      BillingSolaConfig[]       @relation("BillingSolaConfigCreatedBy")
@@ -439,12 +453,27 @@ model User {
 
 enum UserRole {
   SUPER_ADMIN
+  TENANT_ADMIN
+  MANAGER
   ADMIN
+  BILLING_ADMIN
   BILLING
   MESSAGING
   SUPPORT
   READ_ONLY
+  EXTENSION_USER
   USER
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum UserPasswordTokenType {
+  INVITE
+  PASSWORD_RESET
 }
 
 enum CustomerStatus {
@@ -1337,10 +1366,30 @@ model AuditLog {
   entityType  String
   entityId    String
   actorUserId String?
+  targetUserId String?
+  metadata    Json?
   provider    IntegrationProvider?
   createdAt   DateTime             @default(now())
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   actorUser   User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+model UserPasswordToken {
+  id            String                @id @default(cuid())
+  userId        String
+  tokenHash     String                @unique
+  type          UserPasswordTokenType
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime              @default(now())
+  createdBy     String?
+  ipAddress     String?
+  userAgent     String?
+  user          User                  @relation("UserPasswordTokens", fields: [userId], references: [id], onDelete: Cascade)
+  createdByUser User?                 @relation("UserPasswordTokenCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([userId, type, createdAt])
+  @@index([type, expiresAt])
 }
 
 model Receipt {

@@ -80,6 +80,7 @@ export const navItems: NavItem[] = [
   { href: "/settings/messaging", label: "Messaging Settings", icon: "MS", lucide: Send, section: "settings", permission: "can_view_settings" },
 
   { href: "/admin", label: "Admin Console", icon: "AD", lucide: Shield, section: "admin", permission: "can_view_admin" },
+  { href: "/admin/users", label: "Users", icon: "US", lucide: Users, section: "admin", permission: "can_view_admin" },
   { href: "/admin/tenants", label: "Tenants", icon: "TN", lucide: Building, section: "admin", permission: "can_view_admin" },
   { href: "/admin/pbx", label: "PBX Instances", icon: "PI", lucide: Server, section: "admin", permission: "can_view_admin" },
   { href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", permission: "can_view_admin" },

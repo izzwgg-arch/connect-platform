@@ -59,6 +59,6 @@ export function readJwtPayload(): JwtPayload | null {
 export function mapBackendRole(roleRaw?: string): Role {
   const role = String(roleRaw || "").toUpperCase();
   if (role === "SUPER_ADMIN") return "SUPER_ADMIN";
-  if (["ADMIN", "BILLING", "MESSAGING", "SUPPORT"].includes(role)) return "TENANT_ADMIN";
+  if (["TENANT_ADMIN", "ADMIN", "MANAGER", "BILLING_ADMIN", "BILLING", "MESSAGING", "SUPPORT"].includes(role)) return "TENANT_ADMIN";
   return "END_USER";
 }

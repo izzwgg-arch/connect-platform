@@ -16,7 +16,8 @@ export default function AdminPage() {
         />
 
         <section className="grid three">
-          <AdminModuleCard title="Users & Extensions" summary="Manage users, extension assignment, role templates, and onboarding." href="/pbx/extensions" />
+          <AdminModuleCard title="Users" summary="Create users, assign tenant extensions, send invites, and manage access." href="/admin/users" />
+          <AdminModuleCard title="Extensions" summary="Manage PBX extensions, SIP credentials, and softphone assignment." href="/pbx/extensions" />
           <AdminModuleCard title="Audit Logs" summary="Security and telecom operation logs with tenant context." href="/admin/pbx/events" />
           <AdminModuleCard title="Permissions" summary="Role-based feature access controls for all platform capabilities." href="/admin/permissions" />
           <IntegrationCard name="VitalPBX Connection" status="Configured" configureHref="/admin/pbx" auditHref="/admin/pbx" />

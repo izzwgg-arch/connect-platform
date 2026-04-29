@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useState } from "react";
 import { apiPost } from "../../services/apiClient";
 import { writeAuthToken } from "../../services/session";
@@ -48,6 +49,7 @@ export default function LoginPage() {
         </label>
         {error ? <div className="chip danger">{error}</div> : null}
         <button className="btn" type="submit" disabled={loading}>{loading ? "Signing in..." : "Sign in"}</button>
+        <Link className="muted" href="/auth/password/forgot" style={{ textAlign: "center" }}>Forgot password?</Link>
       </form>
     </main>
   );

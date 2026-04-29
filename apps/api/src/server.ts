@@ -55,6 +55,7 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
+import { passwordChangedEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
   registerPlatformRolePermissionRoutes,
@@ -1130,6 +1131,8 @@ async function audit(params: {
   entityType: string;
   entityId: string;
   actorUserId?: string;
+  targetUserId?: string | null;
+  metadata?: Record<string, unknown> | null;
   provider?: ProviderName;
 }) {
   await db.auditLog.create({
@@ -1139,6 +1142,8 @@ async function audit(params: {
       entityType: params.entityType,
       entityId: params.entityId,
       actorUserId: params.actorUserId || null,
+      targetUserId: params.targetUserId || null,
+      metadata: params.metadata ? sanitizeEventPayload(params.metadata) as any : undefined,
       provider: params.provider
     }
   });
@@ -1148,18 +1153,29 @@ function getUser(req: any): JwtUser {
   return req.user as JwtUser;
 }
 
-type StaffRole = "SUPER_ADMIN" | "ADMIN" | "BILLING" | "MESSAGING" | "SUPPORT" | "READ_ONLY" | "USER";
+type StaffRole =
+  | "SUPER_ADMIN"
+  | "TENANT_ADMIN"
+  | "MANAGER"
+  | "ADMIN"
+  | "BILLING_ADMIN"
+  | "BILLING"
+  | "MESSAGING"
+  | "SUPPORT"
+  | "READ_ONLY"
+  | "EXTENSION_USER"
+  | "USER";
 
 function isRole(user: JwtUser, allowed: StaffRole[]): boolean {
   return allowed.includes((user.role || "USER") as StaffRole);
 }
 
 function canManageBilling(user: JwtUser): boolean {
-  return isRole(user, ["SUPER_ADMIN", "ADMIN", "BILLING"]);
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "BILLING_ADMIN", "BILLING"]);
 }
 
 function canManageMessaging(user: JwtUser): boolean {
-  return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "MESSAGING"]);
 }
 
 function canViewCustomers(user: JwtUser): boolean {
@@ -1167,7 +1183,7 @@ function canViewCustomers(user: JwtUser): boolean {
 }
 
 function canManageProviders(user: JwtUser): boolean {
-  return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN"]);
 }
 
 function canAccessAdminSbc(user: JwtUser): boolean {
@@ -1179,7 +1195,7 @@ function canAccessAdminBilling(user: JwtUser): boolean {
 }
 
 function canAccessCampaignSend(user: JwtUser): boolean {
-  return isRole(user, ["SUPER_ADMIN", "ADMIN", "MESSAGING"]);
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "MESSAGING"]);
 }
 
 function constantTimeEqualStr(a: string, b: string): boolean {
@@ -1220,7 +1236,7 @@ function canUseCustomerTargeting(user: JwtUser): boolean {
   return canManageMessaging(user) || canManageBilling(user);
 }
 
-const VITALPBX_ROLE_PERMISSIONS: Record<StaffRole, Set<VitalPbxPermission>> = {
+const VITALPBX_ROLE_PERMISSIONS: Partial<Record<StaffRole, Set<VitalPbxPermission>>> = {
   SUPER_ADMIN: new Set<VitalPbxPermission>([
     "vitalpbx.connection.view", "vitalpbx.connection.edit", "vitalpbx.connection.test",
     "vitalpbx.tenants.view", "vitalpbx.tenants.create", "vitalpbx.tenants.update", "vitalpbx.tenants.delete", "vitalpbx.tenants.switchContext",
@@ -1308,7 +1324,7 @@ const VITALPBX_ROLE_PERMISSIONS: Record<StaffRole, Set<VitalPbxPermission>> = {
 function hasVitalPbxPermission(user: JwtUser, permission: VitalPbxPermission): boolean {
   const role = (user.role || "USER") as StaffRole;
   const set = VITALPBX_ROLE_PERMISSIONS[role] || VITALPBX_ROLE_PERMISSIONS.USER;
-  return set.has(permission);
+  return !!set?.has(permission);
 }
 
 type VitalResourceAction = "view" | "create" | "update" | "delete";
@@ -1379,7 +1395,7 @@ async function requirePermission(req: any, reply: any, checker: (user: JwtUser) 
 }
 
 async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
-  return requirePermission(req, reply, (user) => isRole(user, ["ADMIN", "SUPER_ADMIN"]));
+  return requirePermission(req, reply, (user) => isRole(user, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]));
 }
 
 async function requireSuperAdmin(req: any, reply: any): Promise<JwtUser | null> {
@@ -1566,6 +1582,158 @@ function verifyMediaTestToken(token: string): null | { runId: string; tokenId: s
 
 function hashToken(value: string): string {
   return createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+const INVITE_TOKEN_HOURS = 72;
+const RESET_TOKEN_MINUTES = 60;
+const USER_MANAGEMENT_ROLES = [
+  "SUPER_ADMIN",
+  "TENANT_ADMIN",
+  "MANAGER",
+  "USER",
+  "EXTENSION_USER",
+  "BILLING_ADMIN",
+  "READ_ONLY",
+  "ADMIN",
+  "BILLING",
+] as const;
+
+type UserManagementRole = typeof USER_MANAGEMENT_ROLES[number];
+
+function normalizeEmail(email: string): string {
+  return String(email || "").trim().toLowerCase();
+}
+
+function displayNameForUser(user: { firstName?: string | null; lastName?: string | null; displayName?: string | null; email?: string | null }): string {
+  const direct = String(user.displayName || "").trim();
+  if (direct) return direct;
+  const joined = [user.firstName, user.lastName].map((v) => String(v || "").trim()).filter(Boolean).join(" ");
+  if (joined) return joined;
+  return String(user.email || "User").split("@")[0] || "User";
+}
+
+function portalPublicUrl(pathname: string): string {
+  const origin = String(process.env.PORTAL_PUBLIC_URL || process.env.CONNECT_APP_URL || process.env.APP_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  return `${origin}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+}
+
+function generatePasswordToken(): string {
+  return `cp_${randomBytes(32).toString("base64url")}`;
+}
+
+function passwordScore(password: string): number {
+  let score = 0;
+  if (password.length >= 10) score++;
+  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+  if (/\d/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+  return score;
+}
+
+function validateNewPassword(password: string): string | null {
+  if (password.length < 10) return "PASSWORD_TOO_SHORT";
+  if (passwordScore(password) < 3) return "PASSWORD_TOO_WEAK";
+  return null;
+}
+
+function canManageUsers(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN"]);
+}
+
+function canAssignRole(actor: JwtUser, role: UserManagementRole): boolean {
+  if (actor.role === "SUPER_ADMIN") return true;
+  return role !== "SUPER_ADMIN";
+}
+
+function roleLabel(role: string): string {
+  if (role === "ADMIN") return "TENANT_ADMIN";
+  if (role === "BILLING") return "BILLING_ADMIN";
+  if (role === "EXTENSION_USER") return "USER";
+  return role;
+}
+
+async function resolveManagedTenant(actor: JwtUser, requestedTenantId?: string | null): Promise<string> {
+  if (actor.role === "SUPER_ADMIN") {
+    const tenantId = String(requestedTenantId || actor.tenantId || "").trim();
+    if (!tenantId || tenantId.startsWith("vpbx:")) throw new Error("TENANT_REQUIRED");
+    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
+    if (!tenant) throw new Error("TENANT_NOT_FOUND");
+    return tenant.id;
+  }
+  return actor.tenantId;
+}
+
+function formatAdminUser(row: any) {
+  const extension = row.ownedExtensions?.[0] || null;
+  const token = row.passwordTokens?.[0] || null;
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    tenantName: row.tenant?.name || null,
+    email: row.email,
+    firstName: row.firstName || "",
+    lastName: row.lastName || "",
+    displayName: displayNameForUser(row),
+    phone: row.phone || "",
+    title: row.title || "",
+    department: row.department || "",
+    notes: row.notes || "",
+    role: row.role,
+    roleLabel: roleLabel(row.role),
+    status: row.status || "ACTIVE",
+    emailVerifiedAt: row.emailVerifiedAt || null,
+    lastLoginAt: row.lastLoginAt || null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt || row.createdAt,
+    extension: extension
+      ? { id: extension.id, extNumber: extension.extNumber, displayName: extension.displayName, status: extension.status, pbxUserEmail: extension.pbxUserEmail || null }
+      : null,
+    invite: token ? { id: token.id, type: token.type, expiresAt: token.expiresAt, usedAt: token.usedAt, createdAt: token.createdAt } : null,
+  };
+}
+
+async function createUserPasswordToken(params: {
+  userId: string;
+  type: "INVITE" | "PASSWORD_RESET";
+  ttlMs: number;
+  createdBy?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}): Promise<{ token: string; expiresAt: Date }> {
+  const token = generatePasswordToken();
+  const expiresAt = new Date(Date.now() + params.ttlMs);
+  await db.userPasswordToken.create({
+    data: {
+      userId: params.userId,
+      tokenHash: hashToken(token),
+      type: params.type,
+      expiresAt,
+      createdBy: params.createdBy || null,
+      ipAddress: params.ipAddress || null,
+      userAgent: params.userAgent || null,
+    } as any,
+  });
+  return { token, expiresAt };
+}
+
+async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
+  const template = welcomeCreatePasswordEmail({
+    userName: displayNameForUser(input.user),
+    tenantName: input.tenantName,
+    extensionNumber: input.extensionNumber || null,
+    setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(input.token)}`),
+    expiresHours: INVITE_TOKEN_HOURS,
+  });
+  await queueEmailJob({ tenantId: input.user.tenantId, type: "USER_INVITE", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
+}
+
+async function queuePasswordResetEmail(input: { user: any; token: string }) {
+  const template = passwordResetEmail({
+    userName: displayNameForUser(input.user),
+    resetUrl: portalPublicUrl(`/auth/password/reset?token=${encodeURIComponent(input.token)}`),
+    expiresMinutes: RESET_TOKEN_MINUTES,
+  });
+  await queueEmailJob({ tenantId: input.user.tenantId, type: "PASSWORD_RESET", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
 }
 
 function signMobileProvisioningToken(input: { tokenId: string; tenantId: string; userId: string; expMs: number }): string {
@@ -3045,10 +3213,20 @@ app.post("/auth/signup", async (req, reply) => {
   const passwordHash = await bcrypt.hash(input.password, 10);
   const normalizedEmail = input.email.toLowerCase();
   const role = normalizedEmail.startsWith("support") && normalizedEmail.endsWith("@connectcomunications.com") ? "ADMIN" : "USER";
-  const user = await db.user.create({ data: { tenantId: tenant.id, email: input.email, passwordHash, role } });
+  const user = await db.user.create({
+    data: {
+      tenantId: tenant.id,
+      email: normalizedEmail,
+      passwordHash,
+      role,
+      status: "ACTIVE" as any,
+      displayName: normalizedEmail.split("@")[0],
+      emailVerifiedAt: new Date(),
+    } as any,
+  });
 
   await audit({ tenantId: tenant.id, actorUserId: user.id, action: "TENANT_SIGNUP_CREATED", entityType: "Tenant", entityId: tenant.id });
-  const token = await reply.jwtSign({ sub: user.id, tenantId: tenant.id, email: user.email, role: user.role });
+  const token = await reply.jwtSign({ sub: user.id, tenantId: tenant.id, email: user.email, role: user.role, name: displayNameForUser(user as any) });
   return { token, user: { id: user.id, email: user.email, role: user.role }, tenant: { id: tenant.id, name: tenant.name } };
 });
 
@@ -3060,18 +3238,114 @@ app.post("/auth/login", async (req, reply) => {
     loginFailuresTotal.labels("rate_limit").inc();
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
-  const user = await db.user.findUnique({ where: { email: input.email } });
+  const user = await db.user.findUnique({ where: { email: emailKey } });
   if (!user) {
     loginFailuresTotal.labels("not_found").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
+  }
+  if ((user as any).status === "DISABLED") {
+    loginFailuresTotal.labels("bad_password").inc();
+    return reply.status(403).send({ error: "account_disabled" });
   }
   if (!(await bcrypt.compare(input.password, user.passwordHash))) {
     loginFailuresTotal.labels("bad_password").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
   }
   loginSuccessTotal.inc();
-  const token = await reply.jwtSign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role });
+  await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
+  const token = await reply.jwtSign({
+    sub: user.id,
+    tenantId: user.tenantId,
+    email: user.email,
+    role: user.role,
+    name: displayNameForUser(user as any),
+  });
   return { token };
+});
+
+app.get("/auth/invite/validate", async (req, reply) => {
+  const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
+  const row = await db.userPasswordToken.findUnique({
+    where: { tokenHash: hashToken(query.token) },
+    include: { user: { include: { tenant: { select: { name: true } }, ownedExtensions: { take: 1 } } } },
+  } as any) as any;
+  const now = new Date();
+  if (!row || row.type !== "INVITE" || row.usedAt || row.expiresAt < now || row.user?.status === "DISABLED") {
+    return reply.status(400).send({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+  return {
+    ok: true,
+    email: row.user.email,
+    name: displayNameForUser(row.user),
+    tenantName: row.user.tenant?.name || "",
+    extension: row.user.ownedExtensions?.[0]?.extNumber || null,
+    expiresAt: row.expiresAt,
+  };
+});
+
+app.post("/auth/invite/accept", async (req, reply) => {
+  const input = z.object({ token: z.string().min(20), password: z.string().min(1), confirmPassword: z.string().min(1) }).parse(req.body || {});
+  if (input.password !== input.confirmPassword) return reply.status(400).send({ error: "PASSWORD_MISMATCH" });
+  const passwordError = validateNewPassword(input.password);
+  if (passwordError) return reply.status(400).send({ error: passwordError });
+  const now = new Date();
+  const row = await db.userPasswordToken.findUnique({ where: { tokenHash: hashToken(input.token) }, include: { user: true } } as any) as any;
+  if (!row || row.type !== "INVITE" || row.usedAt || row.expiresAt < now || row.user?.status === "DISABLED") {
+    return reply.status(400).send({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+  const passwordHash = await bcrypt.hash(input.password, 10);
+  const updated = await db.$transaction(async (tx) => {
+    const consumed = await tx.userPasswordToken.updateMany({ where: { id: row.id, usedAt: null, expiresAt: { gte: now } }, data: { usedAt: now } });
+    if (consumed.count === 0) throw new Error("TOKEN_INVALID_OR_EXPIRED");
+    return tx.user.update({ where: { id: row.userId }, data: { passwordHash, status: "ACTIVE" as any, emailVerifiedAt: now, forcePasswordReset: false } as any });
+  });
+  await audit({ tenantId: updated.tenantId, actorUserId: updated.id, targetUserId: updated.id, action: "USER_INVITE_ACCEPTED", entityType: "User", entityId: updated.id });
+  return { ok: true };
+});
+
+app.post("/auth/password/forgot", async (req) => {
+  const input = z.object({ email: z.string().email() }).parse(req.body || {});
+  const email = normalizeEmail(input.email);
+  if (!checkBillingRateLimit(`forgot-password:${email}`, 5, 60 * 60 * 1000)) return { ok: true };
+  const user = await db.user.findUnique({ where: { email } });
+  if (user && (user as any).status !== "DISABLED") {
+    const { token } = await createUserPasswordToken({ userId: user.id, type: "PASSWORD_RESET", ttlMs: RESET_TOKEN_MINUTES * 60 * 1000, ipAddress: req.ip, userAgent: String(req.headers["user-agent"] || "") });
+    await queuePasswordResetEmail({ user, token });
+    await audit({ tenantId: user.tenantId, targetUserId: user.id, action: "PASSWORD_RESET_REQUESTED", entityType: "User", entityId: user.id, metadata: { selfService: true } });
+  }
+  return { ok: true };
+});
+
+app.get("/auth/password/reset/validate", async (req, reply) => {
+  const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
+  const row = await db.userPasswordToken.findUnique({ where: { tokenHash: hashToken(query.token) }, include: { user: true } } as any) as any;
+  const now = new Date();
+  if (!row || row.type !== "PASSWORD_RESET" || row.usedAt || row.expiresAt < now || row.user?.status === "DISABLED") {
+    return reply.status(400).send({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+  return { ok: true, email: row.user.email, name: displayNameForUser(row.user), expiresAt: row.expiresAt };
+});
+
+app.post("/auth/password/reset", async (req, reply) => {
+  const input = z.object({ token: z.string().min(20), password: z.string().min(1), confirmPassword: z.string().min(1) }).parse(req.body || {});
+  if (input.password !== input.confirmPassword) return reply.status(400).send({ error: "PASSWORD_MISMATCH" });
+  const passwordError = validateNewPassword(input.password);
+  if (passwordError) return reply.status(400).send({ error: passwordError });
+  const now = new Date();
+  const row = await db.userPasswordToken.findUnique({ where: { tokenHash: hashToken(input.token) }, include: { user: true } } as any) as any;
+  if (!row || row.type !== "PASSWORD_RESET" || row.usedAt || row.expiresAt < now || row.user?.status === "DISABLED") {
+    return reply.status(400).send({ error: "TOKEN_INVALID_OR_EXPIRED" });
+  }
+  const passwordHash = await bcrypt.hash(input.password, 10);
+  const updated = await db.$transaction(async (tx) => {
+    const consumed = await tx.userPasswordToken.updateMany({ where: { id: row.id, usedAt: null, expiresAt: { gte: now } }, data: { usedAt: now } });
+    if (consumed.count === 0) throw new Error("TOKEN_INVALID_OR_EXPIRED");
+    return tx.user.update({ where: { id: row.userId }, data: { passwordHash, status: "ACTIVE" as any, forcePasswordReset: false } as any });
+  });
+  await audit({ tenantId: updated.tenantId, actorUserId: updated.id, targetUserId: updated.id, action: "PASSWORD_RESET_COMPLETED", entityType: "User", entityId: updated.id });
+  const template = passwordChangedEmail({ userName: displayNameForUser(updated as any) });
+  await queueEmailJob({ tenantId: updated.tenantId, type: "PASSWORD_CHANGED", toEmail: updated.email, subject: template.subject, htmlBody: template.html, textBody: template.text }).catch(() => undefined);
+  return { ok: true };
 });
 
 // Unauthenticated — used by mobile app to log in AND provision via QR scan in one step.
@@ -3251,6 +3525,11 @@ app.addHook("preHandler", async (req, reply) => {
         "/auth/signup",
         "/auth/login",
         "/auth/mobile-qr-exchange",
+        "/auth/invite/validate",
+        "/auth/invite/accept",
+        "/auth/password/forgot",
+        "/auth/password/reset",
+        "/auth/password/reset/validate",
         "/webhooks/twilio/sms-status",
         "/webhooks/sola-cardknox",
         "/webhooks/whatsapp/meta",
@@ -3294,41 +3573,273 @@ app.addHook("preHandler", async (req, reply) => {
 
 app.get("/me", async (req) => {
   const user = getUser(req);
+  const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true } as any }).catch(() => null);
   const portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(user.role);
   return {
     id: user.sub,
     tenantId: user.tenantId,
     email: user.email,
     role: user.role,
+    name: row ? displayNameForUser(row as any) : user.email,
+    status: (row as any)?.status || "ACTIVE",
+    lastLoginAt: (row as any)?.lastLoginAt || null,
     ...(portalPermissionSet ? { portalPermissionSet } : {}),
   };
 });
 
 app.get("/admin/users", async (req, reply) => {
-  const admin = await requirePermission(req, reply, (user) => isRole(user, ["SUPER_ADMIN", "ADMIN"]));
+  const admin = await requirePermission(req, reply, canManageUsers);
   if (!admin) return;
-  return db.user.findMany({
-    where: { tenantId: admin.tenantId },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, email: true, role: true, createdAt: true }
+  const query = z.object({ tenantId: z.string().optional(), search: z.string().optional(), role: z.string().optional(), status: z.string().optional() }).parse(req.query || {});
+  const tenantId = await resolveManagedTenant(admin, query.tenantId).catch((e) => {
+    const err = String((e as Error).message || "TENANT_NOT_FOUND");
+    return reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err }) as any;
   });
+  if (reply.sent) return;
+  const where: any = { tenantId };
+  if (query.role && query.role !== "all") where.role = query.role;
+  if (query.status && query.status !== "all") where.status = query.status;
+  const search = String(query.search || "").trim();
+  if (search) {
+    where.OR = [
+      { email: { contains: search, mode: "insensitive" } },
+      { firstName: { contains: search, mode: "insensitive" } },
+      { lastName: { contains: search, mode: "insensitive" } },
+      { displayName: { contains: search, mode: "insensitive" } },
+      { phone: { contains: search, mode: "insensitive" } },
+      { ownedExtensions: { some: { extNumber: { contains: search, mode: "insensitive" } } } },
+    ];
+  }
+  const [users, tenants, extensions] = await Promise.all([
+    db.user.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        tenant: { select: { id: true, name: true } },
+        ownedExtensions: { take: 1, select: { id: true, extNumber: true, displayName: true, status: true, pbxUserEmail: true } },
+        passwordTokens: { where: { type: "INVITE" as any, usedAt: null }, orderBy: { createdAt: "desc" }, take: 1 },
+      } as any,
+      take: 500,
+    }),
+    admin.role === "SUPER_ADMIN"
+      ? db.tenant.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, isApproved: true } })
+      : db.tenant.findMany({ where: { id: admin.tenantId }, select: { id: true, name: true, isApproved: true } }),
+    db.extension.findMany({
+      where: { tenantId, status: { not: "DELETED" } },
+      orderBy: { extNumber: "asc" },
+      select: { id: true, extNumber: true, displayName: true, pbxUserEmail: true, ownerUserId: true, status: true },
+      take: 1000,
+    }),
+  ]);
+  return {
+    users: users.map(formatAdminUser),
+    tenants: tenants.map((t) => ({ id: t.id, name: t.name, status: t.isApproved === false ? "SUSPENDED" : "ACTIVE" })),
+    extensions,
+    roles: USER_MANAGEMENT_ROLES,
+    tenantId,
+  };
 });
 
-app.post("/admin/users/:id/role", async (req, reply) => {
-  const admin = await requirePermission(req, reply, (user) => isRole(user, ["SUPER_ADMIN", "ADMIN"]));
+app.get("/admin/users/extension-prefill", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const query = z.object({ tenantId: z.string().optional(), extensionId: z.string().min(1) }).parse(req.query || {});
+  const tenantId = await resolveManagedTenant(admin, query.tenantId).catch(() => null);
+  if (!tenantId) return reply.status(404).send({ error: "tenant_not_found" });
+  const extension = await db.extension.findFirst({
+    where: { id: query.extensionId, tenantId },
+    include: { ownerUser: { select: { id: true, email: true, displayName: true, status: true } } },
+  } as any) as any;
+  if (!extension) return reply.status(404).send({ error: "extension_not_found" });
+  const parts = String(extension.displayName || "").trim().split(/\s+/).filter(Boolean);
+  return {
+    extension: { id: extension.id, tenantId: extension.tenantId, extNumber: extension.extNumber, displayName: extension.displayName, email: extension.pbxUserEmail || "", ownerUser: extension.ownerUser || null },
+    prefill: { firstName: parts[0] || "", lastName: parts.length > 1 ? parts.slice(1).join(" ") : "", displayName: extension.displayName || "", email: extension.pbxUserEmail || "", phone: extension.extNumber || "", extensionNumber: extension.extNumber },
+    warning: extension.ownerUserId ? "extension_already_assigned" : null,
+  };
+});
+
+app.post("/admin/users", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`user-create:${admin.sub}`, 30, 60 * 60 * 1000)) return reply.status(429).send({ error: "RATE_LIMITED" });
+  const input = z.object({
+    tenantId: z.string().optional(),
+    extensionId: z.string().min(1),
+    role: z.enum(USER_MANAGEMENT_ROLES),
+    email: z.string().email(),
+    firstName: z.string().min(1).max(80),
+    lastName: z.string().min(1).max(80),
+    displayName: z.string().max(160).optional(),
+    phone: z.string().max(80).optional(),
+    title: z.string().max(120).optional(),
+    department: z.string().max(120).optional(),
+    notes: z.string().max(2000).optional(),
+    active: z.boolean().optional(),
+    sendInvite: z.boolean().default(true),
+  }).parse(req.body || {});
+  if (!canAssignRole(admin, input.role)) return reply.status(403).send({ error: "forbidden" });
+  const tenantId = await resolveManagedTenant(admin, input.tenantId).catch(() => null);
+  if (!tenantId) return reply.status(404).send({ error: "tenant_not_found" });
+  const extension = await db.extension.findFirst({ where: { id: input.extensionId, tenantId }, include: { tenant: { select: { name: true } } } });
+  if (!extension) return reply.status(404).send({ error: "extension_not_found" });
+  if (extension.ownerUserId) return reply.status(409).send({ error: "extension_already_assigned" });
+  const email = normalizeEmail(input.email);
+  const existing = await db.user.findUnique({ where: { email } });
+  if (existing) return reply.status(409).send({ error: "email_already_exists" });
+  const passwordHash = await bcrypt.hash(`invited:${randomBytes(24).toString("hex")}`, 10);
+  const status = input.active === false ? "DISABLED" : input.sendInvite ? "INVITED" : "ACTIVE";
+  const created = await db.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        tenantId,
+        email,
+        passwordHash,
+        role: input.role as any,
+        status: status as any,
+        firstName: input.firstName.trim(),
+        lastName: input.lastName.trim(),
+        displayName: input.displayName?.trim() || `${input.firstName.trim()} ${input.lastName.trim()}`.trim(),
+        phone: input.phone?.trim() || null,
+        title: input.title?.trim() || null,
+        department: input.department?.trim() || null,
+        notes: input.notes?.trim() || null,
+        forcePasswordReset: input.sendInvite,
+      } as any,
+    });
+    await tx.extension.update({ where: { id: extension.id }, data: { ownerUserId: user.id } });
+    return user;
+  });
+  let inviteSent = false;
+  if (input.sendInvite && status !== "DISABLED") {
+    const { token } = await createUserPasswordToken({ userId: created.id, type: "INVITE", ttlMs: INVITE_TOKEN_HOURS * 60 * 60 * 1000, createdBy: admin.sub, ipAddress: req.ip, userAgent: String(req.headers["user-agent"] || "") });
+    await queueUserWelcomeEmail({ user: created, tenantName: extension.tenant.name, extensionNumber: extension.extNumber, token });
+    inviteSent = true;
+  }
+  await audit({ tenantId, actorUserId: admin.sub, targetUserId: created.id, action: "USER_CREATED", entityType: "User", entityId: created.id, metadata: { role: input.role, extensionId: extension.id, inviteSent } });
+  return { ok: true, user: formatAdminUser({ ...created, tenant: { id: tenantId, name: extension.tenant.name }, ownedExtensions: [extension], passwordTokens: [] }), inviteSent };
+});
+
+app.get("/admin/users/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const row = await db.user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId },
+    include: { tenant: { select: { id: true, name: true } }, ownedExtensions: { take: 1 }, passwordTokens: { orderBy: { createdAt: "desc" }, take: 10 } } as any,
+  });
+  if (!row) return reply.status(404).send({ error: "user_not_found" });
+  return { user: formatAdminUser(row), tokens: (row as any).passwordTokens || [] };
+});
+
+app.patch("/admin/users/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const input = z.object({
-    role: z.enum(["SUPER_ADMIN", "ADMIN", "BILLING", "MESSAGING", "SUPPORT", "READ_ONLY", "USER"])
+    tenantId: z.string().optional(),
+    extensionId: z.string().nullable().optional(),
+    role: z.enum(USER_MANAGEMENT_ROLES).optional(),
+    email: z.string().email().optional(),
+    firstName: z.string().max(80).optional(),
+    lastName: z.string().max(80).optional(),
+    displayName: z.string().max(160).optional(),
+    phone: z.string().max(80).nullable().optional(),
+    title: z.string().max(120).nullable().optional(),
+    department: z.string().max(120).nullable().optional(),
+    notes: z.string().max(2000).nullable().optional(),
+    status: z.enum(["INVITED", "ACTIVE", "DISABLED"]).optional(),
   }).parse(req.body || {});
-  const target = await db.user.findFirst({ where: { id, tenantId: admin.tenantId } });
+  const target = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId } });
   if (!target) return reply.status(404).send({ error: "user_not_found" });
-  if (admin.role !== "SUPER_ADMIN" && input.role === "SUPER_ADMIN") {
-    return reply.status(403).send({ error: "forbidden" });
+  if (input.role && !canAssignRole(admin, input.role)) return reply.status(403).send({ error: "forbidden" });
+  const nextTenantId = admin.role === "SUPER_ADMIN" && input.tenantId ? await resolveManagedTenant(admin, input.tenantId) : target.tenantId;
+  let nextExtension: any = undefined;
+  if (input.extensionId !== undefined) {
+    if (input.extensionId) {
+      nextExtension = await db.extension.findFirst({ where: { id: input.extensionId, tenantId: nextTenantId } });
+      if (!nextExtension) return reply.status(404).send({ error: "extension_not_found" });
+      if (nextExtension.ownerUserId && nextExtension.ownerUserId !== target.id) return reply.status(409).send({ error: "extension_already_assigned" });
+    } else {
+      nextExtension = null;
+    }
   }
-  const updated = await db.user.update({ where: { id: target.id }, data: { role: input.role } });
-  await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "USER_ROLE_UPDATED", entityType: "User", entityId: updated.id });
+  const updated = await db.$transaction(async (tx) => {
+    if (nextExtension !== undefined) {
+      await tx.extension.updateMany({ where: { ownerUserId: target.id }, data: { ownerUserId: null } });
+      if (nextExtension) await tx.extension.update({ where: { id: nextExtension.id }, data: { ownerUserId: target.id } });
+    }
+    return tx.user.update({
+      where: { id: target.id },
+      data: {
+        tenantId: nextTenantId,
+        email: input.email ? normalizeEmail(input.email) : undefined,
+        role: input.role as any,
+        status: input.status as any,
+        firstName: input.firstName?.trim(),
+        lastName: input.lastName?.trim(),
+        displayName: input.displayName?.trim(),
+        phone: input.phone === undefined ? undefined : input.phone?.trim() || null,
+        title: input.title === undefined ? undefined : input.title?.trim() || null,
+        department: input.department === undefined ? undefined : input.department?.trim() || null,
+        notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
+      } as any,
+      include: { tenant: { select: { id: true, name: true } }, ownedExtensions: { take: 1 }, passwordTokens: { take: 1, orderBy: { createdAt: "desc" } } } as any,
+    });
+  });
+  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: input.role, status: input.status } });
+  return { ok: true, user: formatAdminUser(updated) };
+});
+
+app.post("/admin/users/:id/role", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ role: z.enum(USER_MANAGEMENT_ROLES) }).parse(req.body || {});
+  if (!canAssignRole(admin, input.role)) return reply.status(403).send({ error: "forbidden" });
+  const target = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId } });
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const updated = await db.user.update({ where: { id: target.id }, data: { role: input.role as any } });
+  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_ROLE_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: input.role } });
   return { ok: true, user: { id: updated.id, email: updated.email, role: updated.role } };
+});
+
+app.post("/admin/users/:id/resend-invite", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  if (!checkBillingRateLimit(`resend-invite:${admin.sub}`, 20, 60 * 60 * 1000)) return reply.status(429).send({ error: "RATE_LIMITED" });
+  const { id } = req.params as { id: string };
+  const user = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId }, include: { tenant: true, ownedExtensions: { take: 1 } } });
+  if (!user) return reply.status(404).send({ error: "user_not_found" });
+  if ((user as any).status === "DISABLED") return reply.status(400).send({ error: "user_disabled" });
+  const { token, expiresAt } = await createUserPasswordToken({ userId: user.id, type: "INVITE", ttlMs: INVITE_TOKEN_HOURS * 60 * 60 * 1000, createdBy: admin.sub, ipAddress: req.ip, userAgent: String(req.headers["user-agent"] || "") });
+  await queueUserWelcomeEmail({ user, tenantName: user.tenant.name, extensionNumber: user.ownedExtensions?.[0]?.extNumber || null, token });
+  await db.user.update({ where: { id: user.id }, data: { status: "INVITED" as any, forcePasswordReset: true } as any });
+  await audit({ tenantId: user.tenantId, actorUserId: admin.sub, targetUserId: user.id, action: "USER_INVITE_RESENT", entityType: "User", entityId: user.id });
+  return { ok: true, expiresAt };
+});
+
+app.post("/admin/users/:id/disable", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const target = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId } });
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  if (target.id === admin.sub) return reply.status(400).send({ error: "cannot_disable_self" });
+  const updated = await db.user.update({ where: { id: target.id }, data: { status: "DISABLED" as any } as any });
+  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_DISABLED", entityType: "User", entityId: updated.id });
+  return { ok: true };
+});
+
+app.post("/admin/users/:id/enable", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const target = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId } });
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const updated = await db.user.update({ where: { id: target.id }, data: { status: "ACTIVE" as any } as any });
+  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_ENABLED", entityType: "User", entityId: updated.id });
+  return { ok: true };
 });
 
 app.get("/settings/sms-limits", async (req, reply) => {
@@ -5220,12 +5731,12 @@ app.get("/pbx/tenant-users", async (req, reply) => {
       ? query.tenantId
       : admin.tenantId;
   const users = await db.user.findMany({
-    where: { tenantId: resolvedTenantId },
-    select: { id: true, email: true, role: true },
+    where: { tenantId: resolvedTenantId, status: { not: "DISABLED" } as any },
+    select: { id: true, email: true, role: true, firstName: true, lastName: true, displayName: true } as any,
     orderBy: { email: "asc" },
     take: 200,
   });
-  return { users };
+  return { users: users.map((u: any) => ({ id: u.id, email: u.email, role: u.role, name: displayNameForUser(u) })) };
 });
 
 app.get("/pbx/dids", async (req, reply) => {
