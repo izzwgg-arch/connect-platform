@@ -603,7 +603,13 @@ async function logInvoiceEvent(params: { tenantId: string; invoiceId: string; ty
 
 async function sendEmailJobNow(job: any): Promise<void> {
   const provider = await db.emailProviderConfig.findUnique({ where: { tenantId: job.tenantId } });
-  if (!provider || !provider.isEnabled) {
+  if (!provider) {
+    const err: any = new Error("EMAIL_PROVIDER_NOT_CONFIGURED");
+    err.code = "EMAIL_PROVIDER_NOT_CONFIGURED";
+    throw err;
+  }
+  // Admin test sends run before isEnabled is flipped true; production jobs still require enabled.
+  if (!provider.isEnabled && job.type !== "EMAIL_TEST") {
     const err: any = new Error("EMAIL_PROVIDER_NOT_CONFIGURED");
     err.code = "EMAIL_PROVIDER_NOT_CONFIGURED";
     throw err;
