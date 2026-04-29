@@ -6623,8 +6623,8 @@ app.post("/admin/extensions/:extensionId/pairing-qr", async (req, reply) => {
   const admin = await requirePermission(req, reply, canManageUsers);
   if (!admin) return;
 
-  const { extensionId } = req.params as { extensionId: string };
-  if (!extensionId || extensionId.length < 8) {
+  const extensionIdRaw = String((req.params as { extensionId?: string }).extensionId || "").trim();
+  if (!extensionIdRaw) {
     return reply.status(400).send({ error: "INVALID_EXTENSION_ID" });
   }
 
@@ -6638,30 +6638,34 @@ app.post("/admin/extensions/:extensionId/pairing-qr", async (req, reply) => {
   }
   const effectiveTenantId = scope.tenantId;
 
-  // Prefer Connect Extension.id (cuid). The portal may still send VitalPBX
-  // `pbxExtensionId` when rows use PBX id as display `id` — resolve safely
-  // within the scoped tenant only.
   const extInclude = {
     pbxLink: true,
     tenant: { select: { id: true, name: true } },
   } as const;
 
-  let ext =
-    (await db.extension.findFirst({
-      where: { id: extensionId, tenantId: effectiveTenantId },
-      include: extInclude,
-    })) ||
-    (await db.extension.findFirst({
-      where: { tenantId: effectiveTenantId, extNumber: extensionId },
-      include: extInclude,
-    })) ||
-    (await db.extension.findFirst({
-      where: {
-        tenantId: effectiveTenantId,
-        pbxLink: { pbxExtensionId: extensionId },
-      },
-      include: extInclude,
-    }));
+  // Connect `Extension.id` is globally unique — resolve by id first, then enforce tenant.
+  let ext = await db.extension.findFirst({
+    where: { id: extensionIdRaw },
+    include: extInclude,
+  });
+  if (ext) {
+    if (ext.tenantId !== effectiveTenantId) {
+      return reply.status(404).send({ error: "extension_not_found" });
+    }
+  } else {
+    ext =
+      (await db.extension.findFirst({
+        where: { tenantId: effectiveTenantId, extNumber: extensionIdRaw },
+        include: extInclude,
+      })) ||
+      (await db.extension.findFirst({
+        where: {
+          tenantId: effectiveTenantId,
+          pbxLink: { pbxExtensionId: extensionIdRaw },
+        },
+        include: extInclude,
+      }));
+  }
 
   if (!ext || !ext.tenant) return reply.status(404).send({ error: "extension_not_found" });
 

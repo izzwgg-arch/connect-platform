@@ -118,9 +118,8 @@ function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null 
     if (nestedId) return nestedId === tenantId;
   }
 
-  // Non-super-admin responses are already tenant-scoped. If a row carries no
-  // tenant marker at all, keep it so valid tenant extensions are not hidden.
-  return true;
+  // Rows without tenant metadata cannot be attributed to the selected workspace.
+  return false;
 }
 
 function isValidTenantExtension(ext: string): boolean {
@@ -644,7 +643,10 @@ export default function TeamDirectoryPage() {
       if (isSystemExtensionName(name)) return [];
 
       const amiState = liveExtensionForTenant(telephony.extensionList, ext, tenantId);
-      const connectExtensionId = readString(r, ["connectExtensionId", "connect_extension_id"]);
+      const rowPrimaryId = readString(r, ["id", "uuid"]);
+      const connectExtensionId =
+        readString(r, ["connectExtensionId", "connect_extension_id"]) ||
+        (rowPrimaryId && /^[a-z][a-z0-9]{8,}$/i.test(rowPrimaryId) ? rowPrimaryId : undefined);
       const ownerUserId = readString(r, ["ownerUserId", "owner_user_id"]);
       const rowStatus = readString(r, ["status"]) ?? "";
       // Do not require pbxLink.webrtcEnabled here — it is often unset in DB even when
