@@ -191,7 +191,7 @@ export function SettingsScreen() {
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <HeaderBar
         title="Settings"
-        showBack
+        showBack={nav.canGoBack?.() === true}
         onBack={() => nav.goBack()}
       />
 

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,15 +12,21 @@ import {
   Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useSip } from '../../context/SipContext';
+import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { Avatar } from '../../components/ui/Avatar';
+import { getContacts } from '../../api/client';
+import { loadLocalCallHistory } from '../../storage/callHistory';
+import type { Contact, CallRecord } from '../../types';
 import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
 
-const { width } = Dimensions.get('window');
+const { width, height: screenHeight } = Dimensions.get('window');
 
 const KEYS = [
   { digit: '1', sub: '' },
@@ -37,11 +43,22 @@ const KEYS = [
   { digit: '#', sub: '' },
 ];
 
-// Key sizing: 3 keys per row with comfortable gutters; slightly smaller than max
-// so the entire pad sits comfortably above the bottom nav on small devices.
-const PAD_H_PADDING = (spacing['6'] as number) ?? 24;
-const KEY_GAP = 14;
-const KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3 * 0.90);
+// Compact layout: tighter gutters so the keypad sits closer to the number
+// display above and the call button below. Key size stays comfortable by
+// clamping to a sensible min/max.
+const PAD_H_PADDING = 28;
+const KEY_GAP = 12;
+const RAW_KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
+const KEY_SIZE = Math.max(66, Math.min(82, Math.floor(RAW_KEY_SIZE * 0.9)));
+const SHORT_SCREEN = screenHeight < 740;
+
+type Suggestion = {
+  id: string;
+  kind: 'contact' | 'recent';
+  label: string;
+  sub: string;
+  value: string;
+};
 
 function DialKey({
   digit,
@@ -63,7 +80,7 @@ function DialKey({
   const handlePressIn = useCallback(() => {
     Animated.parallel([
       Animated.spring(scaleAnim, {
-        toValue: 0.93,
+        toValue: 0.92,
         useNativeDriver: true,
         speed: 40,
         bounciness: 0,
@@ -187,16 +204,87 @@ function CallGlow({ color, active }: { color: string; active: boolean }) {
   );
 }
 
+function SuggestionRow({
+  suggestion,
+  onPress,
+}: {
+  suggestion: Suggestion;
+  onPress: (s: Suggestion) => void;
+}) {
+  const { colors } = useTheme();
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  const pressIn = () =>
+    Animated.spring(scaleAnim, { toValue: 0.98, useNativeDriver: true, speed: 30, bounciness: 0 }).start();
+  const pressOut = () =>
+    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 22, bounciness: 6 }).start();
+
+  const kindColor = suggestion.kind === 'contact' ? colors.primary : colors.teal;
+  const kindIcon = suggestion.kind === 'contact' ? 'person-outline' : 'time-outline';
+
+  return (
+    <Pressable onPress={() => onPress(suggestion)} onPressIn={pressIn} onPressOut={pressOut}>
+      <Animated.View
+        style={[
+          styles.suggestion,
+          {
+            backgroundColor: colors.surface,
+            borderColor: colors.borderSubtle,
+            transform: [{ scale: scaleAnim }],
+          },
+        ]}
+      >
+        {suggestion.kind === 'contact' ? (
+          <Avatar name={suggestion.label} size="sm" />
+        ) : (
+          <View style={[styles.suggestionIcon, { backgroundColor: kindColor + '1f' }]}>
+            <Ionicons name={kindIcon} size={16} color={kindColor} />
+          </View>
+        )}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.suggestionLabel, { color: colors.text }]} numberOfLines={1}>
+            {suggestion.label}
+          </Text>
+          <Text style={[styles.suggestionSub, { color: colors.textSecondary }]} numberOfLines={1}>
+            {suggestion.sub}
+          </Text>
+        </View>
+        <Ionicons name="arrow-up-outline" size={14} color={colors.textTertiary} style={styles.suggestionArrow} />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
 export function KeypadTab() {
   const { colors, isDark } = useTheme();
   const sip = useSip();
+  const { token } = useAuth();
   const insets = useSafeAreaInsets();
   const [number, setNumber] = useState('');
   const [dialing, setDialing] = useState(false);
   // Two-tap redial: first tap fills the last-dialed number, second tap calls it
   const [redialFilled, setRedialFilled] = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [recent, setRecent] = useState<CallRecord[]>([]);
   const prevCallStateRef = useRef(sip.callState);
   const callScale = useRef(new Animated.Value(1)).current;
+
+  // Load suggestion sources on focus. Network call is best-effort — failure
+  // leaves the suggestion list empty but never disables the dialer.
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      loadLocalCallHistory()
+        .then((h) => { if (alive) setRecent(h); })
+        .catch(() => {});
+      if (token) {
+        getContacts(token, '')
+          .then((res) => { if (alive) setContacts(res.rows ?? []); })
+          .catch(() => {});
+      }
+      return () => { alive = false; };
+    }, [token]),
+  );
 
   // Clear number when call ends and return to idle
   useEffect(() => {
@@ -329,6 +417,78 @@ export function KeypadTab() {
     return n;
   };
 
+  // Live suggestions — contacts and recents matched against the typed number.
+  const suggestions = useMemo<Suggestion[]>(() => {
+    const q = number.trim();
+    if (q.length < 2 || callActive) return [];
+    const qDigits = q.replace(/\D/g, '');
+    const qLower = q.toLowerCase();
+    if (!qDigits && qLower.length < 2) return [];
+    const out: Suggestion[] = [];
+    const seen = new Set<string>();
+
+    for (const c of contacts) {
+      if (out.length >= 4) break;
+      // Extension match — wins on exact prefix
+      if (c.extension && qDigits && c.extension.startsWith(qDigits)) {
+        const key = `ext:${c.extension}`;
+        if (!seen.has(key)) {
+          out.push({ id: `c:${c.id}:ext`, kind: 'contact', label: c.displayName, sub: `Ext ${c.extension}`, value: c.extension });
+          seen.add(key);
+        }
+        continue;
+      }
+      // Phone number match
+      let phoneHit: string | null = null;
+      for (const p of c.phones || []) {
+        const digits = (p.numberRaw || '').replace(/\D/g, '');
+        if (qDigits && digits.includes(qDigits)) { phoneHit = p.numberRaw; break; }
+      }
+      if (phoneHit) {
+        const key = `c:${c.id}:${phoneHit}`;
+        if (!seen.has(key)) {
+          out.push({ id: key, kind: 'contact', label: c.displayName, sub: phoneHit, value: phoneHit });
+          seen.add(key);
+        }
+        continue;
+      }
+      // Name match (when user typed letters via T9, rare — at least support plain text search)
+      if (qLower.length >= 2 && c.displayName.toLowerCase().includes(qLower)) {
+        const primaryPhone = c.primaryPhone?.numberRaw || c.phones?.[0]?.numberRaw || c.extension || '';
+        if (primaryPhone) {
+          const key = `cname:${c.id}`;
+          if (!seen.has(key)) {
+            out.push({ id: key, kind: 'contact', label: c.displayName, sub: primaryPhone, value: primaryPhone });
+            seen.add(key);
+          }
+        }
+      }
+    }
+
+    for (const r of recent) {
+      if (out.length >= 6) break;
+      const dir = r.direction?.toLowerCase();
+      const isInbound = dir === 'inbound' || dir === 'incoming';
+      const num = isInbound ? r.fromNumber : r.toNumber;
+      if (!num) continue;
+      const digits = num.replace(/\D/g, '');
+      if (!qDigits || !digits.includes(qDigits)) continue;
+      const key = `r:${num}`;
+      if (seen.has(key)) continue;
+      const name = r.fromName && r.fromName.trim() && r.fromName !== num ? r.fromName : num;
+      out.push({ id: `${r.id}:${num}`, kind: 'recent', label: name, sub: num, value: num });
+      seen.add(key);
+    }
+
+    return out.slice(0, SHORT_SCREEN ? 2 : 3);
+  }, [number, contacts, recent, callActive]);
+
+  const handleSuggestion = (s: Suggestion) => {
+    Haptics.selectionAsync().catch(() => {});
+    setNumber(s.value);
+    setRedialFilled(false);
+  };
+
   const displayValue = formatDisplay(number);
   const registered = sip.registrationState === 'registered';
 
@@ -440,32 +600,43 @@ export function KeypadTab() {
           </Text>
         )}
 
-        <View
-          style={[
-            styles.statusPill,
-            {
-              backgroundColor: registered
-                ? isDark
-                  ? 'rgba(34,197,94,0.14)'
-                  : 'rgba(22,163,74,0.09)'
-                : isDark
-                ? 'rgba(244,63,94,0.14)'
-                : 'rgba(225,29,72,0.09)',
-              borderColor: registered ? colors.callGreen + '40' : colors.danger + '40',
-            },
-          ]}
-        >
-          <View style={[styles.statusDot, { backgroundColor: registered ? colors.callGreen : colors.danger }]} />
-          <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]} numberOfLines={1}>
-            {statusLabel}
-          </Text>
-          {sip.lastError && !callActive && (
-            <Text style={[styles.statusText, { color: colors.danger, marginLeft: 6 }]} numberOfLines={1}>
-              · {sip.lastError}
+        {!suggestions.length && (
+          <View
+            style={[
+              styles.statusPill,
+              {
+                backgroundColor: registered
+                  ? isDark
+                    ? 'rgba(34,197,94,0.14)'
+                    : 'rgba(22,163,74,0.09)'
+                  : isDark
+                  ? 'rgba(244,63,94,0.14)'
+                  : 'rgba(225,29,72,0.09)',
+                borderColor: registered ? colors.callGreen + '40' : colors.danger + '40',
+              },
+            ]}
+          >
+            <View style={[styles.statusDot, { backgroundColor: registered ? colors.callGreen : colors.danger }]} />
+            <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]} numberOfLines={1}>
+              {statusLabel}
             </Text>
-          )}
-        </View>
+            {sip.lastError && !callActive && (
+              <Text style={[styles.statusText, { color: colors.danger, marginLeft: 6 }]} numberOfLines={1}>
+                · {sip.lastError}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
+
+      {/* ── Live suggestions (contacts + recents) ── */}
+      {suggestions.length > 0 && (
+        <View style={styles.suggestionsWrap}>
+          {suggestions.map((s) => (
+            <SuggestionRow key={s.id} suggestion={s} onPress={handleSuggestion} />
+          ))}
+        </View>
+      )}
 
       {/* Flex spacer — absorbs free vertical space above the keypad. */}
       <View style={styles.spacer} />
@@ -486,7 +657,7 @@ export function KeypadTab() {
         </View>
 
         {/* ── Call Button ── */}
-        <View style={[styles.callRow, { paddingBottom: insets.bottom + 18 }]}>
+        <View style={[styles.callRow, { paddingBottom: insets.bottom + 14 }]}>
           <View style={styles.callBtnWrap}>
             <CallGlow color={callButtonColor} active={registered && !callActive} />
             <Animated.View style={{ transform: [{ scale: callScale }] }}>
@@ -530,7 +701,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing['5'],
-    paddingBottom: 4,
+    paddingBottom: 2,
   },
   topBarSide: { width: 40, height: 40 },
   topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -547,14 +718,14 @@ const styles = StyleSheet.create({
   displayArea: {
     alignItems: 'center',
     paddingHorizontal: PAD_H_PADDING,
-    paddingTop: 6,
-    paddingBottom: 12,
+    paddingTop: 4,
+    paddingBottom: 6,
   },
   numberRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 56,
+    minHeight: 52,
     width: '100%',
     gap: 8,
   },
@@ -579,7 +750,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
-    marginTop: 10,
+    marginTop: 8,
     gap: 6,
   },
   statusDot: {
@@ -593,11 +764,55 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
+  // ── Suggestions ─────────────────────────────────────
+  suggestionsWrap: {
+    paddingHorizontal: PAD_H_PADDING,
+    paddingTop: 6,
+    paddingBottom: 2,
+    gap: 6,
+  },
+  suggestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  suggestionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suggestionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.15,
+  },
+  suggestionSub: {
+    fontSize: 12,
+    fontWeight: '500',
+    opacity: 0.85,
+    marginTop: 1,
+  },
+  suggestionArrow: {
+    transform: [{ rotate: '45deg' }],
+    opacity: 0.7,
+  },
+
   // Flex spacer — absorbs all free vertical space and pushes the keypad block
   // down toward the bottom navigation bar for ergonomic thumb reach.
   spacer: {
     flex: 1,
-    minHeight: 8,
+    minHeight: 6,
   },
 
   // ── Keys ─────────────────────────────────────────────
@@ -610,7 +825,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     rowGap: KEY_GAP,
     columnGap: KEY_GAP,
-    marginBottom: 18,
+    marginBottom: 14,
   },
   key: {
     borderWidth: 1,
@@ -643,9 +858,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   callBtn: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
     shadowOffset: { width: 0, height: 8 },

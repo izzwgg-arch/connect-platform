@@ -14,7 +14,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
@@ -24,7 +23,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
-import { getContacts } from '../../api/client';
+import { createContact, getContacts } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
@@ -66,6 +65,7 @@ export function ContactTab() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [selected, setSelected] = useState<Contact | null>(null);
+  const [showAddContact, setShowAddContact] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,13 +95,6 @@ export function ContactTab() {
     if (!token) return undefined;
     return subscribeToBLF(token, setLive);
   }, [token]);
-
-  const stats = useMemo(() => ({
-    total: contacts.length,
-    extensions: contacts.filter((c) => c.type === 'internal_extension').length,
-    external: contacts.filter(isExternal).length,
-    favorites: contacts.filter((c) => c.favorite).length,
-  }), [contacts]);
 
   const statusFor = useCallback((contact: Contact): ContactStatus | null => {
     if (contact.type !== 'internal_extension' || !contact.extension) return null;
@@ -208,28 +201,20 @@ export function ContactTab() {
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <View style={styles.headerTitleWrap}>
           <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>Contacts</Text>
-          <Text style={[styles.headerSub, { color: colors.textSecondary }]} numberOfLines={1}>
-            {stats.total} tenant contacts
-          </Text>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            activeOpacity={0.78}
-            style={[
-              styles.headerIcon,
-              styles.headerIconPrimary,
-              { backgroundColor: colors.primaryMuted, borderColor: colors.primary + '33' },
-            ]}
-          >
-            <Ionicons name="person-add-outline" size={19} color={colors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.78}
-            style={[styles.headerIcon, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}
-          >
-            <Ionicons name="ellipsis-vertical" size={19} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          activeOpacity={0.78}
+          onPress={() => setShowAddContact(true)}
+          style={[
+            styles.headerIcon,
+            styles.headerIconPrimary,
+            { backgroundColor: colors.primary, borderColor: colors.primary, shadowColor: colors.primary },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Add contact"
+        >
+          <Ionicons name="person-add" size={19} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.searchRow}>
@@ -250,30 +235,14 @@ export function ContactTab() {
             </TouchableOpacity>
           )}
         </View>
-        <TouchableOpacity
-          activeOpacity={0.78}
-          style={[styles.filterButton, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}
-        >
-          <Ionicons name="options-outline" size={20} color={colors.textSecondary} />
-        </TouchableOpacity>
       </View>
 
-      <View style={styles.filterWrap}>
-        <HorizontalFilterScroll marginBottom={spacing['3']}>
-          <FilterChip id="all" label="All" icon="people-outline" value={filter} count={stats.total} color={colors.primary} onPress={setFilter} />
-          <FilterChip id="extensions" label="Extensions" icon="people-circle-outline" value={filter} count={stats.extensions} color={colors.success} onPress={setFilter} />
-          <FilterChip id="external" label="External" icon="globe-outline" value={filter} count={stats.external} color={colors.primary} onPress={setFilter} />
-          <FilterChip id="favorites" label="Favorites" icon="star-outline" value={filter} count={stats.favorites} color={colors.warning} onPress={setFilter} />
-        </HorizontalFilterScroll>
-        {/* Soft fade on the right edge hints that more chips scroll horizontally. */}
-        <LinearGradient
-          pointerEvents="none"
-          colors={[colors.bg + '00', colors.bg]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.filterFade}
-        />
-      </View>
+      <HorizontalFilterScroll marginBottom={spacing['3']}>
+        <FilterChip id="all" label="All" value={filter} color={colors.primary} onPress={setFilter} />
+        <FilterChip id="extensions" label="Extensions" value={filter} color={colors.success} onPress={setFilter} />
+        <FilterChip id="external" label="External" value={filter} color={colors.primary} onPress={setFilter} />
+        <FilterChip id="favorites" label="Favorites" value={filter} color={colors.warning} onPress={setFilter} />
+      </HorizontalFilterScroll>
 
       {loading ? (
         <View style={styles.center}>
@@ -323,26 +292,21 @@ export function ContactTab() {
         />
       )}
 
-      <TouchableOpacity
-        activeOpacity={0.82}
-        style={[
-          styles.fab,
-          {
-            backgroundColor: colors.primary + 'ee',
-            borderColor: colors.white + '24',
-            shadowColor: colors.primary,
-          },
-        ]}
-      >
-        <Ionicons name="person-add-outline" size={23} color="#fff" />
-      </TouchableOpacity>
-
       <ContactDetailModal
         contact={selected}
         onClose={() => setSelected(null)}
         onCall={callContact}
         onMessage={messageContact}
         onEmail={emailContact}
+      />
+
+      <AddContactModal
+        visible={showAddContact}
+        onClose={() => setShowAddContact(false)}
+        onCreated={() => {
+          setShowAddContact(false);
+          load(true);
+        }}
       />
     </View>
   );
@@ -351,17 +315,13 @@ export function ContactTab() {
 const FilterChip = memo(function FilterChip({
   id,
   label,
-  icon,
   value,
-  count,
   color,
   onPress,
 }: {
   id: ContactFilter;
   label: string;
-  icon: keyof typeof Ionicons.glyphMap;
   value: ContactFilter;
-  count: number;
   color: string;
   onPress: (next: ContactFilter) => void;
 }) {
@@ -374,28 +334,12 @@ const FilterChip = memo(function FilterChip({
       onPress={() => onPress(id)}
       style={[styles.filterChip, surface]}
     >
-      <Ionicons name={icon} size={14} color={active ? color : colors.textTertiary} />
       <Text
         numberOfLines={1}
         style={[styles.filterText, { color: active ? color : colors.textSecondary }]}
       >
         {label}
       </Text>
-      {count > 0 && (
-        <View
-          style={[
-            styles.countBadge,
-            {
-              backgroundColor: active ? `${color}26` : colors.surfaceElevated,
-              borderColor: active ? 'transparent' : colors.borderSubtle,
-            },
-          ]}
-        >
-          <Text style={[styles.countText, { color: active ? color : colors.textTertiary }]}>
-            {count > 99 ? '99+' : count}
-          </Text>
-        </View>
-      )}
     </TouchableOpacity>
   );
 });
@@ -545,6 +489,195 @@ const ContactCard = memo(function ContactCard({
   );
 });
 
+function AddContactModal({
+  visible,
+  onClose,
+  onCreated,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const { colors } = useTheme();
+  const { token } = useAuth();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [company, setCompany] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const reset = () => {
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setCompany('');
+    setNotes('');
+    setSubmitting(false);
+  };
+
+  const close = () => {
+    if (submitting) return;
+    reset();
+    onClose();
+  };
+
+  const hasName = firstName.trim() || lastName.trim();
+  const hasContact = phone.trim() || email.trim();
+  const canSubmit = !submitting && hasName && hasContact;
+
+  const submit = async () => {
+    if (!canSubmit || !token) return;
+    setSubmitting(true);
+    try {
+      await createContact(token, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        company: company.trim() || undefined,
+        notes: notes.trim() || undefined,
+        phones: phone.trim() ? [{ type: 'mobile', numberRaw: phone.trim(), isPrimary: true }] : [],
+        emails: email.trim() ? [{ type: 'work', email: email.trim(), isPrimary: true }] : [],
+      });
+      reset();
+      onCreated();
+    } catch (e: any) {
+      const msg = String(e?.message || '').toUpperCase();
+      if (msg.includes('DUPLICATE_PHONE')) {
+        Alert.alert('Duplicate phone', 'A contact with this phone number already exists.');
+      } else if (msg.includes('NAME_PHONE_OR_EMAIL_REQUIRED')) {
+        Alert.alert('Missing info', 'Please provide a name plus a phone or email.');
+      } else {
+        Alert.alert('Could not save contact', 'Please try again.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+      <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+        <View style={[styles.addSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.sheetHandleWrap}>
+            <View style={[styles.sheetHandle, { backgroundColor: colors.borderLight }]} />
+          </View>
+
+          <View style={styles.addHeaderRow}>
+            <TouchableOpacity onPress={close} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={[styles.addHeaderCancel, { color: colors.textSecondary }]}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={[styles.addHeaderTitle, { color: colors.text }]}>New Contact</Text>
+            <TouchableOpacity
+              onPress={submit}
+              disabled={!canSubmit}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={[styles.addHeaderSave, { color: canSubmit ? colors.primary : colors.textTertiary }]}>
+                {submitting ? 'Saving…' : 'Save'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>NAME</Text>
+            <View style={styles.fieldRow}>
+              <View style={[styles.fieldInput, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+                <TextInput
+                  value={firstName}
+                  onChangeText={setFirstName}
+                  placeholder="First name"
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.fieldInputText, { color: colors.text }]}
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={[styles.fieldInput, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+                <TextInput
+                  value={lastName}
+                  onChangeText={setLastName}
+                  placeholder="Last name"
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.fieldInputText, { color: colors.text }]}
+                  autoCapitalize="words"
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>PHONE</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+              <Ionicons name="call-outline" size={16} color={colors.textTertiary} />
+              <TextInput
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="Phone number"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.fieldInputText, { color: colors.text, flex: 1 }]}
+                keyboardType="phone-pad"
+              />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>EMAIL</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+              <Ionicons name="mail-outline" size={16} color={colors.textTertiary} />
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Email address"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.fieldInputText, { color: colors.text, flex: 1 }]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+              />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>COMPANY</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+              <Ionicons name="business-outline" size={16} color={colors.textTertiary} />
+              <TextInput
+                value={company}
+                onChangeText={setCompany}
+                placeholder="Company (optional)"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.fieldInputText, { color: colors.text, flex: 1 }]}
+              />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>NOTES</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, styles.fieldInputMultiline, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+              <TextInput
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Add notes (optional)"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.fieldInputText, { color: colors.text, flex: 1, textAlignVertical: 'top' }]}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+          </View>
+
+          {!hasName || !hasContact ? (
+            <Text style={[styles.addHint, { color: colors.textTertiary }]}>
+              Enter a name plus a phone number or email.
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function ContactDetailModal({
   contact,
   onClose,
@@ -641,13 +774,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.8,
   },
-  headerSub: {
-    fontSize: 13,
-    lineHeight: 17,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerIcon: {
     width: 42,
     height: 42,
@@ -657,10 +783,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerIconPrimary: {
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    elevation: 4,
   },
 
   searchRow: {
@@ -686,59 +812,31 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     paddingVertical: 0,
   },
-  filterButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 18,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  /** Wrapper so we can overlay a subtle fade on the right edge. */
-  filterWrap: {
-    position: 'relative',
-  },
-  filterFade: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: 28,
-  },
 
   /**
-   * Chip geometry: fixed height, single-line label; parent ScrollView prevents wrapping.
-   * NOTE: do not set `overflow: 'hidden'` — Android RN clips `borderRadius: 9999`
-   * views to a rectangle when overflow is hidden + borderWidth > 0, chopping the pill.
+   * Android clips the bottom curve of fully-rounded bordered pills when the
+   * pill has a fixed `height` — the hidden font-metrics padding inside
+   * `<Text>` pushes the text past the border box. Use `paddingVertical`
+   * instead of `height`, and turn off `includeFontPadding` on the label.
+   * Never set `overflow: 'hidden'` — that also clips the rounded corners.
    */
   filterChip: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    height: 34,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: radius.full,
     borderWidth: 1,
-    gap: 6,
   },
   filterText: {
     fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 0.1,
-  },
-  countBadge: {
-    minWidth: 22,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  countText: {
-    fontSize: 11,
-    fontWeight: '800',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 
   list: {
@@ -877,23 +975,70 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  fab: {
-    position: 'absolute',
-    right: 22,
-    bottom: 92,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    elevation: 6,
-  },
-
   modalBackdrop: { flex: 1, justifyContent: 'flex-end' },
+
+  addSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    paddingHorizontal: spacing['5'],
+    paddingBottom: spacing['8'],
+    paddingTop: spacing['3'],
+    maxHeight: '92%',
+  },
+  addHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    marginBottom: spacing['4'],
+  },
+  addHeaderCancel: { fontSize: 15, fontWeight: '600' },
+  addHeaderTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+  addHeaderSave: { fontSize: 15, fontWeight: '800' },
+  fieldGroup: {
+    marginBottom: spacing['3'],
+  },
+  fieldLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    marginBottom: 6,
+    marginLeft: 4,
+  },
+  fieldRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  fieldInput: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+  },
+  fieldInputFull: {
+    alignSelf: 'stretch',
+  },
+  fieldInputMultiline: {
+    minHeight: 80,
+    paddingVertical: 10,
+    alignItems: 'flex-start',
+  },
+  fieldInputText: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  addHint: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: spacing['2'],
+    fontStyle: 'italic',
+  },
   detailSheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,

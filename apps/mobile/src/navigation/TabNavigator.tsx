@@ -12,13 +12,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../context/ThemeContext';
-import { QuickActionTab } from '../screens/tabs/QuickActionTab';
 import { TeamTab } from '../screens/tabs/TeamTab';
 import { ContactTab } from '../screens/tabs/ContactTab';
 import { KeypadTab } from '../screens/tabs/KeypadTab';
 import { RecentTab } from '../screens/tabs/RecentTab';
 import { ChatTab } from '../screens/tabs/ChatTab';
 import { VoicemailTab } from '../screens/tabs/VoicemailTab';
+import { SettingsScreen } from '../screens/SettingsScreen';
 import type { TabParamList } from './types';
 
 const Tab = createBottomTabNavigator<TabParamList>();
@@ -29,13 +29,13 @@ const TAB_CONFIG: Array<{
   icon: keyof typeof Ionicons.glyphMap;
   iconActive: keyof typeof Ionicons.glyphMap;
 }> = [
-  { name: 'QuickAction', label: 'Quick', icon: 'flash-outline', iconActive: 'flash' },
   { name: 'Team', label: 'Team', icon: 'people-outline', iconActive: 'people' },
   { name: 'Contact', label: 'Contacts', icon: 'person-outline', iconActive: 'person' },
   { name: 'Keypad', label: 'Keypad', icon: 'keypad-outline', iconActive: 'keypad' },
   { name: 'Recent', label: 'Recent', icon: 'time-outline', iconActive: 'time' },
   { name: 'Chat', label: 'Chat', icon: 'chatbubbles-outline', iconActive: 'chatbubbles' },
   { name: 'Voicemail', label: 'Voicemail', icon: 'recording-outline', iconActive: 'recording' },
+  { name: 'Settings', label: 'Settings', icon: 'settings-outline', iconActive: 'settings' },
 ];
 
 type TabItemProps = {
@@ -172,13 +172,13 @@ export function TabNavigator() {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen name="QuickAction" component={QuickActionTab} />
       <Tab.Screen name="Team" component={TeamTab} />
       <Tab.Screen name="Contact" component={ContactTab} />
       <Tab.Screen name="Keypad" component={KeypadTab} />
       <Tab.Screen name="Recent" component={RecentTab} />
       <Tab.Screen name="Chat" component={ChatTab} />
       <Tab.Screen name="Voicemail" component={VoicemailTab} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );
 }

@@ -179,6 +179,44 @@ export async function getContacts(token: string, query = ""): Promise<ContactsRe
   return json as ContactsResponse;
 }
 
+export type CreateContactInput = {
+  firstName?: string;
+  lastName?: string;
+  displayName?: string;
+  company?: string;
+  phones?: Array<{ type?: "mobile" | "office" | "home" | "other"; numberRaw: string; isPrimary?: boolean }>;
+  emails?: Array<{ type?: "work" | "personal" | "other"; email: string; isPrimary?: boolean }>;
+  notes?: string;
+  favorite?: boolean;
+};
+
+export async function createContact(token: string, input: CreateContactInput): Promise<{ contact: any }> {
+  const body = {
+    type: "external" as const,
+    firstName: input.firstName?.trim() || undefined,
+    lastName: input.lastName?.trim() || undefined,
+    displayName: input.displayName?.trim() || undefined,
+    company: input.company?.trim() || undefined,
+    notes: input.notes?.trim() || undefined,
+    favorite: input.favorite ?? false,
+    active: true,
+    phones: (input.phones || [])
+      .map((p) => ({ type: p.type || "mobile", numberRaw: p.numberRaw.trim(), isPrimary: p.isPrimary }))
+      .filter((p) => p.numberRaw.length > 0),
+    emails: (input.emails || [])
+      .map((e) => ({ type: e.type || "work", email: e.email.trim(), isPrimary: e.isPrimary }))
+      .filter((e) => e.email.length > 0),
+  };
+  const res = await fetch(`${API_BASE}/contacts`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CONTACT_CREATE_FAILED");
+  return json as { contact: any };
+}
+
 export async function getChatThreads(token: string): Promise<ChatThread[]> {
   const res = await fetch(`${API_BASE}/chat/threads`, {
     headers: { Authorization: `Bearer ${token}` },

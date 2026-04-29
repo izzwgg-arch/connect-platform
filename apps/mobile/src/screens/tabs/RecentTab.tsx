@@ -30,7 +30,7 @@ import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
 
-type CallFilter = 'all' | 'missed' | 'incoming' | 'outgoing' | 'internal';
+type CallFilter = 'all' | 'missed' | 'incoming' | 'outgoing';
 type CallKind = 'missed' | 'incoming' | 'outgoing' | 'internal' | 'voicemail';
 
 type CallGroup = {
@@ -327,14 +327,6 @@ export function RecentTab() {
     Alert.alert('Add to contacts', `Saving ${group.displayName} to contacts is coming soon.`);
   }, []);
 
-  const counts = useMemo(() => ({
-    all: calls.length,
-    missed: calls.filter((c) => callKind(c) === 'missed').length,
-    incoming: calls.filter((c) => callKind(c) === 'incoming').length,
-    outgoing: calls.filter((c) => callKind(c) === 'outgoing').length,
-    internal: calls.filter((c) => callKind(c) === 'internal').length,
-  }), [calls]);
-
   const todayCount = useMemo(() => {
     const today = dayKey(new Date().toISOString());
     return calls.filter((c) => dayKey(c.startedAt) === today).length;
@@ -420,11 +412,10 @@ export function RecentTab() {
       </View>
 
       <HorizontalFilterScroll marginBottom={spacing['3']}>
-        <FilterChip id="all" label="All" icon="list" value={filter} count={counts.all} color={colors.primary} onPress={setFilter} />
-        <FilterChip id="missed" label="Missed" icon="call-outline" value={filter} count={counts.missed} color={colors.danger} onPress={setFilter} />
-        <FilterChip id="incoming" label="Incoming" icon="arrow-down" value={filter} count={counts.incoming} color={colors.teal} onPress={setFilter} />
-        <FilterChip id="outgoing" label="Outgoing" icon="arrow-up" value={filter} count={counts.outgoing} color={colors.success} onPress={setFilter} />
-        <FilterChip id="internal" label="Internal" icon="swap-horizontal-outline" value={filter} count={counts.internal} color={colors.purple} onPress={setFilter} />
+        <FilterChip id="all" label="All" value={filter} color={colors.primary} onPress={setFilter} />
+        <FilterChip id="missed" label="Missed" value={filter} color={colors.danger} onPress={setFilter} />
+        <FilterChip id="incoming" label="Incoming" value={filter} color={colors.teal} onPress={setFilter} />
+        <FilterChip id="outgoing" label="Outgoing" value={filter} color={colors.success} onPress={setFilter} />
       </HorizontalFilterScroll>
 
       {loading ? (
@@ -488,17 +479,13 @@ export function RecentTab() {
 const FilterChip = memo(function FilterChip({
   id,
   label,
-  icon,
   value,
-  count,
   color,
   onPress,
 }: {
   id: CallFilter;
   label: string;
-  icon: keyof typeof Ionicons.glyphMap;
   value: CallFilter;
-  count: number;
   color: string;
   onPress: (next: CallFilter) => void;
 }) {
@@ -511,26 +498,12 @@ const FilterChip = memo(function FilterChip({
       onPress={() => onPress(id)}
       style={[styles.filterChip, surface]}
     >
-      <Ionicons name={icon} size={14} color={active ? color : colors.textTertiary} />
       <Text
         numberOfLines={1}
         style={[styles.filterText, { color: active ? color : colors.textSecondary }]}
       >
         {label}
       </Text>
-      {count > 0 && (
-        <View
-          style={[
-            styles.badge,
-            {
-              backgroundColor: active ? `${color}26` : colors.surfaceElevated,
-              borderColor: active ? 'transparent' : colors.borderSubtle,
-            },
-          ]}
-        >
-          <Text style={[styles.badgeText, { color: active ? color : colors.textTertiary }]}>{count > 99 ? '99+' : count}</Text>
-        </View>
-      )}
     </TouchableOpacity>
   );
 });
@@ -649,39 +622,24 @@ const CallCard = memo(function CallCard({
             styles.card,
             {
               backgroundColor: colors.surface,
-              borderColor:
-                group.kind === 'missed' ? colors.danger + '33' : colors.borderSubtle,
+              borderColor: colors.borderSubtle,
             },
           ]}
         >
-          <View style={[styles.avatarRing, { borderColor: accent + '55' }]}>
+          <View style={styles.avatarWrap}>
             {group.unknown ? (
-              <UnknownAvatar size={40} />
+              <UnknownAvatar size={44} />
             ) : (
               <Avatar name={primaryName || callDisplayNumber(primaryCall) || 'Unknown'} size="md" />
             )}
-            <View
-              style={[
-                styles.kindMark,
-                { backgroundColor: colors.surface, borderColor: accent },
-              ]}
-            >
-              <Ionicons name={kindIcon(group.kind)} size={10} color={accent} />
-            </View>
           </View>
 
           <View style={styles.info}>
-            <Text
-              style={[
-                styles.nameText,
-                { color: group.kind === 'missed' ? colors.dangerText : colors.text },
-              ]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.nameText, { color: colors.text }]} numberOfLines={1}>
               {primaryName}
             </Text>
             <View style={styles.metaRow}>
-              <KindBadge kind={group.kind} accent={accent} />
+              <Ionicons name={kindIcon(group.kind)} size={13} color={accent} style={styles.kindIcon} />
               <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
                 {subtitle}
               </Text>
@@ -756,7 +714,7 @@ function CallDetailModal({
           </TouchableOpacity>
 
           <View style={styles.detailHeader}>
-            <View style={[styles.avatarRing, styles.avatarRingLarge, { borderColor: accent + '55' }]}>
+            <View style={[styles.avatarRingLarge, { borderColor: accent + '55' }]}>
               {group.unknown ? <UnknownAvatar size={72} /> : <Avatar name={group.displayName} size="xl" />}
             </View>
             <Text style={[typography.h2, { color: colors.text, marginTop: 14, textAlign: 'center' }]} numberOfLines={1}>
@@ -887,34 +845,30 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
 
-  /** Do NOT set `overflow: 'hidden'` — Android clips fully-rounded bordered pills. */
+  /**
+   * Android clips the bottom curve of fully-rounded bordered pills when the
+   * pill has a fixed `height` — the hidden font-metrics padding inside
+   * `<Text>` pushes the text past the border box. Use `paddingVertical`
+   * instead of `height`, and turn off `includeFontPadding` on the label.
+   * Never set `overflow: 'hidden'` — that also clips the rounded corners.
+   */
   filterChip: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    height: 34,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: radius.full,
     borderWidth: 1,
-    gap: 6,
   },
   filterText: {
     fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 0.1,
-  },
-  badge: {
-    minWidth: 22,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '800',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 
   sectionLabel: {
@@ -959,27 +913,15 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
 
-  avatarRing: {
-    position: 'relative',
-    borderWidth: 2,
-    borderRadius: 999,
-    padding: 2,
+  avatarWrap: {
     marginRight: 12,
   },
   avatarRingLarge: {
+    position: 'relative',
+    borderWidth: 2,
+    borderRadius: 999,
     padding: 3,
     alignSelf: 'center',
-  },
-  kindMark: {
-    position: 'absolute',
-    right: -2,
-    bottom: -2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   info: { flex: 1, minWidth: 0 },
@@ -988,9 +930,10 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '800',
     letterSpacing: -0.15,
-    marginBottom: 4,
+    marginBottom: 3,
   },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  kindIcon: { opacity: 0.9 },
   metaText: {
     flexShrink: 1,
     fontSize: 12.5,

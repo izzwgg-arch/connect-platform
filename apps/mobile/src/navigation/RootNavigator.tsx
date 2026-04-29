@@ -13,7 +13,6 @@ import { LoginScreen } from '../screens/auth/LoginScreen';
 import { QrProvisionScreen } from '../screens/auth/QrProvisionScreen';
 import { ActiveCallScreen } from '../screens/call/ActiveCallScreen';
 import { IncomingCallScreen } from '../screens/call/IncomingCallScreen';
-import { SettingsScreen } from '../screens/SettingsScreen';
 import { DiagnosticsScreen } from '../screens/DiagnosticsScreen';
 import { useIncomingNotifications } from '../context/NotificationsContext';
 import { useCallSessions } from '../context/CallSessionManager';
@@ -96,17 +95,17 @@ function TabsWrapper() {
     } catch {}
   };
 
-  const returnToQuickAction = () => {
+  const returnToDefaultTab = () => {
     try {
       // IMPORTANT ORDERING: if the call was answered from the background /
       // lock screen, move the Android task back to background FIRST, then
       // reset the navigation stack. Reversing these (navigate-then-move)
-      // caused the user to see QuickAction on the lock screen for a beat
-      // before the keyguard re-appeared, then have to press back to return
-      // to the lock screen. moveTaskToBack() is synchronous — the activity
-      // pauses immediately, the keyguard is revealed, and the subsequent
-      // navigation reset happens off-screen so the next time the user opens
-      // the app they land on QuickAction as expected.
+      // caused the user to see the default tab on the lock screen for a
+      // beat before the keyguard re-appeared, then have to press back to
+      // return to the lock screen. moveTaskToBack() is synchronous — the
+      // activity pauses immediately, the keyguard is revealed, and the
+      // subsequent navigation reset happens off-screen so the next time
+      // the user opens the app they land on the default tab as expected.
       if (answeredFromBackgroundRef.current) {
         answeredFromBackgroundRef.current = false;
         // We only push the Android task back to the keyguard / launcher
@@ -147,15 +146,15 @@ function TabsWrapper() {
             {
               name: 'Tabs',
               state: {
-                routes: [{ name: 'QuickAction' }],
+                routes: [{ name: 'Keypad' }],
                 index: 0,
               },
             },
           ],
         }),
       );
-      console.log('[ANSWER_FLOW] RETURNED_TO_QUICK_ACTION');
-      logCallFlow('NAVIGATE_BACK_TO_QUICK', { extra: { source: 'returnToQuickAction' } });
+      console.log('[ANSWER_FLOW] RETURNED_TO_KEYPAD');
+      logCallFlow('NAVIGATE_BACK_TO_KEYPAD', { extra: { source: 'returnToDefaultTab' } });
     } catch {}
   };
 
@@ -190,7 +189,7 @@ function TabsWrapper() {
 
     // When a call returns to idle and we're on ActiveCall, go back
     if (callState === 'idle' && wasActive) {
-      returnToQuickAction();
+      returnToDefaultTab();
     }
   }, [
     answerHandoffInviteIdRef,
@@ -226,7 +225,7 @@ function TabsWrapper() {
     }
 
     if (!incomingInvite && prev && !hasOngoingCall) {
-      returnToQuickAction();
+      returnToDefaultTab();
     }
   }, [
     answerHandoffInviteIdRef,
@@ -241,8 +240,9 @@ function TabsWrapper() {
 
   // If an incoming invite exists or we're in any active-call UI phase, paint a
   // black cover over the tabs. Purpose: MainActivity resumes from the keyguard
-  // with its prior route (e.g. QuickAction) visible for ~50 ms before React-
-  // Navigation mounts IncomingCallScreen. The cover prevents that flash.
+  // with its prior route (e.g. Keypad / the last visited tab) visible for
+  // ~50 ms before React-Navigation mounts IncomingCallScreen. The cover
+  // prevents that flash.
   // IncomingCallScreen / ActiveCallScreen are fullScreen modals pushed on top
   // of TabsWrapper, so they render above this cover — the cover only masks the
   // tabs. pointerEvents="none" keeps taps falling through when the cover is
@@ -279,11 +279,6 @@ function AppNavigator() {
     <AppStack.Navigator screenOptions={{ headerShown: false }}>
       <AppStack.Screen name="Tabs" component={TabsWrapper} />
       <AppStack.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
-      />
-      <AppStack.Screen
         name="QrProvision"
         component={QrProvisionScreen}
         options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
@@ -308,7 +303,7 @@ function AppNavigator() {
         options={{
           // No slide animation: the incoming-call screen must take over the
           // entire display the instant an invite exists so the user never
-          // sees a flash of QuickAction underneath (especially on the lock
+          // sees a flash of the underlying tab (especially on the lock
           // screen where MainActivity resumes with its prior route visible
           // for ~50–250 ms while JS catches up).
           animation: 'none',

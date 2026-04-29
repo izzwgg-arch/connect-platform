@@ -629,15 +629,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     paddingVertical: 0,
   },
-  /** Android RN clips fully-rounded bordered pills when overflow is hidden. */
+  /**
+   * Android clips the bottom curve of fully-rounded bordered pills when the
+   * pill has a fixed `height`. Use `paddingVertical` instead, and turn off
+   * `includeFontPadding` on the label text.
+   */
   filterChip: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 82,
-    height: 34,
-    paddingHorizontal: 12,
-    paddingVertical: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: radius.full,
     borderWidth: 1,
     gap: 6,
@@ -646,6 +649,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.1,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   countBadge: {
     minWidth: 20,

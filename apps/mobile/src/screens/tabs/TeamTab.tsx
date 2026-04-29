@@ -8,10 +8,12 @@ import { useSip } from '../../context/SipContext';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
+import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { getTeamDirectory } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { LiveCall, TeamDirectoryMember, TeamPresence } from '../../types';
 import { typography } from '../../theme/typography';
+import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
 
 type TeamFilter = 'all' | TeamPresence;
@@ -53,7 +55,7 @@ function livePresence(member: TeamDirectoryMember, live: LiveTelephonyState | nu
   return 'offline';
 }
 
-function presenceMeta(presence: TeamPresence, colors: ReturnType<typeof useTheme>['colors']) {
+function presenceColor(presence: TeamPresence, colors: ReturnType<typeof useTheme>['colors']) {
   if (presence === 'available') return colors.success;
   if (presence === 'ringing') return colors.warning;
   if (presence === 'on_call') return colors.danger;
@@ -61,8 +63,18 @@ function presenceMeta(presence: TeamPresence, colors: ReturnType<typeof useTheme
 }
 
 function presenceLabel(presence: TeamPresence): string {
-  if (presence === 'on_call') return 'On call';
+  if (presence === 'on_call') return 'On Call';
   return presence.charAt(0).toUpperCase() + presence.slice(1);
+}
+
+/**
+ * Lower weight = higher in list (available first, ringing, on_call, offline).
+ */
+function presenceWeight(presence: TeamPresence): number {
+  if (presence === 'available') return 0;
+  if (presence === 'ringing') return 1;
+  if (presence === 'on_call') return 2;
+  return 3;
 }
 
 function formatElapsed(startedAt: string | null | undefined, now: number): string | null {
@@ -108,7 +120,6 @@ export function TeamTab() {
   const sip = useSip();
   const [members, setMembers] = useState<TeamDirectoryMember[]>([]);
   const [live, setLive] = useState<LiveTelephonyState | null>(null);
-  const [liveStatus, setLiveStatus] = useState('connecting');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TeamFilter>('all');
   const [now, setNow] = useState(Date.now());
@@ -137,7 +148,7 @@ export function TeamTab() {
 
   useEffect(() => {
     if (!token) return undefined;
-    return subscribeToBLF(token, setLive, setLiveStatus);
+    return subscribeToBLF(token, setLive);
   }, [token]);
 
   useEffect(() => {
@@ -149,17 +160,9 @@ export function TeamTab() {
     .map((member) => ({ ...member, presence: livePresence(member, live) }))
     .filter(isDisplayableMember), [live, members]);
 
-  const counts = useMemo(() => ({
-    all: enriched.length,
-    available: enriched.filter((m) => m.presence === 'available').length,
-    on_call: enriched.filter((m) => m.presence === 'on_call').length,
-    ringing: enriched.filter((m) => m.presence === 'ringing').length,
-    offline: enriched.filter((m) => m.presence === 'offline').length,
-  }), [enriched]);
-
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return enriched
+    const filtered = enriched
       .filter((member) => filter === 'all' || member.presence === filter)
       .filter((member) =>
         !q ||
@@ -167,6 +170,16 @@ export function TeamTab() {
         member.extension.includes(q) ||
         (member.email || '').toLowerCase().includes(q),
       );
+    // Sort: presence-first, then by extension number (numeric).
+    return [...filtered].sort((a, b) => {
+      const wa = presenceWeight(a.presence);
+      const wb = presenceWeight(b.presence);
+      if (wa !== wb) return wa - wb;
+      const ea = parseInt(a.extension || '0', 10);
+      const eb = parseInt(b.extension || '0', 10);
+      if (Number.isFinite(ea) && Number.isFinite(eb) && ea !== eb) return ea - eb;
+      return a.name.localeCompare(b.name);
+    });
   }, [enriched, filter, query]);
 
   const callExtension = useCallback((extension: string) => {
@@ -188,36 +201,18 @@ export function TeamTab() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <View>
-          <View style={styles.headerTitleRow}>
-            <Text style={[styles.headerTitle, { color: colors.text }]}>Team</Text>
-            <Text style={[styles.headerAccent, { color: colors.primary }]}>VLS</Text>
-          </View>
-          <View style={styles.subtitleRow}>
-            <PulseDot color={colors.success} size={7} active={liveStatus === 'connected'} />
-            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Live BLF presence</Text>
-          </View>
-        </View>
-        <View
-          style={[
-            styles.liveBadge,
-            {
-              backgroundColor: liveStatus === 'connected' ? colors.successMuted : colors.warningMuted,
-              shadowColor: liveStatus === 'connected' ? colors.success : colors.warning,
-              borderColor: liveStatus === 'connected' ? colors.success + '30' : colors.warning + '30',
-            },
-          ]}
-        >
-          <PulseDot color={liveStatus === 'connected' ? colors.success : colors.warning} size={8} active={liveStatus !== 'disconnected'} />
+        <View style={styles.headerTitleWrap}>
+          <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>Team</Text>
         </View>
       </View>
+
       <View style={styles.searchRow}>
         <View style={[styles.searchBox, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}>
           <Ionicons name="search-outline" size={17} color={colors.textTertiary} />
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Search name or extension..."
+            placeholder="Search name or extension"
             placeholderTextColor={colors.textTertiary}
             style={[styles.searchInput, { color: colors.text }]}
             autoCapitalize="none"
@@ -229,19 +224,16 @@ export function TeamTab() {
             </TouchableOpacity>
           )}
         </View>
-        <TouchableOpacity
-          activeOpacity={0.75}
-          style={[styles.filterButton, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}
-        >
-          <Ionicons name="options-outline" size={20} color={colors.textSecondary} />
-        </TouchableOpacity>
       </View>
-      <View style={styles.summaryRow}>
-        <SummaryChip label="All" value={counts.all} color={colors.primary} active={filter === 'all'} onPress={() => setFilter('all')} />
-        <SummaryChip label="Available" value={counts.available} color={colors.success} active={filter === 'available'} onPress={() => setFilter('available')} />
-        <SummaryChip label="On Call" value={counts.on_call} color={colors.danger} active={filter === 'on_call'} onPress={() => setFilter('on_call')} />
-        <SummaryChip label="Ringing" value={counts.ringing} color={colors.warning} active={filter === 'ringing'} onPress={() => setFilter('ringing')} />
-      </View>
+
+      <HorizontalFilterScroll marginBottom={spacing['3']}>
+        <SummaryChip id="all" label="All" color={colors.primary} active={filter === 'all'} onPress={setFilter} />
+        <SummaryChip id="available" label="Available" color={colors.success} active={filter === 'available'} onPress={setFilter} />
+        <SummaryChip id="on_call" label="On Call" color={colors.danger} active={filter === 'on_call'} onPress={setFilter} />
+        <SummaryChip id="ringing" label="Ringing" color={colors.warning} active={filter === 'ringing'} onPress={setFilter} />
+        <SummaryChip id="offline" label="Offline" color={colors.textTertiary} active={filter === 'offline'} onPress={setFilter} />
+      </HorizontalFilterScroll>
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.primary} />
@@ -259,7 +251,7 @@ export function TeamTab() {
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             return (
-              <TeamMemberRow
+              <TeamMemberCard
                 member={item}
                 elapsed={formatElapsed(activeCallStartedAt(item, live), now)}
                 onPress={() => showQuickActions(item)}
@@ -270,58 +262,39 @@ export function TeamTab() {
           }}
         />
       )}
-      <TouchableOpacity
-        activeOpacity={0.82}
-        onPress={() => Alert.alert('Invite user', 'User invite actions will open from the web admin tools.')}
-        style={[
-          styles.fab,
-          {
-            backgroundColor: colors.primary + 'ee',
-            borderColor: colors.white + '24',
-            shadowColor: colors.primary,
-          },
-        ]}
-      >
-        <Ionicons name="person-add-outline" size={23} color="#fff" />
-      </TouchableOpacity>
     </View>
   );
 }
 
 const SummaryChip = memo(function SummaryChip({
+  id,
   label,
-  value,
   color,
   active,
   onPress,
 }: {
+  id: TeamFilter;
   label: string;
-  value: number;
   color: string;
   active: boolean;
-  onPress: () => void;
+  onPress: (next: TeamFilter) => void;
 }) {
   const { colors } = useTheme();
+  const surface = teamFilterChipColors(active, color, colors);
   return (
     <TouchableOpacity
       activeOpacity={0.76}
-      onPress={onPress}
-      style={[
-        styles.summaryChip,
-        {
-          backgroundColor: active ? color + '18' : colors.transparent,
-          borderColor: active ? color + '38' : colors.borderSubtle,
-        },
-      ]}
+      onPress={() => onPress(id)}
+      style={[styles.filterChip, surface]}
     >
-      <PulseDot color={color} size={6} active={label === 'Ringing' && value > 0} />
-      <Text style={[styles.summaryValue, { color }]}>{value}</Text>
-      <Text style={[styles.summaryLabel, { color: active ? color : colors.textSecondary }]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.filterText, { color: active ? color : colors.textSecondary }]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 });
 
-type TeamRowProps = {
+type TeamCardProps = {
   member: TeamDirectoryMember & { presence: TeamPresence };
   elapsed: string | null;
   onPress: () => void;
@@ -329,17 +302,19 @@ type TeamRowProps = {
   onMessage: () => void;
 };
 
-const TeamMemberRow = memo(function TeamMemberRow({ member, elapsed, onPress, onCall, onMessage }: TeamRowProps) {
+const TeamMemberCard = memo(function TeamMemberCard({ member, elapsed, onPress, onCall, onMessage }: TeamCardProps) {
   const { colors } = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
-  const tone = presenceMeta(member.presence, colors);
-  const statusText = member.presence === 'on_call' && elapsed ? `On Call ${elapsed}` : presenceLabel(member.presence);
+  const tone = presenceColor(member.presence, colors);
+  const statusText = member.presence === 'on_call' && elapsed ? `On Call · ${elapsed}` : presenceLabel(member.presence);
+  const pulseActive = member.presence === 'available' || member.presence === 'ringing' || member.presence === 'on_call';
+  const onCallAccent = member.presence === 'on_call';
 
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 14 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
     onPanResponderMove: (_, gesture) => {
-      translateX.setValue(Math.max(-104, Math.min(gesture.dx, 88)));
+      translateX.setValue(Math.max(-112, Math.min(gesture.dx, 86)));
     },
     onPanResponderRelease: (_, gesture) => {
       const action = gesture.dx > 54 ? 'call' : gesture.dx < -54 ? 'message' : null;
@@ -366,41 +341,82 @@ const TeamMemberRow = memo(function TeamMemberRow({ member, elapsed, onPress, on
           <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
         </View>
       </View>
+
       <Animated.View style={{ transform: [{ translateX }, { scale }] }} {...panResponder.panHandlers}>
         <TouchableOpacity
-          activeOpacity={0.9}
+          activeOpacity={0.92}
           onPress={onPress}
           onPressIn={pressIn}
           onPressOut={pressOut}
-          style={[styles.row, { borderBottomColor: colors.borderSubtle, backgroundColor: colors.bg }]}
+          style={[
+            styles.card,
+            {
+              backgroundColor: colors.surface,
+              borderColor: onCallAccent ? colors.danger + '33' : colors.borderSubtle,
+              shadowColor: '#000',
+            },
+          ]}
         >
-          <View style={[styles.avatarWrap, member.presence === 'on_call' ? { shadowColor: colors.danger, shadowOpacity: 0.22, shadowRadius: 10, elevation: 4 } : null]}>
+          <View
+            style={[
+              styles.avatarWrap,
+              onCallAccent
+                ? { shadowColor: colors.danger, shadowOpacity: 0.25, shadowRadius: 10, elevation: 4 }
+                : null,
+            ]}
+          >
             <Avatar name={member.name} size="md" />
-            <View style={[styles.presenceBadge, { borderColor: colors.bg }]}>
-              <PulseDot color={tone} size={9} active={member.presence === 'available' || member.presence === 'ringing'} />
+            <View style={[styles.presenceBadge, { borderColor: colors.surface, backgroundColor: colors.surface }]}>
+              <PulseDot color={tone} size={10} active={pulseActive} />
             </View>
           </View>
+
           <View style={styles.info}>
             <View style={styles.nameLine}>
-              <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>{member.name}</Text>
-              <View style={[styles.extPill, { backgroundColor: colors.primaryMuted, borderColor: colors.primary + '25' }]}>
-                <Text style={[styles.extText, { color: colors.primary }]}>#{member.extension}</Text>
-              </View>
+              <Text style={[styles.nameText, { color: colors.text }]} numberOfLines={1}>
+                {member.name}
+              </Text>
             </View>
-            <Text style={[styles.emailText, { color: colors.textSecondary }]} numberOfLines={1}>
-              {member.email || member.title || member.department || 'Connect extension'}
+            <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
+              {`Ext ${member.extension}${member.email ? ' · ' + member.email : member.department ? ' · ' + member.department : ''}`}
             </Text>
-          </View>
-          <View style={styles.rightCol}>
-            <Text style={[styles.statusText, { color: tone }]} numberOfLines={1}>{statusText}</Text>
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.iconButton} onPress={onMessage} activeOpacity={0.72}>
-                <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconButton} onPress={onCall} activeOpacity={0.72}>
-                <Ionicons name="call-outline" size={17} color={colors.success} />
-              </TouchableOpacity>
+            <View
+              style={[
+                styles.statusPill,
+                {
+                  backgroundColor: tone + '18',
+                  borderColor: tone + '40',
+                },
+              ]}
+            >
+              <View style={[styles.statusDot, { backgroundColor: tone }]} />
+              <Text style={[styles.statusPillText, { color: tone }]} numberOfLines={1}>
+                {statusText}
+              </Text>
             </View>
+          </View>
+
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              onPress={onMessage}
+              activeOpacity={0.74}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              style={[styles.actionBtn, { backgroundColor: colors.tealMuted, borderColor: colors.teal + '33' }]}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.teal} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onCall}
+              activeOpacity={0.74}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              style={[
+                styles.actionBtn,
+                styles.actionBtnPrimary,
+                { backgroundColor: colors.primary, borderColor: colors.primary, shadowColor: colors.primary },
+              ]}
+            >
+              <Ionicons name="call" size={18} color="#fff" />
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Animated.View>
@@ -411,209 +427,177 @@ const TeamMemberRow = memo(function TeamMemberRow({ member, elapsed, onPress, on
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
   header: {
     paddingHorizontal: spacing['5'],
     paddingBottom: spacing['3'],
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'flex-start',
   },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  headerTitleWrap: { flex: 1, minWidth: 0 },
   headerTitle: {
-    fontSize: 27,
-    lineHeight: 33,
+    fontSize: 28,
+    lineHeight: 34,
     fontWeight: '800',
     letterSpacing: -0.8,
   },
-  headerAccent: {
-    fontSize: 25,
-    lineHeight: 31,
-    fontWeight: '900',
-    letterSpacing: -0.8,
-  },
-  subtitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    marginTop: 2,
-  },
-  subtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    letterSpacing: 0.1,
-  },
+
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing['5'],
-    gap: 10,
     marginBottom: spacing['3'],
   },
   searchBox: {
     flex: 1,
-    height: 40,
-    borderRadius: 16,
+    height: 44,
+    borderRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
+    gap: 10,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 14.5,
     letterSpacing: 0,
     paddingVertical: 0,
   },
-  filterButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 16,
-    borderWidth: 1,
+
+  /**
+   * Android clips the bottom curve of fully-rounded bordered pills when the
+   * pill has a fixed `height` — the hidden font-metrics padding inside
+   * `<Text>` pushes the text past the border box. Use `paddingVertical`
+   * instead of `height`, and turn off `includeFontPadding` on the label.
+   * Never set `overflow: 'hidden'` — that also clips the rounded corners.
+   */
+  filterChip: {
+    flexShrink: 0,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: spacing['5'],
-    paddingBottom: spacing['2'],
-  },
-  summaryChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: radius.full,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
+    borderWidth: 1,
   },
-  summaryValue: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: -0.1,
-  },
-  summaryLabel: {
-    fontSize: 11,
+  filterText: {
+    fontSize: 13,
     fontWeight: '700',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
-  list: { paddingHorizontal: spacing['5'], paddingTop: spacing['1'], paddingBottom: 104 },
-  liveBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 5,
-  },
-  swipeWrap: {
-    overflow: 'hidden',
-  },
+
+  list: { paddingHorizontal: spacing['5'], paddingTop: spacing['1'], paddingBottom: 120 },
+
+  swipeWrap: { overflow: 'hidden', borderRadius: 18, marginBottom: 10 },
   swipeBg: {
     ...StyleSheet.absoluteFillObject,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 8,
   },
   swipeHint: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  row: {
+
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    minHeight: 72,
-    paddingVertical: 8,
+    minHeight: 76,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 1,
   },
+
   avatarWrap: {
-    marginRight: 11,
+    marginRight: 12,
     borderRadius: 20,
   },
   presenceBadge: {
     position: 'absolute',
-    right: -1,
-    bottom: -1,
-    width: 15,
-    height: 15,
-    borderRadius: 8,
+    right: -2,
+    bottom: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
+
   info: { flex: 1, minWidth: 0 },
-  nameLine: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
-  memberName: {
+  nameLine: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 2 },
+  nameText: {
     flex: 1,
     minWidth: 0,
-    fontSize: 15,
+    fontSize: 15.5,
     lineHeight: 20,
     fontWeight: '800',
     letterSpacing: -0.15,
   },
-  emailText: {
-    fontSize: 12,
+  metaText: {
+    fontSize: 12.5,
     lineHeight: 16,
-    opacity: 0.6,
+    opacity: 0.7,
+    marginBottom: 5,
   },
-  extPill: {
-    borderWidth: 1,
+  statusPill: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 1,
+    borderWidth: 1,
   },
-  extText: {
-    fontSize: 10,
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusPillText: {
+    fontSize: 10.5,
     fontWeight: '800',
-    letterSpacing: 0.1,
+    letterSpacing: 0.2,
   },
-  rightCol: {
-    width: 92,
-    alignSelf: 'stretch',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingTop: 4,
-    paddingBottom: 3,
-    marginLeft: 8,
-  },
-  statusText: {
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '800',
-  },
+
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
+    marginLeft: 10,
   },
-  iconButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fab: {
-    position: 'absolute',
-    right: 22,
-    bottom: 92,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
+  actionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 18,
-    elevation: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnPrimary: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
 });
