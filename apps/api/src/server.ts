@@ -60,6 +60,13 @@ import {
   getEffectivePortalPermissionSetForJwtRole,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
+import {
+  inspectPbxInboundRoute,
+  resolvePbxRouteHelperConfig,
+  restorePbxInboundRoute,
+  retargetPbxInboundRoute,
+  type PbxRouteHelperInspectResponse,
+} from "./pbxInboundRouteHelperClient";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -13317,14 +13324,15 @@ async function publishDidmapToAstDb(
     hold_repeat: string;
   },
 ): Promise<void> {
-  const family = `connect/didmap/${e164}`;
-  const keys: Array<{ family: string; key: string; value: string }> = [
+  const digits = e164.replace(/\D/g, "");
+  const families = Array.from(new Set([`connect/didmap/${e164}`, ...(digits ? [`connect/didmap/${digits}`] : [])]));
+  const keys: Array<{ family: string; key: string; value: string }> = families.flatMap((family) => [
     { family, key: "tenant",        value: values.tenant },
     { family, key: "profile_id",    value: values.profile_id },
     { family, key: "moh_class",     value: values.moh_class },
     { family, key: "hold_announce", value: values.hold_announce },
     { family, key: "hold_repeat",   value: values.hold_repeat },
-  ];
+  ]);
   await publishToAstDb(tenantSlug, keys, { didE164: e164 });
 }
 
@@ -15781,13 +15789,15 @@ app.get("/voice/did/capabilities", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageDidRouting);
   if (!user) return;
   const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+  const routeHelperEnabled = Boolean(resolvePbxRouteHelperConfig());
   return reply.send({
     ok: true,
     inboundApiEnabled,
+    routeHelperEnabled,
     // Hint to help super-admins turn it on without a doc-dive.
-    howToEnable: inboundApiEnabled
+    howToEnable: inboundApiEnabled || routeHelperEnabled
       ? null
-      : "Set PBX_INBOUND_API=true in the Connect API environment and restart to enable DID takeover.",
+      : "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment and restart to enable DID takeover.",
   });
 });
 
@@ -15902,6 +15912,29 @@ function didComputeDrift(
   return { driftDetected: false, reason: null };
 }
 
+function didHelperInspectToPbxLive(helper: PbxRouteHelperInspectResponse): Record<string, unknown> {
+  return {
+    destination_type: "ombutel.destination_id",
+    destination: String(helper.route.destination_id ?? ""),
+    channel_variables: {
+      routeId: helper.route.inbound_route_id,
+      mode: helper.mode,
+      connectDestinationId: helper.snapshot?.current_connect_destination_id ?? null,
+    },
+    description: helper.route.description ?? null,
+    raw: helper,
+  };
+}
+
+function didComputeHelperDrift(
+  mapping: { routingMode: string },
+  helper: PbxRouteHelperInspectResponse,
+): { driftDetected: boolean; reason: string | null } {
+  if (mapping.routingMode !== "connect") return { driftDetected: false, reason: null };
+  if (helper.mode !== "connect") return { driftDetected: true, reason: "pbx_destination_drifted" };
+  return { driftDetected: false, reason: null };
+}
+
 // ── GET /voice/did/:id/inspect ───────────────────────────────────────────────
 // Read-only. Returns both the Connect-stored "original PBX destination" snapshot
 // and the live VitalPBX state so the UI can show them side-by-side and warn
@@ -15927,6 +15960,27 @@ app.get("/voice/did/:id/inspect", async (req, reply) => {
 
   let pbxLive: Record<string, unknown> | null = null;
   let fetchError: string | null = null;
+  const helperCfg = resolvePbxRouteHelperConfig(resolved.pbxInstanceId);
+  if (helperCfg) {
+    try {
+      const helper = await inspectPbxInboundRoute(helperCfg, {
+        did: String(mapping.e164),
+        tenantId: resolved.pbxTenantId,
+      });
+      const drift = didComputeHelperDrift(mapping, helper);
+      return reply.send({
+        ok: true,
+        mapping,
+        pbxLive: didHelperInspectToPbxLive(helper),
+        pbxFetchError: null,
+        driftDetected: drift.driftDetected,
+        driftReason: drift.reason,
+      });
+    } catch (err: any) {
+      fetchError = err?.message ?? "pbx_helper_read_failed";
+      app.log.warn({ id, err: fetchError }, "did.inspect: PBX helper read failed");
+    }
+  }
   try {
     pbxLive = await didFetchLivePbxInboundNumber(resolved.pbxTenantId, String(mapping.e164), resolved.client);
   } catch (err: any) {
@@ -15962,14 +16016,6 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
   if (!user) return;
   const { id } = req.params as { id: string };
 
-  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
-  if (!inboundApiEnabled) {
-    return reply.code(503).send({
-      error: "pbx_inbound_api_disabled",
-      detail: "Set PBX_INBOUND_API=true in the Connect API environment to allow DID takeover.",
-    });
-  }
-
   const mapping = await (db as any).didRouteMapping.findUnique({ where: { id } });
   if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
   assertIvrTenantAccess(user, mapping.tenantId);
@@ -15995,6 +16041,112 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
 
   const tenantSlug = await getIvrSlugForTenant(mapping.tenantId);
   const e164 = String(mapping.e164);
+  const helperCfg = resolvePbxRouteHelperConfig(resolved.pbxInstanceId);
+  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+
+  if (helperCfg) {
+    const performedBy = (user as any).id ?? "unknown";
+    let helperSnapshot: PbxRouteHelperInspectResponse;
+    try {
+      helperSnapshot = await inspectPbxInboundRoute(helperCfg, {
+        did: e164,
+        tenantId: resolvedPbxTenantId,
+      });
+    } catch (err: any) {
+      return reply.code(err?.httpStatus === 404 ? 404 : 502).send({
+        error: err?.message === "did_not_found" ? "pbx_inbound_not_found" : "pbx_helper_read_failed",
+        detail: err?.message ?? "unknown",
+      });
+    }
+
+    const pbxSnapshot = didHelperInspectToPbxLive(helperSnapshot);
+    const { logRow } = await (db as any).$transaction(async (tx: any) => {
+      await tx.didRouteMapping.update({
+        where: { id: mapping.id },
+        data: {
+          originalPbxDestinationType: String(pbxSnapshot.destination_type ?? "") || null,
+          originalPbxDestination: String(pbxSnapshot.destination ?? "") || null,
+          originalPbxChannelVariables: (pbxSnapshot as any).channel_variables ?? undefined,
+          originalCapturedAt: new Date(),
+        },
+      });
+      const logRow = await tx.didRouteSwitchLog.create({
+        data: {
+          mappingId: mapping.id,
+          tenantId: mapping.tenantId,
+          fromMode: mapping.routingMode ?? "pbx",
+          toMode: "connect",
+          performedBy,
+          status: "pending",
+          pbxSnapshot: pbxSnapshot as any,
+        },
+      });
+      return { logRow };
+    });
+
+    try {
+      const values = await didBuildPublishValues(mapping, tenantSlug);
+      await publishDidmapToAstDb(tenantSlug, e164, values);
+    } catch (err: any) {
+      await (db as any).didRouteSwitchLog.update({
+        where: { id: logRow.id },
+        data: { status: "failed", error: `astdb_publish_failed: ${err?.message ?? "unknown"}` },
+      });
+      await (db as any).didRouteMapping.update({
+        where: { id: mapping.id },
+        data: { lastSwitchError: `astdb_publish_failed: ${err?.message ?? "unknown"}` },
+      });
+      return reply.code(503).send({ error: "astdb_publish_failed", detail: err?.message });
+    }
+
+    try {
+      const result = await retargetPbxInboundRoute(helperCfg, {
+        did: e164,
+        tenantId: resolvedPbxTenantId,
+        requestId: logRow.id,
+        actor: performedBy,
+      });
+      const pbxInboundRouteId = String(result.routeId ?? result.after?.inbound_route_id ?? helperSnapshot.route.inbound_route_id);
+      const updated = await (db as any).didRouteMapping.update({
+        where: { id: mapping.id },
+        data: {
+          routingMode: "connect",
+          lastSwitchedAt: new Date(),
+          lastSwitchedBy: performedBy,
+          lastPublishedAt: new Date(),
+          lastSwitchError: null,
+          pbxInboundRouteId,
+          pbxInstanceId: resolved.pbxInstanceId,
+        },
+      });
+      await (db as any).didRouteSwitchLog.update({
+        where: { id: logRow.id },
+        data: { status: "success", pbxPayload: result as any },
+      });
+      app.log.info({ e164, tenantSlug, pbxInboundRouteId }, "did.switch-to-connect: helper success");
+      return reply.send({ ok: true, mapping: updated, logId: logRow.id, pbxPayload: result });
+    } catch (err: any) {
+      await (db as any).didRouteSwitchLog.update({
+        where: { id: logRow.id },
+        data: { status: "failed", error: `helper_retarget_failed: ${err?.message ?? "unknown"}` },
+      });
+      await (db as any).didRouteMapping.update({
+        where: { id: mapping.id },
+        data: { lastSwitchError: `helper_retarget_failed: ${err?.message ?? "unknown"}` },
+      });
+      return reply.code(err?.httpStatus && err.httpStatus >= 400 ? err.httpStatus : 502).send({
+        error: "pbx_helper_retarget_failed",
+        detail: err?.message ?? "unknown",
+      });
+    }
+  }
+
+  if (!inboundApiEnabled) {
+    return reply.code(503).send({
+      error: "pbx_inbound_api_disabled",
+      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment to allow DID takeover.",
+    });
+  }
 
   // Step 1 — read the current PBX destination so we can restore it later.
   let pbxSnapshot: Record<string, unknown> | null = null;
@@ -16117,14 +16269,6 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
   if (!user) return;
   const { id } = req.params as { id: string };
 
-  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
-  if (!inboundApiEnabled) {
-    return reply.code(503).send({
-      error: "pbx_inbound_api_disabled",
-      detail: "Set PBX_INBOUND_API=true in the Connect API environment to allow DID restore.",
-    });
-  }
-
   const body = z.object({
     overrideDestinationType:  z.string().min(1).max(80).optional(),
     overrideDestination:      z.string().min(1).max(400).optional(),
@@ -16147,6 +16291,82 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
     return reply.code(409).send({ error: resolved.error, detail });
   }
   const { client: pbxClient, pbxTenantId: resolvedPbxTenantId } = resolved;
+  const helperCfg = resolvePbxRouteHelperConfig(resolved.pbxInstanceId);
+  const inboundApiEnabled = String(process.env.PBX_INBOUND_API || "").toLowerCase() === "true";
+  const e164 = String(mapping.e164);
+
+  if (helperCfg) {
+    const performedBy = (user as any).id ?? "unknown";
+    let pbxSnapshot: Record<string, unknown> | null = null;
+    try {
+      const helperSnapshot = await inspectPbxInboundRoute(helperCfg, {
+        did: e164,
+        tenantId: resolvedPbxTenantId,
+      });
+      pbxSnapshot = didHelperInspectToPbxLive(helperSnapshot);
+    } catch (err: any) {
+      app.log.warn({ id, err: err?.message }, "did.switch-to-pbx: helper snapshot read failed (non-fatal)");
+    }
+
+    const logRow = await (db as any).didRouteSwitchLog.create({
+      data: {
+        mappingId: mapping.id,
+        tenantId: mapping.tenantId,
+        fromMode: mapping.routingMode ?? "connect",
+        toMode: "pbx",
+        performedBy,
+        status: "pending",
+        pbxSnapshot: pbxSnapshot as any,
+      },
+    });
+
+    try {
+      const result = await restorePbxInboundRoute(helperCfg, {
+        did: e164,
+        tenantId: resolvedPbxTenantId,
+        requestId: logRow.id,
+        actor: performedBy,
+      });
+      const pbxInboundRouteId = String(result.routeId ?? result.after?.inbound_route_id ?? mapping.pbxInboundRouteId ?? "");
+      const updated = await (db as any).didRouteMapping.update({
+        where: { id: mapping.id },
+        data: {
+          routingMode: "pbx",
+          lastSwitchedAt: new Date(),
+          lastSwitchedBy: performedBy,
+          lastSwitchError: null,
+          pbxInboundRouteId: pbxInboundRouteId || mapping.pbxInboundRouteId,
+          pbxInstanceId: resolved.pbxInstanceId,
+        },
+      });
+      await (db as any).didRouteSwitchLog.update({
+        where: { id: logRow.id },
+        data: { status: "success", pbxPayload: result as any },
+      });
+      app.log.info({ e164, restoredDestinationId: result.restoredDestinationId }, "did.switch-to-pbx: helper success");
+      return reply.send({ ok: true, mapping: updated, logId: logRow.id, pbxPayload: result });
+    } catch (err: any) {
+      await (db as any).didRouteSwitchLog.update({
+        where: { id: logRow.id },
+        data: { status: "failed", error: `helper_restore_failed: ${err?.message ?? "unknown"}` },
+      });
+      await (db as any).didRouteMapping.update({
+        where: { id: mapping.id },
+        data: { lastSwitchError: `helper_restore_failed: ${err?.message ?? "unknown"}` },
+      });
+      return reply.code(err?.httpStatus && err.httpStatus >= 400 ? err.httpStatus : 502).send({
+        error: "pbx_helper_restore_failed",
+        detail: err?.message ?? "unknown",
+      });
+    }
+  }
+
+  if (!inboundApiEnabled) {
+    return reply.code(503).send({
+      error: "pbx_inbound_api_disabled",
+      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment to allow DID restore.",
+    });
+  }
 
   // Resolve destination: override wins, else stored original. If neither is
   // present we refuse to guess — the operator should /inspect and pass
@@ -16160,8 +16380,6 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
       detail: "Connect has no stored pre-takeover destination for this DID. Call /inspect then pass overrideDestinationType and overrideDestination.",
     });
   }
-
-  const e164 = String(mapping.e164);
 
   // Snapshot the current PBX state so the audit log records what we overwrote.
   let pbxSnapshot: Record<string, unknown> | null = null;
