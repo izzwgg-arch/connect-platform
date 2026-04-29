@@ -316,8 +316,9 @@ export function registerTelephonyRoutes(
   // Families allowed in `keys`:
   //   • connect/t_<tenantSlug>           — tenant-scoped IVR/MOH/hold state
   //   • connect/didmap/<didE164>         — per-DID routing overrides (only
-  //                                         when didE164 is supplied, and must
-  //                                         match the single namespace exactly)
+  //                                         when didE164 is supplied). Both
+  //                                         +E.164 and raw-digits aliases are
+  //                                         allowed for PBX dialplan lookups.
   router.post("/telephony/internal/ivr-publish", (req: Request, res: Response) => {
     if (!isInternalRouteAuthorized(req)) {
       res.status(401).json({ error: "Unauthorized" });
@@ -336,13 +337,14 @@ export function registerTelephonyRoutes(
     }
     // didE164, if provided, must be strict E.164 digits (optionally with + prefix).
     // This prevents the caller from smuggling a "../"-style family injection.
-    let didFamilyPrefix: string | null = null;
+    let didFamilyPrefixes: Set<string> | null = null;
     if (didE164 !== undefined && didE164 !== null && didE164 !== "") {
       if (typeof didE164 !== "string" || !/^\+?\d{7,20}$/.test(didE164)) {
         res.status(400).json({ error: "invalid_did_e164" });
         return;
       }
-      didFamilyPrefix = `connect/didmap/${didE164}`;
+      const didDigits = didE164.replace(/\D/g, "");
+      didFamilyPrefixes = new Set([`connect/didmap/${didE164}`, `connect/didmap/${didDigits}`]);
     }
     if (!telephony.ami._isConnected) {
       res.status(503).json({ error: "ami_not_connected" });
@@ -359,7 +361,7 @@ export function registerTelephonyRoutes(
       const { family, key, value } = entry as { family: string; key: string; value: string };
       // Tenant-scoped family OR the specific didmap family for this e164.
       const tenantScoped = family.startsWith(`connect/t_${tenantSlug}`);
-      const didScoped = didFamilyPrefix !== null && family === didFamilyPrefix;
+      const didScoped = didFamilyPrefixes !== null && didFamilyPrefixes.has(family);
       if (!tenantScoped && !didScoped) {
         res.status(400).json({ error: "family_scope_mismatch", family });
         return;
