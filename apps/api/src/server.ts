@@ -25994,6 +25994,26 @@ const port = Number(process.env.PORT || 3001);
       }).resetPassword(link.pbxExtensionId);
       return { sipPassword: out.sipPassword };
     },
+    createWebrtcDeviceOnPbx: async (linkId) => {
+      const link = await db.pbxExtensionLink.findUnique({
+        where: { id: linkId },
+        include: { tenant: { select: { id: true } } },
+      });
+      if (!link) return null;
+      const tenantPbxLink = await db.tenantPbxLink.findUnique({
+        where: { tenantId: link.tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!tenantPbxLink) return null;
+      const auth = decryptJson<{ token: string; secret?: string }>(
+        tenantPbxLink.pbxInstance.apiAuthEncrypted,
+      );
+      return getWirePbxClient({
+        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
+        token: auth.token,
+        secret: auth.secret,
+      }).createSipDevice({ pbxExtensionId: link.pbxExtensionId, enableWebrtc: true });
+    },
   });
   registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });

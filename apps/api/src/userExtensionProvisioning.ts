@@ -69,6 +69,7 @@ type Deps = {
    * Kept as a dependency so this module does not have to know about the integrations package.
    */
   resetSipPasswordOnPbx: (pbxExtensionLinkId: string) => Promise<{ sipPassword: string } | null>;
+  createWebrtcDeviceOnPbx: (pbxExtensionLinkId: string) => Promise<{ pbxDeviceId: string; sipUsername: string; sipPassword: string } | null>;
   encryptJson: <T>(value: T) => string;
 };
 
@@ -349,8 +350,9 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
   });
 
   // POST /admin/users/:id/phone/sync
-  //   Re-run the full PBX → Connect sync for the user's tenant. Re-populates
-  //   sipPasswordEncrypted and pbxDeviceName if VitalPBX has them.
+  //   Re-run the full PBX → Connect sync for the user's tenant. If the extension
+  //   still does not have a WebRTC device, create one via WirePBX and store the
+  //   returned credentials.
   app.post("/admin/users/:id/phone/sync", async (req, reply) => {
     const ctx = await loadLinkForAdminAction(req, reply);
     if (!ctx) return;
@@ -370,13 +372,53 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       return reply.code(502).send({ error: "pbx_sync_failed", message: String(err?.message || err) });
     }
 
-    const refreshed = await db.pbxExtensionLink.findUnique({ where: { id: ctx.link.id } });
-    const hasPassword = !!(refreshed as any)?.sipPasswordEncrypted;
+    let refreshed = await db.pbxExtensionLink.findUnique({ where: { id: ctx.link.id } });
+    let hasPassword = !!(refreshed as any)?.sipPasswordEncrypted;
+    let createdWebrtcDevice = false;
+
+    if (!(refreshed as any)?.webrtcEnabled || !hasPassword) {
+      try {
+        const out = await deps.createWebrtcDeviceOnPbx(ctx.link.id);
+        if (out?.sipPassword) {
+          const encrypted = deps.encryptJson<string>(out.sipPassword);
+          refreshed = await db.pbxExtensionLink.update({
+            where: { id: ctx.link.id },
+            data: {
+              pbxDeviceId: out.pbxDeviceId || (refreshed as any)?.pbxDeviceId || null,
+              pbxSipUsername: out.sipUsername || (refreshed as any)?.pbxSipUsername,
+              pbxDeviceName: out.sipUsername || (refreshed as any)?.pbxDeviceName || null,
+              sipPasswordEncrypted: encrypted,
+              sipPasswordIssuedAt: new Date(),
+              webrtcEnabled: true,
+              provisionStatus: "PROVISIONED" as any,
+              provisionSource: "PBX_GENERATED" as any,
+              lastProvisionedAt: new Date(),
+            } as any,
+          });
+          hasPassword = true;
+          createdWebrtcDevice = true;
+        }
+      } catch (err: any) {
+        await deps.audit({
+          tenantId: ctx.user.tenantId,
+          actorUserId: ctx.admin.sub,
+          targetUserId: ctx.user.id,
+          action: "USER_PHONE_WEBRTC_CREATE_FAILED",
+          entityType: "PbxExtensionLink",
+          entityId: ctx.link.id,
+          metadata: { error: String(err?.message || err) },
+        });
+      }
+    }
+
+    refreshed = await db.pbxExtensionLink.findUnique({ where: { id: ctx.link.id } });
+    hasPassword = !!(refreshed as any)?.sipPasswordEncrypted;
     await db.pbxExtensionLink.update({
       where: { id: ctx.link.id },
       data: {
         provisionStatus: (hasPassword ? "PROVISIONED" : "PENDING") as any,
-        provisionSource: (hasPassword ? "PBX_EXISTING" : null) as any,
+        provisionSource: (hasPassword ? (createdWebrtcDevice ? "PBX_GENERATED" : "PBX_EXISTING") : null) as any,
+        webrtcEnabled: hasPassword ? true : !!(refreshed as any)?.webrtcEnabled,
         lastProvisionedAt: new Date(),
       } as any,
     });
@@ -393,6 +435,8 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       ok: true,
       provisionStatus: hasPassword ? "PROVISIONED" : "PENDING",
       hasSipPassword: hasPassword,
+      webrtcEnabled: hasPassword ? true : !!(refreshed as any)?.webrtcEnabled,
+      createdWebrtcDevice,
       endpointName: (refreshed as any)?.pbxDeviceName || (refreshed as any)?.pbxSipUsername || null,
     };
   });
