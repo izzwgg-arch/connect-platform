@@ -56,7 +56,7 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
-import { passwordChangedEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
+import { passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
   registerPlatformRolePermissionRoutes,
@@ -1881,10 +1881,22 @@ async function createUserPasswordToken(params: {
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
   const template = welcomeCreatePasswordEmail({
     userName: displayNameForUser(input.user),
+    userFirstName: String(input.user.firstName || "").trim() || null,
     tenantName: input.tenantName,
     extensionNumber: input.extensionNumber || null,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(input.token)}`),
     expiresHours: INVITE_TOKEN_HOURS,
+  });
+  await queueEmailJob({ tenantId: input.user.tenantId, type: "USER_INVITE", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
+}
+
+async function queuePasswordCreatedEmail(input: { user: any; tenantName: string; extensionNumber?: string | null }) {
+  const template = passwordCreatedConfirmationEmail({
+    userName: displayNameForUser(input.user),
+    userFirstName: String(input.user.firstName || "").trim() || null,
+    tenantName: input.tenantName,
+    extensionNumber: input.extensionNumber || null,
+    loginUrl: portalPublicUrl("/login"),
   });
   await queueEmailJob({ tenantId: input.user.tenantId, type: "USER_INVITE", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
 }
@@ -3462,6 +3474,20 @@ app.post("/auth/invite/accept", async (req, reply) => {
     return tx.user.update({ where: { id: row.userId }, data: { passwordHash, status: "ACTIVE" as any, emailVerifiedAt: now, forcePasswordReset: false } as any });
   });
   await audit({ tenantId: updated.tenantId, actorUserId: updated.id, targetUserId: updated.id, action: "USER_INVITE_ACCEPTED", entityType: "User", entityId: updated.id });
+  // Send "account is ready" confirmation email — fire and forget, must not block login
+  try {
+    const [tenantRow, extRow] = await Promise.all([
+      db.tenant.findUnique({ where: { id: updated.tenantId }, select: { name: true } }),
+      (db.extension as any).findFirst({ where: { userId: updated.id }, select: { extNumber: true }, orderBy: { createdAt: "asc" } }),
+    ]);
+    await queuePasswordCreatedEmail({
+      user: updated,
+      tenantName: (tenantRow as any)?.name || "",
+      extensionNumber: (extRow as any)?.extNumber || null,
+    });
+  } catch {
+    // confirmation email failure must never block the accept response
+  }
   return { ok: true };
 });
 
