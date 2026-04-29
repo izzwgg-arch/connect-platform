@@ -2610,3 +2610,10 @@ model SmsRoutingLog {
   @@index([createdAt])
   @@index([normalizedTo, createdAt])
 }
+
+/// Singleton row `id = "default"`. JSON shape: { "END_USER"?: string[], "TENANT_ADMIN"?: string[], "SUPER_ADMIN"?: string[] } (portal permission keys).
+model PlatformRolePermissionSnapshot {
+  id        String   @id @default("default")
+  roles     Json
+  updatedAt DateTime @updatedAt
+}

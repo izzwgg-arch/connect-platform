@@ -55,6 +55,10 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
+import {
+  getEffectivePortalPermissionSetForJwtRole,
+  registerPlatformRolePermissionRoutes,
+} from "./platformRolePermissions";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -3290,7 +3294,14 @@ app.addHook("preHandler", async (req, reply) => {
 
 app.get("/me", async (req) => {
   const user = getUser(req);
-  return { id: user.sub, tenantId: user.tenantId, email: user.email, role: user.role };
+  const portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(user.role);
+  return {
+    id: user.sub,
+    tenantId: user.tenantId,
+    email: user.email,
+    role: user.role,
+    ...(portalPermissionSet ? { portalPermissionSet } : {}),
+  };
 });
 
 app.get("/admin/users", async (req, reply) => {
@@ -24441,6 +24452,7 @@ const port = Number(process.env.PORT || 3001);
   }
 
   await registerBillingRoutes(app);
+  await registerPlatformRolePermissionRoutes(app);
   registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();

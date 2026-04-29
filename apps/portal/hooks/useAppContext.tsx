@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { hasPermission } from "../permissions/permissionMap";
 import { mapBackendRole, readJwtPayload } from "../services/session";
+import { apiGet } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
@@ -33,6 +34,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
+  /** When set, `can()` uses this list from the API instead of the bundled role map (platform permission overrides). */
+  const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(undefined);
 
   useEffect(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
@@ -53,6 +56,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
     const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
     setTenantId(resolvedTenantId);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let active = true;
+    const load = () => {
+      apiGet<{ portalPermissionSet?: string[] | null }>("/me")
+        .then((me) => {
+          if (!active) return;
+          if (Array.isArray(me.portalPermissionSet) && me.portalPermissionSet.length > 0) {
+            setPortalPermissionOverride(me.portalPermissionSet as Permission[]);
+          } else {
+            setPortalPermissionOverride(null);
+          }
+        })
+        .catch(() => {
+          if (!active) return;
+          setPortalPermissionOverride(null);
+        });
+    };
+    load();
+    const onSaved = () => load();
+    window.addEventListener("cc-portal-permissions-saved", onSaved);
+    return () => {
+      active = false;
+      window.removeEventListener("cc-portal-permissions-saved", onSaved);
+    };
   }, []);
 
   useEffect(() => {
@@ -137,7 +167,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAdminScopeState(scope);
       }
     }),
-    [adminScope, role, tenant, tenantId, tenants, theme, user]
+    [adminScope, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

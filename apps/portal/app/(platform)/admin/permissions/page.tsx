@@ -208,6 +208,9 @@ export default function PermissionsPage() {
       await apiPost("/admin/role-permissions", { permissions: payload });
       setSaveMsg("Permission changes saved. They will apply on the next login.");
       setDirty(false);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("cc-portal-permissions-saved"));
+      }
     } catch (err: any) {
       setSaveError(err?.message || "Save failed.");
     } finally {
