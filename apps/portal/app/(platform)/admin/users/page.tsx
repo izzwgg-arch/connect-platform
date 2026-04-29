@@ -116,7 +116,22 @@ export default function AdminUsersPage() {
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [selectedTenantId, setSelectedTenantId] = useState(contextTenantId);
+
+  const isSuper = role === "SUPER_ADMIN";
+
+  // For super admins, persist the last-selected tenant so page reloads
+  // don't reset to the admin's own INTERNAL tenant (which isn't in the
+  // CUSTOMER dropdown and causes a silent fall-through to "Actual Home Care").
+  const SESSION_KEY = "adminUsersSelectedTenantId";
+  const [selectedTenantId, _setSelectedTenantId] = useState<string>(() => {
+    if (!isSuper) return contextTenantId;
+    try { return sessionStorage.getItem(SESSION_KEY) || contextTenantId; } catch { return contextTenantId; }
+  });
+  const setSelectedTenantId = (id: string) => {
+    try { sessionStorage.setItem(SESSION_KEY, id); } catch { /* noop */ }
+    _setSelectedTenantId(id);
+  };
+
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
@@ -125,7 +140,6 @@ export default function AdminUsersPage() {
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [syncResults, setSyncResults] = useState<Record<string, string>>({});
 
-  const isSuper = role === "SUPER_ADMIN";
   const effectiveTenantId = isSuper ? selectedTenantId : contextTenantId;
 
   const load = useCallback(async () => {
@@ -136,6 +150,8 @@ export default function AdminUsersPage() {
     if (statusFilter !== "all") params.set("status", statusFilter);
     const result = await apiGet<UsersResponse>(`/admin/users?${params.toString()}`);
     setData(result);
+    // If the API resolved a different tenant (e.g. our stored id was stale),
+    // snap the dropdown to match — but only if our stored id isn't in the list.
     if (result.tenantId && (!selectedTenantId || !result.tenants.some((t) => t.id === selectedTenantId))) {
       setSelectedTenantId(result.tenantId);
     }
