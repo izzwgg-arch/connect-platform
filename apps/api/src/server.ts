@@ -7,6 +7,7 @@ import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
 import dgram from "dgram";
+import nodemailer from "nodemailer";
 import { promises as fsp } from "fs";
 import path from "node:path";
 import { execFile } from "child_process";
@@ -615,10 +616,8 @@ async function sendEmailJobNow(job: any): Promise<void> {
     throw err;
   }
 
-  const simulate = (process.env.EMAIL_SIMULATE || "true").toLowerCase() !== "false";
-  if (simulate) return;
-
   const creds = decryptJson<EmailProviderCredentialPayload>(provider.credentialsEncrypted);
+
   if (provider.provider === "SENDGRID") {
     const key = String(creds.sendgridApiKey || "").trim();
     if (!key) {
@@ -650,42 +649,46 @@ async function sendEmailJobNow(job: any): Promise<void> {
     return;
   }
 
-  const endpoint = process.env.SMTP_BRIDGE_ENDPOINT;
-  if (!endpoint) {
-    const err: any = new Error("SMTP_BRIDGE_MISSING");
-    err.code = "SMTP_BRIDGE_MISSING";
+  // SMTP send via nodemailer (Google Workspace + any future SMTP provider)
+  const smtpHost = provider.provider === "GOOGLE_WORKSPACE"
+    ? (creds.smtpHost || "smtp.gmail.com")
+    : (creds.smtpHost || "");
+  const smtpPort = provider.provider === "GOOGLE_WORKSPACE"
+    ? (Number(creds.smtpPort) || 587)
+    : (Number(creds.smtpPort) || 587);
+  const smtpSecure = provider.provider === "GOOGLE_WORKSPACE"
+    ? (typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : false)
+    : !!creds.smtpSecure;
+
+  if (!smtpHost) {
+    const err: any = new Error("SMTP_HOST_MISSING");
+    err.code = "SMTP_HOST_MISSING";
     throw err;
   }
 
-  const smtpHost =
-    provider.provider === "GOOGLE_WORKSPACE"
-      ? (creds.smtpHost || "smtp.gmail.com")
-      : (creds.smtpHost || null);
-  const smtpPort = provider.provider === "GOOGLE_WORKSPACE" ? (creds.smtpPort || 587) : (creds.smtpPort || null);
-  const smtpSecure = provider.provider === "GOOGLE_WORKSPACE" ? (typeof creds.smtpSecure === "boolean" ? creds.smtpSecure : false) : !!creds.smtpSecure;
+  const fromEmail = provider.fromEmail || "noreply@connectcomunications.com";
+  const fromName = provider.fromName || "Connect Communications";
 
-  const smtpResp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      to: job.toEmail,
-      subject: job.subject,
-      html: job.htmlBody,
-      text: job.textBody,
-      smtpHost,
-      smtpPort,
-      smtpUser: creds.smtpUser || null,
-      smtpPass: creds.smtpPass || null,
-      smtpSecure,
-      fromName: provider.fromName || null,
-      fromEmail: provider.fromEmail || null,
-      replyTo: provider.replyTo || null
-    })
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: creds.smtpUser ? { user: creds.smtpUser, pass: creds.smtpPass || "" } : undefined,
   });
-  if (!smtpResp.ok) {
-    const err: any = new Error(`SMTP_BRIDGE_HTTP_${smtpResp.status}`);
-    err.code = "SMTP_BRIDGE_FAILED";
-    err.detail = (await smtpResp.text().catch(() => "")).slice(0, 500);
+
+  try {
+    await transporter.sendMail({
+      from: fromName ? `"${fromName}" <${fromEmail}>` : fromEmail,
+      to: job.toEmail,
+      replyTo: provider.replyTo || undefined,
+      subject: job.subject,
+      text: job.textBody,
+      html: job.htmlBody,
+    });
+  } catch (e: any) {
+    const err: any = new Error(e?.message || "SMTP_SEND_FAILED");
+    err.code = "SMTP_SEND_FAILED";
+    err.detail = String(e?.message || "").slice(0, 500);
     throw err;
   }
 }
