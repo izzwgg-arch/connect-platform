@@ -34,83 +34,106 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# Sentinel — if this NoOp already exists we know the patch is applied.
+# Sentinel — prompt-probe patches (1-3) are applied when this NoOp exists.
 SENTINEL = 'Connect IVR greeting attempt tenant='
+already_prompt_patched = SENTINEL in src
 
-if SENTINEL in src:
-    print('Patch already applied — no changes made.')
+# Sentinel — distinct-fallback patch (4) is applied when this NoOp exists.
+SENTINEL4 = 'Connect IVR default fallback'
+already_fallback_patched = SENTINEL4 in src
+
+if already_prompt_patched and already_fallback_patched:
+    print('All patches already applied — no changes made.')
     sys.exit(0)
 
-# Patch 1: main greeting block
-# Replace the two-line "GotoIf empty → Background → Goto waitdigit" with the
-# probed version.
-old1 = (
-    ' same =>      n,GotoIf($["${GREETING}" = ""]?default_greet)\n'
-    ' same =>      n,Background(${GREETING})\n'
-    ' same =>      n,Goto(waitdigit)\n'
-)
-new1 = (
-    ' same =>      n,GotoIf($["${GREETING}" = ""]?default_greet)\n'
-    ' ; Defense-in-depth for Connect publish/recording drift — fall back to\n'
-    ' ; the default prompt if the file isn\'t on disk, never play silence.\n'
-    ' same =>      n,NoOp(Connect IVR greeting attempt tenant=${TENANT_SLUG} ref=${GREETING})\n'
-    ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${GREETING}.ulaw)}" = "1"]?play_greet)\n'
-    ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${GREETING}.wav)}" = "1"]?play_greet)\n'
-    ' same =>      n,NoOp(Connect IVR greeting file missing ref=${GREETING} — falling back to default)\n'
-    ' same =>      n,Goto(default_greet)\n'
-    ' same =>      n(play_greet),Background(${GREETING})\n'
-    ' same =>      n,Goto(waitdigit)\n'
-)
-if old1 not in src:
-    print('ERROR: greeting block anchor not found — is this the Connect Option A dialplan?')
-    sys.exit(2)
-src = src.replace(old1, new1, 1)
+if not already_prompt_patched:
+    # Patch 1: main greeting block
+    # Replace the two-line "GotoIf empty → Background → Goto waitdigit" with the
+    # probed version.
+    old1 = (
+        ' same =>      n,GotoIf($["${GREETING}" = ""]?default_greet)\n'
+        ' same =>      n,Background(${GREETING})\n'
+        ' same =>      n,Goto(waitdigit)\n'
+    )
+    new1 = (
+        ' same =>      n,GotoIf($["${GREETING}" = ""]?default_greet)\n'
+        ' ; Defense-in-depth for Connect publish/recording drift — fall back to\n'
+        ' ; the default prompt if the file isn\'t on disk, never play silence.\n'
+        ' same =>      n,NoOp(Connect IVR greeting attempt tenant=${TENANT_SLUG} ref=${GREETING})\n'
+        ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${GREETING}.ulaw)}" = "1"]?play_greet)\n'
+        ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${GREETING}.wav)}" = "1"]?play_greet)\n'
+        ' same =>      n,NoOp(Connect IVR greeting file missing ref=${GREETING} — falling back to default)\n'
+        ' same =>      n,Goto(default_greet)\n'
+        ' same =>      n(play_greet),Background(${GREETING})\n'
+        ' same =>      n,Goto(waitdigit)\n'
+    )
+    if old1 not in src:
+        print('ERROR: greeting block anchor not found — is this the Connect Option A dialplan?')
+        sys.exit(2)
+    src = src.replace(old1, new1, 1)
 
-# Patch 2: timeout prompt block
-old2 = (
-    ' same =>      n,GotoIf($["${TIMEOUT_PROMPT}" = ""]?prompt)\n'
-    ' same =>      n,Background(${TIMEOUT_PROMPT})\n'
-    ' same =>      n,Goto(waitdigit)\n'
-)
-new2 = (
-    ' same =>      n,GotoIf($["${TIMEOUT_PROMPT}" = ""]?prompt)\n'
-    ' same =>      n,NoOp(Connect IVR timeout prompt tenant=${TENANT_SLUG} ref=${TIMEOUT_PROMPT})\n'
-    ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${TIMEOUT_PROMPT}.ulaw)}" = "1"]?play_timeout)\n'
-    ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${TIMEOUT_PROMPT}.wav)}" = "1"]?play_timeout)\n'
-    ' same =>      n,NoOp(Connect IVR timeout prompt missing ref=${TIMEOUT_PROMPT} — reprompting)\n'
-    ' same =>      n,Goto(prompt)\n'
-    ' same =>      n(play_timeout),Background(${TIMEOUT_PROMPT})\n'
-    ' same =>      n,Goto(waitdigit)\n'
-)
-if old2 not in src:
-    print('ERROR: timeout block anchor not found.')
-    sys.exit(3)
-src = src.replace(old2, new2, 1)
+    # Patch 2: timeout prompt block
+    old2 = (
+        ' same =>      n,GotoIf($["${TIMEOUT_PROMPT}" = ""]?prompt)\n'
+        ' same =>      n,Background(${TIMEOUT_PROMPT})\n'
+        ' same =>      n,Goto(waitdigit)\n'
+    )
+    new2 = (
+        ' same =>      n,GotoIf($["${TIMEOUT_PROMPT}" = ""]?prompt)\n'
+        ' same =>      n,NoOp(Connect IVR timeout prompt tenant=${TENANT_SLUG} ref=${TIMEOUT_PROMPT})\n'
+        ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${TIMEOUT_PROMPT}.ulaw)}" = "1"]?play_timeout)\n'
+        ' same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${TIMEOUT_PROMPT}.wav)}" = "1"]?play_timeout)\n'
+        ' same =>      n,NoOp(Connect IVR timeout prompt missing ref=${TIMEOUT_PROMPT} — reprompting)\n'
+        ' same =>      n,Goto(prompt)\n'
+        ' same =>      n(play_timeout),Background(${TIMEOUT_PROMPT})\n'
+        ' same =>      n,Goto(waitdigit)\n'
+    )
+    if old2 not in src:
+        print('ERROR: timeout block anchor not found.')
+        sys.exit(3)
+    src = src.replace(old2, new2, 1)
 
-# Patch 3: invalid prompt block (indentation uses 3 spaces after "same =>")
-old3 = (
-    ' same =>   n,GotoIf($["${INVALID_PROMPT}" = ""]?reprompt)\n'
-    ' same =>   n,Background(${INVALID_PROMPT})\n'
-    ' same =>   n(reprompt),Goto(connect-tenant-ivr,${EXTEN},prompt)\n'
-)
-new3 = (
-    ' same =>   n,GotoIf($["${INVALID_PROMPT}" = ""]?reprompt)\n'
-    ' same =>   n,NoOp(Connect IVR invalid prompt tenant=${TENANT_SLUG} ref=${INVALID_PROMPT})\n'
-    ' same =>   n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${INVALID_PROMPT}.ulaw)}" = "1"]?play_invalid)\n'
-    ' same =>   n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${INVALID_PROMPT}.wav)}" = "1"]?play_invalid)\n'
-    ' same =>   n,NoOp(Connect IVR invalid prompt missing ref=${INVALID_PROMPT} — reprompting)\n'
-    ' same =>   n,Goto(reprompt)\n'
-    ' same =>   n(play_invalid),Background(${INVALID_PROMPT})\n'
-    ' same =>   n(reprompt),Goto(connect-tenant-ivr,${EXTEN},prompt)\n'
-)
-if old3 not in src:
-    print('ERROR: invalid block anchor not found.')
-    sys.exit(4)
-src = src.replace(old3, new3, 1)
+    # Patch 3: invalid prompt block (indentation uses 3 spaces after "same =>")
+    old3 = (
+        ' same =>   n,GotoIf($["${INVALID_PROMPT}" = ""]?reprompt)\n'
+        ' same =>   n,Background(${INVALID_PROMPT})\n'
+        ' same =>   n(reprompt),Goto(connect-tenant-ivr,${EXTEN},prompt)\n'
+    )
+    new3 = (
+        ' same =>   n,GotoIf($["${INVALID_PROMPT}" = ""]?reprompt)\n'
+        ' same =>   n,NoOp(Connect IVR invalid prompt tenant=${TENANT_SLUG} ref=${INVALID_PROMPT})\n'
+        ' same =>   n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${INVALID_PROMPT}.ulaw)}" = "1"]?play_invalid)\n'
+        ' same =>   n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${INVALID_PROMPT}.wav)}" = "1"]?play_invalid)\n'
+        ' same =>   n,NoOp(Connect IVR invalid prompt missing ref=${INVALID_PROMPT} — reprompting)\n'
+        ' same =>   n,Goto(reprompt)\n'
+        ' same =>   n(play_invalid),Background(${INVALID_PROMPT})\n'
+        ' same =>   n(reprompt),Goto(connect-tenant-ivr,${EXTEN},prompt)\n'
+    )
+    if old3 not in src:
+        print('ERROR: invalid block anchor not found.')
+        sys.exit(4)
+    src = src.replace(old3, new3, 1)
+
+# Patch 4: make the Connect default fallback DISTINCT from the PBX DISA prompt.
+# Both currently play vm-enter-num-to-call, which makes it impossible to tell
+# from the caller side whether the call even reached Connect. Add a loud NoOp
+# and prepend "one-moment-please" so an operator can hear "we're in Connect's
+# fallback" vs "we're in the PBX DISA".
+if not already_fallback_patched:
+    old4 = ' same =>      n(default_greet),Playback(vm-enter-num-to-call)\n'
+    new4 = (
+        ' same =>      n(default_greet),NoOp(Connect IVR default fallback — tenant=${TENANT_SLUG} ref-was=${GREETING})\n'
+        ' same =>      n,Playback(one-moment-please)\n'
+        ' same =>      n,Playback(vm-enter-num-to-call)\n'
+    )
+    if old4 not in src:
+        print('WARNING: default_greet anchor not found — skipping patch 4. Caller-side disambiguation will be unavailable.')
+    else:
+        src = src.replace(old4, new4, 1)
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
-print('Patched all three prompt playback sites.')
+print('Patch complete.')
 PY
 
 echo ""
