@@ -43,6 +43,10 @@ function statusBadgeClass(status: string): string {
   return "gw-badge gw-badge--muted";
 }
 
+function normalizeAppPassword(value: string): string {
+  return value.replace(/\s+/g, "");
+}
+
 export default function SettingsEmailPage() {
   const { role } = useAppContext();
   const canEdit = role === "SUPER_ADMIN" || role === "TENANT_ADMIN";
@@ -111,7 +115,8 @@ export default function SettingsEmailPage() {
       };
       if (mailbox.trim()) payload.googleWorkspaceMailbox = mailbox.trim();
       if (smtpUser.trim()) payload.smtpUser = smtpUser.trim();
-      if (appPassword.trim()) payload.smtpAppPassword = appPassword.trim();
+      const normalizedAppPassword = normalizeAppPassword(appPassword);
+      if (normalizedAppPassword) payload.smtpAppPassword = normalizedAppPassword;
       if (oauthClientId.trim()) payload.oauthClientId = oauthClientId.trim();
       await apiPatch("/admin/email-settings/google-workspace", payload);
       setToast({ kind: "ok", text: "Google Workspace settings saved. Send a test email to verify delivery." });
@@ -134,21 +139,6 @@ export default function SettingsEmailPage() {
     try {
       await apiPost("/admin/email-settings/google-workspace/test", { testRecipientEmail: testTo.trim() });
       setToast({ kind: "ok", text: `Test email queued/sent to ${testTo.trim()}. Check the inbox (and spam).` });
-      await load();
-    } catch (e: unknown) {
-      setToast({ kind: "err", text: String((e as Error)?.message || e) });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function disconnect() {
-    if (!window.confirm("Disconnect Google Workspace from this tenant? Outbound mail will fall back to SendGrid if configured, otherwise SMTP must be set up again.")) return;
-    setToast(null);
-    setBusy("disconnect");
-    try {
-      await apiPost("/admin/email-settings/google-workspace/disconnect", {});
-      setToast({ kind: "ok", text: "Google Workspace disconnected for this tenant." });
       await load();
     } catch (e: unknown) {
       setToast({ kind: "err", text: String((e as Error)?.message || e) });
@@ -386,10 +376,13 @@ export default function SettingsEmailPage() {
                         className="input"
                         type="password"
                         value={appPassword}
-                        onChange={(e) => setAppPassword(e.target.value)}
+                        onChange={(e) => setAppPassword(normalizeAppPassword(e.target.value))}
                         placeholder={data.googleWorkspace.hasAppPassword ? "•••••••• (enter new to rotate)" : "16-character app password"}
                         autoComplete="new-password"
                       />
+                      <p className="gw-hint" style={{ marginTop: 6 }}>
+                        Spaces are removed automatically. Google shows app passwords in groups, but SMTP needs the 16 characters only.
+                      </p>
                     </div>
                     <div className="gw-field">
                       <label>OAuth client ID (optional, future)</label>
@@ -400,14 +393,6 @@ export default function SettingsEmailPage() {
                   <div className="row-actions" style={{ marginTop: "1.1rem", flexWrap: "wrap", gap: 8 }}>
                     <button type="button" className="btn primary" disabled={busy !== null || integrationType === "OAUTH"} onClick={() => void saveGoogle()}>
                       {busy === "save" ? "Saving…" : "Save settings"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      disabled={busy !== null || data.currentProvider.type !== "GOOGLE_WORKSPACE"}
-                      onClick={() => void disconnect()}
-                    >
-                      {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
                     </button>
                     <button
                       type="button"
