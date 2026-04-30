@@ -350,9 +350,12 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
   });
 
   // POST /admin/users/:id/phone/sync
-  //   Re-run the full PBX → Connect sync for the user's tenant. If the extension
-  //   still does not have a WebRTC device, create one via WirePBX and store the
-  //   returned credentials.
+  //   Re-run the full PBX → Connect sync for the user's tenant. Honest about
+  //   the result:
+  //     - If VitalPBX reports a WebRTC device with a secret → PROVISIONED.
+  //     - If VitalPBX only reports a desk/mobile device → NO_WEBRTC_DEVICE_ON_PBX
+  //       (admin must flip the WebRTC Client flag in VitalPBX — the v4 public
+  //       API does not expose device creation, so we cannot do it for them).
   app.post("/admin/users/:id/phone/sync", async (req, reply) => {
     const ctx = await loadLinkForAdminAction(req, reply);
     if (!ctx) return;
@@ -374,9 +377,13 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
 
     let refreshed = await db.pbxExtensionLink.findUnique({ where: { id: ctx.link.id } });
     let hasPassword = !!(refreshed as any)?.sipPasswordEncrypted;
+    let webrtcEnabled = !!(refreshed as any)?.webrtcEnabled;
     let createdWebrtcDevice = false;
 
-    if (!(refreshed as any)?.webrtcEnabled || !hasPassword) {
+    // Best-effort attempt: ask WirePBX (which in turn calls the VitalPBX
+    // device-create endpoint — may 404 on real VitalPBX 4 installs). If it
+    // succeeds, great. If not, we fall through to the truthful error below.
+    if (!webrtcEnabled || !hasPassword) {
       try {
         const out = await deps.createWebrtcDeviceOnPbx(ctx.link.id);
         if (out?.sipPassword) {
@@ -396,6 +403,7 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
             } as any,
           });
           hasPassword = true;
+          webrtcEnabled = true;
           createdWebrtcDevice = true;
         }
       } catch (err: any) {
@@ -413,15 +421,51 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
 
     refreshed = await db.pbxExtensionLink.findUnique({ where: { id: ctx.link.id } });
     hasPassword = !!(refreshed as any)?.sipPasswordEncrypted;
+    webrtcEnabled = !!(refreshed as any)?.webrtcEnabled;
+
+    // Persist the truthful state: we only call the link PROVISIONED when BOTH
+    // a real WebRTC device exists on VitalPBX AND we have its password.
+    const ready = webrtcEnabled && hasPassword;
     await db.pbxExtensionLink.update({
       where: { id: ctx.link.id },
       data: {
-        provisionStatus: (hasPassword ? "PROVISIONED" : "PENDING") as any,
-        provisionSource: (hasPassword ? (createdWebrtcDevice ? "PBX_GENERATED" : "PBX_EXISTING") : null) as any,
-        webrtcEnabled: hasPassword ? true : !!(refreshed as any)?.webrtcEnabled,
+        provisionStatus: (ready ? "PROVISIONED" : "PENDING") as any,
+        provisionSource: (ready ? (createdWebrtcDevice ? "PBX_GENERATED" : "PBX_EXISTING") : null) as any,
         lastProvisionedAt: new Date(),
       } as any,
     });
+
+    if (!ready) {
+      const ext = await db.extension.findFirst({
+        where: { ownerUserId: ctx.user.id, tenantId: ctx.user.tenantId },
+        select: { extNumber: true },
+      });
+      await deps.audit({
+        tenantId: ctx.user.tenantId,
+        actorUserId: ctx.admin.sub,
+        targetUserId: ctx.user.id,
+        action: "USER_PHONE_SYNC_NO_WEBRTC",
+        entityType: "PbxExtensionLink",
+        entityId: ctx.link.id,
+        metadata: { webrtcEnabled, hasPassword },
+      });
+      const extLabel = ext?.extNumber || "this extension";
+      const reason = !webrtcEnabled
+        ? "NO_WEBRTC_DEVICE_ON_PBX"
+        : "SIP_CREDENTIAL_NOT_SET";
+      const message = !webrtcEnabled
+        ? `VitalPBX extension ${extLabel} has no WebRTC device. Open VitalPBX → PBX → Extensions → ${extLabel} → Devices → edit the device and turn on "WebRTC Client", then click Sync SIP again.`
+        : `VitalPBX extension ${extLabel} is WebRTC-capable, but the SIP secret was not returned. Open VitalPBX → Extensions → ${extLabel} → Devices, regenerate the password, then click Sync SIP again.`;
+      return reply.code(409).send({
+        error: reason,
+        message,
+        provisionStatus: "PENDING",
+        webrtcEnabled,
+        hasSipPassword: hasPassword,
+        endpointName: (refreshed as any)?.pbxDeviceName || (refreshed as any)?.pbxSipUsername || null,
+      });
+    }
+
     await deps.audit({
       tenantId: ctx.user.tenantId,
       actorUserId: ctx.admin.sub,
@@ -433,9 +477,9 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
 
     return {
       ok: true,
-      provisionStatus: hasPassword ? "PROVISIONED" : "PENDING",
-      hasSipPassword: hasPassword,
-      webrtcEnabled: hasPassword ? true : !!(refreshed as any)?.webrtcEnabled,
+      provisionStatus: "PROVISIONED",
+      hasSipPassword: true,
+      webrtcEnabled: true,
       createdWebrtcDevice,
       endpointName: (refreshed as any)?.pbxDeviceName || (refreshed as any)?.pbxSipUsername || null,
     };

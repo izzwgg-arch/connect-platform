@@ -169,12 +169,23 @@ export default function AdminUsersPage() {
   async function syncUser(userId: string) {
     setSyncingIds((prev) => new Set(prev).add(userId));
     setSyncResults((prev) => ({ ...prev, [userId]: "" }));
+    setMessage("");
     try {
       await apiPost(`/admin/users/${userId}/phone/sync`, {});
       setSyncResults((prev) => ({ ...prev, [userId]: "✓ synced" }));
       await load();
     } catch (e: any) {
-      setSyncResults((prev) => ({ ...prev, [userId]: e?.message || "sync failed" }));
+      const msg = String(e?.message || "sync failed");
+      // Short inline chip on the row, full actionable message in the top banner.
+      const shortChip = msg.startsWith("NO_WEBRTC_DEVICE_ON_PBX")
+        ? "no WebRTC device on PBX"
+        : msg.startsWith("SIP_CREDENTIAL_NOT_SET")
+        ? "no SIP secret"
+        : msg.startsWith("pbx_sync_failed")
+        ? "PBX unreachable"
+        : msg.length > 40 ? `${msg.slice(0, 40)}…` : msg;
+      setSyncResults((prev) => ({ ...prev, [userId]: shortChip }));
+      setMessage(msg);
     } finally {
       setSyncingIds((prev) => { const s = new Set(prev); s.delete(userId); return s; });
     }
@@ -216,7 +227,20 @@ export default function AdminUsersPage() {
             </select>
             <button className="btn" onClick={() => setCreating(true)}><Plus size={16} /> Create User</button>
           </div>
-          {message ? <div className="chip info" style={{ marginTop: 12 }}>{message}</div> : null}
+          {message ? (
+            <div
+              className="state-box"
+              style={{
+                marginTop: 12,
+                borderColor: "var(--warning, #f59e0b)",
+                color: "var(--text)",
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.5,
+              }}
+            >
+              {message}
+            </div>
+          ) : null}
         </section>
 
         <section className="panel" style={{ padding: 0, overflow: "hidden" }}>
