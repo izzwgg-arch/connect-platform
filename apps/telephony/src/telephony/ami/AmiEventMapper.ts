@@ -14,6 +14,7 @@ import type {
   AmiQueueMemberStatus,
   AmiQueueMemberPaused,
   AmiExtensionStatus,
+  AmiDeviceStateChange,
   AmiPeerStatus,
   AmiContactStatus,
   AmiAttendedTransfer,
@@ -219,6 +220,13 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         status: g("Status"),
         statusText: g("StatusText"),
       } satisfies AmiExtensionStatus;
+
+    case "DeviceStateChange":
+      return {
+        event: "DeviceStateChange",
+        device: g("Device"),
+        state: g("State"),
+      } satisfies AmiDeviceStateChange;
 
     case "PeerStatus":
       return {

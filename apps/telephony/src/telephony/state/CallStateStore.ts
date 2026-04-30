@@ -58,6 +58,7 @@ export class CallStateStore extends EventEmitter {
 
   // Secondary index: Asterisk Uniqueid (channel uniqueid) → callId (linkedId)
   private channelIndex = new Map<string, string>();
+  private channelByUniqueId = new Map<string, string>();
 
   // Bridge → canonical callId (first call to join bridge wins; others merge into it)
   private bridgeIndex = new Map<string, string>();
@@ -337,6 +338,7 @@ export class CallStateStore extends EventEmitter {
     pbxTenantCode?: string | null;
   }): NormalizedCall {
     this.channelIndex.set(params.uniqueid, params.linkedId);
+    this.channelByUniqueId.set(params.uniqueid, params.channel);
 
     let call = this.calls.get(params.linkedId);
     if (!call) {
@@ -412,7 +414,19 @@ export class CallStateStore extends EventEmitter {
       call.extensions.push(params.callerIDNum);
     }
 
-    call.state = channelStateToCallState(params.channelState);
+    const prevState = call.state;
+    const channelState = channelStateToCallState(params.channelState);
+    if (shouldUpgradeState(call.state, channelState)) {
+      call.state = channelState;
+      if (channelState === "up" && !call.answeredAt) {
+        call.answeredAt = new Date().toISOString();
+      }
+    }
+    this.debugBlfCallTransition(call, prevState, "Newchannel", {
+      uniqueid: params.uniqueid,
+      channel: params.channel,
+      rawChannelState: params.channelState,
+    });
     call.connectedLine = params.connectedLineNum || call.connectedLine;
 
     // Direction priority: inbound > outbound/internal > unknown.
@@ -443,6 +457,7 @@ export class CallStateStore extends EventEmitter {
     const call = this.calls.get(params.linkedId);
     if (!call || call.state === "hungup") return;
 
+    const prevState = call.state;
     const newState = channelStateToCallState(params.channelState);
     if (shouldUpgradeState(call.state, newState)) {
       call.state = newState;
@@ -458,6 +473,15 @@ export class CallStateStore extends EventEmitter {
     if (params.connectedLineNum && !call.connectedLine) {
       call.connectedLine = params.connectedLineNum;
     }
+    const channel = this.channelByUniqueId.get(params.uniqueid);
+    const channelExt = normalizeExtensionFromChannel(channel);
+    if (channelExt && !call.extensions.includes(channelExt)) {
+      call.extensions.push(channelExt);
+    }
+    this.debugBlfCallTransition(call, prevState, "Newstate", {
+      uniqueid: params.uniqueid,
+      rawChannelState: params.channelState,
+    });
 
     this.emit("callUpsert", { ...call });
   }
@@ -474,6 +498,7 @@ export class CallStateStore extends EventEmitter {
     const callerDigits = (params.callerIDNum ?? "").replace(/\D/g, "");
     const callerShort = callerDigits.length >= 2 && callerDigits.length <= 6;
 
+    const prevState = call.state;
     if (call.direction === "unknown") {
       // The originating channel is placing a dial — internal if destination is clearly an extension
       call.direction = isInternalExtension(params.destination) ? "internal" : "outbound";
@@ -489,6 +514,18 @@ export class CallStateStore extends EventEmitter {
     if (call.state === "unknown" || call.state === "ringing") {
       call.state = "dialing";
     }
+    const destExt = normalizeExtensionFromChannel(params.destination) ?? (looksLikeExtension(params.destination) ? params.destination : null);
+    if (destExt && !call.extensions.includes(destExt)) {
+      call.extensions.push(destExt);
+    }
+    const callerExt = looksLikeExtension(params.callerIDNum) ? params.callerIDNum : null;
+    if (callerExt && !call.extensions.includes(callerExt)) {
+      call.extensions.push(callerExt);
+    }
+    this.debugBlfCallTransition(call, prevState, "DialBegin", {
+      callerIDNum: params.callerIDNum,
+      destination: params.destination,
+    });
 
     this.emit("callUpsert", { ...call });
   }
@@ -510,6 +547,11 @@ export class CallStateStore extends EventEmitter {
     if (!call.bridgeIds.includes(bridgeId)) {
       call.bridgeIds.push(bridgeId);
     }
+    const bridgeChannel = this.channelByUniqueId.get(params.uniqueid);
+    const bridgeExt = normalizeExtensionFromChannel(bridgeChannel);
+    if (bridgeExt && !call.extensions.includes(bridgeExt)) {
+      call.extensions.push(bridgeExt);
+    }
 
     const canonicalCallId = this.bridgeIndex.get(bridgeId);
     if (canonicalCallId !== undefined && canonicalCallId !== params.linkedId) {
@@ -520,6 +562,7 @@ export class CallStateStore extends EventEmitter {
       this.bridgeIndex.set(bridgeId, params.linkedId);
     }
 
+    const prevState = call.state;
     if (parseInt(params.bridgeNumChannels, 10) >= 2) {
       if (call.state !== "up") {
         call.state = "up";
@@ -529,6 +572,11 @@ export class CallStateStore extends EventEmitter {
         }
       }
     }
+    this.debugBlfCallTransition(call, prevState, "BridgeEnter", {
+      uniqueid: params.uniqueid,
+      bridgeId: params.bridgeId,
+      bridgeNumChannels: params.bridgeNumChannels,
+    });
 
     this.emit("callUpsert", { ...call });
   }
@@ -601,6 +649,7 @@ export class CallStateStore extends EventEmitter {
     // so lookup by linkedId can miss; channelIndex always points at the call we have for this channel.
     const callIdByChannel = this.channelIndex.get(params.uniqueid);
     this.channelIndex.delete(params.uniqueid);
+    this.channelByUniqueId.delete(params.uniqueid);
 
     let call = this.calls.get(params.linkedId);
     if (!call && callIdByChannel !== undefined) {
@@ -969,7 +1018,10 @@ export class CallStateStore extends EventEmitter {
     for (const [uid, lid] of this.channelIndex) {
       if (lid === callId) uidsToDelete.push(uid);
     }
-    for (const uid of uidsToDelete) this.channelIndex.delete(uid);
+    for (const uid of uidsToDelete) {
+      this.channelIndex.delete(uid);
+      this.channelByUniqueId.delete(uid);
+    }
     this.emitCallRemove(callId);
   }
 
@@ -981,6 +1033,7 @@ export class CallStateStore extends EventEmitter {
     const ids = [...this.calls.keys()];
     this.calls.clear();
     this.channelIndex.clear();
+    this.channelByUniqueId.clear();
     if (env.ENABLE_TELEPHONY_DEBUG && ids.length > 0) {
       log.debug({ count: ids.length, callIds: ids }, "live_call: call_removed_clearAll");
     }
@@ -992,6 +1045,30 @@ export class CallStateStore extends EventEmitter {
       log.debug({ callId }, "live_call: call_removed");
     }
     this.emit("callRemove", callId);
+  }
+
+  private debugBlfCallTransition(
+    call: NormalizedCall,
+    previousState: CallState,
+    source: string,
+    extra: Record<string, unknown>,
+  ): void {
+    if (!env.ENABLE_BLF_DEBUG) return;
+    if (previousState === call.state && source !== "BridgeEnter") return;
+    log.info(
+      {
+        source,
+        callId: call.id,
+        linkedId: call.linkedId,
+        tenantId: call.tenantId,
+        extensions: call.extensions,
+        previousState,
+        nextState: call.state,
+        reason: source,
+        ...extra,
+      },
+      "blf: call_state_transition",
+    );
   }
 
   /**
@@ -1176,7 +1253,7 @@ function channelStateToCallState(stateStr: string): CallState {
 }
 
 function shouldUpgradeState(current: CallState, next: CallState): boolean {
-  const order: CallState[] = ["unknown", "ringing", "dialing", "up", "held", "hungup"];
+  const order: CallState[] = ["unknown", "dialing", "ringing", "up", "held", "hungup"];
   return order.indexOf(next) > order.indexOf(current);
 }
 

@@ -56,6 +56,7 @@ export function registerTelephonyRoutes(
   router.get("/telephony/diag", (_req, res) => {
     const allCalls = telephony.callStore.getAll();
     const activeCalls = telephony.callStore.getActive();
+    const allExtensions = telephony.extStore.getAll();
     const diag = telephony.callStore.getDiagnostics();
     const pbxMap = telephony.pbxTenantMapCache?.getEntries?.() ?? [];
 
@@ -94,6 +95,33 @@ export function registerTelephonyRoutes(
         hungupRetainedCount: diag.hungupRetainedCount,
       },
       calls: callDetail,
+      blf: allExtensions.map((ext) => {
+        const callsForExt = activeCalls.filter((call) => call.extensions.includes(ext.extension));
+        const ringing = callsForExt.filter((call) => call.state === "ringing" || call.state === "dialing");
+        const onCall = callsForExt.filter((call) => call.state === "up" || call.state === "held");
+        const registered = ext.status === "idle" || ext.status === "inuse" || ext.status === "busy" || ext.status === "ringing" || ext.status === "onhold";
+        const finalStatus =
+          ringing.length > 0 ? "ringing" :
+          onCall.length > 0 ? "on_call" :
+          registered ? "available" :
+          "offline";
+        return {
+          extension: ext.extension,
+          tenantId: ext.tenantId,
+          registrationStatus: ext.status,
+          registered,
+          activeRingingChannels: ringing.flatMap((call) => call.channels),
+          activeBridgedOrUpChannels: onCall.flatMap((call) => call.channels),
+          finalStatus,
+          lastEventTimestamp: ext.updatedAt,
+          reason:
+            ringing.length > 0 ? "ringing_call_present" :
+            onCall.length > 0 ? "active_up_or_held_call_present" :
+            registered ? `registered_status_${ext.status}` :
+            `offline_status_${ext.status}`,
+          callIds: callsForExt.map((call) => call.id),
+        };
+      }),
       pbxMapEntryCount: pbxMap.length,
       pbxMapLinkedCount: pbxMap.filter((e: { connectTenantId: string | null }) => e.connectTenantId).length,
     });

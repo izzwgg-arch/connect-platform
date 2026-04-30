@@ -20,6 +20,7 @@ export type AmiEventName =
   | "QueueMemberStatus"
   | "QueueMemberPaused"
   | "ExtensionStatus"
+  | "DeviceStateChange"
   | "PeerStatus"
   | "ContactStatus"
   | "VarSet"
@@ -187,6 +188,12 @@ export interface AmiExtensionStatus {
   statusText: string;
 }
 
+export interface AmiDeviceStateChange {
+  event: "DeviceStateChange";
+  device: string;
+  state: string;
+}
+
 export interface AmiPeerStatus {
   event: "PeerStatus";
   channelType: string;
@@ -272,6 +279,7 @@ export type TypedAmiEvent =
   | AmiQueueMemberStatus
   | AmiQueueMemberPaused
   | AmiExtensionStatus
+  | AmiDeviceStateChange
   | AmiPeerStatus
   | AmiContactStatus
   | AmiAttendedTransfer

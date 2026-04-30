@@ -26,6 +26,10 @@ const schema = z.object({
     .string()
     .transform((v) => v.toLowerCase() === "true")
     .default("false"),
+  ENABLE_BLF_DEBUG: z
+    .string()
+    .transform((v) => v.toLowerCase() === "true")
+    .default("false"),
 
   // CDR ingest — when set, completed calls are POSTed to this URL so the API
   // can persist them in ConnectCdr. If unset, CDR persistence is skipped.

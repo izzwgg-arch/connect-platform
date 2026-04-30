@@ -142,7 +142,7 @@ export class TelephonyService {
     const typed = mapAmiFrame(frame);
     if (!typed) return;
 
-    if (env.ENABLE_TELEPHONY_DEBUG) {
+    if (env.ENABLE_TELEPHONY_DEBUG || env.ENABLE_BLF_DEBUG) {
       log.debug(
         { event: typed.event, linkedid: (typed as { linkedid?: string }).linkedid, uniqueid: (typed as { uniqueid?: string }).uniqueid },
         "live_call: event_received",
@@ -366,6 +366,16 @@ export class TelephonyService {
           hint: typed.hint,
           status: typed.status,
           statusText: typed.statusText,
+          tenantId,
+        });
+        break;
+      }
+
+      case "DeviceStateChange": {
+        const tenantId = this.resolver.resolve({ channel: typed.device });
+        this.extensions.onDeviceStateChange({
+          device: typed.device,
+          state: typed.state,
           tenantId,
         });
         break;
