@@ -65,9 +65,17 @@ export type AdminPbxLiveSummary = {
   lastUpdatedAt: string;
 };
 
+export type DashboardCacheMeta = {
+  cached?: boolean;
+  lastUpdated?: string | null;
+  stale?: boolean;
+  refreshInProgress?: boolean;
+  cacheAgeMs?: number | null;
+};
+
 // Combined loaders — preferred.  One HTTP request returns both summary + calls.
-export type PbxLiveCombined = { summary: PbxLiveSummary; activeCalls: PbxActiveCallsResponse };
-export type AdminPbxLiveCombined = { summary: AdminPbxLiveSummary; activeCalls: PbxActiveCallsResponse };
+export type PbxLiveCombined = { summary: PbxLiveSummary; activeCalls: PbxActiveCallsResponse } & DashboardCacheMeta;
+export type AdminPbxLiveCombined = { summary: AdminPbxLiveSummary; activeCalls: PbxActiveCallsResponse } & DashboardCacheMeta;
 
 export type PbxLiveDiagnostics = {
   step: "link" | "decrypt" | "reach" | "ok";

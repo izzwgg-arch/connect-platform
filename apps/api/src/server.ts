@@ -11727,6 +11727,121 @@ app.delete("/admin/pbx/resources/:resource/:id", async (req, reply) => {
 // Resource list cache: 120 s TTL — extensions/trunks/queues change rarely.
 const PBX_RESOURCE_CACHE = new Map<string, { at: number; rows: any[] }>();
 
+function isRealDirectoryExtensionNumber(value: unknown): boolean {
+  const ext = String(value ?? "").trim();
+  return /^\d{2,6}$/.test(ext);
+}
+
+function isTechnicalDirectoryValue(value: unknown): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("/") ||
+    lower.startsWith("pjsip") ||
+    lower.startsWith("custom") ||
+    lower.startsWith("virtual") ||
+    lower.startsWith("trunk") ||
+    lower.startsWith("queue") ||
+    lower.startsWith("ivr") ||
+    lower.startsWith("parking") ||
+    lower.startsWith("parked") ||
+    lower.startsWith("voicemail") ||
+    lower.includes("virtualdevice") ||
+    lower.includes("custom/") ||
+    lower.includes("pjsip/")
+  );
+}
+
+function cleanDirectoryDisplayName(displayName: unknown, extNumber: string): string {
+  const name = String(displayName ?? "").trim();
+  if (!name || isTechnicalDirectoryValue(name)) return `Ext ${extNumber}`;
+  return name;
+}
+
+function isDirectoryVisibleExtension(e: any): boolean {
+  if (!e || e.status !== "ACTIVE" || e.billable === false) return false;
+  if (!e.tenantId || !isRealDirectoryExtensionNumber(e.extNumber)) return false;
+  // The canonical Connect Extension row is the source of truth. Reject rows whose
+  // actual extension number is an Asterisk endpoint, but don't reject a real
+  // extension just because PBX metadata contains a technical device name.
+  return !isTechnicalDirectoryValue(e.extNumber);
+}
+
+function mapDirectoryExtensionRow(e: any): Record<string, unknown> {
+  const extNumber = String(e.extNumber ?? "").trim();
+  const displayName = cleanDirectoryDisplayName(e.displayName, extNumber);
+  const safePbxDeviceName = isTechnicalDirectoryValue(e.pbxLink?.pbxDeviceName)
+    ? null
+    : e.pbxLink?.pbxDeviceName ?? null;
+  return {
+    id: e.pbxLink?.pbxExtensionId ?? e.id,
+    extension: extNumber,
+    name: displayName,
+    callerName: displayName,
+    displayName,
+    technology: "pjsip",
+    status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
+    tenantName: e.tenant?.name ?? null,
+    tenantId: e.tenantId,
+    pbxExtensionId: e.pbxLink?.pbxExtensionId,
+    pbxSipUsername: e.pbxLink?.pbxSipUsername,
+    pbxDeviceName: safePbxDeviceName,
+    webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
+    connectExtensionId: e.id,
+    // Provisioning metadata
+    pbxExtensionLinkId: e.pbxLink?.id,
+    ownerUserId: e.ownerUserId,
+    assignedUser: e.ownerUser?.email ?? null,
+    pbxUserEmail: e.pbxUserEmail ?? null,
+    sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
+  };
+}
+
+async function resolveDirectoryTenantIdFromContext(rawContext: string): Promise<string | null> {
+  const raw = String(rawContext || "").trim();
+  if (!raw || raw === "local") return null;
+
+  if (!raw.startsWith("vpbx:")) {
+    const tenant = await db.tenant.findUnique({ where: { id: raw }, select: { id: true } });
+    return tenant?.id ?? null;
+  }
+
+  const slug = raw.slice(5).trim();
+  const normalized = normalizeTenantLookupValue(slug);
+  const links = await db.tenantPbxLink.findMany({
+    include: { tenant: { select: { id: true, name: true } } },
+    take: 500,
+  });
+  const direct = links.find((link) => {
+    const candidates = [link.pbxTenantId, link.pbxTenantCode, link.tenant?.name]
+      .map((v) => normalizeTenantLookupValue(String(v || "")));
+    return candidates.includes(normalized);
+  });
+  if (direct) return direct.tenantId;
+
+  const directory = await db.pbxTenantDirectory.findFirst({
+    where: {
+      OR: [
+        { tenantSlug: slug },
+        { tenantCode: slug },
+        { vitalTenantId: slug },
+        { tenantSlug: normalized },
+        { tenantCode: normalized },
+      ],
+    },
+  }).catch(() => null);
+  if (!directory) return null;
+
+  const byDirectory = links.find((link) => {
+    if (link.pbxInstanceId !== directory.pbxInstanceId) return false;
+    return [link.pbxTenantId, link.pbxTenantCode]
+      .map((v) => normalizeTenantLookupValue(String(v || "")))
+      .some((v) => v === normalizeTenantLookupValue(directory.vitalTenantId) || v === normalizeTenantLookupValue(directory.tenantCode));
+  });
+  return byDirectory?.tenantId ?? null;
+}
+
 app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -11736,128 +11851,43 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
 
   // Extensions: serve from synced Connect DB (Phase 1 sync) — fast, no live VitalPBX call needed.
   if (resource === "extensions") {
-    const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
-
-    // Determine the Connect tenantId to query
     let queryTenantId: string | null = null;
-    // ?global=1 is sent by the portal extensions page, which handles per-tenant filtering
-    // client-side using the tenantName already present in every row. Skip backend tenant
-    // scoping entirely so the global all-extensions path runs.
-    const forceGlobal = (req.query as any)?.global === "1" && isRole(user, ["SUPER_ADMIN"]);
-    if (!forceGlobal && pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
-      // Step 1: direct match (works when TenantPbxLink.pbxTenantId was stored as the name/slug)
-      let tenantLink = await db.tenantPbxLink.findFirst({
-        where: { pbxTenantId: pbxTenantOverride },
-      });
-      let resolveStep = tenantLink ? "direct" : "not_found";
-      // Step 2: slug → vitalTenantId → TenantPbxLink (works when pbxTenantId was stored numerically)
-      if (!tenantLink) {
-        const dirRow = await db.pbxTenantDirectory.findFirst({
-          where: { tenantSlug: pbxTenantOverride },
-        });
-        if (dirRow?.vitalTenantId) {
-          tenantLink = await db.tenantPbxLink.findFirst({
-            where: { pbxTenantId: dirRow.vitalTenantId },
-          });
-          resolveStep = tenantLink ? "via_directory" : "not_found";
-        }
-      }
-      app.log.info(
-        { pbxTenantOverride, resolvedTenantId: tenantLink?.tenantId ?? null, resolveStep },
-        "[EXT_FILTER_API] pbxTenantOverride resolved"
-      );
-      queryTenantId = tenantLink?.tenantId ?? null;
-    } else if (!isRole(user, ["SUPER_ADMIN"])) {
-      // Regular tenant admin — always scoped to their own tenant
+
+    if (!isRole(user, ["SUPER_ADMIN"])) {
+      // Regular tenant users/admins are always scoped to their JWT tenant. Ignore
+      // query/header tenant overrides so callers cannot enumerate another tenant.
       queryTenantId = user.tenantId;
     } else {
-      // Super admin: resolve tenant scope in priority order:
-      // 1. Explicit ?tenantId= query param (sent by portal to avoid localStorage timing issues)
-      // 2. x-tenant-context header (legacy path; may lag one render behind)
-      // 3. No tenant context → fall through to the global all-extensions query below.
+      // Super-admin directory reads must still be tenant-scoped. Returning all
+      // extension rows and filtering in the browser caused cross-tenant flashes
+      // and exposed directory data in network responses.
       const qsTenantId = String((req.query as any)?.tenantId || "").trim();
       const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
-      const tenantCtx = qsTenantId || headerTenantId;
-      if (tenantCtx && !tenantCtx.startsWith("vpbx:") && tenantCtx !== "local") {
-        queryTenantId = tenantCtx;
-      }
-      // If tenantCtx is empty (scope=GLOBAL), queryTenantId stays null and the
-      // super-admin global fallback below returns all extensions.
+      const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
+      const tenantCtx = qsTenantId || headerTenantId || (pbxTenantOverride ? `vpbx:${pbxTenantOverride}` : "");
+      queryTenantId = await resolveDirectoryTenantIdFromContext(tenantCtx);
     }
 
-    if (queryTenantId) {
-      const dbExts = await db.extension.findMany({
-        where: { tenantId: queryTenantId, status: "ACTIVE" },
-        include: {
-          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
-          ownerUser: { select: { id: true, email: true } },
-          tenant: { select: { name: true } },
-        },
-        orderBy: { extNumber: "asc" },
-      });
-      const rows = dbExts.map((e) => ({
-        id: e.pbxLink?.pbxExtensionId ?? e.id,
-        extension: e.extNumber,
-        name: e.displayName,
-        callerName: e.displayName,
-        displayName: e.displayName,
-        technology: "pjsip",
-        status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
-        tenantName: e.tenant?.name ?? null,
-        tenantId: e.tenantId,
-        pbxExtensionId: e.pbxLink?.pbxExtensionId,
-        pbxSipUsername: e.pbxLink?.pbxSipUsername,
-        pbxDeviceName: e.pbxLink?.pbxDeviceName ?? null,
-        webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
-        connectExtensionId: e.id,
-        // Provisioning metadata
-        pbxExtensionLinkId: e.pbxLink?.id,
-        ownerUserId: e.ownerUserId,
-        assignedUser: e.ownerUser?.email ?? null,
-        pbxUserEmail: e.pbxUserEmail ?? null,
-        sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
-      }));
-      app.log.info({ mode: "tenant", queryTenantId, rowCount: rows.length }, "[EXT_FILTER_API] returning extensions");
-      return { resource, rows, source: "connect_db" };
+    if (!queryTenantId) {
+      app.log.info({ role: user.role }, "[EXT_FILTER_API] no tenant context; returning empty extension directory");
+      return { resource, rows: [], source: "connect_db", tenantScoped: true };
     }
 
-    // Super admin in GLOBAL scope (no x-tenant-context header) — return all extensions
-    if (isRole(user, ["SUPER_ADMIN"])) {
-      const dbExts = await db.extension.findMany({
-        where: { status: "ACTIVE" },
-        include: {
-          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
-          tenant: { select: { name: true } },
-          ownerUser: { select: { id: true, email: true } },
-        },
-        orderBy: [{ tenantId: "asc" }, { extNumber: "asc" }],
-        take: 500,
-      });
-      const rows = dbExts.map((e) => ({
-        id: e.pbxLink?.pbxExtensionId ?? e.id,
-        extension: e.extNumber,
-        name: e.displayName,
-        callerName: e.displayName,
-        displayName: e.displayName,
-        technology: "pjsip",
-        status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
-        tenantName: e.tenant?.name,
-        tenantId: e.tenantId,
-        pbxExtensionId: e.pbxLink?.pbxExtensionId,
-        pbxSipUsername: e.pbxLink?.pbxSipUsername,
-        pbxDeviceName: e.pbxLink?.pbxDeviceName ?? null,
-        webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
-        connectExtensionId: e.id,
-        // Provisioning metadata
-        pbxExtensionLinkId: e.pbxLink?.id,
-        ownerUserId: e.ownerUserId,
-        assignedUser: e.ownerUser?.email ?? null,
-        pbxUserEmail: e.pbxUserEmail ?? null,
-        sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
-      }));
-      app.log.info({ mode: "global", rowCount: rows.length }, "[EXT_FILTER_API] returning extensions");
-      return { resource, rows, source: "connect_db" };
-    }
+    const dbExts = await db.extension.findMany({
+      where: { tenantId: queryTenantId, status: "ACTIVE", billable: true },
+      include: {
+        pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
+        ownerUser: { select: { id: true, email: true } },
+        tenant: { select: { name: true } },
+      },
+      orderBy: { extNumber: "asc" },
+    });
+    const rows = dbExts.filter(isDirectoryVisibleExtension).map(mapDirectoryExtensionRow);
+    app.log.info(
+      { mode: "tenant", queryTenantId, rowCount: rows.length, filteredOut: dbExts.length - rows.length },
+      "[EXT_FILTER_API] returning tenant-scoped real extensions"
+    );
+    return { resource, rows, source: "connect_db", tenantScoped: true };
   }
 
   // All other resources: proxy to VitalPBX directly.
@@ -22299,15 +22329,37 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   if (wantPbxAggregate) {
     const cacheKey = `pbx:${scopeTenantId ?? "global"}`;
     const cached = _pbxKpiCache.get(cacheKey);
-    // Always prefer cache for global scope to avoid request-path PBX load spikes.
-    if (!scopeTenantId && cached) {
+    if (cached) {
+      const age = Date.now() - cached.ts;
+      const stale = age > 30_000;
+      if (stale && !_pbxKpiInflight.has(cacheKey)) {
+        const refresh = fetchLivePbxKpisByScope({
+          scopeTenantId,
+          timezone,
+          asOfIso: nowUtc.toISOString(),
+        })
+          .then((payload) => {
+            _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: payload });
+            return payload;
+          })
+          .catch((err: any) => {
+            app.log.warn({ err: err?.message || String(err), cacheKey }, "dashboard_call_kpis_bg_refresh_failed");
+            return null;
+          })
+          .finally(() => {
+            _pbxKpiInflight.delete(cacheKey);
+          });
+        _pbxKpiInflight.set(cacheKey, refresh);
+      }
       const { perTenant: _pt, ...rest } = cached.data;
-      return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
-    }
-    // Tenant scope: 30s PBX cache to keep data fresh while protecting CPU.
-    if (scopeTenantId && cached && Date.now() - cached.ts < 30_000) {
-      const { perTenant: _pt, ...rest } = cached.data;
-      return reply.send({ ...rest, cached: true, cacheAgeMs: Date.now() - cached.ts });
+      return reply.send({
+        ...rest,
+        cached: true,
+        cacheAgeMs: age,
+        lastUpdated: cached.data?.asOf || new Date(cached.ts).toISOString(),
+        stale,
+        refreshInProgress: _pbxKpiInflight.has(cacheKey),
+      });
     }
     try {
       let inflight = _pbxKpiInflight.get(cacheKey);
@@ -22321,7 +22373,7 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
       }
       const payload = await inflight;
       _pbxKpiCache.set(cacheKey, { ts: Date.now(), data: payload });
-      return reply.send({ ...payload, cached: false, cacheAgeMs: 0 });
+      return reply.send({ ...payload, cached: false, cacheAgeMs: 0, lastUpdated: payload?.asOf || nowUtc.toISOString(), stale: false, refreshInProgress: false });
     } catch {
       // Tenant scope only: PBX fallback path (still PBX, not Connect).
       if (scopeTenantId) {
@@ -22822,7 +22874,16 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   // Cache key includes the resolved tenantId so different scoped views don't bleed into each other.
   const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
-  if (cached && nowMs - cached.at < 120_000) return cached.payload;
+  if (cached && nowMs - cached.at < 120_000) {
+    return {
+      ...cached.payload,
+      cached: true,
+      lastUpdated: cached.payload?.updatedAt ?? new Date(cached.at).toISOString(),
+      stale: false,
+      refreshInProgress: false,
+      cacheAgeMs: nowMs - cached.at,
+    };
+  }
 
   // For global super-admin scope: no tenant filter. Otherwise filter to resolved tenant.
   const tenantFilter = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
@@ -22840,7 +22901,16 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
     // Return stale cache rather than a broken empty response.
     const stale = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
-    if (stale) return { ...stale.payload, stale: true };
+    if (stale) {
+      return {
+        ...stale.payload,
+        cached: true,
+        lastUpdated: stale.payload?.updatedAt ?? new Date(stale.at).toISOString(),
+        stale: true,
+        refreshInProgress: false,
+        cacheAgeMs: nowMs - stale.at,
+      };
+    }
     return reply.code(500).send({ error: "db_error" });
   }
 
@@ -22853,6 +22923,11 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     totals: activity.totals,
     points: activity.points,
     updatedAt: new Date(nowMs).toISOString(),
+    cached: false,
+    lastUpdated: new Date(nowMs).toISOString(),
+    stale: false,
+    refreshInProgress: false,
+    cacheAgeMs: 0,
   };
 
   app.log.info(
@@ -24120,9 +24195,68 @@ automationRuleTimer.unref();
 
 const PBX_LIVE_CACHE = new Map<string, { at: number; payload: any }>();
 const PBX_LIVE_INFLIGHT = new Map<string, Promise<any>>();
-const PBX_LIVE_TTL_COMBINED  = 120_000;  // 2 min  per-tenant combined (ARI + DB KPIs)
-const PBX_LIVE_TTL_ADMIN     = 300_000;  // 5 min  admin all-tenant aggregation
+const PBX_LIVE_TTL_COMBINED  = 30_000;   // 30s per-tenant combined (ARI + DB KPIs)
+const PBX_LIVE_TTL_ADMIN     = 30_000;   // 30s admin all-tenant aggregation
+const PBX_LIVE_STALE_AFTER_MS = 45_000;  // UI warning threshold; stale data is still returned immediately
 const PBX_LIVE_TTL_RESOURCES = 120_000; // 120 s extension/trunk/queue lists
+const PBX_LIVE_BG_INTERVAL_MS = 30_000;
+const PBX_LIVE_BG_TENANTS_PER_TICK = 4;
+let _pbxLiveBgStarted = false;
+let _pbxLiveBgRunning = false;
+let _pbxLiveBgCursor = 0;
+
+type PbxLiveCacheMeta = {
+  cached: boolean;
+  lastUpdated: string | null;
+  stale: boolean;
+  refreshInProgress: boolean;
+  cacheAgeMs: number | null;
+};
+type WithPbxLiveCacheMeta<T> = T & { __cacheMeta?: PbxLiveCacheMeta };
+
+function pbxLiveCacheMeta(key: string, cached: { at: number; payload: any } | undefined, opts: { fromCache: boolean; stale?: boolean }): PbxLiveCacheMeta {
+  const age = cached ? Date.now() - cached.at : null;
+  return {
+    cached: opts.fromCache,
+    lastUpdated: cached?.payload?.lastUpdatedAt ?? null,
+    stale: opts.stale ?? (age !== null ? age > PBX_LIVE_STALE_AFTER_MS : false),
+    refreshInProgress: PBX_LIVE_INFLIGHT.has(key),
+    cacheAgeMs: age,
+  };
+}
+
+function attachPbxLiveCacheMeta<T extends object>(payload: T, meta: PbxLiveCacheMeta): WithPbxLiveCacheMeta<T> {
+  return Object.assign({}, payload, { __cacheMeta: meta });
+}
+
+function startPbxLiveRefresh<T extends object>(
+  key: string,
+  fetcher: () => Promise<T>,
+  logContext: Record<string, unknown>,
+): Promise<WithPbxLiveCacheMeta<T>> {
+  const existing = PBX_LIVE_INFLIGHT.get(key);
+  if (existing) return existing;
+
+  const startedAt = Date.now();
+  const promise = fetcher()
+    .then((result) => {
+      const elapsedMs = Date.now() - startedAt;
+      PBX_LIVE_CACHE.set(key, { at: Date.now(), payload: result });
+      if (elapsedMs > 4_000) app.log.warn({ ...logContext, elapsedMs }, "pbx_live_cache_refresh_slow");
+      else app.log.debug({ ...logContext, elapsedMs }, "pbx_live_cache_refresh_ok");
+      return attachPbxLiveCacheMeta(result, pbxLiveCacheMeta(key, PBX_LIVE_CACHE.get(key), { fromCache: false, stale: false }));
+    })
+    .catch((err) => {
+      app.log.warn({ ...logContext, err: err?.message || String(err), elapsedMs: Date.now() - startedAt }, "pbx_live_cache_refresh_failed");
+      throw err;
+    })
+    .finally(() => {
+      PBX_LIVE_INFLIGHT.delete(key);
+    });
+
+  PBX_LIVE_INFLIGHT.set(key, promise);
+  return promise;
+}
 
 function normalizePbxActiveCall(raw: any, tenantId?: string | null): {
   channelId: string;
@@ -24303,6 +24437,13 @@ async function fetchAriSliceForPbxLive(
   return { activeCallsList, activeCallsSource, registeredEndpoints, unregisteredEndpoints };
 }
 
+function withPbxLiveTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms)),
+  ]);
+}
+
 async function fetchPbxLiveSummaryForLink(
   link: { pbxInstance: { baseUrl: string; apiAuthEncrypted: string }; pbxTenantId?: string | null },
   tenantId: string
@@ -24351,25 +24492,24 @@ async function fetchPbxLiveSummaryForLink(
 async function getPbxLiveCombined(
   link: { pbxInstance: { baseUrl: string; apiAuthEncrypted: string }; pbxTenantId?: string | null },
   tenantId: string
-): Promise<PbxLiveResult> {
+): Promise<WithPbxLiveCacheMeta<PbxLiveResult>> {
   const key = `live-combined:${tenantId}`;
   const cached = PBX_LIVE_CACHE.get(key);
-  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_COMBINED) return cached.payload as PbxLiveResult;
+  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_COMBINED) {
+    return attachPbxLiveCacheMeta(cached.payload as PbxLiveResult, pbxLiveCacheMeta(key, cached, { fromCache: true, stale: false }));
+  }
 
-  // Inflight dedup: if a fetch is already running for this tenant, wait for it.
-  const inflight = PBX_LIVE_INFLIGHT.get(key);
-  if (inflight) return inflight;
+  const fetcher = () => withPbxLiveTimeout(fetchPbxLiveSummaryForLink(link, tenantId), 8_000, "PBX_LIVE_TENANT");
 
-  const promise = fetchPbxLiveSummaryForLink(link, tenantId).then((result) => {
-    PBX_LIVE_CACHE.set(key, { at: Date.now(), payload: result });
-    PBX_LIVE_INFLIGHT.delete(key);
-    return result;
-  }).catch((err) => {
-    PBX_LIVE_INFLIGHT.delete(key);
-    throw err;
-  });
-  PBX_LIVE_INFLIGHT.set(key, promise);
-  return promise;
+  if (cached) {
+    void startPbxLiveRefresh(key, fetcher, { key, tenantId, mode: "tenant" }).catch(() => undefined);
+    return attachPbxLiveCacheMeta(
+      cached.payload as PbxLiveResult,
+      pbxLiveCacheMeta(key, cached, { fromCache: true, stale: true }),
+    );
+  }
+
+  return startPbxLiveRefresh(key, fetcher, { key, tenantId, mode: "tenant", cold: true });
 }
 
 // Admin-level aggregation across all tenant links — one Promise per cycle.
@@ -24385,15 +24525,14 @@ async function getAdminPbxLiveCombined(): Promise<{
   topTenants: Array<{ tenantId: string; callsToday: number; incomingToday: number; outgoingToday: number; internalToday: number; activeCalls: number; activeCallsSource: string }>;
   allActiveCalls: ReturnType<typeof normalizePbxActiveCall>[];
   lastUpdatedAt: string;
-}> {
+} & { __cacheMeta?: PbxLiveCacheMeta }> {
   const key = "admin-live-combined";
   const cached = PBX_LIVE_CACHE.get(key);
-  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_ADMIN) return cached.payload;
+  if (cached && Date.now() - cached.at < PBX_LIVE_TTL_ADMIN) {
+    return attachPbxLiveCacheMeta(cached.payload, pbxLiveCacheMeta(key, cached, { fromCache: true, stale: false }));
+  }
 
-  const inflight = PBX_LIVE_INFLIGHT.get(key);
-  if (inflight) return inflight;
-
-  const promise = (async () => {
+  const fetcher = () => withPbxLiveTimeout((async () => {
     const enabledInstances = await db.pbxInstance.findMany({
       where: { isEnabled: true },
       take: 10
@@ -24405,7 +24544,7 @@ async function getAdminPbxLiveCombined(): Promise<{
       take: 200
     });
 
-    const PER_FETCH_MS = 6000;
+    const PER_FETCH_MS = 4000;
     const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
       Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
 
@@ -24482,7 +24621,7 @@ async function getAdminPbxLiveCombined(): Promise<{
     const tenantsWithCallsToday = links.length;
     const topTenants = perTenant;
 
-    const result = {
+    return {
       totalCallsToday: g.callsToday,
       incomingToday: g.incomingToday,
       outgoingToday: g.outgoingToday,
@@ -24495,13 +24634,57 @@ async function getAdminPbxLiveCombined(): Promise<{
       allActiveCalls,
       lastUpdatedAt: new Date().toISOString()
     };
-    PBX_LIVE_CACHE.set(key, { at: Date.now(), payload: result });
-    PBX_LIVE_INFLIGHT.delete(key);
-    return result;
-  })().catch((err) => { PBX_LIVE_INFLIGHT.delete(key); throw err; });
+  })(), 10_000, "PBX_LIVE_ADMIN");
 
-  PBX_LIVE_INFLIGHT.set(key, promise);
-  return promise;
+  if (cached) {
+    void startPbxLiveRefresh(key, fetcher, { key, mode: "admin" }).catch(() => undefined);
+    return attachPbxLiveCacheMeta(cached.payload, pbxLiveCacheMeta(key, cached, { fromCache: true, stale: true }));
+  }
+
+  return startPbxLiveRefresh(key, fetcher, { key, mode: "admin", cold: true });
+}
+
+function startPbxLiveDashboardWarm() {
+  if (_pbxLiveBgStarted) return;
+  _pbxLiveBgStarted = true;
+
+  const doWarm = async () => {
+    if (_pbxLiveBgRunning) return;
+    _pbxLiveBgRunning = true;
+    const startedAt = Date.now();
+    try {
+      // One admin/global warm keeps the expensive ARI aggregation hot for reloads.
+      await getAdminPbxLiveCombined().catch(() => undefined);
+
+      const links = await db.tenantPbxLink.findMany({
+        where: { pbxInstance: { isEnabled: true } },
+        include: { pbxInstance: true },
+        orderBy: { tenantId: "asc" },
+        take: 200,
+      });
+      if (links.length > 0) {
+        const selected: typeof links = [];
+        for (let i = 0; i < Math.min(PBX_LIVE_BG_TENANTS_PER_TICK, links.length); i++) {
+          selected.push(links[(_pbxLiveBgCursor + i) % links.length]!);
+        }
+        _pbxLiveBgCursor = (_pbxLiveBgCursor + selected.length) % links.length;
+        await Promise.allSettled(selected.map((link) => getPbxLiveCombined(link, link.tenantId)));
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs > 10_000) {
+        app.log.warn({ elapsedMs }, "pbx_live_bg_warm_slow");
+      } else {
+        app.log.debug({ elapsedMs }, "pbx_live_bg_warm_ok");
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message || String(err), elapsedMs: Date.now() - startedAt }, "pbx_live_bg_warm_failed");
+    } finally {
+      _pbxLiveBgRunning = false;
+    }
+  };
+
+  setTimeout(doWarm, 2_000);
+  setInterval(doWarm, PBX_LIVE_BG_INTERVAL_MS);
 }
 
 // ─── Tenant endpoints ─────────────────────────────────────────────────────────
@@ -24643,9 +24826,15 @@ app.get("/pbx/live/combined", async (req, reply) => {
     };
     try {
       const r = await getPbxLiveCombined(syntheticLink, `vpbx:${pbxTenantOverride}`);
+      const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:vpbx:${pbxTenantOverride}`, undefined, { fromCache: false });
       return {
         summary: { tenantId: pbxTenantOverride, callsToday: r.callsToday, incomingToday: r.incomingToday, outgoingToday: r.outgoingToday, internalToday: r.internalToday, answeredToday: r.answeredToday, missedToday: r.missedToday, activeCalls: r.activeCalls, activeCallsSource: r.activeCallsSource, registeredEndpoints: r.registeredEndpoints, unregisteredEndpoints: r.unregisteredEndpoints, lastUpdatedAt: r.lastUpdatedAt },
-        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt }
+        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt },
+        cached: meta.cached,
+        lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+        stale: meta.stale,
+        refreshInProgress: meta.refreshInProgress,
+        cacheAgeMs: meta.cacheAgeMs,
       };
     } catch (err: any) {
       return reply.status(502).send({ error: err?.code || "PBX_UNAVAILABLE", message: String(err?.message || "PBX data unavailable") });
@@ -24660,6 +24849,7 @@ app.get("/pbx/live/combined", async (req, reply) => {
 
   try {
     const r = await getPbxLiveCombined(link, user.tenantId);
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:${user.tenantId}`, undefined, { fromCache: false });
     return {
       summary: {
         tenantId: user.tenantId,
@@ -24679,7 +24869,12 @@ app.get("/pbx/live/combined", async (req, reply) => {
         calls: r.activeCallsList,
         source: r.activeCallsSource,
         lastUpdatedAt: r.lastUpdatedAt
-      }
+      },
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
     };
   } catch (err: any) {
     app.log.warn({ err: String(err?.message || err), code: err?.code }, "pbx_live_combined_error");
@@ -24701,6 +24896,7 @@ app.get("/pbx/live/summary", async (req, reply) => {
 
   try {
     const r = await getPbxLiveCombined(link, user.tenantId);
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:${user.tenantId}`, undefined, { fromCache: false });
     return {
       tenantId: user.tenantId,
       callsToday: r.callsToday,
@@ -24711,7 +24907,12 @@ app.get("/pbx/live/summary", async (req, reply) => {
       missedToday: r.missedToday,
       activeCalls: r.activeCalls,
       activeCallsSource: r.activeCallsSource,
-      lastUpdatedAt: r.lastUpdatedAt
+      lastUpdatedAt: r.lastUpdatedAt,
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
     };
   } catch (err: any) {
     return reply.status(502).send({ error: err?.code || "PBX_UNAVAILABLE", message: String(err?.message || "PBX data unavailable") });
@@ -24734,7 +24935,17 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
 
   try {
     const r = await getPbxLiveCombined(link, user.tenantId);
-    return { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt };
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:${user.tenantId}`, undefined, { fromCache: false });
+    return {
+      calls: r.activeCallsList,
+      source: r.activeCallsSource,
+      lastUpdatedAt: r.lastUpdatedAt,
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
+    };
   } catch {
     return { calls: [], source: "unavailable", lastUpdatedAt: new Date().toISOString() };
   }
@@ -24750,6 +24961,7 @@ app.get("/admin/pbx/live/combined", async (req, reply) => {
 
   try {
     const r = await getAdminPbxLiveCombined();
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta("admin-live-combined", undefined, { fromCache: false });
     return {
       summary: {
         totalCallsToday: r.totalCallsToday,
@@ -24767,7 +24979,12 @@ app.get("/admin/pbx/live/combined", async (req, reply) => {
         calls: r.allActiveCalls,
         source: r.allActiveCalls.length > 0 ? "ari" : "unavailable",
         lastUpdatedAt: r.lastUpdatedAt
-      }
+      },
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
     };
   } catch (err: any) {
     return reply.status(502).send({ error: "PBX_UNAVAILABLE", message: String(err?.message || "Aggregation failed") });
@@ -24782,6 +24999,7 @@ app.get("/admin/pbx/live/summary", async (req, reply) => {
 
   try {
     const r = await getAdminPbxLiveCombined();
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta("admin-live-combined", undefined, { fromCache: false });
     return {
       totalCallsToday: r.totalCallsToday,
       incomingToday: r.incomingToday,
@@ -24792,7 +25010,12 @@ app.get("/admin/pbx/live/summary", async (req, reply) => {
       totalActiveCalls: r.totalActiveCalls,
       activeTenantsCount: r.activeTenantsCount,
       topTenants: r.topTenants,
-      lastUpdatedAt: r.lastUpdatedAt
+      lastUpdatedAt: r.lastUpdatedAt,
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
     };
   } catch (err: any) {
     return reply.status(502).send({ error: "PBX_UNAVAILABLE", message: String(err?.message || "Aggregation failed") });
@@ -25938,10 +26161,16 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 
   try {
     const r = await getAdminPbxLiveCombined();
+    const meta = (r as any).__cacheMeta || pbxLiveCacheMeta("admin-live-combined", undefined, { fromCache: false });
     return {
       calls: r.allActiveCalls,
       source: r.allActiveCalls.length > 0 ? "ari" : "unavailable",
-      lastUpdatedAt: r.lastUpdatedAt
+      lastUpdatedAt: r.lastUpdatedAt,
+      cached: meta.cached,
+      lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
+      stale: meta.stale,
+      refreshInProgress: meta.refreshInProgress,
+      cacheAgeMs: meta.cacheAgeMs,
     };
   } catch {
     return { calls: [], source: "unavailable", lastUpdatedAt: new Date().toISOString() };
@@ -26209,6 +26438,7 @@ const port = Number(process.env.PORT || 3001);
   registerConnectChatRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
+  startPbxLiveDashboardWarm();
 })().catch((e) => {
   app.log.error(e);
   process.exit(1);

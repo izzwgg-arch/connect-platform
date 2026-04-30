@@ -46,6 +46,13 @@ function DirectionIcon({ direction, size = 14 }: { direction: string; size?: num
   return <ArrowLeftRight className="call-dir-icon internal" size={size} />;
 }
 
+function formatLastUpdated(value?: string | null): string {
+  if (!value) return "warming cache";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "warming cache";
+  return `updated ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type DashboardCallTraffic = {
@@ -62,6 +69,11 @@ type DashboardCallTraffic = {
     internal: number;
     missed: number;
   }>;
+  cached?: boolean;
+  lastUpdated?: string | null;
+  stale?: boolean;
+  refreshInProgress?: boolean;
+  cacheAgeMs?: number | null;
 };
 
 type CallActivityKey = "incoming" | "outgoing" | "internal" | "missed";
@@ -85,6 +97,10 @@ type ConnectKpis = {
   mode?: "raw" | "canonical";
   pbxFallback?: boolean;
   tenantsQueried?: number;
+  cached?: boolean;
+  lastUpdated?: string | null;
+  stale?: boolean;
+  refreshInProgress?: boolean;
 };
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -145,6 +161,12 @@ export default function DashboardPage() {
   const activeCalls  = combined?.activeCalls ?? null;
   const traffic      = trafficState.status === "success" ? trafficState.data : null;
   const extensionRows = extState.status === "success" ? extState.data.rows : [];
+  const pbxCacheStale = Boolean(combined?.stale);
+  const pbxUpdating = Boolean(
+    pbxCombinedState.status === "success" &&
+    (pbxCombinedState.refreshing || combined?.refreshInProgress)
+  );
+  const pbxLastUpdatedText = formatLastUpdated(combined?.lastUpdated || combined?.summary?.lastUpdatedAt);
   // Use the AMI live-call store as the source of truth, then tenant-scope it
   // with the extension directory when the PBX event did not resolve tenantId.
   const liveCalls = useMemo(
@@ -217,9 +239,17 @@ export default function DashboardPage() {
               </div>
               <div className="dash-hero-status-pill">
                 <Activity size={13} />
-                <span>4-category activity</span>
+                <span>
+                  {pbxCacheStale ? "cached" : "live cache"} · {pbxLastUpdatedText}
+                  {pbxUpdating ? " · updating..." : ""}
+                </span>
               </div>
             </div>
+            {pbxCacheStale ? (
+              <div className="state-box" style={{ margin: "0 0 12px", padding: "8px 10px", fontSize: "0.85rem" }}>
+                PBX is responding slowly. Showing the latest cached dashboard data while Connect refreshes in the background.
+              </div>
+            ) : null}
             <div className="dash-hero-plot">
               {trafficState.status === "loading" ? (
                 <LoadingSkeleton rows={5} />

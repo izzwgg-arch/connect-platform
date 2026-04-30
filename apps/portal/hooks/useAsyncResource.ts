@@ -3,37 +3,47 @@
 import { useEffect, useRef, useState } from "react";
 
 type AsyncState<T> =
-  | { status: "loading"; data: null; error: null }
-  | { status: "success"; data: T; error: null }
-  | { status: "error"; data: null; error: string };
+  | { status: "loading"; data: null; error: null; refreshing: false }
+  | { status: "success"; data: T; error: null; refreshing: boolean }
+  | { status: "error"; data: null; error: string; refreshing: false };
 
-export function useAsyncResource<T>(loader: () => Promise<T>, deps: unknown[]): AsyncState<T> {
-  const [state, setState] = useState<AsyncState<T>>({ status: "loading", data: null, error: null });
+type AsyncResourceOptions = {
+  keepPreviousData?: boolean;
+};
+
+export function useAsyncResource<T>(loader: () => Promise<T>, deps: unknown[], options: AsyncResourceOptions = {}): AsyncState<T> {
+  const keepPreviousData = options.keepPreviousData ?? true;
+  const [state, setState] = useState<AsyncState<T>>({ status: "loading", data: null, error: null, refreshing: false });
   // Keep a ref to the last successful data so subsequent refreshes don't flash "--"
   const lastData = useRef<T | null>(null);
 
   useEffect(() => {
     let active = true;
-    // Only show "loading" on the very first fetch; subsequent refreshes keep last data visible
-    if (lastData.current === null) {
-      setState({ status: "loading", data: null, error: null });
+    // Directory-like tenant-scoped resources must be able to opt out of stale
+    // previous data so tenant switches never render another tenant's rows.
+    if (!keepPreviousData || lastData.current === null) {
+      if (!keepPreviousData) lastData.current = null;
+      setState({ status: "loading", data: null, error: null, refreshing: false });
+    } else {
+      setState({ status: "success", data: lastData.current, error: null, refreshing: true });
     }
     loader()
       .then((data) => {
         if (!active) return;
         lastData.current = data;
-        setState({ status: "success", data, error: null });
+        setState({ status: "success", data, error: null, refreshing: false });
       })
       .catch((error: unknown) => {
         if (!active) return;
         // On error after first load, keep showing last data if available
-        if (lastData.current !== null) {
-          setState({ status: "success", data: lastData.current, error: null });
+      if (keepPreviousData && lastData.current !== null) {
+          setState({ status: "success", data: lastData.current, error: null, refreshing: false });
         } else {
           setState({
             status: "error",
             data: null,
-            error: error instanceof Error ? error.message : "Unexpected error"
+            error: error instanceof Error ? error.message : "Unexpected error",
+            refreshing: false
           });
         }
       });
