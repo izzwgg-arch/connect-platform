@@ -13554,7 +13554,13 @@ function ivrInferPromptCategory(base: string): string {
  *   - If the ref doesn't exist in the catalog → allowed (legacy / manual
  *     entry) so we don't break pre-existing profiles when the catalog is
  *     empty. The UI surfaces this as "legacy — not in catalog".
- *  Returns null on OK, or a short error string. */
+ *  Returns null on OK, or a short error string.
+ *
+ *  NOTE: this is the SAVE-time check (PATCH /route-profiles). It intentionally
+ *  stays permissive so admins can save a profile while the prompt is still
+ *  being synced from VitalPBX. The PUBLISH step runs a STRICTER check via
+ *  `ivrResolveMissingPromptRefs` which blocks broadcast to AstDB until every
+ *  referenced recording is confirmed present in the tenant catalog. */
 async function ivrValidatePromptRefForTenant(
   ref: string | null | undefined,
   targetTenantId: string,
@@ -13584,6 +13590,77 @@ async function ivrValidatePromptRefForTenant(
   } catch {
     return null; // DB hiccup → don't block the write over catalog lookup
   }
+}
+
+/** Publish-time strict integrity check. Given the full set of prompt refs
+ *  a publish wants to write to AstDB, return the subset that CANNOT be
+ *  confirmed present in this tenant's catalog. Callers turn a non-empty
+ *  result into a 422 so the publish never ships a dialplan that will
+ *  silently drop calls because Background() can't find the recording.
+ *
+ *  Why strict here and permissive in the save path:
+ *   - Save-time allows "not yet synced" so admins can configure ahead of a
+ *     recording upload. Those profiles show up in the UI with a warning.
+ *   - Publish-time is the hand-off to live callers. If a ref survives to
+ *     this point without a catalog row, the filesystem almost certainly
+ *     doesn't have the audio either — we've seen this cause silent IVR
+ *     dead-air in production (Connect published a prompt ref that was
+ *     never actually uploaded to VitalPBX). Fail loud, keep the caller's
+ *     experience predictable.
+ *
+ *  Accepted matches (same logic as save-time, but "no row at all" no longer
+ *  counts as a pass):
+ *   (a) a row with (tenantId=targetTenantId, promptRef=ref, isActive=true)
+ *   (b) only an (tenantId=null) row for this ref — treated as a shared
+ *       library entry, still considered synced.
+ *
+ *  Returned shape lets the UI say exactly which profile + field is wrong. */
+async function ivrResolveMissingPromptRefs(
+  tenantId: string,
+  candidates: Array<{ key: string; ref: string; profileType?: string | null }>,
+): Promise<Array<{ key: string; ref: string; profileType?: string | null; reason: string }>> {
+  const refs = Array.from(new Set(
+    candidates.map((c) => c.ref).filter((r): r is string => typeof r === "string" && r.length > 0),
+  ));
+  if (refs.length === 0) return [];
+  let rows: Array<{ promptRef: string; tenantId: string | null; isActive: boolean }>;
+  try {
+    rows = await (db as any).tenantPbxPrompt.findMany({
+      where: { promptRef: { in: refs } },
+      select: { promptRef: true, tenantId: true, isActive: true },
+    });
+  } catch {
+    return []; // DB hiccup — fall back to publishing (existing save-time lock still blocks cross-tenant).
+  }
+  const byRef = new Map<string, Array<{ tenantId: string | null; isActive: boolean }>>();
+  for (const r of rows) {
+    const list = byRef.get(r.promptRef) ?? [];
+    list.push({ tenantId: r.tenantId, isActive: r.isActive });
+    byRef.set(r.promptRef, list);
+  }
+  const missing: Array<{ key: string; ref: string; profileType?: string | null; reason: string }> = [];
+  for (const c of candidates) {
+    if (!c.ref) continue;
+    const list = byRef.get(c.ref) ?? [];
+    if (list.length === 0) {
+      missing.push({ ...c, reason: "not_in_catalog" });
+      continue;
+    }
+    const ownActive  = list.some((r) => r.tenantId === tenantId && r.isActive);
+    const sharedOnly = list.every((r) => r.tenantId == null);
+    if (ownActive) continue;
+    if (sharedOnly) {
+      // Shared entry — allow but only if any row is active; an inactive
+      // shared entry still means the file was deleted.
+      if (list.some((r) => r.isActive)) continue;
+      missing.push({ ...c, reason: "catalog_inactive" });
+      continue;
+    }
+    // Some row exists but not for this tenant — save-time blocks this, so
+    // we shouldn't normally see it here, but report clearly if we do.
+    missing.push({ ...c, reason: "not_in_catalog" });
+  }
+  return missing;
 }
 
 /** Normalise a user-supplied/PBX-supplied prompt list into canonical refs.
@@ -15575,6 +15652,50 @@ app.post("/voice/ivr/publish", async (req, reply) => {
     : [];
   const slug = await getIvrSlugForTenant(tenantId);
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions);
+
+  // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
+  // write to AstDB must exist in this tenant's catalog. The save path
+  // intentionally soft-allows unknown refs (so admins can configure ahead
+  // of a recording upload), but the PUBLISH is the hand-off to live callers
+  // and publishing a missing recording manifests as silent dead-air during
+  // the IVR greeting — caller-visible, hard to diagnose. Block the publish
+  // and return a structured list of which profile + field is unsynced so
+  // the UI can point the admin at it. Default pbx-* fallbacks (e.g.
+  // "pbx-invalid", "vm-enter-num-to-call") are always present in the
+  // stock Asterisk sounds tree, so we skip them to avoid false positives.
+  const IVR_DEFAULT_PROMPT_REFS = new Set([
+    IVR_DEFAULT_PROMPT_INVALID,
+    IVR_DEFAULT_PROMPT_TIMEOUT,
+    "vm-goodbye",
+    "pbx-invalid",
+    "vm-enter-num-to-call",
+  ]);
+  const promptCandidates: Array<{ key: string; ref: string; profileType?: string | null }> = [];
+  for (const p of profiles as any[]) {
+    if (p.pbxPromptRef && !IVR_DEFAULT_PROMPT_REFS.has(p.pbxPromptRef)) {
+      promptCandidates.push({ key: "active_prompt", ref: String(p.pbxPromptRef), profileType: p.type });
+    }
+    if (p.pbxInvalidPromptRef && !IVR_DEFAULT_PROMPT_REFS.has(p.pbxInvalidPromptRef)) {
+      promptCandidates.push({ key: "active_prompt_invalid", ref: String(p.pbxInvalidPromptRef), profileType: p.type });
+    }
+    if (p.pbxTimeoutPromptRef && !IVR_DEFAULT_PROMPT_REFS.has(p.pbxTimeoutPromptRef)) {
+      promptCandidates.push({ key: "active_prompt_timeout", ref: String(p.pbxTimeoutPromptRef), profileType: p.type });
+    }
+    if (p.pbxRetryPromptRef && !IVR_DEFAULT_PROMPT_REFS.has(p.pbxRetryPromptRef)) {
+      promptCandidates.push({ key: "active_prompt_retry", ref: String(p.pbxRetryPromptRef), profileType: p.type });
+    }
+  }
+  const missingPrompts = await ivrResolveMissingPromptRefs(tenantId, promptCandidates);
+  if (missingPrompts.length > 0) {
+    app.log.warn({ tenantId, slug, missing: missingPrompts.map((m) => m.ref) }, "ivr: publish blocked — missing recordings in catalog");
+    return reply.code(422).send({
+      error: "prompt_refs_not_in_catalog",
+      detail:
+        "One or more recordings referenced by this tenant's route profiles are not in the PBX prompt catalog. " +
+        "Upload the recording to VitalPBX (or run a prompt-catalog sync) before publishing so the IVR doesn't dead-air on live calls.",
+      missing: missingPrompts,
+    });
+  }
 
   // Snapshot the current AstDB values BEFORE writing, so rollback can restore
   // the true pre-publish state. If the snapshot fails (telephony unreachable,
