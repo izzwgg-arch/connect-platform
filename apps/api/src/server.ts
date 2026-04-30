@@ -3366,12 +3366,52 @@ app.get("/metrics", async (req, reply) => {
 
 const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
 
+/**
+ * Production smoke-tenant firewall.
+ *
+ * CI smoke tests historically called /auth/signup against the production API
+ * with names like "Billing Smoke Tenant", "Admin Tenant 1772002300",
+ * "PBX Smoke 1771998952", "Verify Tenant 1771907715", "dbg 1772514785",
+ * "Tenant Smoke 1771938273", "v0.7 Smoke", "'X Tenant'", etc. — creating
+ * hundreds of garbage tenants that polluted the admin dropdowns.
+ *
+ * Block all of them at the edge regardless of who's calling. Real customers
+ * never name their workspace "Billing Smoke Tenant" or "Admin Tenant 177...".
+ */
+const SMOKE_TENANT_NAME_PATTERNS: RegExp[] = [
+  /\bsmoke\b/i,
+  /\bdbg\b/i,
+  /\bvpbx\s+(perm|header)\b/i,
+  /\bverify\s+tenant\b/i,
+  /\badmin\s+tenant\b/i,
+  /^tenant\s+\d{6,}\b/i,
+  /\bv[0-9]+\.[0-9]+\b.*smoke/i,
+  /^"?'?x\s+tenant'?"?$/i,
+  /\bconnect\s+admin\s+\d{6,}\b/i,
+  /\bsbc\s+(switch|remote|functional|rollout)\b/i,
+];
+function looksLikeSmokeTenantName(name: string): boolean {
+  const v = (name || "").trim();
+  if (!v) return false;
+  return SMOKE_TENANT_NAME_PATTERNS.some((re) => re.test(v));
+}
+
 app.post("/auth/signup", async (req, reply) => {
   const input = signupSchema.parse(req.body);
   const ip = String((req.headers["x-forwarded-for"] as string | undefined) || req.ip || "unknown").split(",")[0].trim();
   if (!checkBillingRateLimit(`signup:${ip}`, 5, 60 * 60 * 1000)) {
     app.log.warn({ ip, endpoint: "/auth/signup" }, "rate_limit_signup");
     return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  if (looksLikeSmokeTenantName(input.tenantName)) {
+    app.log.warn(
+      { ip, tenantName: input.tenantName, email: input.email, endpoint: "/auth/signup" },
+      "rejected_smoke_tenant_signup"
+    );
+    return reply.status(400).send({
+      error: "TENANT_NAME_RESERVED",
+      message: "This workspace name is reserved for internal testing.",
+    });
   }
   const tenant = await db.tenant.create({
     data: {
@@ -3843,7 +3883,26 @@ app.get("/admin/users", async (req, reply) => {
       take: 500,
     }),
     admin.role === "SUPER_ADMIN"
-      ? db.tenant.findMany({ where: { kind: "CUSTOMER" as any, isApproved: true }, orderBy: { name: "asc" }, select: { id: true, name: true, isApproved: true } })
+      ? db.tenant.findMany({
+          where: {
+            kind: "CUSTOMER" as any,
+            isApproved: true,
+            // Hard blocklist: strip any smoke / lab / admin-timestamped tenant
+            // names that may have been mis-flagged as CUSTOMER+approved.
+            NOT: [
+              { name: { contains: "smoke", mode: "insensitive" } },
+              { name: { contains: "dbg ", mode: "insensitive" } },
+              { name: { contains: "vpbx ", mode: "insensitive" } },
+              { name: { contains: "verify tenant", mode: "insensitive" } },
+              { name: { contains: "admin tenant", mode: "insensitive" } },
+              { name: { startsWith: "Tenant ", mode: "insensitive" } },
+              { name: { startsWith: "Connect Admin ", mode: "insensitive" } },
+              { name: { contains: "X Tenant", mode: "insensitive" } },
+            ],
+          },
+          orderBy: { name: "asc" },
+          select: { id: true, name: true, isApproved: true },
+        })
       : db.tenant.findMany({ where: { id: admin.tenantId }, select: { id: true, name: true, isApproved: true } }),
   ]);
   // Only load extensions for single-tenant view (not useful in all-tenants mode)
