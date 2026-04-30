@@ -241,11 +241,12 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
       } satisfies AmiPeerStatus;
 
     case "ContactStatus":
+    case "ContactStatusDetail":
       return {
         event: "ContactStatus",
         uri: g("URI"),
-        contactStatus: g("ContactStatus"),
-        aor: g("AOR"),
+        contactStatus: g("ContactStatus") || g("Status"),
+        aor: g("AOR") || g("ObjectName") || g("EndpointName"),
         userAgent: g("UserAgent"),
         roundtripUsec: g("RoundtripUsec"),
       } satisfies AmiContactStatus;

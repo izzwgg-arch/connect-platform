@@ -23,6 +23,7 @@ export type AmiEventName =
   | "DeviceStateChange"
   | "PeerStatus"
   | "ContactStatus"
+  | "ContactStatusDetail"
   | "VarSet"
   | "AttendedTransfer"
   | "BlindTransfer"

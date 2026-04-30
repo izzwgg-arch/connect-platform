@@ -70,6 +70,7 @@ export class TelephonyService {
       // Bootstrap: request all currently active channels so reconnects don't miss ongoing calls.
       // 500ms delay lets AMI finish its initial burst of FullyBooted/status events first.
       setTimeout(() => this.bootstrapActiveChannels(), 500);
+      setTimeout(() => this.bootstrapExtensionPresence(), 1000);
     });
 
     this.ami.on("disconnected", (reason) => {
@@ -87,6 +88,16 @@ export class TelephonyService {
       log.info("AMI bootstrap: CoreShowChannels sent — seeding active channels");
     } catch (err) {
       log.warn({ err: (err as Error).message }, "AMI bootstrap: CoreShowChannels failed (service may be starting)");
+    }
+  }
+
+  private bootstrapExtensionPresence(): void {
+    try {
+      this.ami.sendAction("ExtensionStateList");
+      this.ami.sendAction("PJSIPShowContacts");
+      log.info("AMI bootstrap: ExtensionStateList/PJSIPShowContacts sent — seeding BLF registration state");
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, "AMI bootstrap: BLF presence bootstrap failed");
     }
   }
 
@@ -395,7 +406,7 @@ export class TelephonyService {
         const tenantId = this.resolver.resolve({ channel: typed.aor });
         this.extensions.onPeerStatus({
           peer: `PJSIP/${typed.aor}`,
-          peerStatus: typed.contactStatus === "Reachable" ? "Registered" : "Unreachable",
+          peerStatus: contactStatusToPeerStatus(typed.contactStatus),
           tenantId,
         });
         break;
@@ -831,4 +842,24 @@ function classifyPbxChannel(channel: string): string {
   if (/parking/i.test(channel)) return "parking";
   if (/^Message\//i.test(channel)) return "message-helper";
   return channel ? "other" : "unknown";
+}
+
+function contactStatusToPeerStatus(contactStatus: string): string {
+  const status = String(contactStatus || "").trim().toLowerCase();
+  if (status === "removed" || status === "deleted") return "Unregistered";
+  if (status === "unreachable") return "Unreachable";
+  // PJSIP contacts can be registered without an active qualify measurement.
+  // Treat contact-present states as online so BLF does not show Offline just
+  // because qualify is disabled, delayed, or not yet measured after restart.
+  if (
+    status === "reachable" ||
+    status === "nonqualified" ||
+    status === "non-qualified" ||
+    status === "unknown" ||
+    status === "created" ||
+    status === "available"
+  ) {
+    return "Registered";
+  }
+  return "unknown";
 }
