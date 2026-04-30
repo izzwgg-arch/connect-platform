@@ -18,11 +18,9 @@ export type PbxResourceResponse = {
 };
 
 export async function loadPbxResource(resource: PbxResourceName, tenantId?: string): Promise<PbxResourceResponse> {
-  // Extensions are always fetched as the full global set for SUPER_ADMINs; client-side filtering
-  // handles per-tenant scoping using the tenantName field already present in every row.
-  // This avoids broken backend filtering caused by mismatched TenantPbxLink identifiers.
   if (resource === "extensions") {
-    return apiGet<PbxResourceResponse>(`/voice/pbx/resources/extensions?global=1`);
+    const qs = tenantId && tenantId !== "local" ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+    return apiGet<PbxResourceResponse>(`/voice/pbx/resources/extensions${qs}`);
   }
   // For other PBX resources, pass tenantId as an explicit query param.
   const qs = tenantId && tenantId !== "local" ? `?tenantId=${encodeURIComponent(tenantId)}` : "";

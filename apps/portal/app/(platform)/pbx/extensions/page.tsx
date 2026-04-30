@@ -667,15 +667,14 @@ export default function PbxExtensionsPage() {
   const [assigning, setAssigning] = useState<{ id: string; extNumber: string; ownerId: string | null; hasSipPass: boolean; tenantId?: string } | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const { tenantId, adminScope, tenant } = useAppContext();
-  // Always load the full extension list (API receives ?global=1 and skips tenant scoping).
-  // Per-tenant filtering is done client-side below using the tenantName already present
-  // in every row — this avoids broken zero-row results caused by backend mapping mismatches.
+  const canFetchTenantExtensions = adminScope === "TENANT" && tenantId && tenantId !== "local";
   const state = useAsyncResource(
     () => {
-      console.log("[EXT_TENANT_FILTER] fetching all extensions for client-side filter. scope:", adminScope, "tenant:", tenant?.name ?? tenantId);
-      return loadPbxResource("extensions");
+      console.log("[EXT_TENANT_FILTER] fetching tenant-scoped extensions. scope:", adminScope, "tenant:", tenant?.name ?? tenantId);
+      return canFetchTenantExtensions ? loadPbxResource("extensions", tenantId) : Promise.resolve({ resource: "extensions", rows: [] });
     },
-    ["extensions", reloadKey],
+    ["extensions", tenantId, adminScope, reloadKey],
+    { keepPreviousData: false },
   );
   const telephony = useTelephony();
 
@@ -698,8 +697,8 @@ export default function PbxExtensionsPage() {
   const rows = useMemo(() => {
     if (state.status !== "success") return [];
     const q = query.trim().toLowerCase();
-    // When a specific tenant is selected, keep only rows whose tenantName matches.
-    // Use trimmed case-insensitive comparison — both values come from human-entered strings.
+    // The API is already tenant-scoped; keep the local check as a defensive guard
+    // in case a stale browser response is ever delivered after a tenant switch.
     const selectedTenant = adminScope === "TENANT" ? (tenant?.name ?? "").trim().toLowerCase() : null;
     const allRows = state.data.rows;
     const filtered = allRows.filter((row) => {

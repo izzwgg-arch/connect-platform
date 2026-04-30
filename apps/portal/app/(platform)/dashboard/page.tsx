@@ -151,8 +151,9 @@ export default function DashboardPage() {
     [adminScope, contextTenantId, trafficTick, kpiTick]
   );
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
-    () => loadPbxResource("extensions"),
+    () => !isGlobal && contextTenantId ? loadPbxResource("extensions", contextTenantId) : Promise.resolve({ resource: "extensions", rows: [] }),
     [adminScope, contextTenantId, tenant?.name],
+    { keepPreviousData: false },
   );
 
   // ── Derived values ──

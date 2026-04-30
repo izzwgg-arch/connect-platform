@@ -74,16 +74,25 @@ function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null 
     const nestedId = readString(nestedTenant as Record<string, unknown>, ["id", "tenantId", "tenant_id"]);
     if (nestedId) return nestedId === tenantId;
   }
-  return true;
+  return false;
 }
 
 function isValidTenantExtension(ext: string): boolean {
-  return /^\d{3}$/.test(ext);
+  return /^\d{2,6}$/.test(ext);
 }
 
 function isSystemExtensionName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
+    normalized.includes("/") ||
+    normalized.startsWith("pjsip") ||
+    normalized.startsWith("custom") ||
+    normalized.startsWith("virtual") ||
+    normalized.startsWith("trunk") ||
+    normalized.startsWith("queue") ||
+    normalized.startsWith("ivr") ||
+    normalized.startsWith("parking") ||
+    normalized.startsWith("voicemail") ||
     normalized === "pbx user" ||
     /^pbx user\s+\d+$/.test(normalized) ||
     normalized.includes("invite lifecycle") ||
@@ -289,7 +298,7 @@ function BlfPanel({
 export function FloatingDialer() {
   const phone = useSipPhone();
   const telephony = useTelephony();
-  const { tenantId, tenant } = useAppContext();
+  const { tenantId, tenant, adminScope } = useAppContext();
   const router = useRouter();
 
   const [open, setOpen] = useState(false);
@@ -306,9 +315,11 @@ export function FloatingDialer() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blfSearch = useDebouncedValue(rawBlfSearch, 120);
 
+  const canFetchTenantDirectory = adminScope === "TENANT" && tenantId && tenantId !== "local";
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
-    () => loadPbxResource("extensions"),
-    [tenantId, tenant?.name],
+    () => canFetchTenantDirectory ? loadPbxResource("extensions", tenantId) : Promise.resolve({ resource: "extensions", rows: [] }),
+    [tenantId, tenant?.name, adminScope],
+    { keepPreviousData: false },
   );
   const extensionRows = extState.status === "success" ? extState.data.rows : [];
 
@@ -391,17 +402,7 @@ export function FloatingDialer() {
         presence: mapPresence(live?.status ?? readString(row, ["state", "status"]) ?? "offline", extension, activeExts, ringingExts),
       }];
     });
-    const fallback = mapped.length > 0 ? mapped : telephony.extensionList.flatMap((entry): BlfEntry[] => {
-      if (entry.tenantId && entry.tenantId !== tenantId) return [];
-      if (!isValidTenantExtension(entry.extension) || isSystemExtensionName(entry.hint || entry.extension)) return [];
-      return [{
-        id: entry.extension,
-        name: entry.hint || `Extension ${entry.extension}`,
-        extension: entry.extension,
-        presence: mapPresence(entry.status ?? "offline", entry.extension, activeExts, ringingExts),
-      }];
-    });
-    return fallback.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
+    return mapped.sort((a, b) => a.extension.localeCompare(b.extension, undefined, { numeric: true }));
   }, [activeExts, extensionRows, ringingExts, telephony.extensionList, tenant?.name, tenantId]);
 
   const visibleBlf = useMemo(() => {

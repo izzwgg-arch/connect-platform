@@ -27,6 +27,15 @@ export function isValidTenantExtension(ext: string): boolean {
 export function isSystemExtensionName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
+    normalized.includes("/") ||
+    normalized.startsWith("pjsip") ||
+    normalized.startsWith("custom") ||
+    normalized.startsWith("virtual") ||
+    normalized.startsWith("trunk") ||
+    normalized.startsWith("queue") ||
+    normalized.startsWith("ivr") ||
+    normalized.startsWith("parking") ||
+    normalized.startsWith("voicemail") ||
     normalized === "pbx user" ||
     /^pbx user\s+\d+$/.test(normalized) ||
     normalized.includes("invite lifecycle") ||
@@ -50,7 +59,7 @@ export function rowTenantMatches(row: ExtensionRow, tenantId: string | null | un
     const nestedId = readString(nestedTenant as ExtensionRow, ["id", "tenantId", "tenant_id"]);
     if (nestedId) return nestedId === tenantId;
   }
-  return true;
+  return false;
 }
 
 function rowStrongTenantMatches(row: ExtensionRow, tenantId: string | null | undefined, tenantName: string | null | undefined): boolean {
@@ -81,7 +90,8 @@ export function tenantExtensionSet(rows: ExtensionRow[], tenantId: string | null
   for (const row of rows) {
     if (!rowStrongTenantMatches(row, tenantId, tenantName)) continue;
     const ext = readString(row, ["extension", "extNumber", "ext_number", "number", "sipExtension"]);
-    if (ext && isValidTenantExtension(ext)) out.add(ext);
+    const name = readString(row, ["displayName", "display_name", "name", "callerid", "callerId"]) ?? "";
+    if (ext && isValidTenantExtension(ext) && !isSystemExtensionName(name || ext)) out.add(ext);
   }
   return out;
 }

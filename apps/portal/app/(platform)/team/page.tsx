@@ -123,12 +123,21 @@ function rowTenantMatches(row: Record<string, unknown>, tenantId: string | null 
 }
 
 function isValidTenantExtension(ext: string): boolean {
-  return /^\d{3}$/.test(ext);
+  return /^\d{2,6}$/.test(ext);
 }
 
 function isSystemExtensionName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
+    normalized.includes("/") ||
+    normalized.startsWith("pjsip") ||
+    normalized.startsWith("custom") ||
+    normalized.startsWith("virtual") ||
+    normalized.startsWith("trunk") ||
+    normalized.startsWith("queue") ||
+    normalized.startsWith("ivr") ||
+    normalized.startsWith("parking") ||
+    normalized.startsWith("voicemail") ||
     normalized === "pbx user" ||
     /^pbx user\s+\d+$/.test(normalized) ||
     normalized === "invite lifecycle" ||
@@ -611,11 +620,11 @@ export default function TeamDirectoryPage() {
     toastTimer.current = setTimeout(() => setToast(null), 2500);
   }, []);
 
-  // Fetch the same extension source as PBX Extensions. For super-admins this
-  // returns all extension rows, then we filter by selected tenant name/id below.
+  const canFetchTenantDirectory = adminScope === "TENANT" && tenantId && tenantId !== "local";
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
-    () => loadPbxResource("extensions"),
+    () => canFetchTenantDirectory ? loadPbxResource("extensions", tenantId) : Promise.resolve({ resource: "extensions", rows: [] }),
     [tenantId, tenant?.name, adminScope],
+    { keepPreviousData: false },
   );
   const extensionRows = extState.status === "success" ? extState.data.rows : [];
 
@@ -672,22 +681,8 @@ export default function TeamDirectoryPage() {
       }];
     });
 
-    // During the initial fetch only, fall back to AMI data filtered to real
-    // 3-digit extensions so system or cross-tenant junk never enters the UI.
-    if (mapped.length === 0 && extState.status === "loading") {
-      return telephony.extensionList.flatMap((e): TeamMember[] => {
-        if (tenantId && e.tenantId && e.tenantId !== tenantId) return [];
-        if (!isValidTenantExtension(e.extension) || isSystemExtensionName(e.hint || e.extension)) return [];
-        return [{
-        id: e.extension,
-        name: e.hint || e.extension,
-        extension: e.extension,
-        presence: mapAmiPresence(e.status ?? "offline", e.extension, activeExts, ringingExts),
-        }];
-      }).sort(byExtensionAsc);
-    }
     return mapped.sort(byExtensionAsc);
-  }, [activeExts, extensionRows, extState.status, ringingExts, tenant?.name, tenantId, telephony.extensionList]);
+  }, [activeExts, extensionRows, ringingExts, tenant?.name, tenantId, telephony.extensionList]);
 
   // Keep detail panel in sync with live presence updates
   useEffect(() => {
@@ -755,7 +750,8 @@ export default function TeamDirectoryPage() {
   }, [showToast]);
 
   const presenceLive = telephony.isLive;
-  const isInitialLoad = extState.status === "loading" && members.length === 0;
+  const directoryTenantPending = adminScope === "TENANT" && (!tenantId || tenantId === "local");
+  const isInitialLoad = directoryTenantPending || (extState.status === "loading" && members.length === 0);
 
   return (
     <div className="td-page">
