@@ -1127,6 +1127,9 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       patchDiag({ iceConnectionState: iceState });
 
       if (iceState === "connected" || iceState === "completed") {
+        // Fallback: if SIP confirmed/accepted didn't fire (some PBX configs),
+        // ICE media path succeeding is a reliable signal that the call is live.
+        setCallState((prev) => (prev === "ringing" || prev === "dialing") ? "connected" : prev);
         syncReceiversToAudio(pc);
         // Kick off stats polling and do an immediate first poll for candidate type.
         startStatsPolling(pc);
@@ -1228,10 +1231,13 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     patchSessionMeta(mcId, { remoteParty: party, isActive: true });
 
     session.on("progress", () => {
-      setCallState("ringing");
+      // Guard: never regress from "connected" → "ringing". A late SIP 180 Ringing
+      // can arrive after 200 OK on some VitalPBX proxy setups; without this guard
+      // the call transitions back to the ringing/outgoing screen after connecting.
+      setCallState((prev) => (prev === "dialing" ? "ringing" : prev));
       patchSessionMeta(mcId, { state: "ringing" });
-      // Outbound: play US ringback (440+480 Hz, 2s on / 4s off)
-      if (callDirectionRef.current === "outbound") startRingback();
+      // Outbound: play US ringback — skip if session already established (late 180)
+      if (callDirectionRef.current === "outbound" && !session.isEstablished?.()) startRingback();
     });
     session.on("accepted", () => {
       stopAllAudio();
