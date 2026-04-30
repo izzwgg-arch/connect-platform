@@ -118,7 +118,29 @@ function resolveDisplayName(t: VitalTenantRaw): string {
 
 export async function loadTenantOptions(): Promise<Tenant[]> {
   try {
-    // Try VitalPBX tenants first — real PBX customers.
+    // Use Connect's platform tenant table first. This is DB-backed and fast on
+    // app boot; the PBX tenant directory is warmed server-side in the
+    // background and should not block every page load.
+    const platformRows = await apiGet<PlatformTenantRow[]>("/admin/tenants?light=1").catch(() => null);
+    if (Array.isArray(platformRows)) {
+      const platformTenants = platformRows
+        .filter((row) => row.name)
+        .filter((row) => row.isApproved !== false)
+        .filter((row) => !matchesSmokeNamePattern(row.name || ""))
+        .map((row) => ({
+          id: String(row.id || ""),
+          name: row.name || "Tenant",
+          plan: "Business" as const,
+          status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED",
+        }))
+        .filter((t) => t.id)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (platformTenants.length > 0) return platformTenants;
+    }
+
+    // Fallback only: VitalPBX tenants can still populate the switcher if the
+    // platform table is empty/unavailable, but normal page boot should never
+    // wait on PBX.
     const pbxResult = await apiGet<{ instanceId: string; tenants: VitalTenantRaw[] }>(
       "/admin/pbx/tenants"
     ).catch(() => null);
@@ -150,21 +172,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
       }
     }
 
-    // Fallback: platform tenants (when VitalPBX API is unavailable)
-    const platformRows = await apiGet<PlatformTenantRow[]>("/admin/tenants").catch(() => null);
-    if (!Array.isArray(platformRows)) return [];
-    return platformRows
-      .filter((row) => row.name)
-      .filter((row) => row.isApproved !== false)
-      .filter((row) => !matchesSmokeNamePattern(row.name || ""))
-      .map((row) => ({
-        id: String(row.id || ""),
-        name: row.name || "Tenant",
-        plan: "Business" as const,
-        status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED",
-      }))
-      .filter((t) => t.id)
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return [];
   } catch {
     return [];
   }

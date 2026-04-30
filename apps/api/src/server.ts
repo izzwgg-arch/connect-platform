@@ -5212,7 +5212,19 @@ app.get("/admin/tenants", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
 
+  const query = z.object({ light: z.coerce.boolean().optional().default(false) }).parse(req.query || {});
   const tenants = await db.tenant.findMany({ orderBy: { createdAt: "desc" } });
+  if (query.light) {
+    return tenants
+      .filter((t) => (t as any).kind === "CUSTOMER" && t.isApproved === true)
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        pbxTenantId: null,
+        pbxInstanceId: null,
+        isApproved: t.isApproved,
+      }));
+  }
   const rows = await Promise.all(tenants.map(async (t) => {
     const [userCount, campaignCount, pbxLink] = await Promise.all([
       db.user.count({ where: { tenantId: t.id } }),
@@ -11480,6 +11492,73 @@ async function vitalDeleteByResource(client: VitalPbxClient, resource: VitalReso
   throw new Error("resource_not_supported");
 }
 
+const PBX_TENANT_LIST_CACHE_TTL_MS = 5 * 60_000;
+const PBX_TENANT_LIST_STALE_MS = 30_000;
+const PBX_TENANT_LIST_CACHE = new Map<string, {
+  at: number;
+  payload: { instanceId: string; tenants: any[]; directoryUpserted: number; inboundDidSync: { tenantsProcessed: number; numbersUpserted: number; errors: string[] } };
+}>();
+const PBX_TENANT_LIST_INFLIGHT = new Map<string, Promise<{ instanceId: string; tenants: any[]; directoryUpserted: number; inboundDidSync: { tenantsProcessed: number; numbersUpserted: number; errors: string[] } }>>();
+
+async function listPbxTenantsFromDirectory(instanceId: string): Promise<any[]> {
+  const rows = await db.pbxTenantDirectory.findMany({
+    where: { pbxInstanceId: instanceId },
+    orderBy: { displayName: "asc" },
+    select: { vitalTenantId: true, tenantSlug: true, tenantCode: true, displayName: true },
+    take: 500,
+  });
+  return rows.map((r) => ({
+    tenant_id: r.vitalTenantId,
+    id: r.vitalTenantId,
+    name: r.tenantSlug || r.tenantCode || r.vitalTenantId,
+    description: r.displayName || r.tenantSlug || r.tenantCode || r.vitalTenantId,
+    enabled: true,
+  }));
+}
+
+function startPbxTenantListRefresh(instance: any, auth: { token: string; secret?: string }, cacheKey: string) {
+  const existing = PBX_TENANT_LIST_INFLIGHT.get(cacheKey);
+  if (existing) return existing;
+
+  const startedAt = Date.now();
+  const promise = (async () => {
+    const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
+    const tenants = await client.listTenants();
+    let directoryUpserted = 0;
+    try {
+      const d = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+      directoryUpserted = d.upserted;
+    } catch (e: any) {
+      app.log.warn({ err: e?.message }, "admin/pbx/tenants: directory sync failed");
+    }
+
+    const payload = {
+      instanceId: instance.id,
+      tenants,
+      directoryUpserted,
+      inboundDidSync: { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] },
+    };
+    PBX_TENANT_LIST_CACHE.set(cacheKey, { at: Date.now(), payload });
+
+    // DID sync can fan out across tenants; never make UI boot wait for it.
+    void syncPbxTenantInboundDids(db, instance.id)
+      .then((inboundDidSync) => {
+        if (inboundDidSync.errors.length) {
+          app.log.warn({ count: inboundDidSync.errors.length, sample: inboundDidSync.errors.slice(0, 3) }, "admin/pbx/tenants: some inbound DID fetches failed");
+        }
+      })
+      .catch((e: any) => app.log.warn({ err: e?.message }, "admin/pbx/tenants: inbound DID sync failed"));
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs > 4_000) app.log.warn({ elapsedMs, tenantCount: tenants.length }, "admin/pbx/tenants: refresh slow");
+    return payload;
+  })().finally(() => {
+    PBX_TENANT_LIST_INFLIGHT.delete(cacheKey);
+  });
+  PBX_TENANT_LIST_INFLIGHT.set(cacheKey, promise);
+  return promise;
+}
+
 app.get("/admin/pbx/tenants", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
@@ -11489,26 +11568,59 @@ app.get("/admin/pbx/tenants", async (req, reply) => {
     : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
-  const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
-  const tenants = await client.listTenants();
-  let directoryUpserted = 0;
-  try {
-    const d = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
-    directoryUpserted = d.upserted;
-  } catch (e: any) {
-    app.log.warn({ err: e?.message }, "admin/pbx/tenants: directory sync failed");
+  const cacheKey = instance.id;
+  const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
+  const age = cached ? Date.now() - cached.at : null;
+  if (cached && age !== null && age < PBX_TENANT_LIST_STALE_MS) {
+    return { ...cached.payload, cached: true, stale: false, refreshInProgress: PBX_TENANT_LIST_INFLIGHT.has(cacheKey), cacheAgeMs: age };
   }
-  let inboundDidSync = { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] };
-  try {
-    inboundDidSync = await syncPbxTenantInboundDids(db, instance.id);
-    if (inboundDidSync.errors.length) {
-      app.log.warn({ count: inboundDidSync.errors.length, sample: inboundDidSync.errors.slice(0, 3) }, "admin/pbx/tenants: some inbound DID fetches failed");
-    }
-  } catch (e: any) {
-    app.log.warn({ err: e?.message }, "admin/pbx/tenants: inbound DID sync failed");
+  if (cached) {
+    void startPbxTenantListRefresh(instance, auth, cacheKey).catch(() => undefined);
+    return { ...cached.payload, cached: true, stale: age! > PBX_TENANT_LIST_CACHE_TTL_MS, refreshInProgress: PBX_TENANT_LIST_INFLIGHT.has(cacheKey), cacheAgeMs: age };
   }
-  return { instanceId: instance.id, tenants, directoryUpserted, inboundDidSync };
+
+  const directoryTenants = await listPbxTenantsFromDirectory(instance.id);
+  if (directoryTenants.length > 0) {
+    const payload = {
+      instanceId: instance.id,
+      tenants: directoryTenants,
+      directoryUpserted: 0,
+      inboundDidSync: { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] },
+    };
+    PBX_TENANT_LIST_CACHE.set(cacheKey, { at: Date.now(), payload });
+    void startPbxTenantListRefresh(instance, auth, cacheKey).catch(() => undefined);
+    return { ...payload, cached: true, stale: true, refreshInProgress: true, cacheAgeMs: 0 };
+  }
+
+  try {
+    const payload = await startPbxTenantListRefresh(instance, auth, cacheKey);
+    return { ...payload, cached: false, stale: false, refreshInProgress: false, cacheAgeMs: 0 };
+  } catch (e: any) {
+    return reply.status(502).send({ error: "PBX_TENANT_LIST_UNAVAILABLE", message: String(e?.message || "PBX tenant list unavailable") });
+  }
 });
+
+let _pbxTenantListWarmStarted = false;
+function startPbxTenantListWarm() {
+  if (_pbxTenantListWarmStarted) return;
+  _pbxTenantListWarmStarted = true;
+  const warm = async () => {
+    try {
+      const instances = await db.pbxInstance.findMany({ where: { isEnabled: true }, take: 5 });
+      for (const instance of instances) {
+        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+        const cacheKey = instance.id;
+        const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
+        if (cached && Date.now() - cached.at < PBX_TENANT_LIST_STALE_MS) continue;
+        void startPbxTenantListRefresh(instance, auth, cacheKey).catch(() => undefined);
+      }
+    } catch (e: any) {
+      app.log.warn({ err: e?.message || String(e) }, "pbx_tenant_list_warm_failed");
+    }
+  };
+  setTimeout(warm, 3_000);
+  setInterval(warm, PBX_TENANT_LIST_CACHE_TTL_MS);
+}
 
 /** Explicit backfill: list tenants once, refresh directory + inbound DIDs (same PBX call pattern as GET /admin/pbx/tenants). */
 app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
@@ -26439,6 +26551,7 @@ const port = Number(process.env.PORT || 3001);
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
   startPbxLiveDashboardWarm();
+  startPbxTenantListWarm();
 })().catch((e) => {
   app.log.error(e);
   process.exit(1);
