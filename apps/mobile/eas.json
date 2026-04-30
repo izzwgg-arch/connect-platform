@@ -12,6 +12,10 @@
       "android": {
         "buildType": "apk"
       },
+      "ios": {
+        "simulator": true,
+        "resourceClass": "m-medium"
+      },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "true",
         "EXPO_PUBLIC_LOG_LEVEL": "debug"
@@ -24,6 +28,9 @@
       "android": {
         "buildType": "apk"
       },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",
         "EXPO_PUBLIC_LOG_LEVEL": "info"
@@ -35,6 +42,10 @@
       "credentialsSource": "local",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "autoIncrement": "buildNumber",
+        "resourceClass": "m-medium"
       },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",

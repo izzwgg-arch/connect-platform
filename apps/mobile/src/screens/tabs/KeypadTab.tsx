@@ -8,23 +8,24 @@ import {
   Dimensions,
   Alert,
   Platform,
-  PermissionsAndroid,
   Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useSip } from '../../context/SipContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { usePresence } from '../../context/PresenceContext';
 import { Avatar } from '../../components/ui/Avatar';
-import { getContacts } from '../../api/client';
+import { AppConfirmDialog } from '../../components/ui/AppPopup';
+import { getContacts, getVoiceExtension } from '../../api/client';
 import { loadLocalCallHistory } from '../../storage/callHistory';
-import type { Contact, CallRecord } from '../../types';
+import type { Contact, CallRecord, VoiceExtension } from '../../types';
 import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
+import { ensureMicPermissionOrAlert } from '../../sip/permissions';
 
 const { width, height: screenHeight } = Dimensions.get('window');
 
@@ -46,10 +47,10 @@ const KEYS = [
 // Compact layout: tighter gutters so the keypad sits closer to the number
 // display above and the call button below. Key size stays comfortable by
 // clamping to a sensible min/max.
-const PAD_H_PADDING = 28;
-const KEY_GAP = 12;
-const RAW_KEY_SIZE = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
-const KEY_SIZE = Math.max(66, Math.min(82, Math.floor(RAW_KEY_SIZE * 0.9)));
+const PAD_H_PADDING = 14;
+const KEY_GAP = 8;
+const KEY_CELL_WIDTH = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
+const KEY_SIZE = 70;
 const SHORT_SCREEN = screenHeight < 740;
 
 type Suggestion = {
@@ -73,7 +74,7 @@ function DialKey({
   onLongPress?: (d: string) => void;
   disabled?: boolean;
 }) {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(1)).current;
 
@@ -121,13 +122,6 @@ function DialKey({
     }
   };
 
-  const keyBg = isDark
-    ? 'rgba(255, 255, 255, 0.05)'
-    : 'rgba(15, 23, 42, 0.035)';
-  const keyBorder = isDark
-    ? 'rgba(255, 255, 255, 0.07)'
-    : 'rgba(15, 23, 42, 0.06)';
-
   return (
     <Pressable
       onPress={handlePress}
@@ -141,11 +135,8 @@ function DialKey({
         style={[
           styles.key,
           {
-            width: KEY_SIZE,
+            width: KEY_CELL_WIDTH,
             height: KEY_SIZE,
-            borderRadius: KEY_SIZE / 2,
-            backgroundColor: keyBg,
-            borderColor: keyBorder,
             transform: [{ scale: scaleAnim }],
             opacity: opacityAnim,
           },
@@ -157,50 +148,6 @@ function DialKey({
         ) : null}
       </Animated.View>
     </Pressable>
-  );
-}
-
-/** Soft pulsing ring behind the call button. Cheap: single scale + opacity loop. */
-function CallGlow({ color, active }: { color: string; active: boolean }) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const opacity = useRef(new Animated.Value(0.35)).current;
-
-  useEffect(() => {
-    if (!active) {
-      scale.setValue(1);
-      opacity.setValue(0);
-      return undefined;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(scale, { toValue: 1.35, duration: 1500, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0, duration: 1500, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0.35, duration: 0, useNativeDriver: true }),
-        ]),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [active, opacity, scale]);
-
-  if (!active) return null;
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={[
-        StyleSheet.absoluteFillObject,
-        {
-          borderRadius: 999,
-          backgroundColor: color,
-          transform: [{ scale }],
-          opacity,
-        },
-      ]}
-    />
   );
 }
 
@@ -259,6 +206,7 @@ export function KeypadTab() {
   const { colors, isDark } = useTheme();
   const sip = useSip();
   const { token } = useAuth();
+  const { setMyStatus, isDnd } = usePresence();
   const insets = useSafeAreaInsets();
   const [number, setNumber] = useState('');
   const [dialing, setDialing] = useState(false);
@@ -266,8 +214,9 @@ export function KeypadTab() {
   const [redialFilled, setRedialFilled] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [recent, setRecent] = useState<CallRecord[]>([]);
+  const [voice, setVoice] = useState<VoiceExtension | null>(null);
+  const [dndConfirmOpen, setDndConfirmOpen] = useState(false);
   const prevCallStateRef = useRef(sip.callState);
-  const callScale = useRef(new Animated.Value(1)).current;
 
   // Load suggestion sources on focus. Network call is best-effort — failure
   // leaves the suggestion list empty but never disables the dialer.
@@ -280,6 +229,9 @@ export function KeypadTab() {
       if (token) {
         getContacts(token, '')
           .then((res) => { if (alive) setContacts(res.rows ?? []); })
+          .catch(() => {});
+        getVoiceExtension(token)
+          .then((next) => { if (alive) setVoice(next); })
           .catch(() => {});
       }
       return () => { alive = false; };
@@ -303,6 +255,7 @@ export function KeypadTab() {
     sip.callState === 'dialing' ||
     sip.callState === 'ringing' ||
     sip.callState === 'ended';
+  const registered = sip.registrationState === 'registered';
 
   const handleKey = (digit: string) => {
     playDtmfTone(digit);
@@ -332,6 +285,11 @@ export function KeypadTab() {
     setRedialFilled(false);
   };
 
+  const confirmDnd = useCallback(() => {
+    if (sip.registrationState !== 'registered') return;
+    setDndConfirmOpen(true);
+  }, [sip.registrationState]);
+
   const handleDial = async () => {
     const target = number.trim();
 
@@ -359,27 +317,14 @@ export function KeypadTab() {
       return;
     }
 
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Microphone Permission',
-            message: 'Connect needs microphone access to make calls.',
-            buttonPositive: 'Allow',
-          },
-        );
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert(
-            'Microphone Required',
-            'Microphone access is needed to make calls. Please enable it in Android Settings.',
-          );
-          return;
-        }
-      } catch (e) {
-        console.warn('[Keypad] Mic permission error:', e);
-      }
-    }
+    // Cross-platform mic preflight. On Android this still calls
+    // PermissionsAndroid.request(RECORD_AUDIO) exactly like before. On iOS it
+    // proactively triggers the native mic prompt via react-native-webrtc's
+    // getUserMedia() (already a dependency for SIP) so the user grants access
+    // BEFORE jssip's audio session fails silently. Returns false + shows an
+    // Alert on denial; short-circuits the call attempt in that case.
+    const micOk = await ensureMicPermissionOrAlert();
+    if (!micOk) return;
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     setDialing(true);
@@ -397,13 +342,6 @@ export function KeypadTab() {
     await sip.hangup();
   };
 
-  const callPressIn = useCallback(() => {
-    Animated.spring(callScale, { toValue: 0.93, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
-  }, [callScale]);
-  const callPressOut = useCallback(() => {
-    Animated.spring(callScale, { toValue: 1, useNativeDriver: true, speed: 22, bounciness: 8 }).start();
-  }, [callScale]);
-
   // Format display number nicely
   const formatDisplay = (n: string): string => {
     if (!n) return '';
@@ -420,10 +358,10 @@ export function KeypadTab() {
   // Live suggestions — contacts and recents matched against the typed number.
   const suggestions = useMemo<Suggestion[]>(() => {
     const q = number.trim();
-    if (q.length < 2 || callActive) return [];
+    if (q.length < 1 || callActive) return [];
     const qDigits = q.replace(/\D/g, '');
     const qLower = q.toLowerCase();
-    if (!qDigits && qLower.length < 2) return [];
+    if (!qDigits && qLower.length < 1) return [];
     const out: Suggestion[] = [];
     const seen = new Set<string>();
 
@@ -490,8 +428,6 @@ export function KeypadTab() {
   };
 
   const displayValue = formatDisplay(number);
-  const registered = sip.registrationState === 'registered';
-
   const subHint = redialFilled ? 'Tap call to dial' : null;
 
   const callButtonDisabled = callActive ? false : dialing;
@@ -513,120 +449,33 @@ export function KeypadTab() {
     : registered
     ? 'Ready'
     : 'Not registered';
-
-  const gradientTop = colors.bg;
-  const gradientBottom = isDark ? colors.bgSecondary : colors.bgSecondary;
+  const userLabel = voice?.displayName?.trim() || 'Connect User';
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Layered background: vertical gradient + bottom-center glow for depth. */}
-      <LinearGradient
-        pointerEvents="none"
-        colors={[gradientTop, gradientBottom]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <LinearGradient
-        pointerEvents="none"
-        colors={[colors.transparent, callButtonColor + (isDark ? '1f' : '14')]}
-        start={{ x: 0.5, y: 0.4 }}
-        end={{ x: 0.5, y: 1 }}
-        style={[StyleSheet.absoluteFill, { opacity: callActive ? 0.9 : 0.65 }]}
-      />
-
       {/* ── Top bar ── */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-        <View style={styles.topBarSide} />
-        <View style={styles.topBarActions}>
-          <TouchableOpacity
-            activeOpacity={0.78}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={[styles.topBarIcon, { backgroundColor: colors.surfaceElevated + 'aa', borderColor: colors.border }]}
-          >
-            <Ionicons name="search-outline" size={18} color={colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.78}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={[styles.topBarIcon, { backgroundColor: colors.surfaceElevated + 'aa', borderColor: colors.border }]}
-          >
-            <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* ── Display Area ── */}
-      <View style={styles.displayArea}>
-        <View style={styles.numberRow}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
+        <TouchableOpacity
+          style={[
+            styles.readyTag,
+            {
+              backgroundColor: registered ? (isDnd ? colors.warningMuted : colors.successMuted) : colors.dangerMuted,
+              borderColor: registered ? (isDnd ? colors.warning + '50' : colors.callGreen + '40') : colors.danger + '40',
+            },
+          ]}
+          activeOpacity={registered ? 0.72 : 1}
+          onPress={registered ? confirmDnd : undefined}
+        >
           <Text
             style={[
-              styles.displayText,
-              {
-                color: colors.text,
-                fontSize:
-                  displayValue.length > 14
-                    ? 28
-                    : displayValue.length > 10
-                    ? 34
-                    : displayValue.length > 6
-                    ? 40
-                    : 46,
-              },
+              styles.readyTagText,
+              { color: registered ? (isDnd ? colors.warning : colors.callGreen) : colors.danger },
             ]}
             numberOfLines={1}
-            adjustsFontSizeToFit
           >
-            {displayValue || ' '}
+            {userLabel}
           </Text>
-
-          {/* Backspace inline with display — only shown when something is typed. */}
-          {number.length > 0 && (
-            <Pressable
-              onPress={handleBackspace}
-              onLongPress={handleLongBackspace}
-              delayLongPress={500}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              style={styles.backspaceBtn}
-            >
-              <Ionicons name="backspace-outline" size={26} color={colors.textSecondary} />
-            </Pressable>
-          )}
-        </View>
-
-        {subHint && (
-          <Text style={[styles.hintText, { color: colors.textTertiary }]} numberOfLines={1}>
-            {subHint}
-          </Text>
-        )}
-
-        {!suggestions.length && (
-          <View
-            style={[
-              styles.statusPill,
-              {
-                backgroundColor: registered
-                  ? isDark
-                    ? 'rgba(34,197,94,0.14)'
-                    : 'rgba(22,163,74,0.09)'
-                  : isDark
-                  ? 'rgba(244,63,94,0.14)'
-                  : 'rgba(225,29,72,0.09)',
-                borderColor: registered ? colors.callGreen + '40' : colors.danger + '40',
-              },
-            ]}
-          >
-            <View style={[styles.statusDot, { backgroundColor: registered ? colors.callGreen : colors.danger }]} />
-            <Text style={[styles.statusText, { color: registered ? colors.callGreen : colors.danger }]} numberOfLines={1}>
-              {statusLabel}
-            </Text>
-            {sip.lastError && !callActive && (
-              <Text style={[styles.statusText, { color: colors.danger, marginLeft: 6 }]} numberOfLines={1}>
-                · {sip.lastError}
-              </Text>
-            )}
-          </View>
-        )}
+        </TouchableOpacity>
       </View>
 
       {/* ── Live suggestions (contacts + recents) ── */}
@@ -640,6 +489,45 @@ export function KeypadTab() {
 
       {/* Flex spacer — absorbs free vertical space above the keypad. */}
       <View style={styles.spacer} />
+
+      {/* ── Display Area: sits directly above the keypad ── */}
+      <View style={styles.displayArea}>
+        <View style={styles.numberRow}>
+          <Text
+            style={[
+              styles.displayText,
+              {
+                color: colors.text,
+                fontSize:
+                  displayValue.length > 14
+                    ? 26
+                    : displayValue.length > 10
+                    ? 31
+                    : displayValue.length > 6
+                    ? 36
+                    : 42,
+              },
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
+            {displayValue || ' '}
+          </Text>
+
+        </View>
+
+        {subHint && (
+          <Text style={[styles.hintText, { color: colors.textTertiary }]} numberOfLines={1}>
+            {subHint}
+          </Text>
+        )}
+
+        {callActive && (
+          <Text style={[styles.callStateText, { color: callButtonColor }]} numberOfLines={1}>
+            {statusLabel}
+          </Text>
+        )}
+      </View>
 
       {/* ── Keypad Grid ── */}
       <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING }]}>
@@ -658,36 +546,61 @@ export function KeypadTab() {
 
         {/* ── Call Button ── */}
         <View style={[styles.callRow, { paddingBottom: insets.bottom + 14 }]}>
-          <View style={styles.callBtnWrap}>
-            <CallGlow color={callButtonColor} active={registered && !callActive} />
-            <Animated.View style={{ transform: [{ scale: callScale }] }}>
-              <TouchableOpacity
-                style={[
-                  styles.callBtn,
-                  {
-                    backgroundColor: callButtonColor,
-                    shadowColor: callButtonColor,
-                  },
-                ]}
-                onPress={callActive ? handleHangup : handleDial}
-                onPressIn={callPressIn}
-                onPressOut={callPressOut}
-                activeOpacity={0.9}
-                disabled={callButtonDisabled}
-                accessibilityRole="button"
-                accessibilityLabel={callActive ? 'End call' : 'Call'}
-              >
-                <Ionicons
-                  name="call"
-                  size={32}
-                  color="#fff"
-                  style={callActive ? { transform: [{ rotate: '135deg' }] } : undefined}
-                />
-              </TouchableOpacity>
-            </Animated.View>
-          </View>
+          {number.length > 0 && (
+            <TouchableOpacity
+              onPress={handleBackspace}
+              onLongPress={handleLongBackspace}
+              delayLongPress={500}
+              activeOpacity={0.75}
+              style={[
+                styles.deleteBtn,
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.surfaceElevated,
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Delete digit"
+            >
+              <Ionicons name="backspace-outline" size={24} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.callBtn,
+              {
+                backgroundColor: callButtonColor,
+                shadowColor: callButtonColor,
+              },
+            ]}
+            onPress={callActive ? handleHangup : handleDial}
+            activeOpacity={0.9}
+            disabled={callButtonDisabled}
+            accessibilityRole="button"
+            accessibilityLabel={callActive ? 'End call' : 'Call'}
+          >
+            <Ionicons
+              name="call"
+              size={30}
+              color="#fff"
+              style={callActive ? { transform: [{ rotate: '135deg' }] } : undefined}
+            />
+          </TouchableOpacity>
         </View>
       </View>
+      <AppConfirmDialog
+        visible={dndConfirmOpen}
+        title="Enable Do Not Disturb?"
+        message="Would you like to put your phone into DND?"
+        cancelLabel="Cancel"
+        confirmLabel="Yes"
+        onClose={() => setDndConfirmOpen(false)}
+        onConfirm={() => {
+          setMyStatus('dnd');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        }}
+      />
     </View>
   );
 }
@@ -699,19 +612,24 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     paddingHorizontal: spacing['5'],
-    paddingBottom: 2,
+    paddingBottom: 4,
   },
-  topBarSide: { width: 40, height: 40 },
-  topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  topBarIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  readyTag: {
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 7,
+  },
+  readyTagText: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+    includeFontPadding: false,
   },
 
   // ── Display ──────────────────────────────────────────
@@ -719,13 +637,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: PAD_H_PADDING,
     paddingTop: 4,
-    paddingBottom: 6,
+    paddingBottom: 8,
   },
   numberRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: 46,
     width: '100%',
     gap: 8,
   },
@@ -735,41 +653,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     flex: 1,
   },
-  backspaceBtn: {
-    padding: 4,
-  },
   hintText: {
     fontSize: 12,
     marginTop: 2,
     letterSpacing: 0.2,
   },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    marginTop: 8,
-    gap: 6,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusText: {
+  callStateText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 0.3,
+    marginTop: 6,
   },
 
   // ── Suggestions ─────────────────────────────────────
   suggestionsWrap: {
     paddingHorizontal: PAD_H_PADDING,
-    paddingTop: 6,
+    paddingTop: 12,
     paddingBottom: 2,
     gap: 6,
+    minHeight: SHORT_SCREEN ? 84 : 118,
   },
   suggestion: {
     flexDirection: 'row',
@@ -812,7 +714,7 @@ const styles = StyleSheet.create({
   // down toward the bottom navigation bar for ergonomic thumb reach.
   spacer: {
     flex: 1,
-    minHeight: 6,
+    minHeight: 10,
   },
 
   // ── Keys ─────────────────────────────────────────────
@@ -820,26 +722,27 @@ const styles = StyleSheet.create({
     // No flex — height determined by content; spacer above handles positioning
   },
   keyGrid: {
+    width: KEY_CELL_WIDTH * 3 + KEY_GAP * 2,
+    alignSelf: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     rowGap: KEY_GAP,
     columnGap: KEY_GAP,
-    marginBottom: 14,
+    marginBottom: 10,
   },
   key: {
-    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyDigit: {
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: '500',
     letterSpacing: 0.3,
-    lineHeight: 34,
+    lineHeight: 37,
   },
   keySub: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '800',
     letterSpacing: 2.0,
     marginTop: 1,
@@ -848,24 +751,30 @@ const styles = StyleSheet.create({
 
   // ── Call Button ─────────────────────────────────────
   callRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
-  callBtnWrap: {
-    width: 78,
-    height: 78,
+  deleteBtn: {
+    position: 'absolute',
+    right: (KEY_CELL_WIDTH - 52) / 2,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   callBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.45,
-    shadowRadius: 18,
+    shadowRadius: 14,
     elevation: 10,
   },
 });

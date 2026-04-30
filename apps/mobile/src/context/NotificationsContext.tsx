@@ -37,6 +37,7 @@ import {
   showIncomingNativeCall,
   subscribeNativeCallActions,
 } from "../sip/callkeep";
+import { initVoipPushListener, getCachedVoipPushToken } from "../sip/voipPush";
 // NOTE: stopAllTelephonyAudio is imported statically here rather than via
 // `void import("../audio/telephonyAudio").then(...)`. The dynamic-import
 // pattern was throwing `Object is not a function` inside teardown paths
@@ -597,6 +598,14 @@ export function NotificationsProvider({
   }, [callSessions.hasAnyOngoingCall]);
 
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+  // iOS VoIP push token (hex, delivered by PushKit). Null on Android and on
+  // iOS until the device registers with Apple — the register event can take
+  // a few seconds on first launch. See src/sip/voipPush.ts for lifecycle.
+  const [voipPushToken, setVoipPushToken] = useState<string | null>(() => getCachedVoipPushToken());
+  // Remember which VoIP token we've already pushed to the backend so we
+  // don't spam registerMobileDevice on every re-render. A change (rotation
+  // or late first-arrival) triggers exactly one re-register.
+  const lastSentVoipTokenRef = useRef<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<CallInvite | null>(null);
   const [incomingCallUiState, setIncomingCallUiState] = useState<NotificationsState["incomingCallUiState"]>({
     phase: "idle",
@@ -1093,9 +1102,15 @@ export function NotificationsProvider({
       return;
     }
 
+    // Attach the iOS VoIP push token (if PushKit has issued one). Android
+    // always omits this. The backend accepts `voipPushToken` optionally and
+    // stores it on the MobileDevice row; the worker's future APNs VoIP
+    // delivery path will read it from there.
+    const voipToken = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
     const reg = await registerMobileDevice(token, {
       platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
       expoPushToken: pushToken,
+      ...(voipToken ? { voipPushToken: voipToken } : {}),
       deviceName: Device.modelName || `${Platform.OS}-device`,
     }).catch((e) => {
       console.warn("[PUSH_RETRY] registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
@@ -1103,7 +1118,7 @@ export function NotificationsProvider({
     });
 
     if (reg?.id) deviceIdRef.current = String(reg.id);
-    console.log("[PUSH_RETRY] Registration result — id:", reg?.id ?? "(none)");
+    console.log("[PUSH_RETRY] Registration result — id:", reg?.id ?? "(none)", "voip:", voipToken ? "yes" : "no");
 
     setExpoPushToken(pushToken);
     setCallReadiness((prev) => ({
@@ -2537,6 +2552,29 @@ export function NotificationsProvider({
       }
     }).catch(() => undefined);
 
+    // iOS VoIP push listener — no-op on Android. Installed alongside the
+    // CallKeep subscription so an incoming VoIP push can drive
+    // showIncomingNativeCall without racing the CallKit bridge. The token
+    // is cached in src/sip/voipPush.ts so registerMobileDevice can pick it
+    // up on next register/refresh; see the voipPushToken useEffect below
+    // for the late-arrival re-register path.
+    const unsubscribeVoip = initVoipPushListener({
+      onToken: (hexToken) => {
+        console.log("[VOIP_PUSH] token received:", hexToken.slice(0, 12) + "...");
+        setVoipPushToken(hexToken);
+      },
+      onIncoming: (payload) => {
+        console.log("[VOIP_PUSH] incoming notification, inviteId:", payload?.inviteId ?? "(none)");
+        // We intentionally do NOT call showIncomingNativeCall here today —
+        // the AppDelegate path invokes CallKit BEFORE JS runs for killed/
+        // background launches, and NotificationsContext's existing Expo
+        // push listener handles the foreground case. When the worker-side
+        // APNs VoIP delivery lands, this is the hook point to add the
+        // post-native-UI JS reconciliation (e.g. prefetching the invite
+        // record, setting inflight state) without duplicating CallKit.
+      },
+    });
+
     const unsubNative = subscribeNativeCallActions({
       onAnswer: async (callId) => {
         const t0 = Date.now();
@@ -2571,9 +2609,40 @@ export function NotificationsProvider({
       },
     });
 
-    return () => { unsubNative(); };
+    return () => {
+      unsubNative();
+      try { unsubscribeVoip(); } catch { /* ignore — unmount racing teardown */ }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, emitAnswerFlowEvent, handleAcceptInvite, handleDeclineInvite, resolveInviteForAction, safeSetInvite]);
+
+  // Re-register the backend MobileDevice when the VoIP push token arrives
+  // late (normal on a fresh iOS install — PushKit issues the token async,
+  // often after our initial registerMobileDevice already fired with just
+  // the expoPushToken). We dedupe via lastSentVoipTokenRef so the effect
+  // body is a no-op on every subsequent render. Android is early-returned.
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    if (!voipPushToken || !token || !expoPushToken) return;
+    if (lastSentVoipTokenRef.current === voipPushToken) return;
+    lastSentVoipTokenRef.current = voipPushToken;
+    (async () => {
+      try {
+        const reg = await registerMobileDevice(token, {
+          platform: "IOS",
+          expoPushToken,
+          voipPushToken,
+          deviceName: Device.modelName || "ios-device",
+        });
+        if (reg?.id) deviceIdRef.current = String(reg.id);
+        console.log("[VOIP_PUSH] re-registered device with VoIP token, id:", reg?.id ?? "(none)");
+      } catch (e) {
+        console.warn("[VOIP_PUSH] re-register with VoIP token failed:", e instanceof Error ? e.message : String(e));
+        // Clear so we retry on the next token delivery if it fails.
+        lastSentVoipTokenRef.current = null;
+      }
+    })();
+  }, [voipPushToken, token, expoPushToken]);
 
   // ── Native notification deep-link actions ──────────────────────────────────
 
@@ -2775,9 +2844,13 @@ export function NotificationsProvider({
 
       if (currentToken) {
         console.log("[PUSH_INIT] Registering device with backend...");
+        // Same VoIP-token attach as the retry path — see the PUSH_RETRY
+        // block above for why this is iOS-only and optional.
+        const voipToken = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
         const reg = await registerMobileDevice(token, {
           platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
           expoPushToken: currentToken,
+          ...(voipToken ? { voipPushToken: voipToken } : {}),
           deviceName: Device.modelName || `${Platform.OS}-device`,
         }).catch((e) => {
           console.warn("[PUSH_INIT] registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
@@ -2785,7 +2858,7 @@ export function NotificationsProvider({
         });
         if (reg?.id) {
           deviceIdRef.current = String(reg.id);
-          console.log("[PUSH_INIT] Device registered, id:", reg.id);
+          console.log("[PUSH_INIT] Device registered, id:", reg.id, "voip:", voipToken ? "yes" : "no");
         } else {
           console.warn("[PUSH_INIT] registerMobileDevice returned no id — response:", JSON.stringify(reg));
         }

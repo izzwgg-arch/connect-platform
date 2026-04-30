@@ -8,6 +8,7 @@ import {
   Modal,
   Platform,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import {
   getCallFlowSnapshot,
@@ -60,13 +61,18 @@ export function CallFlowDebugOverlay() {
   }, [snap.recentLines]);
 
   const joined = snap.recentLines.join(" ");
+  const insets = useSafeAreaInsets();
+  // Lift the FAB above the iPhone home indicator + bottom tab bar. On Android
+  // the translucent nav bar typically gives us insets.bottom=0 and the 100
+  // covers the tab bar height, which matches the pre-fix look.
+  const fabBottom = Math.max(insets.bottom, 0) + 100;
 
   if (!enabled) return null;
 
   return (
     <>
       <TouchableOpacity
-        style={styles.fab}
+        style={[styles.fab, { bottom: fabBottom }]}
         onPress={() => setOpen(true)}
         activeOpacity={0.85}
         accessibilityLabel="Open call flow debug"
@@ -85,7 +91,13 @@ export function CallFlowDebugOverlay() {
             <Text style={styles.meta}>SIP lastError={sip.lastError ?? snap.lastError ?? "—"}</Text>
 
             <Text style={styles.subTitle}>Stages (substring match on recent buffer)</Text>
-            <ScrollView style={styles.checkScroll} nestedScrollEnabled>
+            <ScrollView
+              style={styles.checkScroll}
+              nestedScrollEnabled
+              bounces={false}
+              alwaysBounceVertical={false}
+              overScrollMode="never"
+            >
               {STAGE_CHECKS.map(({ label, needle }) => (
                 <Text key={needle} style={styles.checkRow}>
                   {joined.includes(needle) ? "✓ " : "· "}
@@ -95,7 +107,13 @@ export function CallFlowDebugOverlay() {
             </ScrollView>
 
             <Text style={styles.subTitle}>Recent CALL_FLOW</Text>
-            <ScrollView style={styles.logScroll} nestedScrollEnabled>
+            <ScrollView
+              style={styles.logScroll}
+              nestedScrollEnabled
+              bounces={false}
+              alwaysBounceVertical={false}
+              overScrollMode="never"
+            >
               <Text style={styles.logText}>{text}</Text>
             </ScrollView>
 
@@ -131,7 +149,9 @@ const styles = StyleSheet.create({
   fab: {
     position: "absolute",
     right: 10,
-    bottom: 120,
+    // `bottom` is set dynamically from useSafeAreaInsets — see the component
+    // body so the FAB never sits under the iPhone home indicator or the
+    // bottom tab bar.
     width: 44,
     height: 44,
     borderRadius: 22,

@@ -137,6 +137,10 @@ const config: ExpoConfig = {
   plugins: [
     withCallKeepManifest,
     './plugins/withIncomingCallService',
+    // iOS VoIP push wiring (PushKit → RNVoipPushNotificationManager).
+    // No-op on Android. See plugins/withIosVoipPush.js for the full contract
+    // and post-prebuild checklist (Apple VoIP cert, worker APNs VoIP path).
+    './plugins/withIosVoipPush',
     'expo-secure-store',
     'expo-task-manager',
     [
