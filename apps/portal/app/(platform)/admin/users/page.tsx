@@ -171,11 +171,14 @@ export default function AdminUsersPage() {
     setSyncResults((prev) => ({ ...prev, [userId]: "" }));
     setMessage("");
     try {
-      await apiPost(`/admin/users/${userId}/phone/sync`, {});
+      await apiPost(`/admin/users/${userId}/phone/sync`, {}, undefined, { timeoutMs: 90000 });
       setSyncResults((prev) => ({ ...prev, [userId]: "✓ synced" }));
       await load();
     } catch (e: any) {
-      const msg = String(e?.message || "sync failed");
+      const rawMsg = String(e?.message || "sync failed");
+      const msg = rawMsg.startsWith("Request timed out")
+        ? `${rawMsg}. VitalPBX did not respond in time. The sync may still finish on the server; refresh the users list and try again if the row still is not provisioned.`
+        : rawMsg;
       // Short inline chip on the row, full actionable message in the top banner.
       const shortChip = msg.startsWith("NO_WEBRTC_DEVICE_ON_PBX")
         ? "no WebRTC device on PBX"
@@ -183,6 +186,8 @@ export default function AdminUsersPage() {
         ? "no SIP secret"
         : msg.startsWith("pbx_sync_failed")
         ? "PBX unreachable"
+        : msg.startsWith("Request timed out")
+        ? "sync timed out"
         : msg.length > 40 ? `${msg.slice(0, 40)}…` : msg;
       setSyncResults((prev) => ({ ...prev, [userId]: shortChip }));
       setMessage(msg);

@@ -347,7 +347,7 @@ function getSolaAdapter(configOverride?: SolaCardknoxConfig): SolaCardknoxAdapte
 }
 
 
-function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: string }): WirePbxClient {
+function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: string; timeoutMs?: number }): WirePbxClient {
   const simulate = (process.env.PBX_SIMULATE || "false").toLowerCase() === "true";
   const baseUrl = config?.baseUrl || process.env.PBX_BASE_URL;
   const token = config?.token || process.env.PBX_API_TOKEN;
@@ -357,7 +357,7 @@ function getWirePbxClient(config?: { baseUrl?: string; token?: string; secret?: 
     baseUrl,
     apiToken: token,
     apiSecret: secret,
-    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
+    timeoutMs: config?.timeoutMs ?? Number(process.env.PBX_TIMEOUT_MS || 10000),
     simulate,
     webhookRegisterPath: process.env.PBX_WEBHOOK_REGISTER_PATH,
     webhookListPath: process.env.PBX_WEBHOOK_LIST_PATH,
@@ -26499,7 +26499,7 @@ const port = Number(process.env.PORT || 3001);
       });
       if (!link) return { skipped: "pbx_not_linked" };
       const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-      const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45000 });
       const vitalTenantId = link.pbxTenantId || undefined;
       return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, vitalTenantId ? { vitalTenantId } : undefined);
     },
@@ -26523,6 +26523,7 @@ const port = Number(process.env.PORT || 3001);
         baseUrl: tenantPbxLink.pbxInstance.baseUrl,
         token: auth.token,
         secret: auth.secret,
+        timeoutMs: 45000,
       }).resetPassword(link.pbxExtensionId);
       return { sipPassword: out.sipPassword };
     },
@@ -26544,6 +26545,7 @@ const port = Number(process.env.PORT || 3001);
         baseUrl: tenantPbxLink.pbxInstance.baseUrl,
         token: auth.token,
         secret: auth.secret,
+        timeoutMs: 45000,
       }).createSipDevice({ pbxExtensionId: link.pbxExtensionId, enableWebrtc: true });
     },
   });

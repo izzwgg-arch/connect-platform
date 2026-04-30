@@ -66,9 +66,26 @@ function browserTenantContext(): string {
   return localStorage.getItem("cc-tenant-id") || "";
 }
 
-async function apiRequest<T>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
+type ApiRequestOptions = {
+  timeoutMs?: number;
+};
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException
+    ? err.name === "AbortError" || /abort/i.test(err.message)
+    : /abort/i.test(String((err as { name?: unknown; message?: unknown } | null)?.name || (err as { message?: unknown } | null)?.message || err));
+}
+
+async function apiRequest<T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: Record<string, unknown>,
+  token?: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${baseUrl()}${path}`, {
       method,
@@ -101,6 +118,11 @@ async function apiRequest<T>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
       throw new ApiError(detail || fallback || `Request failed (${res.status})`, res.status, errPayload);
     }
     return parseJsonResponse<T>(res, text);
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new ApiError(`Request timed out after ${Math.round(timeoutMs / 1000)}s`, 408);
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -110,8 +132,8 @@ export async function apiGet<T>(path: string, token?: string): Promise<T> {
   return apiRequest<T>("GET", path, undefined, token);
 }
 
-export async function apiPost<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
-  return apiRequest<T>("POST", path, body, token);
+export async function apiPost<T>(path: string, body?: Record<string, unknown>, token?: string, options?: ApiRequestOptions): Promise<T> {
+  return apiRequest<T>("POST", path, body, token, options);
 }
 
 export async function apiPut<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
