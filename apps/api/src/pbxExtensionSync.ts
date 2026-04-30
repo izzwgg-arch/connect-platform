@@ -155,13 +155,27 @@ export async function syncExtensionsFromPbx(
           return s || null;
         })();
 
-        // Determine the active device:
-        // Prefer the device with a WebRTC profile (profile_id in webrtcProfileIds).
-        // Fall back to devices[0] if no WebRTC device found.
+        // Determine the active device. Tenant rule: WebRTC devices are named
+        // with a trailing "_1" suffix (e.g. "T7_101_1"). Non-WebRTC devices
+        // (desk / mobile) use the bare extension (e.g. "T7_101").
+        //
+        // Detection order:
+        //   1. Prefer any device whose `user` or `device_name` ends in "_1"  ← WebRTC
+        //   2. Fall back to a device whose profile_id matches a VitalPBX
+        //      "WebRTC" device profile (legacy detection, still works).
+        //   3. Fall back to devices[0] so desk-phone extensions keep syncing.
         const devices: any[] = Array.isArray(ext.devices) ? ext.devices : [];
-        const webrtcDevice = webrtcProfileIds.size > 0
-          ? devices.find((d: any) => webrtcProfileIds.has(String(d.profile_id)))
-          : null;
+        const endsWithWebrtcSuffix = (d: any): boolean => {
+          const u = String(d?.user ?? "").trim();
+          const n = String(d?.device_name ?? "").trim();
+          return /_1$/.test(u) || /_1$/.test(n);
+        };
+        const webrtcDevice =
+          devices.find(endsWithWebrtcSuffix) ??
+          (webrtcProfileIds.size > 0
+            ? devices.find((d: any) => webrtcProfileIds.has(String(d.profile_id)))
+            : null) ??
+          null;
         const activeDevice = webrtcDevice ?? devices[0] ?? null;
 
         // SIP username: use the device's "user" field (e.g. "103_1"), NOT the plain extension number.

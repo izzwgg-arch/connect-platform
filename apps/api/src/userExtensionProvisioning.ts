@@ -454,8 +454,8 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
         ? "NO_WEBRTC_DEVICE_ON_PBX"
         : "SIP_CREDENTIAL_NOT_SET";
       const message = !webrtcEnabled
-        ? `VitalPBX extension ${extLabel} has no WebRTC device. Open VitalPBX → PBX → Extensions → ${extLabel} → Devices → edit the device and turn on "WebRTC Client", then click Sync SIP again.`
-        : `VitalPBX extension ${extLabel} is WebRTC-capable, but the SIP secret was not returned. Open VitalPBX → Extensions → ${extLabel} → Devices, regenerate the password, then click Sync SIP again.`;
+        ? `VitalPBX extension ${extLabel} has no WebRTC device. Open VitalPBX → PBX → Extensions → ${extLabel} → Devices and add a new device whose name ends in "_1" (for example T7_${extLabel}_1) with "WebRTC Client: Yes" enabled. Save + Apply Changes, then click Sync SIP again.`
+        : `VitalPBX extension ${extLabel} has a WebRTC device, but no SIP secret was returned. Open VitalPBX → Extensions → ${extLabel} → Devices → the "_1" device, regenerate its password, Apply Changes, then click Sync SIP again.`;
       return reply.code(409).send({
         error: reason,
         message,
