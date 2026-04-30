@@ -1,8 +1,14 @@
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status = 500) {
+  /** Parsed JSON body returned by the server on non-2xx responses, if any.
+   *  Callers that need structured error details (e.g. the IVR publish
+   *  endpoint returns `{ error: "prompt_refs_not_in_catalog", missing: [...] }`
+   *  on 422) can read this without re-parsing the message. */
+  body: unknown | null;
+  constructor(message: string, status = 500, body: unknown | null = null) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -92,7 +98,7 @@ async function apiRequest<T>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
             ? `${text.trim().slice(0, 200)}…`
             : text.trim()
           : "";
-      throw new ApiError(detail || fallback || `Request failed (${res.status})`, res.status);
+      throw new ApiError(detail || fallback || `Request failed (${res.status})`, res.status, errPayload);
     }
     return parseJsonResponse<T>(res, text);
   } finally {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
@@ -278,6 +278,77 @@ function usePromptCatalog(tenantId: string | undefined): {
   return { prompts, loading, error, reload };
 }
 
+// ── Publish pre-flight: missing prompt refs ──────────────────────────────────
+//
+// Mirrors the server-side check in apps/api/src/server.ts →
+// ivrResolveMissingPromptRefs. Keeping them in sync lets the UI warn the
+// admin BEFORE they click Publish instead of only surfacing the 422 after.
+// When the API later accepts a ref we flagged (e.g. because the catalog
+// refreshed mid-click), the publish goes through anyway — the UI side is
+// purely advisory. When the API blocks a ref we didn't flag (e.g. we
+// haven't loaded the catalog yet), the 422 handler in PublishTab renders
+// the server's `missing` list verbatim.
+
+// Stock Asterisk defaults that the server whitelists. Keep in sync with the
+// IVR_DEFAULT_PROMPT_REFS set in apps/api/src/server.ts so we don't flag
+// prompts the server will accept.
+const IVR_DEFAULT_PROMPT_REFS_UI = new Set([
+  "pbx-invalid",
+  "vm-goodbye",
+  "vm-enter-num-to-call",
+]);
+
+interface MissingPromptRef {
+  profileId: string;
+  profileName: string;
+  profileType: RouteType;
+  field: "pbxPromptRef" | "pbxInvalidPromptRef" | "pbxTimeoutPromptRef" | "pbxRetryPromptRef";
+  fieldLabel: string;
+  ref: string;
+}
+
+function collectMissingPromptRefs(
+  profiles: RouteProfile[],
+  prompts: PromptCatalogRow[],
+  tenantId: string,
+): MissingPromptRef[] {
+  // Build an index: for each ref, do we have an active row for this tenant
+  // (or an active shared/unassigned row)? Matches the server logic exactly.
+  const byRef = new Map<string, { ownActive: boolean; sharedActive: boolean }>();
+  for (const p of prompts) {
+    const entry = byRef.get(p.promptRef) ?? { ownActive: false, sharedActive: false };
+    if (p.isActive) {
+      if (p.tenantId === tenantId) entry.ownActive = true;
+      else if (p.tenantId == null) entry.sharedActive = true;
+    }
+    byRef.set(p.promptRef, entry);
+  }
+  const missing: MissingPromptRef[] = [];
+  const check = (profile: RouteProfile, field: MissingPromptRef["field"], fieldLabel: string) => {
+    const ref = profile[field];
+    if (!ref) return;
+    if (IVR_DEFAULT_PROMPT_REFS_UI.has(ref)) return;
+    const entry = byRef.get(ref);
+    if (entry?.ownActive || entry?.sharedActive) return;
+    missing.push({
+      profileId: profile.id,
+      profileName: profile.name,
+      profileType: profile.type,
+      field,
+      fieldLabel,
+      ref,
+    });
+  };
+  for (const p of profiles) {
+    if (!p.isActive) continue;
+    check(p, "pbxPromptRef",        "Greeting");
+    check(p, "pbxInvalidPromptRef", "Invalid digit");
+    check(p, "pbxTimeoutPromptRef", "Timeout");
+    check(p, "pbxRetryPromptRef",   "Retry");
+  }
+  return missing;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ROUTE_TYPE_LABELS: Record<RouteType, string> = {
@@ -445,6 +516,7 @@ export default function IvrRoutingPage() {
         <PublishTab
           history={history}
           preview={preview}
+          profiles={profiles}
           tenantId={tenantId}
           canManage={canManage}
           onRefresh={reload}
@@ -739,6 +811,13 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {profiles.map((p) => {
           const isExpanded = expandedId === p.id;
+          // Reuse the catalog already loaded at this tab level so the badge
+          // costs zero extra round-trips. collectMissingPromptRefs only
+          // considers ACTIVE profiles, which matches what the server will
+          // publish — inactive profiles are skipped at publish time too.
+          const profileMissing = p.isActive
+            ? collectMissingPromptRefs([p], modalPrompts, tenantId)
+            : [];
           return (
             <div key={p.id} style={{
               background: "rgba(15,23,42,0.6)", border: "1px solid rgba(255,255,255,0.08)",
@@ -761,6 +840,27 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
                     <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{ROUTE_TYPE_LABELS[p.type] ?? p.type}</div>
                   </div>
                 </div>
+                {profileMissing.length > 0 && (
+                  <span
+                    title={
+                      profileMissing
+                        .map((m) => `${m.fieldLabel}: ${m.ref} (not in catalog)`)
+                        .join("\n") + "\n\nPublish will be rejected until these recordings are uploaded to VitalPBX and synced into Connect."
+                    }
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: "#fbbf24",
+                      background: "rgba(245, 158, 11, 0.15)",
+                      border: "1px solid rgba(245, 158, 11, 0.5)",
+                      borderRadius: 4,
+                      padding: "2px 8px",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ⚠ {profileMissing.length} missing
+                  </span>
+                )}
                 <ProfileOptionCountBadge profileId={p.id} />
                 {canManage && (
                   <div style={{ display: "flex", gap: 6 }}>
@@ -1300,7 +1400,7 @@ function PromptPicker({
         >
           <option value="">— (use default / skip)</option>
           {showingLegacy && (
-            <option value={value}>{value} — legacy (not in catalog)</option>
+            <option value={value}>⚠ {value} — NOT IN CATALOG (publish will be blocked)</option>
           )}
           {filtered.map((p) => (
             <option key={p.id} value={p.promptRef}>
@@ -1366,6 +1466,25 @@ function PromptPicker({
         />
       )}
 
+      {/* Big, loud warning when the saved ref isn't in the catalog. Pre-flight
+          in PublishTab also surfaces this, but calling it out right next to
+          the dropdown tells the admin WHICH profile has the stale ref. */}
+      {showingLegacy && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: "6px 10px",
+            background: "rgba(245, 158, 11, 0.12)",
+            border: "1px solid rgba(245, 158, 11, 0.5)",
+            borderRadius: 4,
+            fontSize: 11,
+            color: "#fbbf24",
+          }}
+        >
+          ⚠ <strong>{value}</strong> isn't in this tenant's PBX prompt catalog. Publish will be rejected
+          until the recording is uploaded to VitalPBX (and synced into Connect) or a different recording is selected.
+        </div>
+      )}
       <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span>
           {catalogLoading
@@ -2926,9 +3045,10 @@ function OverrideTab({ override, profiles, tenantId, canManage, onRefresh }: {
 // Tab: Publish
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
+function PublishTab({ history, preview, profiles, tenantId, canManage, onRefresh }: {
   history: PublishRecord[];
   preview: PreviewResponse | null;
+  profiles: RouteProfile[];
   tenantId: string;
   canManage: boolean;
   onRefresh: () => void;
@@ -2936,16 +3056,48 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
   const [publishing, setPublishing] = useState(false);
   const [rollingBack, setRollingBack] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Server-side 422 payload from the publish handler, retained so the UI can
+  // render the authoritative "missing refs" list even if the local catalog
+  // is stale (e.g. another admin just deleted a recording in another tab).
+  const [serverMissing, setServerMissing] = useState<Array<{ key: string; ref: string; profileType?: string | null; reason: string }> | null>(null);
+
+  // Local pre-flight: load the catalog and compute missing refs BEFORE the
+  // user clicks Publish. This is the "yellow banner" path — admin gets a
+  // heads-up and can fix the recording without wasting a round-trip. The
+  // server still re-checks on publish, so if the catalog refreshed
+  // mid-click we defer to whatever the API says.
+  const { prompts, loading: catalogLoading } = usePromptCatalog(tenantId);
+  const missingLocal = useMemo(
+    () => (catalogLoading ? [] : collectMissingPromptRefs(profiles, prompts, tenantId)),
+    [profiles, prompts, tenantId, catalogLoading],
+  );
+  const hasLocalBlockers = missingLocal.length > 0;
 
   const publish = async () => {
-    if (!confirm("Publish current routing configuration to the PBX?")) return;
-    setPublishing(true); setMsg(null);
+    // Always require confirmation. When pre-flight detected missing refs
+    // we escalate the copy so the admin sees the warning even if they
+    // dismissed the banner.
+    const confirmMsg = hasLocalBlockers
+      ? `${missingLocal.length} recording(s) referenced by this tenant's profiles aren't in the PBX prompt catalog. Publishing will be rejected by the server (HTTP 422). Continue anyway?`
+      : "Publish current routing configuration to the PBX?";
+    if (!confirm(confirmMsg)) return;
+    setPublishing(true); setMsg(null); setServerMissing(null);
     try {
       const r: any = await apiPost("/voice/ivr/publish", { tenantId });
       setMsg({ ok: true, text: `Published successfully. Mode: ${r?.mode ?? "unknown"} (${r?.keysWritten ?? 0} keys written)` });
       onRefresh();
     } catch (e: any) {
-      setMsg({ ok: false, text: e?.message ?? "Publish failed" });
+      // apiClient surfaces the response body on non-2xx. When the server
+      // returned the structured 422 we built in ivrResolveMissingPromptRefs,
+      // prefer that over the raw message so the UI can list the exact
+      // refs that need to be uploaded.
+      const body = e?.body ?? e?.response ?? null;
+      if (body && body.error === "prompt_refs_not_in_catalog" && Array.isArray(body.missing)) {
+        setServerMissing(body.missing);
+        setMsg({ ok: false, text: body.detail ?? "One or more recordings are not in the PBX prompt catalog. Upload them to VitalPBX and retry." });
+      } else {
+        setMsg({ ok: false, text: e?.message ?? "Publish failed" });
+      }
     } finally {
       setPublishing(false);
     }
@@ -2981,12 +3133,88 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
             </div>
           )}
         </div>
-        {msg && (
+
+        {/* Pre-flight missing-refs banner. Renders as soon as the catalog
+            finishes loading if ANY active profile references a recording
+            that isn't in this tenant's catalog. The server will reject
+            such a publish with HTTP 422; we block in-UI first so the admin
+            can upload the recording without a failed round-trip. */}
+        {hasLocalBlockers && (
+          <div
+            style={{
+              alignSelf: "stretch",
+              background: "rgba(245, 158, 11, 0.12)",
+              border: "1px solid rgba(245, 158, 11, 0.55)",
+              borderRadius: 6,
+              padding: "12px 14px",
+              fontSize: 13,
+              color: "#fbbf24",
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              ⚠ {missingLocal.length} recording{missingLocal.length === 1 ? "" : "s"} not in PBX catalog
+            </div>
+            <div style={{ color: "#fde68a", marginBottom: 8 }}>
+              Publishing will be rejected because these recordings aren't uploaded to VitalPBX
+              (or haven't been synced into Connect yet). Upload them in VitalPBX System Recordings,
+              click <strong>Auto-Sync from VitalPBX</strong> on the Route Profiles tab, then retry.
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 20, color: "#fde68a" }}>
+              {missingLocal.map((m) => (
+                <li key={`${m.profileId}-${m.field}`} style={{ marginBottom: 2 }}>
+                  <strong>{m.profileName}</strong> ({ROUTE_TYPE_LABELS[m.profileType]}) — {m.fieldLabel}:{" "}
+                  <code style={{ background: "rgba(0,0,0,0.3)", padding: "1px 5px", borderRadius: 3 }}>{m.ref}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Server-authoritative missing list (populated when the API rejects
+            with HTTP 422). Overrides the client pre-flight — this is the
+            exact set the server refused to publish. */}
+        {serverMissing && serverMissing.length > 0 && (
+          <div
+            style={{
+              alignSelf: "stretch",
+              background: "rgba(239, 68, 68, 0.12)",
+              border: "1px solid rgba(239, 68, 68, 0.6)",
+              borderRadius: 6,
+              padding: "12px 14px",
+              fontSize: 13,
+              color: "#fca5a5",
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              Publish rejected: {serverMissing.length} recording{serverMissing.length === 1 ? "" : "s"} missing from catalog
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {serverMissing.map((m, i) => (
+                <li key={`${m.key}-${m.ref}-${i}`} style={{ marginBottom: 2 }}>
+                  <code style={{ background: "rgba(0,0,0,0.3)", padding: "1px 5px", borderRadius: 3 }}>{m.ref}</code>
+                  {" "}→ <span style={{ color: "#fde68a" }}>{m.key}</span>
+                  {m.profileType ? <span style={{ color: "#64748b" }}> ({m.profileType})</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {msg && !serverMissing && (
           <div style={{ fontSize: 13, color: msg.ok ? "#86efac" : "#fca5a5" }}>{msg.text}</div>
         )}
         {canManage && (
-          <button onClick={publish} disabled={publishing} style={btnStyle("#6366f1")}>
-            {publishing ? "Publishing…" : "Publish Now"}
+          <button
+            onClick={publish}
+            disabled={publishing || hasLocalBlockers}
+            title={hasLocalBlockers ? "Upload the missing recordings before publishing" : undefined}
+            style={{
+              ...btnStyle(hasLocalBlockers ? "#64748b" : "#6366f1"),
+              cursor: hasLocalBlockers ? "not-allowed" : (publishing ? "wait" : "pointer"),
+              opacity: hasLocalBlockers ? 0.65 : 1,
+            }}
+          >
+            {publishing ? "Publishing…" : hasLocalBlockers ? "Publish blocked — fix recordings above" : "Publish Now"}
           </button>
         )}
       </div>
