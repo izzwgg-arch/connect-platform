@@ -3504,10 +3504,19 @@ app.get("/downloads/:filename", async (req, reply) => {
     isPartial = true;
   }
 
+  const method = String((req.raw as { method?: string }).method || "").toUpperCase();
+  const userAgent = String((req.headers as Record<string, string | undefined>)["user-agent"] || "");
+  const referrer = String(
+    (req.headers as Record<string, string | undefined>).referer
+    || (req.headers as Record<string, string | undefined>).referrer
+    || ""
+  );
+  const isAndroidDownloadClient = /Android/i.test(userAgent) || referrer.startsWith("android-app://");
+
   reply.header("content-type", APK_MIME_TYPE);
   reply.header("content-disposition", `attachment; filename="${filename}"`);
   reply.header("accept-ranges", "bytes");
-  reply.header("cache-control", "public, max-age=300");
+  reply.header("cache-control", isAndroidDownloadClient ? "no-store, max-age=0" : "public, max-age=300");
   reply.header("x-content-type-options", "nosniff");
   // Tell nginx (which sits in front of this API) NOT to buffer the response
   // body. For a 137 MB stream nginx's default proxy_buffering would either
@@ -3521,7 +3530,16 @@ app.get("/downloads/:filename", async (req, reply) => {
     reply.header("content-length", String(end - start + 1));
     fileStream = fs.createReadStream(resolved, { start, end });
   } else {
-    reply.header("content-length", String(totalSize));
+    if (method === "HEAD" || !isAndroidDownloadClient) {
+      reply.header("content-length", String(totalSize));
+    } else {
+      // Android's Gmail/Google embedded downloader has repeatedly received
+      // all Content-Length bytes and then stayed stuck at 100%. For that
+      // client, prefer chunked transfer plus an explicit connection close so
+      // completion is driven by end-of-stream rather than the byte counter.
+      reply.raw.shouldKeepAlive = false;
+      reply.header("connection", "close");
+    }
     fileStream = fs.createReadStream(resolved);
   }
 
