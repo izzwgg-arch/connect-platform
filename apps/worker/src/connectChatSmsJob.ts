@@ -38,7 +38,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
 
   const cfg = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
   const creds = await loadVoipMsCredsWorker();
-  if (!creds || !cfg?.smsEnabled) {
+  if (!creds) {
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: { deliveryStatus: "failed", deliveryError: "VOIPMS_NOT_CONFIGURED" },
@@ -51,7 +51,10 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
   // API marks this when SMS should send signed media links instead of MMS.
   const metadata = msg.metadata && typeof msg.metadata === "object" && !Array.isArray(msg.metadata) ? msg.metadata as Record<string, any> : {};
   const linkFallback = Boolean(metadata.smsLinkFallback);
-  if (hasMedia && !linkFallback && (!cfg.mmsEnabled || !smsRow?.mmsCapable)) {
+  // Per-number `mmsCapable` is the real authority for MMS routing. The legacy
+  // `cfg.mmsEnabled` flag is only honoured when the assigned DID is also
+  // MMS-capable; otherwise we have already routed via `smsLinkFallback`.
+  if (hasMedia && !linkFallback && !smsRow?.mmsCapable) {
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: { deliveryStatus: "failed", deliveryError: "MMS_NOT_AVAILABLE" },
@@ -72,7 +75,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       username: creds.username,
       password: creds.password,
       fromNumber: tenantDid,
-      apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl,
+      apiBaseUrl: cfg?.apiBaseUrl || creds.apiBaseUrl,
     },
     testMode,
   );

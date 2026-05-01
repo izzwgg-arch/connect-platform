@@ -2270,7 +2270,11 @@ type MobilePushPayload =
   | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
   | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
-  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string };
+  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string }
+  | { type: "voicemail"; voicemailId: string; tenantId: string; extensionId: string; callerNameOrNumber?: string | null; timestamp: string }
+  | { type: "missed_call"; callId: string; tenantId: string; extensionId?: string | null; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string }
+  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
+  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; tenantId: string; preview?: string | null; timestamp: string };
 
 /** Android FCM `data` map values must be strings — Expo forwards to FCM. */
 function fcmDataStrings(data: Record<string, unknown>): Record<string, string> {
@@ -2360,7 +2364,7 @@ async function sendPushToUserDevices(input: {
   payload: MobilePushPayload;
   excludeDeviceId?: string | null;
 }) {
-  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
+  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId, active: true } as any });
   const filtered = input.excludeDeviceId ? devices.filter((d) => d.id !== input.excludeDeviceId) : devices;
   if (!filtered.length) return { queued: 0, simulated: mobilePushSimulate };
 
@@ -2370,7 +2374,7 @@ async function sendPushToUserDevices(input: {
         tenantId: input.tenantId,
         action: "MOBILE_PUSH_SIMULATED",
         entityType: "CallInvite",
-        entityId: input.payload.inviteId,
+        entityId: "inviteId" in input.payload ? input.payload.inviteId : ("messageId" in input.payload ? input.payload.messageId : ("voicemailId" in input.payload ? input.payload.voicemailId : input.userId)),
         actorUserId: input.userId
       }
     });
@@ -2383,14 +2387,30 @@ async function sendPushToUserDevices(input: {
       ? "Call answered on another device"
       : input.payload.type === "INVITE_CANCELED"
         ? "Call ended"
-        : "Missed call";
+        : input.payload.type === "voicemail"
+          ? "New voicemail"
+          : input.payload.type === "missed_call"
+            ? "Missed call"
+            : input.payload.type === "dm_message"
+              ? input.payload.senderName || "New message"
+              : input.payload.type === "sms_message"
+                ? input.payload.phoneNumber
+                : "Missed call";
   const body = input.payload.type === "INCOMING_CALL"
     ? `Call from ${input.payload.fromDisplay || input.payload.fromNumber}`
     : input.payload.type === "INVITE_CLAIMED"
       ? "This call was answered on another device."
       : input.payload.type === "INVITE_CANCELED"
         ? "This call has ended."
-        : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
+        : input.payload.type === "voicemail"
+          ? `Voicemail from ${input.payload.callerNameOrNumber || "Unknown caller"}`
+          : input.payload.type === "missed_call"
+            ? `Missed call from ${input.payload.callerNameOrNumber || input.payload.callerNumber}`
+            : input.payload.type === "dm_message"
+              ? (input.payload.preview || "Sent a message")
+              : input.payload.type === "sms_message"
+                ? (input.payload.preview || "Sent an attachment")
+                : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
   const isIncomingCall = input.payload.type === "INCOMING_CALL";
   // INVITE_CANCELED / INVITE_CLAIMED / MISSED_CALL MUST wake the native
@@ -2446,12 +2466,13 @@ async function sendPushToUserDevices(input: {
       };
     }
     if (isCallTerminationPush) {
-      const data = fcmDataStrings({ ...(input.payload as object) });
+      const p = input.payload as Extract<MobilePushPayload, { type: "INVITE_CANCELED" | "INVITE_CLAIMED" | "MISSED_CALL" }>;
+      const data = fcmDataStrings({ ...(p as object) });
       app.log.info(
         {
           mobilePush: "CALL_TERMINATION_DATA_ONLY",
-          payloadType: input.payload.type,
-          inviteId: input.payload.inviteId,
+          payloadType: p.type,
+          inviteId: p.inviteId,
           tokenTail: String(d.expoPushToken).slice(-12),
         },
         "mobile-push: outgoing call-termination (data-only, high priority)",
@@ -2463,6 +2484,14 @@ async function sendPushToUserDevices(input: {
         data,
       };
     }
+    const channelId =
+      input.payload.type === "voicemail"
+        ? "connect-voicemail"
+        : input.payload.type === "missed_call"
+          ? "connect-missed-calls"
+          : input.payload.type === "dm_message" || input.payload.type === "sms_message"
+            ? "connect-messages"
+            : "connect-calls";
     return {
       to: d.expoPushToken,
       sound: "default",
@@ -2470,7 +2499,7 @@ async function sendPushToUserDevices(input: {
       body,
       data: fcmDataStrings({ ...(input.payload as object) }),
       priority: "default" as const,
-      channelId: "connect-calls",
+      channelId,
     };
   });
 
@@ -2485,7 +2514,7 @@ async function sendPushToUserDevices(input: {
       source: "api",
       tenantId: input.tenantId,
       userId: input.userId,
-      inviteId: input.payload.inviteId,
+      inviteId: "inviteId" in input.payload ? input.payload.inviteId : null,
       payloadType: input.payload.type,
       deviceCount: messages.length,
       toExtension:
@@ -2496,15 +2525,32 @@ async function sendPushToUserDevices(input: {
     "[CALL_TIMELINE] PUSH_SEND"
   );
 
-  const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+  let expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers,
     body: JSON.stringify(messages)
   });
+  if (!expoRes.ok && expoRes.status >= 500) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(messages)
+    });
+  }
   const expoBody = await expoRes.json().catch(() => null);
   const expoErrors = (expoBody?.data ?? []).filter((r: any) => r?.status === "error");
   if (expoErrors.length) {
     app.log.warn({ expoErrors, payload: input.payload }, "mobile-push: expo reported errors");
+    const invalidTokens = (expoBody?.data ?? [])
+      .map((r: any, index: number) => r?.details?.error === "DeviceNotRegistered" ? filtered[index]?.expoPushToken : null)
+      .filter(Boolean) as string[];
+    if (invalidTokens.length) {
+      await db.mobileDevice.updateMany({
+        where: { expoPushToken: { in: invalidTokens } },
+        data: { active: false, deactivatedAt: new Date() } as any,
+      });
+    }
   } else {
     app.log.info({ expoStatus: expoRes.status, tokens: filtered.length }, "mobile-push: expo accepted");
   }
@@ -2513,8 +2559,8 @@ async function sendPushToUserDevices(input: {
     data: {
       tenantId: input.tenantId,
       action: "MOBILE_PUSH_SENT",
-      entityType: "CallInvite",
-      entityId: input.payload.inviteId,
+      entityType: input.payload.type === "dm_message" || input.payload.type === "sms_message" ? "ConnectChatMessage" : input.payload.type === "voicemail" ? "Voicemail" : input.payload.type === "missed_call" ? "ConnectCdr" : "CallInvite",
+      entityId: "inviteId" in input.payload ? input.payload.inviteId : ("messageId" in input.payload ? input.payload.messageId : ("voicemailId" in input.payload ? input.payload.voicemailId : ("callId" in input.payload ? input.payload.callId : input.userId))),
       actorUserId: input.userId
     }
   });
@@ -10704,28 +10750,44 @@ app.post("/mobile/devices/register", async (req, reply) => {
     platform: z.enum(["IOS", "ANDROID"]),
     expoPushToken: z.string().min(8),
     voipPushToken: z.string().optional(),
+    deviceId: z.string().max(200).optional(),
+    appVersion: z.string().max(80).optional(),
     deviceName: z.string().max(120).optional()
   }).parse(req.body || {});
+  const extension = await db.extension.findFirst({
+    where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+    select: { id: true },
+  });
 
   const saved = await db.mobileDevice.upsert({
     where: { expoPushToken: input.expoPushToken },
     create: {
       tenantId: user.tenantId,
       userId: user.sub,
+      extensionId: extension?.id ?? null,
       platform: input.platform,
       expoPushToken: input.expoPushToken,
       voipPushToken: input.voipPushToken || null,
+      deviceId: input.deviceId || null,
+      appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
+      active: true,
+      deactivatedAt: null,
       lastSeenAt: new Date()
-    },
+    } as any,
     update: {
       tenantId: user.tenantId,
       userId: user.sub,
+      extensionId: extension?.id ?? null,
       platform: input.platform,
       voipPushToken: input.voipPushToken || null,
+      deviceId: input.deviceId || null,
+      appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
+      active: true,
+      deactivatedAt: null,
       lastSeenAt: new Date()
-    }
+    } as any
   });
 
   // Remove any OLD device registrations for this user that have a different
@@ -10734,12 +10796,13 @@ app.post("/mobile/devices/register", async (req, reply) => {
   // (both tokens get the push, the first claim triggers an INVITE_CLAIMED
   // notification to the "other" device which is the same physical phone).
   // We keep only the registration we just upserted.
-  await db.mobileDevice.deleteMany({
+  await db.mobileDevice.updateMany({
     where: {
       tenantId: user.tenantId,
       userId: user.sub,
       expoPushToken: { not: input.expoPushToken },
     },
+    data: { active: false, deactivatedAt: new Date() } as any,
   });
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
@@ -10750,12 +10813,13 @@ app.post("/mobile/devices/unregister", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({ expoPushToken: z.string().min(8).optional() }).parse(req.body || {});
 
-  const out = await db.mobileDevice.deleteMany({
+  const out = await db.mobileDevice.updateMany({
     where: {
       tenantId: user.tenantId,
       userId: user.sub,
       ...(input.expoPushToken ? { expoPushToken: input.expoPushToken } : {})
-    }
+    },
+    data: { active: false, deactivatedAt: new Date() } as any,
   });
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_UNREGISTERED", entityType: "MobileDevice", entityId: user.sub });
   return { ok: true, removed: out.count };
@@ -18282,7 +18346,11 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
         rec.msg_num ?? rec.msgnum ?? rec.id ?? fromFilename ?? fromRecfile ?? "",
       );
 
-      await db.voicemail.upsert({
+      const existingVoicemail = await db.voicemail.findUnique({
+        where: { pbxMessageId: msgId },
+        select: { id: true },
+      });
+      const voicemail = await db.voicemail.upsert({
         where:  { pbxMessageId: msgId },
         create: {
           pbxMessageId:  msgId,
@@ -18309,6 +18377,20 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           listened: folder !== "inbox",
         },
       });
+      if (!existingVoicemail && folder === "inbox" && ext.ownerUserId) {
+        await sendPushToUserDevices({
+          tenantId: link.tenantId,
+          userId: ext.ownerUserId,
+          payload: {
+            type: "voicemail",
+            voicemailId: voicemail.id,
+            tenantId: link.tenantId,
+            extensionId: ext.id,
+            callerNameOrNumber: vmExtractCallerName(rawCallerid) || callerNumber || "Unknown caller",
+            timestamp: new Date().toISOString(),
+          },
+        }).catch((err: any) => app.log.warn({ err: err?.message, voicemailId: voicemail.id, mailbox }, "voicemail-push: failed"));
+      }
       upserted++;
     }
 
@@ -21456,6 +21538,10 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
       : null;
 
   try {
+    const existingCdr = await db.connectCdr.findUnique({
+      where: { linkedId: d.linkedId },
+      select: { id: true },
+    });
     await db.connectCdr.upsert({
       where: { linkedId: d.linkedId },
       create: {
@@ -21522,6 +21608,30 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         },
         "cdr_pipeline_diag"
       );
+    }
+    if (!existingCdr && tenantPack.tenantId && resolvedDirection === "incoming" && d.disposition === "missed") {
+      const targetExt = String(d.toNumber || "").trim();
+      const ext = targetExt
+        ? await db.extension.findFirst({
+            where: { tenantId: tenantPack.tenantId, extNumber: targetExt, status: "ACTIVE", ownerUserId: { not: null } },
+            select: { id: true, ownerUserId: true },
+          })
+        : null;
+      if (ext?.ownerUserId) {
+        await sendPushToUserDevices({
+          tenantId: tenantPack.tenantId,
+          userId: ext.ownerUserId,
+          payload: {
+            type: "missed_call",
+            callId: d.linkedId,
+            tenantId: tenantPack.tenantId,
+            extensionId: ext.id,
+            callerNumber: d.fromNumber || "Unknown caller",
+            callerNameOrNumber: d.fromName || d.fromNumber || "Unknown caller",
+            timestamp: new Date().toISOString(),
+          },
+        }).catch((err: any) => app.log.warn({ err: err?.message, linkedId: d.linkedId }, "missed-call-push: failed"));
+      }
     }
 
     // ── Channel-based outbound PSTN leg detection ─────────────────────────────
@@ -26521,7 +26631,7 @@ const port = Number(process.env.PORT || 3001);
       }).createSipDevice({ pbxExtensionId: link.pbxExtensionId, enableWebrtc: true });
     },
   });
-  registerConnectChatRoutes(app, { smsQueue });
+  registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
   startPbxLiveDashboardWarm();

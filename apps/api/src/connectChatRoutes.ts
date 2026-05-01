@@ -137,10 +137,23 @@ async function ensureDefaultTenantGroup(tenantId: string, tenantName: string) {
   return thread;
 }
 
-export type ConnectChatRoutesDeps = { smsQueue: Queue };
+type ChatPushPayload =
+  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
+  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; tenantId: string; preview?: string | null; timestamp: string };
+
+export type ConnectChatRoutesDeps = {
+  smsQueue: Queue;
+  sendPushToUserDevices?: (input: { tenantId: string; userId: string; payload: ChatPushPayload; excludeDeviceId?: string | null }) => Promise<unknown>;
+};
 
 function publicChatDownloadBase(): string {
   return (process.env.PUBLIC_API_BASE_URL || process.env.PORTAL_PUBLIC_URL || "").replace(/\/+$/, "");
+}
+
+function pushPreview(body: string, fallback = "Sent an attachment"): string {
+  const text = String(body || "").replace(/\s+/g, " ").trim();
+  if (!text) return fallback;
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
 function extractInboundMmsUrls(payload: Record<string, unknown>): string[] {
@@ -192,6 +205,12 @@ function threadKindLabel(type: string): string {
   if (type === "DM") return "DM";
   if (type === "SMS") return "SMS";
   return "Chat";
+}
+
+function isMessageUnreadForUser(message: { senderUserId: string | null; createdAt: Date }, userId: string, lastReadAt?: Date | null): boolean {
+  if (message.senderUserId === userId) return false;
+  if (!lastReadAt) return true;
+  return message.createdAt.getTime() > lastReadAt.getTime();
 }
 
 async function persistMessageAttachments(
@@ -251,6 +270,24 @@ async function resolveOutboundSmsNumber(
 }
 
 export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectChatRoutesDeps): void {
+  // Self-heal once at boot: if VoIP.ms credentials are configured but the
+  // legacy `smsEnabled`/`mmsEnabled` flags are still false (default from the
+  // initial schema), flip them on so the portal reflects reality. Send paths
+  // no longer rely on these flags — this is purely cosmetic for the admin UI.
+  void (async () => {
+    try {
+      const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
+      if (row?.credentialsEncrypted && (!row.smsEnabled || !row.mmsEnabled)) {
+        await db.globalVoipMsConfig.update({
+          where: { id: "default" },
+          data: { smsEnabled: true, mmsEnabled: true, updatedAt: new Date() },
+        });
+      }
+    } catch {
+      // Non-fatal — ignore.
+    }
+  })();
+
   // Signed-URL download for chat bytes (VoIP.ms MMS media1..3, thumbnails). No JWT.
   app.get("/chat/attachments/download/*", async (req, reply) => {
     const wildcardPath = (req.params as any)["*"] as string | undefined;
@@ -292,7 +329,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
               where: { deletedForEveryoneAt: null },
               orderBy: { createdAt: "desc" },
               take: 1,
-              select: { body: true, createdAt: true, type: true, deliveryStatus: true, deliveryError: true },
+              select: { id: true, body: true, createdAt: true, type: true, senderUserId: true, deliveryStatus: true, deliveryError: true },
             },
             participants: {
               where: { leftAt: null },
@@ -307,9 +344,17 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       orderBy: { thread: { lastMessageAt: "desc" } },
     });
 
-    const threads = parts.map((p) => {
+    const threads = await Promise.all(parts.map(async (p) => {
       const t = p.thread;
       const last = t.messages[0];
+      const unread = await db.connectChatMessage.count({
+        where: {
+          threadId: t.id,
+          deletedForEveryoneAt: null,
+          senderUserId: { not: user.sub },
+          createdAt: p.lastReadAt ? { gt: p.lastReadAt } : undefined,
+        },
+      });
       let participantName = t.title || "Chat";
       let participantExtension = "";
       if (t.type === "SMS") {
@@ -333,13 +378,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         participantExtension,
         lastMessage: last?.body || (last?.type && last.type !== "TEXT" ? `[${String(last.type).toLowerCase()}]` : ""),
         lastAt: (last?.createdAt || t.lastMessageAt).toISOString(),
-        unread: 0,
+        unread,
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
         deliveryStatus: last?.deliveryStatus || null,
         deliveryError: last?.deliveryError || null,
       };
-    }).sort((a, b) => {
+    }));
+    threads.sort((a, b) => {
       if (a.isDefaultTenantGroup !== b.isDefaultTenantGroup) return a.isDefaultTenantGroup ? -1 : 1;
       return new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
     });
@@ -598,6 +644,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         replyTo: { select: { id: true, body: true, type: true, senderUser: { select: { email: true } } } },
       },
     });
+    const readParts = await db.connectChatParticipant.findMany({
+      where: { threadId, leftAt: null, userId: { not: null } },
+      include: { user: { select: { id: true, email: true } } },
+    });
     const rows = rowsRaw.filter((m) => {
       const deletedFor = Array.isArray(m.deletedForUserIds) ? m.deletedForUserIds as unknown[] : [];
       return !deletedFor.includes(user.sub);
@@ -631,6 +681,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
               senderName: m.replyTo.senderUser?.email?.split("@")[0] || "System",
             }
           : null,
+        readBy: readParts
+          .filter((p) => p.userId !== m.senderUserId && p.lastReadAt && p.lastReadAt.getTime() >= m.createdAt.getTime())
+          .map((p) => ({ userId: p.userId || "", name: p.user?.email?.split("@")[0] || "User", readAt: p.lastReadAt!.toISOString() })),
         attachments: (m.attachments || []).map((a) => ({
           id: a.id,
           fileName: a.fileName,
@@ -642,6 +695,63 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       };
     });
     return { messages };
+  });
+
+  app.post("/chat/threads/:threadId/read", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const { threadId } = req.params as { threadId: string };
+    const tenantId = effectiveChatTenantId(req, user);
+    const part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+      select: { id: true },
+    });
+    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const now = new Date();
+    await db.connectChatParticipant.update({ where: { id: part.id }, data: { lastReadAt: now } });
+    return { ok: true, lastReadAt: now.toISOString() };
+  });
+
+  app.post("/chat/threads/:threadId/typing", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const { threadId } = req.params as { threadId: string };
+    const tenantId = effectiveChatTenantId(req, user);
+    const input = z.object({ typing: z.boolean().default(true) }).parse(req.body || {});
+    const part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+      select: { id: true },
+    });
+    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const until = input.typing ? new Date(Date.now() + 5000) : null;
+    await db.connectChatParticipant.update({ where: { id: part.id }, data: { typingUntil: until } });
+    return { ok: true, typingUntil: until?.toISOString() || null };
+  });
+
+  app.get("/chat/threads/:threadId/typing", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const { threadId } = req.params as { threadId: string };
+    const tenantId = effectiveChatTenantId(req, user);
+    const part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+      select: { id: true },
+    });
+    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const rows = await db.connectChatParticipant.findMany({
+      where: {
+        threadId,
+        leftAt: null,
+        userId: { not: user.sub },
+        typingUntil: { gt: new Date() },
+      },
+      include: { user: { select: { id: true, email: true } } },
+      take: 5,
+    });
+    return {
+      users: rows.map((p) => ({
+        userId: p.userId,
+        name: p.user?.email?.split("@")[0] || "User",
+        typingUntil: p.typingUntil?.toISOString() || null,
+      })),
+    };
   });
 
   app.post("/chat/threads/:threadId/messages", async (req, reply) => {
@@ -694,7 +804,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       const creds = await loadVoipMsCreds();
       if (!creds) return reply.status(503).send({ error: "VOIPMS_NOT_CONFIGURED" });
       const cfg = await getOrCreateGlobalVoipConfig();
-      if (!cfg.smsEnabled) return reply.status(503).send({ error: "VOIPMS_SMS_DISABLED" });
+      // Treat connected VoIP.ms credentials + an assigned tenant DID as
+      // authority that SMS is available. The legacy `smsEnabled` boolean
+      // remains as an admin override; only honour it when explicitly false.
+      // Same for MMS — handled later via the per-number `mmsCapable` check.
 
       const atts = (input.attachments || []) as ChatAttachmentInput[];
       let smsLinkFallback = false;
@@ -795,6 +908,37 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       where: { id: threadId },
       data: { lastMessageAt: new Date(), updatedAt: new Date() },
     });
+    if (deps.sendPushToUserDevices) {
+      const sender = await db.user.findUnique({ where: { id: user.sub }, select: { displayName: true, email: true } });
+      const recipients = await db.connectChatParticipant.findMany({
+        where: {
+          threadId,
+          leftAt: null,
+          muted: false,
+          userId: { not: null },
+          NOT: { userId: user.sub },
+        },
+        select: { userId: true },
+      });
+      await Promise.all(recipients.map((recipient) =>
+        recipient.userId
+          ? deps.sendPushToUserDevices!({
+              tenantId,
+              userId: recipient.userId,
+              payload: {
+                type: "dm_message",
+                conversationId: threadId,
+                messageId: msg.id,
+                senderUserId: user.sub,
+                tenantId,
+                senderName: sender?.displayName || sender?.email || "New message",
+                preview: pushPreview(input.body, internalAttachments.length ? "Sent an attachment" : "Sent a message"),
+                timestamp: new Date().toISOString(),
+              },
+            }).catch((err: any) => app.log.warn({ err: err?.message, threadId, messageId: msg.id }, "chat-push: dm failed"))
+          : Promise.resolve(),
+      ));
+    }
     return { ok: true, messageId: msg.id };
   });
 
@@ -930,11 +1074,15 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         credentialsEncrypted: enc,
         apiBaseUrl: body.apiBaseUrl || null,
         webhookSecretEncrypted: wh,
+        smsEnabled: true,
+        mmsEnabled: true,
       },
       update: {
         credentialsEncrypted: enc,
         apiBaseUrl: body.apiBaseUrl || null,
         ...(wh ? { webhookSecretEncrypted: wh } : {}),
+        smsEnabled: true,
+        mmsEnabled: true,
         updatedAt: new Date(),
       },
     });
@@ -976,6 +1124,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         lastHealthAt: now,
         lastHealthOk: probe.ok,
         lastHealthMessage: probe.ok ? "ok" : (probe as { message: string }).message,
+        ...(probe.ok ? { smsEnabled: true, mmsEnabled: true } : {}),
         updatedAt: now,
       },
     });
@@ -1018,7 +1167,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     await db.globalVoipMsConfig.update({
       where: { id: "default" },
-      data: { lastDidsSyncAt: new Date(), updatedAt: new Date() },
+      data: { lastDidsSyncAt: new Date(), smsEnabled: true, mmsEnabled: true, updatedAt: new Date() },
     });
     return { ok: true, upserted: n };
   });
@@ -1315,6 +1464,31 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         payload: payload as object,
       },
     });
+    if (deps.sendPushToUserDevices) {
+      const recipients = await db.connectChatParticipant.findMany({
+        where: { threadId: thread.id, leftAt: null, muted: false, userId: { not: null } },
+        select: { userId: true },
+      });
+      const tenantId = num.tenantId;
+      if (!tenantId) return { ok: true, threadId: thread.id, messageId: msg.id };
+      await Promise.all(recipients.map((recipient) =>
+        recipient.userId
+          ? deps.sendPushToUserDevices!({
+              tenantId,
+              userId: recipient.userId,
+              payload: {
+                type: "sms_message",
+                conversationId: thread.id,
+                messageId: msg.id,
+                phoneNumber: extE164,
+                tenantId,
+                preview: pushPreview(message, mmsUrls.length ? "Sent an attachment" : "New SMS message"),
+                timestamp: new Date().toISOString(),
+              },
+            }).catch((err: any) => app.log.warn({ err: err?.message, threadId: thread.id, messageId: msg.id }, "chat-push: sms failed"))
+          : Promise.resolve(),
+      ));
+    }
     return { ok: true, threadId: thread.id, messageId: msg.id };
   }
 

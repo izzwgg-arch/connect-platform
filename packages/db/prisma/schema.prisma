@@ -1460,6 +1460,7 @@ model Extension {
   callInvites              CallInvite[]
   tenantSmsNumbersAssigned TenantSmsNumber[]        @relation("TenantSmsNumberAssignExtension")
   connectChatParticipants  ConnectChatParticipant[] @relation("ConnectChatParticipantExtension")
+  mobileDevices            MobileDevice[]
 
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])
@@ -1741,20 +1742,28 @@ model MobileDevice {
   id                  String               @id @default(cuid())
   tenantId            String
   userId              String
+  extensionId         String?
   platform            MobilePlatform
   expoPushToken       String               @unique
   voipPushToken       String?
+  deviceId            String?
+  appVersion          String?
   deviceName          String?
+  active              Boolean              @default(true)
+  deactivatedAt       DateTime?
   lastSeenAt          DateTime             @default(now())
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extension           Extension?           @relation(fields: [extensionId], references: [id], onDelete: SetNull)
   acceptedInvites     CallInvite[]         @relation("CallInviteAcceptedByDevice")
   voiceClientSessions VoiceClientSession[]
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
+  @@index([tenantId, userId, active])
+  @@index([extensionId])
 }
 
 model MobileProvisioningToken {
@@ -2594,6 +2603,8 @@ model ConnectChatParticipant {
   role            ConnectChatParticipantRole @default(MEMBER)
   joinedAt        DateTime                   @default(now())
   leftAt          DateTime?
+  lastReadAt      DateTime?
+  typingUntil     DateTime?
   muted           Boolean                    @default(false)
   archivedForUser Boolean                    @default(false)
   thread          ConnectChatThread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
