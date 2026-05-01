@@ -5,6 +5,7 @@ import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import type { HealthService } from "../services/HealthService";
 import type { CallStateStore } from "../state/CallStateStore";
+import type { TenantAliasMatcher } from "../services/SnapshotService";
 import { normalizeCallForClient } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
@@ -25,6 +26,7 @@ export class TelephonyBroadcaster {
     private readonly extensions: ExtensionStateStore,
     private readonly queues: QueueStateStore,
     private readonly health: HealthService,
+    private readonly tenantAliasMatcher: TenantAliasMatcher | null = null,
   ) {
     this.bindCallStore();
     this.bindStores();
@@ -45,8 +47,9 @@ export class TelephonyBroadcaster {
       // Only broadcast active (non-hungup) calls.
       if (call.state === "hungup") return;
 
+      const filter = this.buildTenantFilter(call.tenantId);
       const clientCount = this.socket.clientCount();
-      const matchingClients = this.socket.countMatchingClients(tenantFilter(call.tenantId));
+      const matchingClients = this.socket.countMatchingClients(filter);
       // Always log at info so we can trace every broadcast
       log.info(
         {
@@ -65,7 +68,7 @@ export class TelephonyBroadcaster {
       this.socket.broadcast(
         "telephony.call.upsert",
         normalizeCallForClient(call),
-        tenantFilter(call.tenantId),
+        filter,
       );
     });
 
@@ -80,7 +83,7 @@ export class TelephonyBroadcaster {
       this.socket.broadcast(
         "telephony.extension.upsert",
         normalizeExtensionForClient(ext),
-        tenantFilter(ext.tenantId),
+        this.buildTenantFilter(ext.tenantId),
       );
     });
 
@@ -88,7 +91,7 @@ export class TelephonyBroadcaster {
       this.socket.broadcast(
         "telephony.queue.upsert",
         normalizeQueueForClient(queue),
-        tenantFilter(queue.tenantId),
+        this.buildTenantFilter(queue.tenantId),
       );
     });
   }
@@ -105,13 +108,23 @@ export class TelephonyBroadcaster {
 
     if (this.snapshotTimer.unref) this.snapshotTimer.unref();
   }
-}
 
-function tenantFilter(
-  tenantId: string | null,
-): ((client: WsClient) => boolean) | undefined {
-  // Unknown tenant: only global admins (client.tenantId === null) should see it.
-  if (tenantId === null) return (client) => client.tenantId === null;
-  // Known tenant: global admins + clients scoped to that exact tenant.
-  return (client) => client.tenantId === null || client.tenantId === tenantId;
+  /** Tenant-scoping filter for a single event. Admins (client.tenantId===null)
+   *  always see everything. Tenant-scoped clients receive records that either
+   *  match their tenant exactly OR alias to it via the configured matcher
+   *  (covers CUID ↔ `vpbx:<slug>` namespace). Unknown-tenant records are
+   *  delivered only to admins.
+   */
+  private buildTenantFilter(
+    recordTenantId: string | null,
+  ): ((client: WsClient) => boolean) | undefined {
+    if (recordTenantId === null) return (client) => client.tenantId === null;
+    const matcher = this.tenantAliasMatcher;
+    return (client) => {
+      if (client.tenantId === null) return true;
+      if (client.tenantId === recordTenantId) return true;
+      if (matcher) return matcher(recordTenantId, client.tenantId);
+      return false;
+    };
+  }
 }

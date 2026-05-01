@@ -3985,9 +3985,17 @@ app.get("/me", async (req) => {
   const user = getUser(req);
   const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true } as any }).catch(() => null);
   const portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(user.role);
+  // Resolve tenant display name so the portal can build its tenant object for
+  // regular (non-super-admin) users. Without this, AppProvider falls back to
+  // "My Workspace" and downstream client-side filters that compare tenant name
+  // (team directory, live calls) drop everything as non-matching.
+  const tenantRow = user.tenantId
+    ? await db.tenant.findUnique({ where: { id: user.tenantId }, select: { id: true, name: true } }).catch(() => null)
+    : null;
   return {
     id: user.sub,
     tenantId: user.tenantId,
+    tenantName: tenantRow?.name ?? null,
     email: user.email,
     role: user.role,
     name: row ? displayNameForUser(row as any) : user.email,

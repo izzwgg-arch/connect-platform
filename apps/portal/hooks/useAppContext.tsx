@@ -62,17 +62,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTenantId(resolvedTenantId);
   }, []);
 
+  // Hydrated from GET /me. For regular tenant users (who don't load
+  // `tenants[]` via the admin switcher), this is the only way to get a real
+  // tenant display name — without it the `tenant` object falls back to
+  // "My Workspace" and client-side tenant-name filters drop every row.
+  const [meTenant, setMeTenant] = useState<{ id: string; name: string | null } | null>(null);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     let active = true;
     const load = () => {
-      apiGet<{ portalPermissionSet?: string[] | null }>("/me")
+      apiGet<{
+        portalPermissionSet?: string[] | null;
+        tenantId?: string | null;
+        tenantName?: string | null;
+      }>("/me")
         .then((me) => {
           if (!active) return;
           if (Array.isArray(me.portalPermissionSet) && me.portalPermissionSet.length > 0) {
             setPortalPermissionOverride(me.portalPermissionSet as Permission[]);
           } else {
             setPortalPermissionOverride(null);
+          }
+          if (me.tenantId) {
+            setMeTenant({
+              id: me.tenantId,
+              name: me.tenantName ?? null,
+            });
           }
         })
         .catch(() => {
@@ -151,8 +167,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [role, tenantId]);
 
   const tenant = useMemo<Tenant>(() => {
-    return tenants.find((entry: Tenant) => entry.id === tenantId) || tenants[0] || FALLBACK_TENANT;
-  }, [tenantId, tenants]);
+    // 1. Prefer a tenant loaded via the super-admin switcher (rich metadata).
+    const fromList = tenants.find((entry: Tenant) => entry.id === tenantId);
+    if (fromList) return fromList;
+    // 2. Fall back to /me for regular users: gives us the real display name
+    //    so tenant-name based client filters match server rows.
+    if (meTenant && meTenant.id === tenantId) {
+      return {
+        id: meTenant.id,
+        name: meTenant.name || FALLBACK_TENANT.name,
+        plan: FALLBACK_TENANT.plan,
+        status: FALLBACK_TENANT.status,
+      };
+    }
+    return tenants[0] || FALLBACK_TENANT;
+  }, [tenantId, tenants, meTenant]);
 
   const ctx = useMemo<AppContextType>(
     () => ({
@@ -172,7 +201,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAdminScopeState(scope);
       }
     }),
-    [adminScope, backendJwtRole, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
+    [adminScope, backendJwtRole, meTenant, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

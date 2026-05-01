@@ -52,6 +52,21 @@ export function createTelephonyModule(server: http.Server) {
   const pbxMapCache = new PbxTenantMapCache(mapUrl, env.CDR_INGEST_SECRET, 60_000);
   pbxMapCache.start();
 
+  // Prefer canonical Connect CUIDs at CDR ingest so tenant-scoped WS filters
+  // (keyed by JWT tenantId) don't miss calls tagged with a `vpbx:<slug>`
+  // alias. When the slug map hasn't warmed up yet, the `vpbx:` fallback still
+  // applies and the downstream alias matcher below bridges the gap.
+  callStore.setSlugToConnectIdResolver((slug) => pbxMapCache.resolveBySlug(slug));
+
+  // Alias-aware matcher for snapshots + broadcasts. Lets a regular user whose
+  // JWT carries a Connect CUID see calls/extensions tagged with an equivalent
+  // `vpbx:<slug>` (and vice-versa) — the root cause of "regular users see no
+  // Team Directory / Presence / Live Calls" when admins do.
+  const tenantAliasMatcher = (
+    recordTid: string | null | undefined,
+    viewerTid: string,
+  ): boolean => pbxMapCache.tenantAliasesEqual(recordTid, viewerTid);
+
   const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore, {
     pbxTenantMapCache: pbxMapCache,
   });
@@ -98,7 +113,13 @@ export function createTelephonyModule(server: http.Server) {
       }
     }
   });
-  const snapshotService = new SnapshotService(callStore, extStore, queueStore, healthService);
+  const snapshotService = new SnapshotService(
+    callStore,
+    extStore,
+    queueStore,
+    healthService,
+    tenantAliasMatcher,
+  );
   const socketServer = new TelephonySocketServer(server, snapshotService);
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
@@ -106,6 +127,7 @@ export function createTelephonyModule(server: http.Server) {
     extStore,
     queueStore,
     healthService,
+    tenantAliasMatcher,
   );
   const ariActions = new AriActions(ari);
   const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);

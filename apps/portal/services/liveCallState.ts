@@ -49,16 +49,22 @@ export function isSystemExtensionName(name: string): boolean {
 
 export function rowTenantMatches(row: ExtensionRow, tenantId: string | null | undefined, tenantName: string | null | undefined): boolean {
   if (!tenantId) return false;
-  const selectedTenantName = normalizeTenantName(tenantName);
-  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
-  if (selectedTenantName && rowTenantName) return rowTenantName === selectedTenantName;
+  // Prefer ID-based matching: the Connect tenant CUID on both sides is the
+  // authoritative key. Name is only a last-resort cross-namespace bridge (for
+  // super-admin `vpbx:<slug>` switching). Previously this checked name first,
+  // which meant regular tenant users — whose client-side `tenant.name` falls
+  // back to "My Workspace" when the admin tenant list isn't loaded — filtered
+  // out every legitimate row.
   const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
-  if (directTenant) return directTenant === tenantId;
+  if (directTenant && directTenant === tenantId) return true;
   const nestedTenant = row.tenant;
   if (nestedTenant && typeof nestedTenant === "object") {
     const nestedId = readString(nestedTenant as ExtensionRow, ["id", "tenantId", "tenant_id"]);
-    if (nestedId) return nestedId === tenantId;
+    if (nestedId && nestedId === tenantId) return true;
   }
+  const selectedTenantName = normalizeTenantName(tenantName);
+  const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
+  if (selectedTenantName && rowTenantName && rowTenantName === selectedTenantName) return true;
   return false;
 }
 
@@ -67,11 +73,10 @@ function rowStrongTenantMatches(row: ExtensionRow, tenantId: string | null | und
   const selectedTenantName = normalizeTenantName(tenantName);
   const rowTenantName = normalizeTenantName(readString(row, ["tenantName", "tenant_name", "tenantDisplayName"]));
   const directTenant = readString(row, ["tenantId", "tenant_id", "tenant", "platformTenantId", "platform_tenant_id"]);
+  // Same principle as rowTenantMatches: ID-first. Name acts as a fallback for
+  // super-admin `vpbx:<slug>` cross-namespace matching only.
   if (directTenant) {
     if (directTenant === tenantId) return true;
-    // Super-admin tenant switching often uses synthetic VitalPBX ids such as
-    // `vpbx:gesheft`, while extension rows carry the Connect tenant CUID.
-    // In that mode the display name is the bridge between namespaces.
     return Boolean(selectedTenantName && rowTenantName && rowTenantName === selectedTenantName);
   }
   const nestedTenant = row.tenant;

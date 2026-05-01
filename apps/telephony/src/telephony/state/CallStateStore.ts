@@ -60,6 +60,12 @@ export class CallStateStore extends EventEmitter {
   private channelIndex = new Map<string, string>();
   private channelByUniqueId = new Map<string, string>();
 
+  // Optional hook to map `vpbx:<slug>` / raw slug → Connect tenant CUID at
+  // ingest time so downstream tenant filters (which compare against a viewer's
+  // JWT CUID) don't need alias-awareness. Wired from telephony/index.ts with
+  // PbxTenantMapCache.resolveBySlug.
+  private slugToConnectIdResolver: ((slug: string) => string | null) | null = null;
+
   // Bridge → canonical callId (first call to join bridge wins; others merge into it)
   private bridgeIndex = new Map<string, string>();
 
@@ -77,6 +83,14 @@ export class CallStateStore extends EventEmitter {
   // for calls whose linkedid never ended up in the main store.
   private static PENDING_REC_TTL_MS = 60 * 60 * 1000; // 1h
   private pendingRecTimers = new Map<string, NodeJS.Timeout>();
+
+  /** Register the slug→Connect-CUID resolver. Called once at startup so
+   *  CDR-only ingest paths prefer a canonical Connect tenant id over a
+   *  `vpbx:<slug>` alias that regular-user tenant filters can't match.
+   */
+  setSlugToConnectIdResolver(resolver: (slug: string) => string | null): void {
+    this.slugToConnectIdResolver = resolver;
+  }
 
   // ── Read ────────────────────────────────────────────────────────────────────
 
@@ -742,10 +756,22 @@ export class CallStateStore extends EventEmitter {
     }
 
     // If tenant still unresolved, try to extract from dcontext or accountCode.
-    // dcontext may be "ext-local-a_plus_center" → tenantId becomes "vpbx:a_plus_center".
+    // dcontext may be "ext-local-a_plus_center" → slug "a_plus_center". Prefer
+    // the Connect tenant CUID when we know the mapping; only fall back to the
+    // `vpbx:<slug>` alias when we don't. This is critical so tenant-scoped WS
+    // snapshots (which filter by strict CUID equality against the viewer's JWT
+    // tenant) actually include these calls for regular users.
     if (!call.tenantId && (params.dcontext || params.accountCode)) {
       const resolved = resolveTenantFromCdrFields(params.dcontext, params.accountCode);
-      if (resolved) call.tenantId = resolved;
+      if (resolved) {
+        if (this.slugToConnectIdResolver && resolved.startsWith("vpbx:")) {
+          const slug = resolved.slice(5);
+          const canonical = this.slugToConnectIdResolver(slug);
+          call.tenantId = canonical ?? resolved;
+        } else {
+          call.tenantId = resolved;
+        }
+      }
     }
 
     // Accumulate each CDR leg so CdrNotifier can detect and emit separate outbound PSTN legs.

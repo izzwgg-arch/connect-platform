@@ -10,12 +10,23 @@ import { childLogger } from "../../logging/logger";
 
 const log = childLogger("SnapshotService");
 
+/** Alias-aware tenant matcher. Returns true when `recordTenantId` should be
+ *  visible to a viewer scoped to `viewerTenantId`. Used to bridge the CUID vs
+ *  `vpbx:<slug>` namespace gap for live calls/extensions that were tagged via
+ *  CDR context before the slug→CUID map was warm.
+ */
+export type TenantAliasMatcher = (
+  recordTenantId: string | null | undefined,
+  viewerTenantId: string,
+) => boolean;
+
 export class SnapshotService {
   constructor(
     private readonly calls: CallStateStore,
     private readonly extensions: ExtensionStateStore,
     private readonly queues: QueueStateStore,
     private readonly health: HealthService,
+    private readonly tenantAliasMatcher: TenantAliasMatcher | null = null,
   ) {}
 
   // Returns a point-in-time snapshot suitable for sending to a new WS client.
@@ -30,11 +41,19 @@ export class SnapshotService {
     let exts = this.extensions.getAll();
     let qs = this.queues.getAll();
 
-    // Strict tenant filter when set (match portal callsByTenant: unresolved only in master)
+    // Tenant filter (ID-based) with alias-aware fallback so a viewer scoped to
+    // a Connect CUID still sees records tagged with an equivalent
+    // `vpbx:<slug>` alias (and vice-versa). Admins (tenantId === null) bypass
+    // filtering entirely.
     if (tenantId !== undefined && tenantId !== null) {
-      calls = calls.filter((c) => c.tenantId === tenantId);
-      exts = exts.filter((e) => e.tenantId === tenantId);
-      qs = qs.filter((q) => q.tenantId === tenantId);
+      const matches = (recordTid: string | null | undefined): boolean => {
+        if (recordTid === tenantId) return true;
+        if (this.tenantAliasMatcher) return this.tenantAliasMatcher(recordTid, tenantId);
+        return false;
+      };
+      calls = calls.filter((c) => matches(c.tenantId));
+      exts = exts.filter((e) => matches(e.tenantId));
+      qs = qs.filter((q) => matches(q.tenantId));
     }
 
     log.info(

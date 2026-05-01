@@ -218,6 +218,43 @@ export class PbxTenantMapCache {
     return this.extToTenant.size;
   }
 
+  /** Convert any supported tenant identifier (Connect CUID, `vpbx:<slug>`, or
+   *  bare slug) into the canonical Connect CUID when we have the mapping.
+   *  Returns `null` when no mapping exists so callers can decide whether to
+   *  fall back to the raw identifier.
+   */
+  normalizeToConnectId(raw: string | null | undefined): string | null {
+    if (!raw) return null;
+    const v = String(raw).trim();
+    if (!v) return null;
+    // Already a Connect CUID if it matches any known mapping UUID.
+    for (const uuid of this.slugToConnectId.values()) {
+      if (uuid === v) return uuid;
+    }
+    for (const [, entry] of this.didByE164) {
+      if (entry.connectTenantId && entry.connectTenantId === v) return v;
+    }
+    const slug = v.startsWith("vpbx:") ? v.slice(5) : v;
+    return this.resolveBySlug(slug);
+  }
+
+  /** True when two tenant identifiers (Connect CUID, `vpbx:<slug>`, or slug)
+   *  reference the same tenant. Used to filter tenant-scoped snapshots /
+   *  broadcasts so a JWT carrying a Connect CUID still matches live calls
+   *  ingested from CDR as `vpbx:<slug>` (and vice-versa).
+   */
+  tenantAliasesEqual(
+    a: string | null | undefined,
+    b: string | null | undefined,
+  ): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const na = this.normalizeToConnectId(a);
+    const nb = this.normalizeToConnectId(b);
+    if (na && nb && na === nb) return true;
+    return false;
+  }
+
   /** Ombutel-synced inbound DID → tenant (higher priority than context/trunk hints in TenantResolver). */
   resolveInboundDidTenant(rawPhone: string | null | undefined): {
     tenantId: string | null;
