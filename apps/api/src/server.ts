@@ -3374,6 +3374,10 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
   };
 }
 
+// Stream the APK with HTTP Range support. We `reply.hijack()` so we can use
+// `stream.pipeline()` directly — that propagates client disconnects and
+// read errors cleanly without ever leaving an unhandled `error` event on
+// the file stream (which would otherwise crash the Node process).
 app.get("/downloads/:filename", async (req, reply) => {
   const filename = String((req.params as { filename?: string }).filename || "");
   const resolved = resolveApkPath(filename);
@@ -3389,12 +3393,81 @@ app.get("/downloads/:filename", async (req, reply) => {
   if (!stat.isFile()) {
     return reply.status(404).send({ error: "not_found" });
   }
-  reply.header("content-type", APK_MIME_TYPE);
-  reply.header("content-length", String(stat.size));
-  reply.header("content-disposition", `attachment; filename="${filename}"`);
-  reply.header("cache-control", "public, max-age=300");
-  reply.header("x-content-type-options", "nosniff");
-  return reply.send(fs.createReadStream(resolved));
+
+  const totalSize = stat.size;
+  const rangeHeader = String((req.headers as Record<string, string | undefined>).range || "").trim();
+  let start = 0;
+  let end = totalSize - 1;
+  let isPartial = false;
+  if (rangeHeader.startsWith("bytes=")) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+    if (!m) {
+      reply.header("content-range", `bytes */${totalSize}`);
+      return reply.status(416).send();
+    }
+    const reqStart = m[1] === "" ? NaN : Number(m[1]);
+    const reqEnd = m[2] === "" ? NaN : Number(m[2]);
+    if (Number.isFinite(reqStart) && Number.isFinite(reqEnd)) {
+      start = reqStart;
+      end = reqEnd;
+    } else if (Number.isFinite(reqStart)) {
+      start = reqStart;
+      end = totalSize - 1;
+    } else if (Number.isFinite(reqEnd)) {
+      // bytes=-N → last N bytes
+      const tail = reqEnd;
+      start = Math.max(0, totalSize - tail);
+      end = totalSize - 1;
+    } else {
+      reply.header("content-range", `bytes */${totalSize}`);
+      return reply.status(416).send();
+    }
+    if (start < 0 || end < start || end >= totalSize) {
+      reply.header("content-range", `bytes */${totalSize}`);
+      return reply.status(416).send();
+    }
+    isPartial = true;
+  }
+
+  const length = end - start + 1;
+  reply.hijack();
+  const headers: Record<string, string> = {
+    "content-type": APK_MIME_TYPE,
+    "content-length": String(length),
+    "content-disposition": `attachment; filename="${filename}"`,
+    "accept-ranges": "bytes",
+    "cache-control": "public, max-age=300",
+    "x-content-type-options": "nosniff",
+    // Tell nginx (which sits in front of this API) NOT to buffer the
+    // response body. For a 137 MB stream nginx's default proxy_buffering
+    // would either spool to disk or block the read until the upstream is
+    // done, neither of which is great for end users.
+    "x-accel-buffering": "no",
+  };
+  if (isPartial) headers["content-range"] = `bytes ${start}-${end}/${totalSize}`;
+  reply.raw.writeHead(isPartial ? 206 : 200, headers);
+
+  const fileStream = fs.createReadStream(resolved, { start, end });
+  // Use pipeline() so any client-disconnect / read error is captured here
+  // instead of bubbling up as an unhandled `error` event.
+  const { pipeline } = await import("node:stream/promises");
+  try {
+    await pipeline(fileStream, reply.raw);
+  } catch (err: any) {
+    const code = String(err?.code || err?.message || err || "");
+    // ECONNRESET / EPIPE / ERR_STREAM_PREMATURE_CLOSE are normal when the
+    // client cancels mid-download. Log at warn — do not throw.
+    if (/ECONNRESET|EPIPE|ERR_STREAM_PREMATURE_CLOSE|ABORT_ERR/i.test(code)) {
+      app.log.warn({ filename, code }, "apk-download: client disconnected");
+    } else {
+      app.log.error({ filename, code }, "apk-download: pipeline failed");
+    }
+  } finally {
+    if (!fileStream.destroyed) fileStream.destroy();
+    if (!reply.raw.writableEnded) {
+      try { reply.raw.end(); } catch { /* socket already gone */ }
+    }
+  }
 });
 
 app.get("/mobile/android/latest", async (_req, reply) => {
