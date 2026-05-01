@@ -3356,7 +3356,9 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
   }
   let version: string | null = null;
   try {
-    const manifest = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
+    const manifestRaw = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
+    // Strip a leading UTF-8 BOM (some editors/PowerShell encodings add one).
+    const manifest = manifestRaw.charCodeAt(0) === 0xfeff ? manifestRaw.slice(1) : manifestRaw;
     const parsed = JSON.parse(manifest) as { version?: string };
     if (parsed && typeof parsed.version === "string" && /^\d+\.\d+\.\d+/.test(parsed.version)) {
       version = parsed.version;
