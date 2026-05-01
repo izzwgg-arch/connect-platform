@@ -25,7 +25,17 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail } = useSidebarRail();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const visibleItems = useMemo(() => navItems.filter((item) => can(item.permission)), [can]);
+  const visibleItems = useMemo(
+    () => navItems.filter((item) => can(item.sectionPermission) && can(item.permission)),
+    [can],
+  );
+  const activeNavItem = useMemo(
+    () => [...navItems]
+      .sort((a, b) => b.href.length - a.href.length)
+      .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`)),
+    [pathname],
+  );
+  const routeAllowed = !activeNavItem || (can(activeNavItem.sectionPermission) && can(activeNavItem.permission));
 
   useEffect(() => {
     if (!isMobile) setMobileNavOpen(false);
@@ -53,7 +63,14 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
         />
         <div className="console-workspace">
           {banners ? <div className="workspace-banners">{banners}</div> : null}
-          <main className="console-content custom-scrollbar">{children}</main>
+          <main className="console-content custom-scrollbar">
+            {routeAllowed ? children : (
+              <div className="state-box" style={{ padding: 32 }}>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Access denied</div>
+                <div className="muted">You do not have permission to access {activeNavItem?.label || "this page"}.</div>
+              </div>
+            )}
+          </main>
         </div>
       </div>
 

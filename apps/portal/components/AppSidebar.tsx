@@ -6,7 +6,7 @@ import { SidebarNavGroup } from "./SidebarNavGroup";
 
 export function AppSidebar() {
   const { can } = useAppContext();
-  const visible = navItems.filter((item) => can(item.permission));
+  const visible = navItems.filter((item) => can(item.sectionPermission) && can(item.permission));
 
   return (
     <aside className="sidebar">

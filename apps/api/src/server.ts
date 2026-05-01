@@ -18,7 +18,7 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { canonicalSmsPhone } from "@connect/shared";
+import { canonicalSmsPhone, type PortalPermissionKey } from "@connect/shared";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -59,6 +59,7 @@ import { registerBillingRoutes } from "./billing/routes";
 import { passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
+  hasEffectivePortalPermission,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
@@ -2082,6 +2083,78 @@ function ensureCredentialCrypto(reply: any): boolean {
   return false;
 }
 
+type PortalApiPermissionRule = {
+  prefix: string;
+  permission: PortalPermissionKey;
+};
+
+const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
+  { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
+  { prefix: "/admin/users", permission: "can_view_admin_users" },
+  { prefix: "/admin/extensions", permission: "can_view_admin_users" },
+  { prefix: "/admin/tenants", permission: "can_view_admin_tenants" },
+  { prefix: "/admin/pbx/events", permission: "can_view_admin_pbx_events" },
+  { prefix: "/admin/pbx", permission: "can_view_admin_pbx_instances" },
+  { prefix: "/admin/billing", permission: "can_view_admin_billing" },
+  { prefix: "/admin/cdr-tenant-map", permission: "can_view_admin_cdr_tenant_map" },
+  { prefix: "/admin/ops", permission: "can_view_admin_ops_center" },
+  { prefix: "/admin/deploy", permission: "can_view_admin_deploy_center" },
+  { prefix: "/admin/incidents", permission: "can_view_admin_incidents" },
+  { prefix: "/admin/audio", permission: "can_view_admin_audio_intelligence" },
+  { prefix: "/admin/call-timeline", permission: "can_view_admin_call_timeline" },
+  { prefix: "/admin/call-flight", permission: "can_view_admin_call_flight" },
+  { prefix: "/admin/apps/voip-ms", permission: "can_view_apps_voip_ms" },
+  { prefix: "/admin/numbers", permission: "can_view_admin_billing" },
+  { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
+  { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
+  { prefix: "/admin/ten-dlc", permission: "can_view_admin_ops_center" },
+  { prefix: "/admin/sbc", permission: "can_view_settings_system_health" },
+
+  { prefix: "/dashboard", permission: "can_view_workspace_overview" },
+  { prefix: "/pbx/live", permission: "can_view_workspace_overview" },
+  { prefix: "/dashboard/call", permission: "can_view_workspace_overview" },
+  { prefix: "/team", permission: "can_view_workspace_team_directory" },
+  { prefix: "/calls", permission: "can_view_workspace_call_history" },
+  { prefix: "/voice/calls", permission: "can_view_workspace_call_history" },
+  { prefix: "/voice/me/calls", permission: "can_view_workspace_call_history" },
+  { prefix: "/voicemail", permission: "can_view_workspace_voicemail" },
+  { prefix: "/voice/voicemail", permission: "can_view_workspace_voicemail" },
+  { prefix: "/chat", permission: "can_view_workspace_chat" },
+  { prefix: "/contacts", permission: "can_view_workspace_contacts" },
+
+  { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },
+  { prefix: "/pbx/tenant-users", permission: "can_view_pbx_extensions" },
+  { prefix: "/pbx/settings/webrtc", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/me/extension", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/me/reset-sip-password", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
+  { prefix: "/voice/sbc", permission: "can_view_pbx_sbc_connectivity" },
+  { prefix: "/voice/media-test", permission: "can_view_pbx_sbc_connectivity" },
+  { prefix: "/voice/diag", permission: "can_view_pbx_sbc_connectivity" },
+  { prefix: "/voice/ivr", permission: "can_view_pbx_ivr_routing" },
+  { prefix: "/voice/moh", permission: "can_view_pbx_moh_scheduling" },
+  { prefix: "/pbx/dids", permission: "can_view_pbx_did_routing" },
+  { prefix: "/recordings", permission: "can_view_pbx_call_recordings" },
+  { prefix: "/reports", permission: "can_view_pbx_call_reports" },
+
+  { prefix: "/sms/campaigns", permission: "can_view_apps_sms_campaigns" },
+  { prefix: "/sms/messages", permission: "can_view_apps_sms_campaigns" },
+  { prefix: "/whatsapp", permission: "can_view_apps_whatsapp_inbox" },
+  { prefix: "/settings/providers/whatsapp", permission: "can_view_apps_whatsapp_inbox" },
+
+  { prefix: "/billing", permission: "can_view_billing_overview" },
+  { prefix: "/settings", permission: "can_view_settings_tenant" },
+];
+
+function portalApiPermissionForPath(pathname: string): PortalPermissionKey | null {
+  const rule = PORTAL_API_PERMISSION_RULES
+    .filter((entry) => pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`))
+    .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+  return rule?.permission || null;
+}
+
 async function getTenantProviderCredentials(tenantId: string, provider: ProviderName, requireEnabled = true): Promise<{ recordId: string; creds: any } | null> {
   const key = credCacheKey(tenantId, provider);
   const cached = providerCredCache.get(key);
@@ -4052,6 +4125,10 @@ app.addHook("preHandler", async (req, reply) => {
     if (ctx.startsWith("vpbx:")) {
       (req as any).pbxTenantOverride = ctx.slice(5); // e.g., "a_plus_center"
     }
+  }
+  const portalPermission = portalApiPermissionForPath(path);
+  if (portalPermission && !(await hasEffectivePortalPermission(user, portalPermission))) {
+    return reply.status(403).send({ error: "forbidden", permission: portalPermission });
   }
 });
 

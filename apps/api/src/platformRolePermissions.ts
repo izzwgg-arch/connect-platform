@@ -1,61 +1,27 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
+import {
+  DEFAULT_ROLE_PERMISSIONS,
+  PORTAL_PERMISSION_KEYS,
+  PROTECTED_PLATFORM_ADMIN_PERMISSIONS,
+  expandLegacyPortalPermissions,
+  isPortalPermissionKey,
+  type PortalPermissionKey,
+} from "@connect/shared";
 import { portalBucketFromJwtRole, PORTAL_ROLE_BUCKETS as SHARED_PORTAL_ROLE_BUCKETS } from "./userManagementRoles";
 
 const SNAPSHOT_ID = "default";
+const SNAPSHOT_VERSION = 2;
 
-export const PORTAL_PERMISSION_KEYS = [
-  "can_view_dashboard",
-  "can_view_team",
-  "can_edit_team",
-  "can_view_chat",
-  "can_view_sms",
-  "can_send_sms",
-  "can_view_calls",
-  "can_view_live_calls",
-  "can_view_voicemail",
-  "can_delete_voicemail",
-  "can_view_contacts",
-  "can_manage_contacts",
-  "can_view_recordings",
-  "can_download_recordings",
-  "can_view_reports",
-  "can_view_settings",
-  "can_manage_call_forwarding",
-  "can_manage_blfs",
-  "can_view_admin",
-  "can_manage_integrations",
-  "can_manage_voip_ms",
-  "can_assign_sms_numbers",
-  "can_sync_voip_ms_numbers",
-  "can_switch_tenants",
-  "can_manage_tenant_settings",
-  "can_manage_global_settings",
-  "can_view_apps",
-  "can_download_apk",
-  "can_view_ivr_routing",
-  "can_manage_ivr_routing",
-  "can_publish_ivr_routing",
-  "can_override_ivr_routing",
-  "can_manage_ivr_prompts",
-  "can_view_moh",
-  "can_manage_moh",
-  "can_publish_moh",
-  "can_override_moh",
-  "can_upload_moh",
-  "can_view_did_routing",
-  "can_manage_did_routing",
-  "can_publish_did_routing",
-  "can_manage_deploys",
-] as const;
-
-const PORTAL_PERMISSION_KEYS_SET = new Set<string>(PORTAL_PERMISSION_KEYS);
+export { PORTAL_PERMISSION_KEYS };
 
 const PORTAL_ROLE_BUCKETS = SHARED_PORTAL_ROLE_BUCKETS;
 type PortalRoleBucket = (typeof PORTAL_ROLE_BUCKETS)[number];
 
 type PortalUser = { sub?: string; tenantId?: string; email?: string; role?: string };
+type SnapshotRoles = Partial<Record<PortalRoleBucket, unknown>>;
+type SnapshotPayload = SnapshotRoles | { version?: unknown; roles?: SnapshotRoles };
 
 function user(req: any): PortalUser {
   return req.user as PortalUser;
@@ -74,35 +40,82 @@ export function jwtRoleToPortalPermissionBucket(jwtRole: string | undefined): Po
   return portalBucketFromJwtRole(jwtRole);
 }
 
-function normalizePermissionList(input: unknown): string[] {
+function normalizePermissionList(input: unknown): PortalPermissionKey[] {
   if (!Array.isArray(input)) return [];
-  return [...new Set(input.map((x) => String(x).trim()).filter(Boolean))].filter((p) =>
-    PORTAL_PERMISSION_KEYS_SET.has(p)
-  );
+  return [...new Set(input.map((x) => String(x).trim()).filter(Boolean))]
+    .filter(isPortalPermissionKey);
 }
 
-function setsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const x of a) {
-    if (!b.has(x)) return false;
+function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles } {
+  if (!raw || typeof raw !== "object") return { version: 1, roles: {} };
+  const obj = raw as SnapshotPayload & { version?: unknown; roles?: unknown };
+  const version = typeof (obj as { version?: unknown }).version === "number"
+    ? Number((obj as { version: number }).version)
+    : 1;
+  const roles = version >= SNAPSHOT_VERSION && obj.roles && typeof obj.roles === "object"
+    ? obj.roles
+    : (obj as SnapshotRoles);
+  return { version, roles: roles || {} };
+}
+
+function normalizeStoredRoleList(rawRoles: SnapshotRoles, version: number, bucket: PortalRoleBucket): PortalPermissionKey[] {
+  if (Object.prototype.hasOwnProperty.call(rawRoles, bucket)) {
+    const normalized = normalizePermissionList(rawRoles[bucket]);
+    return normalizeRolePermissionSet(version >= SNAPSHOT_VERSION ? normalized : expandLegacyPortalPermissions(normalized), bucket);
   }
-  return true;
+  return normalizeRolePermissionSet(DEFAULT_ROLE_PERMISSIONS[bucket], bucket);
+}
+
+function normalizeRolePermissionSet(input: unknown, bucket: PortalRoleBucket): PortalPermissionKey[] {
+  const set = new Set(normalizePermissionList(input));
+  if (bucket === "SUPER_ADMIN") {
+    for (const key of PROTECTED_PLATFORM_ADMIN_PERMISSIONS) set.add(key);
+  }
+  return [...set];
+}
+
+async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRoles } | null> {
+  const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
+  if (!row || row.roles == null) return null;
+  return rolesPayload(row.roles);
+}
+
+export async function getEffectivePortalPermissionListForBucket(bucket: PortalRoleBucket): Promise<PortalPermissionKey[]> {
+  const snapshot = await loadSnapshotRoles().catch(() => null);
+  if (!snapshot) return [...DEFAULT_ROLE_PERMISSIONS[bucket]];
+  return normalizeStoredRoleList(snapshot.roles, snapshot.version, bucket);
 }
 
 export async function getEffectivePortalPermissionSetForJwtRole(
   jwtRole: string | undefined
-): Promise<string[] | null> {
+): Promise<PortalPermissionKey[] | null> {
   const bucket = jwtRoleToPortalPermissionBucket(jwtRole);
-  let row: { roles: unknown } | null = null;
   try {
-    row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
+    return await getEffectivePortalPermissionListForBucket(bucket);
   } catch {
     return null;
   }
-  if (!row || row.roles == null || typeof row.roles !== "object") return null;
-  const rawList = (row.roles as Record<string, unknown>)[bucket];
-  const list = normalizePermissionList(rawList);
-  return list.length ? list : null;
+}
+
+export async function hasEffectivePortalPermission(
+  user: PortalUser,
+  permission: PortalPermissionKey,
+): Promise<boolean> {
+  const list = await getEffectivePortalPermissionSetForJwtRole(user.role);
+  return (list || DEFAULT_ROLE_PERMISSIONS[jwtRoleToPortalPermissionBucket(user.role)]).includes(permission);
+}
+
+export async function requirePortalPermission(
+  req: any,
+  reply: any,
+  permission: PortalPermissionKey,
+): Promise<PortalUser | null> {
+  const u = user(req);
+  if (!(await hasEffectivePortalPermission(u, permission))) {
+    reply.code(403).send({ error: "forbidden", permission });
+    return null;
+  }
+  return u;
 }
 
 export async function registerPlatformRolePermissionRoutes(app: FastifyInstance) {
@@ -110,14 +123,14 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
     const admin = await requireSuperAdminPortal(req, reply);
     if (!admin) return;
     try {
-      const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
-      const roles = row?.roles && typeof row.roles === "object" ? (row.roles as Record<string, unknown>) : {};
-      const permissions: Partial<Record<PortalRoleBucket, string[]>> = {};
+      const snapshot = await loadSnapshotRoles();
+      const permissions: Partial<Record<PortalRoleBucket, PortalPermissionKey[]>> = {};
       for (const key of PORTAL_ROLE_BUCKETS) {
-        const list = normalizePermissionList(roles[key]);
-        if (list.length) permissions[key] = list;
+        permissions[key] = snapshot
+          ? normalizeStoredRoleList(snapshot.roles, snapshot.version, key)
+          : [...DEFAULT_ROLE_PERMISSIONS[key]];
       }
-      return { permissions };
+      return { permissions, version: SNAPSHOT_VERSION, keys: PORTAL_PERMISSION_KEYS };
     } catch (err: any) {
       app.log.error({ err: err?.message }, "role-permissions: read failed");
       return reply.code(500).send({ error: "db_error" });
@@ -134,7 +147,7 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
       })
       .parse(req.body || {});
 
-    const normalized: Record<PortalRoleBucket, string[]> = {
+    const normalized: Record<PortalRoleBucket, PortalPermissionKey[]> = {
       END_USER: [],
       TENANT_ADMIN: [],
       SUPER_ADMIN: [],
@@ -147,23 +160,22 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
     }
 
     for (const bucket of PORTAL_ROLE_BUCKETS) {
-      normalized[bucket] = normalizePermissionList(body.permissions[bucket]);
+      normalized[bucket] = normalizeRolePermissionSet(body.permissions[bucket], bucket);
     }
 
-    const superSet = new Set(normalized.SUPER_ADMIN);
-    const allSet = new Set(PORTAL_PERMISSION_KEYS);
-    if (!setsEqual(superSet, allSet)) {
+    const missingProtectedSuperAdmin = PROTECTED_PLATFORM_ADMIN_PERMISSIONS.filter((key) => !normalized.SUPER_ADMIN.includes(key));
+    if (missingProtectedSuperAdmin.length > 0) {
       return reply.code(400).send({
         error: "invalid_super_admin_permissions",
-        message: "Platform Admin must retain the full permission set (all toggles are locked for that column).",
+        message: "Platform Admin must retain access to Permissions Management.",
       });
     }
 
     try {
       await db.platformRolePermissionSnapshot.upsert({
         where: { id: SNAPSHOT_ID },
-        create: { id: SNAPSHOT_ID, roles: normalized },
-        update: { roles: normalized },
+        create: { id: SNAPSHOT_ID, roles: { version: SNAPSHOT_VERSION, roles: normalized } },
+        update: { roles: { version: SNAPSHOT_VERSION, roles: normalized } },
       });
       return { ok: true };
     } catch (err: any) {

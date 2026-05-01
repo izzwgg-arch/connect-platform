@@ -79,7 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }>("/me")
         .then((me) => {
           if (!active) return;
-          if (Array.isArray(me.portalPermissionSet) && me.portalPermissionSet.length > 0) {
+          if (Array.isArray(me.portalPermissionSet)) {
             setPortalPermissionOverride(me.portalPermissionSet as Permission[]);
           } else {
             setPortalPermissionOverride(null);
@@ -105,6 +105,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const canPermission = useMemo(
+    () => (permission: Permission) => {
+      if (Array.isArray(portalPermissionOverride)) {
+        return portalPermissionOverride.includes(permission);
+      }
+      return hasPermission(role, permission);
+    },
+    [portalPermissionOverride, role],
+  );
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("cc-theme", theme);
@@ -122,7 +132,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    if (!hasPermission(role, "can_switch_tenants")) {
+    if (!canPermission("can_switch_tenants")) {
       // Non-super-admins only see their own tenant
       setTenants([]);
       return;
@@ -139,7 +149,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [role]);
+  }, [canPermission, role]);
 
   useEffect(() => {
     if (tenants.length === 0) return;
@@ -193,7 +203,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tenant,
       tenants,
       adminScope,
-      can: (permission: Permission) => hasPermission(role, permission),
+      can: canPermission,
       setTheme: setThemeState,
       setTenantId,
       setRole,
@@ -201,7 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAdminScopeState(scope);
       }
     }),
-    [adminScope, backendJwtRole, meTenant, portalPermissionOverride, role, tenant, tenantId, tenants, theme, user]
+    [adminScope, backendJwtRole, canPermission, meTenant, role, tenant, tenantId, tenants, theme, user]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

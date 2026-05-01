@@ -1,195 +1,137 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  DEFAULT_ROLE_PERMISSIONS,
+  PROTECTED_PLATFORM_ADMIN_PERMISSIONS,
+  SIDEBAR_ITEMS,
+  SIDEBAR_SECTIONS,
+  type PortalPermissionKey,
+} from "@connect/shared";
 import { PageHeader } from "../../../../components/PageHeader";
 import { DetailCard } from "../../../../components/DetailCard";
-import { RoleGate } from "../../../../components/RoleGate";
+import { PermissionGate } from "../../../../components/PermissionGate";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import type { Permission, Role } from "../../../../types/app";
 import { ROLE_PERMISSION_MAP } from "../../../../permissions/permissionMap";
 
-// ── Permission Categories ─────────────────────────────────────────────────────
-
-interface PermissionMeta {
-  key: Permission;
-  label: string;
-  description: string;
-}
-
-const PERMISSION_GROUPS: { group: string; perms: PermissionMeta[] }[] = [
-  {
-    group: "Dashboard & Navigation",
-    perms: [
-      { key: "can_view_dashboard",   label: "View Dashboard",         description: "Access main dashboard and KPI overview" },
-      { key: "can_view_apps",        label: "View Apps",              description: "Access the Apps section (SMS, WhatsApp, Customers)" },
-    ],
-  },
-  {
-    group: "Calls & Live Telephony",
-    perms: [
-      { key: "can_view_calls",       label: "View Calls",             description: "View call history and active call state" },
-      { key: "can_view_live_calls",  label: "View Live Calls",        description: "Monitor real-time active call board" },
-    ],
-  },
-  {
-    group: "Team & Extensions",
-    perms: [
-      { key: "can_view_team",        label: "View Team Directory",    description: "See all extension and team member presence" },
-      { key: "can_edit_team",        label: "Manage Team",            description: "Add, edit, and remove team members and extensions" },
-    ],
-  },
-  {
-    group: "Messaging",
-    perms: [
-      { key: "can_view_sms",         label: "View SMS Inbox",         description: "Read SMS threads and message history" },
-      { key: "can_send_sms",         label: "Send SMS",               description: "Compose and send outbound SMS messages" },
-    ],
-  },
-  {
-    group: "Voicemail",
-    perms: [
-      { key: "can_view_voicemail",   label: "View Voicemail",         description: "Listen to and read voicemail transcriptions" },
-      { key: "can_delete_voicemail", label: "Delete Voicemail",       description: "Permanently delete voicemail messages" },
-    ],
-  },
-  {
-    group: "Contacts",
-    perms: [
-      { key: "can_view_contacts",    label: "View Contacts",          description: "Access contact directory and records" },
-      { key: "can_manage_contacts",  label: "Manage Contacts",        description: "Create, update, and delete contact records" },
-    ],
-  },
-  {
-    group: "Recordings & Reports",
-    perms: [
-      { key: "can_view_recordings",      label: "View Recordings",        description: "Access call recording list" },
-      { key: "can_download_recordings",  label: "Download Recordings",    description: "Download call recording files" },
-      { key: "can_view_reports",         label: "View Reports",           description: "Access CDR, performance, and queue reports" },
-    ],
-  },
-  {
-    group: "Settings & Configuration",
-    perms: [
-      { key: "can_view_settings",            label: "View Settings",              description: "Access tenant settings pages" },
-      { key: "can_manage_call_forwarding",   label: "Manage Call Forwarding",     description: "Configure call forwarding and voicemail routing" },
-      { key: "can_manage_blfs",              label: "Manage BLFs",                description: "Configure Busy Lamp Field monitors" },
-      { key: "can_manage_integrations",      label: "Manage Integrations",        description: "Connect third-party integrations (CRM, webhooks)" },
-      { key: "can_manage_tenant_settings",   label: "Manage Tenant Settings",     description: "Full tenant configuration access" },
-    ],
-  },
-  {
-    group: "Admin & Platform",
-    perms: [
-      { key: "can_view_admin",               label: "View Admin Panel",           description: "Access admin console, PBX instances, and events" },
-      { key: "can_switch_tenants",           label: "Switch Tenants",             description: "Switch context between tenants (SUPER_ADMIN only)" },
-      { key: "can_manage_global_settings",   label: "Manage Global Settings",     description: "Modify platform-wide settings (SUPER_ADMIN only)" },
-    ],
-  },
-  {
-    group: "Mobile App",
-    perms: [
-      { key: "can_download_apk",  label: "Download Mobile App",  description: "Access mobile app download and QR linking" },
-    ],
-  },
-  {
-    group: "Chat",
-    perms: [
-      { key: "can_view_chat",   label: "View Chat",  description: "Access internal team chat" },
-    ],
-  },
-];
-
-// ── Role Definitions ─────────────────────────────────────────────────────────
+type RolePermissionsResponse = {
+  permissions: Partial<Record<Role, Permission[]>>;
+  version?: number;
+  keys?: Permission[];
+};
 
 const ROLES: { role: Role; label: string; description: string; color: string }[] = [
-  { role: "END_USER",     label: "End User",      description: "Standard user — call, SMS, voicemail, contacts",  color: "var(--info)" },
-  { role: "TENANT_ADMIN", label: "Tenant Admin",  description: "Full tenant management + admin panel access",     color: "var(--warning)" },
-  { role: "SUPER_ADMIN",  label: "Platform Admin", description: "Global platform administrator",                  color: "var(--danger)" },
+  { role: "END_USER", label: "End User", description: "Standard user-facing access", color: "var(--info)" },
+  { role: "TENANT_ADMIN", label: "Tenant Admin", description: "Tenant management and configuration", color: "var(--warning)" },
+  { role: "SUPER_ADMIN", label: "Platform Admin", description: "Platform-wide access", color: "var(--danger)" },
 ];
 
-// ── Permission Toggle ─────────────────────────────────────────────────────────
+const PROTECTED = new Set<PortalPermissionKey>(PROTECTED_PLATFORM_ADMIN_PERMISSIONS);
+
+const SECTION_GROUPS = SIDEBAR_SECTIONS.map((section) => ({
+  section,
+  items: SIDEBAR_ITEMS.filter((item) => item.section === section.id),
+}));
 
 function PermissionToggle({
   checked,
-  locked,
+  disabled,
   onChange,
+  title,
 }: {
   checked: boolean;
-  locked: boolean;
+  disabled?: boolean;
   onChange: (v: boolean) => void;
+  title?: string;
 }) {
   return (
-    <div
-      onClick={() => !locked && onChange(!checked)}
-      title={locked ? "This permission is locked for this role" : undefined}
+    <button
+      type="button"
+      onClick={() => !disabled && onChange(!checked)}
+      title={title}
+      aria-pressed={checked}
+      disabled={disabled}
       style={{
-        width: 36,
-        height: 20,
-        borderRadius: 10,
+        width: 38,
+        height: 22,
+        borderRadius: 999,
+        border: "1px solid var(--border)",
         background: checked ? "var(--success)" : "var(--border)",
         position: "relative",
-        cursor: locked ? "not-allowed" : "pointer",
-        transition: "background 0.2s",
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "background 0.2s, opacity 0.2s",
         flexShrink: 0,
-        opacity: locked ? 0.5 : 1,
+        opacity: disabled ? 0.45 : 1,
+        padding: 0,
       }}
     >
-      <div style={{
-        position: "absolute",
-        top: 3,
-        left: checked ? 19 : 3,
-        width: 14,
-        height: 14,
-        borderRadius: "50%",
-        background: "#fff",
-        transition: "left 0.15s",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-      }} />
-    </div>
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: checked ? 20 : 3,
+          width: 14,
+          height: 14,
+          borderRadius: "50%",
+          background: "#fff",
+          transition: "left 0.15s",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+        }}
+      />
+    </button>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+function copyDefaults(): Record<Role, Set<Permission>> {
+  return {
+    END_USER: new Set(ROLE_PERMISSION_MAP.END_USER),
+    TENANT_ADMIN: new Set(ROLE_PERMISSION_MAP.TENANT_ADMIN),
+    SUPER_ADMIN: new Set(ROLE_PERMISSION_MAP.SUPER_ADMIN),
+  };
+}
 
 export default function PermissionsPage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [overrides, setOverrides] = useState<Record<Role, Set<Permission>>>(copyDefaults);
 
-  // Local override state: starts from the compiled permissionMap, can be edited
-  const [overrides, setOverrides] = useState<Record<Role, Set<Permission>>>(() => ({
-    END_USER:     new Set(ROLE_PERMISSION_MAP.END_USER),
-    TENANT_ADMIN: new Set(ROLE_PERMISSION_MAP.TENANT_ADMIN),
-    SUPER_ADMIN:  new Set(ROLE_PERMISSION_MAP.SUPER_ADMIN),
-  }));
-
-  // Load server-side overrides if available
-  const serverState = useAsyncResource<{ permissions: Partial<Record<Role, Permission[]>> }>(
+  const serverState = useAsyncResource<RolePermissionsResponse>(
     () => apiGet("/admin/role-permissions"),
-    []
+    [],
   );
 
-  // Apply server overrides on load
-  useMemo(() => {
+  useEffect(() => {
     if (serverState.status !== "success") return;
     const srv = serverState.data.permissions;
     if (!srv) return;
     setOverrides((prev) => {
       const next = { ...prev };
       for (const role of ["END_USER", "TENANT_ADMIN", "SUPER_ADMIN"] as Role[]) {
-        if (srv[role]) next[role] = new Set(srv[role]);
+        if (Array.isArray(srv[role])) next[role] = new Set(srv[role]);
       }
       return next;
     });
-  }, [serverState.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [serverState.data, serverState.status]);
+
+  const counts = useMemo(() => {
+    return ROLES.reduce<Record<Role, number>>((acc, role) => {
+      acc[role.role] = overrides[role.role].size;
+      return acc;
+    }, { END_USER: 0, TENANT_ADMIN: 0, SUPER_ADMIN: 0 });
+  }, [overrides]);
 
   function toggle(role: Role, perm: Permission, value: boolean) {
     setOverrides((prev) => {
       const set = new Set(prev[role]);
       if (value) set.add(perm);
       else set.delete(perm);
+      if (role === "SUPER_ADMIN") {
+        for (const protectedKey of PROTECTED_PLATFORM_ADMIN_PERMISSIONS) set.add(protectedKey);
+      }
       return { ...prev, [role]: set };
     });
     setDirty(true);
@@ -203,10 +145,14 @@ export default function PermissionsPage() {
     try {
       const payload: Record<string, string[]> = {};
       for (const role of ["END_USER", "TENANT_ADMIN", "SUPER_ADMIN"] as Role[]) {
-        payload[role] = Array.from(overrides[role]);
+        const list = new Set(overrides[role]);
+        if (role === "SUPER_ADMIN") {
+          for (const protectedKey of PROTECTED_PLATFORM_ADMIN_PERMISSIONS) list.add(protectedKey);
+        }
+        payload[role] = Array.from(list);
       }
       await apiPost("/admin/role-permissions", { permissions: payload });
-      setSaveMsg("Permission changes saved. They will apply on the next login.");
+      setSaveMsg("Permission changes saved. They apply after refresh or next login.");
       setDirty(false);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("cc-portal-permissions-saved"));
@@ -219,129 +165,135 @@ export default function PermissionsPage() {
   }
 
   function handleReset() {
-    setOverrides({
-      END_USER:     new Set(ROLE_PERMISSION_MAP.END_USER),
-      TENANT_ADMIN: new Set(ROLE_PERMISSION_MAP.TENANT_ADMIN),
-      SUPER_ADMIN:  new Set(ROLE_PERMISSION_MAP.SUPER_ADMIN),
-    });
-    setDirty(false);
+    setOverrides(copyDefaults());
+    setDirty(true);
     setSaveMsg("");
     setSaveError("");
   }
 
-  // SUPER_ADMIN always has all perms — lock those toggles
-  const lockedForSuperAdmin = new Set(
-    Object.values(PERMISSION_GROUPS).flatMap((g) => g.perms.map((p) => p.key))
-  );
-
   return (
-    <RoleGate allow={["SUPER_ADMIN"]} fallback={
-      <div className="state-box" style={{ padding: 32, textAlign: "center" }}>
-        <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Access Restricted</div>
-        <p style={{ color: "var(--text-dim)" }}>Only Platform Admins can manage permissions.</p>
-      </div>
-    }>
+    <PermissionGate
+      permission="can_view_admin_permissions"
+      fallback={
+        <div className="state-box" style={{ padding: 32, textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Access denied</div>
+          <p className="muted">You do not have permission to manage platform role access.</p>
+        </div>
+      }
+    >
       <div className="stack compact-stack">
         <PageHeader
           title="Permissions Management"
-          subtitle="Control which features are accessible to each role. Changes apply platform-wide on next login."
+          subtitle="Control sidebar sections, sidebar pages, and role access across the platform."
           actions={
-            <div style={{ display: "flex", gap: 8 }}>
-              {dirty ? (
-                <button className="btn ghost" onClick={handleReset}>Reset to Defaults</button>
-              ) : null}
-              <button
-                className="btn"
-                onClick={handleSave}
-                disabled={saving || !dirty}
-                style={!dirty ? { opacity: 0.5 } : undefined}
-              >
-                {saving ? "Saving…" : "Save Changes"}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {dirty ? <span className="chip warning" style={{ fontSize: 12 }}>Unsaved changes</span> : null}
+              <button className="btn ghost" onClick={handleReset} disabled={saving}>Reset to Defaults</button>
+              <button className="btn" onClick={handleSave} disabled={saving || !dirty} style={!dirty ? { opacity: 0.5 } : undefined}>
+                {saving ? "Saving..." : "Save Changes"}
               </button>
             </div>
           }
         />
 
+        <div className="panel" style={{ padding: 14 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Sidebar permissions</div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            Section toggles control the whole sidebar group. Item toggles control individual pages.
+          </div>
+        </div>
+
         {saveMsg ? <div className="chip success" style={{ alignSelf: "flex-start" }}>{saveMsg}</div> : null}
         {saveError ? <div className="chip danger" style={{ alignSelf: "flex-start" }}>{saveError}</div> : null}
-        {dirty ? (
-          <div className="chip warning" style={{ alignSelf: "flex-start", fontSize: 12 }}>
-            ⚠ Unsaved changes — click "Save Changes" to apply
-          </div>
-        ) : null}
 
-        {/* Role legend */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           {ROLES.map((r) => (
             <div
               key={r.role}
               className="panel"
-              style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flex: "1 1 200px" }}
+              style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flex: "1 1 220px" }}
             >
-              <div style={{
-                width: 10, height: 10, borderRadius: "50%",
-                background: r.color, flexShrink: 0,
-              }} />
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: r.color, flexShrink: 0 }} />
               <div>
                 <div style={{ fontWeight: 650, fontSize: 13 }}>{r.label}</div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{r.description}</div>
+                <div className="muted" style={{ fontSize: 11 }}>{r.description}</div>
               </div>
-              <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-dim)" }}>
-                {overrides[r.role].size} permissions
+              <div className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
+                {counts[r.role]} permissions
               </div>
             </div>
           ))}
         </div>
 
-        {/* Permission groups table */}
-        {PERMISSION_GROUPS.map((group) => (
-          <div key={group.group} className="panel" style={{ overflow: "hidden" }}>
-            <div style={{
-              padding: "10px 16px",
-              background: "var(--panel-2)",
-              borderBottom: "1px solid var(--border)",
-              fontSize: 13,
-              fontWeight: 650,
-              color: "var(--text-dim)",
-            }}>
-              {group.group}
+        {SECTION_GROUPS.map(({ section, items }) => (
+          <div key={section.id} className="panel" style={{ overflow: "hidden" }}>
+            <div
+              style={{
+                padding: "12px 16px",
+                background: "var(--panel-2)",
+                borderBottom: "1px solid var(--border)",
+                display: "grid",
+                gridTemplateColumns: "minmax(260px, 1fr) repeat(3, 150px)",
+                gap: 12,
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{section.label}</div>
+                <div className="muted" style={{ fontSize: 12 }}>Master section access</div>
+              </div>
+              {ROLES.map((role) => {
+                const locked = role.role === "SUPER_ADMIN" && PROTECTED.has(section.permission);
+                const checked = locked || overrides[role.role].has(section.permission);
+                return (
+                  <div key={role.role} style={{ display: "flex", justifyContent: "center" }}>
+                    <PermissionToggle
+                      checked={checked}
+                      disabled={locked}
+                      title={locked ? "Platform Admin must retain permissions access." : `${role.label}: ${section.label}`}
+                      onChange={(value) => toggle(role.role, section.permission, value)}
+                    />
+                  </div>
+                );
+              })}
             </div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--text-dim)" }}>
-                  <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 500 }}>Permission</th>
+                  <th style={{ textAlign: "left", padding: "8px 16px", fontWeight: 600 }}>Sidebar item</th>
                   {ROLES.map((r) => (
-                    <th key={r.role} style={{ textAlign: "center", padding: "6px 14px", fontWeight: 600, color: r.color }}>
+                    <th key={r.role} style={{ textAlign: "center", padding: "8px 14px", fontWeight: 700, color: r.color }}>
                       {r.label}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {group.perms.map((perm, idx) => (
+                {items.map((item, idx) => (
                   <tr
-                    key={perm.key}
+                    key={item.id}
                     style={{
-                      borderBottom: idx < group.perms.length - 1 ? "1px solid var(--border)" : undefined,
+                      borderBottom: idx < items.length - 1 ? "1px solid var(--border)" : undefined,
                       background: idx % 2 === 0 ? undefined : "rgba(255,255,255,0.01)",
                     }}
                   >
                     <td style={{ padding: "10px 16px" }}>
-                      <div style={{ fontSize: 13, fontWeight: 550 }}>{perm.label}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{perm.description}</div>
+                      <div style={{ fontSize: 13, fontWeight: 650 }}>{item.label}</div>
+                      <div className="muted" style={{ fontSize: 11 }}>{item.href}</div>
                     </td>
-                    {ROLES.map((r) => {
-                      const checked = overrides[r.role].has(perm.key);
-                      // SUPER_ADMIN always has everything locked to ON
-                      const locked = r.role === "SUPER_ADMIN";
-                      // END_USER can't have TENANT_ADMIN-only perms — leave as-is but show warning
+                    {ROLES.map((role) => {
+                      const sectionOn = overrides[role.role].has(section.permission);
+                      const locked = role.role === "SUPER_ADMIN" && PROTECTED.has(item.permission);
+                      const checked = locked || overrides[role.role].has(item.permission);
+                      const disabled = locked || !sectionOn;
                       return (
-                        <td key={r.role} style={{ textAlign: "center", padding: "10px 14px" }}>
+                        <td key={role.role} style={{ textAlign: "center", padding: "10px 14px", opacity: sectionOn ? 1 : 0.55 }}>
                           <div style={{ display: "flex", justifyContent: "center" }}>
                             <PermissionToggle
-                              checked={locked || checked}
-                              locked={locked}
-                              onChange={(v) => toggle(r.role, perm.key, v)}
+                              checked={checked}
+                              disabled={disabled}
+                              title={!sectionOn ? `${section.label} is off for ${role.label}` : locked ? "Platform Admin must retain permissions access." : `${role.label}: ${item.label}`}
+                              onChange={(value) => toggle(role.role, item.permission, value)}
                             />
                           </div>
                         </td>
@@ -356,19 +308,16 @@ export default function PermissionsPage() {
 
         <DetailCard title="How Permissions Work">
           <div style={{ fontSize: 13, color: "var(--text-dim)", lineHeight: 1.7 }}>
-            <p>Permissions are role-based and apply globally across all tenants by default. Each user is assigned one of three roles:</p>
-            <ul style={{ paddingLeft: 18, marginTop: 6 }}>
-              <li><strong>End User</strong> — standard agents and users. Can use calls, SMS, voicemail, and contacts.</li>
-              <li><strong>Tenant Admin</strong> — manages the tenant's configuration, team, and reports.</li>
-              <li><strong>Platform Admin</strong> — full access to all settings, all tenants, and global configuration.</li>
-            </ul>
+            <p>
+              Sidebar section toggles hide or show entire navigation groups. Item toggles hide or show individual pages inside
+              enabled sections. Backend APIs for those modules also check the saved role permissions before returning data.
+            </p>
             <p style={{ marginTop: 8 }}>
-              Platform Admin permissions are locked — they always have full access. Changes to End User and Tenant Admin 
-              permissions take effect on next login. Nav items and UI elements are automatically shown or hidden based on permissions.
+              Platform Admin access to this Permissions page is protected so the platform cannot be locked out accidentally.
             </p>
           </div>
         </DetailCard>
       </div>
-    </RoleGate>
+    </PermissionGate>
   );
 }
