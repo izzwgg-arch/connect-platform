@@ -1894,10 +1894,11 @@ async function createUserPasswordToken(params: {
 }
 
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
-  // Operators can pin a fully-formed CDN URL via ANDROID_APK_DOWNLOAD_URL; the
-  // default falls back to our self-hosted Fastify route under PUBLIC_API_URL.
-  const apkOverride = String(process.env.ANDROID_APK_DOWNLOAD_URL || "").trim();
-  const androidApkUrl = apkOverride.length > 0 ? apkOverride : androidApkPublicUrl();
+  // Invite emails point to a lightweight Connect download page, not directly
+  // to the APK. Gmail's google.com wrapper has trouble finalizing direct APK
+  // downloads; starting the APK from our page is more reliable on Android.
+  const pageOverride = String(process.env.ANDROID_APK_DOWNLOAD_PAGE_URL || "").trim();
+  const androidApkUrl = pageOverride.length > 0 ? pageOverride : androidApkDownloadPageUrl();
   const template = welcomeCreatePasswordEmail({
     userName: displayNameForUser(input.user),
     userFirstName: String(input.user.firstName || "").trim() || null,
@@ -3447,6 +3448,62 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
   };
 }
 
+function apkDownloadHref(filename = APK_LATEST_FILENAME): string {
+  return `${APK_PUBLIC_BASE_URL}/${filename}?direct=1`;
+}
+
+function androidApkDownloadPageUrl(): string {
+  return `${APK_PUBLIC_BASE_URL.replace(/\/downloads$/, "")}/mobile/android/download`;
+}
+
+function renderAndroidApkDownloadPage(input: { apkUrl: string; version: string | null; sizeBytes: number | null }): string {
+  const versionText = input.version ? `Version ${input.version}` : "Latest Android build";
+  const sizeText = input.sizeBytes ? `${(input.sizeBytes / 1024 / 1024).toFixed(2)} MB` : "APK download";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download Connect Android App</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1120; color: #e5e7eb; }
+    main { width: min(440px, calc(100vw - 40px)); padding: 30px 24px; border: 1px solid rgba(148, 163, 184, .24); border-radius: 24px; background: linear-gradient(180deg, rgba(15, 23, 42, .96), rgba(15, 23, 42, .88)); box-shadow: 0 24px 80px rgba(0, 0, 0, .38); }
+    .mark { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; margin-bottom: 18px; background: rgba(37, 99, 235, .18); color: #93c5fd; font-size: 28px; }
+    h1 { margin: 0 0 10px; font-size: 25px; line-height: 1.15; letter-spacing: -.03em; }
+    p { margin: 0; color: #aeb8ca; line-height: 1.55; font-size: 15px; }
+    .meta { margin-top: 18px; color: #94a3b8; font-size: 13px; }
+    a.button { margin-top: 24px; display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: 16px; background: #2563eb; color: white; font-weight: 700; text-decoration: none; box-shadow: 0 16px 32px rgba(37, 99, 235, .28); }
+    .hint { margin-top: 18px; font-size: 13px; color: #8fa0b8; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">↓</div>
+    <h1>Download Connect for Android</h1>
+    <p>Tap the button below to download the Android app directly from Connect.</p>
+    <div class="meta">${versionText} · ${sizeText}</div>
+    <a class="button" href="${input.apkUrl}" download>Download Android App</a>
+    <p class="hint">After the download finishes, Android may ask you to allow installs from this source the first time.</p>
+  </main>
+</body>
+</html>`;
+}
+
+app.get("/mobile/android/download", async (_req, reply) => {
+  const manifest = await readApkManifest();
+  if (!manifest.sizeBytes) {
+    return reply.status(404).send({ error: "apk_not_published" });
+  }
+  reply.header("content-type", "text/html; charset=utf-8");
+  reply.header("cache-control", "no-store, max-age=0");
+  return reply.send(renderAndroidApkDownloadPage({
+    apkUrl: apkDownloadHref(APK_LATEST_FILENAME),
+    version: manifest.version,
+    sizeBytes: manifest.sizeBytes,
+  }));
+});
+
 // Stream the APK with HTTP Range support. We use Fastify's normal stream
 // handling (NOT reply.hijack) so framing/keep-alive/Content-Length is
 // managed by Fastify itself. The only thing the original route was missing
@@ -3467,6 +3524,27 @@ app.get("/downloads/:filename", async (req, reply) => {
   }
   if (!stat.isFile()) {
     return reply.status(404).send({ error: "not_found" });
+  }
+
+  const method = String((req.raw as { method?: string }).method || "").toUpperCase();
+  const query = (req.query || {}) as Record<string, string | undefined>;
+  const userAgent = String((req.headers as Record<string, string | undefined>)["user-agent"] || "");
+  const referrer = String(
+    (req.headers as Record<string, string | undefined>).referer
+    || (req.headers as Record<string, string | undefined>).referrer
+    || ""
+  );
+  const isAndroidDownloadClient = /Android/i.test(userAgent) || referrer.startsWith("android-app://");
+  const isExplicitDownload = query.direct === "1" || query.download === "1";
+  if (method === "GET" && isAndroidDownloadClient && !isExplicitDownload && !String(req.headers.range || "").trim()) {
+    const manifest = await readApkManifest();
+    reply.header("content-type", "text/html; charset=utf-8");
+    reply.header("cache-control", "no-store, max-age=0");
+    return reply.send(renderAndroidApkDownloadPage({
+      apkUrl: apkDownloadHref(filename),
+      version: manifest.version,
+      sizeBytes: stat.size,
+    }));
   }
 
   const totalSize = stat.size;
@@ -3504,19 +3582,10 @@ app.get("/downloads/:filename", async (req, reply) => {
     isPartial = true;
   }
 
-  const method = String((req.raw as { method?: string }).method || "").toUpperCase();
-  const userAgent = String((req.headers as Record<string, string | undefined>)["user-agent"] || "");
-  const referrer = String(
-    (req.headers as Record<string, string | undefined>).referer
-    || (req.headers as Record<string, string | undefined>).referrer
-    || ""
-  );
-  const isAndroidDownloadClient = /Android/i.test(userAgent) || referrer.startsWith("android-app://");
-
   reply.header("content-type", APK_MIME_TYPE);
   reply.header("content-disposition", `attachment; filename="${filename}"`);
   reply.header("accept-ranges", "bytes");
-  reply.header("cache-control", isAndroidDownloadClient ? "no-store, max-age=0" : "public, max-age=300");
+  reply.header("cache-control", "public, max-age=300");
   reply.header("x-content-type-options", "nosniff");
   // Tell nginx (which sits in front of this API) NOT to buffer the response
   // body. For a 137 MB stream nginx's default proxy_buffering would either
@@ -3530,16 +3599,7 @@ app.get("/downloads/:filename", async (req, reply) => {
     reply.header("content-length", String(end - start + 1));
     fileStream = fs.createReadStream(resolved, { start, end });
   } else {
-    if (method === "HEAD" || !isAndroidDownloadClient) {
-      reply.header("content-length", String(totalSize));
-    } else {
-      // Android's Gmail/Google embedded downloader has repeatedly received
-      // all Content-Length bytes and then stayed stuck at 100%. For that
-      // client, prefer chunked transfer plus an explicit connection close so
-      // completion is driven by end-of-stream rather than the byte counter.
-      reply.raw.shouldKeepAlive = false;
-      reply.header("connection", "close");
-    }
+    reply.header("content-length", String(totalSize));
     fileStream = fs.createReadStream(resolved);
   }
 
@@ -3568,14 +3628,15 @@ app.get("/mobile/android/latest", async (_req, reply) => {
   return {
     platform: "android",
     version: manifest.version || "0.0.0",
-    apkUrl: `${APK_PUBLIC_BASE_URL}/${APK_LATEST_FILENAME}`,
+    apkUrl: apkDownloadHref(APK_LATEST_FILENAME),
+    downloadPageUrl: androidApkDownloadPageUrl(),
     sizeBytes: manifest.sizeBytes,
     publishedAt: manifest.modifiedAt,
   };
 });
 
 function androidApkPublicUrl(): string {
-  return `${APK_PUBLIC_BASE_URL}/${APK_LATEST_FILENAME}`;
+  return apkDownloadHref(APK_LATEST_FILENAME);
 }
 
 // ── Prometheus metrics ────────────────────────────────────────────────────────
@@ -4131,6 +4192,8 @@ app.addHook("preHandler", async (req, reply) => {
     // browser.
     || path.startsWith("/downloads/")
     || /\/downloads\/[^/]+$/.test(path)
+    || path === "/mobile/android/download"
+    || path.endsWith("/mobile/android/download")
     || path === "/mobile/android/latest"
     || path.endsWith("/mobile/android/latest")
   ) return;
