@@ -3374,10 +3374,12 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
   };
 }
 
-// Stream the APK with HTTP Range support. We `reply.hijack()` so we can use
-// `stream.pipeline()` directly — that propagates client disconnects and
-// read errors cleanly without ever leaving an unhandled `error` event on
-// the file stream (which would otherwise crash the Node process).
+// Stream the APK with HTTP Range support. We use Fastify's normal stream
+// handling (NOT reply.hijack) so framing/keep-alive/Content-Length is
+// managed by Fastify itself. The only thing the original route was missing
+// was a defensive `error` listener on the file stream — without it, a
+// client cancelling mid-download produced an unhandled `error` event that
+// crashed the Node process.
 app.get("/downloads/:filename", async (req, reply) => {
   const filename = String((req.params as { filename?: string }).filename || "");
   const resolved = resolveApkPath(filename);
@@ -3429,45 +3431,42 @@ app.get("/downloads/:filename", async (req, reply) => {
     isPartial = true;
   }
 
-  const length = end - start + 1;
-  reply.hijack();
-  const headers: Record<string, string> = {
-    "content-type": APK_MIME_TYPE,
-    "content-length": String(length),
-    "content-disposition": `attachment; filename="${filename}"`,
-    "accept-ranges": "bytes",
-    "cache-control": "public, max-age=300",
-    "x-content-type-options": "nosniff",
-    // Tell nginx (which sits in front of this API) NOT to buffer the
-    // response body. For a 137 MB stream nginx's default proxy_buffering
-    // would either spool to disk or block the read until the upstream is
-    // done, neither of which is great for end users.
-    "x-accel-buffering": "no",
-  };
-  if (isPartial) headers["content-range"] = `bytes ${start}-${end}/${totalSize}`;
-  reply.raw.writeHead(isPartial ? 206 : 200, headers);
+  reply.header("content-type", APK_MIME_TYPE);
+  reply.header("content-disposition", `attachment; filename="${filename}"`);
+  reply.header("accept-ranges", "bytes");
+  reply.header("cache-control", "public, max-age=300");
+  reply.header("x-content-type-options", "nosniff");
+  // Tell nginx (which sits in front of this API) NOT to buffer the response
+  // body. For a 137 MB stream nginx's default proxy_buffering would either
+  // spool to disk or stall, neither of which is great for end users.
+  reply.header("x-accel-buffering", "no");
 
-  const fileStream = fs.createReadStream(resolved, { start, end });
-  // Use pipeline() so any client-disconnect / read error is captured here
-  // instead of bubbling up as an unhandled `error` event.
-  const { pipeline } = await import("node:stream/promises");
-  try {
-    await pipeline(fileStream, reply.raw);
-  } catch (err: any) {
-    const code = String(err?.code || err?.message || err || "");
-    // ECONNRESET / EPIPE / ERR_STREAM_PREMATURE_CLOSE are normal when the
-    // client cancels mid-download. Log at warn — do not throw.
+  let fileStream: import("fs").ReadStream;
+  if (isPartial) {
+    reply.code(206);
+    reply.header("content-range", `bytes ${start}-${end}/${totalSize}`);
+    reply.header("content-length", String(end - start + 1));
+    fileStream = fs.createReadStream(resolved, { start, end });
+  } else {
+    reply.header("content-length", String(totalSize));
+    fileStream = fs.createReadStream(resolved);
+  }
+
+  // Defensive — Fastify will pipe this stream to the response, but if the
+  // client cancels mid-download fs.createReadStream emits an `error` event
+  // (EPIPE / ECONNRESET / ERR_STREAM_PREMATURE_CLOSE) that, without this
+  // listener, would crash the Node process under tsx-watch and produce 502s
+  // on every subsequent request.
+  fileStream.on("error", (err: NodeJS.ErrnoException) => {
+    const code = String(err.code || err.message || "");
     if (/ECONNRESET|EPIPE|ERR_STREAM_PREMATURE_CLOSE|ABORT_ERR/i.test(code)) {
       app.log.warn({ filename, code }, "apk-download: client disconnected");
     } else {
-      app.log.error({ filename, code }, "apk-download: pipeline failed");
+      app.log.error({ filename, code }, "apk-download: stream error");
     }
-  } finally {
-    if (!fileStream.destroyed) fileStream.destroy();
-    if (!reply.raw.writableEnded) {
-      try { reply.raw.end(); } catch { /* socket already gone */ }
-    }
-  }
+  });
+
+  return reply.send(fileStream);
 });
 
 app.get("/mobile/android/latest", async (_req, reply) => {
