@@ -1893,6 +1893,10 @@ async function createUserPasswordToken(params: {
 }
 
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
+  // Operators can pin a fully-formed CDN URL via ANDROID_APK_DOWNLOAD_URL; the
+  // default falls back to our self-hosted Fastify route under PUBLIC_API_URL.
+  const apkOverride = String(process.env.ANDROID_APK_DOWNLOAD_URL || "").trim();
+  const androidApkUrl = apkOverride.length > 0 ? apkOverride : androidApkPublicUrl();
   const template = welcomeCreatePasswordEmail({
     userName: displayNameForUser(input.user),
     userFirstName: String(input.user.firstName || "").trim() || null,
@@ -1900,6 +1904,7 @@ async function queueUserWelcomeEmail(input: { user: any; tenantName: string; ext
     extensionNumber: input.extensionNumber || null,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(input.token)}`),
     expiresHours: INVITE_TOKEN_HOURS,
+    androidApkUrl,
   });
   await queueEmailJob({ tenantId: input.user.tenantId, type: "USER_INVITE", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
 }
@@ -3299,6 +3304,115 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
 app.get("/health", async () => ({ ok: true }));
 
+// ── Android APK distribution ──────────────────────────────────────────────
+// Serves the published Android APK to invited users. Files live in a
+// host-mounted directory (`APK_DOWNLOAD_DIR`) that is *not* committed to git
+// — operators copy a fresh build via `scripts/android-publish.ps1`.
+//
+// Public URLs (no JWT — gated only by filename allow-list):
+//   GET /downloads/connectcomms-latest.apk
+//   GET /downloads/connectcomms-v<semver>.apk
+//   GET /mobile/android/latest    (manifest JSON for in-app update checks)
+//
+// nginx does not need any changes — these paths flow through the existing
+// `/api/...` reverse-proxy mount.
+const APK_DOWNLOAD_DIR = (process.env.APK_DOWNLOAD_DIR || "/var/lib/connect/downloads").replace(/\/+$/, "");
+const APK_PUBLIC_BASE_URL = (
+  process.env.ANDROID_APK_DOWNLOAD_URL_BASE
+  || (() => {
+    const origin = String(
+      process.env.API_PUBLIC_URL
+      || process.env.PUBLIC_API_URL
+      || process.env.PUBLIC_API_BASE_URL
+      || process.env.PORTAL_PUBLIC_URL
+      || process.env.APP_PUBLIC_URL
+      || "https://app.connectcomunications.com"
+    ).replace(/\/+$/, "");
+    return origin.endsWith("/api") ? `${origin}/downloads` : `${origin}/api/downloads`;
+  })()
+).replace(/\/+$/, "");
+const APK_LATEST_FILENAME = "connectcomms-latest.apk";
+const APK_FILENAME_PATTERN = /^connectcomms-(latest|v\d+\.\d+\.\d+(?:[+\-][A-Za-z0-9.\-]+)?)\.apk$/;
+const APK_MIME_TYPE = "application/vnd.android.package-archive";
+
+function resolveApkPath(filename: string): string | null {
+  if (!APK_FILENAME_PATTERN.test(filename)) return null;
+  const resolved = path.resolve(APK_DOWNLOAD_DIR, filename);
+  // Defence-in-depth: the regex already blocks `..` / slashes, but verify the
+  // resolved path stays inside the configured directory.
+  if (!resolved.startsWith(`${APK_DOWNLOAD_DIR}${path.sep}`) && resolved !== `${APK_DOWNLOAD_DIR}${path.sep}${filename}`) {
+    return null;
+  }
+  return resolved;
+}
+
+async function readApkManifest(): Promise<{ version: string | null; filename: string; sizeBytes: number | null; modifiedAt: string | null }> {
+  const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
+  let stat: import("fs").Stats | null = null;
+  try {
+    stat = await fsp.stat(latestPath);
+  } catch {
+    stat = null;
+  }
+  let version: string | null = null;
+  try {
+    const manifest = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
+    const parsed = JSON.parse(manifest) as { version?: string };
+    if (parsed && typeof parsed.version === "string" && /^\d+\.\d+\.\d+/.test(parsed.version)) {
+      version = parsed.version;
+    }
+  } catch {
+    /* manifest is optional */
+  }
+  return {
+    version,
+    filename: APK_LATEST_FILENAME,
+    sizeBytes: stat ? stat.size : null,
+    modifiedAt: stat ? stat.mtime.toISOString() : null,
+  };
+}
+
+app.get("/downloads/:filename", async (req, reply) => {
+  const filename = String((req.params as { filename?: string }).filename || "");
+  const resolved = resolveApkPath(filename);
+  if (!resolved) {
+    return reply.status(404).send({ error: "not_found" });
+  }
+  let stat: import("fs").Stats;
+  try {
+    stat = await fsp.stat(resolved);
+  } catch {
+    return reply.status(404).send({ error: "not_found" });
+  }
+  if (!stat.isFile()) {
+    return reply.status(404).send({ error: "not_found" });
+  }
+  reply.header("content-type", APK_MIME_TYPE);
+  reply.header("content-length", String(stat.size));
+  reply.header("content-disposition", `attachment; filename="${filename}"`);
+  reply.header("cache-control", "public, max-age=300");
+  reply.header("x-content-type-options", "nosniff");
+  return reply.send(fs.createReadStream(resolved));
+});
+
+app.get("/mobile/android/latest", async (_req, reply) => {
+  const manifest = await readApkManifest();
+  if (!manifest.sizeBytes) {
+    return reply.status(404).send({ error: "apk_not_published" });
+  }
+  return {
+    platform: "android",
+    version: manifest.version || "0.0.0",
+    apkUrl: `${APK_PUBLIC_BASE_URL}/${APK_LATEST_FILENAME}`,
+    sizeBytes: manifest.sizeBytes,
+    publishedAt: manifest.modifiedAt,
+  };
+});
+
+function androidApkPublicUrl(): string {
+  return `${APK_PUBLIC_BASE_URL}/${APK_LATEST_FILENAME}`;
+}
+
 // ── Prometheus metrics ────────────────────────────────────────────────────────
 const apiRegistry = new Registry();
 apiRegistry.setDefaultLabels({ service: "api" });
@@ -3827,6 +3941,14 @@ app.addHook("preHandler", async (req, reply) => {
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")
+    // Public Android APK distribution + lightweight manifest used by the
+    // invitation email button and future in-app update checks. Filenames are
+    // tightly allow-listed inside the handler so this is not a directory
+    // browser.
+    || path.startsWith("/downloads/")
+    || /\/downloads\/[^/]+$/.test(path)
+    || path === "/mobile/android/latest"
+    || path.endsWith("/mobile/android/latest")
   ) return;
   // Allow a JWT passed via `?token=` query param (used by <audio> / download <a>
   // tags where you can't set an Authorization header). Copy it to the header

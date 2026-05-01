@@ -71,6 +71,14 @@ services:
       PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
       PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
+      # ── Android APK distribution ─────────────────────────────────────────
+      # Where the API reads APK files from (mounted read-only below). The
+      # host-side directory is populated by scripts/android-publish.ps1.
+      APK_DOWNLOAD_DIR: ${APK_DOWNLOAD_DIR:-/var/lib/connect/downloads}
+      # Optional override for the public download URL that goes into the
+      # invitation email. Leave unset to auto-derive from PUBLIC_API_URL.
+      ANDROID_APK_DOWNLOAD_URL: ${ANDROID_APK_DOWNLOAD_URL:-}
+      ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
     command: sh -lc "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
     ports:
       - "127.0.0.1:3001:3001"
@@ -83,6 +91,11 @@ services:
       # connect-prompt-sync.sh cron on the PBX host POSTs recording bytes
       # here so Connect can stream them to the browser on click.
       - ivr-prompts:/var/lib/connect/ivr-prompts
+      # Android APK distribution. Operators populate this directory via
+      # scripts/android-publish.ps1 (scp on top of an existing release APK).
+      # Mounted read-only so a compromised API container cannot tamper with
+      # the published binary.
+      - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
     networks:
       - default
       - infra_default

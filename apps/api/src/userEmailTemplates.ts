@@ -91,6 +91,16 @@ function ctaButton(label: string, url: string, color = "#2563eb"): string {
 </table>`;
 }
 
+function secondaryCtaButton(label: string, url: string): string {
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:14px 0 4px;">
+  <tr>
+    <td align="left" style="border:1.5px solid #2563eb;border-radius:10px;background:#ffffff;">
+      <a href="${esc(url)}" target="_blank" style="display:inline-block;color:#2563eb;text-decoration:none;font-weight:700;font-size:14px;padding:13px 26px;border-radius:10px;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:0.01em;">${esc(label)}</a>
+    </td>
+  </tr>
+</table>`;
+}
+
 function infoBadgesTable(badges: Array<{ label: string; value: string }>): string {
   if (!badges.length) return "";
   const rows = badges.map(
@@ -126,10 +136,24 @@ export function welcomeCreatePasswordEmail(input: {
   extensionNumber?: string | null;
   setupUrl: string;
   expiresHours: number;
+  androidApkUrl?: string | null;
 }): { subject: string; html: string; text: string } {
   const firstName = (input.userFirstName || input.userName.split(" ")[0] || "there").trim();
   const badges: Array<{ label: string; value: string }> = [{ label: "Organization", value: input.tenantName }];
   if (input.extensionNumber) badges.push({ label: "Extension", value: input.extensionNumber });
+
+  const androidSection = input.androidApkUrl
+    ? `
+${divider()}
+
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Get the Android App</p>
+<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After creating your password, install the Android app from the link below.</p>
+
+${secondaryCtaButton("Download Android App", input.androidApkUrl)}
+
+<p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
+`
+    : "";
 
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
@@ -141,6 +165,8 @@ ${infoBadgesTable(badges)}
 ${ctaButton("Create Your Password", input.setupUrl)}
 
 <p style="margin:20px 0 0;font-size:13px;color:#94a3b8;">This one-time link expires in <strong>${input.expiresHours} hours</strong>. After that you can request a new invite from your administrator.</p>
+
+${androidSection}
 
 ${divider()}
 
@@ -158,6 +184,15 @@ ${divider()}
     ``,
     `This one-time link expires in ${input.expiresHours} hours.`,
     ``,
+    ...(input.androidApkUrl
+      ? [
+          `Get the Android App:`,
+          `After creating your password, install the Android app from this link:`,
+          input.androidApkUrl,
+          `(Android may ask you to allow installs from this source the first time.)`,
+          ``,
+        ]
+      : []),
     `If you were not expecting this invite, you can safely ignore this email.`,
   ].join("\n");
 
