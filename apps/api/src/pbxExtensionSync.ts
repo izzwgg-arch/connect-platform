@@ -147,12 +147,24 @@ export async function syncExtensionsFromPbx(
           ext.email ?? ext.voicemail_email ?? ext.user_email ?? null;
         const pbxUserEmail: string | null = (() => {
           if (!rawEmail) return null;
+          // Always store emails in their canonical lowercased form. Login flow
+          // lowercases the typed email before lookup; without this normalize
+          // step, users imported with mixed-case PBX emails (e.g.
+          // "Relaxtires@gmail.com") can never log in because Postgres
+          // `String @unique` is case-sensitive.
+          const norm = (v: unknown): string | null => {
+            if (typeof v !== "string") return null;
+            const t = v.trim().toLowerCase();
+            return t || null;
+          };
           if (Array.isArray(rawEmail)) {
-            const first = rawEmail.find((e: any) => typeof e === "string" && e.trim());
-            return first ? String(first).trim() : null;
+            for (const candidate of rawEmail) {
+              const n = norm(candidate);
+              if (n) return n;
+            }
+            return null;
           }
-          const s = String(rawEmail).trim();
-          return s || null;
+          return norm(rawEmail);
         })();
 
         // Determine the active device. Tenant rule: WebRTC devices are named

@@ -3773,7 +3773,20 @@ app.post("/auth/login", async (req, reply) => {
     loginFailuresTotal.labels("rate_limit").inc();
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
-  const user = await db.user.findUnique({ where: { email: emailKey } });
+  // Primary lookup against the canonical (lowercased) form; fall back to a
+  // case-insensitive match so a user imported with mixed-case email (e.g.
+  // "Relaxtires@gmail.com" from VitalPBX sync) is not permanently locked out
+  // if a future write-path regression lets a non-normalized email through.
+  let user = await db.user.findUnique({ where: { email: emailKey } });
+  if (!user) {
+    user = await db.user.findFirst({ where: { email: { equals: emailKey, mode: "insensitive" } } });
+    if (user && user.email !== emailKey) {
+      app.log.warn(
+        { userId: user.id, storedEmail: user.email, loginEmail: emailKey },
+        "auth_login_email_case_mismatch",
+      );
+    }
+  }
   if (!user) {
     loginFailuresTotal.labels("not_found").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
@@ -3856,7 +3869,13 @@ app.post("/auth/password/forgot", async (req) => {
   const input = z.object({ email: z.string().email() }).parse(req.body || {});
   const email = normalizeEmail(input.email);
   if (!checkBillingRateLimit(`forgot-password:${email}`, 5, 60 * 60 * 1000)) return { ok: true };
-  const user = await db.user.findUnique({ where: { email } });
+  // Mirror /auth/login: prefer the unique-index lookup, fall back to a
+  // case-insensitive scan so legacy mixed-case rows still receive their
+  // reset email instead of silently no-op-ing.
+  let user = await db.user.findUnique({ where: { email } });
+  if (!user) {
+    user = await db.user.findFirst({ where: { email: { equals: email, mode: "insensitive" } } });
+  }
   if (user && (user as any).status !== "DISABLED") {
     const { token } = await createUserPasswordToken({ userId: user.id, type: "PASSWORD_RESET", ttlMs: RESET_TOKEN_MINUTES * 60 * 1000, ipAddress: req.ip, userAgent: String(req.headers["user-agent"] || "") });
     await queuePasswordResetEmail({ user, token });
