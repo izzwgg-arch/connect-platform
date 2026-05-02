@@ -2618,12 +2618,74 @@ async function sendPushToUserDevices(input: {
     });
   }
   const expoBody = await expoRes.json().catch(() => null);
-  const expoErrors = (expoBody?.data ?? []).filter((r: any) => r?.status === "error");
+  const expoTickets = Array.isArray(expoBody?.data) ? (expoBody.data as any[]) : [];
+  const expoErrors = expoTickets.filter((r: any) => r?.status === "error");
+
+  // Per-device tracking. Powers the admin /admin/mobile/devices diagnostics
+  // surface and the in-app Call Wake Diagnostics screen, so the user (and we)
+  // can see whether the S25 push was actually accepted by Expo / FCM.
+  const sentAt = new Date();
+  const pushStateUpdates: Array<Promise<unknown>> = [];
+  const invalidTokens: string[] = [];
+  for (let i = 0; i < filtered.length; i++) {
+    const device = filtered[i];
+    const ticket = expoTickets[i] ?? null;
+    const status =
+      ticket?.status === "ok"
+        ? "ok"
+        : ticket?.status === "error"
+          ? (ticket?.details?.error || "error")
+          : (expoRes.ok ? "queued" : `http_${expoRes.status}`);
+    const errorMessage =
+      ticket?.status === "error"
+        ? (ticket?.message || ticket?.details?.error || "expo_error")
+        : null;
+    if (ticket?.status === "error" && ticket?.details?.error === "DeviceNotRegistered") {
+      invalidTokens.push(device.expoPushToken);
+    }
+    pushStateUpdates.push(
+      db.mobileDevice
+        .update({
+          where: { id: device.id },
+          data: {
+            lastPushSentAt: sentAt,
+            lastPushType: input.payload.type,
+            lastPushStatus: status,
+            lastPushError: errorMessage
+          } as any
+        })
+        .catch((e) => {
+          app.log.warn(
+            { err: e instanceof Error ? e.message : String(e), deviceId: device.id },
+            "mobile-push: failed to record device push state"
+          );
+        })
+    );
+    app.log.info(
+      {
+        callWake: true,
+        stage: "PUSH_DELIVERED",
+        tenantId: input.tenantId,
+        userId: input.userId,
+        deviceId: device.id,
+        platform: device.platform,
+        manufacturer: (device as any).manufacturer || null,
+        model: (device as any).model || null,
+        osVersion: (device as any).osVersion || null,
+        appVersion: (device as any).appVersion || null,
+        payloadType: input.payload.type,
+        inviteId: "inviteId" in input.payload ? input.payload.inviteId : null,
+        expoStatus: status,
+        expoError: errorMessage,
+        tokenTail: String(device.expoPushToken).slice(-12)
+      },
+      "[CALL_WAKE] PUSH_DELIVERED"
+    );
+  }
+  await Promise.allSettled(pushStateUpdates);
+
   if (expoErrors.length) {
     app.log.warn({ expoErrors, payload: input.payload }, "mobile-push: expo reported errors");
-    const invalidTokens = (expoBody?.data ?? [])
-      .map((r: any, index: number) => r?.details?.error === "DeviceNotRegistered" ? filtered[index]?.expoPushToken : null)
-      .filter(Boolean) as string[];
     if (invalidTokens.length) {
       await db.mobileDevice.updateMany({
         where: { expoPushToken: { in: invalidTokens } },
@@ -11133,7 +11195,12 @@ app.post("/mobile/devices/register", async (req, reply) => {
     voipPushToken: z.string().optional(),
     deviceId: z.string().max(200).optional(),
     appVersion: z.string().max(80).optional(),
-    deviceName: z.string().max(120).optional()
+    deviceName: z.string().max(120).optional(),
+    // Call-wake diagnostics: populated on every app start so we can tell
+    // S24-vs-S25 (and any other manufacturer/model) at the backend.
+    manufacturer: z.string().max(80).optional(),
+    model: z.string().max(120).optional(),
+    osVersion: z.string().max(80).optional()
   }).parse(req.body || {});
   const extension = await db.extension.findFirst({
     where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
@@ -11152,6 +11219,9 @@ app.post("/mobile/devices/register", async (req, reply) => {
       deviceId: input.deviceId || null,
       appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
+      manufacturer: input.manufacturer || null,
+      model: input.model || null,
+      osVersion: input.osVersion || null,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
@@ -11165,11 +11235,34 @@ app.post("/mobile/devices/register", async (req, reply) => {
       deviceId: input.deviceId || null,
       appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
+      manufacturer: input.manufacturer || null,
+      model: input.model || null,
+      osVersion: input.osVersion || null,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
     } as any
   });
+
+  // Structured log for call-wake diagnostics. Greppable by ops as `[CALL_WAKE]`
+  // alongside the push-send log emitted by sendPushToUserDevices.
+  app.log.info(
+    {
+      callWake: true,
+      stage: "DEVICE_REGISTERED",
+      tenantId: user.tenantId,
+      userId: user.sub,
+      deviceId: saved.id,
+      platform: saved.platform,
+      extensionId: extension?.id ?? null,
+      manufacturer: input.manufacturer || null,
+      model: input.model || null,
+      osVersion: input.osVersion || null,
+      appVersion: input.appVersion || null,
+      tokenTail: String(input.expoPushToken).slice(-12)
+    },
+    "[CALL_WAKE] DEVICE_REGISTERED"
+  );
 
   // Remove any OLD device registrations for this user that have a different
   // push token. A user's phone gets a new token after each APK reinstall, so
@@ -11204,6 +11297,131 @@ app.post("/mobile/devices/unregister", async (req, reply) => {
   });
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_UNREGISTERED", entityType: "MobileDevice", entityId: user.sub });
   return { ok: true, removed: out.count };
+});
+
+// Returns the current user's registered mobile devices with diagnostics
+// fields (manufacturer/model/osVersion/lastPushSentAt/lastPushStatus/...) so
+// the in-app Call Wake Diagnostics screen can show "yes the backend has your
+// token; the last push was sent at <ts> with status <status>".
+//
+// `as any` casts on order/select/return shape are used because the freshly
+// added MobileDevice columns (manufacturer / model / osVersion /
+// lastPushSentAt / lastPushType / lastPushStatus / lastPushError) only become
+// known to the Prisma client after `prisma generate`, which the deploy queue
+// runs as part of the api job. This keeps the source compiling against an
+// older generated client too.
+app.get("/mobile/devices/me", async (req, _reply) => {
+  const user = getUser(req);
+  const devices = (await (db.mobileDevice as any).findMany({
+    where: { tenantId: user.tenantId, userId: user.sub },
+    orderBy: [{ active: "desc" }, { lastSeenAt: "desc" }],
+    take: 10
+  })) as any[];
+  return {
+    devices: devices.map((d: any) => ({
+      id: d.id,
+      platform: d.platform,
+      active: d.active,
+      extensionId: d.extensionId,
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+      appVersion: d.appVersion,
+      manufacturer: d.manufacturer ?? null,
+      model: d.model ?? null,
+      osVersion: d.osVersion ?? null,
+      lastSeenAt: d.lastSeenAt,
+      lastPushSentAt: d.lastPushSentAt ?? null,
+      lastPushType: d.lastPushType ?? null,
+      lastPushStatus: d.lastPushStatus ?? null,
+      lastPushError: d.lastPushError ?? null,
+      // Tokens are sensitive; only return the trailing fingerprint.
+      expoPushTokenTail: String(d.expoPushToken).slice(-12),
+      voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
+      deactivatedAt: d.deactivatedAt
+    }))
+  };
+});
+
+// Admin diagnostics: lists mobile devices with optional userId / tenantId
+// filters. SUPER_ADMIN may view any tenant; TENANT_ADMIN is scoped to their
+// own tenant. Used by the portal to debug "is the user's S25 actually
+// receiving our pushes?" scenarios.
+app.get("/admin/mobile/devices", async (req, reply) => {
+  const user = getUser(req);
+  if (user.role !== "SUPER_ADMIN" && user.role !== "TENANT_ADMIN") {
+    return reply.status(403).send({ error: "FORBIDDEN" });
+  }
+  const q = z
+    .object({
+      userId: z.string().optional(),
+      tenantId: z.string().optional(),
+      platform: z.enum(["IOS", "ANDROID"]).optional(),
+      includeInactive: z.union([z.boolean(), z.string()]).optional(),
+      limit: z.coerce.number().int().min(1).max(200).optional()
+    })
+    .parse((req.query as any) || {});
+
+  const tenantFilter =
+    user.role === "SUPER_ADMIN"
+      ? q.tenantId
+        ? { tenantId: q.tenantId }
+        : {}
+      : { tenantId: user.tenantId };
+
+  const includeInactive =
+    q.includeInactive === true || q.includeInactive === "1" || q.includeInactive === "true";
+
+  const devices = (await (db.mobileDevice as any).findMany({
+    where: {
+      ...tenantFilter,
+      ...(q.userId ? { userId: q.userId } : {}),
+      ...(q.platform ? { platform: q.platform } : {}),
+      ...(includeInactive ? {} : { active: true })
+    },
+    orderBy: [{ active: "desc" }, { lastPushSentAt: "desc" }, { lastSeenAt: "desc" }],
+    take: q.limit ?? 100,
+    include: {
+      user: { select: { id: true, firstName: true, lastName: true, displayName: true, email: true } },
+      extension: { select: { id: true, number: true, displayName: true } }
+    }
+  })) as any[];
+
+  return {
+    count: devices.length,
+    devices: devices.map((d: any) => ({
+      id: d.id,
+      tenantId: d.tenantId,
+      user: d.user
+        ? {
+            id: d.user.id,
+            email: d.user.email,
+            name:
+              d.user.displayName ||
+              [d.user.firstName, d.user.lastName].filter(Boolean).join(" ").trim() ||
+              d.user.email
+          }
+        : null,
+      extension: d.extension,
+      platform: d.platform,
+      active: d.active,
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+      appVersion: d.appVersion,
+      manufacturer: d.manufacturer ?? null,
+      model: d.model ?? null,
+      osVersion: d.osVersion ?? null,
+      lastSeenAt: d.lastSeenAt,
+      lastPushSentAt: d.lastPushSentAt ?? null,
+      lastPushType: d.lastPushType ?? null,
+      lastPushStatus: d.lastPushStatus ?? null,
+      lastPushError: d.lastPushError ?? null,
+      expoPushTokenTail: String(d.expoPushToken).slice(-12),
+      voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+      deactivatedAt: d.deactivatedAt
+    }))
+  };
 });
 
 app.get("/mobile/call-invites/pending", async (req, reply) => {

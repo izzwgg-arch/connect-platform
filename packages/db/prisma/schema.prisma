@@ -1749,6 +1749,18 @@ model MobileDevice {
   deviceId            String?
   appVersion          String?
   deviceName          String?
+  // Call-wake diagnostics — populated by /mobile/devices/register on every
+  // app start so backend can correlate S24 vs S25 vs OnePlus vs Pixel etc.
+  manufacturer        String?
+  model               String?
+  osVersion           String?
+  // Updated by sendPushToUserDevices on every push. Lets the admin /mobile
+  // diagnostics surface confirm "yes the push was sent at <ts> and Expo
+  // accepted it" or "Expo rejected it with reason X".
+  lastPushSentAt      DateTime?
+  lastPushType        String?
+  lastPushStatus      String?
+  lastPushError       String?
   active              Boolean              @default(true)
   deactivatedAt       DateTime?
   lastSeenAt          DateTime             @default(now())
@@ -1763,6 +1775,7 @@ model MobileDevice {
   @@index([tenantId, userId])
   @@index([tenantId, platform])
   @@index([tenantId, userId, active])
+  @@index([tenantId, lastPushSentAt])
   @@index([extensionId])
 }
 
