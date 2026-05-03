@@ -14372,6 +14372,12 @@ type IvrActiveOption = {
   enabled: boolean;
 };
 
+function normalizeTenantExtensionDestination(type: string | null | undefined, ref: string | null | undefined, tenantDialContext: string | null): string {
+  const value = String(ref ?? "").trim();
+  if (!value || type !== "extension" || !tenantDialContext) return value;
+  return value.replace(/^from-internal,/i, `${tenantDialContext},`);
+}
+
 /** VitalPBX-parity defaults for the optional prompt slots. The dialplan
  *  checks for a LITERAL empty string and falls back to these when the admin
  *  hasn't uploaded a custom recording. Matches what VitalPBX ships out of
@@ -14403,6 +14409,7 @@ function buildIvrKeys(
   }>,
   override: { expiresAt: Date | null } | null,
   activeOptions: IvrActiveOption[] = [],
+  tenantDialContext: string | null = null,
 ): Array<{ family: string; key: string; value: string }> {
   const fam = ivrFamily(slug);
   const byType = new Map(profiles.map((p) => [p.type, p]));
@@ -14462,7 +14469,11 @@ function buildIvrKeys(
   }
   for (const digit of IVR_OPTION_DIGITS) {
     const opt = optByDigit.get(digit);
-    keys.push({ family: fam, key: `opt_${digit}/dest`, value: opt?.destinationRef  ?? "" });
+    keys.push({
+      family: fam,
+      key: `opt_${digit}/dest`,
+      value: normalizeTenantExtensionDestination(opt?.destinationType, opt?.destinationRef, tenantDialContext),
+    });
     keys.push({ family: fam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" });
   }
 
@@ -16889,7 +16900,14 @@ app.post("/voice/ivr/publish", async (req, reply) => {
     ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } })
     : [];
   const slug = await getIvrSlugForTenant(tenantId);
-  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions);
+  const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({
+    where: { tenantId },
+    select: { pbxTenantId: true },
+  });
+  const tenantDialContext = tenantPbxLink?.pbxTenantId
+    ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all`
+    : null;
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext);
 
   // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
   // write to AstDB must exist in this tenant's catalog. The save path

@@ -86,7 +86,7 @@ function describeDestination(dest: { type: DestinationType; ref: string } | null
   const r = (ref ?? "").trim();
   if (!r) return DESTINATION_TYPE_LABELS[type];
   if (type === "extension") {
-    const m = r.match(/^from-internal,([^,]+),\d+$/i);
+    const m = r.match(/^(?:from-internal|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return `Extension ${m[1]}`;
   }
   if (type === "queue") {
@@ -2065,7 +2065,12 @@ function ProfilePromptsSection({ profile, canEdit, onRefresh }: {
 // digit slot. Tenant-scoped via ?tenantId so super-admins get the right
 // list when switching contexts. Failures are non-fatal — the destination
 // input falls back to free text.
-type ExtensionSuggestion = { extension: string; name: string | null };
+type ExtensionSuggestion = {
+  extension: string;
+  name: string | null;
+  pbxDeviceName?: string | null;
+  pbxSipUsername?: string | null;
+};
 
 function useExtensionSuggestions(tenantId: string): ExtensionSuggestion[] {
   const [rows, setRows] = useState<ExtensionSuggestion[]>([]);
@@ -2078,7 +2083,12 @@ function useExtensionSuggestions(tenantId: string): ExtensionSuggestion[] {
           `/voice/pbx/resources/extensions?tenantId=${encodeURIComponent(tenantId)}`,
         );
         if (abort) return;
-        setRows((r.rows || []).map((e) => ({ extension: String(e.extension), name: e.name ?? null })));
+        setRows((r.rows || []).map((e: any) => ({
+          extension: String(e.extension),
+          name: e.name ?? null,
+          pbxDeviceName: e.pbxDeviceName ?? null,
+          pbxSipUsername: e.pbxSipUsername ?? null,
+        })));
       } catch {
         if (!abort) setRows([]);
       }
@@ -2174,7 +2184,7 @@ function parseDestinationRef(type: DestinationType | "", ref: string): { selecte
   const r = (ref ?? "").trim();
   if (!r) return { selected: "", free: "" };
   if (type === "extension") {
-    const m = r.match(/^from-internal,([^,]+),\d+$/i);
+    const m = r.match(/^(?:from-internal|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return { selected: m[1], free: "" };
   }
   if (type === "queue") {
@@ -2197,11 +2207,25 @@ function parseDestinationRef(type: DestinationType | "", ref: string): { selecte
   return { selected: "", free: r };
 }
 
+function tenantDialContextForExtension(row: ExtensionSuggestion | undefined): string | null {
+  const values = [row?.pbxDeviceName, row?.pbxSipUsername].filter(Boolean).map(String);
+  for (const value of values) {
+    const m = value.match(/^T(\d+)_/i);
+    if (m) return `T${m[1]}_cos-all`;
+  }
+  return null;
+}
+
 /** Turn a picker selection into the CEP the publisher writes to AstDB. */
-function buildDestinationRef(type: DestinationType | "", selected: string, free: string): string {
+function buildDestinationRef(
+  type: DestinationType | "",
+  selected: string,
+  free: string,
+  opts: { extensionRow?: ExtensionSuggestion } = {},
+): string {
   const s = (selected ?? "").trim();
   const f = (free ?? "").trim();
-  if (type === "extension"        && s) return `from-internal,${s},1`;
+  if (type === "extension"        && s) return `${tenantDialContextForExtension(opts.extensionRow) ?? "from-internal"},${s},1`;
   if (type === "queue"            && s) return `ext-queues,${s},1`;
   if (type === "ring_group"       && s) return `ext-group,${s},1`;
   if (type === "ring_group")            return f; // legacy/custom free-text fallback
@@ -2243,7 +2267,10 @@ function DestinationPicker({
   };
 
   const setSelected = (s: string) => {
-    onChange({ type: value.type, ref: buildDestinationRef(value.type, s, "") });
+    const extensionRow = value.type === "extension"
+      ? extensions.find((e) => e.extension === s)
+      : undefined;
+    onChange({ type: value.type, ref: buildDestinationRef(value.type, s, "", { extensionRow }) });
   };
   const setFree = (f: string) => {
     onChange({ type: value.type, ref: buildDestinationRef(value.type, "", f) });
