@@ -57,12 +57,16 @@ function normalizeInboundRow(raw: unknown, tenantDidE164: string): InboundRow | 
   if (!from.ok || !to.ok) return null;
   if (to.e164 !== tenantDidE164) return null;
 
-  const direction = firstString(row, ["direction", "type", "message_type", "sms_type"]).toLowerCase();
-  if (direction && !["received", "inbound", "incoming", "rx", "both"].includes(direction)) return null;
   if (from.e164 === tenantDidE164) return null;
 
   const body = firstString(row, ["message", "body", "msg", "text"]);
   const mediaUrls = parseMediaUrls(row);
+  const rawDirection = firstString(row, ["direction", "type", "message_type", "sms_type"]).toLowerCase();
+  if (rawDirection === "0" || rawDirection === "sent" || rawDirection === "outbound" || rawDirection === "outgoing" || rawDirection === "tx") {
+    return null;
+  }
+  if (rawDirection && rawDirection !== "1" && !["received", "inbound", "incoming", "rx", "both"].includes(rawDirection)) return null;
+
   const providerId =
     firstString(row, ["id", "sms", "sms_id", "message_id", "mms", "mms_id"]) ||
     `${tenantDidE164}:${from.e164}:${firstString(row, ["date", "timestamp", "created_at"])}:${body}:${mediaUrls.join(",")}`;
