@@ -14,15 +14,20 @@ and rejects missing or ambiguous DID matches.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
+import grp
+import hashlib
 import hmac
 import json
 import os
+import pwd
 import re
 import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,10 +36,21 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.04.28"
+VERSION = "2026.05.03"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 TENANT_RE = re.compile(r"^\d{1,10}$")
 DEST_RE = re.compile(r"^\d{1,10}$")
+# IVR prompt basename: same character set the rest of Connect's catalog
+# enforces. We additionally cap at 120 chars so the on-disk filename
+# remains comfortably under ext4 limits even with the .wav suffix.
+PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# Hard cap on inbound JSON body. The base64-encoded WAV for a 60-second
+# greeting is ~1.3 MB — 16 MB leaves room for unusually long announcements
+# while still bounding the helper's per-request memory footprint.
+MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# Hard cap on the decoded WAV bytes we'll write to /var/lib/asterisk/sounds.
+MAX_WAV_BYTES = 12 * 1024 * 1024
 
 
 def utc_now() -> str:
@@ -79,6 +95,14 @@ class Config:
         # CONNECT_PBX_HELPER_APPLY_COMMAND='asterisk -rx "dialplan reload"'
         self.apply_command = os.environ.get("CONNECT_PBX_HELPER_APPLY_COMMAND", "").strip()
         self.apply_timeout_sec = int(os.environ.get("CONNECT_PBX_HELPER_APPLY_TIMEOUT_SEC", "30"))
+        # IVR prompt sync (Connect → PBX). Defaults match VitalPBX's stock
+        # custom recordings dir, so the dialplan's
+        # `STAT(/var/lib/asterisk/sounds/${GREETING}.wav)` check resolves
+        # against the same files this helper writes.
+        self.sounds_dir = Path(os.environ.get("CONNECT_PBX_HELPER_SOUNDS_DIR", "/var/lib/asterisk/sounds/custom"))
+        self.sounds_owner_user = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_USER", "asterisk").strip()
+        self.sounds_owner_group = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP", "asterisk").strip()
+        self.sounds_file_mode = int(os.environ.get("CONNECT_PBX_HELPER_SOUNDS_FILE_MODE", "0o644"), 0)
 
     def validate(self) -> None:
         if len(self.secret) < 32:
@@ -375,6 +399,133 @@ def restore_route(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def upload_prompt(body: dict[str, Any]) -> dict[str, Any]:
+    """Write a Connect-supplied IVR prompt audio file to /var/lib/asterisk/sounds/custom/.
+
+    Body shape (JSON):
+        {
+          "fileBaseName": "test_greeting_20260426",   # bare basename, no ext
+          "sha256": "<hex>",                          # of the decoded WAV bytes
+          "sizeBytes": 12345,                         # decoded length, advisory
+          "bytesB64": "<base64>",                     # the WAV bytes
+          "tenantSlug": "landau_home",                # context (audit only)
+          "promptRef": "custom/test_greeting_…",       # context (audit only)
+          "requestedBy": "user:abc"                   # context (audit only)
+        }
+
+    The handler:
+      - Decodes base64, verifies sha256, enforces size cap.
+      - If a file with the same sha already exists at the target path,
+        skips the rewrite and returns `unchanged: true` (idempotent retries
+        from Connect's catch-up cron are free).
+      - Atomic write: stage in a temp file in the same directory, then
+        os.replace() onto the final path so partial writes can never be
+        played by `Background()` mid-call.
+      - Best-effort chown to asterisk:asterisk + chmod 0644 so the
+        Asterisk channel driver can read it. Failures are logged but
+        not fatal — many production hosts run Asterisk under a different
+        UID, and the operator may have already widened group perms.
+    """
+    base = str(body.get("fileBaseName") or "").strip()
+    if not PROMPT_BASE_RE.match(base):
+        raise ValueError("invalid_fileBaseName")
+    sha = str(body.get("sha256") or "").strip().lower()
+    if not SHA256_RE.match(sha):
+        raise ValueError("invalid_sha256")
+    bytes_b64 = body.get("bytesB64")
+    if not isinstance(bytes_b64, str) or not bytes_b64:
+        raise ValueError("bytesB64_required")
+    try:
+        wav_bytes = base64.b64decode(bytes_b64, validate=True)
+    except Exception as exc:
+        raise ValueError("base64_decode_failed: " + str(exc))
+    if not wav_bytes:
+        raise ValueError("empty_decoded_bytes")
+    if len(wav_bytes) > MAX_WAV_BYTES:
+        raise ValueError("wav_too_large")
+    actual_sha = hashlib.sha256(wav_bytes).hexdigest()
+    if not hmac.compare_digest(actual_sha, sha):
+        raise ValueError("sha256_mismatch")
+
+    # Sanity: the bytes should look like a RIFF WAV. Asterisk WILL play
+    # other things, but Connect-side conversion is supposed to produce
+    # WAV — refusing anything else here keeps a corrupted upload from
+    # silently breaking the IVR for callers.
+    if not (wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
+        raise ValueError("not_a_riff_wav")
+
+    sounds_dir = CFG.sounds_dir
+    if not sounds_dir.is_dir():
+        raise RuntimeError("sounds_dir_missing: " + str(sounds_dir))
+
+    target = sounds_dir / (base + ".wav")
+    # Idempotency: skip if the file already matches sha. Saves a syscall
+    # storm when the catch-up cron and the immediate push race.
+    if target.is_file():
+        try:
+            with target.open("rb") as fh:
+                existing_sha = hashlib.sha256(fh.read()).hexdigest()
+            if hmac.compare_digest(existing_sha, sha):
+                return {
+                    "ok": True,
+                    "unchanged": True,
+                    "fileBaseName": base,
+                    "pbxPath": str(target),
+                    "sha256": sha,
+                    "sizeBytes": len(wav_bytes),
+                }
+        except OSError:
+            # Existing file is unreadable to us — fall through and rewrite.
+            pass
+
+    # Atomic write: temp file in the same directory + os.replace().
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="." + base + ".", suffix=".wav.tmp", dir=str(sounds_dir))
+    tmp_p = Path(tmp_path)
+    try:
+        with os.fdopen(tmp_fd, "wb") as fh:
+            fh.write(wav_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # Best-effort permissions before the rename. Ignored if running
+        # without the rights to chown — Asterisk usually still reads via
+        # the group bit (0644).
+        try:
+            os.chmod(tmp_path, CFG.sounds_file_mode)
+        except OSError:
+            pass
+        if CFG.sounds_owner_user:
+            try:
+                uid = pwd.getpwnam(CFG.sounds_owner_user).pw_uid
+                gid = (
+                    grp.getgrnam(CFG.sounds_owner_group).gr_gid
+                    if CFG.sounds_owner_group
+                    else -1
+                )
+                os.chown(tmp_path, uid, gid)
+            except (KeyError, PermissionError, OSError):
+                # Not running as root or asterisk user doesn't exist —
+                # we still got the bytes onto disk, which is the
+                # critical thing.
+                pass
+        os.replace(tmp_path, target)
+    except Exception:
+        # Clean up the temp on any failure path so we don't leak
+        # half-written files into the sounds dir.
+        try:
+            tmp_p.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    return {
+        "ok": True,
+        "fileBaseName": base,
+        "pbxPath": str(target),
+        "sha256": sha,
+        "sizeBytes": len(wav_bytes),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConnectPbxRouteHelper/" + VERSION
 
@@ -394,7 +545,10 @@ class Handler(BaseHTTPRequestHandler):
         return bool(got) and hmac.compare_digest(got, CFG.secret)
 
     def _read_json(self) -> dict[str, Any]:
-        raw = self.rfile.read(int(self.headers.get("content-length", "0") or "0"))
+        length = int(self.headers.get("content-length", "0") or "0")
+        if length > MAX_REQUEST_BYTES:
+            raise ValueError("request_body_too_large")
+        raw = self.rfile.read(length)
         if not raw:
             return {}
         parsed = json.loads(raw.decode("utf-8"))
@@ -418,6 +572,7 @@ class Handler(BaseHTTPRequestHandler):
             "/inspect": inspect_route,
             "/retarget": retarget_route,
             "/restore": restore_route,
+            "/upload-prompt": upload_prompt,
         }
         fn = actions.get(path)
         if not fn:
@@ -426,19 +581,27 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             result = fn(body)
-            audit(path.strip("/"), True, body, result=result)
+            # Audit but never log raw audio bytes — drop bytesB64 from
+            # the persisted payload.
+            audit_body = {k: v for k, v in body.items() if k != "bytesB64"}
+            if "bytesB64" in body:
+                audit_body["bytesB64Len"] = len(body.get("bytesB64") or "")
+            audit(path.strip("/"), True, audit_body, result=result)
             self._send(200, result)
         except LookupError as exc:
             body = locals().get("body", {})
-            audit(path.strip("/"), False, body, error=str(exc))
+            audit_body = {k: v for k, v in body.items() if k != "bytesB64"}
+            audit(path.strip("/"), False, audit_body, error=str(exc))
             self._send(404, {"error": str(exc)})
         except ValueError as exc:
             body = locals().get("body", {})
-            audit(path.strip("/"), False, body, error=str(exc))
+            audit_body = {k: v for k, v in body.items() if k != "bytesB64"}
+            audit(path.strip("/"), False, audit_body, error=str(exc))
             self._send(400, {"error": str(exc)})
         except Exception as exc:
             body = locals().get("body", {})
-            audit(path.strip("/"), False, body, error=str(exc))
+            audit_body = {k: v for k, v in body.items() if k != "bytesB64"}
+            audit(path.strip("/"), False, audit_body, error=str(exc))
             self._send(409, {"error": str(exc)})
 
 

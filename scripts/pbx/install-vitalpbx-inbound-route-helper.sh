@@ -58,6 +58,27 @@ install -d -m 0755 /opt/connect-pbx-helper
 install -d -m 0750 /var/lib/connect-pbx-helper
 useradd --system --home /var/lib/connect-pbx-helper --shell /usr/sbin/nologin connect-route-helper 2>/dev/null || true
 
+# The helper writes IVR prompts directly into Asterisk's sounds dir AND
+# (when configured) reloads dialplan via /run/asterisk/asterisk.ctl.
+# Both require membership in the 'asterisk' group, which is owned by
+# /var/lib/asterisk/sounds/custom (mode 0775 on stock VitalPBX) and by
+# the AMI control socket. This is a no-op if the group already includes
+# the helper user.
+if getent group asterisk >/dev/null 2>&1; then
+  if ! id -nG connect-route-helper 2>/dev/null | tr ' ' '\n' | grep -qx asterisk; then
+    usermod -a -G asterisk connect-route-helper
+    echo "Added connect-route-helper to the asterisk group"
+  fi
+else
+  echo "WARN: 'asterisk' group not present — IVR prompt writes may fail until perms are widened" >&2
+fi
+
+# Make sure the destination dir exists; on a stock VitalPBX it always
+# does, but a freshly imaged box may not have called any custom-recording
+# tool yet. We create with group write so the helper can drop files.
+install -d -o asterisk -g asterisk -m 0775 /var/lib/asterisk/sounds/custom 2>/dev/null || \
+  install -d -m 0775 /var/lib/asterisk/sounds/custom
+
 HELPER_SECRET="$(openssl rand -hex 32 2>/dev/null || python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
@@ -75,15 +96,20 @@ python3 -m venv /opt/connect-pbx-helper/.venv
 
 cat >/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py <<'PYHELPER'
 #!/usr/bin/env python3
+import base64
 import datetime as dt
+import grp
+import hashlib
 import hmac
 import json
 import os
+import pwd
 import re
 import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,9 +117,13 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.04.28"
+VERSION = "2026.05.03"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
+PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MAX_WAV_BYTES = 12 * 1024 * 1024
 
 def utc_now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -128,6 +158,10 @@ class Config:
         self.connect_destination_id = os.environ.get("CONNECT_PBX_CONNECT_DESTINATION_ID", "").strip()
         self.apply_command = os.environ.get("CONNECT_PBX_HELPER_APPLY_COMMAND", "").strip()
         self.apply_timeout = int(os.environ.get("CONNECT_PBX_HELPER_APPLY_TIMEOUT_SEC", "30"))
+        self.sounds_dir = Path(os.environ.get("CONNECT_PBX_HELPER_SOUNDS_DIR", "/var/lib/asterisk/sounds/custom"))
+        self.sounds_owner_user = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_USER", "asterisk").strip()
+        self.sounds_owner_group = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP", "asterisk").strip()
+        self.sounds_file_mode = int(os.environ.get("CONNECT_PBX_HELPER_SOUNDS_FILE_MODE", "0o644"), 0)
     def validate(self):
         if len(self.secret) < 32:
             raise SystemExit("CONNECT_PBX_HELPER_SECRET must be at least 32 chars")
@@ -314,6 +348,66 @@ def restore_route(body):
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
 
+def upload_prompt(body):
+    base = str(body.get("fileBaseName") or "").strip()
+    if not PROMPT_BASE_RE.match(base):
+        raise ValueError("invalid_fileBaseName")
+    sha = str(body.get("sha256") or "").strip().lower()
+    if not SHA256_RE.match(sha):
+        raise ValueError("invalid_sha256")
+    bytes_b64 = body.get("bytesB64")
+    if not isinstance(bytes_b64, str) or not bytes_b64:
+        raise ValueError("bytesB64_required")
+    try:
+        wav_bytes = base64.b64decode(bytes_b64, validate=True)
+    except Exception as exc:
+        raise ValueError("base64_decode_failed: " + str(exc))
+    if not wav_bytes:
+        raise ValueError("empty_decoded_bytes")
+    if len(wav_bytes) > MAX_WAV_BYTES:
+        raise ValueError("wav_too_large")
+    actual_sha = hashlib.sha256(wav_bytes).hexdigest()
+    if not hmac.compare_digest(actual_sha, sha):
+        raise ValueError("sha256_mismatch")
+    if not (wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
+        raise ValueError("not_a_riff_wav")
+    if not CFG.sounds_dir.is_dir():
+        raise RuntimeError("sounds_dir_missing: " + str(CFG.sounds_dir))
+    target = CFG.sounds_dir / (base + ".wav")
+    if target.is_file():
+        try:
+            with target.open("rb") as fh:
+                existing_sha = hashlib.sha256(fh.read()).hexdigest()
+            if hmac.compare_digest(existing_sha, sha):
+                return {"ok": True, "unchanged": True, "fileBaseName": base, "pbxPath": str(target), "sha256": sha, "sizeBytes": len(wav_bytes)}
+        except OSError:
+            pass
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="." + base + ".", suffix=".wav.tmp", dir=str(CFG.sounds_dir))
+    try:
+        with os.fdopen(tmp_fd, "wb") as fh:
+            fh.write(wav_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp_path, CFG.sounds_file_mode)
+        except OSError:
+            pass
+        if CFG.sounds_owner_user:
+            try:
+                uid = pwd.getpwnam(CFG.sounds_owner_user).pw_uid
+                gid = grp.getgrnam(CFG.sounds_owner_group).gr_gid if CFG.sounds_owner_group else -1
+                os.chown(tmp_path, uid, gid)
+            except (KeyError, PermissionError, OSError):
+                pass
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "fileBaseName": base, "pbxPath": str(target), "sha256": sha, "sizeBytes": len(wav_bytes)}
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConnectPbxRouteHelper/" + VERSION
     def log_message(self, fmt, *args):
@@ -329,7 +423,10 @@ class Handler(BaseHTTPRequestHandler):
         got = self.headers.get("x-connect-pbx-helper-secret", "")
         return bool(got) and hmac.compare_digest(got, CFG.secret)
     def read_body(self):
-        raw = self.rfile.read(int(self.headers.get("content-length", "0") or "0"))
+        length = int(self.headers.get("content-length", "0") or "0")
+        if length > MAX_REQUEST_BYTES:
+            raise ValueError("request_body_too_large")
+        raw = self.rfile.read(length)
         parsed = json.loads(raw.decode("utf-8") or "{}")
         if not isinstance(parsed, dict):
             raise ValueError("body_must_be_object")
@@ -344,7 +441,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.auth_ok():
             self.send_json(401, {"error": "unauthorized"})
             return
-        actions = {"/inspect": inspect_route, "/retarget": retarget_route, "/restore": restore_route}
+        actions = {"/inspect": inspect_route, "/retarget": retarget_route, "/restore": restore_route, "/upload-prompt": upload_prompt}
         fn = actions.get(path)
         if not fn:
             self.send_json(404, {"error": "not_found"})
@@ -352,16 +449,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self.read_body()
             result = fn(body)
-            audit(path.strip("/"), True, body, result=result)
+            audit_body = {k: v for k, v in body.items() if k != "bytesB64"}
+            if "bytesB64" in body:
+                audit_body["bytesB64Len"] = len(body.get("bytesB64") or "")
+            audit(path.strip("/"), True, audit_body, result=result)
             self.send_json(200, result)
         except LookupError as exc:
-            audit(path.strip("/"), False, locals().get("body", {}), error=str(exc))
+            body = locals().get("body", {})
+            audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(404, {"error": str(exc)})
         except ValueError as exc:
-            audit(path.strip("/"), False, locals().get("body", {}), error=str(exc))
+            body = locals().get("body", {})
+            audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(400, {"error": str(exc)})
         except Exception as exc:
-            audit(path.strip("/"), False, locals().get("body", {}), error=str(exc))
+            body = locals().get("body", {})
+            audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(409, {"error": str(exc)})
 
 def main():
@@ -395,6 +498,10 @@ OMBU_MYSQL_PASSWORD=${MYSQL_PASS}
 CONNECT_PBX_CONNECT_DESTINATION_ID=${CONNECT_DESTINATION_ID}
 CONNECT_PBX_HELPER_APPLY_COMMAND='asterisk -rx "dialplan reload"'
 CONNECT_PBX_HELPER_DATA_DIR=/var/lib/connect-pbx-helper
+CONNECT_PBX_HELPER_SOUNDS_DIR=/var/lib/asterisk/sounds/custom
+CONNECT_PBX_HELPER_SOUNDS_OWNER_USER=asterisk
+CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP=asterisk
+CONNECT_PBX_HELPER_SOUNDS_FILE_MODE=0o644
 EOF
 
 chmod 0600 /etc/connect-pbx-helper.env
@@ -429,7 +536,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/connect-pbx-helper
+ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom
+SupplementaryGroups=asterisk
 
 [Install]
 WantedBy=multi-user.target
@@ -447,6 +555,10 @@ env \
   CONNECT_PBX_CONNECT_DESTINATION_ID="${CONNECT_DESTINATION_ID}" \
   CONNECT_PBX_HELPER_APPLY_COMMAND='asterisk -rx "dialplan reload"' \
   CONNECT_PBX_HELPER_DATA_DIR=/var/lib/connect-pbx-helper \
+  CONNECT_PBX_HELPER_SOUNDS_DIR=/var/lib/asterisk/sounds/custom \
+  CONNECT_PBX_HELPER_SOUNDS_OWNER_USER=asterisk \
+  CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP=asterisk \
+  CONNECT_PBX_HELPER_SOUNDS_FILE_MODE=0o644 \
   /opt/connect-pbx-helper/.venv/bin/python /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py --check >/tmp/connect-pbx-helper-check.json
 
 systemctl daemon-reload
@@ -484,6 +596,15 @@ echo "PBX_ROUTE_HELPER_CONNECT_DESTINATION_ID=${CONNECT_DESTINATION_ID}"
 echo
 echo "If Connect runs on the same PBX host, use:"
 echo "PBX_ROUTE_HELPER_BASE_URL=http://${HELPER_BIND}:${HELPER_PORT}"
+echo
+echo "Helper now also accepts /upload-prompt for Connect-uploaded IVR audio."
+echo "When an admin uploads a greeting in Connect's IVR section, the API"
+echo "POSTs the normalised WAV to ${HELPER_BIND}:${HELPER_PORT}/upload-prompt and"
+echo "this service writes it to /var/lib/asterisk/sounds/custom/<base>.wav."
+echo
+echo "Verify with:"
+echo "  curl -sS http://${HELPER_BIND}:${HELPER_PORT}/health"
+echo "  ls -la /var/lib/asterisk/sounds/custom/   # connect-route-helper must be in 'asterisk' group"
 echo
 echo "Service status:"
 systemctl status connect-pbx-helper --no-pager -l || true

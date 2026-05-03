@@ -1,28 +1,44 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# connect-prompt-sync
+# connect-prompt-sync — bidirectional IVR prompt sync between VitalPBX and Connect.
 #
-# Cron-driven uploader that pushes VitalPBX System Recordings
-# (/var/lib/asterisk/sounds/custom/*) into Connect's prompt catalog so admins
-# can preview them in the Connect UI via the in-browser "Play" button.
+# DIRECTION 1 (PBX → Connect, original behaviour):
+#   Pushes VitalPBX System Recordings (/var/lib/asterisk/sounds/custom/*)
+#   into Connect's prompt catalog so admins can preview them via the
+#   in-browser "Play" button.
+#
+# DIRECTION 2 (Connect → PBX, added 2026-05-03):
+#   Pulls any prompt whose authoritative bytes live in Connect (e.g. an
+#   admin uploaded a greeting through Connect's IVR section) so it lands
+#   on the PBX's filesystem where `Background()` can play it during a call.
+#   This is the *catch-up* channel; the immediate route-helper push from
+#   Connect's API at upload time is the primary delivery — this loop
+#   guarantees eventual consistency if that push ever fails or the admin
+#   uploads while the helper is briefly down.
 #
 # Flow:
 #   1. GET  https://<CONNECT_URL>/voice/ivr/prompts/sync-manifest
 #      (x-connect-secret header) — returns the current catalog with each
-#      prompt's current sha256.
-#   2. For every *.wav / *.mp3 / *.gsm in SOUNDS_DIR:
+#      prompt's current sha256 plus a signed `downloadUrl` for any row
+#      whose audio bytes are stored on Connect.
+#   2. PUSH (PBX → Connect): For every *.wav / *.mp3 / *.gsm in SOUNDS_DIR:
 #        • compute local sha256
 #        • if the catalog already has that sha256 for this fileBaseName,
 #          SKIP (zero bandwidth)
 #        • otherwise POST /voice/ivr/prompts/upload with the file bytes +
-#          meta JSON (fileBaseName, originalFilename, sha256).
-#   3. The Connect API stores the bytes and updates the catalog row.
+#          meta JSON.
+#   3. PULL (Connect → PBX): For every catalog row with a non-empty
+#      downloadUrl whose sha256 doesn't match the local file under
+#      SOUNDS_DIR (or the file is missing entirely):
+#        • download via the signed URL (no extra credentials in the
+#          query string — the URL itself carries an HMAC).
+#        • atomic rename into /var/lib/asterisk/sounds/custom/<base>.wav
+#        • chown asterisk:asterisk, chmod 0644.
 #
 # Non-goals:
-#   - This script NEVER runs during a live call; cron is the only trigger.
-#   - It never hits VitalPBX — only reads from the local filesystem that
-#     Asterisk already owns.
-#   - It never deletes files on the PBX; `custom/` remains authoritative.
+#   - Not for per-call traffic. Cron is the only trigger.
+#   - Never deletes files on the PBX; missing-from-catalog rows are left
+#     alone so a manual upload via the VitalPBX UI is never overwritten.
 #
 # Installation:
 #   1. Drop this script at /usr/local/bin/connect-prompt-sync and chmod +x.
@@ -194,4 +210,89 @@ for stem in "${!BEST_PATH[@]}"; do
   fi
 done
 
-log "done — uploaded=$UPLOADED skipped=$SKIPPED failed=$FAILED total=${#BEST_PATH[@]}"
+# ── Pull leg: Connect-authoritative prompts → /var/lib/asterisk/sounds/custom ─
+# This is the catch-up half of the bidirectional sync. The Connect API also
+# pushes prompts to the route-helper directly at upload time; this loop
+# backstops that path so an admin upload during a network blip eventually
+# becomes audible without manual intervention.
+PULLED=0
+PULL_SKIPPED=0
+PULL_FAILED=0
+
+# Build a quick lookup of every fileBaseName that the API marked as
+# "Connect-authoritative" (has a downloadUrl), with its expected sha.
+# Rows without downloadUrl are PBX-authoritative and are never touched
+# by the pull leg.
+PULL_TUPLES_FILE="$STATE_DIR/pull-tuples.tsv"
+jq -r '
+  .files[]
+  | select(.downloadUrl != null and .downloadUrl != "")
+  | [.fileBaseName // "", .sha256 // "", .downloadUrl // "", .sizeBytes // 0]
+  | @tsv
+' "$MANIFEST_JSON" > "$PULL_TUPLES_FILE" || true
+
+if [[ -s "$PULL_TUPLES_FILE" ]]; then
+  log "pull-leg: $(wc -l < "$PULL_TUPLES_FILE" | tr -d ' ') Connect-authoritative prompt(s) to reconcile"
+  ASTERISK_UID="$(id -u asterisk 2>/dev/null || echo "")"
+  ASTERISK_GID="$(id -g asterisk 2>/dev/null || echo "")"
+
+  while IFS=$'\t' read -r base want_sha url _size; do
+    [[ -z "$base" || -z "$want_sha" || -z "$url" ]] && continue
+
+    # Locate the local file in ANY of the supported extensions; we
+    # always WRITE as .wav (matches the dialplan's STAT() check) but
+    # tolerate legacy formats already on disk.
+    local_path=""
+    local_sha=""
+    for ext in wav WAV mp3 ogg gsm; do
+      candidate="$SOUNDS_DIR/${base}.${ext}"
+      if [[ -f "$candidate" ]]; then
+        local_path="$candidate"
+        local_sha="$(sha256_of "$candidate")"
+        break
+      fi
+    done
+
+    if [[ -n "$local_sha" && "$local_sha" == "$want_sha" ]]; then
+      PULL_SKIPPED=$((PULL_SKIPPED+1))
+      continue
+    fi
+
+    target="$SOUNDS_DIR/${base}.wav"
+    tmp="$(mktemp "$SOUNDS_DIR/.${base}.XXXXXX.wav.tmp")"
+
+    log "pulling ${base}.wav (want sha=${want_sha:0:12}…)"
+    if ! curl -fsSL \
+          --connect-timeout "$CURL_TIMEOUT" --max-time "$((CURL_TIMEOUT * 6))" \
+          -o "$tmp" \
+          "$url"; then
+      log "ERROR: pull download failed for ${base}.wav"
+      rm -f "$tmp"
+      PULL_FAILED=$((PULL_FAILED+1))
+      continue
+    fi
+
+    got_sha="$(sha256_of "$tmp")"
+    if [[ "$got_sha" != "$want_sha" ]]; then
+      log "ERROR: pull sha mismatch for ${base}.wav (got=${got_sha:0:12} want=${want_sha:0:12})"
+      rm -f "$tmp"
+      PULL_FAILED=$((PULL_FAILED+1))
+      continue
+    fi
+
+    # Best-effort ownership change. If we're not root and the asterisk
+    # account isn't in our supplementary groups, the chown will fail
+    # silently and the rename will still succeed — Asterisk reads the
+    # file via the world-read bit (0644).
+    chmod 0644 "$tmp" 2>/dev/null || true
+    if [[ -n "$ASTERISK_UID" && -n "$ASTERISK_GID" ]]; then
+      chown "${ASTERISK_UID}:${ASTERISK_GID}" "$tmp" 2>/dev/null || true
+    fi
+    mv -f "$tmp" "$target"
+    PULLED=$((PULLED+1))
+  done < "$PULL_TUPLES_FILE"
+
+  rm -f "$PULL_TUPLES_FILE"
+fi
+
+log "done — uploaded=$UPLOADED skipped=$SKIPPED failed=$FAILED total=${#BEST_PATH[@]} | pulled=$PULLED pull_skipped=$PULL_SKIPPED pull_failed=$PULL_FAILED"

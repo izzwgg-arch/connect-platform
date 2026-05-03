@@ -76,6 +76,7 @@ import {
   retargetPbxInboundRoute,
   type PbxRouteHelperInspectResponse,
 } from "./pbxInboundRouteHelperClient";
+import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -4369,7 +4370,12 @@ app.addHook("preHandler", async (req, reply) => {
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
     || path === "/voice/ivr/prompts/upload"
-    || path.endsWith("/voice/ivr/prompts/upload");
+    || path.endsWith("/voice/ivr/prompts/upload")
+    // /voice/ivr/prompts/download/<storageKey> — HMAC-signed query string
+    // auth (verifySignedDownload), no JWT, no shared secret. Only the PBX
+    // cron helper has a fresh signed URL via the sync-manifest response.
+    || path.startsWith("/voice/ivr/prompts/download/")
+    || path.includes("/voice/ivr/prompts/download/");
   const isMohSyncPath =
     path === "/voice/moh/sync-manifest"
     || path.endsWith("/voice/moh/sync-manifest")
@@ -15867,10 +15873,18 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
 });
 
 // ── POST /voice/ivr/prompts/:id/audio ───────────────────────────────────────
-// Multipart upload: field `file` (audio bytes). Admin-gated. Writes to disk,
-// computes sha256, updates the catalog row. Lets admins provide a bytes-only
-// preview for prompts the PBX-host helper hasn't uploaded yet (or for
-// tenants whose PBX doesn't run the helper at all).
+// Multipart upload: field `file` (audio bytes). Admin-gated. The pipeline:
+//   1. Read multipart bytes (≤20 MB raw).
+//   2. ffmpeg-normalise to PCM 16-bit / 8 kHz / mono / RIFF WAV — the
+//      exact format Asterisk's `Background()` plays without transcoding.
+//      Storage on Connect's disk uses these normalised bytes (so the
+//      browser preview is byte-identical to what callers will hear).
+//   3. Push the WAV bytes to the PBX-host route-helper's /upload-prompt
+//      endpoint so the file lands at /var/lib/asterisk/sounds/custom/<base>.wav
+//      within seconds — without this step, the dialplan's `STAT()` check
+//      would fail and the IVR would fall back to the default greeting.
+//   4. Persist sha256 + sync status on the catalog row so admins can see
+//      whether the PBX side actually got the file.
 app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageIvrPrompts);
   if (!user) return;
@@ -15905,23 +15919,85 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
   }
 
   if (!fileBuf || fileBuf.length === 0) return reply.code(400).send({ error: "file_required" });
-  // Hard limit: 20MB — larger prompts are almost certainly a mistake and
-  // would blow the node multipart buffer.
+  // Hard limit on the RAW upload (20 MB). After ffmpeg conversion the
+  // 8 kHz mono PCM WAV is much smaller (~16 KB/sec ≈ 1 MB/minute), but
+  // we cap the input so a malicious upload can't exhaust memory before
+  // we get to the ffmpeg pipeline.
   if (fileBuf.length > 20 * 1024 * 1024) {
     return reply.code(413).send({ error: "file_too_large", limit: 20 * 1024 * 1024 });
   }
 
-  const { writePromptFile } = await import("./promptStorage");
-  let stored: { storageKey: string; sha256: string; sizeBytes: number; contentType: string };
+  const { writeAndNormalisePromptFile, readPromptFile } = await import("./promptStorage");
+  let stored: {
+    storageKey: string;
+    sha256: string;
+    sizeBytes: number;
+    contentType: string;
+    absolutePath: string;
+    originalSizeBytes: number;
+  };
   try {
-    stored = await writePromptFile({
+    stored = await writeAndNormalisePromptFile({
       tenantScope: existing.tenantId,
       baseName: existing.fileBaseName || existing.promptRef,
       originalFilename,
       buffer: fileBuf,
     });
   } catch (err: any) {
-    return reply.code(500).send({ error: "storage_write_failed", detail: err?.message });
+    const detail = String(err?.message || err);
+    // Surface ffmpeg failures as 422 so the UI can show a useful error
+    // ("file format not supported") rather than a generic 500.
+    if (detail.startsWith("audio_conversion_failed")) {
+      return reply.code(422).send({
+        error: "audio_conversion_failed",
+        message: "Could not convert audio to PBX-compatible WAV. Upload a WAV/MP3/OGG/M4A file with audible content.",
+        detail,
+      });
+    }
+    return reply.code(500).send({ error: "storage_write_failed", detail });
+  }
+
+  // Push the normalised bytes to the PBX-host helper so calls hitting
+  // the IVR right now will hear THIS upload (not the default fallback).
+  // Failure here doesn't roll back the catalog write — the cron-driven
+  // catch-up flow will re-attempt the push on its next tick, and the
+  // status string we persist makes the failure visible to admins.
+  let pushStatus: "pushed" | "skipped_no_helper" | "failed" = "skipped_no_helper";
+  let pushDetail: string | null = null;
+  try {
+    const helperCfg = resolvePbxRouteHelperConfig();
+    if (helperCfg) {
+      // Re-read the WRITTEN bytes so the sha matches what we sent.
+      // (writeAndNormalisePromptFile returns the sha computed in-memory
+      // from the same buffer it wrote, so they're equal — but the read
+      // is cheap and keeps the contract obvious.)
+      const wavBytes = await readPromptFile(stored.storageKey);
+      await pushPromptToHelper(
+        helperCfg,
+        {
+          fileBaseName: existing.fileBaseName || existing.promptRef.replace(/^custom\//, ""),
+          sha256: stored.sha256,
+          sizeBytes: stored.sizeBytes,
+          tenantSlug: existing.tenantSlug,
+          promptRef: existing.promptRef,
+          requestedBy: `user:${user.sub}`,
+        },
+        wavBytes,
+      );
+      pushStatus = "pushed";
+    } else {
+      pushDetail = "PBX_ROUTE_HELPER_BASE_URL/SECRET not configured — IVR audio will only sync via cron.";
+    }
+  } catch (err: any) {
+    pushStatus = "failed";
+    pushDetail =
+      err instanceof PromptPushError
+        ? `helper_${err.httpStatus}: ${err.message}`
+        : `push_error: ${err?.message || String(err)}`;
+    app.log.warn(
+      { id, promptRef: existing.promptRef, pushDetail },
+      "[IVR_PROMPT_UPLOAD] PBX push failed; cron will retry",
+    );
   }
 
   const updated = await (db as any).tenantPbxPrompt.update({
@@ -15939,7 +16015,16 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
   });
 
   app.log.info(
-    { id, promptRef: existing.promptRef, storageKey: stored.storageKey, sha256: stored.sha256, sizeBytes: stored.sizeBytes },
+    {
+      id,
+      promptRef: existing.promptRef,
+      storageKey: stored.storageKey,
+      sha256: stored.sha256,
+      sizeBytes: stored.sizeBytes,
+      originalSizeBytes: stored.originalSizeBytes,
+      pushStatus,
+      pushDetail,
+    },
     "[IVR_PROMPT_UPLOAD] manual upload from UI",
   );
 
@@ -15953,6 +16038,7 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
       sizeBytes: updated.sizeBytes,
       syncedAt: updated.syncedAt,
     },
+    pbxPush: { status: pushStatus, detail: pushDetail },
   });
 });
 
@@ -15988,6 +16074,15 @@ app.get("/voice/ivr/prompts/sync-manifest", async (req, reply) => {
     where: { isActive: true },
     orderBy: [{ fileBaseName: "asc" }],
   });
+
+  // Signed download URLs are minted only for rows whose audio bytes
+  // actually live in Connect's storage (storageKey set). The cron-driven
+  // PBX-side puller uses these to fetch any prompt missing or stale on
+  // /var/lib/asterisk/sounds/custom — i.e. the catch-up channel that
+  // backstops the immediate route-helper push performed at upload time.
+  const { buildSignedDownloadUrl } = await import("./promptStorage");
+  const publicBase = String(process.env.PROMPT_DOWNLOAD_PUBLIC_URL || process.env.PUBLIC_API_BASE_URL || "").trim();
+
   const files = rows.map((r: any) => ({
     id: r.id,
     promptRef: r.promptRef,
@@ -15998,8 +16093,57 @@ app.get("/voice/ivr/prompts/sync-manifest", async (req, reply) => {
     contentType: r.contentType,
     syncedAt: r.syncedAt,
     tenantSlug: r.tenantSlug,
+    // `downloadUrl` is non-empty whenever Connect holds the authoritative
+    // bytes for this prompt and the API knows its own public URL. The
+    // cron helper checks both fields before pulling.
+    downloadUrl:
+      r.storageKey && publicBase
+        ? buildSignedDownloadUrl(publicBase, r.storageKey, 900)
+        : null,
   }));
   return reply.send({ files });
+});
+
+// ── GET /voice/ivr/prompts/download/:storageKey ─────────────────────────────
+// Authenticated by HMAC-signed query string (`?exp=&sig=`) — no JWT, no
+// shared secret over the wire. Used by the PBX-host cron helper to pull
+// Connect-authoritative prompts that haven't yet landed in /var/lib/asterisk/
+// sounds/custom (e.g. when the immediate route-helper push at upload time
+// failed transiently).
+//
+// `:storageKey` is the URL-encoded relative path under PROMPT_STORAGE_DIR.
+// resolvePromptStoragePath() refuses path traversal, so even with a valid
+// signature you can only read inside the prompt store.
+app.get("/voice/ivr/prompts/download/:storageKey", async (req, reply) => {
+  const params = req.params as { storageKey?: string };
+  const query = req.query as { exp?: string; sig?: string };
+  const storageKey = decodeURIComponent(String(params.storageKey || ""));
+  if (!storageKey) return reply.code(400).send({ error: "storage_key_required" });
+
+  const { verifySignedDownload, resolvePromptStoragePath, contentTypeForFilename } = await import("./promptStorage");
+  const verify = verifySignedDownload(storageKey, query.exp, query.sig);
+  if (!verify.ok) return reply.code(403).send({ error: verify.reason });
+
+  let absolutePath: string;
+  try {
+    absolutePath = resolvePromptStoragePath(storageKey);
+  } catch {
+    return reply.code(400).send({ error: "invalid_storage_key" });
+  }
+
+  const fs = await import("node:fs");
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await fs.promises.stat(absolutePath);
+  } catch {
+    return reply.code(404).send({ error: "file_not_found" });
+  }
+  if (!stat.isFile()) return reply.code(404).send({ error: "file_not_found" });
+
+  reply.header("content-type", contentTypeForFilename(storageKey));
+  reply.header("content-length", String(stat.size));
+  reply.header("cache-control", "no-store");
+  return reply.send(fs.createReadStream(absolutePath));
 });
 
 // ── POST /voice/ivr/prompts/upload ──────────────────────────────────────────

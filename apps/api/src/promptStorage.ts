@@ -19,8 +19,13 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_ROOT = path.resolve(process.cwd(), "data/ivr-prompts");
 
@@ -136,6 +141,92 @@ export async function writePromptFile(input: {
     contentType,
     absolutePath,
   };
+}
+
+/**
+ * Convert raw uploaded audio bytes (any format ffmpeg can decode) to the
+ * exact PCM format Asterisk's `Background()` and `Playback()` expect on
+ * VitalPBX: signed 16-bit little-endian, 8 kHz, mono, RIFF WAV.
+ *
+ * Why force this format on every upload:
+ *  - Asterisk picks the on-disk file by extension, then transcodes if
+ *    needed. A 44 kHz stereo MP3 will transcode poorly through ulaw/alaw,
+ *    or fail to play on some channel drivers entirely. PCM 8 kHz mono
+ *    matches the wire codec and skips the transcoder fast-path entirely.
+ *  - We never store the original bytes — the PBX wouldn't know what to do
+ *    with them, and the browser preview re-uses the same converted file
+ *    so admins hear exactly what callers will hear.
+ *  - Output is always `.wav` so the dialplan's `STAT(.../GREETING.wav)`
+ *    check resolves to the same file the PBX-side helper writes to
+ *    `/var/lib/asterisk/sounds/custom/`.
+ *
+ * Throws on failure. Caller is responsible for surfacing the error.
+ */
+export async function convertToPbxWav(sourceBytes: Buffer): Promise<Buffer> {
+  if (!sourceBytes || sourceBytes.length === 0) {
+    throw new Error("convert_empty_input");
+  }
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ivr-prompt-"));
+  const sourcePath = path.join(tmpDir, "in");
+  const targetPath = path.join(tmpDir, "out.wav");
+  try {
+    await fs.promises.writeFile(sourcePath, sourceBytes);
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y",
+        "-i", sourcePath,
+        "-ac", "1",
+        "-ar", "8000",
+        "-sample_fmt", "s16",
+        "-acodec", "pcm_s16le",
+        "-f", "wav",
+        targetPath,
+      ],
+      { timeout: 45_000 },
+    );
+    return await fs.promises.readFile(targetPath);
+  } catch (err: any) {
+    throw new Error(`audio_conversion_failed: ${err?.message || "ffmpeg failed"}`);
+  } finally {
+    // Best-effort cleanup; never let cleanup failures mask a real error.
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => void 0);
+  }
+}
+
+/**
+ * Same as `writePromptFile`, but normalises the audio first via
+ * `convertToPbxWav()` and forces the on-disk extension to `.wav` so the
+ * file the PBX dialplan expects (`/var/lib/asterisk/sounds/custom/<base>.wav`)
+ * matches the bytes the PBX-host helper will receive.
+ *
+ * Returns the same shape as `writePromptFile` but the sha256 is over the
+ * CONVERTED bytes — that's the value the PBX uses to decide whether its
+ * cached copy is fresh, and the value the browser preview will hear.
+ */
+export async function writeAndNormalisePromptFile(input: {
+  tenantScope: string | null | undefined;
+  baseName: string;
+  originalFilename: string;
+  buffer: Buffer;
+}): Promise<{
+  storageKey: string;
+  sha256: string;
+  sizeBytes: number;
+  contentType: string;
+  absolutePath: string;
+  originalSizeBytes: number;
+}> {
+  const converted = await convertToPbxWav(input.buffer);
+  const written = await writePromptFile({
+    tenantScope: input.tenantScope,
+    baseName: input.baseName,
+    // Force `.wav` so the storage key always lands in <base>.wav, matching
+    // the PBX-side filename that the dialplan looks up.
+    originalFilename: `${sanitizeBaseName(input.baseName || input.originalFilename) || "prompt"}.wav`,
+    buffer: converted,
+  });
+  return { ...written, originalSizeBytes: input.buffer.length };
 }
 
 export async function readPromptFile(storageKey: string): Promise<Buffer> {
