@@ -735,17 +735,20 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
     });
     if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
-    const rowsRaw = await db.connectChatMessage.findMany({
-      where: { threadId },
-      orderBy: { createdAt: "asc" },
-      take: 200,
-      include: {
-        reactions: true,
-        senderUser: { select: { email: true } },
-        attachments: { orderBy: { createdAt: "asc" } },
-        replyTo: { select: { id: true, body: true, type: true, senderUser: { select: { email: true } } } },
-      },
-    });
+    const [rowsRaw, threadRow] = await Promise.all([
+      db.connectChatMessage.findMany({
+        where: { threadId },
+        orderBy: { createdAt: "asc" },
+        take: 200,
+        include: {
+          reactions: true,
+          senderUser: { select: { email: true } },
+          attachments: { orderBy: { createdAt: "asc" } },
+          replyTo: { select: { id: true, body: true, type: true, senderUser: { select: { email: true } } } },
+        },
+      }),
+      db.connectChatThread.findUnique({ where: { id: threadId }, select: { type: true, externalSmsE164: true } }),
+    ]);
     const readParts = await db.connectChatParticipant.findMany({
       where: { threadId, leftAt: null, userId: { not: null } },
       include: { user: { select: { id: true, email: true } } },
@@ -763,7 +766,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         id: m.id,
         threadId: m.threadId,
         senderId: m.senderUserId || "",
-        senderName: m.senderUser?.email?.split("@")[0] || "System",
+        senderName: m.senderUser?.email?.split("@")[0] || (threadRow?.type === "SMS" && !m.senderUserId ? threadRow.externalSmsE164 || "SMS" : "System"),
         body: deletedForEveryone ? "" : m.body,
         sentAt: m.createdAt.toISOString(),
         mine: m.senderUserId === user.sub,
