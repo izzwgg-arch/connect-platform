@@ -310,6 +310,50 @@ async function resolveOutboundSmsNumber(
   return { error: "No SMS number assigned for this tenant or extension." };
 }
 
+async function resolveSmsInboxOwnerUserId(input: {
+  tenantId: string;
+  assignedUserId?: string | null;
+  assignedExtensionId?: string | null;
+}): Promise<string> {
+  if (input.assignedUserId) return input.assignedUserId;
+  if (!input.assignedExtensionId) return "";
+  const extension = await db.extension.findFirst({
+    where: { id: input.assignedExtensionId, tenantId: input.tenantId },
+    select: { ownerUserId: true },
+  });
+  return extension?.ownerUserId || "";
+}
+
+async function upsertSmsThreadParticipants(input: {
+  threadId: string;
+  tenantId: string;
+  inboxOwnerUserId: string;
+  assignedExtensionId?: string | null;
+}): Promise<void> {
+  const users = input.inboxOwnerUserId
+    ? await db.user.findMany({ where: { id: input.inboxOwnerUserId, tenantId: input.tenantId } })
+    : await db.user.findMany({ where: { tenantId: input.tenantId } });
+  for (const u of users) {
+    await db.connectChatParticipant.upsert({
+      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `u:${u.id}` } },
+      create: { threadId: input.threadId, participantKey: `u:${u.id}`, userId: u.id, role: "MEMBER" },
+      update: { leftAt: null },
+    });
+  }
+  if (input.assignedExtensionId) {
+    await db.connectChatParticipant.upsert({
+      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `e:${input.assignedExtensionId}` } },
+      create: {
+        threadId: input.threadId,
+        participantKey: `e:${input.assignedExtensionId}`,
+        extensionId: input.assignedExtensionId,
+        role: "MEMBER",
+      },
+      update: { leftAt: null },
+    });
+  }
+}
+
 export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectChatRoutesDeps): void {
   // Self-heal once at boot: if VoIP.ms credentials are configured but the
   // legacy `smsEnabled`/`mmsEnabled` flags are still false (default from the
@@ -585,9 +629,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
 
       const assign = await db.tenantSmsNumber.findFirst({
         where: { id: fromPick.row.id, tenantId },
-        select: { assignedUserId: true },
+        select: { assignedUserId: true, assignedExtensionId: true },
       });
-      const inboxScope = assign?.assignedUserId && assign.assignedUserId === user.sub ? user.sub : "";
+      const resolvedInboxOwner = await resolveSmsInboxOwnerUserId({
+        tenantId,
+        assignedUserId: assign?.assignedUserId || null,
+        assignedExtensionId: assign?.assignedExtensionId || null,
+      });
+      const inboxScope = resolvedInboxOwner === user.sub ? user.sub : "";
 
       const dk = smsDedupeKey(tenantId, fromPick.row.phoneE164, extNorm.e164, inboxScope);
       let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
@@ -610,6 +659,18 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         await db.connectChatParticipant.create({
           data: { threadId: thread.id, participantKey: `u:${user.sub}`, userId: user.sub, role: "OWNER" },
         });
+        if (assign?.assignedExtensionId) {
+          await db.connectChatParticipant.upsert({
+            where: { threadId_participantKey: { threadId: thread.id, participantKey: `e:${assign.assignedExtensionId}` } },
+            create: {
+              threadId: thread.id,
+              participantKey: `e:${assign.assignedExtensionId}`,
+              extensionId: assign.assignedExtensionId,
+              role: "MEMBER",
+            },
+            update: { leftAt: null },
+          });
+        }
       }
       return { threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
     }
@@ -1411,8 +1472,12 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const q = z.object({ phoneE164: z.string() }).parse(req.query || {});
     const n = canonicalSmsPhone(q.phoneE164);
     if (!n.ok) return reply.status(400).send({ error: "INVALID_PHONE" });
-    const row = await db.tenantSmsNumber.findUnique({ where: { phoneE164: n.e164 } });
+    const row = await db.tenantSmsNumber.findUnique({
+      where: { phoneE164: n.e164 },
+      include: { assignedExtension: { select: { ownerUserId: true } } },
+    } as any) as any;
     if (!row) return { found: false, normalized: n.e164 };
+    const extensionOwnerUserId = row.assignedExtension?.ownerUserId || null;
     return {
       found: true,
       normalized: n.e164,
@@ -1420,7 +1485,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       assignedUserId: row.assignedUserId,
       assignedExtensionId: row.assignedExtensionId,
       isTenantDefault: row.isTenantDefault,
-      inboundRoutesTo: row.assignedUserId ? `user:${row.assignedUserId}` : row.tenantId ? "tenant_inbox" : "unassigned",
+      inboundRoutesTo: row.assignedUserId
+        ? `user:${row.assignedUserId}`
+        : extensionOwnerUserId
+          ? `extension_owner:${extensionOwnerUserId}`
+          : row.tenantId
+            ? "tenant_inbox"
+            : "unassigned",
     };
   });
 
@@ -1530,7 +1601,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return { ok: false };
     }
 
-    const num = await db.tenantSmsNumber.findUnique({ where: { phoneE164: nt.e164 } });
+    const num = await db.tenantSmsNumber.findUnique({
+      where: { phoneE164: nt.e164 },
+      include: { assignedExtension: { select: { id: true, ownerUserId: true } } },
+    } as any) as any;
     if (!num || !num.tenantId) {
       await db.smsRoutingLog.create({
         data: {
@@ -1548,7 +1622,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     const extE164 = nf.ok ? nf.e164 : rawFrom;
-    const inboxScope = num.assignedUserId || "";
+    const inboxScope = num.assignedUserId || num.assignedExtension?.ownerUserId || "";
     const dk = smsDedupeKey(num.tenantId, nt.e164, extE164, inboxScope);
 
     let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
@@ -1567,17 +1641,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           lastMessageAt: new Date(),
         },
       });
-      const users = num.assignedUserId
-        ? await db.user.findMany({ where: { id: num.assignedUserId, tenantId: num.tenantId } })
-        : await db.user.findMany({ where: { tenantId: num.tenantId } });
-      for (const u of users) {
-        await db.connectChatParticipant.upsert({
-          where: { threadId_participantKey: { threadId: thread.id, participantKey: `u:${u.id}` } },
-          create: { threadId: thread.id, participantKey: `u:${u.id}`, userId: u.id, role: "MEMBER" },
-          update: { leftAt: null },
-        });
-      }
     }
+    await upsertSmsThreadParticipants({
+      threadId: thread.id,
+      tenantId: num.tenantId,
+      inboxOwnerUserId: inboxScope,
+      assignedExtensionId: num.assignedExtensionId || null,
+    });
 
     const msg = await db.connectChatMessage.create({
       data: {
@@ -1602,7 +1672,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         normalizedTo: nt.e164,
         direction: "inbound",
         resolvedTenantId: num.tenantId,
-        resolvedUserId: num.assignedUserId,
+        resolvedUserId: inboxScope || null,
         resolvedExtensionId: num.assignedExtensionId,
         resolvedThreadId: thread.id,
         status: "routed",
