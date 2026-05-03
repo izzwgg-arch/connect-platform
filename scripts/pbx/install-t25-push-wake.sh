@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── DEPRECATED ──────────────────────────────────────────────────────────────
+# This is the original tenant-T25-only installer. It is preserved for
+# emergency rollback ONLY. For new installs use the universal version:
+#
+#     scripts/pbx/install-connect-wake-dialplan.sh
+#
+# The universal script wires push-wake into the Connect option/exit routers
+# and direct-dial path so EVERY tenant + EVERY extension dial is covered
+# without per-tenant dialplan edits. It also publishes the AstDB keys the
+# new wrapper reads.
+# ────────────────────────────────────────────────────────────────────────────
+#
 # Install the Connect Push-Wake (Option 2) dialplan on a VitalPBX host for
 # tenant T25. See docs/pbx/connect-push-wake-T25.md for full context.
 #
@@ -22,7 +34,11 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 : "${CONNECT_API_BASE:?set CONNECT_API_BASE (e.g. https://app.connectcomunications.com/api)}"
-: "${CONNECT_CDR_SECRET:?set CONNECT_CDR_SECRET (paste from /opt/connectcomms/env/api.env on Connect prod)}"
+# CONNECT_CDR_SECRET is optional. If empty (or unset), the API endpoint runs
+# in "warn and allow" mode — fine for the pilot. Set this to the value of
+# CDR_INGEST_SECRET on the Connect API container if/when that secret is
+# configured for proper auth.
+CONNECT_CDR_SECRET="${CONNECT_CDR_SECRET:-}"
 T25_VITAL_TENANT="${T25_VITAL_TENANT:-T25}"
 CONNECT_WAIT_SECONDS="${CONNECT_WAIT_SECONDS:-6}"
 DRY_RUN="${DRY_RUN:-0}"

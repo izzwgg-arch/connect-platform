@@ -4355,7 +4355,12 @@ app.addHook("preHandler", async (req, reply) => {
   // Push-wake (Option 2) — called by the PBX dialplan. Authenticated by
   // CDR_INGEST_SECRET inside the handler.
   const isInternalPbxWakePath =
-    path === "/internal/pbx/wake-extension" || path.endsWith("/internal/pbx/wake-extension");
+    path === "/internal/pbx/wake-extension"
+    || path.endsWith("/internal/pbx/wake-extension")
+    // Admin/internal one-shot publisher for the wake AstDB keys. Same shared
+    // secret auth model as wake-extension itself.
+    || path === "/internal/pbx/publish-wake-config"
+    || path.endsWith("/internal/pbx/publish-wake-config");
   const isInternalTelephonyPath =
     path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
   // AMI MessageWaiting → telephony POSTs here to trigger immediate voicemail sync.
@@ -14791,6 +14796,69 @@ async function publishDidmapToAstDb(
 /** The 5 didmap keys written for every DID publish — exposed for snapshot/rollback. */
 const DIDMAP_KEY_NAMES = ["tenant", "profile_id", "moh_class", "hold_announce", "hold_repeat"] as const;
 
+// ── Push-Wake AstDB config helpers ───────────────────────────────────────────
+// The [connect-dial-with-wake] dialplan context (see docs/pbx/option-a-custom-context.conf)
+// reads three families:
+//   1. connect/system/*                 — global wake API endpoint + secret + wait
+//   2. connect/t_<slug>/pbx_tenant_id   — numeric VitalPBX tenant id (e.g. "21")
+//   3. connect/t_<slug>/pbx_tenant_code — short code (e.g. "T21") sent to wake API
+// These helpers publish all three so the dialplan can route any tenant's
+// extension dials through the smart wake-then-dial wrapper without per-tenant
+// dialplan edits.
+
+/**
+ * Publish the system-wide wake endpoint config to AstDB.
+ *
+ * Reads from env at call time so a deploy that updates the URL/secret takes
+ * effect on the next publish. Tenant slug is required only because the
+ * telephony service's auth model is tenant-scoped, but the keys land in the
+ * global `connect/system` family which every tenant's dialplan reads.
+ *
+ * Idempotent: writing the same values is a no-op for the dialplan.
+ */
+async function publishWakeSystemConfig(tenantSlug: string): Promise<void> {
+  const baseUrl = (process.env.PUBLIC_API_BASE_URL ?? "https://app.connectcomunications.com/api").replace(/\/$/, "");
+  const wakeUrl = `${baseUrl}/internal/pbx/wake-extension`;
+  const wakeSecret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const wakeWaitSecs = String(Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "6", 10) || 6);
+  await publishToAstDb(tenantSlug, [
+    { family: "connect/system", key: "wake_api_url",    value: wakeUrl },
+    { family: "connect/system", key: "wake_api_secret", value: wakeSecret },
+    { family: "connect/system", key: "wake_wait_secs",  value: wakeWaitSecs },
+  ]);
+}
+
+/**
+ * Publish per-tenant identity to AstDB so the wake-dial wrapper can build
+ * the correct PJSIP endpoint name (T<id>_<ext>) and pass the tenant code in
+ * the wake-API payload.
+ *
+ * Reads the IDs from TenantPbxLink. If neither id nor code is set we skip
+ * the publish (the dialplan will fall through to legacy dial behavior).
+ */
+async function publishWakeTenantConfig(tenantSlug: string, tenantId: string): Promise<{ published: boolean; pbxTenantId: string | null; pbxTenantCode: string | null }> {
+  let link: { pbxTenantId: string | null; pbxTenantCode: string | null } | null = null;
+  try {
+    link = await db.tenantPbxLink.findFirst({
+      where: { tenantId },
+      select: { pbxTenantId: true, pbxTenantCode: true } as any,
+    }) as any;
+  } catch {
+    link = null;
+  }
+  const pbxTenantId = (link?.pbxTenantId ?? "").trim();
+  const pbxTenantCode = (link?.pbxTenantCode ?? "").trim();
+  if (!pbxTenantId && !pbxTenantCode) {
+    return { published: false, pbxTenantId: null, pbxTenantCode: null };
+  }
+  const fam = `connect/t_${tenantSlug}`;
+  await publishToAstDb(tenantSlug, [
+    { family: fam, key: "pbx_tenant_id",   value: pbxTenantId },
+    { family: fam, key: "pbx_tenant_code", value: pbxTenantCode },
+  ]);
+  return { published: true, pbxTenantId: pbxTenantId || null, pbxTenantCode: pbxTenantCode || null };
+}
+
 /**
  * Read the current AstDB values for a set of tenant-scoped IVR keys via the
  * telephony service. Returns a snapshot (empty-string for missing keys) that
@@ -16881,9 +16949,24 @@ app.post("/voice/ivr/publish", async (req, reply) => {
 
   try {
     await publishToAstDb(slug, keys);
+    // Bundle the wake-config publish into the IVR publish so the wake wrapper
+    // always has fresh system + per-tenant keys to read. Failure here is
+    // logged but doesn't fail the IVR publish — the dialplan falls back to
+    // legacy dial when wake keys are missing.
+    let wakeSystemPublished = false;
+    let wakeTenantPublished: { published: boolean; pbxTenantId: string | null; pbxTenantCode: string | null } = {
+      published: false, pbxTenantId: null, pbxTenantCode: null,
+    };
+    try {
+      await publishWakeSystemConfig(slug);
+      wakeSystemPublished = true;
+      wakeTenantPublished = await publishWakeTenantConfig(slug, tenantId);
+    } catch (wakeErr: any) {
+      app.log.warn({ tenantId, slug, err: wakeErr?.message }, "ivr: wake-config publish failed (non-fatal)");
+    }
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
-    app.log.info({ tenantId, slug, mode, keysWritten: keys.length, previousCaptured: previousKeys.length }, "ivr: publish success");
-    return reply.send({ ok: true, mode, slug, keysWritten: keys.length, recordId: record.id });
+    app.log.info({ tenantId, slug, mode, keysWritten: keys.length, previousCaptured: previousKeys.length, wakeSystemPublished, wakeTenantPublished }, "ivr: publish success");
+    return reply.send({ ok: true, mode, slug, keysWritten: keys.length, recordId: record.id, wakeSystemPublished, wakeTenantPublished });
   } catch (err: any) {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
     app.log.warn({ tenantId, err: err?.message }, "ivr: publish failed");
@@ -22829,6 +22912,86 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   });
 
   return { ok: true, inviteId: invite.id, push };
+});
+
+// ─── Push-wake config publisher (admin/internal) ─────────────────────────────
+// One-shot publisher for the AstDB keys the [connect-dial-with-wake] dialplan
+// context reads. Use this to bootstrap a PBX after deploying the new dialplan
+// snippet, or to re-publish after rotating CDR_INGEST_SECRET / changing
+// PBX_WAKE_WAIT_SECS without doing a full IVR republish.
+//
+// Body (JSON):
+//   tenantId  — OPTIONAL — Connect tenantId. If omitted, publishes ONLY the
+//                          system-wide keys (connect/system/*). The
+//                          telephony service requires a tenantSlug for auth,
+//                          so omitted tenant uses the first available tenant
+//                          slug just to satisfy the routing — keys still land
+//                          in the global family.
+//
+// Auth: same x-cdr-secret header as the rest of the /internal/* endpoints.
+//
+// Returns:
+//   { ok, slug, wakeUrl, wakeWaitSecs, hasSecret, tenantPublished, pbxTenantId, pbxTenantCode }
+app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/pbx/publish-wake-config" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  const input = z.object({
+    tenantId: z.string().nullable().optional(),
+  }).parse(req.body || {});
+
+  // Pick a tenant slug to satisfy the telephony service's tenant-scoped
+  // authorisation (the keys themselves go into the global family). When
+  // tenantId is supplied use that tenant's slug; otherwise grab any active
+  // tenant. The slug only gates the auth path — wake_api_url/secret/etc
+  // land under connect/system regardless of which slug we passed.
+  let resolvedTenantId: string | null = input.tenantId || null;
+  if (!resolvedTenantId) {
+    const anyTenant = await db.tenant.findFirst({ select: { id: true } });
+    resolvedTenantId = anyTenant?.id ?? null;
+  }
+  if (!resolvedTenantId) {
+    return reply.code(409).send({ error: "no_tenant_available", detail: "Cannot publish wake config — no tenants exist." });
+  }
+
+  const slug = await getIvrSlugForTenant(resolvedTenantId);
+  let systemPublished = false;
+  let tenantPublished: { published: boolean; pbxTenantId: string | null; pbxTenantCode: string | null } = {
+    published: false, pbxTenantId: null, pbxTenantCode: null,
+  };
+  let publishError: string | null = null;
+  try {
+    await publishWakeSystemConfig(slug);
+    systemPublished = true;
+    if (input.tenantId) {
+      tenantPublished = await publishWakeTenantConfig(slug, input.tenantId);
+    }
+  } catch (err: any) {
+    publishError = err?.message ?? "publish_failed";
+    app.log.warn({ tenantId: resolvedTenantId, slug, err: publishError }, "publish-wake-config: failed");
+  }
+
+  const baseUrl = (process.env.PUBLIC_API_BASE_URL ?? "https://app.connectcomunications.com/api").replace(/\/$/, "");
+  return reply.send({
+    ok: systemPublished,
+    slug,
+    wakeUrl: `${baseUrl}/internal/pbx/wake-extension`,
+    wakeWaitSecs: Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "6", 10) || 6,
+    hasSecret: Boolean(secret),
+    systemPublished,
+    tenantPublished,
+    error: publishError,
+  });
 });
 
 // ─── Push-wake (Option 2) ───────────────────────────────────────────────────

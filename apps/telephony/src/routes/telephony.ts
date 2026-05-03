@@ -387,10 +387,21 @@ export function registerTelephonyRoutes(
         typeof (entry as any).value !== "string"
       ) continue;
       const { family, key, value } = entry as { family: string; key: string; value: string };
-      // Tenant-scoped family OR the specific didmap family for this e164.
+      // Allowed families:
+      //  - connect/t_<tenantSlug>* — tenant-scoped routing/IVR/MOH/wake config
+      //  - connect/didmap/<e164>   — per-DID overrides (only when didE164 supplied)
+      //  - connect/system          — system-wide config used by every tenant's
+      //                              wake-then-dial wrapper. Allowing this family
+      //                              from any tenantSlug is intentional: the keys
+      //                              under it (wake_api_url, wake_api_secret,
+      //                              wake_wait_secs) are global runtime
+      //                              configuration that every tenant publish needs
+      //                              available before the dialplan can run a
+      //                              push-wake. No per-tenant data goes here.
       const tenantScoped = family.startsWith(`connect/t_${tenantSlug}`);
       const didScoped = didFamilyPrefixes !== null && didFamilyPrefixes.has(family);
-      if (!tenantScoped && !didScoped) {
+      const systemScoped = family === "connect/system";
+      if (!tenantScoped && !didScoped && !systemScoped) {
         res.status(400).json({ error: "family_scope_mismatch", family });
         return;
       }
