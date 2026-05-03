@@ -1581,6 +1581,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
     const rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
     const message = String(payload.message ?? payload.body ?? payload.msg ?? "");
+    const providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
     const mmsUrls = extractInboundMmsUrls(payload);
 
     const nf = canonicalSmsPhone(rawFrom);
@@ -1657,6 +1658,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         type: mmsUrls.length ? "IMAGE" : "TEXT",
         body: message,
         deliveryStatus: "delivered",
+        smsProviderMessageId: providerMessageId ? `voipms:${providerMessageId}` : null,
         metadata: mmsUrls.length ? { mms: { urls: mmsUrls } } : undefined,
       },
     });

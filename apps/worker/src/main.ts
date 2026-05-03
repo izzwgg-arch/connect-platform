@@ -15,6 +15,7 @@ import {
   VitalPbxClient,
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
+import { runVoipMsInboundSyncCycle } from "./voipMsInboundSyncJob";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -1521,6 +1522,12 @@ runDunningCycle().catch((err) => console.error("initial dunning cycle failed", e
 setInterval(() => {
   runPbxJobCycle().catch((err) => console.error("pbx job cycle failed", err?.message || err));
 }, 60 * 1000);
+
+setInterval(() => {
+  runVoipMsInboundSyncCycle().catch((err) => console.error("voipms inbound sms sync failed", err?.message || err));
+}, Number(process.env.VOIPMS_INBOUND_SYNC_INTERVAL_MS || 60_000));
+
+runVoipMsInboundSyncCycle().catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
 
 setInterval(() => {
   runPbxCdrSyncCycle().catch((err) => console.error("pbx cdr sync failed", err?.message || err));
