@@ -103,6 +103,26 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     public static volatile long ringtoneStoppedAtMs = 0;
     public static volatile String ringtoneSource = null;
     public static volatile String ringtoneStopReason = null;
+
+    /**
+     * Call-wake diagnostics state. Updated synchronously in onMessageReceived
+     * so the JS Diagnostics screen (and the in-app debug overlay) can prove
+     * "yes the FCM push physically reached the device at <ts>" — which is the
+     * single most useful signal when triaging Samsung S25 wake regressions
+     * vs working S24 behavior.
+     *
+     * lastPushReceivedAppState records the process importance bucket the
+     * service was in when the push arrived (FOREGROUND / VISIBLE /
+     * BACKGROUND / CACHED / GONE) so we can distinguish "push arrived but the
+     * app was already foreground" from "push arrived while killed / locked".
+     */
+    public static volatile long lastPushReceivedAtMs = 0;
+    public static volatile String lastPushType = null;
+    public static volatile String lastPushInviteId = null;
+    public static volatile String lastPushReceivedAppState = null;
+    public static volatile long lastIncomingUiDisplayedAtMs = 0;
+    public static volatile String lastIncomingUiPresentation = null;
+    public static volatile String lastPushError = null;
     /**
      * Multi-call busy flag. Written by JS via IncomingCallUiModule.setInActiveCall()
      * whenever the CallSessionManager has an active call. While true, new FCM
@@ -139,9 +159,33 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             }
         }
 
+        // ── Call-wake diagnostics (always recorded, even for non-INCOMING_CALL).
+        lastPushReceivedAtMs = System.currentTimeMillis();
+        lastPushType = type;
+        lastPushInviteId = appData.get("inviteId") != null ? appData.get("inviteId") : appData.get("callId");
+        lastPushReceivedAppState = describeProcessImportance();
+        lastPushError = null;
+
         Log.i(TAG, "[CALL_INCOMING] onMessageReceived type=" + type
                 + " dataKeys=" + data.keySet()
-                + " appDataKeys=" + appData.keySet());
+                + " appDataKeys=" + appData.keySet()
+                + " appState=" + lastPushReceivedAppState);
+
+        // Greppable structured event for ops dashboards.
+        try {
+            JSONObject e = new JSONObject();
+            e.put("appState", lastPushReceivedAppState);
+            emitCallFlowNative(
+                "FOREGROUND".equals(lastPushReceivedAppState)
+                    ? "incoming_call_push_received_foreground"
+                    : ("BACKGROUND".equals(lastPushReceivedAppState)
+                        ? "incoming_call_push_received_background"
+                        : "incoming_call_push_received_killed_state"),
+                lastPushInviteId,
+                e
+            );
+        } catch (Exception ignored) {
+        }
 
         if ("INCOMING_CALL".equals(type)) {
             try {
@@ -184,6 +228,29 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         }
 
         forwardToExpo("onMessageReceived", RemoteMessage.class, remoteMessage);
+    }
+
+    /**
+     * Compact one-word label for {@link RunningAppProcessInfo#importance}. Used
+     * by the call-wake diagnostics to record what state the app process was in
+     * when the FCM push arrived.
+     */
+    private static String describeProcessImportance() {
+        try {
+            RunningAppProcessInfo pinfo = new RunningAppProcessInfo();
+            ActivityManager.getMyMemoryState(pinfo);
+            int imp = pinfo.importance;
+            if (imp == RunningAppProcessInfo.IMPORTANCE_FOREGROUND) return "FOREGROUND";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_VISIBLE) return "VISIBLE";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) return "FOREGROUND_SERVICE";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE) return "PERCEPTIBLE";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_SERVICE) return "SERVICE";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_CACHED) return "CACHED";
+            if (imp == RunningAppProcessInfo.IMPORTANCE_GONE) return "GONE";
+            return "OTHER:" + imp;
+        } catch (Exception e) {
+            return "UNKNOWN";
+        }
     }
 
     private void emitCallFlowNative(String stage, String inviteId, JSONObject extra) {
@@ -398,16 +465,67 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         // Notification sound is owned by the channel (v4+). Avoid NotificationCompat.setSound
         // with AudioAttributes here — older androidx resolves the (Uri, int) overload only.
 
-        NotificationManagerCompat.from(this).notify(notificationId, builder.build());
         try {
-            JSONObject n = new JSONObject();
-            n.put("preferFullScreen", preferFullScreen);
-            emitCallFlowNative("NATIVE_NOTIFICATION_POSTED", inviteId, n);
-        } catch (Exception ignored) {
+            NotificationManagerCompat.from(this).notify(notificationId, builder.build());
+            lastIncomingUiDisplayedAtMs = System.currentTimeMillis();
+            lastIncomingUiPresentation = preferFullScreen ? PRESENTATION_FULL_SCREEN : PRESENTATION_HEADS_UP;
+            try {
+                JSONObject n = new JSONObject();
+                n.put("preferFullScreen", preferFullScreen);
+                n.put("channelImportance", currentIncomingChannelImportance());
+                n.put("canUseFullScreenIntent", canUseFullScreenIntentSafely());
+                emitCallFlowNative("incoming_call_ui_displayed", inviteId, n);
+                emitCallFlowNative("NATIVE_NOTIFICATION_POSTED", inviteId, n);
+            } catch (Exception ignored) {
+            }
+            Log.i(TAG, "[CALL_INCOMING] posted incoming call notification mode=" + (preferFullScreen ? "full_screen" : "heads_up"));
+        } catch (SecurityException se) {
+            // POST_NOTIFICATIONS revoked — record the failure so diagnostics can
+            // surface "the OS blocked us from showing the call" instead of
+            // silently dropping.
+            lastPushError = "post_notifications_denied";
+            Log.w(TAG, "[CALL_INCOMING] notify failed (POST_NOTIFICATIONS denied?): " + se.getMessage());
+            try {
+                JSONObject n = new JSONObject();
+                n.put("error", "post_notifications_denied");
+                emitCallFlowNative("foreground_call_service_failed", inviteId, n);
+            } catch (Exception ignored) {
+            }
         }
-        Log.i(TAG, "[CALL_INCOMING] posted incoming call notification mode=" + (preferFullScreen ? "full_screen" : "heads_up"));
         if (preferFullScreen) {
             triggerFullScreenIntent(fullScreenIntent, launchIntent);
+        }
+    }
+
+    /**
+     * Reads the current importance of the incoming-call notification channel.
+     * Returns -1 if the channel doesn't exist yet (will be created by
+     * ensureIncomingCallChannel before the next post).
+     */
+    private int currentIncomingChannelImportance() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return NotificationManager.IMPORTANCE_HIGH;
+        try {
+            NotificationManager m = getSystemService(NotificationManager.class);
+            if (m == null) return -1;
+            NotificationChannel ch = m.getNotificationChannel(CHANNEL_ID);
+            return ch != null ? ch.getImportance() : -1;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Android 14+ runtime FSI permission check. On older releases this is
+     * always true (the manifest permission is sufficient).
+     */
+    private boolean canUseFullScreenIntentSafely() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true;
+            NotificationManager m = getSystemService(NotificationManager.class);
+            if (m == null) return false;
+            return m.canUseFullScreenIntent();
+        } catch (Throwable t) {
+            return true;
         }
     }
 

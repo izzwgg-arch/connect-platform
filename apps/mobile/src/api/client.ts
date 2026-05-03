@@ -273,7 +273,15 @@ export async function registerMobileDevice(token: string, input: {
   platform: "IOS" | "ANDROID";
   expoPushToken: string;
   voipPushToken?: string;
+  deviceId?: string;
+  appVersion?: string;
   deviceName?: string;
+  // Call-wake diagnostics — populated by mobileDeviceRegistrationMetadata so
+  // the backend can correlate Samsung S24 vs S25 (or any other device) when
+  // triaging "calls don't ring when locked".
+  manufacturer?: string;
+  model?: string;
+  osVersion?: string;
 }) {
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {
     method: "POST",
@@ -282,6 +290,37 @@ export async function registerMobileDevice(token: string, input: {
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "MOBILE_REGISTER_FAILED");
+  return json;
+}
+
+export type MobileDeviceDiagnostics = {
+  id: string;
+  platform: "IOS" | "ANDROID";
+  active: boolean;
+  extensionId: string | null;
+  deviceId: string | null;
+  deviceName: string | null;
+  appVersion: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  osVersion: string | null;
+  lastSeenAt: string;
+  lastPushSentAt: string | null;
+  lastPushType: string | null;
+  lastPushStatus: string | null;
+  lastPushError: string | null;
+  expoPushTokenTail: string;
+  voipPushTokenTail: string | null;
+  deactivatedAt: string | null;
+};
+
+export async function getMyMobileDevices(token: string): Promise<{ devices: MobileDeviceDiagnostics[] }> {
+  const res = await fetch(`${API_BASE}/mobile/devices/me`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "MOBILE_DEVICES_FETCH_FAILED");
   return json;
 }
 

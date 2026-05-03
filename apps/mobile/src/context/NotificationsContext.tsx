@@ -10,6 +10,7 @@ import React, {
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
+import * as SecureStore from "expo-secure-store";
 import { Alert, AppState, Linking, NativeEventEmitter, NativeModules, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -231,6 +232,8 @@ const NotificationsCtx = createContext<NotificationsState | undefined>(
   undefined,
 );
 
+const INSTALLATION_DEVICE_ID_KEY = "cc_mobile_device_id";
+
 type IncomingCallAction = "open" | "answer" | "decline";
 
 type ParsedIncomingCallAction = {
@@ -309,6 +312,62 @@ function parseIncomingCallActionUrl(url: string | null): ParsedIncomingCallActio
   } catch {
     return null;
   }
+}
+
+async function getStableInstallationDeviceId(): Promise<string> {
+  const existing = await SecureStore.getItemAsync(INSTALLATION_DEVICE_ID_KEY).catch(() => null);
+  if (existing) return existing;
+  const next = `mobile-${Platform.OS}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  await SecureStore.setItemAsync(INSTALLATION_DEVICE_ID_KEY, next).catch(() => undefined);
+  return next;
+}
+
+function mobileAppVersion(): string {
+  const nativeVersion = Constants.nativeApplicationVersion || Constants.expoConfig?.version || "unknown";
+  const nativeBuild = Constants.nativeBuildVersion || "";
+  return nativeBuild ? `${nativeVersion}+${nativeBuild}` : nativeVersion;
+}
+
+/**
+ * Returns the metadata sent to /mobile/devices/register on every app start.
+ *
+ * Manufacturer / model / osVersion power the backend's call-wake diagnostics
+ * surface so we can correlate "Samsung SM-S921 / S24" vs "Samsung SM-S931 /
+ * S25" without guessing — this is what lets us prove an S25-specific wake
+ * regression once and for all.
+ *
+ * Native module values win over expo-device because the Android bridge
+ * returns the OEM Build.* strings exactly as Android sees them, which the
+ * backend can match against known device-class regressions.
+ */
+async function mobileDeviceRegistrationMetadata() {
+  let manufacturer: string | undefined;
+  let model: string | undefined;
+  let osVersion: string | undefined;
+  if (Platform.OS === "android") {
+    try {
+      const native = (NativeModules as any).IncomingCallUi?.getDeviceInfo?.();
+      if (native && typeof native === "object") {
+        manufacturer = String(native.manufacturer || "") || undefined;
+        model = String(native.model || "") || undefined;
+        osVersion = String(native.osVersion || "") || undefined;
+      }
+    } catch {
+      // fall through to expo-device fallback below
+    }
+  }
+  if (!manufacturer) manufacturer = (Device.manufacturer || undefined) ?? undefined;
+  if (!model) model = (Device.modelName || undefined) ?? undefined;
+  if (!osVersion) osVersion = (Device.osVersion || undefined) ?? undefined;
+
+  return {
+    deviceId: await getStableInstallationDeviceId(),
+    appVersion: mobileAppVersion(),
+    deviceName: Device.modelName || `${Platform.OS}-device`,
+    ...(manufacturer ? { manufacturer } : {}),
+    ...(model ? { model } : {}),
+    ...(osVersion ? { osVersion } : {}),
+  };
 }
 
 async function readCachedInvite(matchInviteId?: string): Promise<CallInvite | null> {
@@ -1107,11 +1166,12 @@ export function NotificationsProvider({
     // stores it on the MobileDevice row; the worker's future APNs VoIP
     // delivery path will read it from there.
     const voipToken = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
+    const metadata = await mobileDeviceRegistrationMetadata();
     const reg = await registerMobileDevice(token, {
       platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
       expoPushToken: pushToken,
       ...(voipToken ? { voipPushToken: voipToken } : {}),
-      deviceName: Device.modelName || `${Platform.OS}-device`,
+      ...metadata,
     }).catch((e) => {
       console.warn("[PUSH_RETRY] registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
       return null;
@@ -2628,11 +2688,12 @@ export function NotificationsProvider({
     lastSentVoipTokenRef.current = voipPushToken;
     (async () => {
       try {
+        const metadata = await mobileDeviceRegistrationMetadata();
         const reg = await registerMobileDevice(token, {
           platform: "IOS",
           expoPushToken,
           voipPushToken,
-          deviceName: Device.modelName || "ios-device",
+          ...metadata,
         });
         if (reg?.id) deviceIdRef.current = String(reg.id);
         console.log("[VOIP_PUSH] re-registered device with VoIP token, id:", reg?.id ?? "(none)");
@@ -2847,11 +2908,12 @@ export function NotificationsProvider({
         // Same VoIP-token attach as the retry path — see the PUSH_RETRY
         // block above for why this is iOS-only and optional.
         const voipToken = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
+        const metadata = await mobileDeviceRegistrationMetadata();
         const reg = await registerMobileDevice(token, {
           platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
           expoPushToken: currentToken,
           ...(voipToken ? { voipPushToken: voipToken } : {}),
-          deviceName: Device.modelName || `${Platform.OS}-device`,
+          ...metadata,
         }).catch((e) => {
           console.warn("[PUSH_INIT] registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
           return null;

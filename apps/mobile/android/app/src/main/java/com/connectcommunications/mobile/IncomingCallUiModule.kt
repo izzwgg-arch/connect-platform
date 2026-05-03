@@ -1,9 +1,11 @@
 package com.connectcommunications.mobile
 
 import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
@@ -11,6 +13,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -481,5 +484,180 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   @ReactMethod
   fun removeListeners(count: Int) {
     // no-op: NativeEventEmitter tracking happens on the JS side
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Call-wake diagnostics bridge.
+  //
+  // These are read by the in-app Diagnostics screen so the user (and we) can
+  // see in real time:
+  //   • whether the OS still grants USE_FULL_SCREEN_INTENT (Android 14+ can
+  //     silently revoke this from non-call-category apps — the single most
+  //     likely Samsung S25 wake regression),
+  //   • whether POST_NOTIFICATIONS is granted,
+  //   • the current importance of the connect-incoming-ui-* channel,
+  //   • when the FCM push was last physically received in onMessageReceived,
+  //   • when the native incoming-call notification was last posted.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Android 14+ runtime check: returns true iff the OS still allows this app
+   * to launch a full-screen intent from a notification. On older releases this
+   * always resolves true (the manifest permission is sufficient).
+   */
+  @ReactMethod
+  fun canUseFullScreenIntent(promise: Promise) {
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        promise.resolve(true)
+        return
+      }
+      val ctx = reactApplicationContext.applicationContext
+      val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      val allowed = nm?.canUseFullScreenIntent() ?: false
+      promise.resolve(allowed)
+    } catch (t: Throwable) {
+      Log.w(TAG, "canUseFullScreenIntent failed: ${t.message}")
+      promise.resolve(true)
+    }
+  }
+
+  /** Whether the user has granted POST_NOTIFICATIONS (Android 13+). */
+  @ReactMethod
+  fun areNotificationsEnabled(promise: Promise) {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      val ok = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+      promise.resolve(ok)
+    } catch (t: Throwable) {
+      Log.w(TAG, "areNotificationsEnabled failed: ${t.message}")
+      promise.resolve(true)
+    }
+  }
+
+  /**
+   * Importance of the incoming-call notification channel as the OS sees it
+   * right now. Returns -1 on pre-O or if the channel hasn't been created yet.
+   * Maps directly to NotificationManager.IMPORTANCE_* constants.
+   */
+  @ReactMethod
+  fun getCallChannelImportance(promise: Promise) {
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        promise.resolve(NotificationManager.IMPORTANCE_HIGH)
+        return
+      }
+      val ctx = reactApplicationContext.applicationContext
+      val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      val ch = nm?.getNotificationChannel("connect-incoming-ui-v6")
+      promise.resolve(ch?.importance ?: -1)
+    } catch (t: Throwable) {
+      Log.w(TAG, "getCallChannelImportance failed: ${t.message}")
+      promise.resolve(-1)
+    }
+  }
+
+  /**
+   * Synchronous device snapshot: manufacturer / model / brand / OS / SDK /
+   * package / app-version. Sent up by the mobile registration flow so the
+   * backend can correlate "S24 works, S25 broken" without guessing.
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun getDeviceInfo(): WritableMap {
+    val map = Arguments.createMap()
+    try {
+      map.putString("manufacturer", Build.MANUFACTURER ?: "")
+      map.putString("model", Build.MODEL ?: "")
+      map.putString("brand", Build.BRAND ?: "")
+      map.putString("device", Build.DEVICE ?: "")
+      map.putString("hardware", Build.HARDWARE ?: "")
+      map.putString("osVersion", Build.VERSION.RELEASE ?: "")
+      map.putInt("sdkInt", Build.VERSION.SDK_INT)
+      val ctx = reactApplicationContext.applicationContext
+      map.putString("packageName", ctx.packageName ?: "")
+      try {
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        map.putString("appVersion", info.versionName ?: "")
+        @Suppress("DEPRECATION")
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+        map.putString("appBuild", code.toString())
+      } catch (_: PackageManager.NameNotFoundException) {
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "getDeviceInfo failed: ${t.message}")
+    }
+    return map
+  }
+
+  /**
+   * Snapshot of the wake path's most recent activity:
+   *   - lastPushReceivedAtMs : when FCM physically delivered onMessageReceived
+   *   - lastPushType         : payload type ("INCOMING_CALL", "INVITE_CANCELED", …)
+   *   - lastPushInviteId     : inviteId / callId on the most recent push
+   *   - lastPushReceivedAppState : process importance bucket at the time
+   *   - lastIncomingUiDisplayedAtMs : when the CallStyle notification posted
+   *   - lastIncomingUiPresentation  : "full_screen" | "heads_up"
+   *   - lastPushError        : last non-fatal error (e.g. POST_NOTIFICATIONS denied)
+   *
+   * 0 / "" mean "no event recorded since process start". Reading this from JS
+   * after a missed S25 wake tells you which step failed (push didn't arrive
+   * vs notification didn't post vs full-screen intent was downgraded).
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun getCallWakeDiagnostics(): WritableMap {
+    val map = Arguments.createMap()
+    map.putDouble("lastPushReceivedAtMs", IncomingCallFirebaseService.lastPushReceivedAtMs.toDouble())
+    map.putString("lastPushType", IncomingCallFirebaseService.lastPushType ?: "")
+    map.putString("lastPushInviteId", IncomingCallFirebaseService.lastPushInviteId ?: "")
+    map.putString("lastPushReceivedAppState", IncomingCallFirebaseService.lastPushReceivedAppState ?: "")
+    map.putDouble("lastIncomingUiDisplayedAtMs", IncomingCallFirebaseService.lastIncomingUiDisplayedAtMs.toDouble())
+    map.putString("lastIncomingUiPresentation", IncomingCallFirebaseService.lastIncomingUiPresentation ?: "")
+    map.putString("lastPushError", IncomingCallFirebaseService.lastPushError ?: "")
+    map.putDouble("ringtoneStartedAtMs", IncomingCallFirebaseService.ringtoneStartedAtMs.toDouble())
+    map.putDouble("ringtoneStoppedAtMs", IncomingCallFirebaseService.ringtoneStoppedAtMs.toDouble())
+    map.putString("ringtoneStopReason", IncomingCallFirebaseService.ringtoneStopReason ?: "")
+    return map
+  }
+
+  /**
+   * Opens the Android 14+ "Allow full-screen notifications" page for this
+   * app. Called from the Diagnostics screen "Fix Call Reliability" flow when
+   * canUseFullScreenIntent() returns false. Falls back gracefully on older
+   * OS versions / OEMs that don't expose the action.
+   */
+  @ReactMethod
+  fun requestFullScreenIntentPermission(promise: Promise) {
+    val ctx = reactApplicationContext.applicationContext
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        promise.resolve(true)
+        return
+      }
+      val activity = currentActivity
+      val target: Context = activity ?: ctx
+      val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+        data = Uri.parse("package:${ctx.packageName}")
+        if (activity == null) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      target.startActivity(intent)
+      Log.i(TAG, "requestFullScreenIntentPermission: launched MANAGE_APP_USE_FULL_SCREEN_INTENT")
+      promise.resolve(true)
+    } catch (e: ActivityNotFoundException) {
+      Log.w(TAG, "requestFullScreenIntentPermission: action not available, falling back to app settings")
+      try {
+        val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = Uri.parse("package:${ctx.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        ctx.startActivity(fallback)
+        promise.resolve(false)
+      } catch (t: Throwable) {
+        Log.w(TAG, "requestFullScreenIntentPermission fallback failed: ${t.message}")
+        promise.resolve(false)
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "requestFullScreenIntentPermission failed: ${t.message}")
+      promise.resolve(false)
+    }
   }
 }

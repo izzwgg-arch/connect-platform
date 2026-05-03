@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,11 +17,24 @@ import * as SecureStore from 'expo-secure-store';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
-import { getVoiceExtension } from '../api/client';
+import { useIncomingNotifications } from '../context/NotificationsContext';
+import { getMyMobileDevices, getVoiceExtension, type MobileDeviceDiagnostics } from '../api/client';
 import { HeaderBar } from '../components/HeaderBar';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
+import {
+  describeChannelImportance,
+  formatTimestamp,
+  getCallWakeDeviceInfo,
+  getCallWakeNativeState,
+  getCallWakePermissionState,
+  isSamsungDevice,
+  requestFullScreenIntentPermission,
+  type CallWakeDeviceInfo,
+  type CallWakeNativeState,
+  type CallWakePermissionState,
+} from '../diagnostics/callWakeDiagnostics';
 
 const PROVISION_KEY = 'cc_mobile_provision';
 
@@ -80,6 +94,36 @@ export function DiagnosticsScreen() {
   const [voice, setVoice] = useState<VoiceExtension | null>(null);
   const [loading, setLoading] = useState(false);
   const [provBundle, setProvBundle] = useState<string | null>(null);
+  const notifications = useIncomingNotifications();
+
+  // ── Call Wake (Android) state ──
+  const [wakeDeviceInfo] = useState<CallWakeDeviceInfo>(() => getCallWakeDeviceInfo());
+  const [wakeState, setWakeState] = useState<CallWakeNativeState>(() => getCallWakeNativeState());
+  const [wakePerms, setWakePerms] = useState<CallWakePermissionState>({
+    notificationsEnabled: null,
+    canUseFullScreenIntent: null,
+    callChannelImportance: null,
+    batteryOptimizationIgnored: null,
+  });
+  const [wakeBackend, setWakeBackend] = useState<MobileDeviceDiagnostics[]>([]);
+  const [wakeRefreshing, setWakeRefreshing] = useState(false);
+
+  const refreshCallWake = useCallback(async () => {
+    setWakeRefreshing(true);
+    try {
+      setWakeState(getCallWakeNativeState());
+      const [perms, devices] = await Promise.all([
+        getCallWakePermissionState(),
+        token
+          ? getMyMobileDevices(token).catch(() => ({ devices: [] }))
+          : Promise.resolve({ devices: [] }),
+      ]);
+      setWakePerms(perms);
+      setWakeBackend(devices.devices ?? []);
+    } finally {
+      setWakeRefreshing(false);
+    }
+  }, [token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -88,9 +132,20 @@ export function DiagnosticsScreen() {
       Promise.all([
         getVoiceExtension(token).then(setVoice).catch(() => {}),
         SecureStore.getItemAsync(PROVISION_KEY).then(setProvBundle).catch(() => {}),
+        refreshCallWake(),
       ]).finally(() => setLoading(false));
-    }, [token]),
+    }, [token, refreshCallWake]),
   );
+
+  // Refresh native state every 5 seconds while screen is open so a missed-call
+  // test can be observed live without leaving the screen.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const id = setInterval(() => {
+      setWakeState(getCallWakeNativeState());
+    }, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://app.connectcomunications.com/api';
 
@@ -314,6 +369,262 @@ export function DiagnosticsScreen() {
               warn={process.env.EXPO_PUBLIC_VOICE_SIMULATE === 'true'}
             />
           </Section>
+
+          {/* ── Call Wake (Android) ── */}
+          {Platform.OS === 'android' && (
+            <>
+              <Section title="Call Wake — Device">
+                <DiagRow
+                  label="Manufacturer"
+                  value={wakeDeviceInfo.manufacturer || '—'}
+                />
+                <DiagRow label="Model" value={wakeDeviceInfo.model || '—'} />
+                <DiagRow
+                  label="Android Version"
+                  value={wakeDeviceInfo.osVersion ? `${wakeDeviceInfo.osVersion} (SDK ${wakeDeviceInfo.sdkInt})` : '—'}
+                />
+                <DiagRow
+                  label="App Version"
+                  value={
+                    wakeDeviceInfo.appVersion
+                      ? `${wakeDeviceInfo.appVersion}${wakeDeviceInfo.appBuild ? ` (${wakeDeviceInfo.appBuild})` : ''}`
+                      : String(Constants.expoConfig?.version || '—')
+                  }
+                />
+                {isSamsungDevice(wakeDeviceInfo) && (
+                  <DiagRow
+                    label="Samsung Notes"
+                    value="Battery + Sleeping Apps must be off (see button below)"
+                    warn
+                  />
+                )}
+              </Section>
+
+              <Section title="Call Wake — Permissions">
+                <DiagRow
+                  label="Notifications"
+                  value={
+                    wakePerms.notificationsEnabled === null
+                      ? 'unknown'
+                      : wakePerms.notificationsEnabled
+                        ? 'Allowed'
+                        : 'Blocked — calls will not ring'
+                  }
+                  ok={wakePerms.notificationsEnabled === true}
+                  danger={wakePerms.notificationsEnabled === false}
+                />
+                <DiagRow
+                  label="Full-Screen Intent"
+                  value={
+                    wakePerms.canUseFullScreenIntent === null
+                      ? 'unknown'
+                      : wakePerms.canUseFullScreenIntent
+                        ? 'Allowed'
+                        : 'Revoked — call screen will not appear over lock'
+                  }
+                  ok={wakePerms.canUseFullScreenIntent === true}
+                  danger={wakePerms.canUseFullScreenIntent === false}
+                />
+                <DiagRow
+                  label="Battery Optimization"
+                  value={
+                    wakePerms.batteryOptimizationIgnored === null
+                      ? 'unknown'
+                      : wakePerms.batteryOptimizationIgnored
+                        ? 'Ignored (good)'
+                        : 'Active — Doze can delay or block call wake'
+                  }
+                  ok={wakePerms.batteryOptimizationIgnored === true}
+                  warn={wakePerms.batteryOptimizationIgnored === false}
+                />
+                <DiagRow
+                  label="Call Channel Importance"
+                  value={describeChannelImportance(wakePerms.callChannelImportance)}
+                  ok={wakePerms.callChannelImportance != null && wakePerms.callChannelImportance >= 4}
+                  warn={
+                    wakePerms.callChannelImportance != null &&
+                    wakePerms.callChannelImportance >= 0 &&
+                    wakePerms.callChannelImportance < 4
+                  }
+                />
+              </Section>
+
+              <Section title="Call Wake — Last Push (this device)">
+                <DiagRow
+                  label="FCM Push Received"
+                  value={formatTimestamp(wakeState.lastPushReceivedAtMs)}
+                  ok={wakeState.lastPushReceivedAtMs > 0}
+                />
+                <DiagRow
+                  label="Push Type"
+                  value={wakeState.lastPushType || '—'}
+                />
+                <DiagRow
+                  label="Process State at Push"
+                  value={wakeState.lastPushReceivedAppState || '—'}
+                />
+                <DiagRow
+                  label="Incoming UI Posted"
+                  value={formatTimestamp(wakeState.lastIncomingUiDisplayedAtMs)}
+                  ok={wakeState.lastIncomingUiDisplayedAtMs > 0}
+                  warn={
+                    wakeState.lastPushReceivedAtMs > 0 &&
+                    wakeState.lastIncomingUiDisplayedAtMs === 0
+                  }
+                />
+                <DiagRow
+                  label="Presentation"
+                  value={wakeState.lastIncomingUiPresentation || '—'}
+                />
+                <DiagRow
+                  label="Ringtone Started"
+                  value={formatTimestamp(wakeState.ringtoneStartedAtMs)}
+                />
+                <DiagRow
+                  label="Ringtone Stopped"
+                  value={
+                    wakeState.ringtoneStoppedAtMs > 0
+                      ? `${formatTimestamp(wakeState.ringtoneStoppedAtMs)} (${wakeState.ringtoneStopReason || 'n/a'})`
+                      : '—'
+                  }
+                />
+                {wakeState.lastPushError ? (
+                  <DiagRow label="Last Error" value={wakeState.lastPushError} danger />
+                ) : null}
+              </Section>
+
+              <Section title="Call Wake — Backend View">
+                {wakeBackend.length === 0 ? (
+                  <DiagRow label="Devices" value="None registered yet" warn />
+                ) : (
+                  wakeBackend.map((d, idx) => (
+                    <View key={d.id}>
+                      <DiagRow
+                        label={`Device #${idx + 1}`}
+                        value={`${d.platform} ${d.model || d.deviceName || ''}`.trim()}
+                      />
+                      <DiagRow
+                        label="Active"
+                        value={d.active ? 'Yes' : 'No'}
+                        ok={d.active}
+                        warn={!d.active}
+                      />
+                      <DiagRow
+                        label="Last Push Sent"
+                        value={
+                          d.lastPushSentAt
+                            ? `${formatTimestamp(new Date(d.lastPushSentAt).getTime())}${d.lastPushType ? ` (${d.lastPushType})` : ''}`
+                            : 'Never'
+                        }
+                        ok={!!d.lastPushSentAt}
+                      />
+                      <DiagRow
+                        label="Push Status"
+                        value={d.lastPushStatus || '—'}
+                        ok={d.lastPushStatus === 'ok' || d.lastPushStatus === 'queued'}
+                        danger={
+                          !!d.lastPushStatus &&
+                          d.lastPushStatus !== 'ok' &&
+                          d.lastPushStatus !== 'queued'
+                        }
+                      />
+                      {d.lastPushError ? (
+                        <DiagRow label="Push Error" value={d.lastPushError} danger />
+                      ) : null}
+                      <DiagRow
+                        label="Token Tail"
+                        value={d.expoPushTokenTail}
+                      />
+                    </View>
+                  ))
+                )}
+              </Section>
+
+              {/* Quick fix actions for the most common Samsung S25 wake regressions. */}
+              <TouchableOpacity
+                style={[
+                  styles.btn,
+                  {
+                    backgroundColor: colors.surfaceElevated,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                    marginTop: spacing['3'],
+                  },
+                ]}
+                onPress={refreshCallWake}
+                activeOpacity={0.85}
+                disabled={wakeRefreshing}
+              >
+                <Ionicons
+                  name="refresh"
+                  size={18}
+                  color={colors.primary}
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={[typography.labelLg, { color: colors.primary }]}>
+                  {wakeRefreshing ? 'Refreshing…' : 'Refresh Call Wake Diagnostics'}
+                </Text>
+              </TouchableOpacity>
+
+              {wakePerms.canUseFullScreenIntent === false && (
+                <TouchableOpacity
+                  style={[
+                    styles.btn,
+                    {
+                      backgroundColor: 'rgba(245,158,11,0.12)',
+                      borderColor: 'rgba(245,158,11,0.4)',
+                      borderWidth: 1,
+                      marginTop: spacing['3'],
+                    },
+                  ]}
+                  onPress={async () => {
+                    await requestFullScreenIntentPermission();
+                    setTimeout(refreshCallWake, 500);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons
+                    name="warning-outline"
+                    size={18}
+                    color={colors.warningText}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={[typography.labelLg, { color: colors.warningText }]}>
+                    Allow Full-Screen Notifications
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {wakePerms.batteryOptimizationIgnored === false && (
+                <TouchableOpacity
+                  style={[
+                    styles.btn,
+                    {
+                      backgroundColor: 'rgba(245,158,11,0.12)',
+                      borderColor: 'rgba(245,158,11,0.4)',
+                      borderWidth: 1,
+                      marginTop: spacing['3'],
+                    },
+                  ]}
+                  onPress={async () => {
+                    await notifications.openBatteryOptimizationSettings();
+                    setTimeout(refreshCallWake, 500);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons
+                    name="battery-charging-outline"
+                    size={18}
+                    color={colors.warningText}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={[typography.labelLg, { color: colors.warningText }]}>
+                    Fix Battery / Sleeping Apps
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </>
+          )}
 
           {/* ── Actions ── */}
           <TouchableOpacity
