@@ -123,6 +123,25 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     public static volatile long lastIncomingUiDisplayedAtMs = 0;
     public static volatile String lastIncomingUiPresentation = null;
     public static volatile String lastPushError = null;
+
+    /**
+     * Push-wake (Option 2) state. Updated when an INCOMING_CALL_WAKE FCM data
+     * message arrives — independent of lastPush* (which tracks the actual
+     * INCOMING_CALL UI push). The Diagnostics screen shows these so we can see
+     * "wake push at T+0ms, JS bridge emit at T+5ms" before the SIP REGISTER
+     * even fires.
+     *
+     * lastWakeBridgeStatus values:
+     *   "emitted_to_js" — emitSipWakeRegister returned without throwing.
+     *   "no_react_context" — JS hadn't booted yet; wake was native-only.
+     *   "no_active_react_instance" — JS booting / dying; wake was native-only.
+     *   "emit_threw" — RCTDeviceEventEmitter threw; see logcat.
+     */
+    public static volatile long lastWakePushReceivedAtMs = 0;
+    public static volatile String lastWakePushPbxCallId = null;
+    public static volatile String lastWakePushExtension = null;
+    public static volatile long lastWakeBridgeEmittedAtMs = 0;
+    public static volatile String lastWakeBridgeStatus = null;
     /**
      * Multi-call busy flag. Written by JS via IncomingCallUiModule.setInActiveCall()
      * whenever the CallSessionManager has an active call. While true, new FCM
@@ -185,6 +204,24 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 e
             );
         } catch (Exception ignored) {
+        }
+
+        if ("INCOMING_CALL_WAKE".equals(type)) {
+            // Push-wake (Option 2): silently kick the SIP keep-alive service so
+            // the JS process gets the FOREGROUND_SERVICE importance bump, then
+            // signal SipContext to register({ forceRestart: true }). The actual
+            // ringing UI is driven by the SIP INVITE that arrives ~6 seconds
+            // later from the PBX dialplan, OR by a separate INCOMING_CALL push.
+            try {
+                handleWakePushNative(appData);
+            } catch (Exception e) {
+                Log.e(TAG, "[CALL_WAKE] handleWakePushNative failed: " + e.getMessage(), e);
+                lastPushError = "wake_handler_threw: " + e.getMessage();
+            }
+            // Forward to Expo for symmetry, then return — DO NOT fall through
+            // to INCOMING_CALL handling (no UI, no ringtone for wake pushes).
+            forwardToExpo("onMessageReceived", RemoteMessage.class, remoteMessage);
+            return;
         }
 
         if ("INCOMING_CALL".equals(type)) {
@@ -296,6 +333,100 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         } catch (Exception e) {
             Log.w(TAG, "[CALL_INCOMING] forwardToExpo(" + methodName + ") failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Push-wake (Option 2). Called when an INCOMING_CALL_WAKE FCM data
+     * message arrives. Three things happen:
+     *
+     *   1. Start the SipKeepAliveService — gives the JS process the
+     *      FOREGROUND_SERVICE importance bump and a partial wake lock so
+     *      Samsung doze cannot freeze the WSS socket while we re-register.
+     *      Idempotent (no-op if already running).
+     *   2. Emit the Sip.WakeRegister event so SipContext kicks
+     *      register({ forceRestart: true }).
+     *   3. Append a JSON line tagged ConnectCallFlow so logcat shows the
+     *      full timeline.
+     *
+     * Updates lastWake* static state so the Diagnostics screen can prove the
+     * wake push physically reached the device even when the SIP register
+     * later fails for unrelated reasons.
+     */
+    private void handleWakePushNative(Map<String, String> data) {
+        long t0 = System.currentTimeMillis();
+        String pbxCallId = data.get("pbxCallId");
+        String toExt = data.get("toExtension");
+        String fromNum = data.get("fromNumber");
+        if (fromNum == null || fromNum.isEmpty()) fromNum = data.get("from");
+        String fromDisp = data.get("fromDisplay");
+        String tenantId = data.get("tenantId");
+        String wakeRequestedAt = data.get("wakeRequestedAt");
+
+        lastWakePushReceivedAtMs = t0;
+        lastWakePushPbxCallId = pbxCallId;
+        lastWakePushExtension = toExt;
+
+        Log.i(TAG, "[CALL_WAKE] WAKE_PUSH_RECEIVED pbxCallId=" + pbxCallId
+                + " toExt=" + toExt
+                + " from=" + fromNum
+                + " appState=" + lastPushReceivedAppState);
+
+        // Greppable structured event.
+        try {
+            JSONObject e = new JSONObject();
+            e.put("pbxCallId", pbxCallId != null ? pbxCallId : JSONObject.NULL);
+            e.put("toExtension", toExt != null ? toExt : JSONObject.NULL);
+            e.put("fromNumber", fromNum != null ? fromNum : JSONObject.NULL);
+            e.put("tenantId", tenantId != null ? tenantId : JSONObject.NULL);
+            e.put("wakeRequestedAt", wakeRequestedAt != null ? wakeRequestedAt : JSONObject.NULL);
+            e.put("appState", lastPushReceivedAppState);
+            emitCallFlowNative("WAKE_PUSH_RECEIVED", pbxCallId, e);
+        } catch (Exception ignored) { }
+
+        // 1) Make sure the SIP keep-alive service is up. start() is idempotent
+        // and creates the foreground notification + wake lock if not already.
+        try {
+            SipKeepAliveService.start(getApplicationContext());
+            Log.i(TAG, "[CALL_WAKE] SipKeepAliveService.start() invoked from wake push");
+        } catch (Throwable t) {
+            Log.w(TAG, "[CALL_WAKE] SipKeepAliveService.start() failed: " + t.getMessage());
+            lastPushError = "keepalive_start_failed: " + t.getMessage();
+        }
+
+        // 2) Tell the JS layer to force-register. emitSipWakeRegister handles
+        // the "no React context yet" case gracefully — JS may still be booting,
+        // and SipContext re-registers on AppState change as a safety net.
+        try {
+            com.facebook.react.bridge.WritableMap payload =
+                com.facebook.react.bridge.Arguments.createMap();
+            payload.putString("pbxCallId", pbxCallId != null ? pbxCallId : "");
+            payload.putString("toExtension", toExt != null ? toExt : "");
+            payload.putString("fromNumber", fromNum != null ? fromNum : "");
+            payload.putString("fromDisplay", fromDisp != null ? fromDisp : "");
+            payload.putString("tenantId", tenantId != null ? tenantId : "");
+            payload.putString("wakeRequestedAt", wakeRequestedAt != null ? wakeRequestedAt : "");
+            payload.putDouble("receivedAtMs", (double) t0);
+            payload.putString("appState", lastPushReceivedAppState != null ? lastPushReceivedAppState : "");
+
+            // Use reflection to detect "no react context yet" vs "emit threw"
+            // for richer diagnostics state.
+            try {
+                IncomingCallUiModule.emitSipWakeRegister(payload);
+                lastWakeBridgeEmittedAtMs = System.currentTimeMillis();
+                lastWakeBridgeStatus = "emitted_to_js";
+            } catch (Throwable t) {
+                lastWakeBridgeEmittedAtMs = System.currentTimeMillis();
+                lastWakeBridgeStatus = "emit_threw: " + t.getMessage();
+                Log.w(TAG, "[CALL_WAKE] emitSipWakeRegister rethrown: " + t.getMessage());
+            }
+        } catch (Throwable t) {
+            lastWakeBridgeStatus = "payload_build_failed: " + t.getMessage();
+            Log.w(TAG, "[CALL_WAKE] wake bridge payload build failed: " + t.getMessage());
+        }
+
+        Log.i(TAG, "[CALL_WAKE] WAKE_NATIVE_HANDLED elapsedMs="
+                + (System.currentTimeMillis() - t0)
+                + " bridgeStatus=" + lastWakeBridgeStatus);
     }
 
     private void handleIncomingCallNative(Map<String, String> data) {

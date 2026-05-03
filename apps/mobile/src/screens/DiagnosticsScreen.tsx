@@ -18,7 +18,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
 import { useIncomingNotifications } from '../context/NotificationsContext';
-import { getMyMobileDevices, getVoiceExtension, type MobileDeviceDiagnostics } from '../api/client';
+import { getMyMobileDevices, getVoiceExtension, getWakeTimeline, type MobileDeviceDiagnostics, type WakeTimelineEvent } from '../api/client';
 import { HeaderBar } from '../components/HeaderBar';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
@@ -88,15 +88,15 @@ export function DiagnosticsScreen() {
   const { colors } = useTheme();
   const { token } = useAuth();
   const sip = useSip();
+  const notifications = useIncomingNotifications();
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
 
   const [voice, setVoice] = useState<VoiceExtension | null>(null);
   const [loading, setLoading] = useState(false);
   const [provBundle, setProvBundle] = useState<string | null>(null);
-  const notifications = useIncomingNotifications();
 
-  // ── Call Wake (Android) state ──
+  // ── Call Wake (Android) state ─────────────────────────────────────────────
   const [wakeDeviceInfo] = useState<CallWakeDeviceInfo>(() => getCallWakeDeviceInfo());
   const [wakeState, setWakeState] = useState<CallWakeNativeState>(() => getCallWakeNativeState());
   const [wakePerms, setWakePerms] = useState<CallWakePermissionState>({
@@ -106,20 +106,25 @@ export function DiagnosticsScreen() {
     batteryOptimizationIgnored: null,
   });
   const [wakeBackend, setWakeBackend] = useState<MobileDeviceDiagnostics[]>([]);
+  const [wakeTimeline, setWakeTimeline] = useState<WakeTimelineEvent[]>([]);
   const [wakeRefreshing, setWakeRefreshing] = useState(false);
 
   const refreshCallWake = useCallback(async () => {
     setWakeRefreshing(true);
     try {
       setWakeState(getCallWakeNativeState());
-      const [perms, devices] = await Promise.all([
+      const [perms, devices, timeline] = await Promise.all([
         getCallWakePermissionState(),
         token
           ? getMyMobileDevices(token).catch(() => ({ devices: [] }))
           : Promise.resolve({ devices: [] }),
+        token
+          ? getWakeTimeline(token, { limit: 50 }).catch(() => ({ events: [] as WakeTimelineEvent[] }))
+          : Promise.resolve({ events: [] as WakeTimelineEvent[] }),
       ]);
       setWakePerms(perms);
       setWakeBackend(devices.devices ?? []);
+      setWakeTimeline(timeline.events ?? []);
     } finally {
       setWakeRefreshing(false);
     }
@@ -195,6 +200,9 @@ export function DiagnosticsScreen() {
         <ScrollView
           contentContainerStyle={{ padding: spacing['4'], paddingBottom: insets.bottom + spacing['8'] }}
           showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
         >
           {/* ── SIP Registration ── */}
           <Section title="SIP Registration">
@@ -534,6 +542,67 @@ export function DiagnosticsScreen() {
                       <DiagRow
                         label="Token Tail"
                         value={d.expoPushTokenTail}
+                      />
+                    </View>
+                  ))
+                )}
+              </Section>
+
+              {/* Push-wake (Option 2) native receipt — fires only when an
+                  INCOMING_CALL_WAKE FCM data message reached the device. */}
+              <Section title="Call Wake — Push-Wake (Option 2)">
+                <DiagRow
+                  label="Last Wake Push"
+                  value={
+                    wakeState.lastWakePushReceivedAtMs > 0
+                      ? formatTimestamp(wakeState.lastWakePushReceivedAtMs)
+                      : 'Never'
+                  }
+                  ok={wakeState.lastWakePushReceivedAtMs > 0}
+                  warn={wakeState.lastWakePushReceivedAtMs === 0}
+                />
+                <DiagRow
+                  label="pbxCallId"
+                  value={wakeState.lastWakePushPbxCallId || '—'}
+                />
+                <DiagRow
+                  label="Target Extension"
+                  value={wakeState.lastWakePushExtension || '—'}
+                />
+                <DiagRow
+                  label="JS Bridge Emitted"
+                  value={
+                    wakeState.lastWakeBridgeEmittedAtMs > 0
+                      ? `${formatTimestamp(wakeState.lastWakeBridgeEmittedAtMs)} (${wakeState.lastWakeBridgeStatus || 'unknown'})`
+                      : '—'
+                  }
+                  ok={wakeState.lastWakeBridgeStatus === 'emitted_to_js'}
+                  warn={
+                    !!wakeState.lastWakeBridgeStatus &&
+                    wakeState.lastWakeBridgeStatus !== 'emitted_to_js'
+                  }
+                />
+              </Section>
+
+              {/* Wake Timeline — full event sequence from backend. Useful when
+                  user calls and we want to see every step end-to-end. */}
+              <Section title="Call Wake — Timeline (latest 50)">
+                {wakeTimeline.length === 0 ? (
+                  <DiagRow label="Events" value="No wake events recorded yet" warn />
+                ) : (
+                  wakeTimeline.slice(0, 50).map((ev) => (
+                    <View key={ev.id}>
+                      <DiagRow
+                        label={ev.stage}
+                        value={
+                          `${formatTimestamp(new Date(ev.occurredAt).getTime())}` +
+                          (ev.latencyMs != null ? ` (+${ev.latencyMs}ms)` : '') +
+                          ` [${ev.source}]` +
+                          (ev.pbxCallId ? ` ${ev.pbxCallId.slice(-10)}` : '')
+                        }
+                        ok={ev.stage.endsWith('COMPLETE') || ev.stage === 'WAKE_PUSH_DELIVERED'}
+                        warn={ev.stage.endsWith('TRIGGERED') || ev.stage === 'WAKE_REQUESTED'}
+                        danger={ev.stage.endsWith('FAILED') || ev.stage.endsWith('NOT_FOUND') || ev.stage === 'WAKE_PUSH_FAILED'}
                       />
                     </View>
                   ))

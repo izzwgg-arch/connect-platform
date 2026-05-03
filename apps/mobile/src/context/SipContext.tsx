@@ -730,6 +730,136 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authToken, hasProvisioning]);
 
+  // ── Push-wake (Option 2) — react to native Sip.WakeRegister event ───────
+  // Native IncomingCallFirebaseService fires this event when an
+  // INCOMING_CALL_WAKE FCM data message arrives. We force-register the SIP
+  // UA so the device is online before the PBX dialplan dials in ~6 seconds,
+  // and POST telemetry events so the backend timeline shows every step.
+  //
+  // Suppression: ignore duplicate wake events for the same pbxCallId within
+  // 30 seconds. The PBX dialplan only fires the wake hook once per call, but
+  // FCM may rarely re-deliver, and we don't want to thrash the UA.
+  const lastHandledWakeRef = useRef<{ pbxCallId: string; ts: number } | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!authToken) return; // can't POST telemetry without auth
+
+    const sub = DeviceEventEmitter.addListener("Sip.WakeRegister", async (raw: any) => {
+      const t0 = Date.now();
+      const pbxCallId = String(raw?.pbxCallId || "").trim();
+      const toExtension = String(raw?.toExtension || "");
+      const fromNumber = String(raw?.fromNumber || "");
+      const wakeRequestedAt = String(raw?.wakeRequestedAt || "");
+      const appState = String(raw?.appState || "");
+
+      console.log(
+        "[CALL_WAKE] Sip.WakeRegister received",
+        JSON.stringify({ pbxCallId, toExtension, fromNumber, wakeRequestedAt, appState }),
+      );
+
+      if (!pbxCallId) {
+        console.warn("[CALL_WAKE] Sip.WakeRegister missing pbxCallId — ignoring");
+        return;
+      }
+
+      // Duplicate suppression.
+      const last = lastHandledWakeRef.current;
+      if (last && last.pbxCallId === pbxCallId && t0 - last.ts < 30_000) {
+        console.log("[CALL_WAKE] duplicate wake event suppressed", JSON.stringify({ pbxCallId, ageMs: t0 - last.ts }));
+        return;
+      }
+      lastHandledWakeRef.current = { pbxCallId, ts: t0 };
+
+      // Lazy-load the API helper to avoid a top-level cycle.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { postWakeEvent } = require("../api/client") as typeof import("../api/client");
+
+      // Stage A — DEVICE_PUSH_RECEIVED.
+      void postWakeEvent(authToken, {
+        pbxCallId,
+        stage: "DEVICE_PUSH_RECEIVED",
+        details: {
+          toExtension,
+          fromNumber,
+          wakeRequestedAt,
+          appState,
+          jsBootedAtMs: t0,
+        },
+      });
+
+      // Ensure provisioning is loaded — we may have been dead-cold and JS
+      // only just started. ensureProvisioningLoaded is idempotent.
+      try {
+        const loaded = await ensureProvisioningLoaded();
+        if (!loaded) {
+          console.warn("[CALL_WAKE] no provisioning available — wake aborted (user not signed in?)");
+          await postWakeEvent(authToken, {
+            pbxCallId,
+            stage: "DEVICE_REGISTER_FAILED",
+            details: { reason: "no_provisioning" },
+          });
+          return;
+        }
+      } catch (e: any) {
+        console.warn("[CALL_WAKE] ensureProvisioningLoaded threw:", e?.message);
+        await postWakeEvent(authToken, {
+          pbxCallId,
+          stage: "DEVICE_REGISTER_FAILED",
+          details: { reason: "provisioning_threw", error: e?.message },
+        });
+        return;
+      }
+
+      // Stage B — DEVICE_REGISTER_TRIGGERED. ALWAYS force-restart on a wake
+      // push: the whole point is that we expect the prior UA to be stale
+      // (Doze, killed JS, broken WS). A no-op register won't help.
+      const triggeredAt = Date.now();
+      await postWakeEvent(authToken, {
+        pbxCallId,
+        stage: "DEVICE_REGISTER_TRIGGERED",
+        details: {
+          forceRestart: true,
+          previousRegState: registrationStateRef.current,
+          appState,
+          latencySinceWakeMs: triggeredAt - t0,
+        },
+      });
+
+      try {
+        await clientRef.current.register({ forceRestart: true });
+        const completedAt = Date.now();
+        console.log(
+          "[CALL_WAKE] register({forceRestart:true}) resolved",
+          JSON.stringify({
+            pbxCallId,
+            registerLatencyMs: completedAt - triggeredAt,
+            totalLatencyMs: completedAt - t0,
+            regState: registrationStateRef.current,
+          }),
+        );
+        await postWakeEvent(authToken, {
+          pbxCallId,
+          stage: "DEVICE_REGISTER_COMPLETE",
+          details: {
+            registerLatencyMs: completedAt - triggeredAt,
+            totalLatencyMs: completedAt - t0,
+            regState: registrationStateRef.current,
+          },
+        });
+      } catch (e: any) {
+        console.warn("[CALL_WAKE] register({forceRestart:true}) threw:", e?.message);
+        await postWakeEvent(authToken, {
+          pbxCallId,
+          stage: "DEVICE_REGISTER_FAILED",
+          details: { error: e?.message, regState: registrationStateRef.current },
+        });
+      }
+    });
+
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
+
   // ─────────────────────────────────────────────────────────────────────
   // Stage 2 prerequisite — request battery-optimization exemption.
   //

@@ -44,6 +44,12 @@ export type CallWakeNativeState = {
   ringtoneStartedAtMs: number;
   ringtoneStoppedAtMs: number;
   ringtoneStopReason: string;
+  /** Push-wake (Option 2) — last INCOMING_CALL_WAKE FCM receipt. */
+  lastWakePushReceivedAtMs: number;
+  lastWakePushPbxCallId: string;
+  lastWakePushExtension: string;
+  lastWakeBridgeEmittedAtMs: number;
+  lastWakeBridgeStatus: string;
 };
 
 export type CallWakePermissionState = {
@@ -64,6 +70,11 @@ const EMPTY_NATIVE_STATE: CallWakeNativeState = {
   ringtoneStartedAtMs: 0,
   ringtoneStoppedAtMs: 0,
   ringtoneStopReason: "",
+  lastWakePushReceivedAtMs: 0,
+  lastWakePushPbxCallId: "",
+  lastWakePushExtension: "",
+  lastWakeBridgeEmittedAtMs: 0,
+  lastWakeBridgeStatus: "",
 };
 
 const EMPTY_DEVICE_INFO: CallWakeDeviceInfo = {
@@ -97,6 +108,11 @@ export function getCallWakeNativeState(): CallWakeNativeState {
       ringtoneStartedAtMs: Number(raw.ringtoneStartedAtMs) || 0,
       ringtoneStoppedAtMs: Number(raw.ringtoneStoppedAtMs) || 0,
       ringtoneStopReason: String(raw.ringtoneStopReason ?? ""),
+      lastWakePushReceivedAtMs: Number(raw.lastWakePushReceivedAtMs) || 0,
+      lastWakePushPbxCallId: String(raw.lastWakePushPbxCallId ?? ""),
+      lastWakePushExtension: String(raw.lastWakePushExtension ?? ""),
+      lastWakeBridgeEmittedAtMs: Number(raw.lastWakeBridgeEmittedAtMs) || 0,
+      lastWakeBridgeStatus: String(raw.lastWakeBridgeStatus ?? ""),
     };
   } catch {
     return EMPTY_NATIVE_STATE;

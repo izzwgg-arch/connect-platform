@@ -47,6 +47,13 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   companion object {
     private const val TAG = "IncomingCallUiModule"
     private const val EVENT_INCOMING_CALL_FOREGROUND = "IncomingCall.ForegroundInvite"
+    /**
+     * Push-wake (Option 2) event. Fired by IncomingCallFirebaseService when an
+     * INCOMING_CALL_WAKE FCM data message arrives. JS (SipContext) listens and
+     * triggers JsSIP register({ forceRestart: true }) so the device is online
+     * before the PBX dials in ~6 seconds.
+     */
+    private const val EVENT_SIP_WAKE_REGISTER = "Sip.WakeRegister"
 
     @JvmStatic
     private var lastReactContext: WeakReference<ReactApplicationContext>? = null
@@ -75,6 +82,37 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         Log.i(TAG, "emitForegroundInvite: dispatched $EVENT_INCOMING_CALL_FOREGROUND to JS")
       } catch (t: Throwable) {
         Log.w(TAG, "emitForegroundInvite failed: ${t.message}")
+      }
+    }
+
+    /**
+     * Push-wake bridge: tells the JS SipContext that an INCOMING_CALL_WAKE FCM
+     * push just landed for the given pbxCallId. SipContext should immediately
+     * call sip.register({ forceRestart: true }) and POST DEVICE_REGISTER_*
+     * events to /mobile/wake/event so the backend timeline shows the full
+     * sequence.
+     *
+     * Native side ALWAYS starts the SipKeepAliveService BEFORE emitting this
+     * event so the JS process gets the FOREGROUND_SERVICE importance bump it
+     * needs to keep the WSS socket open while it re-registers.
+     */
+    @JvmStatic
+    fun emitSipWakeRegister(payload: WritableMap) {
+      val ctx = lastReactContext?.get()
+      if (ctx == null) {
+        Log.w(TAG, "emitSipWakeRegister: no ReactApplicationContext cached yet — wake event dropped (JS not yet booted)")
+        return
+      }
+      if (!ctx.hasActiveReactInstance()) {
+        Log.w(TAG, "emitSipWakeRegister: ReactContext has no active instance — wake event dropped (JS booting?)")
+        return
+      }
+      try {
+        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit(EVENT_SIP_WAKE_REGISTER, payload)
+        Log.i(TAG, "emitSipWakeRegister: dispatched $EVENT_SIP_WAKE_REGISTER to JS")
+      } catch (t: Throwable) {
+        Log.w(TAG, "emitSipWakeRegister failed: ${t.message}")
       }
     }
   }
@@ -616,6 +654,12 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     map.putDouble("ringtoneStartedAtMs", IncomingCallFirebaseService.ringtoneStartedAtMs.toDouble())
     map.putDouble("ringtoneStoppedAtMs", IncomingCallFirebaseService.ringtoneStoppedAtMs.toDouble())
     map.putString("ringtoneStopReason", IncomingCallFirebaseService.ringtoneStopReason ?: "")
+    // Push-wake (Option 2) snapshot
+    map.putDouble("lastWakePushReceivedAtMs", IncomingCallFirebaseService.lastWakePushReceivedAtMs.toDouble())
+    map.putString("lastWakePushPbxCallId", IncomingCallFirebaseService.lastWakePushPbxCallId ?: "")
+    map.putString("lastWakePushExtension", IncomingCallFirebaseService.lastWakePushExtension ?: "")
+    map.putDouble("lastWakeBridgeEmittedAtMs", IncomingCallFirebaseService.lastWakeBridgeEmittedAtMs.toDouble())
+    map.putString("lastWakeBridgeStatus", IncomingCallFirebaseService.lastWakeBridgeStatus ?: "")
     return map
   }
 

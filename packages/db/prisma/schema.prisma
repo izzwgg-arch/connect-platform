@@ -366,6 +366,7 @@ model Tenant {
   callRecords                     CallRecord[]
   mobileDevices                   MobileDevice[]
   callInvites                     CallInvite[]
+  callWakeEvents                  CallWakeEvent[]
   voiceClientSessions             VoiceClientSession[]
   voiceDiagEvents                 VoiceDiagEvent[]
   mediaTestRuns                   MediaTestRun[]
@@ -437,6 +438,7 @@ model User {
   ownedExtensions                Extension[]               @relation("ExtensionOwner")
   mobileDevices                  MobileDevice[]
   callInvites                    CallInvite[]
+  callWakeEvents                 CallWakeEvent[]
   voiceClientSessions            VoiceClientSession[]
   voiceDiagEvents                VoiceDiagEvent[]
   requestedTurnValidationJobs    TurnValidationJob[]       @relation("TurnValidationRequestedBy")
@@ -624,87 +626,87 @@ model BillingPlan {
 }
 
 model TaxProfile {
-  id                     String                  @id @default(cuid())
-  name                   String
-  state                  String
-  county                 String?
-  salesTaxRate           Decimal                 @default(0) @db.Decimal(7, 6)
-  e911FeePerExtension    Int                     @default(0)
-  regulatoryFeePercent   Decimal                 @default(0) @db.Decimal(7, 6)
-  regulatoryFeeEnabled   Boolean                 @default(true)
-  enabled                Boolean                 @default(true)
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
-  tenantBillingSettings  TenantBillingSettings[]
+  id                    String                  @id @default(cuid())
+  name                  String
+  state                 String
+  county                String?
+  salesTaxRate          Decimal                 @default(0) @db.Decimal(7, 6)
+  e911FeePerExtension   Int                     @default(0)
+  regulatoryFeePercent  Decimal                 @default(0) @db.Decimal(7, 6)
+  regulatoryFeeEnabled  Boolean                 @default(true)
+  enabled               Boolean                 @default(true)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  tenantBillingSettings TenantBillingSettings[]
 
   @@unique([state, county])
   @@index([enabled, state, county])
 }
 
 model TenantBillingSettings {
-  id                              String          @id @default(cuid())
-  tenantId                        String          @unique
+  id                              String         @id @default(cuid())
+  tenantId                        String         @unique
   billingPlanId                   String?
-  extensionPriceCents             Int             @default(3000)
-  additionalPhoneNumberPriceCents Int             @default(1000)
-  smsPriceCents                   Int             @default(1000)
-  firstPhoneNumberFree            Boolean         @default(true)
-  smsBillingEnabled               Boolean         @default(false)
-  taxEnabled                      Boolean         @default(false)
+  extensionPriceCents             Int            @default(3000)
+  additionalPhoneNumberPriceCents Int            @default(1000)
+  smsPriceCents                   Int            @default(1000)
+  firstPhoneNumberFree            Boolean        @default(true)
+  smsBillingEnabled               Boolean        @default(false)
+  taxEnabled                      Boolean        @default(false)
   taxProfileId                    String?
-  autoBillingEnabled              Boolean         @default(false)
-  billingDayOfMonth               Int             @default(1)
-  paymentTermsDays                Int             @default(15)
+  autoBillingEnabled              Boolean        @default(false)
+  billingDayOfMonth               Int            @default(1)
+  paymentTermsDays                Int            @default(15)
   defaultPaymentMethodId          String?
   billingEmail                    String?
   billingAddress                  Json?
   serviceAddress                  Json?
-  creditsCents                    Int             @default(0)
-  discountPercent                 Decimal         @default(0) @db.Decimal(7, 6)
+  creditsCents                    Int            @default(0)
+  discountPercent                 Decimal        @default(0) @db.Decimal(7, 6)
   metadata                        Json?
-  createdAt                       DateTime        @default(now())
-  updatedAt                       DateTime        @updatedAt
-  tenant                          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  billingPlan                     BillingPlan?    @relation(fields: [billingPlanId], references: [id], onDelete: SetNull)
-  taxProfile                      TaxProfile?     @relation(fields: [taxProfileId], references: [id], onDelete: SetNull)
-  defaultPaymentMethod            PaymentMethod?  @relation("DefaultTenantBillingPaymentMethod", fields: [defaultPaymentMethodId], references: [id], onDelete: SetNull)
+  createdAt                       DateTime       @default(now())
+  updatedAt                       DateTime       @updatedAt
+  tenant                          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  billingPlan                     BillingPlan?   @relation(fields: [billingPlanId], references: [id], onDelete: SetNull)
+  taxProfile                      TaxProfile?    @relation(fields: [taxProfileId], references: [id], onDelete: SetNull)
+  defaultPaymentMethod            PaymentMethod? @relation("DefaultTenantBillingPaymentMethod", fields: [defaultPaymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([taxProfileId])
   @@index([autoBillingEnabled, billingDayOfMonth])
 }
 
 model BillingInvoice {
-  id                    String                    @id @default(cuid())
-  tenantId              String
-  invoiceNumber         String                    @unique
-  status                BillingInvoiceStatus      @default(DRAFT)
-  currency              String                    @default("USD")
-  periodStart           DateTime
-  periodEnd             DateTime
-  issueDate             DateTime                  @default(now())
-  dueDate               DateTime
-  subtotalCents         Int                       @default(0)
-  taxCents              Int                       @default(0)
-  totalCents            Int                       @default(0)
-  amountPaidCents       Int                       @default(0)
-  balanceDueCents       Int                       @default(0)
-  paymentMethodId       String?
-  paidAt                DateTime?
-  failedAt              DateTime?
-  voidedAt              DateTime?
-  lastEmailStatus       String?
-  lastEmailedAt         DateTime?
-  pdfStorageKey         String?
-  pdfGeneratedAt        DateTime?
-  notes                 String?
-  metadata              Json?
-  createdAt             DateTime                  @default(now())
-  updatedAt             DateTime                  @updatedAt
-  tenant                Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paymentMethod         PaymentMethod?            @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  lineItems             BillingInvoiceLineItem[]
-  transactions          PaymentTransaction[]
-  events                BillingEventLog[]
+  id              String                   @id @default(cuid())
+  tenantId        String
+  invoiceNumber   String                   @unique
+  status          BillingInvoiceStatus     @default(DRAFT)
+  currency        String                   @default("USD")
+  periodStart     DateTime
+  periodEnd       DateTime
+  issueDate       DateTime                 @default(now())
+  dueDate         DateTime
+  subtotalCents   Int                      @default(0)
+  taxCents        Int                      @default(0)
+  totalCents      Int                      @default(0)
+  amountPaidCents Int                      @default(0)
+  balanceDueCents Int                      @default(0)
+  paymentMethodId String?
+  paidAt          DateTime?
+  failedAt        DateTime?
+  voidedAt        DateTime?
+  lastEmailStatus String?
+  lastEmailedAt   DateTime?
+  pdfStorageKey   String?
+  pdfGeneratedAt  DateTime?
+  notes           String?
+  metadata        Json?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethod   PaymentMethod?           @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  lineItems       BillingInvoiceLineItem[]
+  transactions    PaymentTransaction[]
+  events          BillingEventLog[]
 
   @@index([tenantId, status, dueDate])
   @@index([tenantId, periodStart, periodEnd])
@@ -712,68 +714,68 @@ model BillingInvoice {
 }
 
 model BillingInvoiceLineItem {
-  id              String              @id @default(cuid())
-  invoiceId       String
-  tenantId        String
-  type            BillingLineItemType
-  description     String
-  quantity        Int                 @default(1)
-  unitPriceCents  Int                 @default(0)
-  amountCents     Int
-  taxable         Boolean             @default(true)
-  metadata        Json?
-  createdAt       DateTime            @default(now())
-  invoice         BillingInvoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  id             String              @id @default(cuid())
+  invoiceId      String
+  tenantId       String
+  type           BillingLineItemType
+  description    String
+  quantity       Int                 @default(1)
+  unitPriceCents Int                 @default(0)
+  amountCents    Int
+  taxable        Boolean             @default(true)
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+  invoice        BillingInvoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
   @@index([tenantId, type])
 }
 
 model PaymentMethod {
-  id                         String                          @id @default(cuid())
-  tenantId                   String
-  processor                  BillingPaymentMethodProcessor   @default(SOLA)
-  tokenEncrypted             String
-  tokenKeyId                 String                          @default("v1")
-  brand                      String?
-  last4                      String?
-  expMonth                   String?
-  expYear                    String?
-  cardholderName             String?
-  billingZip                 String?
-  isDefault                  Boolean                         @default(false)
-  active                     Boolean                         @default(true)
-  lastUsedAt                 DateTime?
-  createdAt                  DateTime                        @default(now())
-  updatedAt                  DateTime                        @updatedAt
-  tenant                     Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultForBillingSettings  TenantBillingSettings[]         @relation("DefaultTenantBillingPaymentMethod")
-  invoices                   BillingInvoice[]
-  transactions               PaymentTransaction[]
+  id                        String                        @id @default(cuid())
+  tenantId                  String
+  processor                 BillingPaymentMethodProcessor @default(SOLA)
+  tokenEncrypted            String
+  tokenKeyId                String                        @default("v1")
+  brand                     String?
+  last4                     String?
+  expMonth                  String?
+  expYear                   String?
+  cardholderName            String?
+  billingZip                String?
+  isDefault                 Boolean                       @default(false)
+  active                    Boolean                       @default(true)
+  lastUsedAt                DateTime?
+  createdAt                 DateTime                      @default(now())
+  updatedAt                 DateTime                      @updatedAt
+  tenant                    Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForBillingSettings TenantBillingSettings[]       @relation("DefaultTenantBillingPaymentMethod")
+  invoices                  BillingInvoice[]
+  transactions              PaymentTransaction[]
 
   @@index([tenantId, active])
   @@index([tenantId, isDefault])
 }
 
 model PaymentTransaction {
-  id                      String                          @id @default(cuid())
-  tenantId                String
-  invoiceId               String?
-  paymentMethodId         String?
-  amountCents             Int
-  currency                String                          @default("USD")
-  status                  BillingPaymentTransactionStatus @default(PENDING)
-  processor               BillingPaymentMethodProcessor   @default(SOLA)
-  processorTransactionId  String?
-  responseCode            String?
-  responseMessage         String?
-  rawResponseSafeJson     Json?
-  idempotencyKey          String?                         @unique
-  createdAt               DateTime                        @default(now())
-  updatedAt               DateTime                        @updatedAt
-  tenant                  Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice                 BillingInvoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  paymentMethod           PaymentMethod?                  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  id                     String                          @id @default(cuid())
+  tenantId               String
+  invoiceId              String?
+  paymentMethodId        String?
+  amountCents            Int
+  currency               String                          @default("USD")
+  status                 BillingPaymentTransactionStatus @default(PENDING)
+  processor              BillingPaymentMethodProcessor   @default(SOLA)
+  processorTransactionId String?
+  responseCode           String?
+  responseMessage        String?
+  rawResponseSafeJson    Json?
+  idempotencyKey         String?                         @unique
+  createdAt              DateTime                        @default(now())
+  updatedAt              DateTime                        @updatedAt
+  tenant                 Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice                BillingInvoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  paymentMethod          PaymentMethod?                  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([invoiceId, createdAt])
@@ -781,36 +783,36 @@ model PaymentTransaction {
 }
 
 model BillingRun {
-  id               String             @id @default(cuid())
-  tenantId         String?
-  periodStart      DateTime
-  periodEnd        DateTime
-  status           BillingRunStatus   @default(RUNNING)
-  dryRun           Boolean            @default(false)
-  totals           Json?
-  errorMessage     String?
-  startedAt        DateTime           @default(now())
-  finishedAt       DateTime?
-  createdAt        DateTime           @default(now())
-  tenant           Tenant?            @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  events           BillingEventLog[]
+  id           String            @id @default(cuid())
+  tenantId     String?
+  periodStart  DateTime
+  periodEnd    DateTime
+  status       BillingRunStatus  @default(RUNNING)
+  dryRun       Boolean           @default(false)
+  totals       Json?
+  errorMessage String?
+  startedAt    DateTime          @default(now())
+  finishedAt   DateTime?
+  createdAt    DateTime          @default(now())
+  tenant       Tenant?           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  events       BillingEventLog[]
 
   @@index([status, startedAt])
   @@index([tenantId, startedAt])
 }
 
 model BillingEventLog {
-  id          String          @id @default(cuid())
-  tenantId    String
-  invoiceId   String?
-  runId       String?
-  type        String
-  message     String?
-  metadata    Json?
-  createdAt   DateTime        @default(now())
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice     BillingInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  run         BillingRun?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  id        String          @id @default(cuid())
+  tenantId  String
+  invoiceId String?
+  runId     String?
+  type      String
+  message   String?
+  metadata  Json?
+  createdAt DateTime        @default(now())
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice   BillingInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  run       BillingRun?     @relation(fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([invoiceId, createdAt])
@@ -1381,18 +1383,18 @@ model EmailJob {
 }
 
 model AuditLog {
-  id          String               @id @default(cuid())
-  tenantId    String
-  action      String
-  entityType  String
-  entityId    String
-  actorUserId String?
+  id           String               @id @default(cuid())
+  tenantId     String
+  action       String
+  entityType   String
+  entityId     String
+  actorUserId  String?
   targetUserId String?
-  metadata    Json?
-  provider    IntegrationProvider?
-  createdAt   DateTime             @default(now())
-  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  actorUser   User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  metadata     Json?
+  provider     IntegrationProvider?
+  createdAt    DateTime             @default(now())
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorUser    User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 }
 
 model UserPasswordToken {
@@ -1458,6 +1460,7 @@ model Extension {
   pbxLink                  PbxExtensionLink?
   contacts                 Contact[]
   callInvites              CallInvite[]
+  callWakeEvents           CallWakeEvent[]
   tenantSmsNumbersAssigned TenantSmsNumber[]        @relation("TenantSmsNumberAssignExtension")
   connectChatParticipants  ConnectChatParticipant[] @relation("ConnectChatParticipantExtension")
   mobileDevices            MobileDevice[]
@@ -1560,9 +1563,9 @@ model TenantPbxLink {
 }
 
 model PbxExtensionLink {
-  id                   String    @id @default(cuid())
+  id                   String                    @id @default(cuid())
   tenantId             String
-  extensionId          String    @unique
+  extensionId          String                    @unique
   pbxExtensionId       String
   pbxSipUsername       String
   sipPasswordHash      String?
@@ -1573,17 +1576,17 @@ model PbxExtensionLink {
   /// VitalPBX device_name for the active (WebRTC-preferred) device, e.g. "T2_103_1". Displayed in admin UI for disambiguation.
   pbxDeviceName        String?
   /// True when this extension has a device with a WebRTC profile assigned in VitalPBX.
-  webrtcEnabled        Boolean   @default(false)
-  isSuspended          Boolean   @default(false)
+  webrtcEnabled        Boolean                   @default(false)
+  isSuspended          Boolean                   @default(false)
   /// Connect-side provisioning state for the user's softphone (independent of desk-phone registrations).
   provisionStatus      ExtensionProvisionStatus  @default(PENDING)
   /// Where the current sipPasswordEncrypted came from. PBX_EXISTING = reused from sync, PBX_GENERATED = Wire reset, CONNECT_GENERATED = never used today.
   provisionSource      ExtensionProvisionSource?
   lastProvisionedAt    DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  extension            Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension            Extension                 @relation(fields: [extensionId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, extensionId])
   @@index([pbxExtensionId])
@@ -1771,6 +1774,7 @@ model MobileDevice {
   extension           Extension?           @relation(fields: [extensionId], references: [id], onDelete: SetNull)
   acceptedInvites     CallInvite[]         @relation("CallInviteAcceptedByDevice")
   voiceClientSessions VoiceClientSession[]
+  callWakeEvents      CallWakeEvent[]      @relation("CallWakeEventByDevice")
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
@@ -1987,6 +1991,48 @@ model CallInvite {
   @@index([acceptedByDeviceId])
   @@index([userId, status, expiresAt])
   @@index([userId, status, stackOrder])
+}
+
+// Push-wake timeline. Every step in the "PBX dialplan -> backend wake -> FCM ->
+// device wake -> SIP REGISTER -> INVITE -> answer" pipeline writes a row here so
+// we can reconstruct exactly what happened (and where it broke) for any given
+// pbxCallId. Cheap append-only log; pruned by the worker after ~14 days.
+model CallWakeEvent {
+  id          String        @id @default(cuid())
+  tenantId    String
+  // pbxCallId correlates events across all stages (PBX, backend, device).
+  pbxCallId   String
+  // userId / deviceId are nullable because the very first event (WAKE_REQUESTED
+  // from PBX dialplan) is fired before we resolve which device(s) will be woken.
+  userId      String?
+  deviceId    String?
+  // extensionId is the Connect Extension.id (NOT the PBX extension number)
+  extensionId String?
+  // Free-form stage label: "WAKE_REQUESTED" | "WAKE_DEVICES_RESOLVED" |
+  // "WAKE_PUSH_QUEUED" | "WAKE_PUSH_DELIVERED" | "WAKE_PUSH_FAILED" |
+  // "DEVICE_PUSH_RECEIVED" | "DEVICE_REGISTER_TRIGGERED" |
+  // "DEVICE_REGISTER_COMPLETE" | "DEVICE_INVITE_RECEIVED" |
+  // "DEVICE_ANSWER_TAPPED" | "WAKE_TIMED_OUT".
+  stage       String
+  // Source of the event row: "pbx_dialplan" | "api" | "device".
+  source      String
+  // Free-form details (e.g. expoStatus, expoError, registerLatencyMs, etc.).
+  // Always JSON-stringifiable. Limited to ~4 KB by convention.
+  details     Json?
+  // Latency from the FIRST event for this pbxCallId until this event, in ms.
+  // Lets the diagnostics UI render a Gantt-style timeline without sorting.
+  latencyMs   Int?
+  occurredAt  DateTime      @default(now())
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  device      MobileDevice? @relation("CallWakeEventByDevice", fields: [deviceId], references: [id], onDelete: SetNull)
+  extension   Extension?    @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, pbxCallId, occurredAt])
+  @@index([tenantId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([deviceId, occurredAt])
+  @@index([stage, occurredAt])
 }
 
 // ─── IVR Routing — Option A ─────────────────────────────────────────────────

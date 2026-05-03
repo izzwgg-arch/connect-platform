@@ -3,6 +3,9 @@ import type {
   CallRecord,
   ChatDirectoryUser,
   ChatMessage,
+  ChatMessageType,
+  ChatLocation,
+  PendingChatAttachment,
   ChatThread,
   ContactsResponse,
   TeamDirectoryMember,
@@ -66,7 +69,7 @@ export async function getCallHistory(token: string): Promise<CallRecord[]> {
 export const mobileQueryKeys = {
   callHistory: ["mobile", "callHistory"] as const,
   voicemails: (folder: VoicemailFolder | "all" = "all") => ["mobile", "voicemails", folder] as const,
-  teamDirectory: ["mobile", "teamDirectory"] as const,
+  teamDirectory: (scope: string) => ["mobile", "teamDirectory", scope] as const,
   contacts: (query = "") => ["mobile", "contacts", query] as const,
   chatThreads: ["mobile", "chatThreads"] as const,
   chatMessages: (threadId: string) => ["mobile", "chatMessages", threadId] as const,
@@ -244,6 +247,18 @@ export async function getChatDirectory(token: string): Promise<ChatDirectoryUser
   return Array.isArray(json?.users) ? (json.users as ChatDirectoryUser[]) : [];
 }
 
+export async function getChatDirectoryFull(token: string): Promise<{ users: ChatDirectoryUser[]; extensions?: Array<{ id: string; extNumber: string; displayName: string; ownerUserId?: string | null }> }> {
+  const res = await fetch(`${API_BASE}/chat/directory`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_DIRECTORY_FAILED");
+  return {
+    users: Array.isArray(json?.users) ? (json.users as ChatDirectoryUser[]) : [],
+    extensions: Array.isArray(json?.extensions) ? json.extensions : [],
+  };
+}
+
 export async function createChatThread(
   token: string,
   input: { type: "dm" | "sms" | "group"; peerUserId?: string; externalPhone?: string; title?: string; peerUserIds?: string[] },
@@ -258,14 +273,114 @@ export async function createChatThread(
   return json as { threadId: string };
 }
 
-export async function sendChatMessage(token: string, threadId: string, body: string): Promise<{ ok: boolean; messageId?: string }> {
+export type SendChatMessageInput = {
+  body?: string;
+  type?: Exclude<ChatMessageType, "SYSTEM">;
+  replyToMessageId?: string;
+  location?: ChatLocation;
+  attachments?: PendingChatAttachment[];
+};
+
+export async function uploadChatAttachment(
+  token: string,
+  threadId: string,
+  file: { uri: string; name: string; type: string },
+): Promise<PendingChatAttachment> {
+  const form = new FormData();
+  form.append("file", file as any);
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/attachments/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.message || json?.error || "CHAT_ATTACHMENT_UPLOAD_FAILED");
+  return {
+    storageKey: String(json.storageKey),
+    mimeType: String(json.mimeType || file.type),
+    sizeBytes: Number(json.sizeBytes || 0),
+    fileName: String(json.fileName || file.name),
+    localUri: file.uri,
+  };
+}
+
+export async function sendChatMessage(token: string, threadId: string, input: string | SendChatMessageInput): Promise<{ ok: boolean; messageId?: string; deliveryStatus?: string }> {
+  const payload = typeof input === "string" ? { body: input } : {
+    body: input.body ?? "",
+    type: input.type,
+    replyToMessageId: input.replyToMessageId,
+    location: input.location,
+    attachments: input.attachments?.map(({ storageKey, mimeType, sizeBytes, fileName }) => ({ storageKey, mimeType, sizeBytes, fileName })),
+  };
   const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify(payload),
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "CHAT_SEND_FAILED");
+  return json;
+}
+
+export async function markChatThreadRead(token: string, threadId: string): Promise<{ ok: boolean; lastReadAt?: string }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/read`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_READ_FAILED");
+  return json;
+}
+
+export async function setChatTyping(token: string, threadId: string, typing: boolean): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/typing`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ typing }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_TYPING_FAILED");
+  return json;
+}
+
+export async function getChatTyping(token: string, threadId: string): Promise<Array<{ userId: string; name: string; typingUntil: string | null }>> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/typing`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_TYPING_FETCH_FAILED");
+  return Array.isArray(json?.users) ? json.users : [];
+}
+
+export async function reactToChatMessage(token: string, threadId: string, messageId: string, emoji: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/reactions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ emoji }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_REACTION_FAILED");
+  return json;
+}
+
+export async function removeChatReaction(token: string, threadId: string, messageId: string, emoji: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(emoji)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_REACTION_DELETE_FAILED");
+  return json;
+}
+
+export async function deleteChatMessage(token: string, threadId: string, messageId: string, mode: "me" | "everyone"): Promise<{ ok: boolean; mode: string }> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}?mode=${encodeURIComponent(mode)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "CHAT_DELETE_FAILED");
   return json;
 }
 
@@ -332,6 +447,86 @@ export async function unregisterMobileDevice(token: string, expoPushToken?: stri
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "MOBILE_UNREGISTER_FAILED");
+  return json;
+}
+
+// ─── Push-wake (Option 2) device telemetry ────────────────────────────────
+// Each call writes one CallWakeEvent row keyed by pbxCallId on the backend.
+// MUST be best-effort: a failure here must NEVER block a real call. The caller
+// should `.catch(() => undefined)` every invocation.
+export type WakeDeviceStage =
+  | "DEVICE_PUSH_RECEIVED"
+  | "DEVICE_REGISTER_TRIGGERED"
+  | "DEVICE_REGISTER_COMPLETE"
+  | "DEVICE_REGISTER_FAILED"
+  | "DEVICE_INVITE_RECEIVED"
+  | "DEVICE_INVITE_UI_SHOWN"
+  | "DEVICE_ANSWER_TAPPED"
+  | "DEVICE_DECLINE_TAPPED"
+  | "DEVICE_TIMED_OUT";
+
+export async function postWakeEvent(
+  token: string,
+  body: {
+    pbxCallId: string;
+    stage: WakeDeviceStage;
+    deviceId?: string | null;
+    details?: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/mobile/wake/event`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      // Don't throw — wake telemetry must be lossy under failure.
+      console.warn(
+        "[CALL_WAKE] postWakeEvent non-2xx",
+        res.status,
+        body.stage,
+        body.pbxCallId,
+      );
+    }
+  } catch (err: any) {
+    console.warn(
+      "[CALL_WAKE] postWakeEvent threw",
+      err?.message,
+      body.stage,
+      body.pbxCallId,
+    );
+  }
+}
+
+export type WakeTimelineEvent = {
+  id: string;
+  pbxCallId: string;
+  stage: string;
+  source: string;
+  userId: string | null;
+  deviceId: string | null;
+  extensionId: string | null;
+  details: Record<string, unknown> | null;
+  latencyMs: number | null;
+  occurredAt: string;
+};
+
+export async function getWakeTimeline(
+  token: string,
+  opts: { pbxCallId?: string; limit?: number } = {},
+): Promise<{ events: WakeTimelineEvent[] }> {
+  const params = new URLSearchParams();
+  if (opts.pbxCallId) params.set("pbxCallId", opts.pbxCallId);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const url = `${API_BASE}/mobile/wake/timeline${qs ? "?" + qs : ""}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "WAKE_TIMELINE_FETCH_FAILED");
   return json;
 }
 

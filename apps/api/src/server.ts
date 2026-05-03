@@ -2347,6 +2347,14 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
 
 type MobilePushPayload =
   | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
+  // Push-wake (Option 2 architecture). Sent BY the PBX dialplan via
+  // /internal/pbx/wake-extension BEFORE the PBX attempts Dial() on the target
+  // extension. The mobile native FCM service silently wakes the JS process and
+  // triggers JsSIP REGISTER so a contact is online by the time the SIP INVITE
+  // arrives ~6 seconds later. Carries no UI obligations — the actual ringing
+  // UI is driven by either (a) the SIP INVITE itself or (b) a follow-up
+  // INCOMING_CALL push from the telephony service.
+  | { type: "INCOMING_CALL_WAKE"; pbxCallId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; pbxVitalTenantId?: string | null; timestamp: string; wakeRequestedAt: string }
   | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string }
@@ -2437,6 +2445,72 @@ async function requestTelephonyInviteStatus(input: {
   };
 }
 
+/**
+ * Append-only audit log for the push-wake pipeline. Every step emitted from
+ * PBX dialplan, the API, the FCM service, the JS bridge, and the JsSIP layer
+ * SHOULD funnel through here so we have a single timeline keyed by pbxCallId
+ * to debug "why didn't the phone ring?" tickets.
+ *
+ * Failures are swallowed (with a warn) — call-wake telemetry must NEVER block
+ * a real call. Missing rows just mean a degraded debug view.
+ */
+async function recordWakeEvent(input: {
+  tenantId: string;
+  pbxCallId: string;
+  stage: string;
+  source: "pbx_dialplan" | "api" | "device";
+  userId?: string | null;
+  deviceId?: string | null;
+  extensionId?: string | null;
+  details?: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    // Compute latencyMs relative to the FIRST event for this pbxCallId.
+    let latencyMs: number | null = null;
+    const first = await (db as any).callWakeEvent.findFirst({
+      where: { tenantId: input.tenantId, pbxCallId: input.pbxCallId },
+      orderBy: { occurredAt: "asc" },
+      select: { occurredAt: true },
+    });
+    if (first?.occurredAt) {
+      latencyMs = Date.now() - new Date(first.occurredAt).getTime();
+    }
+    await (db as any).callWakeEvent.create({
+      data: {
+        tenantId: input.tenantId,
+        pbxCallId: input.pbxCallId,
+        stage: input.stage,
+        source: input.source,
+        userId: input.userId ?? null,
+        deviceId: input.deviceId ?? null,
+        extensionId: input.extensionId ?? null,
+        details: input.details ?? null,
+        latencyMs,
+      },
+    });
+    app.log.info(
+      {
+        callWake: true,
+        stage: input.stage,
+        source: input.source,
+        tenantId: input.tenantId,
+        pbxCallId: input.pbxCallId,
+        userId: input.userId ?? null,
+        deviceId: input.deviceId ?? null,
+        extensionId: input.extensionId ?? null,
+        latencyMs,
+        ...(input.details || {}),
+      },
+      `[CALL_WAKE] ${input.stage}`,
+    );
+  } catch (err: any) {
+    app.log.warn(
+      { err: err?.message, stage: input.stage, pbxCallId: input.pbxCallId },
+      "[CALL_WAKE] record_event_failed",
+    );
+  }
+}
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
@@ -2492,6 +2566,11 @@ async function sendPushToUserDevices(input: {
                 : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
   const isIncomingCall = input.payload.type === "INCOMING_CALL";
+  // INCOMING_CALL_WAKE travels the same data-only/high-priority path as
+  // INCOMING_CALL so Android delivers it via FirebaseMessagingService
+  // .onMessageReceived (not the OS notification tray). The native FCM service
+  // routes it to the wake handler instead of the ringing UI.
+  const isIncomingCallWake = input.payload.type === "INCOMING_CALL_WAKE";
   // INVITE_CANCELED / INVITE_CLAIMED / MISSED_CALL MUST wake the native
   // FirebaseMessagingService on a cold-killed app so it can stop the ringtone
   // started by the prior INCOMING_CALL push. If we send them as Expo
@@ -2541,6 +2620,43 @@ async function sendPushToUserDevices(input: {
         to: d.expoPushToken,
         priority: "high" as const,
         ttl: 45,
+        data,
+      };
+    }
+    if (isIncomingCallWake) {
+      const p = input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL_WAKE" }>;
+      // Strict data-only — same delivery class as INCOMING_CALL so the FCM
+      // service handles it even when the app is killed/backgrounded. The
+      // native handler MUST NOT show any UI for this push; it just kicks
+      // SIP REGISTER so the device is reachable when the PBX dials in ~6s.
+      const data = fcmDataStrings({
+        type: p.type,
+        pbxCallId: p.pbxCallId,
+        from: p.fromNumber,
+        fromNumber: p.fromNumber,
+        fromDisplay: p.fromDisplay ?? "",
+        toExtension: p.toExtension,
+        tenantId: p.tenantId,
+        pbxVitalTenantId: p.pbxVitalTenantId ?? "",
+        timestamp: p.timestamp,
+        wakeRequestedAt: p.wakeRequestedAt,
+      });
+      app.log.info(
+        {
+          mobilePush: "INCOMING_CALL_WAKE_DATA_ONLY",
+          dataKeys: Object.keys(data),
+          pbxCallId: p.pbxCallId,
+          toExtension: p.toExtension,
+          tokenTail: String(d.expoPushToken).slice(-12),
+        },
+        "mobile-push: outgoing INCOMING_CALL_WAKE (data-only, high priority)",
+      );
+      return {
+        to: d.expoPushToken,
+        priority: "high" as const,
+        // Short TTL: if FCM can't deliver within 10s the dialplan's Wait()
+        // will already have ended and this push is useless. Drop it.
+        ttl: 10,
         data,
       };
     }
@@ -2675,12 +2791,48 @@ async function sendPushToUserDevices(input: {
         appVersion: (device as any).appVersion || null,
         payloadType: input.payload.type,
         inviteId: "inviteId" in input.payload ? input.payload.inviteId : null,
+        pbxCallId: "pbxCallId" in input.payload ? (input.payload as any).pbxCallId : null,
         expoStatus: status,
         expoError: errorMessage,
         tokenTail: String(device.expoPushToken).slice(-12)
       },
       "[CALL_WAKE] PUSH_DELIVERED"
     );
+
+    // Append CallWakeEvent rows for any push that has a pbxCallId — this powers
+    // the cross-stage Wake Timeline in the Diagnostics screen and ops dashboards.
+    const pbxCallIdForEvent: string | null =
+      input.payload.type === "INCOMING_CALL_WAKE"
+        ? (input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL_WAKE" }>).pbxCallId
+        : input.payload.type === "INCOMING_CALL"
+          ? (input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL" }>).pbxCallId ?? null
+          : null;
+    if (pbxCallIdForEvent) {
+      const stage =
+        input.payload.type === "INCOMING_CALL_WAKE"
+          ? (status === "ok" || status === "queued" ? "WAKE_PUSH_DELIVERED" : "WAKE_PUSH_FAILED")
+          : "INVITE_PUSH_DELIVERED";
+      // Fire-and-forget; recordWakeEvent already swallows errors internally.
+      void recordWakeEvent({
+        tenantId: input.tenantId,
+        pbxCallId: pbxCallIdForEvent,
+        stage,
+        source: "api",
+        userId: input.userId,
+        deviceId: device.id,
+        details: {
+          payloadType: input.payload.type,
+          expoStatus: status,
+          expoError: errorMessage,
+          platform: device.platform,
+          model: (device as any).model || null,
+          manufacturer: (device as any).manufacturer || null,
+          osVersion: (device as any).osVersion || null,
+          appVersion: (device as any).appVersion || null,
+          tokenTail: String(device.expoPushToken).slice(-12),
+        },
+      });
+    }
   }
   await Promise.allSettled(pushStateUpdates);
 
@@ -4199,6 +4351,10 @@ app.addHook("preHandler", async (req, reply) => {
     path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
   const isInternalMobileRingPath =
     path === "/internal/mobile-ring-notify" || path.endsWith("/internal/mobile-ring-notify");
+  // Push-wake (Option 2) — called by the PBX dialplan. Authenticated by
+  // CDR_INGEST_SECRET inside the handler.
+  const isInternalPbxWakePath =
+    path === "/internal/pbx/wake-extension" || path.endsWith("/internal/pbx/wake-extension");
   const isInternalTelephonyPath =
     path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
   // AMI MessageWaiting → telephony POSTs here to trigger immediate voicemail sync.
@@ -4225,6 +4381,7 @@ app.addHook("preHandler", async (req, reply) => {
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
+    || isInternalPbxWakePath
     || isInternalTelephonyPath
     || isInternalVoicemailNotifyPath
     || isIvrPromptSyncPath
@@ -22528,6 +22685,356 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   });
 
   return { ok: true, inviteId: invite.id, push };
+});
+
+// ─── Push-wake (Option 2) ───────────────────────────────────────────────────
+// Called BY the VitalPBX dialplan (via CURL) for the target extension(s) the
+// PBX is about to Dial(). The dialplan calls this, then Wait()s ~6 seconds,
+// then Dial()s. During those 6 seconds the mobile device wakes, registers
+// SIP, and is ready to receive the INVITE.
+//
+// Hard requirements:
+//   * MUST respond fast (<500 ms typical, <2 s ceiling) — the dialplan blocks
+//     on the CURL response. Push send happens AFTER we respond if needed.
+//   * MUST be idempotent at the (tenant, pbxCallId) grain — the dialplan may
+//     retry on transient HTTP failure.
+//   * MUST NOT throw on missing extension owner / no devices — return ok:false
+//     with reason so the dialplan logs cleanly.
+//   * MUST emit CallWakeEvent rows at every stage for ops debug.
+//
+// Body (JSON):
+//   pbxCallId           — MANDATORY — the linkedid the PBX assigns to this call
+//   pbxVitalTenantId    — MANDATORY — VitalPBX tenant code (e.g. "T25")
+//   extensionNumber     — MANDATORY — the extension the PBX is about to dial (e.g. "101")
+//   fromNumber          — caller ID number (raw)
+//   fromDisplay         — caller ID name
+//   tenantId            — OPTIONAL — short-circuits PBX→Connect tenant lookup if known
+//
+// Auth: same x-cdr-secret header as the rest of the /internal/* endpoints.
+app.post("/internal/pbx/wake-extension", async (req, reply) => {
+  const t0 = Date.now();
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/pbx/wake-extension" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/pbx/wake-extension" }, "wake_extension_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  const input = z.object({
+    pbxCallId: z.string().min(1),
+    pbxVitalTenantId: z.string().min(1),
+    extensionNumber: z.string().min(1),
+    fromNumber: z.string().nullable().optional(),
+    fromDisplay: z.string().nullable().optional(),
+    tenantId: z.string().nullable().optional(),
+  }).parse(req.body || {});
+
+  const wakeRequestedAtIso = new Date().toISOString();
+
+  app.log.info(
+    {
+      callWake: true,
+      stage: "WAKE_HTTP_RECEIVED",
+      pbxCallId: input.pbxCallId,
+      pbxVitalTenantId: input.pbxVitalTenantId,
+      extensionNumber: input.extensionNumber,
+      fromNumber: input.fromNumber || null,
+      hintTenantId: input.tenantId || null,
+      ip: req.ip,
+    },
+    "[CALL_WAKE] WAKE_HTTP_RECEIVED",
+  );
+
+  // ── Resolve Connect tenant + extension owner ───────────────────────────────
+  // Strategy mirrors /internal/mobile-ring-notify so the wake hook works for
+  // any tenant the dialplan opts in. Fast path: caller passed tenantId.
+  let target: { tenantId: string; userId: string; extensionId: string | null } | null = null;
+  let resolvedTenantId: string | null = input.tenantId || null;
+
+  // Resolve PBX tenant code (e.g. T25) → Connect tenantId if not provided.
+  // The dialplan can send either the numeric vitalTenantId OR the human code
+  // ("T25"); we match either against pbxTenantId / pbxTenantCode.
+  if (!resolvedTenantId) {
+    try {
+      const link = await db.tenantPbxLink.findFirst({
+        where: {
+          OR: [
+            { pbxTenantId: input.pbxVitalTenantId },
+            { pbxTenantCode: input.pbxVitalTenantId },
+          ],
+        },
+        select: { tenantId: true },
+      });
+      if (link) resolvedTenantId = link.tenantId;
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, pbxVitalTenantId: input.pbxVitalTenantId }, "wake-extension: tenant lookup failed");
+    }
+  }
+
+  if (!resolvedTenantId) {
+    await recordWakeEvent({
+      tenantId: input.pbxVitalTenantId, // placeholder; we have nothing better
+      pbxCallId: input.pbxCallId,
+      stage: "WAKE_TENANT_NOT_FOUND",
+      source: "api",
+      details: { pbxVitalTenantId: input.pbxVitalTenantId, extensionNumber: input.extensionNumber },
+    }).catch(() => undefined);
+    app.log.warn(
+      { pbxCallId: input.pbxCallId, pbxVitalTenantId: input.pbxVitalTenantId },
+      "wake-extension: no Connect tenant for PBX vitalTenantId",
+    );
+    return reply.code(200).send({ ok: false, reason: "TENANT_NOT_FOUND", elapsedMs: Date.now() - t0 });
+  }
+
+  await recordWakeEvent({
+    tenantId: resolvedTenantId,
+    pbxCallId: input.pbxCallId,
+    stage: "WAKE_REQUESTED",
+    source: "pbx_dialplan",
+    details: {
+      pbxVitalTenantId: input.pbxVitalTenantId,
+      extensionNumber: input.extensionNumber,
+      fromNumber: input.fromNumber || null,
+      fromDisplay: input.fromDisplay || null,
+      wakeRequestedAt: wakeRequestedAtIso,
+      callerIp: req.ip,
+    },
+  });
+
+  // Resolve extension owner.
+  try {
+    const ext = await db.extension.findFirst({
+      where: {
+        tenantId: resolvedTenantId,
+        extNumber: input.extensionNumber,
+        status: "ACTIVE",
+        ownerUserId: { not: null },
+      },
+      select: { id: true, tenantId: true, ownerUserId: true },
+    });
+    if (ext?.ownerUserId) {
+      target = { tenantId: ext.tenantId, userId: ext.ownerUserId, extensionId: ext.id };
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message, pbxCallId: input.pbxCallId }, "wake-extension: extension lookup failed");
+  }
+
+  if (!target) {
+    await recordWakeEvent({
+      tenantId: resolvedTenantId,
+      pbxCallId: input.pbxCallId,
+      stage: "WAKE_EXTENSION_NOT_FOUND",
+      source: "api",
+      details: { extensionNumber: input.extensionNumber, pbxVitalTenantId: input.pbxVitalTenantId },
+    });
+    return reply.code(200).send({ ok: false, reason: "EXTENSION_NOT_FOUND", elapsedMs: Date.now() - t0 });
+  }
+
+  // Fetch active devices to record DEVICES_RESOLVED before push send (so we can
+  // see the count in the timeline even if the push step itself is slow/fails).
+  const devices = await db.mobileDevice.findMany({
+    where: { tenantId: target.tenantId, userId: target.userId, active: true } as any,
+    select: { id: true, platform: true, expoPushToken: true } as any,
+  });
+
+  await recordWakeEvent({
+    tenantId: target.tenantId,
+    pbxCallId: input.pbxCallId,
+    stage: "WAKE_DEVICES_RESOLVED",
+    source: "api",
+    userId: target.userId,
+    extensionId: target.extensionId,
+    details: {
+      deviceCount: devices.length,
+      platforms: devices.map((d: any) => d.platform),
+      tokenTails: devices.map((d: any) => String(d.expoPushToken).slice(-12)),
+    },
+  });
+
+  if (!devices.length) {
+    return reply.code(200).send({
+      ok: true,
+      devicesNotified: 0,
+      tenantId: target.tenantId,
+      userId: target.userId,
+      extensionId: target.extensionId,
+      reason: "NO_ACTIVE_DEVICES",
+      elapsedMs: Date.now() - t0,
+    });
+  }
+
+  // ── Send the wake push ────────────────────────────────────────────────────
+  // We send synchronously so the dialplan knows whether the push was queued
+  // before it starts its Wait(). Worst case Expo accepts in <300 ms.
+  let pushResult: { queued?: number; simulated?: boolean } | null = null;
+  try {
+    pushResult = await sendPushToUserDevices({
+      tenantId: target.tenantId,
+      userId: target.userId,
+      payload: {
+        type: "INCOMING_CALL_WAKE",
+        pbxCallId: input.pbxCallId,
+        fromNumber: input.fromNumber || "unknown",
+        fromDisplay: input.fromDisplay ?? null,
+        toExtension: input.extensionNumber,
+        tenantId: target.tenantId,
+        pbxVitalTenantId: input.pbxVitalTenantId,
+        timestamp: new Date().toISOString(),
+        wakeRequestedAt: wakeRequestedAtIso,
+      },
+    });
+  } catch (err: any) {
+    await recordWakeEvent({
+      tenantId: target.tenantId,
+      pbxCallId: input.pbxCallId,
+      stage: "WAKE_PUSH_THREW",
+      source: "api",
+      userId: target.userId,
+      extensionId: target.extensionId,
+      details: { error: err?.message, stack: err?.stack?.slice(0, 1000) },
+    });
+    app.log.error({ err: err?.message, pbxCallId: input.pbxCallId }, "wake-extension: push send threw");
+    return reply.code(200).send({ ok: false, reason: "PUSH_THREW", elapsedMs: Date.now() - t0 });
+  }
+
+  await recordWakeEvent({
+    tenantId: target.tenantId,
+    pbxCallId: input.pbxCallId,
+    stage: "WAKE_PUSH_QUEUED",
+    source: "api",
+    userId: target.userId,
+    extensionId: target.extensionId,
+    details: {
+      queued: pushResult?.queued ?? 0,
+      simulated: pushResult?.simulated ?? false,
+      elapsedMs: Date.now() - t0,
+    },
+  });
+
+  app.log.info(
+    {
+      callWake: true,
+      stage: "WAKE_HTTP_RESPONDED",
+      pbxCallId: input.pbxCallId,
+      tenantId: target.tenantId,
+      userId: target.userId,
+      extensionId: target.extensionId,
+      devicesNotified: pushResult?.queued ?? 0,
+      elapsedMs: Date.now() - t0,
+    },
+    "[CALL_WAKE] WAKE_HTTP_RESPONDED",
+  );
+
+  return reply.code(200).send({
+    ok: true,
+    tenantId: target.tenantId,
+    userId: target.userId,
+    extensionId: target.extensionId,
+    devicesNotified: pushResult?.queued ?? 0,
+    simulated: pushResult?.simulated ?? false,
+    elapsedMs: Date.now() - t0,
+  });
+});
+
+// ─── Device-side wake telemetry ─────────────────────────────────────────────
+// The mobile app POSTs here from the FCM service / SipContext to tell us
+// "I received the wake push at <ts>", "I started SIP REGISTER", "I got
+// REGISTERED at <ts>". Each call writes one CallWakeEvent row keyed by
+// pbxCallId so the Diagnostics screen can show the full Gantt-style timeline.
+//
+// Auth: requires a valid mobile JWT (preAuthHook). We'll trust the deviceId
+// the device claims (verified via the JWT's userId).
+app.post("/mobile/wake/event", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const body = z.object({
+    pbxCallId: z.string().min(1),
+    deviceId: z.string().min(1).optional(),
+    stage: z.enum([
+      "DEVICE_PUSH_RECEIVED",
+      "DEVICE_REGISTER_TRIGGERED",
+      "DEVICE_REGISTER_COMPLETE",
+      "DEVICE_REGISTER_FAILED",
+      "DEVICE_INVITE_RECEIVED",
+      "DEVICE_INVITE_UI_SHOWN",
+      "DEVICE_ANSWER_TAPPED",
+      "DEVICE_DECLINE_TAPPED",
+      "DEVICE_TIMED_OUT",
+    ]),
+    details: z.record(z.string(), z.any()).optional().nullable(),
+  }).parse(req.body || {});
+
+  // If the client passes a deviceId, verify it belongs to this user.
+  let resolvedDeviceId: string | null = null;
+  if (body.deviceId) {
+    const owned = await db.mobileDevice.findFirst({
+      where: { id: body.deviceId, userId: user.sub, tenantId: user.tenantId } as any,
+      select: { id: true },
+    });
+    if (owned) resolvedDeviceId = owned.id;
+  }
+
+  await recordWakeEvent({
+    tenantId: user.tenantId,
+    pbxCallId: body.pbxCallId,
+    stage: body.stage,
+    source: "device",
+    userId: user.sub,
+    deviceId: resolvedDeviceId,
+    details: body.details || null,
+  });
+
+  return reply.send({ ok: true });
+});
+
+// ─── Wake timeline read API (for Diagnostics screen + admin tools) ──────────
+// Returns the full event sequence for a pbxCallId, or the most recent N events
+// for the calling user when no pbxCallId is supplied. Tenant-scoped.
+app.get("/mobile/wake/timeline", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const q = z.object({
+    pbxCallId: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+  }).parse(req.query || {});
+
+  const where: any = { tenantId: user.tenantId };
+  if (q.pbxCallId) {
+    where.pbxCallId = q.pbxCallId;
+  } else {
+    // Limit to "this user" view when no pbxCallId is specified, so non-admin
+    // diagnostics don't accidentally surface other users' calls.
+    where.userId = user.sub;
+  }
+
+  const events = await (db as any).callWakeEvent.findMany({
+    where,
+    orderBy: { occurredAt: "desc" },
+    take: q.limit,
+    select: {
+      id: true,
+      pbxCallId: true,
+      stage: true,
+      source: true,
+      userId: true,
+      deviceId: true,
+      extensionId: true,
+      details: true,
+      latencyMs: true,
+      occurredAt: true,
+    },
+  });
+
+  return reply.send({ events });
 });
 
 // Internal: telephony service pulls PBX tenant → Connect tenant map (same auth as cdr-ingest).

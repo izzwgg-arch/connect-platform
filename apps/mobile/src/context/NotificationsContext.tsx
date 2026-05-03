@@ -74,6 +74,7 @@ import {
   flightEndCall,
   flightRecord,
 } from "../diagnostics/CallFlightRecorder";
+import { shouldSuppressForegroundPush } from "../notifications/notificationRouting";
 /**
  * Reads native ringtone timing data from the Android bridge and records
  * RINGTONE_START / RINGTONE_STOP events in the flight recorder.
@@ -117,6 +118,8 @@ Notifications.setNotificationHandler({
     // in-app IncomingCallScreen. Never show an Expo system banner for them.
     const CALL_TYPES = new Set([
       "INCOMING_CALL",
+      // Push-wake (Option 2): silent, no UI. Always suppress the system banner.
+      "INCOMING_CALL_WAKE",
       "INVITE_CLAIMED",
       "INVITE_CANCELED",
       "MISSED_CALL",
@@ -140,6 +143,9 @@ Notifications.setNotificationHandler({
     const hasRenderableContent =
       !!(notification.request.content.title || notification.request.content.body);
     if (!type && !hasRenderableContent) {
+      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+    }
+    if (shouldSuppressForegroundPush(data)) {
       return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
     }
     return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
@@ -232,6 +238,7 @@ const NotificationsCtx = createContext<NotificationsState | undefined>(
   undefined,
 );
 
+const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
 const INSTALLATION_DEVICE_ID_KEY = "cc_mobile_device_id";
 
 type IncomingCallAction = "open" | "answer" | "decline";
@@ -441,6 +448,33 @@ async function ensureCallChannel() {
       enableLights: true,
       lightColor: "#22c55e",
       showBadge: false,
+    });
+    await Notifications.setNotificationChannelAsync("connect-messages", {
+      name: "Messages",
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: "default",
+      vibrationPattern: [0, 160],
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: true,
+      showBadge: true,
+    });
+    await Notifications.setNotificationChannelAsync("connect-voicemail", {
+      name: "Voicemail",
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: "default",
+      vibrationPattern: [0, 220, 120, 220],
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: true,
+      showBadge: true,
+    });
+    await Notifications.setNotificationChannelAsync("connect-missed-calls", {
+      name: "Missed Calls",
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: "default",
+      vibrationPattern: [0, 300, 120, 300],
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: true,
+      showBadge: true,
     });
   } catch {
     // Non-fatal — plugin-configured channel is the primary path
@@ -1178,6 +1212,7 @@ export function NotificationsProvider({
     });
 
     if (reg?.id) deviceIdRef.current = String(reg.id);
+    await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, pushToken).catch(() => undefined);
     console.log("[PUSH_RETRY] Registration result — id:", reg?.id ?? "(none)", "voip:", voipToken ? "yes" : "no");
 
     setExpoPushToken(pushToken);
@@ -1239,8 +1274,8 @@ export function NotificationsProvider({
       // wait briefly (up to 4s) for the token to arrive and continue so the tap
       // is never lost on cold start.
       //
-      // This useCallback closed over `token` at render time. We shadow the
-      // outer closure value by declaring a local `token` below so every
+      // This useCallback closed over `token` at render time. Use a local
+      // authToken below so every
       // downstream API call observes the freshly resolved value rather than
       // the potentially stale null closure.
       let resolved: string | null = token ?? tokenRef.current;
@@ -1257,8 +1292,7 @@ export function NotificationsProvider({
         }
         console.log('[ACCEPT_GUARD] token ready after ' + (Date.now() - waitStart) + 'ms, proceeding inviteId=' + invite?.id);
       }
-      // eslint-disable-next-line @typescript-eslint/no-shadow, no-shadow
-      const token: string = resolved;
+      const authToken: string = resolved;
 
     const acceptKey = `accept:${invite.id}`;
     if (inviteActionInFlightRef.current.has(acceptKey)) {
@@ -1610,7 +1644,7 @@ export function NotificationsProvider({
 
         const sid = diagSessionIdRef.current;
         if (sid) {
-          postVoiceDiagEvent(token, {
+          postVoiceDiagEvent(authToken, {
             sessionId: sid,
             type: "ANSWER_TAPPED",
             payload: {
@@ -1675,7 +1709,7 @@ export function NotificationsProvider({
           inviteId: invite.id, pbxCallId: invite.pbxCallId, sinceAnswerMs: t2_claimStart - answerTappedAt,
         }));
         const resp = await respondInvite(
-          token,
+          authToken,
           invite.id,
           "ACCEPT",
           deviceIdRef.current || undefined,
@@ -1702,9 +1736,9 @@ export function NotificationsProvider({
           // Backend rejected — hang up the SIP call we already sent 200 OK for.
           sip.hangup().catch(() => {});
           if (reason === "TURN_REQUIRED_NOT_VERIFIED") {
-            await respondInvite(token, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+            await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
           } else if (reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
-            await respondInvite(token, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+            await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
           }
           showEndedState(
             invite,
@@ -1754,7 +1788,7 @@ export function NotificationsProvider({
         // Log SIP-join timing
         const sipJoinedAt = Date.now();
         if (sid) {
-          postVoiceDiagEvent(token, {
+          postVoiceDiagEvent(authToken, {
             sessionId: sid,
             type: "CALL_CONNECTED",
             payload: {
@@ -2696,6 +2730,7 @@ export function NotificationsProvider({
           ...metadata,
         });
         if (reg?.id) deviceIdRef.current = String(reg.id);
+        await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken).catch(() => undefined);
         console.log("[VOIP_PUSH] re-registered device with VoIP token, id:", reg?.id ?? "(none)");
       } catch (e) {
         console.warn("[VOIP_PUSH] re-register with VoIP token failed:", e instanceof Error ? e.message : String(e));
@@ -2920,6 +2955,7 @@ export function NotificationsProvider({
         });
         if (reg?.id) {
           deviceIdRef.current = String(reg.id);
+          await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, currentToken).catch(() => undefined);
           console.log("[PUSH_INIT] Device registered, id:", reg.id, "voip:", voipToken ? "yes" : "no");
         } else {
           console.warn("[PUSH_INIT] registerMobileDevice returned no id — response:", JSON.stringify(reg));
