@@ -6,6 +6,10 @@ services:
     env_file:
       - /opt/connectcomms/env/.env.platform
     environment:
+      # Production must send real provider traffic. The platform env historically
+      # carried SMS_PROVIDER_TEST_MODE=true for early smoke tests; override it here
+      # unless the host shell explicitly opts back into test mode for a dry run.
+      SMS_PROVIDER_TEST_MODE: ${SMS_PROVIDER_TEST_MODE:-false}
       SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
       SOLA_CARDKNOX_SIMULATE: ${SOLA_CARDKNOX_SIMULATE:-false}
       SOLA_CARDKNOX_MODE: ${SOLA_CARDKNOX_MODE:-sandbox}
@@ -175,6 +179,9 @@ services:
       - /opt/connectcomms/env/.env.platform
     environment:
       SMS_PROVIDER: ${SMS_PROVIDER:-fake}
+      # Worker handles queued chat/campaign SMS sends; production default must
+      # call the provider, not return voipms-test-* simulated ids.
+      SMS_PROVIDER_TEST_MODE: ${SMS_PROVIDER_TEST_MODE:-false}
       SIMULATE_PROVIDER_FAILURE_TWILIO: ${SIMULATE_PROVIDER_FAILURE_TWILIO:-false}
       SIMULATE_PROVIDER_FAILURE_VOIPMS: ${SIMULATE_PROVIDER_FAILURE_VOIPMS:-false}
       SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
