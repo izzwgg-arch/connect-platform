@@ -164,7 +164,19 @@ async function importInboundMessage(input: {
 
   const inboxScope = await resolveInboxOwnerUserId(input);
   const dedupeKey = `sms:${input.tenantId}:${input.tenantDidE164}:${input.row.from}:${inboxScope}`;
-  let thread = await db.connectChatThread.findUnique({ where: { dedupeKey } });
+
+  // Search by number pair first (any dedupeKey variant) to avoid creating duplicate threads
+  // when the existing thread was created by the webhook with a different suffix.
+  let thread = await db.connectChatThread.findFirst({
+    where: {
+      tenantId: input.tenantId,
+      tenantSmsE164: input.tenantDidE164,
+      externalSmsE164: input.row.from,
+      type: "SMS",
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
   if (!thread) {
     thread = await db.connectChatThread.create({
       data: {
@@ -179,6 +191,12 @@ async function importInboundMessage(input: {
         smsInboxOwnerUserId: inboxScope,
         lastMessageAt: input.row.createdAt || new Date(),
       },
+    });
+  } else if (!thread.smsInboxOwnerUserId && inboxScope) {
+    // Backfill the inbox owner if the thread was created without one
+    await db.connectChatThread.update({
+      where: { id: thread.id },
+      data: { smsInboxOwnerUserId: inboxScope, updatedAt: new Date() },
     });
   }
   await upsertParticipants({
