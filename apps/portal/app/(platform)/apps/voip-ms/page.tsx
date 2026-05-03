@@ -57,6 +57,7 @@ export default function VoipMsIntegrationPage() {
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
+  const [numberSearch, setNumberSearch] = useState("");
 
   // credentials form
   const [credUser, setCredUser] = useState("");
@@ -193,6 +194,20 @@ export default function VoipMsIntegrationPage() {
 
   const preview = previewPhone.trim() ? normalizeUsCanadaToE164(previewPhone.trim()) : null;
 
+  const filteredNumbers = numberSearch.trim()
+    ? numbers.filter((r) => {
+        const q = numberSearch.trim().toLowerCase().replace(/\D/g, "");
+        const digits = r.phoneE164.replace(/\D/g, "");
+        const rawDigits = (r.phoneRaw || "").replace(/\D/g, "");
+        const tenant = (r.tenantName || r.tenantId || "").toLowerCase();
+        return (
+          digits.includes(q) ||
+          rawDigits.includes(q) ||
+          tenant.includes(numberSearch.trim().toLowerCase())
+        );
+      })
+    : numbers;
+
   return (
     <PermissionGate permission="can_manage_voip_ms" fallback={<div className="state-box">You do not have access to VoIP.ms integration.</div>}>
       <div className="stack">
@@ -209,7 +224,7 @@ export default function VoipMsIntegrationPage() {
         <div className="row-actions" style={{ gap: 8 }}>
           {(["connection", "numbers", "routing"] as const).map((t) => (
             <button key={t} className={`btn ${tab === t ? "" : "ghost"}`} type="button" onClick={() => setTab(t)}>
-              {t === "connection" ? "Connection" : t === "numbers" ? `Numbers (${numbers.length})` : "Routing preview"}
+              {t === "connection" ? "Connection" : t === "numbers" ? `Numbers (${numberSearch.trim() ? `${filteredNumbers.length}/${numbers.length}` : numbers.length})` : "Routing preview"}
             </button>
           ))}
         </div>
@@ -418,20 +433,34 @@ export default function VoipMsIntegrationPage() {
               <div>
                 <h3 style={{ marginTop: 0 }}>Synced numbers</h3>
                 <p style={{ fontSize: 13, color: "var(--text-dim)", margin: 0 }}>
-                  {numbers.length} numbers — assign each to a tenant, and optionally pin to an extension for inbound routing.
+                  {filteredNumbers.length !== numbers.length
+                    ? `${filteredNumbers.length} of ${numbers.length} numbers`
+                    : `${numbers.length} numbers`}{" "}
+                  — assign each to a tenant, and optionally pin to an extension for inbound routing.
                 </p>
               </div>
-              {superOnly ? (
-                <button className="btn" type="button" onClick={syncDids} disabled={!overview?.hasCredentials} style={{ flexShrink: 0 }}>
-                  Sync now
-                </button>
-              ) : null}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  className="input"
+                  placeholder="Search by number or tenant…"
+                  value={numberSearch}
+                  onChange={(e) => setNumberSearch(e.target.value)}
+                  style={{ minWidth: 220, fontSize: 13 }}
+                />
+                {superOnly ? (
+                  <button className="btn" type="button" onClick={syncDids} disabled={!overview?.hasCredentials} style={{ flexShrink: 0 }}>
+                    Sync now
+                  </button>
+                ) : null}
+              </div>
             </div>
             {numbers.length === 0 ? (
               <div className="state-box">
                 No numbers synced yet.{" "}
                 {superOnly ? <span>Use <strong>Sync numbers</strong> on the Connection tab to pull DIDs from VoIP.ms.</span> : null}
               </div>
+            ) : filteredNumbers.length === 0 ? (
+              <div className="state-box">No numbers match &ldquo;{numberSearch}&rdquo;.</div>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table className="table" style={{ minWidth: 780 }}>
@@ -449,7 +478,7 @@ export default function VoipMsIntegrationPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {numbers.map((r) => (
+                    {filteredNumbers.map((r) => (
                       <tr key={r.id}>
                         <td><code style={{ fontSize: 12 }}>{r.phoneE164}</code></td>
                         <td style={{ fontSize: 13 }}>{r.phoneRaw || "—"}</td>

@@ -1324,13 +1324,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const user = req.user as JwtUser;
     if (!isSuper(user) && !isTenantAdmin(user)) return reply.status(403).send({ error: "FORBIDDEN" });
     const tenantId = effectiveChatTenantId(req, user);
-    const header = String(req.headers["x-tenant-context"] || "").trim();
-    const where =
-      isSuper(user) && !header
-        ? {}
-        : isSuper(user) && header
-          ? { OR: [{ tenantId }, { tenantId: null }] }
-          : { tenantId };
+    // Super admins always see the full number inventory regardless of any
+    // x-tenant-context header the portal may send. Filtering by tenant context
+    // for super admins was hiding numbers assigned to other tenants.
+    const where = isSuper(user) ? {} : { tenantId };
     const rows = await db.tenantSmsNumber.findMany({
       where,
       orderBy: { phoneE164: "asc" },
