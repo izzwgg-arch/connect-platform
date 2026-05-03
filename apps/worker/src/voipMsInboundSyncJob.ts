@@ -100,12 +100,19 @@ async function fetchRecentSmsForDid(creds: VoipMsStoredCreds, didE164: string): 
   url.searchParams.set("did", digits(didE164));
   url.searchParams.set("limit", "50");
 
+  // Request last 2 days so we never miss messages around midnight UTC.
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dateFrom = `${twoDaysAgo.getUTCFullYear()}-${pad(twoDaysAgo.getUTCMonth() + 1)}-${pad(twoDaysAgo.getUTCDate())}`;
+  url.searchParams.set("date_from", dateFrom);
+
   const res = await fetch(url);
   const json: any = await res.json().catch(() => ({}));
   const status = String(json?.status || "").toLowerCase();
-  if (!res.ok || (status && status !== "success")) {
+  if (!res.ok || (status && status !== "success" && status !== "no_sms")) {
     throw new Error(`VoIP.ms getSMS rejected for ${didE164}: ${json?.status || res.status}`);
   }
+  if (status === "no_sms") return [];
   const rows =
     asArray(json.sms).length ? asArray(json.sms)
     : asArray(json.messages).length ? asArray(json.messages)
@@ -247,7 +254,10 @@ export async function runVoipMsInboundSyncCycle(): Promise<void> {
   running = true;
   try {
     const creds = await loadVoipMsCreds();
-    if (!creds?.username || !creds.password) return;
+    if (!creds?.username || !creds.password) {
+      console.warn("[voipms-inbound] no credentials found — skipping sync");
+      return;
+    }
     const numbers = await db.tenantSmsNumber.findMany({
       where: { tenantId: { not: null }, active: true, smsCapable: true },
       select: {
@@ -259,10 +269,16 @@ export async function runVoipMsInboundSyncCycle(): Promise<void> {
       orderBy: { updatedAt: "desc" },
       take: 500,
     });
+    if (numbers.length === 0) {
+      console.log("[voipms-inbound] no tenant SMS numbers to poll");
+      return;
+    }
+    let totalFetched = 0;
     for (const n of numbers) {
       if (!n.tenantId) continue;
       try {
         const rows = await fetchRecentSmsForDid(creds, n.phoneE164);
+        totalFetched += rows.length;
         for (const row of rows) {
           await importInboundMessage({
             tenantId: n.tenantId,
@@ -272,10 +288,12 @@ export async function runVoipMsInboundSyncCycle(): Promise<void> {
             row,
           });
         }
+        console.log(`[voipms-inbound] ${n.phoneE164}: fetched=${rows.length}`);
       } catch (err: any) {
-        console.warn("voipms inbound sync failed", n.phoneE164, err?.message || err);
+        console.warn("[voipms-inbound] sync failed", n.phoneE164, err?.message || err);
       }
     }
+    console.log(`[voipms-inbound] cycle done: numbers=${numbers.length} fetched=${totalFetched}`);
   } finally {
     running = false;
   }
