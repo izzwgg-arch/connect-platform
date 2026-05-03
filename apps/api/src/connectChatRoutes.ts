@@ -93,17 +93,58 @@ async function voipMsApiCall(method: string, extra: Record<string, string> = {})
   return json;
 }
 
-function normalizeDidRow(raw: any): { did: string; e164: string; sms: boolean; mms: boolean } | null {
+function normalizeDidRow(raw: any): { did: string; e164: string; sms: boolean; mms: boolean; smsExplicit: boolean } | null {
+  // Extract the DID number string from any of the field names VoIP.ms uses.
   const did = String(raw?.did ?? raw?.description ?? raw?.number ?? "").trim();
   if (!did) return null;
   const n = canonicalSmsPhone(did);
   if (!n.ok) return null;
-  return {
-    did,
-    e164: n.e164,
-    sms: raw?.smsenabled === "1" || raw?.sms === true || raw?.sms_enabled === "1" || String(raw?.sms ?? "").toLowerCase() === "yes",
-    mms: raw?.mms === true || raw?.mmsenabled === "1" || String(raw?.mms ?? "").toLowerCase() === "yes",
-  };
+
+  // Detect SMS capability across every field variant VoIP.ms has ever returned.
+  // smsenabled="1"  — SMS routing is configured on this DID.
+  // sms_available="1" — the DID hardware supports SMS (may not be configured yet).
+  // sms_capable / smscapable — additional variants seen in reseller responses.
+  // We treat ANY positive indicator as "SMS capable".
+  const smsExplicit =
+    raw?.smsenabled === "1" ||
+    raw?.smsenabled === 1 ||
+    raw?.sms_enabled === "1" ||
+    raw?.sms === true ||
+    raw?.sms === "1" ||
+    String(raw?.sms ?? "").toLowerCase() === "yes" ||
+    raw?.sms_available === "1" ||
+    raw?.sms_available === 1 ||
+    raw?.smsavailable === "1" ||
+    raw?.smsavailable === 1 ||
+    raw?.sms_capable === "1" ||
+    raw?.sms_capable === 1 ||
+    raw?.smscapable === "1" ||
+    raw?.smscapable === 1;
+
+  // If the API response has NO SMS field at all (field simply absent), we default
+  // sms = true: VoIP.ms US/CA DIDs are SMS-capable unless explicitly restricted.
+  const hasSmsField =
+    raw?.smsenabled !== undefined ||
+    raw?.sms_enabled !== undefined ||
+    raw?.sms !== undefined ||
+    raw?.sms_available !== undefined ||
+    raw?.smsavailable !== undefined ||
+    raw?.sms_capable !== undefined ||
+    raw?.smscapable !== undefined;
+
+  const sms = smsExplicit || !hasSmsField;
+
+  const mms =
+    raw?.mms === true ||
+    raw?.mms === "1" ||
+    raw?.mmsenabled === "1" ||
+    raw?.mmsenabled === 1 ||
+    raw?.mms_enabled === "1" ||
+    raw?.mms_available === "1" ||
+    raw?.mms_available === 1 ||
+    String(raw?.mms ?? "").toLowerCase() === "yes";
+
+  return { did, e164: n.e164, sms, mms, smsExplicit };
 }
 
 function smsDedupeKey(tenantId: string, tenantE164: string, externalE164: string, inboxOwnerUserId: string): string {
@@ -1135,15 +1176,60 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const user = req.user as JwtUser;
     if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
     if (!requireCrypto(reply)) return;
+
+    // ── Step 1: Fetch all DIDs from VoIP.ms ──────────────────────────────────
+    // VoIP.ms returns all owned DIDs in a single getDIDsInfo call (no pagination
+    // for owned DIDs). We log the raw response for ops visibility.
     const json = await voipMsApiCall("getDIDsInfo");
+    console.log("[VOIPMS_SYNC] getDIDsInfo raw status:", json?.status, "keys:", Object.keys(json || {}).join(","));
+
     if (String(json.status || "").toLowerCase() !== "success") {
+      console.error("[VOIPMS_SYNC] API returned non-success:", JSON.stringify(json).slice(0, 500));
       return reply.status(502).send({ error: "VOIPMS_SYNC_FAILED", detail: json });
     }
-    const rawList: any[] = Array.isArray(json.dids) ? json.dids : Array.isArray(json.did) ? json.did : [];
-    let n = 0;
+
+    // VoIP.ms wraps the list under "dids" or "did" depending on API version.
+    const rawList: any[] = Array.isArray(json.dids)
+      ? json.dids
+      : Array.isArray(json.did)
+        ? json.did
+        : [];
+
+    console.log(`[VOIPMS_SYNC] Raw DID count from API: ${rawList.length}`);
+
+    // Log every DID's fields so we can see exactly what VoIP.ms is returning,
+    // including which fields carry SMS capability info.
+    rawList.forEach((raw, i) => {
+      const fields = Object.entries(raw || {})
+        .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
+        .join(" | ");
+      console.log(`[VOIPMS_SYNC] DID[${i}] ${fields}`);
+    });
+
+    // ── Step 2: Normalize + upsert ALL DIDs ──────────────────────────────────
+    // CRITICAL: We import EVERY DID from VoIP.ms and let smsCapable be derived
+    // from the API response. We do NOT skip DIDs based on sms capability —
+    // smsenabled="0" means "SMS routing not yet configured", NOT "DID is SMS
+    // incapable". Skipping those was causing SMS-ready numbers to go missing.
+    let upserted = 0;
+    let skippedInvalidNumber = 0;
+    const smsCapableCount = { yes: 0, unclear: 0 };
+    const upsertedNumbers: string[] = [];
+    const skippedNumbers: string[] = [];
+
     for (const raw of rawList) {
       const row = normalizeDidRow(raw);
-      if (!row || !row.sms) continue;
+      if (!row) {
+        skippedInvalidNumber++;
+        const didStr = String(raw?.did ?? raw?.number ?? raw?.description ?? "(unknown)");
+        console.warn(`[VOIPMS_SYNC] Skipped (could not normalize to E.164): did=${didStr} raw=${JSON.stringify(raw).slice(0, 200)}`);
+        skippedNumbers.push(didStr);
+        continue;
+      }
+
+      if (row.smsExplicit) smsCapableCount.yes++;
+      else smsCapableCount.unclear++;
+
       await db.tenantSmsNumber.upsert({
         where: { phoneE164: row.e164 },
         create: {
@@ -1163,13 +1249,75 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           updatedAt: new Date(),
         },
       });
-      n += 1;
+      upserted++;
+      upsertedNumbers.push(row.e164);
     }
+
+    console.log(`[VOIPMS_SYNC] Complete: total=${rawList.length} upserted=${upserted} skipped_invalid=${skippedInvalidNumber} sms_explicit=${smsCapableCount.yes} sms_unclear=${smsCapableCount.unclear}`);
+    if (upsertedNumbers.length > 0) {
+      console.log(`[VOIPMS_SYNC] Upserted numbers: ${upsertedNumbers.join(", ")}`);
+    }
+
     await db.globalVoipMsConfig.update({
       where: { id: "default" },
       data: { lastDidsSyncAt: new Date(), smsEnabled: true, mmsEnabled: true, updatedAt: new Date() },
     });
-    return { ok: true, upserted: n };
+
+    return {
+      ok: true,
+      upserted,
+      total: rawList.length,
+      skippedInvalidNumber,
+      smsCapableExplicit: smsCapableCount.yes,
+      smsCapableUnclear: smsCapableCount.unclear,
+    };
+  });
+
+  // ── Debug endpoint: compare VoIP.ms API vs DB ──────────────────────────────
+  // Shows raw API count, stored DB count, and which numbers are missing from DB.
+  // Super-admin only. Calls the live VoIP.ms API.
+  app.get("/admin/apps/voip-ms/debug-dids", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+
+    const json = await voipMsApiCall("getDIDsInfo").catch((e: any) => ({ status: "error", _err: String(e?.message || e) }));
+    const apiStatus = String(json?.status || "");
+    const rawList: any[] = String(json?.status || "").toLowerCase() === "success"
+      ? (Array.isArray(json.dids) ? json.dids : Array.isArray(json.did) ? json.did : [])
+      : [];
+
+    const apiDids: Array<{ raw: string; e164: string | null; sms: boolean; mms: boolean; parseError?: string }> = rawList.map((raw) => {
+      const row = normalizeDidRow(raw);
+      if (!row) {
+        const rawDid = String(raw?.did ?? raw?.number ?? raw?.description ?? "");
+        const tried = canonicalSmsPhone(rawDid);
+        const parseError = tried.ok ? "unknown parse error" : tried.error;
+        return { raw: rawDid, e164: null, sms: false, mms: false, parseError };
+      }
+      return { raw: row.did, e164: row.e164, sms: row.sms, mms: row.mms };
+    });
+
+    const dbRows = await db.tenantSmsNumber.findMany({
+      select: { phoneE164: true, phoneRaw: true, smsCapable: true, mmsCapable: true, tenantId: true, active: true },
+    });
+    const dbE164Set = new Set(dbRows.map((r) => r.phoneE164));
+    const apiE164Set = new Set(apiDids.filter((d) => d.e164).map((d) => d.e164 as string));
+
+    const missingFromDb = apiDids.filter((d) => d.e164 && !dbE164Set.has(d.e164));
+    const inDbNotInApi = dbRows.filter((r) => !apiE164Set.has(r.phoneE164));
+
+    return {
+      apiStatus,
+      apiRawCount: rawList.length,
+      apiParsedCount: apiDids.filter((d) => d.e164).length,
+      apiParseFailCount: apiDids.filter((d) => !d.e164).length,
+      dbCount: dbRows.length,
+      missingFromDb,
+      inDbNotInApi: inDbNotInApi.map((r) => ({ phoneE164: r.phoneE164, phoneRaw: r.phoneRaw, active: r.active })),
+      apiDids,
+      dbSummary: dbRows.map((r) => ({ phoneE164: r.phoneE164, smsCapable: r.smsCapable, mmsCapable: r.mmsCapable, tenantId: r.tenantId, active: r.active })),
+    };
   });
 
   app.get("/admin/apps/voip-ms/numbers", async (req, reply) => {
