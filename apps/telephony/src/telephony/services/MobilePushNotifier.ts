@@ -100,11 +100,13 @@ export class MobilePushNotifier {
     }
 
     // Push for inbound (PSTN→extension) AND internal (extension→extension) ringing calls.
-    // Allow any pre-answer state: "ringing", "unknown", or "dialing".
-    // Extension resolution on VitalPBX multi-tenant often lands in "dialing"/"unknown"
-    // by the time the target extension channel appears — we must allow those states too.
-    const PRE_ANSWER_STATES = new Set(["ringing", "unknown", "dialing"]);
-    if (!PRE_ANSWER_STATES.has(call.state)) return;
+    // Allow any non-terminal state: "ringing", "unknown", "dialing", or "up".
+    // We MUST allow "up" because IVR-routed calls answer the trunk leg (state→"up")
+    // BEFORE the IVR creates the Local/<ext> channel that finally adds the target
+    // extension to the call. Without "up" allowed, IVR-fronted DIDs never push.
+    // The `pushed` dedup set prevents double-sends if multiple events qualify.
+    const PUSH_ELIGIBLE_STATES = new Set(["ringing", "unknown", "dialing", "up"]);
+    if (!PUSH_ELIGIBLE_STATES.has(call.state)) return;
     if (call.direction !== "inbound" && call.direction !== "internal") return;
 
     // Already sent a push for this call — skip.
