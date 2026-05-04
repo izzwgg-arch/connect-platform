@@ -43,6 +43,23 @@ function parseMediaUrls(row: Record<string, unknown>): string[] {
 function parseVoipMsDate(value: string): Date | undefined {
   const raw = String(value || "").trim();
   if (!raw) return undefined;
+  // VoIP.ms returns timestamps in US/Eastern time without a timezone indicator.
+  // Detect bare "YYYY-MM-DD HH:MM:SS" strings and append the current Eastern offset
+  // so JS doesn't silently treat them as UTC (which would make messages appear 4-5 h early).
+  const hasTimezone = /[Zz]$/.test(raw) || /[+\-]\d{2}:?\d{2}$/.test(raw);
+  if (!hasTimezone) {
+    // Determine whether we are currently in EDT (UTC-4) or EST (UTC-5).
+    // We do this by checking what IANA says for America/New_York right now.
+    const nowLocal = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      timeZoneName: "short",
+    }).formatToParts(new Date());
+    const tzAbbr = nowLocal.find((p) => p.type === "timeZoneName")?.value ?? "";
+    const offset = tzAbbr.includes("4") || tzAbbr === "EDT" ? "-04:00" : "-05:00";
+    const normalized = raw.replace(" ", "T") + offset;
+    const d = new Date(normalized);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
   const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
@@ -226,10 +243,14 @@ async function importInboundMessage(input: {
       ...(input.row.createdAt ? { createdAt: input.row.createdAt } : {}),
     },
   } as any);
-  await db.connectChatThread.update({
-    where: { id: thread.id },
-    data: { lastMessageAt: input.row.createdAt || msg.createdAt, updatedAt: new Date() },
-  });
+  const newLastAt = input.row.createdAt || msg.createdAt;
+  // Only advance lastMessageAt — never regress it for older out-of-order imports.
+  if (!thread.lastMessageAt || newLastAt > thread.lastMessageAt) {
+    await db.connectChatThread.update({
+      where: { id: thread.id },
+      data: { lastMessageAt: newLastAt, updatedAt: new Date() },
+    });
+  }
   await db.smsRoutingLog.create({
     data: {
       rawFrom: input.row.from,
