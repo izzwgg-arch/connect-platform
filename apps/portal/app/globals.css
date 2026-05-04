@@ -8355,9 +8355,11 @@ table tr:hover {
 }
 .dash-v2-graph-head-meta {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
+  gap: 14px;
   font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .dash-v2-graph-total {
   font-size: 14px;
@@ -8368,6 +8370,37 @@ table tr:hover {
   font-size: 11px;
   color: var(--console-muted);
 }
+
+/* Legend chips */
+.dash-v2-graph-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dash-v2-graph-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--console-muted);
+}
+.dash-v2-graph-legend li strong {
+  font-weight: 600;
+  color: var(--console-text);
+  margin-left: 2px;
+}
+.dash-v2-graph-legend .swatch {
+  width: 9px; height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.dash-v2-graph-legend .swatch.incoming { background: var(--dash-incoming); }
+.dash-v2-graph-legend .swatch.outgoing { background: var(--dash-outgoing); }
+.dash-v2-graph-legend .swatch.internal { background: var(--dash-internal); }
 
 .dash-v2-graph-plot {
   position: relative;

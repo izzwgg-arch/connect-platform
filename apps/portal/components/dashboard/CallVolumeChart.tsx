@@ -90,23 +90,44 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  const { points, viewBox, areaPath, linePath, gridLines, xTicks, maxY, hasData } = useMemo(() => {
+  const { hoverPositions, viewBox, series, gridLines, xTicks, hasData } = useMemo(() => {
     const padding = { top: 16, right: 16, bottom: 28, left: 36 };
     const innerW = Math.max(10, size.w - padding.left - padding.right);
     const innerH = Math.max(10, size.h - padding.top - padding.bottom);
     const raw = data?.points ?? [];
-    const counts = raw.map((p) => p.total ?? 0);
-    const max = Math.max(1, ...counts);
-    const niceMax = niceCeil(max);
-    const xy = raw.map((p, i) => {
-      const x = raw.length <= 1 ? padding.left + innerW / 2 : padding.left + (i / (raw.length - 1)) * innerW;
-      const y = padding.top + innerH - (p.total / niceMax) * innerH;
-      return { x, y };
+    const seriesDefs: Array<{ key: "incoming" | "outgoing" | "internal"; color: string; gradientId: string; }> = [
+      { key: "incoming", color: "var(--dash-incoming)", gradientId: "dashV2GraphFillIncoming" },
+      { key: "outgoing", color: "var(--dash-outgoing)", gradientId: "dashV2GraphFillOutgoing" },
+      { key: "internal", color: "var(--dash-internal)", gradientId: "dashV2GraphFillInternal" },
+    ];
+    // Y-scale based on the largest single-direction value (not stacked).
+    let max = 0;
+    for (const p of raw) {
+      max = Math.max(max, p.incoming ?? 0, p.outgoing ?? 0, p.internal ?? 0);
+    }
+    const niceMax = niceCeil(Math.max(1, max));
+
+    const xFor = (i: number) =>
+      raw.length <= 1 ? padding.left + innerW / 2 : padding.left + (i / (raw.length - 1)) * innerW;
+    const yFor = (count: number) => padding.top + innerH - (count / niceMax) * innerH;
+
+    const built = seriesDefs.map((def) => {
+      const xy = raw.map((p, i) => ({ x: xFor(i), y: yFor(p[def.key] ?? 0) }));
+      const linePathStr = smoothLine(xy, 0.5);
+      const areaPathStr = xy.length === 0
+        ? ""
+        : `${linePathStr} L ${xy[xy.length - 1]!.x} ${padding.top + innerH} L ${xy[0]!.x} ${padding.top + innerH} Z`;
+      return { ...def, xy, linePath: linePathStr, areaPath: areaPathStr };
     });
-    const linePathStr = smoothLine(xy, 0.5);
-    const areaPathStr = xy.length === 0
-      ? ""
-      : `${linePathStr} L ${xy[xy.length - 1]!.x} ${padding.top + innerH} L ${xy[0]!.x} ${padding.top + innerH} Z`;
+
+    // Hover positions are based on x for each bucket; the y of the dot will follow
+    // the highest visible series at that bucket so the indicator stays visible.
+    const hoverXY = raw.map((p, i) => {
+      const yIncoming = yFor(p.incoming ?? 0);
+      const yOutgoing = yFor(p.outgoing ?? 0);
+      const yInternal = yFor(p.internal ?? 0);
+      return { x: xFor(i), y: Math.min(yIncoming, yOutgoing, yInternal) };
+    });
 
     // Y grid lines: 4 horizontal divisions
     const gridDivs = 4;
@@ -121,32 +142,33 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
     const tickStep = raw.length > 1 ? Math.max(1, Math.ceil(raw.length / targetTicks)) : 1;
     const ticks: Array<{ x: number; label: string; index: number }> = [];
     for (let i = 0; i < raw.length; i += tickStep) {
-      const item = xy[i]!;
-      ticks.push({ x: item.x, label: fmtBucketLabel(raw[i]!, rangeKey), index: i });
+      ticks.push({ x: xFor(i), label: fmtBucketLabel(raw[i]!, rangeKey), index: i });
     }
+    const has = raw.some((p) => (p.incoming ?? 0) + (p.outgoing ?? 0) + (p.internal ?? 0) > 0);
+
     return {
-      points: xy,
+      hoverPositions: hoverXY,
       viewBox: `0 0 ${size.w} ${size.h}`,
-      areaPath: areaPathStr,
-      linePath: linePathStr,
+      series: built,
       gridLines: grid,
       xTicks: ticks,
-      maxY: niceMax,
-      hasData: counts.some((c) => c > 0),
+      hasData: has,
     };
   }, [data, size.w, size.h, rangeKey]);
 
   const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (!data?.points?.length || points.length === 0) return;
+    if (!data?.points?.length || hoverPositions.length === 0) return;
     const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
-    const x = event.clientX - rect.left;
+    // Convert client pixels → SVG viewBox space so hover lines up regardless of CSS scaling.
+    const scaleX = size.w / rect.width;
+    const x = (event.clientX - rect.left) * scaleX;
     let nearest = 0;
     let best = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const dx = Math.abs(points[i]!.x - x);
+    for (let i = 0; i < hoverPositions.length; i++) {
+      const dx = Math.abs(hoverPositions[i]!.x - x);
       if (dx < best) { best = dx; nearest = i; }
     }
-    const p = points[nearest]!;
+    const p = hoverPositions[nearest]!;
     setHover({ index: nearest, x: p.x, y: p.y });
   };
 
@@ -161,10 +183,14 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
             <h2>Call Volume</h2>
           </div>
           <div className="dash-v2-graph-head-meta">
+            <ul className="dash-v2-graph-legend" role="list" aria-label="Series">
+              <li><span className="swatch incoming" aria-hidden /> Incoming<strong>{(data?.totals?.incoming ?? 0).toLocaleString()}</strong></li>
+              <li><span className="swatch outgoing" aria-hidden /> Outgoing<strong>{(data?.totals?.outgoing ?? 0).toLocaleString()}</strong></li>
+              <li><span className="swatch internal" aria-hidden /> Internal<strong>{(data?.totals?.internal ?? 0).toLocaleString()}</strong></li>
+            </ul>
             <span className="dash-v2-graph-total" aria-live="polite">
               {loading && !data ? "…" : `${(data?.totals?.total ?? 0).toLocaleString()} calls`}
             </span>
-            <span className="dash-v2-graph-tz">{data?.timezone ?? ""}</span>
           </div>
         </header>
 
@@ -186,11 +212,13 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
               className="dash-v2-graph-svg"
             >
               <defs>
-                <linearGradient id="dashV2GraphFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%"  stopColor="var(--console-accent)" stopOpacity="0.32" />
-                  <stop offset="60%" stopColor="var(--console-accent)" stopOpacity="0.08" />
-                  <stop offset="100%" stopColor="var(--console-accent)" stopOpacity="0" />
-                </linearGradient>
+                {series.map((s) => (
+                  <linearGradient key={s.gradientId} id={s.gradientId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor={s.color} stopOpacity="0.28" />
+                    <stop offset="60%"  stopColor={s.color} stopOpacity="0.06" />
+                    <stop offset="100%" stopColor={s.color} stopOpacity="0" />
+                  </linearGradient>
+                ))}
               </defs>
 
               {/* Horizontal grid lines + Y labels */}
@@ -216,17 +244,22 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                 </g>
               ))}
 
-              {/* Area fill */}
-              <path d={areaPath} fill="url(#dashV2GraphFill)" />
-              {/* Line */}
-              <path
-                d={linePath}
-                fill="none"
-                stroke="var(--console-accent)"
-                strokeWidth={2}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
+              {/* Area fills (drawn first so lines sit on top) */}
+              {series.map((s) => (
+                <path key={`fill-${s.key}`} d={s.areaPath} fill={`url(#${s.gradientId})`} />
+              ))}
+              {/* Lines */}
+              {series.map((s) => (
+                <path
+                  key={`line-${s.key}`}
+                  d={s.linePath}
+                  fill="none"
+                  stroke={s.color}
+                  strokeWidth={2}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              ))}
 
               {/* X tick labels */}
               {xTicks.map((t) => (
@@ -242,7 +275,7 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                 </text>
               ))}
 
-              {/* Hover indicator */}
+              {/* Hover indicator: vertical guide + dot per series */}
               {hover && data?.points?.[hover.index] ? (
                 <g pointerEvents="none">
                   <line
@@ -253,8 +286,16 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                     strokeWidth={1}
                     strokeDasharray="3 3"
                   />
-                  <circle cx={hover.x} cy={hover.y} r={5} fill="var(--console-accent)" />
-                  <circle cx={hover.x} cy={hover.y} r={9} fill="var(--console-accent)" fillOpacity={0.18} />
+                  {series.map((s) => {
+                    const pt = s.xy[hover.index];
+                    if (!pt) return null;
+                    return (
+                      <g key={`dot-${s.key}`}>
+                        <circle cx={pt.x} cy={pt.y} r={9} fill={s.color} fillOpacity={0.18} />
+                        <circle cx={pt.x} cy={pt.y} r={4} fill={s.color} />
+                      </g>
+                    );
+                  })}
                 </g>
               ) : null}
             </svg>
