@@ -133,7 +133,7 @@ export function DiagnosticsScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!token) return;
-      setLoading(true);
+        setLoading(true);
       Promise.all([
         getVoiceExtension(token).then(setVoice).catch(() => {}),
         SecureStore.getItemAsync(PROVISION_KEY).then(setProvBundle).catch(() => {}),
@@ -166,8 +166,8 @@ export function DiagnosticsScreen() {
       return provBundle ? JSON.parse(provBundle) : null;
     } catch {
       return null;
-    }
-  })();
+        }
+      })();
 
   const handleClearProvisioning = () => {
     Alert.alert(
@@ -195,7 +195,7 @@ export function DiagnosticsScreen() {
       {loading ? (
         <View style={styles.loader}>
           <ActivityIndicator color={colors.primary} />
-        </View>
+          </View>
       ) : (
         <ScrollView
           contentContainerStyle={{ padding: spacing['4'], paddingBottom: insets.bottom + spacing['8'] }}
@@ -584,6 +584,62 @@ export function DiagnosticsScreen() {
                 />
               </Section>
 
+              {/* Stage 2 — SipKeepAliveService FGS state. The single most
+                  diagnostic surface for "calls don't ring on backgrounded
+                  S25". keepAliveIsRunning=false + keepAliveLastForegroundResult
+                  ="threw" + keepAliveLastForegroundErrorClass tells us
+                  exactly which Android 15 / OEM rule killed the FGS. */}
+              <Section title="Call Wake — SIP Keep-Alive Service">
+                <DiagRow
+                  label="Service Running"
+                  value={wakeState.keepAliveIsRunning ? 'Yes' : 'No'}
+                  ok={wakeState.keepAliveIsRunning}
+                  warn={!wakeState.keepAliveIsRunning}
+                />
+                <DiagRow
+                  label="Service Created"
+                  value={
+                    wakeState.keepAliveServiceCreatedAtMs > 0
+                      ? formatTimestamp(wakeState.keepAliveServiceCreatedAtMs)
+                      : 'Never'
+                  }
+                />
+                <DiagRow
+                  label="Last Start Attempt"
+                  value={
+                    wakeState.keepAliveLastStartAttemptAtMs > 0
+                      ? `${formatTimestamp(wakeState.keepAliveLastStartAttemptAtMs)} (${wakeState.keepAliveLastStartResult || 'n/a'})`
+                      : '—'
+                  }
+                  ok={wakeState.keepAliveLastStartResult === 'dispatched'}
+                  warn={wakeState.keepAliveLastStartResult === 'threw'}
+                />
+                {wakeState.keepAliveLastStartErrorClass ? (
+                  <DiagRow
+                    label="Start Error"
+                    value={`${wakeState.keepAliveLastStartErrorClass}: ${wakeState.keepAliveLastStartErrorMessage || ''}`}
+                    warn
+                  />
+                ) : null}
+                <DiagRow
+                  label="Last Foreground Attempt"
+                  value={
+                    wakeState.keepAliveLastForegroundAttemptAtMs > 0
+                      ? `${formatTimestamp(wakeState.keepAliveLastForegroundAttemptAtMs)} (${wakeState.keepAliveLastForegroundResult || 'n/a'} via ${wakeState.keepAliveLastForegroundTypeUsed || 'n/a'})`
+                      : '—'
+                  }
+                  ok={wakeState.keepAliveLastForegroundResult === 'ok'}
+                  warn={wakeState.keepAliveLastForegroundResult === 'threw'}
+                />
+                {wakeState.keepAliveLastForegroundErrorClass ? (
+                  <DiagRow
+                    label="Foreground Error"
+                    value={`${wakeState.keepAliveLastForegroundErrorClass}: ${wakeState.keepAliveLastForegroundErrorMessage || ''}`}
+                    warn
+                  />
+                ) : null}
+              </Section>
+
               {/* Wake Timeline — full event sequence from backend. Useful when
                   user calls and we want to see every step end-to-end. */}
               <Section title="Call Wake — Timeline (latest 50)">
@@ -691,8 +747,8 @@ export function DiagnosticsScreen() {
                     Fix Battery / Sleeping Apps
                   </Text>
                 </TouchableOpacity>
-              )}
-            </>
+                )}
+              </>
           )}
 
           {/* ── Actions ── */}
@@ -730,7 +786,7 @@ export function DiagnosticsScreen() {
             <Ionicons name="trash-outline" size={18} color={colors.danger} style={{ marginRight: 8 }} />
             <Text style={[typography.labelLg, { color: colors.danger }]}>Clear Provisioning</Text>
           </TouchableOpacity>
-        </ScrollView>
+      </ScrollView>
       )}
     </View>
   );

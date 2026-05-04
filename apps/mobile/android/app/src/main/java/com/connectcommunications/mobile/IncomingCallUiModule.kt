@@ -660,6 +660,23 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     map.putString("lastWakePushExtension", IncomingCallFirebaseService.lastWakePushExtension ?: "")
     map.putDouble("lastWakeBridgeEmittedAtMs", IncomingCallFirebaseService.lastWakeBridgeEmittedAtMs.toDouble())
     map.putString("lastWakeBridgeStatus", IncomingCallFirebaseService.lastWakeBridgeStatus ?: "")
+    // Stage 2 keep-alive foreground service status. Surfacing this lets the
+    // Diagnostics screen prove "the FGS that should hold the WSS open is
+    // actually running" or "no, startForeground threw <X> because Android 15
+    // / One UI 7 rejects PHONE_CALL FGS without an active call". Without
+    // these fields the only way to find out was logcat — useless for users.
+    map.putBoolean("keepAliveIsRunning", SipKeepAliveService.isRunning)
+    map.putDouble("keepAliveServiceCreatedAtMs", SipKeepAliveService.serviceCreatedAtMs.toDouble())
+    map.putDouble("keepAliveServiceDestroyedAtMs", SipKeepAliveService.serviceDestroyedAtMs.toDouble())
+    map.putDouble("keepAliveLastStartAttemptAtMs", SipKeepAliveService.lastStartAttemptAtMs.toDouble())
+    map.putString("keepAliveLastStartResult", SipKeepAliveService.lastStartResult)
+    map.putString("keepAliveLastStartErrorClass", SipKeepAliveService.lastStartErrorClass)
+    map.putString("keepAliveLastStartErrorMessage", SipKeepAliveService.lastStartErrorMessage)
+    map.putDouble("keepAliveLastForegroundAttemptAtMs", SipKeepAliveService.lastForegroundAttemptAtMs.toDouble())
+    map.putString("keepAliveLastForegroundResult", SipKeepAliveService.lastForegroundResult)
+    map.putString("keepAliveLastForegroundTypeUsed", SipKeepAliveService.lastForegroundTypeUsed)
+    map.putString("keepAliveLastForegroundErrorClass", SipKeepAliveService.lastForegroundErrorClass)
+    map.putString("keepAliveLastForegroundErrorMessage", SipKeepAliveService.lastForegroundErrorMessage)
     return map
   }
 

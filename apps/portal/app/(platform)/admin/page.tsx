@@ -42,6 +42,11 @@ export default function AdminPage() {
               summary="Media test results, TURN relay verification, and real-time quality scoring."
               href="/admin/audio-intelligence"
             />
+            <AdminModuleCard
+              title="Call Wake Diagnostics"
+              summary="Per-device wake-then-dial timeline + auto-triage. Use when a user reports 'phone goes to voicemail' or 'calls only ring with the app open'."
+              href="/admin/call-wake-diagnostics"
+            />
           </section>
         </RoleGate>
       </div>

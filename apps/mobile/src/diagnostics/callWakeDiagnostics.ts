@@ -50,6 +50,26 @@ export type CallWakeNativeState = {
   lastWakePushExtension: string;
   lastWakeBridgeEmittedAtMs: number;
   lastWakeBridgeStatus: string;
+  /**
+   * Stage 2 SipKeepAliveService foreground service status. The S25 / Android
+   * 15 / One UI 7 silently rejects FOREGROUND_SERVICE_TYPE_PHONE_CALL on some
+   * launch paths and the only way to know is to capture the exception class
+   * and surface it. `keepAliveIsRunning=false` + `keepAliveLastForegroundResult="threw"`
+   * + `keepAliveLastForegroundErrorClass="ForegroundServiceTypeNotAllowedException"`
+   * is the smoking gun for "calls don't ring on backgrounded S25".
+   */
+  keepAliveIsRunning: boolean;
+  keepAliveServiceCreatedAtMs: number;
+  keepAliveServiceDestroyedAtMs: number;
+  keepAliveLastStartAttemptAtMs: number;
+  keepAliveLastStartResult: string;
+  keepAliveLastStartErrorClass: string;
+  keepAliveLastStartErrorMessage: string;
+  keepAliveLastForegroundAttemptAtMs: number;
+  keepAliveLastForegroundResult: string;
+  keepAliveLastForegroundTypeUsed: string;
+  keepAliveLastForegroundErrorClass: string;
+  keepAliveLastForegroundErrorMessage: string;
 };
 
 export type CallWakePermissionState = {
@@ -75,6 +95,18 @@ const EMPTY_NATIVE_STATE: CallWakeNativeState = {
   lastWakePushExtension: "",
   lastWakeBridgeEmittedAtMs: 0,
   lastWakeBridgeStatus: "",
+  keepAliveIsRunning: false,
+  keepAliveServiceCreatedAtMs: 0,
+  keepAliveServiceDestroyedAtMs: 0,
+  keepAliveLastStartAttemptAtMs: 0,
+  keepAliveLastStartResult: "",
+  keepAliveLastStartErrorClass: "",
+  keepAliveLastStartErrorMessage: "",
+  keepAliveLastForegroundAttemptAtMs: 0,
+  keepAliveLastForegroundResult: "",
+  keepAliveLastForegroundTypeUsed: "",
+  keepAliveLastForegroundErrorClass: "",
+  keepAliveLastForegroundErrorMessage: "",
 };
 
 const EMPTY_DEVICE_INFO: CallWakeDeviceInfo = {
@@ -113,6 +145,18 @@ export function getCallWakeNativeState(): CallWakeNativeState {
       lastWakePushExtension: String(raw.lastWakePushExtension ?? ""),
       lastWakeBridgeEmittedAtMs: Number(raw.lastWakeBridgeEmittedAtMs) || 0,
       lastWakeBridgeStatus: String(raw.lastWakeBridgeStatus ?? ""),
+      keepAliveIsRunning: Boolean(raw.keepAliveIsRunning),
+      keepAliveServiceCreatedAtMs: Number(raw.keepAliveServiceCreatedAtMs) || 0,
+      keepAliveServiceDestroyedAtMs: Number(raw.keepAliveServiceDestroyedAtMs) || 0,
+      keepAliveLastStartAttemptAtMs: Number(raw.keepAliveLastStartAttemptAtMs) || 0,
+      keepAliveLastStartResult: String(raw.keepAliveLastStartResult ?? ""),
+      keepAliveLastStartErrorClass: String(raw.keepAliveLastStartErrorClass ?? ""),
+      keepAliveLastStartErrorMessage: String(raw.keepAliveLastStartErrorMessage ?? ""),
+      keepAliveLastForegroundAttemptAtMs: Number(raw.keepAliveLastForegroundAttemptAtMs) || 0,
+      keepAliveLastForegroundResult: String(raw.keepAliveLastForegroundResult ?? ""),
+      keepAliveLastForegroundTypeUsed: String(raw.keepAliveLastForegroundTypeUsed ?? ""),
+      keepAliveLastForegroundErrorClass: String(raw.keepAliveLastForegroundErrorClass ?? ""),
+      keepAliveLastForegroundErrorMessage: String(raw.keepAliveLastForegroundErrorMessage ?? ""),
     };
   } catch {
     return EMPTY_NATIVE_STATE;

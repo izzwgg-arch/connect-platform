@@ -23619,12 +23619,25 @@ app.get("/mobile/wake/timeline", async (req, reply) => {
 
   const q = z.object({
     pbxCallId: z.string().min(1).optional(),
+    // Admin-only override: when SUPER_ADMIN / TENANT_ADMIN passes a userId,
+    // we surface that user's wake timeline. Powers the
+    // /admin/call-wake-diagnostics portal page so an admin can triage a
+    // remote user's "phone goes straight to voicemail" report without
+    // needing the device in hand. Quietly ignored for non-admins.
+    userId: z.string().min(1).optional(),
+    deviceId: z.string().min(1).optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
   }).parse(req.query || {});
+
+  const isAdmin = user.role === "SUPER_ADMIN" || user.role === "TENANT_ADMIN";
 
   const where: any = { tenantId: user.tenantId };
   if (q.pbxCallId) {
     where.pbxCallId = q.pbxCallId;
+  } else if (isAdmin && q.userId) {
+    where.userId = q.userId;
+  } else if (isAdmin && q.deviceId) {
+    where.deviceId = q.deviceId;
   } else {
     // Limit to "this user" view when no pbxCallId is specified, so non-admin
     // diagnostics don't accidentally surface other users' calls.

@@ -62,7 +62,30 @@ class SipKeepAliveService : Service() {
     private const val NOTIFICATION_ID = 4242
     private const val WAKE_LOCK_TAG = "ConnectCommunications:SipKeepAlive"
 
+    // ── Diagnostics state ────────────────────────────────────────────────────
+    // Surfaced via IncomingCallUiModule.getCallWakeDiagnostics() so the in-app
+    // Diagnostics screen can prove "yes the keep-alive service started" or
+    // "no, startForegroundService threw <ForegroundServiceStartNotAllowedException>"
+    // without needing logcat. The S25 / Android 15 / One UI 7 silently rejects
+    // FOREGROUND_SERVICE_TYPE_PHONE_CALL on some launch paths and the only way
+    // to know is to capture the exception class and surface it.
+    @JvmStatic @Volatile var lastStartAttemptAtMs: Long = 0
+    @JvmStatic @Volatile var lastStartResult: String = ""
+    @JvmStatic @Volatile var lastStartErrorClass: String = ""
+    @JvmStatic @Volatile var lastStartErrorMessage: String = ""
+    @JvmStatic @Volatile var lastForegroundAttemptAtMs: Long = 0
+    @JvmStatic @Volatile var lastForegroundResult: String = ""
+    @JvmStatic @Volatile var lastForegroundTypeUsed: String = ""
+    @JvmStatic @Volatile var lastForegroundErrorClass: String = ""
+    @JvmStatic @Volatile var lastForegroundErrorMessage: String = ""
+    @JvmStatic @Volatile var serviceCreatedAtMs: Long = 0
+    @JvmStatic @Volatile var serviceDestroyedAtMs: Long = 0
+    @JvmStatic @Volatile var isRunning: Boolean = false
+
     fun start(context: Context) {
+      lastStartAttemptAtMs = System.currentTimeMillis()
+      lastStartErrorClass = ""
+      lastStartErrorMessage = ""
       val intent = Intent(context, SipKeepAliveService::class.java)
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -70,9 +93,13 @@ class SipKeepAliveService : Service() {
         } else {
           context.startService(intent)
         }
+        lastStartResult = "dispatched"
         Log.i(TAG, "start: dispatched startForegroundService")
       } catch (t: Throwable) {
-        Log.w(TAG, "start failed: ${t.message}")
+        lastStartResult = "threw"
+        lastStartErrorClass = t.javaClass.simpleName
+        lastStartErrorMessage = t.message ?: ""
+        Log.w(TAG, "start failed (${t.javaClass.simpleName}): ${t.message}")
       }
     }
 
@@ -91,20 +118,35 @@ class SipKeepAliveService : Service() {
   override fun onCreate() {
     super.onCreate()
     Log.i(TAG, "onCreate")
+    serviceCreatedAtMs = System.currentTimeMillis()
+    serviceDestroyedAtMs = 0
     ensureChannel()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     Log.i(TAG, "onStartCommand startId=$startId")
-    startForegroundSafely()
-    acquireWakeLock()
-    // STICKY so the system re-creates the service if it is killed for memory
-    // pressure — that is exactly the scenario we are trying to defeat.
+    val foregrounded = startForegroundSafely()
+    if (foregrounded) {
+      isRunning = true
+      acquireWakeLock()
+    } else {
+      // We could not enter foreground state. Returning START_STICKY would let
+      // the system silently restart us into the same failure. Stop the service
+      // so the failure is visible (the keepalive notification stays missing
+      // and the diagnostics surface lastForegroundResult="threw"), and let JS
+      // fall back to the wake-then-dial path entirely.
+      isRunning = false
+      Log.w(TAG, "onStartCommand: startForeground failed, stopping service to avoid silent restart loop")
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
     return START_STICKY
   }
 
   override fun onDestroy() {
     Log.i(TAG, "onDestroy")
+    serviceDestroyedAtMs = System.currentTimeMillis()
+    isRunning = false
     releaseWakeLock()
     super.onDestroy()
   }
@@ -122,40 +164,98 @@ class SipKeepAliveService : Service() {
 
   // ── Internals ───────────────────────────────────────────────────────────
 
-  private fun startForegroundSafely() {
+  /**
+   * Attempt startForeground with progressively safer foregroundServiceType
+   * combinations. Returns true iff one of the attempts succeeded; false means
+   * the service is NOT in foreground state and the caller must stopSelf() to
+   * avoid the system silently restarting us into the same failure.
+   *
+   * Why this ladder
+   * ---------------
+   * Android 15 / One UI 7 on the Galaxy S25 has been observed to reject
+   * `FOREGROUND_SERVICE_TYPE_PHONE_CALL` with `SecurityException` /
+   * `ForegroundServiceTypeNotAllowedException` even when the app holds
+   * `MANAGE_OWN_CALLS` + `FOREGROUND_SERVICE_PHONE_CALL`. The exact gate seems
+   * to be "no active TelecomManager call right now" — which we don't have when
+   * we're spinning up the keep-alive proactively.
+   *
+   * If PHONE_CALL fails we try DATA_SYNC alone, then SPECIAL_USE (added in
+   * Android 14, intended for niche cases like ours), then a typeless
+   * startForeground call (the system pre-Android 14 default — many Android
+   * 14/15 devices still accept it with a downgrade warning).
+   *
+   * Each step records the failure into the diagnostics fields so the in-app
+   * Diagnostics screen can show `lastForegroundResult="threw"` +
+   * `lastForegroundErrorClass="ForegroundServiceTypeNotAllowedException"` —
+   * the single most useful signal when triaging "calls don't ring on S25".
+   */
+  private fun startForegroundSafely(): Boolean {
     val notification = buildNotification()
-    try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        // Android 14+ requires an explicit foregroundServiceType on startForeground.
-        //
-        // We combine PHONE_CALL | DATA_SYNC:
-        //   • PHONE_CALL gives this service the highest FGS protection tier —
-        //     the OS is far less willing to kill it under memory pressure than
-        //     a plain dataSync service. We qualify: the app is a VoIP/SIP
-        //     client, holds MANAGE_OWN_CALLS, and registers a
-        //     ConnectionService (CallKeep) for in-call behavior. The keep-alive
-        //     service is part of the phone-call pipeline — without it the
-        //     inbound INVITE never reaches the device.
-        //   • DATA_SYNC is kept as a secondary type so the service still has
-        //     a legitimate foreground type on OEMs / scenarios where the
-        //     phoneCall type is denied (e.g. when no dialer role is granted).
-        //
-        // On Samsung the previous DATA_SYNC-only configuration was killed with
-        // "fg +50 FGS (273,1623) mem-pressure-event" roughly 16 s after
-        // backgrounding, defeating the entire Stage 2 promise. PHONE_CALL sits
-        // at a significantly lower oom_adj and survives those sweeps.
-        startForeground(
-          NOTIFICATION_ID,
-          notification,
-          ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
-      } else {
+    lastForegroundAttemptAtMs = System.currentTimeMillis()
+    lastForegroundErrorClass = ""
+    lastForegroundErrorMessage = ""
+
+    // Pre-Android 8 has no foreground service type concept.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return tryFg("legacy") {
         startForeground(NOTIFICATION_ID, notification)
       }
-      Log.i(TAG, "startForeground posted ongoing notification id=$NOTIFICATION_ID")
+    }
+
+    // Pre-Android 14 takes type via the Service manifest entry only —
+    // the 3-arg startForeground is a no-op on these versions.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      return tryFg("type-from-manifest") {
+        startForeground(NOTIFICATION_ID, notification)
+      }
+    }
+
+    // Android 14+ ladder. Each type passed must be a subset of what is
+    // declared in AndroidManifest.xml `android:foregroundServiceType`. We
+    // declare `phoneCall|dataSync`, so PHONE_CALL, DATA_SYNC, and the combo
+    // are all valid. SPECIAL_USE / MEDIA_PLAYBACK / etc. would throw
+    // MissingForegroundServiceTypeException — we'd need a manifest update
+    // to add those, which is its own change.
+    val attempts: List<Pair<String, Int>> = listOf(
+      // Best — strongest survival tier when accepted. Some Android 15 builds
+      // refuse this combo if no active TelecomManager call exists.
+      "PHONE_CALL|DATA_SYNC" to (
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+      ),
+      // Some Samsung builds accept PHONE_CALL alone but not the combo.
+      "PHONE_CALL" to ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+      // DATA_SYNC alone — weaker tier, killed faster under mem-pressure but
+      // never refused on permission grounds. Final fallback.
+      "DATA_SYNC" to ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+    )
+
+    for ((label, type) in attempts) {
+      val ok = tryFg(label) {
+        startForeground(NOTIFICATION_ID, notification, type)
+      }
+      if (ok) return true
+    }
+    return false
+  }
+
+  /** Wraps a single startForeground attempt and records its outcome. */
+  private inline fun tryFg(label: String, block: () -> Unit): Boolean {
+    return try {
+      block()
+      lastForegroundResult = "ok"
+      lastForegroundTypeUsed = label
+      Log.i(TAG, "startForeground posted ongoing notification id=$NOTIFICATION_ID type=$label")
+      true
     } catch (t: Throwable) {
-      Log.w(TAG, "startForeground failed: ${t.message}")
+      // Capture the LAST failure — overwritten on each attempt so JS sees the
+      // final reason we couldn't enter foreground state.
+      lastForegroundResult = "threw"
+      lastForegroundTypeUsed = label
+      lastForegroundErrorClass = t.javaClass.simpleName
+      lastForegroundErrorMessage = t.message ?: ""
+      Log.w(TAG, "startForeground type=$label failed (${t.javaClass.simpleName}): ${t.message}")
+      false
     }
   }
 
