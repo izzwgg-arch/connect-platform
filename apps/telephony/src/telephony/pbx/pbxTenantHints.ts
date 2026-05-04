@@ -74,7 +74,7 @@ export function extractPbxTenantHintsFromContext(contextOrDcontext: string): Pbx
 export function extractPbxTenantHintsFromChannel(channel: string): PbxTenantHints {
   const ch = String(channel || "").trim();
   if (!ch) return {};
-  const tCode = /^PJSIP\/(T\d+)_/i.exec(ch);
+  const tCode = /^(?:(?:PJSIP|SIP|IAX2?|Local)\/)?(T\d+)_/i.exec(ch);
   if (tCode?.[1]) {
     const code = tCode[1].toUpperCase();
     const id = code.replace(/^T/i, "");

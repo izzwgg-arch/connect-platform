@@ -9,9 +9,32 @@ import type { TenantAliasMatcher } from "../services/SnapshotService";
 import { normalizeCallForClient } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
+import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
 import type { NormalizedCall, NormalizedExtensionState, NormalizedQueueState } from "../types";
 
 const log = childLogger("TelephonyBroadcaster");
+
+function callInvolvesClientExtension(call: NormalizedCall, allowed: Set<string>): boolean {
+  const involved = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const raw = String(value).trim();
+    if (!raw) return;
+    if (looksLikeExtension(raw)) involved.add(raw);
+    const normalized = normalizeExtensionFromChannel(raw);
+    if (normalized) involved.add(normalized);
+  };
+
+  for (const ext of call.extensions) add(ext);
+  add(call.source_extension);
+  add(call.destination_extension);
+  add(call.from);
+  add(call.to);
+  add(call.connectedLine);
+  for (const channel of call.channels) add(channel);
+
+  return [...involved].some((ext) => allowed.has(ext));
+}
 
 // Live calls: AMI CallStateStore events (real-time, DID-based tenant resolution).
 // Extensions/queues: debounced AMI-driven upserts.
@@ -136,7 +159,7 @@ export class TelephonyBroadcaster {
       if (!client.extensionScoped) return true;
       if (client.extensions.length === 0) return false;
       const allowed = new Set(client.extensions);
-      return call.extensions.some((ext) => allowed.has(ext));
+      return callInvolvesClientExtension(call, allowed);
     };
   }
 }

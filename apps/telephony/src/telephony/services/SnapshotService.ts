@@ -6,9 +6,32 @@ import type { HealthService } from "./HealthService";
 import { normalizeCallForClient, isLocalOnlyCall, hasValidChannel } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
+import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
 import { childLogger } from "../../logging/logger";
 
 const log = childLogger("SnapshotService");
+
+function callInvolvesViewerExtension(call: NormalizedCall, viewerExtensions: Set<string>): boolean {
+  const involved = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const raw = String(value).trim();
+    if (!raw) return;
+    if (looksLikeExtension(raw)) involved.add(raw);
+    const normalized = normalizeExtensionFromChannel(raw);
+    if (normalized) involved.add(normalized);
+  };
+
+  for (const ext of call.extensions) add(ext);
+  add(call.source_extension);
+  add(call.destination_extension);
+  add(call.from);
+  add(call.to);
+  add(call.connectedLine);
+  for (const channel of call.channels) add(channel);
+
+  return [...involved].some((ext) => viewerExtensions.has(ext));
+}
 
 /** Alias-aware tenant matcher. Returns true when `recordTenantId` should be
  *  visible to a viewer scoped to `viewerTenantId`. Used to bridge the CUID vs
@@ -75,7 +98,7 @@ export class SnapshotService {
     if (extensionScoped) {
       calls = viewerExtensions.size === 0
         ? []
-        : calls.filter((c) => c.extensions.some((ext) => viewerExtensions.has(ext)));
+        : calls.filter((c) => callInvolvesViewerExtension(c, viewerExtensions));
     }
 
     log.info(

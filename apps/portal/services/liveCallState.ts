@@ -137,6 +137,8 @@ export function involvedExtensionsFromCall(call: LiveCall): string[] {
   add(call.from);
   add(call.to);
   add(call.connectedLine);
+  add(call.source_extension);
+  add(call.destination_extension);
 
   return [...out];
 }

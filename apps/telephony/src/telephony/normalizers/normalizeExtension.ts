@@ -61,6 +61,8 @@ export function normalizeExtensionFromChannel(input: string | null | undefined):
 
   // 5. Peel a VitalPBX tenant prefix (e.g. `T11_105` → `105`). The prefix is
   //    always `[A-Za-z]+digits+_` — anything else is NOT a tenant prefix.
+  //    ContactStatus/AOR events often arrive as bare `T11_105` without a
+  //    PJSIP/ driver prefix, so this must run after optional prefix stripping.
   const tenantPrefixed = /^[A-Za-z]\d+_(\d{2,6})$/.exec(token);
   if (tenantPrefixed) return tenantPrefixed[1] ?? null;
 

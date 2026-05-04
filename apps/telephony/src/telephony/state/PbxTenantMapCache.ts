@@ -126,11 +126,21 @@ export class PbxTenantMapCache {
         this.didByE164 = new Map();
       }
       if (Array.isArray(body.extensionEntries)) {
-        const next = new Map<string, { connectTenantId: string; tenantName: string | null }>();
+        const tenantsByExt = new Map<string, Map<string, string | null>>();
         for (const e of body.extensionEntries) {
           const n = (e.extNumber || "").trim();
           if (!n || !e.connectTenantId) continue;
-          next.set(n, { connectTenantId: e.connectTenantId, tenantName: e.tenantName ?? null });
+          const tenants = tenantsByExt.get(n) ?? new Map<string, string | null>();
+          tenants.set(e.connectTenantId, e.tenantName ?? null);
+          tenantsByExt.set(n, tenants);
+        }
+        const next = new Map<string, { connectTenantId: string; tenantName: string | null }>();
+        for (const [ext, tenants] of tenantsByExt) {
+          if (tenants.size !== 1) continue;
+          const only = [...tenants.entries()][0];
+          if (!only) continue;
+          const [connectTenantId, tenantName] = only;
+          if (connectTenantId) next.set(ext, { connectTenantId, tenantName: tenantName ?? null });
         }
         this.extToTenant = next;
         log.debug({ extCount: next.size }, "pbx-tenant-map extension entries refreshed");
