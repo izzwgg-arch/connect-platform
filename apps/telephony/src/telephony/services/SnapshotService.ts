@@ -47,9 +47,14 @@ export class SnapshotService {
     // Use the ARI bridge snapshot when available. It is the PBX-correct source:
     // one active call equals one qualifying bridge, not one AMI channel/event.
     const activeSource = this.activeCallProvider?.() ?? this.calls.getActive();
-    const allActive = activeSource.filter(
-      (c) => !isLocalOnlyCall(c) && (c.bridgeIds.length > 0 || hasValidChannel(c)),
-    );
+    const allActive = activeSource.filter((c) => {
+      // Always keep ringing/dialing calls — they haven't formed a bridge yet and
+      // may temporarily have only Local/ helper channels during setup.
+      if (c.state === "ringing" || c.state === "dialing") return true;
+      // For connected/held calls: require a real channel or bridge to avoid showing
+      // ghost calls that consist only of internal PBX housekeeping legs.
+      return !isLocalOnlyCall(c) && (c.bridgeIds.length > 0 || hasValidChannel(c));
+    });
     let calls = allActive;
     let exts = this.extensions.getAll();
     let qs = this.queues.getAll();

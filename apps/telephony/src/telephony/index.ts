@@ -152,9 +152,12 @@ export function createTelephonyModule(server: http.Server) {
     }
   };
   const socketServer = new TelephonySocketServer(server, snapshotService, resolveUserExtensions);
-  ariBridgedPoller.on("update", () => {
-    socketServer.broadcastCallSnapshots();
-  });
+  // NOTE: broadcastCallSnapshots() is intentionally NOT called on every ARI poll.
+  // The ARI poller's job is bridge reconciliation (callRemove for zombies) only.
+  // Individual callUpsert/callRemove events from callStore handle real-time updates.
+  // Periodic snapshot replacement was causing ringing calls to flicker and disappear
+  // because calls in the early ringing phase (Local/-only channels) were filtered
+  // out by the allActive filter before their real PJSIP channels arrived.
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
     callStore,
