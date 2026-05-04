@@ -35,7 +35,7 @@ export type ProvisioningBundle = {
 export type OutboundDialRoute = {
   id: string;
   name: string;
-  prefix: string;
+  prefix?: string;
   callerIdName?: string | null;
   callerIdNumber?: string | null;
   isDefault?: boolean;

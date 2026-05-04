@@ -4756,6 +4756,11 @@ const outboundRouteAssignmentSchema = z.object({
   })).max(100),
 });
 
+const outboundRouteDialResolveSchema = z.object({
+  number: z.string().trim().min(1).max(80),
+  outboundRouteId: z.string().trim().min(1).optional().nullable(),
+});
+
 function cleanOutboundPrefix(value: string | null | undefined): string | null {
   const prefix = String(value ?? "").trim();
   if (!prefix) return null;
@@ -4793,6 +4798,38 @@ function formatOutboundRoute(row: any, permission?: any) {
     isDefault: permission ? permission.isDefault === true : false,
     label: prefix ? `${row.name} · ${prefix}` : `${row.name} · No prefix`,
   };
+}
+
+function formatPublicOutboundRoute(row: any, permission?: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    callerIdName: row.callerIdName || null,
+    callerIdNumber: row.callerIdNumber || null,
+    isDefault: permission ? permission.isDefault === true : false,
+    label: row.name,
+  };
+}
+
+function normalizeOutboundDialTarget(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (trimmed.includes("@")) return trimmed;
+  return trimmed.replace(/[()\-\s.]/g, "");
+}
+
+function isEmergencyOutboundDialTarget(value: string): boolean {
+  const digits = value.replace(/\D/g, "");
+  return digits === "911" || digits === "9911";
+}
+
+function applyInternalOutboundPrefix(number: string, prefix: string | null | undefined): { finalNumber: string; prefixApplied: boolean } {
+  const normalized = normalizeOutboundDialTarget(number);
+  const routePrefix = String(prefix || "").trim();
+  if (!routePrefix || !/^\d{1,8}$/.test(routePrefix)) return { finalNumber: normalized, prefixApplied: false };
+  if (!normalized || normalized.includes("@") || normalized.startsWith("*") || normalized.startsWith("#")) return { finalNumber: normalized, prefixApplied: false };
+  if (isEmergencyOutboundDialTarget(normalized)) return { finalNumber: normalized, prefixApplied: false };
+  if (normalized.startsWith(routePrefix)) return { finalNumber: normalized, prefixApplied: false };
+  return { finalNumber: `${routePrefix}${normalized}`, prefixApplied: true };
 }
 
 async function resolveAdminTargetUser(admin: JwtUser, userId: string): Promise<any | null> {
@@ -4948,7 +4985,73 @@ app.get("/me/outbound-routes", async (req) => {
   });
   return {
     tenantId: user.tenantId,
-    routes: rows.map((p: any) => formatOutboundRoute(p.outboundRoute, p)),
+    routes: rows.map((p: any) => formatPublicOutboundRoute(p.outboundRoute, p)),
+  };
+});
+
+app.post("/me/outbound-routes/resolve-dial", async (req, reply) => {
+  const user = getUser(req);
+  const input = outboundRouteDialResolveSchema.parse(req.body || {});
+  const originalNumber = input.number.trim();
+  const normalizedNumber = normalizeOutboundDialTarget(originalNumber);
+  if (!normalizedNumber) return reply.status(400).send({ error: "invalid_number" });
+
+  if (!input.outboundRouteId) {
+    return {
+      originalNumber,
+      normalizedNumber,
+      finalNumber: normalizedNumber,
+      outboundRouteId: null,
+      outboundRouteName: null,
+      prefixApplied: false,
+    };
+  }
+
+  const permission = await (db as any).userOutboundRoutePermission.findFirst({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      outboundRouteId: input.outboundRouteId,
+      enabled: true,
+      outboundRoute: { tenantId: user.tenantId, isActive: true },
+    },
+    include: { outboundRoute: true },
+  });
+  if (!permission?.outboundRoute) {
+    await audit({
+      tenantId: user.tenantId,
+      actorUserId: user.sub,
+      action: "OUTBOUND_ROUTE_DIAL_DENIED",
+      entityType: "OutboundRoute",
+      entityId: input.outboundRouteId,
+      metadata: { originalNumber, reason: "route_not_allowed" },
+    });
+    return reply.status(403).send({ error: "outbound_route_not_allowed" });
+  }
+
+  const resolved = applyInternalOutboundPrefix(normalizedNumber, permission.outboundRoute.prefix);
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    action: "OUTBOUND_ROUTE_DIAL_RESOLVED",
+    entityType: "OutboundRoute",
+    entityId: permission.outboundRoute.id,
+    metadata: {
+      routeName: permission.outboundRoute.name,
+      originalNumber,
+      normalizedNumber,
+      finalNumber: resolved.finalNumber,
+      prefixApplied: resolved.prefixApplied,
+      emergencyBypass: isEmergencyOutboundDialTarget(normalizedNumber),
+    },
+  });
+  return {
+    originalNumber,
+    normalizedNumber,
+    finalNumber: resolved.finalNumber,
+    outboundRouteId: permission.outboundRoute.id,
+    outboundRouteName: permission.outboundRoute.name,
+    prefixApplied: resolved.prefixApplied,
   };
 });
 

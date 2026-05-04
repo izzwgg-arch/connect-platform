@@ -73,7 +73,7 @@ export interface SipDiagnostics {
 export type OutboundDialRoute = {
   id: string;
   name: string;
-  prefix: string;
+  prefix?: string;
   callerIdName?: string | null;
   callerIdNumber?: string | null;
   isDefault?: boolean;
@@ -192,8 +192,6 @@ const VOICE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   sampleRate: { ideal: 48_000 },
 };
 
-const OUTBOUND_ROUTE_STORAGE_KEY = "connect:selected-outbound-route-id";
-
 // ── JsSIP dynamic import ────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type JsSIPModule = any;
@@ -227,24 +225,10 @@ function hasStunServer(
   });
 }
 
-function isEmergencyDialTarget(value: string): boolean {
-  const digits = value.replace(/\D/g, "");
-  return digits === "911" || digits === "9911";
-}
-
 function normalizeDialTargetForSip(value: string): string {
   const trimmed = value.trim();
   if (trimmed.includes("@")) return trimmed;
   return trimmed.replace(/[()\-\s.]/g, "");
-}
-
-function applyOutboundRoutePrefix(target: string, route: OutboundDialRoute | null): string {
-  const normalized = normalizeDialTargetForSip(target);
-  const prefix = String(route?.prefix || "").trim();
-  if (!prefix || !/^\d{1,8}$/.test(prefix)) return normalized;
-  if (!normalized || normalized.includes("@") || normalized.startsWith("*") || normalized.startsWith("#")) return normalized;
-  if (isEmergencyDialTarget(normalized)) return normalized;
-  return normalized.startsWith(prefix) ? normalized : `${prefix}${normalized}`;
 }
 
 async function checkMicPermission(): Promise<MicPermission> {
@@ -760,10 +744,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         if (cancelled) return;
         const routes = (result.routes || []).filter((route) => route && route.id);
         setOutboundRoutes(routes);
-        const stored = window.localStorage.getItem(OUTBOUND_ROUTE_STORAGE_KEY) || "";
-        const defaultRoute = routes.find((route) => route.isDefault) || (routes.length === 1 ? routes[0] : null);
-        const nextSelected = routes.some((route) => route.id === stored) ? stored : (defaultRoute?.id || "");
-        setSelectedOutboundRouteId(nextSelected);
+        setSelectedOutboundRouteId("");
       })
       .catch(() => {
         if (!cancelled) {
@@ -775,10 +756,8 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (selectedOutboundRouteId) window.localStorage.setItem(OUTBOUND_ROUTE_STORAGE_KEY, selectedOutboundRouteId);
-    else window.localStorage.removeItem(OUTBOUND_ROUTE_STORAGE_KEY);
-  }, [selectedOutboundRouteId]);
+    if (callState === "idle" || callState === "ended") setSelectedOutboundRouteId("");
+  }, [callState]);
 
   // ── Initialise ─────────────────────────────────────────────────────────
 
@@ -1443,7 +1422,6 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       if (!domain) return;
       const normalised = target.trim();
       if (!normalised) return;
-      const pbxDialTarget = selectedOutboundRoute ? applyOutboundRoutePrefix(normalised, selectedOutboundRoute) : normalised;
 
       // Multi-call policy: if another session is currently active, put it on
       // hold before starting the new outbound call.
@@ -1463,11 +1441,19 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
       setCallState("dialing");
       setError(null);
       setOnHold(false);
-      console.log("[SIP] CALL_INITIATED target:", normalised, "pbxTarget:", pbxDialTarget);
+      console.log("[SIP] CALL_INITIATED target:", normalised, "route:", selectedOutboundRoute?.name || "none");
       // Start ringback immediately on dial (before "progress" from PBX)
       startRingback();
 
-      navigator.mediaDevices
+      const resolveDialTarget = selectedOutboundRoute
+        ? apiPost<{ finalNumber: string }>("/me/outbound-routes/resolve-dial", {
+            number: normalised,
+            outboundRouteId: selectedOutboundRoute.id,
+          }).then((result) => result.finalNumber || normalizeDialTargetForSip(normalised))
+        : Promise.resolve(normalised);
+
+      resolveDialTarget
+        .then((pbxDialTarget) => navigator.mediaDevices
         .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
         .then((localStream) => {
           localStreamRef.current = localStream;
@@ -1481,6 +1467,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             localStream.getTracks().forEach((t) => t.stop());
             localStreamRef.current = null;
             setCallState("idle");
+            setSelectedOutboundRouteId("");
             const msg = e instanceof Error ? e.message : "Call failed";
             setError(msg);
             patchDiag({ lastCallError: msg });
@@ -1488,6 +1475,7 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
         })
         .catch((err) => {
           setCallState("idle");
+          setSelectedOutboundRouteId("");
           if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
             setError("Microphone access denied. Allow microphone in your browser settings for this site, then try again.");
           } else if (err?.name === "NotFoundError") {
@@ -1496,6 +1484,14 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
             setError(`Microphone error: ${err?.message ?? err}`);
           }
           patchDiag({ lastCallError: `mic_error: ${err?.name}`, micPermission: "denied" });
+        }))
+        .catch((err) => {
+          setCallState("idle");
+          setSelectedOutboundRouteId("");
+          const msg = err instanceof Error ? err.message : "Could not resolve outbound route";
+          setError(msg);
+          patchDiag({ lastCallError: msg });
+          stopAllAudio();
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

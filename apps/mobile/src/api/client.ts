@@ -56,6 +56,20 @@ export async function getOutboundRoutes(token: string): Promise<OutboundDialRout
   return Array.isArray(json?.routes) ? (json.routes as OutboundDialRoute[]) : [];
 }
 
+export async function resolveOutboundDial(
+  token: string,
+  input: { number: string; outboundRouteId?: string | null },
+): Promise<{ finalNumber: string; originalNumber: string; normalizedNumber: string; outboundRouteId: string | null }> {
+  const res = await fetch(`${API_BASE}/me/outbound-routes/resolve-dial`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "OUTBOUND_DIAL_RESOLVE_FAILED");
+  return json;
+}
+
 export async function resetSipPassword(token: string): Promise<{ sipPassword: string; provisioning: any }> {
   const res = await fetch(`${API_BASE}/voice/me/reset-sip-password`, {
     method: "POST",

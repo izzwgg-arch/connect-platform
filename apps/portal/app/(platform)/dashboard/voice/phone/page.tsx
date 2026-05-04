@@ -431,7 +431,7 @@ function KeypadScreen({
             <option value="">No route prefix</option>
             {phone.outboundRoutes.map((route) => (
               <option key={route.id} value={route.id}>
-                {route.prefix ? `${route.name} · ${route.prefix}` : `${route.name} · No prefix`}
+                {route.name}
               </option>
             ))}
           </select>
