@@ -660,6 +660,11 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     map.putString("lastWakePushExtension", IncomingCallFirebaseService.lastWakePushExtension ?: "")
     map.putDouble("lastWakeBridgeEmittedAtMs", IncomingCallFirebaseService.lastWakeBridgeEmittedAtMs.toDouble())
     map.putString("lastWakeBridgeStatus", IncomingCallFirebaseService.lastWakeBridgeStatus ?: "")
+    // Wake placeholder notification (the early "Incoming call — connecting…"
+    // heads-up). Lets Diagnostics show "yes the OS told the user a call was
+    // coming even though SIP REGISTER took 5s after that".
+    map.putDouble("lastWakePlaceholderPostedAtMs", IncomingCallFirebaseService.lastWakePlaceholderPostedAtMs.toDouble())
+    map.putString("lastWakePlaceholderResult", IncomingCallFirebaseService.lastWakePlaceholderResult ?: "")
     // Stage 2 keep-alive foreground service status. Surfacing this lets the
     // Diagnostics screen prove "the FGS that should hold the WSS open is
     // actually running" or "no, startForeground threw <X> because Android 15

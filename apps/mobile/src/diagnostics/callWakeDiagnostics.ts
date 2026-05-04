@@ -51,6 +51,16 @@ export type CallWakeNativeState = {
   lastWakeBridgeEmittedAtMs: number;
   lastWakeBridgeStatus: string;
   /**
+   * Wake placeholder notification — the early "Incoming call —
+   * connecting…" heads-up posted by handleWakePushNative when the app is
+   * killed/cold so the user gets visual + vibration feedback BEFORE the
+   * SIP REGISTER + INVITE round trip completes. Lets Diagnostics show
+   * "yes the OS told the user a call was coming" vs "no, POST_NOTIFICATIONS
+   * was denied so we silently failed".
+   */
+  lastWakePlaceholderPostedAtMs: number;
+  lastWakePlaceholderResult: string;
+  /**
    * Stage 2 SipKeepAliveService foreground service status. The S25 / Android
    * 15 / One UI 7 silently rejects FOREGROUND_SERVICE_TYPE_PHONE_CALL on some
    * launch paths and the only way to know is to capture the exception class
@@ -95,6 +105,8 @@ const EMPTY_NATIVE_STATE: CallWakeNativeState = {
   lastWakePushExtension: "",
   lastWakeBridgeEmittedAtMs: 0,
   lastWakeBridgeStatus: "",
+  lastWakePlaceholderPostedAtMs: 0,
+  lastWakePlaceholderResult: "",
   keepAliveIsRunning: false,
   keepAliveServiceCreatedAtMs: 0,
   keepAliveServiceDestroyedAtMs: 0,
@@ -145,6 +157,8 @@ export function getCallWakeNativeState(): CallWakeNativeState {
       lastWakePushExtension: String(raw.lastWakePushExtension ?? ""),
       lastWakeBridgeEmittedAtMs: Number(raw.lastWakeBridgeEmittedAtMs) || 0,
       lastWakeBridgeStatus: String(raw.lastWakeBridgeStatus ?? ""),
+      lastWakePlaceholderPostedAtMs: Number(raw.lastWakePlaceholderPostedAtMs) || 0,
+      lastWakePlaceholderResult: String(raw.lastWakePlaceholderResult ?? ""),
       keepAliveIsRunning: Boolean(raw.keepAliveIsRunning),
       keepAliveServiceCreatedAtMs: Number(raw.keepAliveServiceCreatedAtMs) || 0,
       keepAliveServiceDestroyedAtMs: Number(raw.keepAliveServiceDestroyedAtMs) || 0,

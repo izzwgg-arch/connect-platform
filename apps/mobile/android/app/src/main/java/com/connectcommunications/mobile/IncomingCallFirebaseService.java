@@ -80,6 +80,21 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     /** Bumped when channel sound / importance policy changes (Android caches channels by id). */
     private static final String CHANNEL_ID = "connect-incoming-ui-v6";
     private static final int NOTIFICATION_ID_BASE = 41001;
+    /**
+     * Stable id for the wake-push placeholder notification. Reserved one slot
+     * BELOW the invite-keyed range so it cannot collide with any
+     * {@link #notificationIdForInvite(String)} hash. There is at most one
+     * wake placeholder live at a time — a fresh wake replaces the previous one.
+     */
+    private static final int WAKE_PLACEHOLDER_NOTIFICATION_ID = NOTIFICATION_ID_BASE - 1;
+    /**
+     * If no real INCOMING_CALL FCM ever arrives within this window the
+     * placeholder self-dismisses so the user is not left staring at a
+     * permanent "Incoming call from X" they cannot answer. 30 seconds covers
+     * a worst-case wake_wait_secs (10s) + dial-attempt timeout (~20s) and
+     * matches the ringer timeout in launchIncomingCallUi.
+     */
+    private static final long WAKE_PLACEHOLDER_TIMEOUT_MS = 30_000L;
     private static final String EXTRA_SHOW_INCOMING_CALL = "connect_show_incoming_call";
     private static final String PRESENTATION_FULL_SCREEN = "full_screen";
     private static final String PRESENTATION_HEADS_UP = "heads_up";
@@ -142,6 +157,24 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     public static volatile String lastWakePushExtension = null;
     public static volatile long lastWakeBridgeEmittedAtMs = 0;
     public static volatile String lastWakeBridgeStatus = null;
+    /**
+     * Wake-placeholder notification telemetry. Set when handleWakePushNative
+     * decides to post the early "Incoming call — connecting…" heads-up so the
+     * user gets visual + vibration feedback BEFORE the SIP REGISTER + INVITE
+     * round-trip completes. The Diagnostics screen surfaces both fields so we
+     * can prove the placeholder fired (or explain why it did not — e.g.
+     * post_notifications_denied).
+     *
+     * lastWakePlaceholderResult values:
+     *   "posted"                       — notify() returned cleanly.
+     *   "skipped:app_foregrounded"     — JS will own the UI, no placeholder needed.
+     *   "skipped:in_active_call"       — multi-call path; banner handles it.
+     *   "skipped:no_caller_info"       — wake push payload had no fromNumber/fromDisplay.
+     *   "post_notifications_denied"    — POST_NOTIFICATIONS revoked.
+     *   "notify_threw:<class>"         — any other failure; class is the throwable name.
+     */
+    public static volatile long lastWakePlaceholderPostedAtMs = 0;
+    public static volatile String lastWakePlaceholderResult = null;
     /**
      * Multi-call busy flag. Written by JS via IncomingCallUiModule.setInActiveCall()
      * whenever the CallSessionManager has an active call. While true, new FCM
@@ -385,8 +418,10 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
 
         // 1) Make sure the SIP keep-alive service is up. start() is idempotent
         // and creates the foreground notification + wake lock if not already.
+        // SipKeepAliveService is a Kotlin file — its companion object methods
+        // are reachable from Java only via .Companion (no @JvmStatic).
         try {
-            SipKeepAliveService.start(getApplicationContext());
+            SipKeepAliveService.Companion.start(getApplicationContext());
             Log.i(TAG, "[CALL_WAKE] SipKeepAliveService.start() invoked from wake push");
         } catch (Throwable t) {
             Log.w(TAG, "[CALL_WAKE] SipKeepAliveService.start() failed: " + t.getMessage());
@@ -424,12 +459,51 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             Log.w(TAG, "[CALL_WAKE] wake bridge payload build failed: " + t.getMessage());
         }
 
+        // 3) Optional placeholder notification.
+        //
+        // When the app is killed/cold (lastPushReceivedAppState != "active")
+        // and we are NOT already in another call, post a non-actionable
+        // "Incoming call from X — connecting…" heads-up so the user gets
+        // visual + vibration feedback immediately. Without this, the device
+        // sits silent while we wait for SIP REGISTER → INVITE round-trip
+        // (~1–10s on a cold start), and if anything in that window fails
+        // the user never sees the call at all. The placeholder is canceled
+        // the moment a real INCOMING_CALL or termination push arrives.
+        //
+        // Skipped when:
+        //   • app is foregrounded — JS owns the UI
+        //   • app already has an active call — multi-call banner handles it
+        //   • wake payload had no caller info — heads-up would be useless
+        boolean appWasForeground = "active".equalsIgnoreCase(lastPushReceivedAppState);
+        boolean haveCallerInfo =
+            (fromNum != null && !fromNum.isEmpty()) ||
+            (fromDisp != null && !fromDisp.isEmpty());
+        if (appWasForeground) {
+            lastWakePlaceholderResult = "skipped:app_foregrounded";
+        } else if (inActiveCall) {
+            lastWakePlaceholderResult = "skipped:in_active_call";
+        } else if (!haveCallerInfo) {
+            lastWakePlaceholderResult = "skipped:no_caller_info";
+        } else {
+            try {
+                postWakePlaceholderNotification(pbxCallId, fromNum, fromDisp);
+            } catch (Throwable t) {
+                lastWakePlaceholderResult = "post_threw:" + t.getClass().getSimpleName();
+                Log.w(TAG, "[CALL_WAKE] postWakePlaceholderNotification threw: " + t.getMessage());
+            }
+        }
+
         Log.i(TAG, "[CALL_WAKE] WAKE_NATIVE_HANDLED elapsedMs="
                 + (System.currentTimeMillis() - t0)
-                + " bridgeStatus=" + lastWakeBridgeStatus);
+                + " bridgeStatus=" + lastWakeBridgeStatus
+                + " placeholder=" + lastWakePlaceholderResult);
     }
 
     private void handleIncomingCallNative(Map<String, String> data) {
+        // Real INVITE-bearing push has arrived. Drop the wake placeholder
+        // (if any) so it does not coexist with the real CallStyle ringer.
+        cancelWakePlaceholderNotification(this, "real_incoming_call_arrived");
+
         String inviteId = data.get("inviteId");
         if (inviteId == null || inviteId.isEmpty()) inviteId = data.get("callId");
         String fromNum = data.get("fromNumber");
@@ -527,8 +601,131 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         if (inviteId == null || inviteId.isEmpty()) inviteId = data.get("callId");
         Log.i(TAG, "[LOCK_CALL_CLEANUP] native_termination type=" + type + " inviteId=" + inviteId);
         Log.i(TAG, "[CALL_INCOMING] native termination type=" + type + " inviteId=" + inviteId);
+        // Termination implies the call is gone — placeholder must die too,
+        // even if no real INCOMING_CALL ever arrived (e.g. dialplan timed out).
+        cancelWakePlaceholderNotification(this, "native_termination:" + type);
         dismissIncomingCallUi(this, inviteId, "native_termination:" + type);
         deleteCacheFile();
+    }
+
+    /**
+     * Posts a stripped-down "Incoming call — connecting…" heads-up notification
+     * the moment a wake push arrives, BEFORE the SIP REGISTER + INVITE round
+     * trip has had a chance to complete. Without this, on a killed-state
+     * Samsung Galaxy S25 the wake push wakes the JS process silently, the
+     * dialplan dials ~10s later, and if anything in between fails the user
+     * never sees that someone called — the call routes straight to voicemail
+     * with zero phone-side feedback.
+     *
+     * Differences vs {@link #launchIncomingCallUi}:
+     *   • No answer / decline buttons — we don't have an inviteId yet (the
+     *     real INCOMING_CALL push hasn't fired and won't until the device is
+     *     fully registered and the PBX has dialed).
+     *   • Tap opens the app (so the in-app UI can render the real ringer
+     *     once JsSIP receives the INVITE).
+     *   • {@code setTimeoutAfter(WAKE_PLACEHOLDER_TIMEOUT_MS)} so the OS
+     *     auto-dismisses if no real INVITE arrives — matches the worst-case
+     *     dial budget so a failed wake leaves only a faint trace.
+     *   • Vibration is inherited from the channel (CHANNEL_ID has a 350-250-
+     *     350 pattern), but ringtone is NOT started — that is owned
+     *     exclusively by the real INCOMING_CALL handler so a fully-failed
+     *     wake doesn't ring forever with no one to answer.
+     *
+     * The placeholder is canceled by {@link #cancelWakePlaceholderNotification}
+     * the moment a real INCOMING_CALL or termination push arrives so the
+     * proper full-screen UI replaces it without a flicker.
+     */
+    private void postWakePlaceholderNotification(
+        String pbxCallId,
+        String fromNum,
+        String fromDisp
+    ) {
+        // Choose the best caller label we have. Wake pushes carry fromDisplay
+        // (CNAM-resolved) when the API knows it; fall back to the raw number,
+        // then a generic "Unknown caller" so we never post a blank heads-up.
+        String displayName;
+        if (fromDisp != null && !fromDisp.isEmpty()) {
+            displayName = fromDisp;
+        } else if (fromNum != null && !fromNum.isEmpty()) {
+            displayName = fromNum;
+        } else {
+            displayName = "Unknown caller";
+        }
+
+        ensureIncomingCallChannel();
+
+        int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            pendingIntentFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        // Tap on the placeholder opens the app at MainActivity so the in-app
+        // SipContext + IncomingCallScreen take over the moment the real
+        // INVITE arrives. We deliberately do NOT pass action=answer here —
+        // there is no inviteId yet, so a stray tap before the real push
+        // would no-op.
+        Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.setAction(Intent.ACTION_MAIN);
+        openIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentPending = PendingIntent.getActivity(
+            this,
+            WAKE_PLACEHOLDER_NOTIFICATION_ID,
+            openIntent,
+            pendingIntentFlags
+        );
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.notification_icon)
+            .setContentTitle("Incoming call")
+            .setContentText(displayName + " — connecting…")
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setVibrate(new long[] { 0, 350, 250, 350 })
+            .setTimeoutAfter(WAKE_PLACEHOLDER_TIMEOUT_MS)
+            .setContentIntent(contentPending);
+
+        try {
+            NotificationManagerCompat.from(this).notify(WAKE_PLACEHOLDER_NOTIFICATION_ID, builder.build());
+            lastWakePlaceholderPostedAtMs = System.currentTimeMillis();
+            lastWakePlaceholderResult = "posted";
+            try {
+                JSONObject n = new JSONObject();
+                n.put("pbxCallId", pbxCallId != null ? pbxCallId : JSONObject.NULL);
+                n.put("displayName", displayName);
+                n.put("timeoutMs", WAKE_PLACEHOLDER_TIMEOUT_MS);
+                emitCallFlowNative("WAKE_PLACEHOLDER_POSTED", pbxCallId, n);
+            } catch (Exception ignored) { }
+            Log.i(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_POSTED display=" + displayName + " pbxCallId=" + pbxCallId);
+        } catch (SecurityException se) {
+            // POST_NOTIFICATIONS denied — record so the Diagnostics screen
+            // surfaces "the OS blocked us from showing the call" rather than
+            // silently dropping. Same failure mode as launchIncomingCallUi.
+            lastWakePlaceholderResult = "post_notifications_denied";
+            Log.w(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_FAILED reason=post_notifications_denied msg=" + se.getMessage());
+        } catch (Throwable t) {
+            lastWakePlaceholderResult = "notify_threw:" + t.getClass().getSimpleName();
+            Log.w(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_FAILED " + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    /**
+     * Cancels the wake-push placeholder notification (if any). Safe to call
+     * unconditionally — NotificationManagerCompat.cancel is a no-op when no
+     * notification exists for that id. Called on every code path that
+     * supersedes the placeholder: real INCOMING_CALL push, termination push,
+     * JS-side dismiss bridge, and the in-app dismissIncomingCallUi cleanup.
+     */
+    private static void cancelWakePlaceholderNotification(Context context, String reason) {
+        try {
+            NotificationManagerCompat.from(context).cancel(WAKE_PLACEHOLDER_NOTIFICATION_ID);
+            Log.i(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_CANCELED reason=" + reason);
+        } catch (Throwable t) {
+            Log.w(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_CANCEL failed: " + t.getMessage());
+        }
     }
 
     private void launchIncomingCallUi(
@@ -1284,6 +1481,11 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         String reason
     ) {
         cancelIncomingCallNotification(context, inviteId);
+        // Also clear the wake placeholder so an explicit dismiss (JS bridge,
+        // notification action, deep-link decline) takes the early heads-up
+        // down with it. Otherwise a dismiss before the real ringer fires
+        // would leave the placeholder lingering for its 30s timeout.
+        cancelWakePlaceholderNotification(context, "dismissIncomingCallUi:" + reason);
         stopIncomingCallRingtone(reason, inviteId);
         // The cache file is the "is there a pending call?" breadcrumb JS reads on
         // cold start. Leaving it around after dismiss is the root cause of the
