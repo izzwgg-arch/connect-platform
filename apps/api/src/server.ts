@@ -4364,7 +4364,10 @@ app.addHook("preHandler", async (req, reply) => {
     || path === "/internal/pbx/publish-wake-config"
     || path.endsWith("/internal/pbx/publish-wake-config");
   const isInternalTelephonyPath =
-    path === "/internal/telephony/pbx-tenant-map" || path.endsWith("/internal/telephony/pbx-tenant-map");
+    path === "/internal/telephony/pbx-tenant-map"
+    || path.endsWith("/internal/telephony/pbx-tenant-map")
+    || path === "/internal/telephony/user-extensions"
+    || path.endsWith("/internal/telephony/user-extensions");
   // AMI MessageWaiting → telephony POSTs here to trigger immediate voicemail sync.
   // Authenticated by the shared CDR_INGEST_SECRET header, not by user JWT.
   const isInternalVoicemailNotifyPath =
