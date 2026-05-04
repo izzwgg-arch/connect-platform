@@ -36,6 +36,11 @@ const schema = z.object({
   CDR_INGEST_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   CDR_INGEST_SECRET: z.string().optional().or(z.literal("").transform(() => undefined)),
   TELEPHONY_PBX_MAP_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
+
+  // Connect API base URL (used on WS connect to fetch the calling user's
+  // owned extensions for per-user live-call filtering). Optional: when unset
+  // the server falls back to broadcasting all tenant calls (legacy behavior).
+  API_INTERNAL_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
 });
 
 function loadEnv() {

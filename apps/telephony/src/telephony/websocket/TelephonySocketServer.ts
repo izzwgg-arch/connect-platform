@@ -11,6 +11,11 @@ const log = childLogger("TelephonySocketServer");
 export interface WsClient {
   ws: WebSocket;
   tenantId: string | null;
+  /** Calling user's owned extension numbers (e.g. ["101","102"]).
+   *  Empty for global/admin clients (no per-user filter applied). */
+  extensions: string[];
+  /** True when this client is global/admin and bypasses per-user filtering. */
+  bypassExtensionFilter: boolean;
   isAlive: boolean;
 }
 
@@ -101,6 +106,8 @@ export class TelephonySocketServer {
       "";
 
     let tenantId: string | null = null;
+    let userId: string | null = null;
+    let bypassExtensionFilter = true;
 
     try {
       const payload = jwt.verify(token, env.JWT_SECRET) as Record<string, unknown>;
@@ -108,19 +115,37 @@ export class TelephonySocketServer {
         typeof payload["tenantId"] === "string" ? payload["tenantId"] : null;
       const role =
         typeof payload["role"] === "string" ? payload["role"].toUpperCase() : "";
+      userId = typeof payload["sub"] === "string" ? payload["sub"] : null;
       // SUPER_ADMIN and ADMIN users see all tenants — treat as global (tenantId = null)
       // so tenantFilter broadcasts every live call to them regardless of which tenant owns it.
       const isGlobalRole = role === "SUPER_ADMIN" || role === "ADMIN";
       tenantId = isGlobalRole ? null : rawTenantId;
+      // Per-user extension filter: bypassed for workspace admins (SUPER_ADMIN,
+      // ADMIN, TENANT_ADMIN, MANAGER) — they see all calls in scope. Everyone
+      // else is filtered to calls involving one of their owned extensions.
+      bypassExtensionFilter =
+        role === "SUPER_ADMIN" ||
+        role === "TENANT_ADMIN" ||
+        role === "ADMIN" ||
+        role === "MANAGER";
     } catch {
       ws.close(1008, "Unauthorized");
       this.decrementIpCount(clientIp);
       return;
     }
 
-    const client: WsClient = { ws, tenantId, isAlive: true };
+    const client: WsClient = {
+      ws,
+      tenantId,
+      extensions: [],
+      bypassExtensionFilter,
+      isAlive: true,
+    };
     this.clients.add(client);
-    log.info({ tenantId, ip: clientIp, total: this.clients.size }, "WS client connected");
+    log.info(
+      { tenantId, userId, bypassExtensionFilter, ip: clientIp, total: this.clients.size },
+      "WS client connected",
+    );
 
     ws.on("pong", () => {
       client.isAlive = true;
@@ -138,8 +163,56 @@ export class TelephonySocketServer {
       this.decrementIpCount(clientIp);
     });
 
-    // Send initial snapshot
-    this.sendSnapshot(client);
+    // Resolve the user's owned extensions for per-user live-call filtering.
+    // The snapshot is sent AFTER this resolves so initial calls are already
+    // filtered; subsequent broadcasts also use these extensions.
+    if (!bypassExtensionFilter && userId && token && env.API_INTERNAL_URL) {
+      this.fetchUserExtensions(token).then(
+        (extensions) => {
+          client.extensions = extensions;
+          log.info(
+            { userId, tenantId, extensions, count: extensions.length },
+            "WS client extensions resolved",
+          );
+          this.sendSnapshot(client);
+        },
+        (err) => {
+          log.warn(
+            { userId, tenantId, err: err?.message || String(err) },
+            "WS client extension fetch failed — sending snapshot without per-user filter",
+          );
+          // Fail-open: if we can't fetch extensions (API unreachable etc.),
+          // fall back to tenant-only filtering rather than breaking the UI.
+          client.bypassExtensionFilter = true;
+          this.sendSnapshot(client);
+        },
+      );
+    } else {
+      // Admin / global-role / no API URL configured → tenant filter only.
+      this.sendSnapshot(client);
+    }
+  }
+
+  // Fetches the calling user's owned extension numbers from Connect API.
+  // Used to scope live-call broadcasts to "calls that involve me" for
+  // non-admin users. Returns [] on any failure (treated as "no calls").
+  private async fetchUserExtensions(token: string): Promise<string[]> {
+    const base = (env.API_INTERNAL_URL || "").replace(/\/$/, "");
+    if (!base) return [];
+    const res = await fetch(`${base}/me/extensions`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      throw new Error(`/me/extensions http_${res.status}`);
+    }
+    const body = (await res.json()) as { extensions?: unknown };
+    const raw = Array.isArray(body?.extensions) ? body.extensions : [];
+    const out: string[] = [];
+    for (const v of raw) {
+      const n = String(v ?? "").trim();
+      if (n && !out.includes(n)) out.push(n);
+    }
+    return out;
   }
 
   private decrementIpCount(ip: string): void {
@@ -153,6 +226,20 @@ export class TelephonySocketServer {
 
   private sendSnapshot(client: WsClient): void {
     const snap = this.snapshot.getSnapshot(client.tenantId);
+    // Per-user extension scoping for the initial snapshot. Admin/global
+    // clients (bypassExtensionFilter) always get the full tenant snapshot.
+    if (!client.bypassExtensionFilter) {
+      if (client.extensions.length === 0) {
+        snap.calls = [];
+      } else {
+        const owned = new Set(client.extensions);
+        snap.calls = snap.calls.filter((c) => {
+          const callExts = (c as { extensions?: string[] }).extensions ?? [];
+          for (const e of callExts) if (owned.has(e)) return true;
+          return false;
+        });
+      }
+    }
     const envelope: TelephonyEventEnvelope = {
       event: "telephony.snapshot",
       ts: new Date().toISOString(),

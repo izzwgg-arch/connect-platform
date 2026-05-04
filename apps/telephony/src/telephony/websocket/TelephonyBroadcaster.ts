@@ -47,7 +47,7 @@ export class TelephonyBroadcaster {
       // Only broadcast active (non-hungup) calls.
       if (call.state === "hungup") return;
 
-      const filter = this.buildTenantFilter(call.tenantId);
+      const filter = this.buildCallFilter(call);
       const clientCount = this.socket.clientCount();
       const matchingClients = this.socket.countMatchingClients(filter);
       // Always log at info so we can trace every broadcast
@@ -59,6 +59,7 @@ export class TelephonyBroadcaster {
           to: call.to,
           tenantId: call.tenantId,
           tenantName: call.tenantName,
+          callExtensions: call.extensions,
           totalWsClients: clientCount,
           matchingWsClients: matchingClients,
         },
@@ -74,6 +75,8 @@ export class TelephonyBroadcaster {
 
     this.callStore.on("callRemove", (callId: string) => {
       // Broadcast remove to ALL clients (global + tenant-scoped) so everyone clears the row.
+      // Per-user extension scoping doesn't apply here: if the client never had
+      // the call in their list, removing a non-existent id is a no-op.
       this.socket.broadcast("telephony.call.remove", { callId }, undefined);
     });
   }
@@ -124,6 +127,33 @@ export class TelephonyBroadcaster {
       if (client.tenantId === null) return true;
       if (client.tenantId === recordTenantId) return true;
       if (matcher) return matcher(recordTenantId, client.tenantId);
+      return false;
+    };
+  }
+
+  /** Live-call filter: tenant scope first, then per-user extension scope.
+   *  • Admin / global clients (bypassExtensionFilter=true): tenant filter only.
+   *  • Per-user clients with extensions: must also have at least one of their
+   *    extensions appear in `call.extensions` (the source/dest extensions
+   *    Asterisk derived for this call).
+   *  • Per-user clients with NO extensions: never see live calls (their owned
+   *    extensions list is empty, so there's nothing to match).
+   *  This implements the spec's filterCallsForUser at the broadcast layer
+   *  rather than the frontend, so users cannot snoop on each other's calls.
+   */
+  private buildCallFilter(
+    call: NormalizedCall,
+  ): ((client: WsClient) => boolean) | undefined {
+    const tenantFilter = this.buildTenantFilter(call.tenantId);
+    return (client: WsClient) => {
+      if (tenantFilter && !tenantFilter(client)) return false;
+      if (client.bypassExtensionFilter) return true;
+      if (client.extensions.length === 0) return false;
+      const callExts = call.extensions ?? [];
+      if (callExts.length === 0) return false;
+      for (const ext of client.extensions) {
+        if (callExts.includes(ext)) return true;
+      }
       return false;
     };
   }

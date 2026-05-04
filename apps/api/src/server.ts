@@ -1268,6 +1268,58 @@ function canAccessCampaignSend(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "MESSAGING"]);
 }
 
+// ─── Call-scoping helpers (per-user vs workspace-wide) ─────────────────────────
+// "Workspace admins" see tenant-wide calls (history + live + dashboard totals).
+// Everyone else (USER, EXTENSION_USER, BILLING, MESSAGING, SUPPORT, READ_ONLY)
+// is scoped to calls that involve one of the extensions they own.
+//
+// 1 user → N owned extensions (Extension.ownerUserId). For users with no
+// owned extension we return [] and the route returns no rows (valid empty state).
+function isWorkspaceAdminLikeRole(role: string | null | undefined): boolean {
+  const r = String(role || "").toUpperCase();
+  return r === "SUPER_ADMIN" || r === "TENANT_ADMIN" || r === "ADMIN" || r === "MANAGER";
+}
+
+async function getUserExtensionNumbers(
+  userId: string,
+  tenantId?: string | null,
+): Promise<string[]> {
+  if (!userId) return [];
+  const rows = await db.extension.findMany({
+    where: {
+      ownerUserId: userId,
+      ...(tenantId ? { tenantId } : {}),
+    },
+    select: { extNumber: true },
+  });
+  const out: string[] = [];
+  for (const r of rows) {
+    const n = String(r.extNumber || "").trim();
+    if (n && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+// Build a Prisma OR clause that matches ConnectCdr rows where the user's
+// extensions appear as either source (fromNumber) or destination (toNumber).
+// Returns null when there are no extensions — caller should treat that as
+// "user has no calls", not "show everything".
+function buildCdrExtensionInvolvementClause(
+  extensions: string[],
+): { OR: Array<Record<string, unknown>> } | null {
+  if (!extensions || extensions.length === 0) return null;
+  if (extensions.length === 1) {
+    const ext = extensions[0];
+    return { OR: [{ fromNumber: ext }, { toNumber: ext }] };
+  }
+  return {
+    OR: [
+      { fromNumber: { in: extensions } },
+      { toNumber: { in: extensions } },
+    ],
+  };
+}
+
 function constantTimeEqualStr(a: string, b: string): boolean {
   try {
     const ba = Buffer.from(a, "utf8");
@@ -2117,9 +2169,11 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/pbx/live", permission: "can_view_workspace_overview" },
   { prefix: "/dashboard/call", permission: "can_view_workspace_overview" },
   { prefix: "/team", permission: "can_view_workspace_team_directory" },
-  { prefix: "/calls", permission: "can_view_workspace_call_history" },
+  // /calls/history and /voice/me/calls intentionally have no top-level permission gate
+  // here — they accept any authenticated user. The route handlers themselves enforce
+  // workspace-vs-user scoping based on role + owned extensions, so an end user gets
+  // their own call history and a workspace admin gets the tenant-wide view.
   { prefix: "/voice/calls", permission: "can_view_workspace_call_history" },
-  { prefix: "/voice/me/calls", permission: "can_view_workspace_call_history" },
   { prefix: "/voicemail", permission: "can_view_workspace_voicemail" },
   { prefix: "/voice/voicemail", permission: "can_view_workspace_voicemail" },
   { prefix: "/chat", permission: "can_view_workspace_chat" },
@@ -8139,9 +8193,32 @@ app.get("/voice/me/calls", async (req, reply) => {
     return dir; // "internal" | "unknown" pass through
   };
 
-  // Primary source: ConnectCdr (authoritative, populated by telephony ingest)
+  // "Me" history is ALWAYS scoped to the calling user's owned extensions —
+  // never tenant-wide, even for admins. (Admins get tenant-wide via /calls/history.)
+  // PBX calls are tied to extensions, not to user_id, so we resolve the user's
+  // extensions and match them against ConnectCdr.fromNumber / toNumber.
+  const userExtensions = await getUserExtensionNumbers(user.sub, user.tenantId);
+  if (userExtensions.length === 0) {
+    // No extensions assigned → user has no calls. Valid empty state.
+    return [];
+  }
+  const involvement = buildCdrExtensionInvolvementClause(userExtensions);
+
+  const tenantIdSet = await resolveTenantIdFilterSet(user.tenantId);
+  const tenantClause: Record<string, unknown> = tenantIdSet && tenantIdSet.length > 0
+    ? (tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } })
+    : { tenantId: user.tenantId };
+
+  // Primary source: ConnectCdr (authoritative, populated by telephony ingest).
+  // Drop `:out` forwarded legs (`isForwarded: true`) so a single inbound that
+  // gets find-me/follow-me'd to an external number is counted as one call,
+  // not two.
   const cdrRows = await db.connectCdr.findMany({
-    where: { tenantId: user.tenantId },
+    where: {
+      ...tenantClause,
+      isForwarded: false,
+      ...(involvement ?? {}),
+    },
     orderBy: { startedAt: "desc" },
     take: 150,
     select: {
@@ -8172,9 +8249,14 @@ app.get("/voice/me/calls", async (req, reply) => {
     }));
   }
 
-  // Fallback: legacy CallRecord table
+  // Fallback: legacy CallRecord table (no isForwarded column there). Same
+  // extension-involvement scoping. Legacy table has fewer fields, so we use
+  // fromNumber / toNumber the same way.
   const legacyRows = await db.callRecord.findMany({
-    where: { tenantId: user.tenantId },
+    where: {
+      tenantId: user.tenantId,
+      ...(involvement ?? {}),
+    },
     orderBy: { startedAt: "desc" },
     take: 150,
   });
@@ -8190,6 +8272,17 @@ app.get("/voice/me/calls", async (req, reply) => {
     durationSec: r.durationSec,
     disposition: r.disposition ?? (r.durationSec > 0 ? "answered" : "missed"),
   }));
+});
+
+// GET /me/extensions — returns the calling user's owned extension numbers.
+// Used by clients (mobile / portal) to display "my calls only" and by the
+// telephony WS server to filter live-call broadcasts per user.
+app.get("/me/extensions", async (req, reply) => {
+  let user: JwtUser;
+  try { user = getUser(req); } catch { return reply.status(401).send({ error: "Unauthorized" }); }
+  if (!user?.sub) return reply.status(401).send({ error: "Unauthorized" });
+  const extensions = await getUserExtensionNumbers(user.sub, user.tenantId);
+  return { tenantId: user.tenantId, extensions };
 });
 
 app.get("/voice/provisioning", async (req, reply) => {
@@ -19931,8 +20024,14 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get("/calls/history", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
+  // Auth-only at the gate. Internal logic decides workspace-wide vs per-user
+  // scope based on role. End users get their own extensions' calls; workspace
+  // admins get the whole tenant (and SUPER_ADMIN can switch via tenantId param).
+  let user: JwtUser;
+  try { user = getUser(req); } catch { return reply.status(401).send({ error: "unauthorized" }); }
+  if (!user?.tenantId && !(String(user.role || "").toUpperCase() === "SUPER_ADMIN")) {
+    return reply.status(403).send({ error: "no_tenant" });
+  }
 
   const query = z.object({
     tenantId: z.string().optional(),
@@ -19946,8 +20045,16 @@ app.get("/calls/history", async (req, reply) => {
     pageSize: z.coerce.number().int().min(10).max(200).optional().default(100),
   }).parse(req.query || {});
 
-  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const requestedTenantId = query.tenantId && query.tenantId !== "global" ? query.tenantId : null;
+  const role = String(user.role || "").toUpperCase();
+  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isWorkspaceAdmin = isWorkspaceAdminLikeRole(role);
+  // End users (non-admin) are FORCED to their session tenant + their own
+  // extensions, and they cannot use the tenantId selector to spoof another
+  // workspace. Admins (TENANT_ADMIN/ADMIN/MANAGER) are pinned to their session
+  // tenant. Only SUPER_ADMIN may switch via ?tenantId=…
+  const requestedTenantId = isSuperAdmin && query.tenantId && query.tenantId !== "global"
+    ? query.tenantId
+    : null;
 
   // Build the set of tenantId values to filter by.
   // null = global / no restriction.
@@ -19960,8 +20067,13 @@ app.get("/calls/history", async (req, reply) => {
   let tenantIdFilter: string[] | null = null;
 
   if (!isSuperAdmin) {
-    // Non-super-admins: always scoped to their own tenant cuid.
-    if (user.tenantId) tenantIdFilter = [user.tenantId];
+    // Non-super-admins: always scoped to their session tenant. Resolve both
+    // the Connect cuid AND the "vpbx:{slug}" alias so we match rows ingested
+    // under either label.
+    if (user.tenantId) {
+      tenantIdFilter = await resolveTenantIdFilterSet(user.tenantId);
+      if (!tenantIdFilter || tenantIdFilter.length === 0) tenantIdFilter = [user.tenantId];
+    }
   } else if (requestedTenantId) {
     if (requestedTenantId.startsWith("vpbx:")) {
       // CDR rows use "vpbx:{slug}" as their tenantId — include it directly.
@@ -20004,13 +20116,51 @@ app.get("/calls/history", async (req, reply) => {
     return reply.status(400).send({ error: "invalid_date_window" });
   }
 
+  // Per-user scoping for non-admins. End users see only calls that involve
+  // one of their owned extensions — never tenant-wide (matches PBX reality:
+  // a call belongs to whoever's extension was the source/destination).
+  let userExtensionsForLog: string[] | null = null;
+  let extensionInvolvementClause: { OR: Array<Record<string, unknown>> } | null = null;
+  if (!isWorkspaceAdmin) {
+    userExtensionsForLog = await getUserExtensionNumbers(user.sub, user.tenantId);
+    if (userExtensionsForLog.length === 0) {
+      // No extensions assigned → no calls visible. Return an empty-but-valid
+      // page so the UI shows an empty state, not a 403.
+      app.log.info(
+        { userId: user.sub, tenantId: user.tenantId, role },
+        "[CALL_HISTORY_FILTER] non-admin user has no owned extensions",
+      );
+      const tz = process.env.PBX_TIMEZONE?.trim() || "UTC";
+      return reply.send({
+        items: [],
+        total: 0,
+        showing: 0,
+        page: query.page,
+        pageSize: query.pageSize,
+        totalPages: 1,
+        window: { startIso: startAt.toISOString(), endIso: endAt.toISOString(), timezone: tz },
+        scope: "user",
+        totalsByDirection: { incoming: 0, outgoing: 0, internal: 0, total: 0 },
+      });
+    }
+    extensionInvolvementClause = buildCdrExtensionInvolvementClause(userExtensionsForLog);
+    app.log.info(
+      { userId: user.sub, tenantId: user.tenantId, role, userExtensions: userExtensionsForLog },
+      "[CALL_HISTORY_FILTER] scoped to user's owned extensions",
+    );
+  }
+
   const where: any = {
     startedAt: { gte: startAt, lt: endAt },
+    // Drop `:out` find-me/follow-me legs so a single inbound forwarded call
+    // counts as one call, not two. Workspace admins also see deduped totals.
+    isForwarded: false,
     ...(tenantIdFilter
       ? tenantIdFilter.length === 1
         ? { tenantId: tenantIdFilter[0] }
         : { tenantId: { in: tenantIdFilter } }
       : {}),
+    ...(extensionInvolvementClause ?? {}),
   };
 
   if (query.direction !== "all") where.direction = query.direction;
@@ -20028,10 +20178,20 @@ app.get("/calls/history", async (req, reply) => {
 
   const normalizedSearch = String(query.search || "").trim();
   if (normalizedSearch) {
-    where.OR = [
+    // The `where.OR` slot may already be used by the extension-involvement
+    // clause for non-admins. In that case we move it under `AND` so search
+    // narrows further within those rows instead of replacing the user filter.
+    const searchOr = [
       { fromNumber: { contains: normalizedSearch, mode: "insensitive" } },
       { toNumber: { contains: normalizedSearch, mode: "insensitive" } },
     ];
+    if (where.OR) {
+      const existingOr = where.OR;
+      delete where.OR;
+      where.AND = [{ OR: existingOr }, { OR: searchOr }];
+    } else {
+      where.OR = searchOr;
+    }
   }
 
   const skip = (query.page - 1) * query.pageSize;
@@ -22596,6 +22756,9 @@ function resolveDashboardCallRange(
 
 async function aggregateDashboardCallActivity(opts: {
   tenantFilter: Record<string, unknown>;
+  /** Optional per-user scope: "OR fromNumber/toNumber in extensions". Pass when
+   *  the caller is an end user so totals reflect only THEIR calls. */
+  userExtensionFilter?: { OR: Array<Record<string, unknown>> } | null;
   range?: DashboardCallRange;
   customFrom?: Date | null;
   customTo?: Date | null;
@@ -22611,8 +22774,16 @@ async function aggregateDashboardCallActivity(opts: {
   let connectCdrSourceRows = 0;
   let legacyCallRecordRows = 0;
 
+  // 1 call = 1 ConnectCdr row keyed by linkedId. Forwarded :out legs are
+  // synthetic extra rows for the same logical inbound call (find-me/follow-me)
+  // — we drop them so dashboard counts reflect actual calls, not channels.
   const connectRows = await db.connectCdr.findMany({
-    where: { ...opts.tenantFilter, startedAt: timeWhere },
+    where: {
+      ...opts.tenantFilter,
+      ...(opts.userExtensionFilter ?? {}),
+      isForwarded: false,
+      startedAt: timeWhere,
+    },
     select: { startedAt: true, direction: true, disposition: true },
     orderBy: { startedAt: "asc" },
     take: 20_000,
@@ -22629,9 +22800,15 @@ async function aggregateDashboardCallActivity(opts: {
   }
 
   // Legacy fallback only when ConnectCdr has no rows, matching existing behaviour.
+  // The userExtensionFilter is applied here too so end users get their own
+  // legacy rows only.
   if (connectCdrSourceRows === 0) {
     const legacyRows = await db.callRecord.findMany({
-      where: { ...opts.tenantFilter, startedAt: timeWhere },
+      where: {
+        ...opts.tenantFilter,
+        ...(opts.userExtensionFilter ?? {}),
+        startedAt: timeWhere,
+      },
       orderBy: { startedAt: "asc" },
       take: 20_000,
     });
@@ -24674,9 +24851,13 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   const customFrom = query.range === "custom" && query.from ? new Date(query.from) : null;
   const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
 
-  const wantPbxAggregate = query.source === "pbx";
-
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  // PBX-aggregate path returns tenant-wide PBX-side counts and CANNOT be
+  // narrowed to a single user's extensions. End users must always use the
+  // Connect-CDR path so we can apply per-extension scoping; admins are free
+  // to choose either source.
+  const wantPbxAggregate = query.source === "pbx" && isWorkspaceAdminLikeRole(user.role);
+
   // tenantId param is only honoured for super admins; regular users get their own tenant
   const scopeTenantId = isSuperAdmin
     ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
@@ -24769,12 +24950,33 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     const tenantClause: Record<string, unknown> = tenantIdSet && tenantIdSet.length > 0
       ? (tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } })
       : {};
+
+    // End-user KPIs are scoped to the calling user's owned extensions —
+    // workspace admins keep tenant-wide totals.
+    const isWorkspaceAdminCK = isWorkspaceAdminLikeRole(user.role);
+    let userExtensionFilterCK: { OR: Array<Record<string, unknown>> } | null = null;
+    if (!isWorkspaceAdminCK) {
+      const userExts = await getUserExtensionNumbers(user.sub, user.tenantId);
+      userExtensionFilterCK = buildCdrExtensionInvolvementClause(userExts);
+      if (userExts.length === 0) {
+        userExtensionFilterCK = { OR: [{ id: "__no_user_extensions__" }] };
+      }
+    }
+
     const activity = await aggregateDashboardCallActivity({
       tenantFilter: tenantClause,
+      userExtensionFilter: userExtensionFilterCK,
       range: query.range,
       customFrom,
       customTo,
-      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, tenantIdSet, role: user.role, range: query.range },
+      logContext: {
+        endpoint: "call-kpis",
+        tenantId: scopeTenantId,
+        tenantIdSet,
+        role: user.role,
+        range: query.range,
+        userScoped: !isWorkspaceAdminCK,
+      },
     });
 
     // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
@@ -25248,9 +25450,13 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
 
   const nowMs = Date.now();
 
-  // Cache key includes the resolved tenantId + custom range bounds so different scoped views don't bleed into each other.
+  // Cache key includes the resolved tenantId, range bounds, AND the calling
+  // user's id when their dashboard is per-user scoped. Without the userId
+  // suffix two different end users in the same tenant would share each
+  // other's cached chart, leaking calls across users.
   const customSuffix = query.range === "custom" ? `:${query.from ?? ""}:${query.to ?? ""}` : "";
-  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}${customSuffix}`;
+  const userScopeForCacheKey = isWorkspaceAdminLikeRole(user.role) ? "" : `:u:${user.sub}`;
+  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}${customSuffix}${userScopeForCacheKey}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
   // Custom ranges are not cached (the bounds are user-controlled).
   if (cached && nowMs - cached.at < 120_000 && query.range !== "custom") {
@@ -25276,14 +25482,38 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     }
   }
 
+  // End-user dashboards are scoped to the calling user's owned extensions —
+  // a USER seeing the dashboard sees totals/charts for THEIR calls only,
+  // not the whole tenant. Workspace admins keep the tenant-wide view.
+  const isWorkspaceAdminCT = isWorkspaceAdminLikeRole(user.role);
+  let userExtensionFilter: { OR: Array<Record<string, unknown>> } | null = null;
+  if (!isWorkspaceAdminCT) {
+    const userExts = await getUserExtensionNumbers(user.sub, user.tenantId);
+    userExtensionFilter = buildCdrExtensionInvolvementClause(userExts);
+    // No extensions → user has no calls; force a clause that matches nothing
+    // so the chart renders an empty (zero) state rather than tenant-wide totals.
+    if (userExts.length === 0) {
+      userExtensionFilter = { OR: [{ id: "__no_user_extensions__" }] };
+    }
+  }
+
   let activity: DashboardCallActivityAggregate;
   try {
     activity = await aggregateDashboardCallActivity({
       tenantFilter,
+      userExtensionFilter,
       range: query.range,
       customFrom,
       customTo,
-      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, tenantIdSet, role: user.role, range: query.range },
+      logContext: {
+        endpoint: "call-traffic",
+        scope,
+        tenantId: scopeTenantId,
+        tenantIdSet,
+        role: user.role,
+        range: query.range,
+        userScoped: !isWorkspaceAdminCT,
+      },
     });
   } catch (err: any) {
     app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
@@ -25340,6 +25570,112 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   const cacheTtlMs = activity.totals.total === 0 ? 30_000 : 120_000;
   DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs - (120_000 - cacheTtlMs), payload });
   return payload;
+});
+
+// ─── Forensic: PBX vs backend vs dashboard active-call comparison ───────────
+// Diagnostic endpoint to verify the system is counting calls consistently
+// across the three layers:
+//   • pbx:        AMI/ARI view (rawChannelCount + active bridges) — sourced
+//                 from telephony's /telephony/diag.
+//   • backend:    NormalizedCall objects in CallStateStore.getActive(), what
+//                 the WS would broadcast.
+//   • dashboard:  what the calling user actually sees on their dashboard
+//                 (per-tenant + per-extension scope already applied).
+//
+// Lets an operator instantly tell whether overcounting is at the PBX layer,
+// the in-memory store, or the dashboard query.
+app.get("/forensic", async (req, reply) => {
+  let user: JwtUser;
+  try { user = getUser(req); } catch { return reply.status(401).send({ error: "unauthorized" }); }
+  if (!isWorkspaceAdminLikeRole(user.role)) {
+    return reply.status(403).send({ error: "forbidden", required: "workspace_admin" });
+  }
+
+  const telephonyBase = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const auth = req.headers["authorization"];
+  const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token) headers["authorization"] = `Bearer ${token}`;
+
+  type DiagResponse = {
+    timestamp?: string;
+    totalCallsInStore?: number;
+    activeCallCount?: number;
+    storeStats?: { rawChannelCount?: number; hungupRetainedCount?: number };
+    calls?: Array<{
+      id: string; linkedId: string; state: string;
+      tenantId: string | null; direction: string;
+      from: string | null; to: string | null;
+      channels: string[]; extensions: string[];
+      isActive: boolean;
+      activeFilterReasons: string[];
+    }>;
+  };
+
+  let diag: DiagResponse | null = null;
+  let diagError: string | null = null;
+  try {
+    const r = await fetch(`${telephonyBase}/telephony/diag`, { headers });
+    if (r.ok) diag = await r.json() as DiagResponse;
+    else diagError = `telephony diag http_${r.status}`;
+  } catch (err: any) {
+    diagError = `telephony unreachable: ${err?.message || String(err)}`;
+  }
+
+  const allCalls = diag?.calls ?? [];
+  const activeBackendCalls = allCalls.filter((c) => c.isActive);
+
+  // Validity per the user spec: "1 call = 1 bridge with ≥2 valid channels,
+  // exclude Local/* channels". We model this on top of the normalized store:
+  //   • valid call → has at least one non-Local channel and isn't local-only
+  //   • activeFilterReasons captures why a row was excluded.
+  const isValidCall = (c: NonNullable<DiagResponse["calls"]>[number]): boolean => {
+    if (c.activeFilterReasons.includes("local_only")) return false;
+    if (c.activeFilterReasons.includes("no_valid_channel")) return false;
+    if (c.state === "hungup") return false;
+    const realChannels = (c.channels ?? []).filter((n) => !String(n).startsWith("Local/"));
+    return realChannels.length >= 1; // bridged-up calls have ≥2; ringing has 1 — both valid
+  };
+  const validBackendCalls = activeBackendCalls.filter(isValidCall);
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const dashboardScopeTenantId = isSuperAdmin ? null : user.tenantId;
+
+  const matchesTenant = (recordTid: string | null): boolean => {
+    if (isSuperAdmin) return true;
+    if (!dashboardScopeTenantId) return false;
+    if (recordTid === dashboardScopeTenantId) return true;
+    if (recordTid?.startsWith("vpbx:") && recordTid.slice(5) === dashboardScopeTenantId) return true;
+    return false;
+  };
+
+  const dashboardCalls = validBackendCalls.filter((c) => matchesTenant(c.tenantId));
+
+  return reply.send({
+    asOf: new Date().toISOString(),
+    pbx: {
+      rawChannels: diag?.storeStats?.rawChannelCount ?? null,
+      // PBX bridge-level count is approximated from validBackendCalls: each
+      // valid live call corresponds to one PBX bridge (Local/ stripped).
+      activeCalls: validBackendCalls.length,
+      diagError,
+    },
+    backend: {
+      totalInStore: diag?.totalCallsInStore ?? null,
+      activeCalls: activeBackendCalls.length,
+      validActiveCalls: validBackendCalls.length,
+      droppedAsLocal: activeBackendCalls.length - validBackendCalls.length,
+    },
+    dashboard: {
+      activeCalls: dashboardCalls.length,
+      callIds: dashboardCalls.map((c) => c.linkedId || c.id),
+    },
+    scope: {
+      role: user.role,
+      tenantId: user.tenantId ?? null,
+      effective: isSuperAdmin ? "GLOBAL" : "TENANT",
+    },
+  });
 });
 
 // ─── Dashboard: Communications (voicemail + chat) for the signed-in user ────

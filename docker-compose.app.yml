@@ -164,6 +164,10 @@ services:
       # CDR persistence: telephony POSTs completed calls to the API for DB storage.
       CDR_INGEST_URL: ${CDR_INGEST_URL:-http://api:3001/internal/cdr-ingest}
       CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # Connect API base — used on WS connect to fetch the calling user's owned
+      # extensions for per-user live-call filtering. When unset the WS server
+      # falls back to tenant-only scoping.
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:3001}
     ports:
       - "127.0.0.1:3003:3003"
     networks:
