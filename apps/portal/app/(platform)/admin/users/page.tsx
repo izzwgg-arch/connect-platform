@@ -142,6 +142,7 @@ export default function AdminUsersPage() {
 
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
+  const [routeUser, setRouteUser] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [message, setMessage] = useState("");
@@ -287,14 +288,23 @@ export default function AdminUsersPage() {
                           : <button className="btn ghost" onClick={() => action(`/admin/users/${u.id}/disable`, "User disabled")}>Disable</button>}
                         <button className="btn ghost" onClick={() => action(`/admin/users/${u.id}/resend-invite`, "Invite queued")}>Resend</button>
                         {u.extension ? (
-                          <button
-                            className="btn ghost"
-                            disabled={syncingIds.has(u.id)}
-                            onClick={() => syncUser(u.id)}
-                            title="Sync SIP/WebRTC credentials from VitalPBX"
-                          >
-                            {syncingIds.has(u.id) ? "Syncing…" : "Sync SIP"}
-                          </button>
+                          <>
+                            <button
+                              className="btn ghost"
+                              onClick={() => setRouteUser(u)}
+                              title="Set outbound route prefixes for this user"
+                            >
+                              Routes
+                            </button>
+                            <button
+                              className="btn ghost"
+                              disabled={syncingIds.has(u.id)}
+                              onClick={() => syncUser(u.id)}
+                              title="Sync SIP/WebRTC credentials from VitalPBX"
+                            >
+                              {syncingIds.has(u.id) ? "Syncing…" : "Sync SIP"}
+                            </button>
+                          </>
                         ) : null}
                         {syncResults[u.id] ? (
                           <span className={`chip ${syncResults[u.id].startsWith("✓") ? "success" : "danger"}`} style={{ fontSize: 11 }}>
@@ -312,6 +322,7 @@ export default function AdminUsersPage() {
         </section>
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
+        {routeUser ? <OutboundRoutesModal user={routeUser} onClose={() => setRouteUser(null)} /> : null}
         {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId === "ALL" ? "" : effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
@@ -349,6 +360,28 @@ function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => 
             <OutboundRoutePrefixesPanel user={user} />
           </>
         ) : null}
+      </aside>
+    </div>
+  );
+}
+
+function OutboundRoutesModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <aside
+        className="modal"
+        style={{ marginLeft: "auto", width: "min(560px, 96vw)", height: "100vh", borderRadius: "22px 0 0 22px", overflow: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button className="btn ghost" style={{ float: "right" }} onClick={onClose}>Close</button>
+        <div style={{ width: 56, height: 56, borderRadius: 20, background: "linear-gradient(135deg,#0ea5e9,#22c55e)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 22 }}>
+          {user.displayName.slice(0, 1).toUpperCase()}
+        </div>
+        <h2>Outbound Routes</h2>
+        <p className="muted" style={{ marginTop: -4 }}>
+          {user.displayName} · {user.extension ? `Ext ${user.extension.extNumber}` : user.email}
+        </p>
+        <OutboundRoutePrefixesPanel user={user} />
       </aside>
     </div>
   );
