@@ -25275,6 +25275,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       tenantFilter = tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } };
     }
   }
+  app.log.info({ endpoint: "call-traffic", scope, scopeTenantId, tenantIdSet, tenantFilter }, "dashboard_call_traffic_filter_built");
 
   let activity: DashboardCallActivityAggregate;
   try {
