@@ -113,9 +113,15 @@ export class MobilePushNotifier {
     if (this.pushed.has(call.linkedId)) return;
 
     // For internal calls (ext→ext), exclude the calling extension so we only notify
-    // the RECEIVING side. For inbound PSTN calls, call.from is a 10-digit PSTN number
-    // so it never matches a short extension — all listed extensions are recipients.
-    const callerExt = extractShortExtension(call.from ?? "");
+    // the RECEIVING side.
+    //
+    // IMPORTANT: do NOT apply this filter for inbound calls. On IVR/Local-channel
+    // paths Asterisk can rewrite `from` to the destination extension ("110"), which
+    // would make us incorrectly drop the only recipient and skip mobile push entirely
+    // when the app is closed.
+    const callerExt = call.direction === "internal"
+      ? extractShortExtension(call.from ?? "")
+      : null;
 
     // Extract short extension numbers (e.g. "103") from the extensions list.
     // Handles both plain "103" and VitalPBX multi-tenant "T8_103" formats.
