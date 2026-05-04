@@ -1806,6 +1806,14 @@ model MobileDevice {
   lastPushType        String?
   lastPushStatus      String?
   lastPushError       String?
+  // Runtime-permission snapshot reported by the mobile app on every
+  // /mobile/devices/register call. Used by /admin/call-wake-diagnostics
+  // to flag devices that are missing RECORD_AUDIO (answer-then-disconnect)
+  // or POST_NOTIFICATIONS (no heads-up ringer / lock-screen full-screen
+  // intent) without needing the device in hand.
+  permRecordAudio       Boolean?
+  permNotifications     Boolean?
+  permissionsReportedAt DateTime?
   active              Boolean              @default(true)
   deactivatedAt       DateTime?
   lastSeenAt          DateTime             @default(now())

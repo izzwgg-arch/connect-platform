@@ -11655,12 +11655,33 @@ app.post("/mobile/devices/register", async (req, reply) => {
     // S24-vs-S25 (and any other manufacturer/model) at the backend.
     manufacturer: z.string().max(80).optional(),
     model: z.string().max(120).optional(),
-    osVersion: z.string().max(80).optional()
+    osVersion: z.string().max(80).optional(),
+    // Runtime-permission snapshot. Powers /admin/call-wake-diagnostics so
+    // an operator can tell at-a-glance whether a remote user's device is
+    // missing RECORD_AUDIO (answer-then-disconnect symptom) or
+    // POST_NOTIFICATIONS (no heads-up ringer). Sent on every register
+    // call so the snapshot stays fresh as the user grants/revokes.
+    permissions: z.object({
+      recordAudio: z.boolean().optional(),
+      notifications: z.boolean().optional(),
+    }).optional(),
   }).parse(req.body || {});
   const extension = await db.extension.findFirst({
     where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
     select: { id: true },
   });
+
+  // Only set permission columns + reportedAt when the client actually
+  // included a permissions block (older app builds may not). Avoids
+  // clobbering a previously-true value with null after a downgrade.
+  const permissionsPatch =
+    input.permissions
+      ? {
+          permRecordAudio: input.permissions.recordAudio ?? null,
+          permNotifications: input.permissions.notifications ?? null,
+          permissionsReportedAt: new Date(),
+        }
+      : {};
 
   const saved = await db.mobileDevice.upsert({
     where: { expoPushToken: input.expoPushToken },
@@ -11677,6 +11698,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       manufacturer: input.manufacturer || null,
       model: input.model || null,
       osVersion: input.osVersion || null,
+      ...permissionsPatch,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
@@ -11693,6 +11715,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       manufacturer: input.manufacturer || null,
       model: input.model || null,
       osVersion: input.osVersion || null,
+      ...permissionsPatch,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
@@ -11789,6 +11812,9 @@ app.get("/mobile/devices/me", async (req, _reply) => {
       lastPushType: d.lastPushType ?? null,
       lastPushStatus: d.lastPushStatus ?? null,
       lastPushError: d.lastPushError ?? null,
+      permRecordAudio: d.permRecordAudio ?? null,
+      permNotifications: d.permNotifications ?? null,
+      permissionsReportedAt: d.permissionsReportedAt ?? null,
       // Tokens are sensitive; only return the trailing fingerprint.
       expoPushTokenTail: String(d.expoPushToken).slice(-12),
       voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
@@ -11870,6 +11896,9 @@ app.get("/admin/mobile/devices", async (req, reply) => {
       lastPushType: d.lastPushType ?? null,
       lastPushStatus: d.lastPushStatus ?? null,
       lastPushError: d.lastPushError ?? null,
+      permRecordAudio: d.permRecordAudio ?? null,
+      permNotifications: d.permNotifications ?? null,
+      permissionsReportedAt: d.permissionsReportedAt ?? null,
       expoPushTokenTail: String(d.expoPushToken).slice(-12),
       voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
       createdAt: d.createdAt,

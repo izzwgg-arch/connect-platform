@@ -407,6 +407,14 @@ export async function registerMobileDevice(token: string, input: {
   manufacturer?: string;
   model?: string;
   osVersion?: string;
+  // Runtime-permission snapshot. Sent on every register so /admin/call-wake-
+  // diagnostics can flag devices missing RECORD_AUDIO (answer-then-disconnect
+  // bug) or POST_NOTIFICATIONS (no heads-up ringer) without contacting the
+  // user.
+  permissions?: {
+    recordAudio?: boolean;
+    notifications?: boolean;
+  };
 }) {
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {
     method: "POST",
@@ -434,6 +442,9 @@ export type MobileDeviceDiagnostics = {
   lastPushType: string | null;
   lastPushStatus: string | null;
   lastPushError: string | null;
+  permRecordAudio: boolean | null;
+  permNotifications: boolean | null;
+  permissionsReportedAt: string | null;
   expoPushTokenTail: string;
   voipPushTokenTail: string | null;
   deactivatedAt: string | null;

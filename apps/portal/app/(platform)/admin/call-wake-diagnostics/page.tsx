@@ -25,6 +25,9 @@ interface AdminMobileDevice {
   lastPushType: string | null;
   lastPushStatus: string | null;
   lastPushError: string | null;
+  permRecordAudio: boolean | null;
+  permNotifications: boolean | null;
+  permissionsReportedAt: string | null;
   expoPushTokenTail: string;
   voipPushTokenTail: string | null;
   createdAt: string;
@@ -171,9 +174,29 @@ interface CallSummary {
   diagnosisColor: string;
 }
 
-function diagnoseCall(events: WakeEvent[]): { text: string; color: string } {
+function diagnoseCall(
+  events: WakeEvent[],
+  device?: AdminMobileDevice | null,
+): { text: string; color: string } {
   const stages = new Set(events.map((e) => e.stage));
   const any = (s: string) => stages.has(s);
+
+  // Mic-permission diagnosis takes precedence when the call reached the
+  // device but answered-then-disconnected. Without RECORD_AUDIO, the SIP
+  // 200 OK is sent with no audio track and the PBX BYE's almost
+  // immediately, which the wake event timeline alone cannot distinguish
+  // from a generic media failure.
+  if (
+    device?.platform === "ANDROID" &&
+    device.permRecordAudio === false &&
+    any("DEVICE_INVITE_RECEIVED")
+  ) {
+    return {
+      text:
+        "RECORD_AUDIO permission denied on this device — incoming calls answer-then-disconnect. Ask user to grant mic access (Settings → Apps → Connect → Permissions).",
+      color: "#ef4444",
+    };
+  }
 
   if (!any("WAKE_REQUESTED")) {
     return {
@@ -238,7 +261,10 @@ function diagnoseCall(events: WakeEvent[]): { text: string; color: string } {
   };
 }
 
-function groupEventsByCall(events: WakeEvent[]): CallSummary[] {
+function groupEventsByCall(
+  events: WakeEvent[],
+  device?: AdminMobileDevice | null,
+): CallSummary[] {
   const byCall = new Map<string, WakeEvent[]>();
   for (const e of events) {
     if (!byCall.has(e.pbxCallId)) byCall.set(e.pbxCallId, []);
@@ -249,7 +275,7 @@ function groupEventsByCall(events: WakeEvent[]): CallSummary[] {
     const sorted = [...evs].sort(
       (a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
     );
-    const d = diagnoseCall(sorted);
+    const d = diagnoseCall(sorted, device);
     calls.push({ pbxCallId, events: sorted, diagnosis: d.text, diagnosisColor: d.color });
   }
   // Most recent call first
@@ -343,6 +369,16 @@ function DeviceCard({
         >
           last push: {device.lastPushStatus || "never"}
         </span>
+        <PermissionBadge
+          label="mic"
+          granted={device.permRecordAudio}
+          reportedAt={device.permissionsReportedAt}
+        />
+        <PermissionBadge
+          label="notif"
+          granted={device.permNotifications}
+          reportedAt={device.permissionsReportedAt}
+        />
         {!device.active && (
           <span
             style={{
@@ -362,6 +398,56 @@ function DeviceCard({
         FCM: …{device.expoPushTokenTail}
       </div>
     </div>
+  );
+}
+
+function PermissionBadge({
+  label,
+  granted,
+  reportedAt,
+}: {
+  label: string;
+  granted: boolean | null | undefined;
+  reportedAt: string | null;
+}) {
+  // Three states:
+  //   • unknown (null/undefined or never reported) — older app build, gray
+  //   • granted (true) — green
+  //   • denied (false) — red, this is the actionable signal
+  let bg: string;
+  let color: string;
+  let text: string;
+  if (granted === true) {
+    bg = "#14532d22";
+    color = "#22c55e";
+    text = `${label} ✓`;
+  } else if (granted === false) {
+    bg = "#7f1d1d22";
+    color = "#ef4444";
+    text = `${label} ✕`;
+  } else {
+    bg = "#1f293722";
+    color = "#6b7280";
+    text = reportedAt ? `${label} ?` : `${label} (old app)`;
+  }
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        padding: "2px 6px",
+        borderRadius: 3,
+        background: bg,
+        color,
+        fontWeight: 600,
+      }}
+      title={
+        reportedAt
+          ? `Reported ${new Date(reportedAt).toLocaleString()}`
+          : "No permission state reported yet (app needs to re-register)"
+      }
+    >
+      {text}
+    </span>
   );
 }
 
@@ -591,7 +677,7 @@ export default function CallWakeDiagnosticsPage() {
     void loadEvents();
   }, [loadEvents]);
 
-  const calls = useMemo(() => groupEventsByCall(events), [events]);
+  const calls = useMemo(() => groupEventsByCall(events, selectedDevice), [events, selectedDevice]);
 
   return (
     <RoleGate

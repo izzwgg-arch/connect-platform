@@ -367,6 +367,42 @@ async function mobileDeviceRegistrationMetadata() {
   if (!model) model = (Device.modelName || undefined) ?? undefined;
   if (!osVersion) osVersion = (Device.osVersion || undefined) ?? undefined;
 
+  // Snapshot the runtime permissions that affect call delivery / answer.
+  // Sent to the backend on every register so /admin/call-wake-diagnostics
+  // can render a per-device permission badge and the auto-triage can flag
+  // "missing RECORD_AUDIO" as a likely cause of answer-then-disconnect.
+  let permRecordAudio: boolean | undefined;
+  let permNotifications: boolean | undefined;
+  if (Platform.OS === "android") {
+    try {
+      permRecordAudio = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      );
+    } catch {
+      permRecordAudio = undefined;
+    }
+  } else {
+    // iOS records the mic permission inside react-native-webrtc; we don't
+    // have a reliable sync probe here, so we leave it undefined and rely
+    // on the in-call answer pipeline to surface failures. This still
+    // populates the Android-side badge which is the actual S25 path we're
+    // debugging.
+    permRecordAudio = undefined;
+  }
+  try {
+    const perm = await Notifications.getPermissionsAsync().catch(() => null);
+    if (perm) permNotifications = perm.status === "granted";
+  } catch {
+    permNotifications = undefined;
+  }
+  const permissions =
+    permRecordAudio !== undefined || permNotifications !== undefined
+      ? {
+          ...(permRecordAudio !== undefined ? { recordAudio: permRecordAudio } : {}),
+          ...(permNotifications !== undefined ? { notifications: permNotifications } : {}),
+        }
+      : undefined;
+
   return {
     deviceId: await getStableInstallationDeviceId(),
     appVersion: mobileAppVersion(),
@@ -374,6 +410,7 @@ async function mobileDeviceRegistrationMetadata() {
     ...(manufacturer ? { manufacturer } : {}),
     ...(model ? { model } : {}),
     ...(osVersion ? { osVersion } : {}),
+    ...(permissions ? { permissions } : {}),
   };
 }
 
