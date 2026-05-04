@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -659,19 +660,16 @@ export default function CallFlightPage() {
               borderRadius: 8, color: "#f1f5f9", padding: "10px 14px", fontSize: 13, outline: "none",
             }}
           />
-          <select
+          <ConnectSelect
+            size="sm"
             value={resultFilter}
-            onChange={e => { setResultFilter(e.target.value); }}
-            style={{
-              background: "#1f2937", border: "1px solid #374151", borderRadius: 8,
-              color: "#f1f5f9", padding: "10px 12px", fontSize: 13, outline: "none",
-            }}
-          >
-            <option value="">All results</option>
-            {Object.entries(RESULT_CONFIG).map(([k, v]) => (
-              <option key={k} value={k}>{v.label}</option>
-            ))}
-          </select>
+            onChange={setResultFilter}
+            style={{ minWidth: 150 }}
+            options={[
+              { value: "", label: "All results" },
+              ...Object.entries(RESULT_CONFIG).map(([k, v]) => ({ value: k, label: v.label })),
+            ]}
+          />
           <button
             onClick={() => doSearch(0)}
             disabled={loading}

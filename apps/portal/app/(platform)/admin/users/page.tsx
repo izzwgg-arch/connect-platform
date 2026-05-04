@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { CheckCircle2, Mail, Plus, Search, Shield, UserCog, XCircle } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -234,21 +235,31 @@ export default function AdminUsersPage() {
               <input className="input" style={{ paddingLeft: 36 }} placeholder="Search name, email, phone, extension..." value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
             {isSuper ? (
-              <select className="input" style={{ width: 230 }} value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)}>
-                <option value="ALL">All tenants</option>
-                {(data?.tenants || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+              <ConnectSelect size="sm" value={selectedTenantId} onChange={setSelectedTenantId}
+                style={{ width: 230 }}
+                searchable
+                options={[
+                  { value: "ALL", label: "All tenants" },
+                  ...(data?.tenants || []).map((t) => ({ value: t.id, label: t.name })),
+                ]}
+              />
             ) : null}
-            <select className="input" style={{ width: 170 }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-              <option value="all">All roles</option>
-              {DEFAULT_PORTAL_ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-            <select className="input" style={{ width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="all">All status</option>
-              <option value="INVITED">Invited</option>
-              <option value="ACTIVE">Active</option>
-              <option value="DISABLED">Disabled</option>
-            </select>
+            <ConnectSelect size="sm" value={roleFilter} onChange={setRoleFilter}
+              style={{ width: 170 }}
+              options={[
+                { value: "all", label: "All roles" },
+                ...DEFAULT_PORTAL_ROLES.map((r) => ({ value: r.id, label: r.label })),
+              ]}
+            />
+            <ConnectSelect size="sm" value={statusFilter} onChange={setStatusFilter}
+              style={{ width: 150 }}
+              options={[
+                { value: "all", label: "All status" },
+                { value: "INVITED", label: "Invited" },
+                { value: "ACTIVE", label: "Active" },
+                { value: "DISABLED", label: "Disabled" },
+              ]}
+            />
             <button className="btn" onClick={() => setCreating(true)}><Plus size={16} /> Create User</button>
           </div>
           {message ? (
@@ -847,25 +858,38 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
         </div>
         <div className="grid two" style={{ marginTop: 16 }}>
           <Field label="Tenant">
-            <select className="input" value={form.tenantId} disabled={mode === "edit"} onChange={(e) => setForm({ ...form, tenantId: e.target.value, extensionId: "" })}>
-              <option value="">Select tenant</option>
-              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}{t.status === "SUSPENDED" ? " (suspended)" : ""}</option>)}
-            </select>
+            <ConnectSelect
+              value={form.tenantId}
+              disabled={mode === "edit"}
+              onChange={(v) => setForm({ ...form, tenantId: v, extensionId: "" })}
+              searchable
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "Select tenant" },
+                ...tenants.map((t) => ({ value: t.id, label: `${t.name}${t.status === "SUSPENDED" ? " (suspended)" : ""}` })),
+              ]}
+            />
           </Field>
           <Field label="Extension">
-            <select className="input" value={form.extensionId} onChange={(e) => pickExtension(e.target.value)}>
-              <option value="">Select extension</option>
-              {extensionOptions.map((e) => {
-                const assigned = e.ownerUserId && e.ownerUserId !== user?.id;
-                const pieces = [
-                  `${e.extNumber} \u00b7 ${e.displayName}`,
-                  e.pbxDeviceName ? `(${e.pbxDeviceName})` : null,
-                  assigned ? "\u2014 assigned" : null,
-                  !e.webrtcEnabled ? "\u2014 webrtc off" : null,
-                ].filter(Boolean);
-                return <option key={e.id} value={e.id} disabled={!!assigned}>{pieces.join(" ")}</option>;
-              })}
-            </select>
+            <ConnectSelect
+              value={form.extensionId}
+              onChange={pickExtension}
+              searchable
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "Select extension" },
+                ...extensionOptions.map((e) => {
+                  const assigned = !!(e.ownerUserId && e.ownerUserId !== user?.id);
+                  const pieces = [
+                    `${e.extNumber} · ${e.displayName}`,
+                    e.pbxDeviceName ? `(${e.pbxDeviceName})` : null,
+                    assigned ? "— assigned" : null,
+                    !e.webrtcEnabled ? "— webrtc off" : null,
+                  ].filter(Boolean);
+                  return { value: e.id, label: pieces.join(" "), disabled: assigned };
+                }),
+              ]}
+            />
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
               <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
                 <input type="checkbox" checked={userFacingOnly} onChange={(e) => setUserFacingOnly(e.target.checked)} />
@@ -875,9 +899,12 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
             </div>
           </Field>
           <Field label="Role">
-            <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {roleOptions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
+            <ConnectSelect
+              value={form.role}
+              onChange={(v) => setForm({ ...form, role: v })}
+              style={{ width: "100%" }}
+              options={roleOptions.map((r) => ({ value: r.id, label: r.label }))}
+            />
           </Field>
           <Field label="Email"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="First name"><input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></Field>

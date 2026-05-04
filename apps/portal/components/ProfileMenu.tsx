@@ -8,6 +8,7 @@ import { apiDelete, apiGet, apiUploadVoicemailGreeting, ApiError } from "../serv
 import { clearAuthSession } from "../services/session";
 import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
+import { ConnectSelect } from "./ConnectSelect";
 
 type ControlPanelResponse = {
   extension: null | {
@@ -251,11 +252,17 @@ export function ProfileMenu() {
 
         <section className="ecp-section ecp-admin" aria-label="Role and admin controls">
           <div className="ecp-section-title">Role / Admin</div>
-          <select className="select" value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
-            <option value="END_USER">End User</option>
-            <option value="TENANT_ADMIN">Tenant Admin</option>
-            <option value="SUPER_ADMIN">Super Admin</option>
-          </select>
+          <ConnectSelect
+            className="select"
+            value={role}
+            onChange={(v) => setRole(v as typeof role)}
+            options={[
+              { value: "END_USER", label: "End User" },
+              { value: "TENANT_ADMIN", label: "Tenant Admin" },
+              { value: "SUPER_ADMIN", label: "Super Admin" },
+            ]}
+            style={{ width: "100%" }}
+          />
           <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
         </section>
 

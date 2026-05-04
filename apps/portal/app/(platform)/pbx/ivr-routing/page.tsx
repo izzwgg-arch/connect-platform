@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -899,11 +900,12 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
             <input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Main Business IVR" />
 
             <label style={labelStyle}>Type</label>
-            <select style={inputStyle} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as RouteType }))}>
-              {(Object.entries(ROUTE_TYPE_LABELS) as [RouteType, string][]).map(([v, l]) => (
-                <option key={v} value={v}>{l}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={form.type}
+              onChange={(v) => setForm((f) => ({ ...f, type: v as RouteType }))}
+              style={{ width: "100%", marginBottom: 14 }}
+              options={(Object.entries(ROUTE_TYPE_LABELS) as [RouteType, string][]).map(([v, l]) => ({ value: v, label: l }))}
+            />
 
             <SectionLabel>Greeting &amp; Prompts</SectionLabel>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
@@ -2909,9 +2911,14 @@ function ScheduleTab({ schedule, profiles, tenantId, canManage, onRefresh }: {
 
       {/* Timezone */}
       <SectionLabel>Timezone</SectionLabel>
-      <select style={{ ...inputStyle, maxWidth: 320 }} value={form.timezone} onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))} disabled={!canManage}>
-        {ALL_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-      </select>
+      <ConnectSelect
+        value={form.timezone}
+        onChange={(v) => setForm((f) => ({ ...f, timezone: v }))}
+        disabled={!canManage}
+        searchable
+        style={{ maxWidth: 320, width: "100%", marginBottom: 2 }}
+        options={ALL_TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
+      />
 
       {/* Business hours */}
       <SectionLabel>Business Hours</SectionLabel>
@@ -3055,12 +3062,15 @@ function OverrideTab({ override, profiles, tenantId, canManage, onRefresh }: {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <label style={labelStyle}>Override Profile</label>
-            <select style={inputStyle} value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-              <option value="">— Select profile —</option>
-              {profiles.filter((p) => p.isActive).map((p) => (
-                <option key={p.id} value={p.id}>{p.name} ({ROUTE_TYPE_LABELS[p.type]})</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={profileId}
+              onChange={setProfileId}
+              style={{ width: "100%", marginBottom: 2 }}
+              options={[
+                { value: "", label: "— Select profile —" },
+                ...profiles.filter((p) => p.isActive).map((p) => ({ value: p.id, label: `${p.name} (${ROUTE_TYPE_LABELS[p.type]})` })),
+              ]}
+            />
           </div>
           <div>
             <label style={labelStyle}>Reason (optional)</label>

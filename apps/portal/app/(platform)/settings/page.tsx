@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useSipPhone } from "../../../hooks/useSipPhone";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import {
   DEFAULT_WEB_RINGTONE_ID,
   WEB_RINGTONE_OPTIONS,
@@ -105,20 +106,32 @@ function GeneralTab() {
           </div>
           <div>
             <label className="label">Language</label>
-            <select className="select" value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="en">English (US)</option>
-              <option value="en-gb">English (UK)</option>
-              <option value="es">Español</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
-            </select>
+            <ConnectSelect
+              className="select"
+              value={language}
+              onChange={setLanguage}
+              options={[
+                { value: "en", label: "English (US)" },
+                { value: "en-gb", label: "English (UK)" },
+                { value: "es", label: "Español" },
+                { value: "fr", label: "Français" },
+                { value: "de", label: "Deutsch" },
+              ]}
+              style={{ width: "100%" }}
+            />
           </div>
           <div>
             <label className="label">Theme</label>
-            <select className="select" value={theme} onChange={(e) => setTheme(e.target.value as "dark" | "light")}>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-            </select>
+            <ConnectSelect
+              className="select"
+              value={theme}
+              onChange={(v) => setTheme(v as "dark" | "light")}
+              options={[
+                { value: "dark", label: "Dark" },
+                { value: "light", label: "Light" },
+              ]}
+              style={{ width: "100%" }}
+            />
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
@@ -336,10 +349,15 @@ function ForwardRuleRow({ label, value, onChange }: { label: string; value: stri
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
       <label style={{ color: "var(--text-dim)", minWidth: 220 }}>{label}</label>
-      <select className="select" style={{ flex: 1, maxWidth: 200 }} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="Same as all Calls">Same as all Calls</option>
-        {FWD_DESTINATIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-      </select>
+      <ConnectSelect
+        value={value}
+        onChange={onChange}
+        options={[
+          { value: "Same as all Calls", label: "Same as all Calls" },
+          ...FWD_DESTINATIONS.map((d) => ({ value: d, label: d })),
+        ]}
+        style={{ flex: 1, maxWidth: 200 }}
+      />
     </div>
   );
 }
@@ -418,12 +436,16 @@ function AudioTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <label className="label">Input Device</label>
-            <select className="select" value={selectedMic} onChange={(e) => setSelectedMic(e.target.value)}>
-              <option value="">System Default</option>
-              {micDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              className="select"
+              value={selectedMic}
+              onChange={setSelectedMic}
+              options={[
+                { value: "", label: "System Default" },
+                ...micDevices.map((d) => ({ value: d.deviceId, label: d.label || `Microphone ${d.deviceId.slice(0, 8)}` })),
+              ]}
+              style={{ width: "100%" }}
+            />
           </div>
           {micTesting ? (
             <div>
@@ -455,12 +477,16 @@ function AudioTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <label className="label">Output Device</label>
-            <select className="select" value={selectedSpeaker} onChange={(e) => setSelectedSpeaker(e.target.value)}>
-              <option value="">System Default</option>
-              {speakerDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label || `Speaker ${d.deviceId.slice(0, 8)}`}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              className="select"
+              value={selectedSpeaker}
+              onChange={setSelectedSpeaker}
+              options={[
+                { value: "", label: "System Default" },
+                ...speakerDevices.map((d) => ({ value: d.deviceId, label: d.label || `Speaker ${d.deviceId.slice(0, 8)}` })),
+              ]}
+              style={{ width: "100%" }}
+            />
           </div>
           <button
             className="btn ghost"
@@ -479,31 +505,33 @@ function AudioTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <label className="label">Incoming Ringtone</label>
-            <select
+            <ConnectSelect
               className="select"
               value={incomingRingtone}
-              onChange={(e) => {
-                const next = e.target.value as WebRingtoneId;
+              onChange={(v) => {
+                const next = v as WebRingtoneId;
                 setWebIncomingRingtone(next);
                 setIncomingRingtoneId(next);
               }}
-            >
-              {WEB_RINGTONE_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </select>
+              options={WEB_RINGTONE_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+              style={{ width: "100%" }}
+            />
           </div>
           <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
             Connect Default uses the bundled Connect ringtone. Classic Ring keeps the legacy generated tone.
           </div>
           <div>
             <label className="label">Ringtone Device</label>
-            <select className="select">
-            <option>Same as Speaker</option>
-            {speakerDevices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>{d.label || "Speaker"}</option>
-            ))}
-            </select>
+            <ConnectSelect
+              className="select"
+              value=""
+              onChange={() => {}}
+              options={[
+                { value: "", label: "Same as Speaker" },
+                ...speakerDevices.map((d) => ({ value: d.deviceId, label: d.label || "Speaker" })),
+              ]}
+              style={{ width: "100%" }}
+            />
           </div>
         </div>
       </section>

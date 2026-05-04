@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Mail } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -343,14 +344,16 @@ export default function SettingsEmailPage() {
                     </div>
                     <div className="gw-field">
                       <label>Integration type</label>
-                      <select
+                      <ConnectSelect
                         className="input"
                         value={integrationType}
-                        onChange={(e) => setIntegrationType(e.target.value as "SMTP" | "OAUTH")}
-                      >
-                        <option value="SMTP">SMTP (app password) — supported now</option>
-                        <option value="OAUTH">OAuth Gmail API — coming soon</option>
-                      </select>
+                        onChange={(v) => setIntegrationType(v as "SMTP" | "OAUTH")}
+                        style={{ width: "100%" }}
+                        options={[
+                          { value: "SMTP", label: "SMTP (app password) — supported now" },
+                          { value: "OAUTH", label: "OAuth Gmail API — coming soon" },
+                        ]}
+                      />
                     </div>
                     <div className="gw-field">
                       <label>SMTP host</label>

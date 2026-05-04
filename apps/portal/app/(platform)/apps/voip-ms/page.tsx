@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { normalizeUsCanadaToE164 } from "@connect/shared";
@@ -622,12 +623,16 @@ function NumberAssignForm({
       )}
 
       {extensions.length > 0 ? (
-        <select className="input" style={{ fontSize: 12 }} value={extId} onChange={(e) => setExtId(e.target.value)}>
-          <option value="">— no extension —</option>
-          {extensions.map((e) => (
-            <option key={e.id} value={e.id}>Ext {e.extNumber}{e.displayName ? ` — ${e.displayName}` : ""}</option>
-          ))}
-        </select>
+        <ConnectSelect
+          value={extId}
+          onChange={setExtId}
+          searchable
+          style={{ width: "100%", fontSize: 12 }}
+          options={[
+            { value: "", label: "— no extension —" },
+            ...extensions.map((e) => ({ value: e.id, label: `Ext ${e.extNumber}${e.displayName ? ` — ${e.displayName}` : ""}` })),
+          ]}
+        />
       ) : (
         <input
           className="input"

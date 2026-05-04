@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -432,24 +433,27 @@ function MohClassPicker({
     </div>
   );
 
+  const allMohOptions = [
+    { value: "", label: "— Select MOH class —" },
+    ...GROUP_ORDER.flatMap((g) => {
+      const list = grouped.get(g);
+      if (!list || list.length === 0) return [];
+      return list.map((o) => ({
+        value: o.value,
+        label: `[${GROUP_LABELS[g]}] ${o.tenantLabel && o.group === "other" ? `${o.label} (${o.tenantLabel})` : o.label}`,
+      }));
+    }),
+  ];
+
   return (
     <div>
-      <select style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— Select MOH class —</option>
-        {GROUP_ORDER.map((g) => {
-          const list = grouped.get(g);
-          if (!list || list.length === 0) return null;
-          return (
-            <optgroup key={g} label={GROUP_LABELS[g]}>
-              {list.map((o) => (
-                <option key={`${o.group}:${o.value}`} value={o.value}>
-                  {o.tenantLabel && o.group === "other" ? `${o.label} (${o.tenantLabel})` : o.label}
-                </option>
-              ))}
-            </optgroup>
-          );
-        })}
-      </select>
+      <ConnectSelect
+        value={value}
+        onChange={onChange}
+        style={{ width: "100%", marginBottom: 6 }}
+        searchable
+        options={allMohOptions}
+      />
       {controls}
     </div>
   );
@@ -631,9 +635,12 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
             <input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Holiday Jazz" />
 
             <label style={labelStyle}>Type</label>
-            <select style={inputStyle} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as HoldType }))}>
-              {(Object.entries(TYPE_LABELS) as [HoldType, string][]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            <ConnectSelect
+              value={form.type}
+              onChange={(v) => setForm((f) => ({ ...f, type: v as HoldType }))}
+              style={{ width: "100%", marginBottom: 14 }}
+              options={(Object.entries(TYPE_LABELS) as [HoldType, string][]).map(([v, l]) => ({ value: v, label: l }))}
+            />
 
             <label style={labelStyle}>VitalPBX MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(runtime class from synced PBX catalog)</span></label>
             <MohClassPicker
@@ -772,19 +779,30 @@ function ScheduleTab({ schedule, profiles, tenantId, canManage, onRefresh }: {
       {saved && <div style={{ color: "#86efac", fontSize: 13, marginBottom: 10 }}>Schedule saved.</div>}
 
       <SectionLabel>Timezone</SectionLabel>
-      <select style={{ ...inputStyle, maxWidth: 320 }} value={tz} onChange={(e) => setTz(e.target.value)} disabled={!canManage}>
-        {ALL_TIMEZONES.map((z) => <option key={z} value={z}>{z}</option>)}
-      </select>
+      <ConnectSelect
+        value={tz}
+        onChange={setTz}
+        disabled={!canManage}
+        searchable
+        style={{ maxWidth: 320, width: "100%", marginBottom: 2 }}
+        options={ALL_TIMEZONES.map((z) => ({ value: z, label: z }))}
+      />
 
       <SectionLabel>Default Profile Slots</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
         {([["Default / Business Hours", defId, setDefId], ["After Hours Fallback", ahId, setAhId], ["Holiday Fallback", holId, setHolId]] as const).map(([label, val, setter]) => (
           <div key={label} style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 200, fontSize: 13, color: "#94a3b8", flexShrink: 0 }}>{label}</span>
-            <select style={{ ...inputStyle, flex: 1 }} value={val} onChange={(e) => (setter as any)(e.target.value)} disabled={!canManage}>
-              <option value="">— Not set —</option>
-              {profs.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.vitalPbxMohClassName})</option>)}
-            </select>
+            <ConnectSelect
+              value={val}
+              onChange={(v) => (setter as (v: string) => void)(v)}
+              disabled={!canManage}
+              style={{ flex: 1 }}
+              options={[
+                { value: "", label: "— Not set —" },
+                ...profs.map((p) => ({ value: p.id, label: `${p.name} (${p.vitalPbxMohClassName})` })),
+              ]}
+            />
           </div>
         ))}
       </div>
@@ -827,20 +845,31 @@ function ScheduleTab({ schedule, profiles, tenantId, canManage, onRefresh }: {
             <h3 style={{ margin: "0 0 18px", fontSize: 15, fontWeight: 700 }}>Add Schedule Rule</h3>
             {ruleErr && <div style={{ color: "#fca5a5", fontSize: 12, marginBottom: 10 }}>{ruleErr}</div>}
             <label style={labelStyle}>Rule Type</label>
-            <select style={inputStyle} value={ruleForm.ruleType} onChange={(e) => setRuleForm((f) => ({ ...f, ruleType: e.target.value as RuleType }))}>
-              {(Object.entries(RULE_LABELS) as [RuleType, string][]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            <ConnectSelect
+              value={ruleForm.ruleType}
+              onChange={(v) => setRuleForm((f) => ({ ...f, ruleType: v as RuleType }))}
+              style={{ width: "100%", marginBottom: 14 }}
+              options={(Object.entries(RULE_LABELS) as [RuleType, string][]).map(([v, l]) => ({ value: v, label: l }))}
+            />
             <label style={labelStyle}>Hold Profile</label>
-            <select style={inputStyle} value={ruleForm.profileId} onChange={(e) => setRuleForm((f) => ({ ...f, profileId: e.target.value }))}>
-              <option value="">— Select —</option>
-              {profs.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.vitalPbxMohClassName})</option>)}
-            </select>
+            <ConnectSelect
+              value={ruleForm.profileId}
+              onChange={(v) => setRuleForm((f) => ({ ...f, profileId: v }))}
+              style={{ width: "100%", marginBottom: 14 }}
+              options={[
+                { value: "", label: "— Select —" },
+                ...profs.map((p) => ({ value: p.id, label: `${p.name} (${p.vitalPbxMohClassName})` })),
+              ]}
+            />
             {ruleForm.ruleType === "weekly" && (
               <>
                 <label style={labelStyle}>Day</label>
-                <select style={inputStyle} value={ruleForm.weekday} onChange={(e) => setRuleForm((f) => ({ ...f, weekday: parseInt(e.target.value) }))}>
-                  {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                </select>
+                <ConnectSelect
+                  value={String(ruleForm.weekday)}
+                  onChange={(v) => setRuleForm((f) => ({ ...f, weekday: parseInt(v) }))}
+                  style={{ width: "100%", marginBottom: 14 }}
+                  options={DAY_NAMES.map((d, i) => ({ value: String(i), label: d }))}
+                />
                 <div style={{ display: "flex", gap: 12 }}>
                   <div style={{ flex: 1 }}><label style={labelStyle}>Start</label><input type="time" style={{ ...timeInput, width: "100%" }} value={ruleForm.startTime} onChange={(e) => setRuleForm((f) => ({ ...f, startTime: e.target.value }))} /></div>
                   <div style={{ flex: 1 }}><label style={labelStyle}>End</label><input type="time" style={{ ...timeInput, width: "100%" }} value={ruleForm.endTime} onChange={(e) => setRuleForm((f) => ({ ...f, endTime: e.target.value }))} /></div>
@@ -937,12 +966,15 @@ function OverrideTab({ override, profiles, tenantId, canManage, onRefresh }: {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <label style={labelStyle}>Hold Profile to activate</label>
-            <select style={inputStyle} value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-              <option value="">— Select profile —</option>
-              {profiles.filter((p) => p.isActive).map((p) => (
-                <option key={p.id} value={p.id}>{p.name} → {p.vitalPbxMohClassName}{p.holdAnnouncementEnabled ? " + 📢" : ""}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={profileId}
+              onChange={setProfileId}
+              style={{ width: "100%", marginBottom: 2 }}
+              options={[
+                { value: "", label: "— Select profile —" },
+                ...profiles.filter((p) => p.isActive).map((p) => ({ value: p.id, label: `${p.name} → ${p.vitalPbxMohClassName}${p.holdAnnouncementEnabled ? " + 📢" : ""}` })),
+              ]}
+            />
           </div>
           <div>
             <label style={labelStyle}>Reason (optional)</label>

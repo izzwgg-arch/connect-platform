@@ -9,6 +9,7 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { SearchInput } from "../../../../components/SearchInput";
 import { StatusChip } from "../../../../components/StatusChip";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import {
@@ -148,9 +149,12 @@ function QueueEditor({
         </div>
         <div className="form-field" style={{ gridColumn: "1 / -1" }}>
           <label className="label">Ring Strategy</label>
-          <select className="input" value={form.strategy} onChange={(e) => set("strategy")(e.target.value)}>
-            {STRATEGIES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          <ConnectSelect
+            value={form.strategy}
+            onChange={set("strategy")}
+            style={{ width: "100%" }}
+            options={STRATEGIES.map((s) => ({ value: s.value, label: s.label }))}
+          />
         </div>
         <div className="form-field">
           <label className="label">Call Timeout (sec)</label>

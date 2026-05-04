@@ -20,6 +20,7 @@ import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PermissionGate } from "../../../components/PermissionGate";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useSipPhone } from "../../../hooks/useSipPhone";
@@ -358,7 +359,7 @@ function ContactModal({ contact, onClose, onSaved }: { contact?: Contact | null;
             <span>{avatarFile ? avatarFile.name : "Upload profile picture"}</span>
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} />
           </label>
-          <label><span>Type</span><select value={form.type} onChange={(e) => update("type", e.target.value as ContactForm["type"])}><option value="external">External Contact</option><option value="company">Company Contact</option></select></label>
+          <label><span>Type</span><ConnectSelect size="sm" value={form.type} onChange={(v) => update("type", v as ContactForm["type"])} options={[{ value: "external", label: "External Contact" }, { value: "company", label: "Company Contact" }]} /></label>
           <label><span>First name</span><input value={form.firstName} onChange={(e) => update("firstName", e.target.value)} /></label>
           <label><span>Last name</span><input value={form.lastName} onChange={(e) => update("lastName", e.target.value)} /></label>
           <label><span>Display name</span><input value={form.displayName} onChange={(e) => update("displayName", e.target.value)} /></label>
@@ -393,7 +394,7 @@ function DynamicPhones({ phones, onChange }: { phones: ContactPhone[]; onChange:
       <div><h3>Phone numbers</h3><button type="button" onClick={() => onChange([...phones, { type: "mobile", numberRaw: "" }])}><Plus size={14} />Add phone</button></div>
       {phones.map((phone, index) => (
         <div className="cx-dynamic-row" key={index}>
-          <select value={phone.type} onChange={(e) => onChange(phones.map((p, i) => i === index ? { ...p, type: e.target.value as PhoneType } : p))}><option value="mobile">Mobile</option><option value="office">Office</option><option value="home">Home</option><option value="other">Other</option></select>
+          <ConnectSelect size="sm" value={phone.type} onChange={(v) => onChange(phones.map((p, i) => i === index ? { ...p, type: v as PhoneType } : p))} options={[{ value: "mobile", label: "Mobile" }, { value: "office", label: "Office" }, { value: "home", label: "Home" }, { value: "other", label: "Other" }]} />
           <input type="tel" value={phone.numberRaw} onChange={(e) => onChange(phones.map((p, i) => i === index ? { ...p, numberRaw: e.target.value } : p))} placeholder="(845) 555-1234" />
           <button type="button" onClick={() => onChange(phones.filter((_, i) => i !== index))}><X size={14} /></button>
         </div>
@@ -408,7 +409,7 @@ function DynamicEmails({ emails, onChange }: { emails: ContactEmail[]; onChange:
       <div><h3>Email addresses</h3><button type="button" onClick={() => onChange([...emails, { type: "work", email: "" }])}><Plus size={14} />Add email</button></div>
       {emails.map((email, index) => (
         <div className="cx-dynamic-row" key={index}>
-          <select value={email.type} onChange={(e) => onChange(emails.map((item, i) => i === index ? { ...item, type: e.target.value as EmailType } : item))}><option value="work">Work</option><option value="personal">Personal</option><option value="other">Other</option></select>
+          <ConnectSelect size="sm" value={email.type} onChange={(v) => onChange(emails.map((item, i) => i === index ? { ...item, type: v as EmailType } : item))} options={[{ value: "work", label: "Work" }, { value: "personal", label: "Personal" }, { value: "other", label: "Other" }]} />
           <input type="email" value={email.email} onChange={(e) => onChange(emails.map((item, i) => i === index ? { ...item, email: e.target.value } : item))} placeholder="name@company.com" />
           <button type="button" onClick={() => onChange(emails.filter((_, i) => i !== index))}><X size={14} /></button>
         </div>

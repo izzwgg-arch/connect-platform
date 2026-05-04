@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
 import { callsForTenant } from "../services/liveCallState";
+import { ConnectSelect } from "./ConnectSelect";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -230,19 +231,20 @@ export function PresenceGrid({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select
-          className="select"
+        <ConnectSelect
+          size="sm"
           value={stateFilter}
-          onChange={(e) => setStateFilter(e.target.value as PresenceState | "all")}
+          onChange={(v) => setStateFilter(v as PresenceState | "all")}
           style={{ width: 150 }}
-        >
-          <option value="all">All States</option>
-          <option value="registered">Available</option>
-          <option value="ringing">Ringing</option>
-          <option value="active">On Call</option>
-          <option value="busy">Busy</option>
-          <option value="offline">Offline</option>
-        </select>
+          options={[
+            { value: "all", label: "All States" },
+            { value: "registered", label: "Available" },
+            { value: "ringing", label: "Ringing" },
+            { value: "active", label: "On Call" },
+            { value: "busy", label: "Busy" },
+            { value: "offline", label: "Offline" },
+          ]}
+        />
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, fontSize: 12, flexWrap: "wrap" }}>
           {counts.active > 0 ? (

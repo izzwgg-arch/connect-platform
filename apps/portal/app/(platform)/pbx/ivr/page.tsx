@@ -7,6 +7,7 @@ import { EmptyState } from "../../../../components/EmptyState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { ErrorState } from "../../../../components/ErrorState";
 import { StatusChip } from "../../../../components/StatusChip";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
@@ -84,18 +85,14 @@ function DestRow({
 }) {
   return (
     <tr>
-      <td style={{ width: 70 }}>
-        <select
-          className="select"
+      <td style={{ width: 90 }}>
+        <ConnectSelect
+          size="sm"
           value={opt.digit}
-          onChange={(e) => onChange(idx, "digit", e.target.value)}
-        >
-          {DIGIT_OPTIONS.map((d) => (
-            <option key={d} value={d} disabled={d !== opt.digit && usedDigits.has(d)}>
-              Press {d}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => onChange(idx, "digit", v)}
+          style={{ width: "100%" }}
+          options={DIGIT_OPTIONS.map((d) => ({ value: d, label: `Press ${d}`, disabled: d !== opt.digit && usedDigits.has(d) }))}
+        />
       </td>
       <td>
         <input
@@ -106,15 +103,13 @@ function DestRow({
         />
       </td>
       <td style={{ width: 160 }}>
-        <select
-          className="select"
+        <ConnectSelect
+          size="sm"
           value={opt.destType}
-          onChange={(e) => onChange(idx, "destType", e.target.value as DestinationType)}
-        >
-          {Object.entries(DEST_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
-        </select>
+          onChange={(v) => onChange(idx, "destType", v as DestinationType)}
+          style={{ width: "100%" }}
+          options={Object.entries(DEST_LABELS).map(([k, v]) => ({ value: k, label: v }))}
+        />
       </td>
       <td>
         {opt.destType !== "operator" && opt.destType !== "hangup" ? (
@@ -215,16 +210,15 @@ function IvrEditor({
         </div>
         <div>
           <label className="label">Greeting Recording</label>
-          <select
-            className="select"
+          <ConnectSelect
             value={form.greeting || ""}
-            onChange={(e) => setField("greeting", e.target.value)}
-          >
-            <option value="">— No greeting / use system default —</option>
-            {recordings.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
+            onChange={(v) => setField("greeting", v)}
+            style={{ width: "100%" }}
+            options={[
+              { value: "", label: "— No greeting / use system default —" },
+              ...recordings.map((r) => ({ value: r.id, label: r.name })),
+            ]}
+          />
         </div>
         <div>
           <label className="label">Digit Timeout (seconds)</label>

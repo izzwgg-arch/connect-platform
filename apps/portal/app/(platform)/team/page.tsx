@@ -25,6 +25,7 @@ import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { loadPbxResource } from "../../../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../../../services/liveCallState";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { AdminExtensionPairingQrModal } from "../../../components/AdminExtensionPairingQrModal";
 import type { AdminScope } from "../../../types/app";
 
@@ -828,16 +829,17 @@ export default function TeamDirectoryPage() {
 
         <div className="td-toolbar-right">
           {/* Sort */}
-          <select
-            className="td-sort-select"
+          <ConnectSelect
+            size="sm"
             value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            aria-label="Sort by"
-          >
-            <option value="extension">Extension</option>
-            <option value="name">Name</option>
-            <option value="status">Status</option>
-          </select>
+            onChange={(v) => setSortKey(v as SortKey)}
+            style={{ minWidth: 120 }}
+            options={[
+              { value: "extension", label: "Extension" },
+              { value: "name", label: "Name" },
+              { value: "status", label: "Status" },
+            ]}
+          />
 
           {/* View toggle */}
           <div className="td-view-toggle" role="group" aria-label="View mode">

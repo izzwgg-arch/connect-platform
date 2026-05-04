@@ -6,6 +6,7 @@ import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../../components/MetricCard";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 
@@ -515,35 +516,37 @@ export default function AudioIntelligencePage() {
         <FilterBar>
           <label className="filter-label">
             Time Range
-            <select className="input" value={range} onChange={(e) => setRange(e.target.value as "1h" | "24h" | "7d")}>
-              <option value="1h">Last hour</option>
-              <option value="24h">Last 24 hours</option>
-              <option value="7d">Last 7 days</option>
-            </select>
+            <ConnectSelect size="sm" value={range} onChange={(v) => setRange(v as "1h" | "24h" | "7d")}
+              options={[
+                { value: "1h", label: "Last hour" },
+                { value: "24h", label: "Last 24 hours" },
+                { value: "7d", label: "Last 7 days" },
+              ]}
+            />
           </label>
           <label className="filter-label">
             Root Cause
-            <select className="input" value={causeFilter} onChange={(e) => setCauseFilter(e.target.value)}>
-              <option value="all">All causes</option>
-              {causeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <ConnectSelect size="sm" value={causeFilter} onChange={setCauseFilter}
+              options={[{ value: "all", label: "All causes" }, ...causeOptions]}
+            />
           </label>
           <label className="filter-label">
             Platform
-            <select className="input" value={platformFilter} onChange={(e) => setPlatformFilter(e.target.value)}>
-              <option value="all">All platforms</option>
-              <option value="WEB">Web</option>
-              <option value="ANDROID">Android</option>
-              <option value="IOS">iOS</option>
-            </select>
+            <ConnectSelect size="sm" value={platformFilter} onChange={setPlatformFilter}
+              options={[
+                { value: "all", label: "All platforms" },
+                { value: "WEB", label: "Web" },
+                { value: "ANDROID", label: "Android" },
+                { value: "IOS", label: "iOS" },
+              ]}
+            />
           </label>
           {tenantOptions.length > 1 && (
             <label className="filter-label">
               Tenant
-              <select className="input" value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)}>
-                <option value="all">All tenants</option>
-                {tenantOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <ConnectSelect size="sm" value={tenantFilter} onChange={setTenantFilter}
+                options={[{ value: "all", label: "All tenants" }, ...tenantOptions]}
+              />
             </label>
           )}
         </FilterBar>

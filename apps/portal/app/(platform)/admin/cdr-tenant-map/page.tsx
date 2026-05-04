@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 
@@ -191,11 +192,13 @@ export default function CdrTenantMapPage() {
           <form className="stack" onSubmit={addRule} style={{ maxWidth: 520 }}>
             <label>
               Match Type
-              <select value={matchType} onChange={(e) => setMatchType(e.target.value as any)} className="input">
-                {Object.entries(MATCH_TYPE_LABELS).map(([v, l]) => (
-                  <option key={v} value={v}>{l}</option>
-                ))}
-              </select>
+              <ConnectSelect
+                className="input"
+                value={matchType}
+                onChange={(v) => setMatchType(v as any)}
+                style={{ width: "100%" }}
+                options={Object.entries(MATCH_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l as string }))}
+              />
             </label>
             <label>
               Match Value
@@ -209,19 +212,20 @@ export default function CdrTenantMapPage() {
             </label>
             <label>
               Tenant
-              <select
+              <ConnectSelect
                 className="input"
                 value={tenantSlug}
-                onChange={(e) => setTenantSlug(e.target.value)}
-                required
-              >
-                <option value="">— select tenant —</option>
-                {tenants.status === "success" && tenants.data.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.description || t.name} ({t.name})
-                  </option>
-                ))}
-              </select>
+                onChange={setTenantSlug}
+                searchable
+                style={{ width: "100%" }}
+                options={[
+                  { value: "", label: "— select tenant —" },
+                  ...(tenants.status === "success" ? tenants.data.map((t) => ({
+                    value: t.name,
+                    label: `${t.description || t.name} (${t.name})`,
+                  })) : []),
+                ]}
+              />
             </label>
             <label>
               Description (optional)

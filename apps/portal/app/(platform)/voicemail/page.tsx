@@ -23,6 +23,7 @@ import {
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useSipPhone } from "../../../hooks/useSipPhone";
 import { apiDelete, apiGet, apiPatch } from "../../../services/apiClient";
@@ -755,12 +756,18 @@ export default function VoicemailPage() {
           />
           <ChevronDown size={14} />
         </div>
-        <select className="vm-date-select" value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}>
-          <option value="all">All dates</option>
-          <option value="today">Today</option>
-          <option value="7d">Last 7 days</option>
-          <option value="older">Older than 7 days</option>
-        </select>
+        <ConnectSelect
+          size="sm"
+          value={dateFilter}
+          onChange={(v) => setDateFilter(v as DateFilter)}
+          style={{ minWidth: 140 }}
+          options={[
+            { value: "all", label: "All dates" },
+            { value: "today", label: "Today" },
+            { value: "7d", label: "Last 7 days" },
+            { value: "older", label: "Older than 7 days" },
+          ]}
+        />
       </section>
 
       <main className={`vm-workspace ${selected ? "has-detail" : ""}`}>

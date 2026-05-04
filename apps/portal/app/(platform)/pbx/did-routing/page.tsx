@@ -21,6 +21,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -429,26 +430,37 @@ export default function DidRoutingPage() {
               style={{ ...inputStyle, minWidth: 180 }}
             />
             {isSuper && (
-              <select
+              <ConnectSelect
                 value={addTenantId}
-                onChange={(e) => setAddTenantId(e.target.value)}
-                style={{ ...inputStyle, minWidth: 220 }}
-                title="Tenant this DID belongs to"
-              >
-                <option value="">— Select tenant —</option>
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+                onChange={setAddTenantId}
+                searchable
+                style={{ minWidth: 220 }}
+                options={[
+                  { value: "", label: "— Select tenant —" },
+                  ...tenants.map((t) => ({ value: t.id, label: t.name })),
+                ]}
+              />
             )}
-            <select value={addIvrId} onChange={(e) => setAddIvrId(e.target.value)} style={inputStyle} disabled={!scopeTenantId}>
-              <option value="">— No IVR —</option>
-              {ivrProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <select value={addMohId} onChange={(e) => setAddMohId(e.target.value)} style={inputStyle} disabled={!scopeTenantId}>
-              <option value="">— PBX default MOH —</option>
-              {mohProfiles.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.vitalPbxMohClassName})</option>)}
-            </select>
+            <ConnectSelect
+              value={addIvrId}
+              onChange={setAddIvrId}
+              disabled={!scopeTenantId}
+              style={{ minWidth: 160 }}
+              options={[
+                { value: "", label: "— No IVR —" },
+                ...ivrProfiles.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+            <ConnectSelect
+              value={addMohId}
+              onChange={setAddMohId}
+              disabled={!scopeTenantId}
+              style={{ minWidth: 180 }}
+              options={[
+                { value: "", label: "— PBX default MOH —" },
+                ...mohProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.vitalPbxMohClassName})` })),
+              ]}
+            />
             <button onClick={create} disabled={busy === "create" || !scopeTenantId} style={buttonPrimary}>
               {busy === "create" ? "Creating…" : "Add mapping"}
             </button>

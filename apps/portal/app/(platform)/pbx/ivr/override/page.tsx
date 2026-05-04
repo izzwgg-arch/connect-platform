@@ -7,6 +7,7 @@ import { EmptyState } from "../../../../../components/EmptyState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { StatusChip } from "../../../../../components/StatusChip";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, apiDelete } from "../../../../../services/apiClient";
 
@@ -241,24 +242,30 @@ export default function IvrOverridePage() {
           </div>
           <div>
             <label className="label">IVR to Activate *</label>
-            <select className="select" value={ivrId} onChange={(e) => setIvrId(e.target.value)}>
-              <option value="">— Select IVR —</option>
-              {ivrs.map((ivr) => (
-                <option key={ivr.id} value={ivr.id}>{ivr.name}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={ivrId}
+              onChange={setIvrId}
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "— Select IVR —" },
+                ...ivrs.map((ivr) => ({ value: ivr.id, label: ivr.name })),
+              ]}
+            />
             <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
               This IVR will be activated during the override window. All other routing stays unchanged.
             </p>
           </div>
           <div>
             <label className="label">Override Announcement (optional)</label>
-            <select className="select" value={recordingId} onChange={(e) => setRecordingId(e.target.value)}>
-              <option value="">— Use IVR default greeting —</option>
-              {recordings.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={recordingId}
+              onChange={setRecordingId}
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "— Use IVR default greeting —" },
+                ...recordings.map((r) => ({ value: r.id, label: r.name })),
+              ]}
+            />
           </div>
           <div style={{ gridColumn: "1 / -1" }}>
             <label className="label">Internal Note (optional)</label>

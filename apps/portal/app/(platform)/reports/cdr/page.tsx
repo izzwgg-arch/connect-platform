@@ -9,6 +9,7 @@ import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../../components/MetricCard";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { loadCallReports } from "../../../../services/pbxData";
 import { directionClass, directionLabel, formatDurationSec } from "../../../../services/pbxLive";
@@ -89,22 +90,26 @@ export default function ReportsCdrPage() {
           </label>
           <label className="filter-label">
             Direction
-            <select className="input" value={dirFilter} onChange={(e) => setDirFilter(e.target.value)}>
-              <option value="all">All</option>
-              <option value="inbound">Inbound</option>
-              <option value="outbound">Outbound</option>
-              <option value="internal">Internal</option>
-            </select>
+            <ConnectSelect size="sm" value={dirFilter} onChange={setDirFilter}
+              options={[
+                { value: "all", label: "All" },
+                { value: "inbound", label: "Inbound" },
+                { value: "outbound", label: "Outbound" },
+                { value: "internal", label: "Internal" },
+              ]}
+            />
           </label>
           <label className="filter-label">
             Disposition
-            <select className="input" value={dispFilter} onChange={(e) => setDispFilter(e.target.value)}>
-              <option value="all">All</option>
-              <option value="answered">Answered</option>
-              <option value="no answer">No Answer</option>
-              <option value="busy">Busy</option>
-              <option value="failed">Failed</option>
-            </select>
+            <ConnectSelect size="sm" value={dispFilter} onChange={setDispFilter}
+              options={[
+                { value: "all", label: "All" },
+                { value: "answered", label: "Answered" },
+                { value: "no answer", label: "No Answer" },
+                { value: "busy", label: "Busy" },
+                { value: "failed", label: "Failed" },
+              ]}
+            />
           </label>
         </FilterBar>
 

@@ -9,6 +9,7 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { SearchInput } from "../../../../components/SearchInput";
 import { StatusChip } from "../../../../components/StatusChip";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
@@ -61,9 +62,13 @@ function SelectField({ label, name, value, onChange, options }: {
   return (
     <div className="form-field">
       <label className="label" htmlFor={name}>{label}</label>
-      <select id={name} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      <ConnectSelect
+        id={name}
+        value={value}
+        onChange={onChange}
+        style={{ width: "100%" }}
+        options={options}
+      />
     </div>
   );
 }
@@ -603,12 +608,16 @@ function AssignModal({ extensionLinkId, extNumber, currentOwnerId, hasSipPass, t
           ) : users === null ? (
             <div className="muted" style={{ fontSize: 12 }}>Loading users…</div>
           ) : (
-            <select className="input" value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)}>
-              <option value="none">— Unassigned —</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>{u.name ? `${u.name} (${u.email})` : u.email}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={selectedUserId}
+              onChange={setSelectedUserId}
+              searchable
+              style={{ width: "100%" }}
+              options={[
+                { value: "none", label: "— Unassigned —" },
+                ...users.map((u) => ({ value: u.id, label: u.name ? `${u.name} (${u.email})` : u.email })),
+              ]}
+            />
           )}
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
             Once assigned, this user's softphone auto-provisions from this extension on next login.
