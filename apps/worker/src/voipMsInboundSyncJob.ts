@@ -40,28 +40,62 @@ function parseMediaUrls(row: Record<string, unknown>): string[] {
   return [...split, ...numbered].slice(0, 3);
 }
 
+/** VoIP.ms returns bare `YYYY-MM-DD HH:MM:SS` in America/New_York wall time (no TZ suffix). */
 function parseVoipMsDate(value: string): Date | undefined {
   const raw = String(value || "").trim();
   if (!raw) return undefined;
-  // VoIP.ms returns timestamps in US/Eastern time without a timezone indicator.
-  // Detect bare "YYYY-MM-DD HH:MM:SS" strings and append the current Eastern offset
-  // so JS doesn't silently treat them as UTC (which would make messages appear 4-5 h early).
   const hasTimezone = /[Zz]$/.test(raw) || /[+\-]\d{2}:?\d{2}$/.test(raw);
-  if (!hasTimezone) {
-    // Determine whether we are currently in EDT (UTC-4) or EST (UTC-5).
-    // We do this by checking what IANA says for America/New_York right now.
-    const nowLocal = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      timeZoneName: "short",
-    }).formatToParts(new Date());
-    const tzAbbr = nowLocal.find((p) => p.type === "timeZoneName")?.value ?? "";
-    const offset = tzAbbr.includes("4") || tzAbbr === "EDT" ? "-04:00" : "-05:00";
-    const normalized = raw.replace(" ", "T") + offset;
-    const d = new Date(normalized);
+  if (hasTimezone) {
+    const d = new Date(raw);
     return Number.isNaN(d.getTime()) ? undefined : d;
   }
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? undefined : d;
+  const normalized = raw.replace(" ", "T");
+  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const day = Number(m[3]);
+  const h = Number(m[4]);
+  const mi = Number(m[5]);
+  const sec = Number(m[6]);
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const wallKey = (t: number) => {
+    const parts = formatter.formatToParts(new Date(t));
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    const wy = get("year");
+    const wmo = get("month");
+    const wd = get("day");
+    const wh = get("hour");
+    const wmi = get("minute");
+    const ws = get("second");
+    return wy * 1e12 + wmo * 1e10 + wd * 1e8 + wh * 1e6 + wmi * 1e3 + ws;
+  };
+
+  const targetKey = y * 1e12 + mo * 1e10 + day * 1e8 + h * 1e6 + mi * 1e3 + sec;
+  let lo = Date.UTC(y, mo - 1, day - 1, 0, 0, 0);
+  let hi = Date.UTC(y, mo - 1, day + 2, 23, 59, 59);
+  for (let i = 0; i < 48; i++) {
+    const mid = Math.floor((lo + hi) / 2);
+    const wk = wallKey(mid);
+    if (wk === targetKey) return new Date(mid);
+    if (wk < targetKey) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return undefined;
 }
 
 function normalizeInboundRow(raw: unknown, tenantDidE164: string): InboundRow | null {
