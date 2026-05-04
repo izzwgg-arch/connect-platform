@@ -9,6 +9,7 @@ import { useTelephony } from "../../../contexts/TelephonyContext";
 import { loadPbxResource } from "../../../services/pbxData";
 import { callsForTenant } from "../../../services/liveCallState";
 import { DateRangeFilter, type DateRangeValue } from "../../../components/DateRangeFilter";
+import { CallVolumeChart, type TrafficData } from "../../../components/dashboard/CallVolumeChart";
 import { ActiveCallsPanel } from "../../../components/dashboard/ActiveCallsPanel";
 import { CallActivityRow } from "../../../components/dashboard/CallActivityRow";
 import { CommunicationsRow, type CommunicationsData } from "../../../components/dashboard/CommunicationsRow";
@@ -27,6 +28,16 @@ type ConnectKpis = {
 
 function buildKpiQuery(range: DateRangeValue, isGlobal: boolean, contextTenantId: string | null): string {
   const params = new URLSearchParams({ source: "connect", mode: "canonical", range: range.key });
+  if (range.key === "custom") {
+    if (range.from) params.set("from", range.from);
+    if (range.to) params.set("to", range.to);
+  }
+  if (!isGlobal && contextTenantId) params.set("tenantId", contextTenantId);
+  return `?${params.toString()}`;
+}
+
+function buildTrafficQuery(range: DateRangeValue, isGlobal: boolean, contextTenantId: string | null): string {
+  const params = new URLSearchParams({ scope: isGlobal ? "GLOBAL" : "TENANT", range: range.key });
   if (range.key === "custom") {
     if (range.from) params.set("from", range.from);
     if (range.to) params.set("to", range.to);
@@ -59,20 +70,31 @@ export default function DashboardPage() {
   const isAdmin = role === "TENANT_ADMIN" || role === "SUPER_ADMIN";
   const telephony = useTelephony();
 
-  // Date range filter state — controls KPIs and IVR analytics. Active Calls and
-  // Communications are always "now" (live state, not date-windowed).
+  // Date range filter state — controls the volume chart, KPIs, and IVR analytics.
+  // Active Calls and Communications are always "now" (live state, not date-windowed).
   const [range, setRange] = useState<DateRangeValue>({ key: "today" });
 
   // Refresh ticks
   const [kpiTick, setKpiTick] = useState(0);
+  const [trafficTick, setTrafficTick] = useState(0);
   const [commTick, setCommTick] = useState(0);
   useEffect(() => {
     const t1 = window.setInterval(() => setKpiTick((v) => v + 1), 30_000);
-    const t2 = window.setInterval(() => setCommTick((v) => v + 1), 60_000);
-    return () => { clearInterval(t1); clearInterval(t2); };
+    const t2 = window.setInterval(() => setTrafficTick((v) => v + 1), 60_000);
+    const t3 = window.setInterval(() => setCommTick((v) => v + 1), 60_000);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
   }, []);
 
-  // KPI fetch (date-range aware)
+  // Traffic (volume chart) — date-range aware
+  const trafficQuery = useMemo(() => buildTrafficQuery(range, isGlobal, contextTenantId), [range, isGlobal, contextTenantId]);
+  const trafficState = useAsyncResource<TrafficData>(
+    () => apiGet<TrafficData>(`/dashboard/call-traffic${trafficQuery}`),
+    [trafficQuery, trafficTick],
+  );
+  const trafficData = trafficState.status === "success" ? trafficState.data : null;
+  const trafficLoading = trafficState.status === "loading";
+
+  // KPI fetch — date-range aware (Connect canonical totals)
   const kpiQuery = useMemo(() => buildKpiQuery(range, isGlobal, contextTenantId), [range, isGlobal, contextTenantId]);
   const kpiState = useAsyncResource<ConnectKpis>(
     () => apiGet<ConnectKpis>(`/dashboard/call-kpis${kpiQuery}`),
@@ -81,7 +103,29 @@ export default function DashboardPage() {
   const kpis = kpiState.status === "success" ? kpiState.data : null;
   const kpiLoading = kpiState.status === "loading";
 
-  // Communications fetch (per-user, no range)
+  // Prefer the (cheaper, already-aggregated) traffic totals when available so the
+  // 5-card row stays in sync with the chart even if the KPI fetch is still in flight.
+  const callTotals = useMemo(() => {
+    const t = trafficData?.totals;
+    if (t) {
+      return {
+        incoming: t.incoming ?? null,
+        outgoing: t.outgoing ?? null,
+        internal: t.internal ?? null,
+        missed:   t.missed   ?? null,
+        canceled: t.canceled ?? null,
+      };
+    }
+    return {
+      incoming: kpis?.incomingToday ?? null,
+      outgoing: kpis?.outgoingToday ?? null,
+      internal: kpis?.internalToday ?? null,
+      missed:   kpis?.missedToday   ?? null,
+      canceled: kpis?.canceledToday ?? null,
+    };
+  }, [trafficData, kpis]);
+
+  // Communications — per-user, no range
   const commState = useAsyncResource<CommunicationsData>(
     () => apiGet<CommunicationsData>("/dashboard/communications"),
     [commTick],
@@ -89,7 +133,7 @@ export default function DashboardPage() {
   const commData = commState.status === "success" ? commState.data : null;
   const commLoading = commState.status === "loading";
 
-  // IVR analytics fetch (admin only, date-range aware)
+  // IVR analytics — admin only, date-range aware
   const ivrQuery = useMemo(() => buildIvrQuery(range, isGlobal, contextTenantId), [range, isGlobal, contextTenantId]);
   const ivrState = useAsyncResource<IvrAnalyticsData>(
     () => isAdmin ? apiGet<IvrAnalyticsData>(`/dashboard/ivr-analytics${ivrQuery}`) : Promise.resolve(null as any),
@@ -124,25 +168,22 @@ export default function DashboardPage() {
           <DateRangeFilter value={range} onChange={setRange} />
         </header>
 
-        {/* 1. Active calls — top priority */}
-        <ActiveCallsPanel calls={liveCalls} isLive={telephony.isLive} />
+        {/* 1. Hourly call volume chart — top */}
+        <CallVolumeChart data={trafficData} loading={trafficLoading} rangeKey={range.key} />
 
         {/* 2. Call activity (5 metrics) */}
         <CallActivityRow
-          totals={{
-            incoming: kpis?.incomingToday ?? null,
-            outgoing: kpis?.outgoingToday ?? null,
-            internal: kpis?.internalToday ?? null,
-            missed:   kpis?.missedToday   ?? null,
-            canceled: kpis?.canceledToday ?? null,
-          }}
-          loading={kpiLoading}
+          totals={callTotals}
+          loading={kpiLoading && trafficLoading}
         />
 
-        {/* 3. Communications — voicemail + messages */}
+        {/* 3. Active calls — live, below metrics */}
+        <ActiveCallsPanel calls={liveCalls} isLive={telephony.isLive} />
+
+        {/* 4. Communications — voicemail + messages */}
         <CommunicationsRow data={commData} loading={commLoading} />
 
-        {/* 4. IVR analytics — admin only */}
+        {/* 5. IVR analytics — admin only */}
         {isAdmin ? <IvrAnalyticsCard data={ivrData} loading={ivrLoading} /> : null}
       </div>
     </PermissionGate>

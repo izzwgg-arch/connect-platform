@@ -8322,6 +8322,143 @@ table tr:hover {
 }
 
 .dash-v2-section { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── Call volume chart ─────────────────────────────────────────────────────── */
+.dash-v2-graph-card {
+  padding: 16px 18px 12px;
+  gap: 6px;
+}
+.dash-v2-graph-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.dash-v2-graph-head-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dash-v2-graph-head-title h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--console-text);
+  margin: 0;
+}
+.dash-v2-graph-icon {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--console-accent) 16%, var(--dash-card));
+  color: var(--console-accent);
+}
+.dash-v2-graph-head-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.dash-v2-graph-total {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--console-text);
+}
+.dash-v2-graph-tz {
+  font-size: 11px;
+  color: var(--console-muted);
+}
+
+.dash-v2-graph-plot {
+  position: relative;
+  width: 100%;
+  height: 240px;
+  margin-top: 4px;
+}
+.dash-v2-graph-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+.dash-v2-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--console-muted);
+  font-size: 13px;
+}
+
+/* Tooltip */
+.dash-v2-graph-tooltip {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--dash-card) 92%, var(--console-bg));
+  border: 1px solid color-mix(in srgb, var(--dash-card-border) 70%, var(--console-accent) 30%);
+  border-radius: 10px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 0.12s ease;
+}
+.dash-v2-graph-tooltip-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--console-muted);
+}
+.dash-v2-graph-tooltip-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--console-muted);
+}
+.dash-v2-graph-tooltip-total strong {
+  font-size: 16px;
+  color: var(--console-text);
+  font-weight: 700;
+}
+.dash-v2-graph-tooltip-rows {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--dash-card-border) 60%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dash-v2-graph-tooltip-rows li {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--console-text);
+}
+.dash-v2-graph-tooltip-rows li strong {
+  font-weight: 600;
+}
+.dash-v2-graph-tooltip-rows .swatch {
+  width: 8px; height: 8px;
+  border-radius: 2px;
+}
+.dash-v2-graph-tooltip-rows .swatch.incoming { background: var(--dash-incoming); }
+.dash-v2-graph-tooltip-rows .swatch.outgoing { background: var(--dash-outgoing); }
+.dash-v2-graph-tooltip-rows .swatch.internal { background: var(--dash-internal); }
+
+@media (max-width: 720px) {
+  .dash-v2-graph-plot { height: 200px; }
+  .dash-v2-graph-head { flex-wrap: wrap; }
+}
 .dash-v2-section-head {
   display: flex;
   align-items: baseline;
