@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, DeviceEventEmitter, NativeModules, Platform } from "react-native";
+import { AppState, DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { createSipClient } from "../sip";
 import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from "../api/client";
@@ -728,6 +728,54 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.warn('[SIP_KEEPALIVE_FGS] bridge_threw:', e);
     }
+  }, [authToken, hasProvisioning]);
+
+  // ── Proactive RECORD_AUDIO permission preflight ────────────────────────
+  // Until now this was only requested from KeypadTab on the dial-out path.
+  // Inbound calls that arrived before the user ever made an outbound call
+  // would hit `session.answer({ mediaConstraints: { audio: true } })` without
+  // the runtime permission, JsSIP's internal `getUserMedia` would throw
+  // (or silently produce a no-track local SDP), and the call would briefly
+  // appear to answer then drop — exactly the Samsung Galaxy S25 symptom
+  // ("call rang, I tapped answer, it disconnected and never connected").
+  //
+  // Request RECORD_AUDIO once when SIP is ready (auth + provisioning
+  // loaded) so the user grants it during a low-stakes UI moment rather
+  // than mid-incoming-call. This effect fires only once per process
+  // lifetime per ready transition; if the user denies we surface that
+  // via callReadiness for diagnostics but do not nag again — the answer
+  // pipeline still has a defensive re-request as last-line-of-defense.
+  const recordAudioRequestedRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!authToken || !hasProvisioning) return;
+    if (recordAudioRequestedRef.current) return;
+    recordAudioRequestedRef.current = true;
+    void (async () => {
+      try {
+        const already = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        ).catch(() => false);
+        if (already) {
+          console.log('[SIP_PERM] RECORD_AUDIO already granted at startup');
+          return;
+        }
+        console.log('[SIP_PERM] RECORD_AUDIO not yet granted — requesting proactively');
+        const result = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone access',
+            message:
+              'Connect needs microphone access so you can be heard on calls. Without this, incoming calls will disconnect immediately when you answer.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Not now',
+          },
+        );
+        console.log('[SIP_PERM] RECORD_AUDIO request result:', result);
+      } catch (e) {
+        console.warn('[SIP_PERM] RECORD_AUDIO request threw:', e);
+      }
+    })();
   }, [authToken, hasProvisioning]);
 
   // ── Push-wake (Option 2) — react to native Sip.WakeRegister event ───────

@@ -11,7 +11,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
-import { Alert, AppState, Linking, NativeEventEmitter, NativeModules, Platform } from "react-native";
+import { Alert, AppState, Linking, NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   getMediaTestStatus,
@@ -1337,6 +1337,59 @@ export function NotificationsProvider({
           endNativeCall(callId);
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           return;
+        }
+
+        // ── Mic permission preflight (Android only) ─────────────────────────
+        // Without RECORD_AUDIO, JsSIP's internal `getUserMedia({ audio: true })`
+        // inside `session.answer()` either throws or yields a no-track stream,
+        // which causes the call to briefly "answer" then immediately drop —
+        // exactly the Samsung Galaxy S25 symptom users were reporting. We
+        // also proactively request the permission in SipContext when SIP is
+        // ready, so this should be a hot, granted-already check; we still
+        // gate here defensively because permissions can be revoked at any
+        // time from Android Settings, and proactive request can be denied.
+        if (Platform.OS === "android") {
+          let micGranted = false;
+          try {
+            micGranted = await PermissionsAndroid.check(
+              PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            );
+          } catch {
+            micGranted = false;
+          }
+          if (!micGranted) {
+            console.warn('[ANSWER_GUARD] mic_permission_missing — requesting before answer');
+            try {
+              const result = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+                {
+                  title: 'Microphone access required',
+                  message: 'Allow microphone access to answer this call.',
+                  buttonPositive: 'Allow',
+                  buttonNegative: 'Cancel',
+                },
+              );
+              micGranted = result === PermissionsAndroid.RESULTS.GRANTED;
+            } catch {
+              micGranted = false;
+            }
+          }
+          if (!micGranted) {
+            console.warn('[ANSWER_GUARD] mic_permission_denied — aborting answer for invite ' + invite.id);
+            setCallFlowLastError('mic_permission_denied');
+            // Decline the invite on the backend so the caller hears voicemail
+            // instead of silent hold-then-drop.
+            void respondInvite(authToken, invite.id, 'DECLINE', deviceIdRef.current || undefined).catch(() => undefined);
+            showEndedState(
+              invite,
+              'Microphone access required',
+              { reason: 'mic_permission_denied' },
+              2000,
+            );
+            endNativeCall(callId);
+            AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+            return;
+          }
         }
 
         // ── Timing: record answer-tap timestamp (needed by register/answer
