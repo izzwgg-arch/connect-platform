@@ -6,32 +6,9 @@ import type { HealthService } from "./HealthService";
 import { normalizeCallForClient, isLocalOnlyCall, hasValidChannel } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
-import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
 import { childLogger } from "../../logging/logger";
 
 const log = childLogger("SnapshotService");
-
-function callInvolvesViewerExtension(call: NormalizedCall, viewerExtensions: Set<string>): boolean {
-  const involved = new Set<string>();
-  const add = (value: string | null | undefined) => {
-    if (!value) return;
-    const raw = String(value).trim();
-    if (!raw) return;
-    if (looksLikeExtension(raw)) involved.add(raw);
-    const normalized = normalizeExtensionFromChannel(raw);
-    if (normalized) involved.add(normalized);
-  };
-
-  for (const ext of call.extensions) add(ext);
-  add(call.source_extension);
-  add(call.destination_extension);
-  add(call.from);
-  add(call.to);
-  add(call.connectedLine);
-  for (const channel of call.channels) add(channel);
-
-  return [...involved].some((ext) => viewerExtensions.has(ext));
-}
 
 /** Alias-aware tenant matcher. Returns true when `recordTenantId` should be
  *  visible to a viewer scoped to `viewerTenantId`. Used to bridge the CUID vs
@@ -45,8 +22,7 @@ export type TenantAliasMatcher = (
 
 export type ViewerCallScope = {
   tenantId?: string | null;
-  extensions?: string[];
-  extensionScoped?: boolean;
+  extensions?: string[];  // retained for callers; not used to filter calls
 };
 
 export class SnapshotService {
@@ -67,8 +43,6 @@ export class SnapshotService {
         ? scopeOrTenantId
         : { tenantId: scopeOrTenantId };
     const tenantId = scope.tenantId ?? null;
-    const extensionScoped = scope.extensionScoped === true;
-    const viewerExtensions = new Set((scope.extensions ?? []).map((ext) => String(ext).trim()).filter(Boolean));
 
     // Use the ARI bridge snapshot when available. It is the PBX-correct source:
     // one active call equals one qualifying bridge, not one AMI channel/event.
@@ -95,17 +69,14 @@ export class SnapshotService {
       qs = qs.filter((q) => matches(q.tenantId));
     }
 
-    if (extensionScoped) {
-      calls = viewerExtensions.size === 0
-        ? []
-        : calls.filter((c) => callInvolvesViewerExtension(c, viewerExtensions));
-    }
+    // Extension-scoped filtering is intentionally NOT applied to the live WS
+    // snapshot.  Every user in a tenant sees all of that tenant's live calls —
+    // the same view an admin has, just bounded to their own tenant.
+    // Personal call history (extension-level) is handled by the REST endpoint.
 
     log.info(
       {
         forTenantId: tenantId ?? "GLOBAL",
-        extensionScoped,
-        viewerExtensions: [...viewerExtensions],
         totalActiveCalls: allActive.length,
         callsInSnapshot: calls.length,
         droppedByTenantFilter: allActive.length - calls.length,

@@ -14,7 +14,6 @@ export interface WsClient {
   role: string;
   tenantId: string | null;
   extensions: string[];
-  extensionScoped: boolean;
   isAlive: boolean;
 }
 
@@ -129,7 +128,6 @@ export class TelephonySocketServer {
     let userId: string | null = null;
     let role = "";
     let extensions: string[] = [];
-    let extensionScoped = false;
 
     try {
       const payload = jwt.verify(token, env.JWT_SECRET) as Record<string, unknown>;
@@ -141,8 +139,9 @@ export class TelephonySocketServer {
       // so tenantFilter broadcasts every live call to them regardless of which tenant owns it.
       const isGlobalRole = role === "SUPER_ADMIN" || role === "ADMIN";
       tenantId = isGlobalRole ? null : rawTenantId;
-      extensionScoped = role === "USER" || role === "EXTENSION_USER";
-      if (extensionScoped && userId && rawTenantId && this.resolveUserExtensions) {
+      // All users see all live calls for their tenant.  Fetch extensions for
+      // push-notification matching and future per-user features.
+      if (userId && rawTenantId && this.resolveUserExtensions) {
         extensions = await this.resolveUserExtensions({ userId, tenantId: rawTenantId, role });
       }
     } catch {
@@ -151,9 +150,9 @@ export class TelephonySocketServer {
       return;
     }
 
-    const client: WsClient = { ws, userId, role, tenantId, extensions, extensionScoped, isAlive: true };
+    const client: WsClient = { ws, userId, role, tenantId, extensions, isAlive: true };
     this.clients.add(client);
-    log.info({ tenantId, role, extensionScoped, extensionCount: extensions.length, ip: clientIp, total: this.clients.size }, "WS client connected");
+    log.info({ tenantId, role, extensionCount: extensions.length, ip: clientIp, total: this.clients.size }, "WS client connected");
 
     ws.on("pong", () => {
       client.isAlive = true;
@@ -188,7 +187,6 @@ export class TelephonySocketServer {
     const snap = this.snapshot.getSnapshot({
       tenantId: client.tenantId,
       extensions: client.extensions,
-      extensionScoped: client.extensionScoped,
     });
     const envelope: TelephonyEventEnvelope = {
       event: "telephony.snapshot",
@@ -204,7 +202,6 @@ export class TelephonySocketServer {
     const snap = this.snapshot.getSnapshot({
       tenantId: client.tenantId,
       extensions: client.extensions,
-      extensionScoped: client.extensionScoped,
     });
     const envelope: TelephonyEventEnvelope = {
       event: "telephony.calls.snapshot",
