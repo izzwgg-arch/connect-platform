@@ -22505,7 +22505,7 @@ function normalizeCallDirection(input: any): "incoming" | "outgoing" | "internal
   return "outgoing";
 }
 
-type DashboardCallRange = "today" | "7d";
+type DashboardCallRange = "today" | "7d" | "30d" | "custom";
 type DashboardCallDirection = "incoming" | "outgoing" | "internal";
 type DashboardCallDisposition = "answered" | "missed" | "canceled" | "failed" | "unknown";
 type DashboardCallActivityPoint = {
@@ -22517,6 +22517,7 @@ type DashboardCallActivityPoint = {
   outgoing: number;
   internal: number;
   missed: number;
+  canceled: number;
 };
 type DashboardCallActivityAggregate = {
   range: DashboardCallRange;
@@ -22530,6 +22531,7 @@ type DashboardCallActivityAggregate = {
     outgoing: number;
     internal: number;
     missed: number;
+    canceled: number;
   };
   points: DashboardCallActivityPoint[];
   sourceRows: { connectCdr: number; legacyCallRecord: number };
@@ -22545,13 +22547,18 @@ function normalizeDashboardDisposition(input: unknown): DashboardCallDisposition
 }
 
 function formatDashboardBucketLabel(start: Date, range: DashboardCallRange, timezone: string): string {
-  if (range === "7d") {
+  if (range === "7d" || range === "30d" || range === "custom") {
     return start.toLocaleDateString("en-US", { timeZone: timezone, weekday: "short", month: "short", day: "numeric" });
   }
   return start.toLocaleTimeString("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" });
 }
 
-function resolveDashboardCallRange(range: DashboardCallRange, nowUtc = new Date()): {
+function resolveDashboardCallRange(
+  range: DashboardCallRange,
+  nowUtc = new Date(),
+  customFrom?: Date | null,
+  customTo?: Date | null,
+): {
   timezone: string;
   timeWhere: { gte: Date; lt: Date };
   bucketMinutes: number | null;
@@ -22567,16 +22574,35 @@ function resolveDashboardCallRange(range: DashboardCallRange, nowUtc = new Date(
       bucketMinutes: null,
     };
   }
+  if (range === "30d") {
+    return {
+      timezone: today.timezone,
+      timeWhere: {
+        gte: new Date(today.dayStartUtc.getTime() - 29 * 24 * 60 * 60 * 1000),
+        lt: today.dayEndUtc,
+      },
+      bucketMinutes: null,
+    };
+  }
+  if (range === "custom" && customFrom instanceof Date && customTo instanceof Date && customFrom < customTo) {
+    return {
+      timezone: today.timezone,
+      timeWhere: { gte: customFrom, lt: customTo },
+      bucketMinutes: null,
+    };
+  }
   return { timezone: today.timezone, timeWhere: today.timeWhere, bucketMinutes: 30 };
 }
 
 async function aggregateDashboardCallActivity(opts: {
   tenantFilter: Record<string, unknown>;
   range?: DashboardCallRange;
+  customFrom?: Date | null;
+  customTo?: Date | null;
   logContext?: Record<string, unknown>;
 }): Promise<DashboardCallActivityAggregate> {
   const range = opts.range ?? "today";
-  const { timezone, timeWhere, bucketMinutes } = resolveDashboardCallRange(range);
+  const { timezone, timeWhere, bucketMinutes } = resolveDashboardCallRange(range, new Date(), opts.customFrom ?? null, opts.customTo ?? null);
   const normalizedRows: Array<{
     ts: number;
     direction: DashboardCallDirection;
@@ -22625,9 +22651,10 @@ async function aggregateDashboardCallActivity(opts: {
     (acc, row) => {
       acc[row.direction] += 1;
       if (row.direction === "incoming" && row.disposition === "missed") acc.missed += 1;
+      if (row.disposition === "canceled") acc.canceled += 1;
       return acc;
     },
-    { made: 0, total: 0, incoming: 0, outgoing: 0, internal: 0, missed: 0 },
+    { made: 0, total: 0, incoming: 0, outgoing: 0, internal: 0, missed: 0, canceled: 0 },
   );
   totals.made = totals.incoming + totals.outgoing + totals.internal;
   totals.total = totals.made;
@@ -22635,10 +22662,13 @@ async function aggregateDashboardCallActivity(opts: {
   const points: DashboardCallActivityPoint[] = [];
   const startMs = timeWhere.gte.getTime();
   const endMs = timeWhere.lt.getTime();
-  if (range === "7d") {
-    for (let i = 0; i < 7; i++) {
-      const start = new Date(startMs + i * 24 * 60 * 60 * 1000);
-      const end = new Date(Math.min(endMs, start.getTime() + 24 * 60 * 60 * 1000));
+  const isDayBucketRange = range === "7d" || range === "30d" || (range === "custom" && bucketMinutes === null);
+  if (isDayBucketRange) {
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const dayCount = Math.max(1, Math.ceil((endMs - startMs) / msPerDay));
+    for (let i = 0; i < dayCount; i++) {
+      const start = new Date(startMs + i * msPerDay);
+      const end = new Date(Math.min(endMs, start.getTime() + msPerDay));
       points.push({
         label: formatDashboardBucketLabel(start, range, timezone),
         start: start.toISOString(),
@@ -22648,6 +22678,7 @@ async function aggregateDashboardCallActivity(opts: {
         outgoing: 0,
         internal: 0,
         missed: 0,
+        canceled: 0,
       });
     }
   } else {
@@ -22665,17 +22696,19 @@ async function aggregateDashboardCallActivity(opts: {
         outgoing: 0,
         internal: 0,
         missed: 0,
+        canceled: 0,
       });
     }
   }
 
   for (const row of normalizedRows) {
-    const bucketSizeMs = range === "7d" ? 24 * 60 * 60 * 1000 : (bucketMinutes ?? 30) * 60 * 1000;
+    const bucketSizeMs = isDayBucketRange ? 24 * 60 * 60 * 1000 : (bucketMinutes ?? 30) * 60 * 1000;
     const bucketIndex = Math.floor((row.ts - startMs) / bucketSizeMs);
     if (bucketIndex < 0 || bucketIndex >= points.length) continue;
     const point = points[bucketIndex];
     point[row.direction] += 1;
     if (row.direction === "incoming" && row.disposition === "missed") point.missed += 1;
+    if (row.disposition === "canceled") point.canceled += 1;
     point.total = point.incoming + point.outgoing + point.internal;
   }
 
@@ -22685,15 +22718,17 @@ async function aggregateDashboardCallActivity(opts: {
       acc.outgoing += p.outgoing;
       acc.internal += p.internal;
       acc.missed += p.missed;
+      acc.canceled += p.canceled;
       return acc;
     },
-    { incoming: 0, outgoing: 0, internal: 0, missed: 0 },
+    { incoming: 0, outgoing: 0, internal: 0, missed: 0, canceled: 0 },
   );
   if (
     pointTotals.incoming !== totals.incoming ||
     pointTotals.outgoing !== totals.outgoing ||
     pointTotals.internal !== totals.internal ||
-    pointTotals.missed !== totals.missed
+    pointTotals.missed !== totals.missed ||
+    pointTotals.canceled !== totals.canceled
   ) {
     app.log.warn({ ...opts.logContext, totals, pointTotals, range }, "dashboard_call_activity_aggregation_mismatch");
   } else {
@@ -24631,7 +24666,13 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     tenantId: z.string().optional(),
     source: z.enum(["connect", "pbx"]).optional().default("pbx"),
     mode: z.enum(["raw", "canonical"]).optional().default("raw"),
+    range: z.enum(["today", "7d", "30d", "custom"]).optional().default("today"),
+    from: z.string().optional(),
+    to: z.string().optional(),
   }).parse(req.query || {});
+
+  const customFrom = query.range === "custom" && query.from ? new Date(query.from) : null;
+  const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
 
   const wantPbxAggregate = query.source === "pbx";
 
@@ -24725,8 +24766,10 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
     const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
     const activity = await aggregateDashboardCallActivity({
       tenantFilter: tenantClause,
-      range: "today",
-      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, role: user.role },
+      range: query.range,
+      customFrom,
+      customTo,
+      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, role: user.role, range: query.range },
     });
 
     // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
@@ -24738,13 +24781,14 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
 
     // Canonical mode: direction is authoritative at ingest (callDirectionPolicy + merged dcontexts).
     // No SQL-time reclassification — avoids dashboard drift vs call history.
-    let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; total: number; outgoingForwarded: number } | null = null;
+    let canonicalCounts: { incoming: number; outgoing: number; internal: number; missed: number; canceled: number; total: number; outgoingForwarded: number } | null = null;
     if (query.mode === "canonical") {
       canonicalCounts = {
         incoming: activity.totals.incoming,
         outgoing: activity.totals.outgoing,
         internal: activity.totals.internal,
         missed: activity.totals.missed,
+        canceled: activity.totals.canceled,
         total: activity.totals.total,
         outgoingForwarded: Number(outgoingForwarded),
       };
@@ -24757,7 +24801,12 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
       outgoingDirectToday: activity.totals.outgoing - Number(outgoingForwarded),
       internalToday: activity.totals.internal,
       missedToday: activity.totals.missed,
+      canceledToday: activity.totals.canceled,
       callsToday: activity.totals.total,
+      range: query.range,
+      timezone: activity.timezone,
+      windowFrom: activity.timeWhere.gte.toISOString(),
+      windowTo: activity.timeWhere.lt.toISOString(),
       scope: scopeTenantId ? "tenant" as const : "global" as const,
       ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
       asOf: nowUtc.toISOString(),
@@ -25172,11 +25221,16 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   if (!user) return;
   const query = z.object({
     scope: z.enum(["GLOBAL", "TENANT"]).optional(),
-    range: z.enum(["today", "7d"]).optional().default("today"),
+    range: z.enum(["today", "7d", "30d", "custom"]).optional().default("today"),
+    from: z.string().optional(),
+    to: z.string().optional(),
     windowMinutes: z.coerce.number().int().min(15).max(1440).optional(),
     // Super-admin may pass tenantId to scope a tenant view (mirrors call-kpis behaviour).
     tenantId: z.string().optional(),
   }).parse(req.query || {});
+
+  const customFrom = query.range === "custom" && query.from ? new Date(query.from) : null;
+  const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   const scope = query.scope === "GLOBAL" && isSuperAdmin ? "GLOBAL" : "TENANT";
@@ -25189,10 +25243,12 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
 
   const nowMs = Date.now();
 
-  // Cache key includes the resolved tenantId so different scoped views don't bleed into each other.
-  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}`;
+  // Cache key includes the resolved tenantId + custom range bounds so different scoped views don't bleed into each other.
+  const customSuffix = query.range === "custom" ? `:${query.from ?? ""}:${query.to ?? ""}` : "";
+  const cacheKey = `${scope}:${scopeTenantId ?? "all"}:${query.range}${customSuffix}`;
   const cached = DASHBOARD_CALL_TRAFFIC_CACHE.get(cacheKey);
-  if (cached && nowMs - cached.at < 120_000) {
+  // Custom ranges are not cached (the bounds are user-controlled).
+  if (cached && nowMs - cached.at < 120_000 && query.range !== "custom") {
     return {
       ...cached.payload,
       cached: true,
@@ -25213,7 +25269,9 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     activity = await aggregateDashboardCallActivity({
       tenantFilter,
       range: query.range,
-      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, role: user.role },
+      customFrom,
+      customTo,
+      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, role: user.role, range: query.range },
     });
   } catch (err: any) {
     app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
@@ -25232,11 +25290,14 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     return reply.code(500).send({ error: "db_error" });
   }
 
+  const windowMs = activity.timeWhere.lt.getTime() - activity.timeWhere.gte.getTime();
   const payload = {
     scope,
     range: activity.range,
     timezone: activity.timezone,
-    windowMinutes: query.range === "7d" ? 7 * 24 * 60 : 24 * 60,
+    windowMinutes: Math.round(windowMs / 60_000),
+    windowFrom: activity.timeWhere.gte.toISOString(),
+    windowTo: activity.timeWhere.lt.toISOString(),
     bucketMinutes: activity.bucketMinutes,
     totals: activity.totals,
     points: activity.points,
@@ -25267,6 +25328,246 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   const cacheTtlMs = activity.totals.total === 0 ? 30_000 : 120_000;
   DASHBOARD_CALL_TRAFFIC_CACHE.set(cacheKey, { at: nowMs - (120_000 - cacheTtlMs), payload });
   return payload;
+});
+
+// ─── Dashboard: Communications (voicemail + chat) for the signed-in user ────
+// Returns unread voicemail count + latest 5 voicemails (own extension's mailbox)
+// and unread chat count + latest 5 thread previews (threads the user participates in).
+app.get("/dashboard/communications", async (req, reply) => {
+  const authUser = await requirePermission(req, reply, () => true);
+  if (!authUser) return;
+  const userId = authUser.sub;
+  const userTenantId = authUser.tenantId ?? null;
+
+  // ── Voicemails ──
+  let voicemailUnread = 0;
+  let voicemailRecent: Array<{ id: string; callerName: string | null; callerNumber: string | null; durationSec: number; receivedAt: string; read: boolean }> = [];
+  try {
+    const ext = await db.extension.findFirst({
+      where: { ownerUserId: userId, ...(userTenantId ? { tenantId: userTenantId } : {}) },
+      select: { extNumber: true, tenantId: true },
+    });
+    if (ext?.extNumber) {
+      const vmWhere: Record<string, unknown> = {
+        extension: ext.extNumber,
+        deletedAt: null,
+        folder: "inbox",
+      };
+      if (ext.tenantId) vmWhere.tenantId = ext.tenantId;
+      const [unreadCount, recent] = await Promise.all([
+        db.voicemail.count({ where: { ...vmWhere, readAt: null } }),
+        db.voicemail.findMany({
+          where: vmWhere,
+          orderBy: { receivedAt: "desc" },
+          take: 5,
+          select: { id: true, callerName: true, callerNumber: true, durationSec: true, receivedAt: true, readAt: true },
+        }),
+      ]);
+      voicemailUnread = unreadCount;
+      voicemailRecent = recent.map((vm) => ({
+        id: vm.id,
+        callerName: vm.callerName ?? null,
+        callerNumber: vm.callerNumber ?? null,
+        durationSec: vm.durationSec ?? 0,
+        receivedAt: vm.receivedAt.toISOString(),
+        read: vm.readAt !== null,
+      }));
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message }, "dashboard_communications: voicemail query failed");
+  }
+
+  // ── Chat messages ──
+  let messageUnread = 0;
+  let messageRecent: Array<{ threadId: string; preview: string; counterpartyLabel: string; createdAt: string; unread: boolean }> = [];
+  try {
+    const participants = await (db as any).connectChatParticipant.findMany({
+      where: { userId, leftAt: null, archivedForUser: false },
+      select: { threadId: true, lastReadAt: true },
+    });
+    if (Array.isArray(participants) && participants.length > 0) {
+      const threadIds = participants.map((p: any) => p.threadId);
+      const lastReadByThread = new Map<string, Date | null>(
+        participants.map((p: any) => [p.threadId, p.lastReadAt ?? null]),
+      );
+
+      const recentMessages = await (db as any).connectChatMessage.findMany({
+        where: {
+          threadId: { in: threadIds },
+          deletedForEveryoneAt: null,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        select: {
+          id: true, threadId: true, body: true, createdAt: true, direction: true, senderUserId: true, type: true,
+        },
+      });
+
+      // Pick the latest message per thread for the preview list.
+      const seenThreads = new Set<string>();
+      const previews: typeof messageRecent = [];
+      for (const m of recentMessages) {
+        if (seenThreads.has(m.threadId)) continue;
+        seenThreads.add(m.threadId);
+        const lastRead = lastReadByThread.get(m.threadId) ?? null;
+        const isUnread = m.direction === "INBOUND" && (!lastRead || m.createdAt > lastRead) && m.senderUserId !== userId;
+        previews.push({
+          threadId: m.threadId,
+          preview: (m.body || (m.type !== "TEXT" ? `[${String(m.type).toLowerCase()}]` : "")).slice(0, 120),
+          counterpartyLabel: "",
+          createdAt: m.createdAt.toISOString(),
+          unread: isUnread,
+        });
+        if (previews.length >= 5) break;
+      }
+      messageRecent = previews;
+
+      // Resolve counterparty labels by looking up the thread title fallback.
+      const threadRows = await (db as any).connectChatThread.findMany({
+        where: { id: { in: previews.map((p) => p.threadId) } },
+        select: { id: true, title: true, kind: true, externalAddress: true },
+      });
+      const threadById = new Map<string, any>(threadRows.map((t: any) => [t.id, t]));
+      for (const p of messageRecent) {
+        const t = threadById.get(p.threadId);
+        if (!t) continue;
+        p.counterpartyLabel = t.title || t.externalAddress || (t.kind ? String(t.kind).toLowerCase() : "Conversation");
+      }
+
+      // Total unread = sum of inbound messages newer than lastReadAt across all my threads.
+      let total = 0;
+      for (const part of participants) {
+        const lastRead = part.lastReadAt as Date | null | undefined;
+        const where: Record<string, unknown> = {
+          threadId: part.threadId,
+          direction: "INBOUND",
+          deletedForEveryoneAt: null,
+          senderUserId: { not: userId },
+        };
+        if (lastRead) (where as any).createdAt = { gt: lastRead };
+        total += await (db as any).connectChatMessage.count({ where });
+      }
+      messageUnread = total;
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message }, "dashboard_communications: chat query failed");
+  }
+
+  return reply.send({
+    voicemails: { unread: voicemailUnread, recent: voicemailRecent },
+    messages: { unread: messageUnread, recent: messageRecent },
+    asOf: new Date().toISOString(),
+  });
+});
+
+// ─── Dashboard: IVR analytics (admin only) ───────────────────────────────────
+// Aggregates PbxCallEvent rows with eventType in (ivr_option_pressed, ivr_invalid,
+// ivr_timeout, ivr_direct_dial, ivr_fallback_invalid, ivr_fallback_timeout) for the
+// requested date range. Returns total IVR calls, top option digits, drop-off counts.
+app.get("/dashboard/ivr-analytics", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const query = z.object({
+    range: z.enum(["today", "7d", "30d", "custom"]).optional().default("today"),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    tenantId: z.string().optional(),
+  }).parse(req.query || {});
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const scopeTenantId: string | null = isSuperAdmin
+    ? (query.tenantId && query.tenantId !== "global" ? query.tenantId : null)
+    : (user.tenantId ?? null);
+
+  const customFrom = query.range === "custom" && query.from ? new Date(query.from) : null;
+  const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
+  const { timeWhere } = resolveDashboardCallRange(query.range, new Date(), customFrom, customTo);
+
+  const where: Record<string, unknown> = {
+    createdAt: timeWhere,
+    eventType: {
+      in: [
+        "ivr_option_pressed",
+        "ivr_invalid",
+        "ivr_timeout",
+        "ivr_direct_dial",
+        "ivr_fallback_invalid",
+        "ivr_fallback_timeout",
+      ],
+    },
+  };
+  if (scopeTenantId) where.tenantId = scopeTenantId;
+
+  let events: Array<{ id: string; eventType: string; callId: string | null; payload: any; createdAt: Date }> = [];
+  try {
+    events = await (db as any).pbxCallEvent.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+      select: { id: true, eventType: true, callId: true, payload: true, createdAt: true },
+    });
+  } catch (err: any) {
+    app.log.warn({ err: err?.message }, "dashboard_ivr_analytics: query failed");
+  }
+
+  const callIdsSeen = new Set<string>();
+  const optionCounts = new Map<string, number>();
+  let pressed = 0, invalid = 0, timeout = 0, directDial = 0;
+  for (const ev of events) {
+    if (ev.callId) callIdsSeen.add(ev.callId);
+    if (ev.eventType === "ivr_option_pressed") {
+      pressed++;
+      const digit = String((ev.payload as any)?.digit ?? "").trim();
+      if (digit) optionCounts.set(digit, (optionCounts.get(digit) ?? 0) + 1);
+    } else if (ev.eventType === "ivr_invalid" || ev.eventType === "ivr_fallback_invalid") invalid++;
+    else if (ev.eventType === "ivr_timeout" || ev.eventType === "ivr_fallback_timeout") timeout++;
+    else if (ev.eventType === "ivr_direct_dial") directDial++;
+  }
+
+  const topOptions = Array.from(optionCounts.entries())
+    .map(([digit, count]) => ({ digit, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+
+  // Resolve labels via the active IvrOptionRoute config (digit → label).
+  const labelByDigit = new Map<string, string>();
+  if (scopeTenantId) {
+    try {
+      const profile = await db.ivrRouteProfile.findFirst({
+        where: { tenantId: scopeTenantId },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true },
+      });
+      if (profile) {
+        const routes = await db.ivrOptionRoute.findMany({
+          where: { profileId: profile.id, enabled: true },
+          select: { optionDigit: true, label: true, destinationType: true },
+        });
+        for (const r of routes) {
+          labelByDigit.set(r.optionDigit, r.label || `${r.destinationType.replace(/_/g, " ")}`);
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  return reply.send({
+    range: query.range,
+    windowFrom: timeWhere.gte.toISOString(),
+    windowTo: timeWhere.lt.toISOString(),
+    scope: scopeTenantId ? "tenant" : "global",
+    ...(scopeTenantId ? { tenantId: scopeTenantId } : {}),
+    totals: {
+      ivrCalls: callIdsSeen.size,
+      optionsPressed: pressed,
+      timeouts: timeout,
+      invalidEntries: invalid,
+      directDials: directDial,
+      dropOffs: timeout + invalid,
+    },
+    topOptions: topOptions.map((o) => ({ ...o, label: labelByDigit.get(o.digit) ?? null })),
+    asOf: new Date().toISOString(),
+  });
 });
 
 app.get("/dashboard/summary", async (req, reply) => {
