@@ -24763,13 +24763,18 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   }
 
   try {
-    const tenantClause = scopeTenantId ? { tenantId: scopeTenantId } : {};
+    // Broaden the tenant filter so we match rows whether they were ingested with
+    // the Connect cuid or the "vpbx:{slug}" placeholder form.
+    const tenantIdSet = scopeTenantId ? await resolveTenantIdFilterSet(scopeTenantId) : null;
+    const tenantClause: Record<string, unknown> = tenantIdSet && tenantIdSet.length > 0
+      ? (tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } })
+      : {};
     const activity = await aggregateDashboardCallActivity({
       tenantFilter: tenantClause,
       range: query.range,
       customFrom,
       customTo,
-      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, role: user.role, range: query.range },
+      logContext: { endpoint: "call-kpis", tenantId: scopeTenantId, tenantIdSet, role: user.role, range: query.range },
     });
 
     // Forwarded outbound legs: inbound call auto-forwarded to external number (find-me/follow-me).
@@ -25259,10 +25264,17 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
     };
   }
 
-  // For global super-admin scope: no tenant filter. Otherwise filter to resolved tenant.
-  const tenantFilter = (scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId
-    ? {}
-    : { tenantId: scopeTenantId };
+  // For global super-admin scope: no tenant filter. Otherwise filter to BOTH the
+  // Connect cuid and the "vpbx:{slug}" placeholder form so rows ingested under
+  // either label are matched.
+  let tenantFilter: Record<string, unknown> = {};
+  let tenantIdSet: string[] | null = null;
+  if (!((scope === "GLOBAL" && isSuperAdmin) || !scopeTenantId)) {
+    tenantIdSet = await resolveTenantIdFilterSet(scopeTenantId);
+    if (tenantIdSet && tenantIdSet.length > 0) {
+      tenantFilter = tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } };
+    }
+  }
 
   let activity: DashboardCallActivityAggregate;
   try {
@@ -25271,7 +25283,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
       range: query.range,
       customFrom,
       customTo,
-      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, role: user.role, range: query.range },
+      logContext: { endpoint: "call-traffic", scope, tenantId: scopeTenantId, tenantIdSet, role: user.role, range: query.range },
     });
   } catch (err: any) {
     app.log.error({ err: err?.message, cacheKey }, "dashboard_call_traffic: db query failed");
@@ -25348,12 +25360,17 @@ app.get("/dashboard/communications", async (req, reply) => {
       select: { extNumber: true, tenantId: true },
     });
     if (ext?.extNumber) {
+      // Voicemails may carry either a Connect cuid or the "vpbx:{slug}" form for the
+      // same tenant — match both so we don't miss rows ingested under either label.
+      const tenantIdSet = ext.tenantId ? await resolveTenantIdFilterSet(ext.tenantId) : null;
       const vmWhere: Record<string, unknown> = {
         extension: ext.extNumber,
         deletedAt: null,
         folder: "inbox",
       };
-      if (ext.tenantId) vmWhere.tenantId = ext.tenantId;
+      if (tenantIdSet && tenantIdSet.length > 0) {
+        vmWhere.tenantId = tenantIdSet.length === 1 ? tenantIdSet[0] : { in: tenantIdSet };
+      }
       const [unreadCount, recent] = await Promise.all([
         db.voicemail.count({ where: { ...vmWhere, readAt: null } }),
         db.voicemail.findMany({
@@ -25497,7 +25514,13 @@ app.get("/dashboard/ivr-analytics", async (req, reply) => {
       ],
     },
   };
-  if (scopeTenantId) where.tenantId = scopeTenantId;
+  // PbxCallEvent.tenantId is FK-bound to Connect cuid, but resolveTenantIdFilterSet
+  // accepts either a cuid or a "vpbx:{slug}" input and returns the matching cuid +
+  // slug form — using { in: [...] } here is a safe no-op for the slug rows.
+  const tenantIdSet = scopeTenantId ? await resolveTenantIdFilterSet(scopeTenantId) : null;
+  if (tenantIdSet && tenantIdSet.length > 0) {
+    where.tenantId = tenantIdSet.length === 1 ? tenantIdSet[0] : { in: tenantIdSet };
+  }
 
   let events: Array<{ id: string; eventType: string; callId: string | null; payload: any; createdAt: Date }> = [];
   try {
@@ -25531,11 +25554,13 @@ app.get("/dashboard/ivr-analytics", async (req, reply) => {
     .slice(0, 6);
 
   // Resolve labels via the active IvrOptionRoute config (digit → label).
+  // IvrRouteProfile.tenantId is the Connect cuid only — pick that form from the set.
   const labelByDigit = new Map<string, string>();
-  if (scopeTenantId) {
+  const ivrProfileTenantId = (tenantIdSet ?? []).find((id) => !id.startsWith("vpbx:")) ?? null;
+  if (ivrProfileTenantId) {
     try {
       const profile = await db.ivrRouteProfile.findFirst({
-        where: { tenantId: scopeTenantId },
+        where: { tenantId: ivrProfileTenantId },
         orderBy: { updatedAt: "desc" },
         select: { id: true },
       });
