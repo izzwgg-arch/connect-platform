@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { RoleGate } from "../../../../components/RoleGate";
-import { apiGet } from "../../../../services/apiClient";
+import { apiGet, apiPost } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +52,23 @@ interface WakeEvent {
 
 interface WakeTimelineResponse {
   events: WakeEvent[];
+}
+
+interface RepublishWakeConfigResponse {
+  ok: boolean;
+  systemPublished: boolean;
+  systemError: string | null;
+  wakeWaitSecs: number;
+  tenantsAttempted: number;
+  tenantsPublished: number;
+  tenants: Array<{
+    tenantId: string;
+    slug: string;
+    published: boolean;
+    pbxTenantId: string | null;
+    pbxTenantCode: string | null;
+    error: string | null;
+  }>;
 }
 
 // ── Stage taxonomy ────────────────────────────────────────────────────────────
@@ -495,6 +512,9 @@ export default function CallWakeDiagnosticsPage() {
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [includeInactive, setIncludeInactive] = useState(false);
+  const [republishing, setRepublishing] = useState(false);
+  const [republishResult, setRepublishResult] = useState<RepublishWakeConfigResponse | null>(null);
+  const [republishError, setRepublishError] = useState<string | null>(null);
 
   const selectedDevice = useMemo(
     () => devices.find((d) => d.id === selectedDeviceId) || null,
@@ -547,6 +567,22 @@ export default function CallWakeDiagnosticsPage() {
     }
   }, [selectedDevice?.user?.id]);
 
+  const republishWakeConfig = useCallback(async () => {
+    setRepublishing(true);
+    setRepublishError(null);
+    try {
+      const res = await apiPost<RepublishWakeConfigResponse>(
+        "/admin/pbx/republish-wake-config",
+        { allTenants: true },
+      );
+      setRepublishResult(res);
+    } catch (e) {
+      setRepublishError(e instanceof Error ? e.message : "Republish failed");
+    } finally {
+      setRepublishing(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadDevices();
   }, [loadDevices]);
@@ -567,6 +603,111 @@ export default function CallWakeDiagnosticsPage() {
           title="Call Wake Diagnostics"
           subtitle="Per-device wake-then-dial timeline and auto-triage. Use this when a user reports 'phone goes straight to voicemail' or 'calls only ring when app is open'."
         />
+
+        {/* PBX wake config control */}
+        <section
+          style={{
+            background: "#0f172a",
+            border: "1px solid #1f2937",
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 16,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 14,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+              <div style={{ color: "#e2e8f0", fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+                PBX wake config
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.5 }}>
+                Pushes <code style={{ color: "#cbd5e1" }}>wake_api_url</code>,{" "}
+                <code style={{ color: "#cbd5e1" }}>wake_api_secret</code>, and{" "}
+                <code style={{ color: "#cbd5e1" }}>wake_wait_secs</code> into VitalPBX&apos;s AstDB so the{" "}
+                <code style={{ color: "#cbd5e1" }}>connect-dial-with-wake</code> dialplan picks up the new
+                values. Run this after the API redeploys with a new wake budget — otherwise calls keep using
+                the cached value.
+              </div>
+            </div>
+            <button
+              onClick={() => void republishWakeConfig()}
+              disabled={republishing}
+              style={{
+                background: republishing ? "#374151" : "#7c3aed",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: republishing ? "default" : "pointer",
+                whiteSpace: "nowrap",
+                alignSelf: "center",
+              }}
+            >
+              {republishing ? "Republishing…" : "Republish wake config"}
+            </button>
+          </div>
+
+          {republishError && (
+            <div
+              style={{
+                marginTop: 10,
+                background: "#7f1d1d22",
+                border: "1px solid #ef4444",
+                color: "#fca5a5",
+                padding: 10,
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+            >
+              {republishError}
+            </div>
+          )}
+
+          {republishResult && (
+            <div
+              style={{
+                marginTop: 10,
+                background: republishResult.systemPublished ? "#14532d22" : "#7f1d1d22",
+                border: `1px solid ${republishResult.systemPublished ? "#22c55e" : "#ef4444"}`,
+                color: "#cbd5e1",
+                padding: 10,
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                {republishResult.systemPublished ? "Published" : "Failed"} ·{" "}
+                wake_wait_secs = {republishResult.wakeWaitSecs}s · tenants{" "}
+                {republishResult.tenantsPublished}/{republishResult.tenantsAttempted}
+              </div>
+              {republishResult.systemError && (
+                <div style={{ color: "#fca5a5", fontFamily: "monospace", fontSize: 11 }}>
+                  system: {republishResult.systemError}
+                </div>
+              )}
+              {republishResult.tenants.some((t) => t.error) && (
+                <ul style={{ margin: "6px 0 0 18px", padding: 0, fontSize: 11 }}>
+                  {republishResult.tenants
+                    .filter((t) => t.error)
+                    .map((t) => (
+                      <li key={t.tenantId} style={{ color: "#fca5a5" }}>
+                        {t.slug}: {t.error}
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </section>
 
         {error && (
           <div

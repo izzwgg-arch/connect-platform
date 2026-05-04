@@ -15121,7 +15121,16 @@ async function publishWakeSystemConfig(tenantSlug: string): Promise<void> {
   const baseUrl = (process.env.PUBLIC_API_BASE_URL ?? "https://app.connectcomunications.com/api").replace(/\/$/, "");
   const wakeUrl = `${baseUrl}/internal/pbx/wake-extension`;
   const wakeSecret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
-  const wakeWaitSecs = String(Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "6", 10) || 6);
+  // Cold-start budget for a killed Samsung Galaxy S25 / Android 15 app:
+  //   FCM delivery       ~0.5–2.0s
+  //   Process startup    ~1.5–3.0s (Hermes + JS bundle eval)
+  //   SIP REGISTER       ~0.5–1.5s (WSS + auth round trips)
+  //   Total worst case   ~5–7s; 6s left no margin and the call would
+  //   route to voicemail just as the device finished registering. 10s
+  //   lets a killed-app S25 land an INVITE comfortably, while phones
+  //   that were already registered skip this Wait() entirely via the
+  //   PJSIP_DIAL_CONTACTS check at the top of [connect-dial-with-wake].
+  const wakeWaitSecs = String(Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "10", 10) || 10);
   await publishToAstDb(tenantSlug, [
     { family: "connect/system", key: "wake_api_url",    value: wakeUrl },
     { family: "connect/system", key: "wake_api_secret", value: wakeSecret },
@@ -23294,11 +23303,91 @@ app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
     ok: systemPublished,
     slug,
     wakeUrl: `${baseUrl}/internal/pbx/wake-extension`,
-    wakeWaitSecs: Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "6", 10) || 6,
+    wakeWaitSecs: Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "10", 10) || 10,
     hasSecret: Boolean(secret),
     systemPublished,
     tenantPublished,
     error: publishError,
+  });
+});
+
+// Admin-authenticated wrapper around publish-wake-config so an operator can
+// hit "Republish wake config" from /admin/call-wake-diagnostics after we tune
+// PBX_WAKE_WAIT_SECS or wake_api_url. The /internal/* sibling above is
+// nginx-blocked and requires CDR_INGEST_SECRET; this one accepts a
+// SUPER_ADMIN JWT and reuses the same publish helpers.
+//
+// Optional body { allTenants?: boolean } — when true, also republishes the
+// per-tenant identity keys (pbx_tenant_id / pbx_tenant_code) for every
+// tenant that has a TenantPbxLink. The system family (wake_api_url,
+// wake_api_secret, wake_wait_secs) is global and only written once.
+app.post("/admin/pbx/republish-wake-config", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const input = z.object({
+    allTenants: z.boolean().optional().default(true),
+  }).parse(req.body || {});
+
+  const anyTenant = await db.tenant.findFirst({ select: { id: true } });
+  if (!anyTenant) {
+    return reply.code(409).send({ error: "no_tenant_available" });
+  }
+  const slugForSystem = await getIvrSlugForTenant(anyTenant.id);
+
+  let systemPublished = false;
+  let systemError: string | null = null;
+  try {
+    await publishWakeSystemConfig(slugForSystem);
+    systemPublished = true;
+  } catch (err: any) {
+    systemError = err?.message ?? "publish_failed";
+    app.log.warn({ tenantId: anyTenant.id, slug: slugForSystem, err: systemError }, "republish-wake-config: system failed");
+  }
+
+  const tenantResults: Array<{
+    tenantId: string;
+    slug: string;
+    published: boolean;
+    pbxTenantId: string | null;
+    pbxTenantCode: string | null;
+    error: string | null;
+  }> = [];
+
+  if (input.allTenants) {
+    const links = await db.tenantPbxLink.findMany({
+      where: { status: "LINKED" },
+      select: { tenantId: true },
+    }).catch(() => [] as Array<{ tenantId: string }>);
+    const linkedTenantIds = Array.from(new Set(links.map((l) => l.tenantId).filter(Boolean)));
+    for (const tenantId of linkedTenantIds) {
+      let tSlug = "";
+      try {
+        tSlug = await getIvrSlugForTenant(tenantId);
+        const r = await publishWakeTenantConfig(tSlug, tenantId);
+        tenantResults.push({
+          tenantId, slug: tSlug,
+          published: r.published, pbxTenantId: r.pbxTenantId, pbxTenantCode: r.pbxTenantCode,
+          error: null,
+        });
+      } catch (err: any) {
+        tenantResults.push({
+          tenantId, slug: tSlug,
+          published: false, pbxTenantId: null, pbxTenantCode: null,
+          error: err?.message ?? "publish_failed",
+        });
+      }
+    }
+  }
+
+  return reply.send({
+    ok: systemPublished,
+    systemPublished,
+    systemError,
+    wakeWaitSecs: Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "10", 10) || 10,
+    tenantsAttempted: tenantResults.length,
+    tenantsPublished: tenantResults.filter((t) => t.published).length,
+    tenants: tenantResults,
   });
 });
 
