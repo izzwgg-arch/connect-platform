@@ -72,7 +72,7 @@ export default function DashboardPage() {
 
   // Date range filter state — controls the volume chart, KPIs, and IVR analytics.
   // Active Calls and Communications are always "now" (live state, not date-windowed).
-  const [range, setRange] = useState<DateRangeValue>({ key: "today" });
+  const [range, setRange] = useState<DateRangeValue>({ key: "7d" });
 
   // Refresh ticks
   const [kpiTick, setKpiTick] = useState(0);
