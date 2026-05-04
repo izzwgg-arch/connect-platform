@@ -8299,6 +8299,69 @@ table tr:hover {
   width: 100%;
 }
 
+/* Page-load stagger: each top-level section fades up with a gentle delay. */
+@keyframes dashV2FadeUp {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes dashV2GraphReveal {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes dashV2KpiPop {
+  0%   { opacity: 0; transform: translate3d(0, 8px, 0) scale(0.985); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+.dash-v2-shell > * {
+  animation: dashV2FadeUp 0.5s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+  will-change: transform, opacity;
+}
+.dash-v2-shell > *:nth-child(1) { animation-delay: 0ms; }
+.dash-v2-shell > *:nth-child(2) { animation-delay: 70ms; }
+.dash-v2-shell > *:nth-child(3) { animation-delay: 140ms; }
+.dash-v2-shell > *:nth-child(4) { animation-delay: 210ms; }
+.dash-v2-shell > *:nth-child(5) { animation-delay: 280ms; }
+.dash-v2-shell > *:nth-child(6) { animation-delay: 350ms; }
+
+/* Inner-stagger for the 5 KPI cards so the row feels alive. */
+.dash-v2-kpi-grid .dash-v2-kpi-card {
+  animation: dashV2KpiPop 0.55s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+}
+.dash-v2-kpi-grid .dash-v2-kpi-card:nth-child(1) { animation-delay: 200ms; }
+.dash-v2-kpi-grid .dash-v2-kpi-card:nth-child(2) { animation-delay: 240ms; }
+.dash-v2-kpi-grid .dash-v2-kpi-card:nth-child(3) { animation-delay: 280ms; }
+.dash-v2-kpi-grid .dash-v2-kpi-card:nth-child(4) { animation-delay: 320ms; }
+.dash-v2-kpi-grid .dash-v2-kpi-card:nth-child(5) { animation-delay: 360ms; }
+
+/* Soft scale-in on the call-volume chart card. */
+.dash-v2-graph .dash-v2-graph-card {
+  animation: dashV2GraphReveal 0.6s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+  animation-delay: 100ms;
+  transform-origin: center top;
+}
+
+/* Stagger active-call rows so newly fetched calls cascade in. */
+.dash-v2-active-list .dash-v2-active-row {
+  animation: dashV2FadeUp 0.4s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+}
+.dash-v2-active-list .dash-v2-active-row:nth-child(1) { animation-delay: 280ms; }
+.dash-v2-active-list .dash-v2-active-row:nth-child(2) { animation-delay: 320ms; }
+.dash-v2-active-list .dash-v2-active-row:nth-child(3) { animation-delay: 360ms; }
+.dash-v2-active-list .dash-v2-active-row:nth-child(4) { animation-delay: 400ms; }
+.dash-v2-active-list .dash-v2-active-row:nth-child(n + 5) { animation-delay: 440ms; }
+
+/* Honour user motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .dash-v2-shell > *,
+  .dash-v2-kpi-grid .dash-v2-kpi-card,
+  .dash-v2-graph .dash-v2-graph-card,
+  .dash-v2-active-list .dash-v2-active-row {
+    animation: none !important;
+  }
+}
+
 .dash-v2-header {
   display: flex;
   flex-wrap: wrap;
