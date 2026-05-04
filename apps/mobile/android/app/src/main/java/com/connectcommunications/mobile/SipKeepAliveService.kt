@@ -5,14 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 
 /**
  * Stage 2: persistent Android Foreground Service that keeps the JS process
@@ -59,8 +62,43 @@ class SipKeepAliveService : Service() {
     private const val TAG = "SipKeepAliveService"
     private const val CHANNEL_ID = "connect_sip_keepalive"
     private const val CHANNEL_NAME = "Connect background service"
+    /**
+     * Separate channel for the in-call ongoing notification so we can give it
+     * a higher importance + visible category — the keep-alive idle channel
+     * is IMPORTANCE_MIN, which would render the in-call CallStyle without
+     * action buttons on the lock screen on some OEMs.
+     */
+    private const val IN_CALL_CHANNEL_ID = "connect_in_call_v2"
+    private const val IN_CALL_CHANNEL_NAME = "On a call"
     private const val NOTIFICATION_ID = 4242
     private const val WAKE_LOCK_TAG = "ConnectCommunications:SipKeepAlive"
+
+    // ── Foreground state intents ─────────────────────────────────────────────
+    /**
+     * Sent to onStartCommand to swap the service into in-call mode:
+     *   • foreground type ladder includes MICROPHONE (so mic capture survives
+     *     backgrounding on Android 14+)
+     *   • notification swaps to a CallStyle.forOngoingCall ringer with End +
+     *     Speaker actions and a live chronometer
+     * Extras: EXTRA_CALLER_NAME, EXTRA_CALL_STARTED_AT_MS, EXTRA_SPEAKER_ON.
+     */
+    private const val ACTION_ENTER_CALL = "com.connectcommunications.mobile.SipKeepAlive.ENTER_CALL"
+    private const val ACTION_EXIT_CALL  = "com.connectcommunications.mobile.SipKeepAlive.EXIT_CALL"
+    private const val ACTION_UPDATE_CALL = "com.connectcommunications.mobile.SipKeepAlive.UPDATE_CALL"
+    private const val EXTRA_CALLER_NAME = "callerName"
+    private const val EXTRA_CALL_STARTED_AT_MS = "callStartedAtMs"
+    private const val EXTRA_SPEAKER_ON = "speakerOn"
+    private const val EXTRA_MUTED = "muted"
+
+    // ── Notification action intents ──────────────────────────────────────────
+    // The user tapping "End" or "Speaker" in the in-call notification fires a
+    // broadcast that we (1) re-emit to JS via DeviceEventEmitter so SipContext
+    // can act on it, and (2) for Speaker, also flip our local mirror so the
+    // notification updates the toggle visual immediately without waiting for
+    // the JS round-trip.
+    const val NOTIF_ACTION_HANGUP = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_HANGUP"
+    const val NOTIF_ACTION_TOGGLE_SPEAKER = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_TOGGLE_SPEAKER"
+    const val NOTIF_ACTION_TOGGLE_MUTE = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_TOGGLE_MUTE"
 
     // ── Diagnostics state ────────────────────────────────────────────────────
     // Surfaced via IncomingCallUiModule.getCallWakeDiagnostics() so the in-app
@@ -111,9 +149,113 @@ class SipKeepAliveService : Service() {
         Log.w(TAG, "stop failed: ${t.message}")
       }
     }
+
+    /**
+     * Switch the (already-running) service into in-call mode.
+     *
+     * Two outcomes that must succeed atomically:
+     *
+     *   1. The foreground-service type is re-promoted to include MICROPHONE
+     *      so Android 14+ keeps the WebRTC mic stream alive when the user
+     *      backgrounds the app. Without this, the remote party hears
+     *      silence the moment the app loses foreground.
+     *
+     *   2. The persistent notification is replaced with a CallStyle ongoing
+     *      ringer that shows the caller name, a live timer (chronometer
+     *      anchored to callStartedAtMs), and End / Speaker action buttons
+     *      so the user can manage the call without bringing the app
+     *      foreground.
+     *
+     * Idempotent: calling repeatedly with new info just refreshes the
+     * notification (used for speaker-state changes mid-call).
+     */
+    fun startInCall(
+      context: Context,
+      callerName: String?,
+      callStartedAtMs: Long,
+      speakerOn: Boolean,
+      muted: Boolean,
+    ) {
+      val i = Intent(context, SipKeepAliveService::class.java).apply {
+        action = ACTION_ENTER_CALL
+        putExtra(EXTRA_CALLER_NAME, callerName ?: "")
+        putExtra(EXTRA_CALL_STARTED_AT_MS, callStartedAtMs)
+        putExtra(EXTRA_SPEAKER_ON, speakerOn)
+        putExtra(EXTRA_MUTED, muted)
+      }
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          context.startForegroundService(i)
+        } else {
+          context.startService(i)
+        }
+        Log.i(TAG, "startInCall dispatched callerName=${callerName ?: ""} speakerOn=$speakerOn muted=$muted")
+      } catch (t: Throwable) {
+        Log.w(TAG, "startInCall failed (${t.javaClass.simpleName}): ${t.message}")
+      }
+    }
+
+    /**
+     * Refresh the in-call notification's toggle state mid-call (used when JS
+     * flips speaker / mute and we need the notification action icon to stay
+     * in sync with the actual audio routing). No-op if the service isn't
+     * already in in-call mode — the notification is simply rebuilt with the
+     * current state.
+     */
+    fun updateInCallState(
+      context: Context,
+      speakerOn: Boolean,
+      muted: Boolean,
+    ) {
+      val i = Intent(context, SipKeepAliveService::class.java).apply {
+        action = ACTION_UPDATE_CALL
+        putExtra(EXTRA_SPEAKER_ON, speakerOn)
+        putExtra(EXTRA_MUTED, muted)
+      }
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          context.startForegroundService(i)
+        } else {
+          context.startService(i)
+        }
+      } catch (t: Throwable) {
+        Log.w(TAG, "updateInCallState failed: ${t.message}")
+      }
+    }
+
+    /**
+     * Drop out of in-call mode: re-promote the service to its idle
+     * foreground type ladder (PHONE_CALL|DATA_SYNC) and restore the minimal
+     * "Connect ready" notification. Called from JS when the call ends.
+     */
+    fun stopInCall(context: Context) {
+      val i = Intent(context, SipKeepAliveService::class.java).apply {
+        action = ACTION_EXIT_CALL
+      }
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          context.startForegroundService(i)
+        } else {
+          context.startService(i)
+        }
+        Log.i(TAG, "stopInCall dispatched")
+      } catch (t: Throwable) {
+        Log.w(TAG, "stopInCall failed: ${t.message}")
+      }
+    }
   }
 
   private var wakeLock: PowerManager.WakeLock? = null
+
+  /** In-call snapshot. Null = idle keep-alive mode. */
+  private data class InCallSnapshot(
+    val callerName: String,
+    val callStartedAtMs: Long,
+    val speakerOn: Boolean,
+    val muted: Boolean,
+  )
+  private var inCall: InCallSnapshot? = null
+  private var notifReceiver: BroadcastReceiver? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -121,10 +263,34 @@ class SipKeepAliveService : Service() {
     serviceCreatedAtMs = System.currentTimeMillis()
     serviceDestroyedAtMs = 0
     ensureChannel()
+    ensureInCallChannel()
+    registerNotifReceiver()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    Log.i(TAG, "onStartCommand startId=$startId")
+    val action = intent?.action
+    Log.i(TAG, "onStartCommand startId=$startId action=$action")
+
+    when (action) {
+      ACTION_ENTER_CALL -> {
+        inCall = InCallSnapshot(
+          callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "",
+          callStartedAtMs = intent.getLongExtra(EXTRA_CALL_STARTED_AT_MS, System.currentTimeMillis()),
+          speakerOn = intent.getBooleanExtra(EXTRA_SPEAKER_ON, false),
+          muted = intent.getBooleanExtra(EXTRA_MUTED, false),
+        )
+      }
+      ACTION_EXIT_CALL -> {
+        inCall = null
+      }
+      ACTION_UPDATE_CALL -> {
+        inCall = inCall?.copy(
+          speakerOn = intent.getBooleanExtra(EXTRA_SPEAKER_ON, inCall?.speakerOn ?: false),
+          muted    = intent.getBooleanExtra(EXTRA_MUTED,    inCall?.muted    ?: false),
+        )
+      }
+    }
+
     val foregrounded = startForegroundSafely()
     if (foregrounded) {
       isRunning = true
@@ -148,6 +314,7 @@ class SipKeepAliveService : Service() {
     serviceDestroyedAtMs = System.currentTimeMillis()
     isRunning = false
     releaseWakeLock()
+    unregisterNotifReceiver()
     super.onDestroy()
   }
 
@@ -212,23 +379,59 @@ class SipKeepAliveService : Service() {
 
     // Android 14+ ladder. Each type passed must be a subset of what is
     // declared in AndroidManifest.xml `android:foregroundServiceType`. We
-    // declare `phoneCall|dataSync`, so PHONE_CALL, DATA_SYNC, and the combo
-    // are all valid. SPECIAL_USE / MEDIA_PLAYBACK / etc. would throw
-    // MissingForegroundServiceTypeException — we'd need a manifest update
-    // to add those, which is its own change.
-    val attempts: List<Pair<String, Int>> = listOf(
-      // Best — strongest survival tier when accepted. Some Android 15 builds
-      // refuse this combo if no active TelecomManager call exists.
-      "PHONE_CALL|DATA_SYNC" to (
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
-          ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-      ),
-      // Some Samsung builds accept PHONE_CALL alone but not the combo.
-      "PHONE_CALL" to ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
-      // DATA_SYNC alone — weaker tier, killed faster under mem-pressure but
-      // never refused on permission grounds. Final fallback.
-      "DATA_SYNC" to ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-    )
+    // declare `phoneCall|dataSync|microphone`, so any combination of those
+    // three is valid.
+    //
+    // The exact ladder depends on whether we are in-call or idle:
+    //
+    //   IN-CALL:
+    //     The MICROPHONE type is the critical one — without it Android 14+
+    //     silently mutes WebRTC capture the moment the app loses foreground
+    //     and the remote party hears silence. We try the strongest combo
+    //     first (MICROPHONE + PHONE_CALL + DATA_SYNC) so the kernel knows
+    //     this is a foreground voice call AND we hold the mic. If PHONE_CALL
+    //     is rejected (S25 / Android 15 has been seen to refuse it without
+    //     an active TelecomManager call) we fall back to MICROPHONE +
+    //     DATA_SYNC which still keeps the mic alive.
+    //
+    //   IDLE:
+    //     PHONE_CALL|DATA_SYNC ladder as before — there's no mic capture
+    //     happening so MICROPHONE would be misleading and Android may
+    //     enforce timeouts on idle MICROPHONE FGS.
+    val attempts: List<Pair<String, Int>> = if (inCall != null) {
+      listOf(
+        "MICROPHONE|PHONE_CALL|DATA_SYNC" to (
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        ),
+        "MICROPHONE|PHONE_CALL" to (
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        ),
+        "MICROPHONE|DATA_SYNC" to (
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        ),
+        // Last resort: MICROPHONE alone. Still fixes the mic-mute issue but
+        // loses the PHONE_CALL/DATA_SYNC survival hints.
+        "MICROPHONE" to ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+      )
+    } else {
+      listOf(
+        // Best — strongest survival tier when accepted. Some Android 15 builds
+        // refuse this combo if no active TelecomManager call exists.
+        "PHONE_CALL|DATA_SYNC" to (
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        ),
+        // Some Samsung builds accept PHONE_CALL alone but not the combo.
+        "PHONE_CALL" to ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL,
+        // DATA_SYNC alone — weaker tier, killed faster under mem-pressure but
+        // never refused on permission grounds. Final fallback.
+        "DATA_SYNC" to ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+      )
+    }
 
     for ((label, type) in attempts) {
       val ok = tryFg(label) {
@@ -280,7 +483,114 @@ class SipKeepAliveService : Service() {
     nm.createNotificationChannel(channel)
   }
 
+  /**
+   * Channel for the in-call ongoing notification. DEFAULT importance (no
+   * sound/vibration — the channel is silent because the call audio itself
+   * is the notification) so the lock-screen surface still shows action
+   * buttons. The keep-alive idle channel is IMPORTANCE_MIN, which on some
+   * OEMs strips notification actions on the lock screen.
+   */
+  private fun ensureInCallChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+    if (nm.getNotificationChannel(IN_CALL_CHANNEL_ID) != null) return
+    val channel = NotificationChannel(
+      IN_CALL_CHANNEL_ID,
+      IN_CALL_CHANNEL_NAME,
+      NotificationManager.IMPORTANCE_DEFAULT,
+    ).apply {
+      description = "Shown for the entire duration of an active call so you can hang up or toggle the speaker without opening the app."
+      setShowBadge(false)
+      setSound(null, null)
+      enableVibration(false)
+      enableLights(false)
+      lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+    }
+    nm.createNotificationChannel(channel)
+  }
+
+  /**
+   * Subscribes to the three in-call notification action broadcasts. Each
+   * action does two things:
+   *   1. Updates our local in-call snapshot (speaker / mute toggles flip
+   *      immediately so the next notification rebuild reflects the new
+   *      icon / label).
+   *   2. Re-emits the action to the JS layer via DeviceEventEmitter so
+   *      SipContext can call session.terminate() / setSpeaker() /
+   *      toggleMute() against the actual JsSIP session. JS owns the SIP
+   *      lifecycle — the native side can only request these.
+   */
+  private fun registerNotifReceiver() {
+    if (notifReceiver != null) return
+    val filter = IntentFilter().apply {
+      addAction(NOTIF_ACTION_HANGUP)
+      addAction(NOTIF_ACTION_TOGGLE_SPEAKER)
+      addAction(NOTIF_ACTION_TOGGLE_MUTE)
+    }
+    val receiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+          NOTIF_ACTION_HANGUP -> {
+            Log.i(TAG, "in-call notification: HANGUP tapped")
+            // Best-effort emit to JS; the in-call notification is removed by
+            // the subsequent ACTION_EXIT_CALL that JS sends on session.ended.
+            try { IncomingCallUiModule.emitInCallAction("hangup") } catch (_: Throwable) {}
+          }
+          NOTIF_ACTION_TOGGLE_SPEAKER -> {
+            val cur = inCall ?: return
+            val next = !cur.speakerOn
+            Log.i(TAG, "in-call notification: TOGGLE_SPEAKER -> $next")
+            inCall = cur.copy(speakerOn = next)
+            // Refresh the notification immediately so the action label flips
+            // before the JS round-trip completes (perceived latency).
+            try {
+              val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+              nm?.notify(NOTIFICATION_ID, buildNotification())
+            } catch (_: Throwable) {}
+            try { IncomingCallUiModule.emitInCallAction("toggle_speaker", next) } catch (_: Throwable) {}
+          }
+          NOTIF_ACTION_TOGGLE_MUTE -> {
+            val cur = inCall ?: return
+            val next = !cur.muted
+            Log.i(TAG, "in-call notification: TOGGLE_MUTE -> $next")
+            inCall = cur.copy(muted = next)
+            try {
+              val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+              nm?.notify(NOTIFICATION_ID, buildNotification())
+            } catch (_: Throwable) {}
+            try { IncomingCallUiModule.emitInCallAction("toggle_mute", next) } catch (_: Throwable) {}
+          }
+        }
+      }
+    }
+    try {
+      // Android 14+ requires explicit RECEIVER_NOT_EXPORTED for in-process
+      // broadcasts. Older versions ignore the flag.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+      } else {
+        @Suppress("UnspecifiedRegisterReceiverFlag")
+        registerReceiver(receiver, filter)
+      }
+      notifReceiver = receiver
+      Log.i(TAG, "registerNotifReceiver: subscribed to in-call notification actions")
+    } catch (t: Throwable) {
+      Log.w(TAG, "registerNotifReceiver failed: ${t.message}")
+    }
+  }
+
+  private fun unregisterNotifReceiver() {
+    val r = notifReceiver ?: return
+    try { unregisterReceiver(r) } catch (_: Throwable) {}
+    notifReceiver = null
+  }
+
   private fun buildNotification(): Notification {
+    val snap = inCall
+    return if (snap != null) buildInCallNotification(snap) else buildIdleNotification()
+  }
+
+  private fun buildIdleNotification(): Notification {
     val contentIntent = Intent(this, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
@@ -301,6 +611,90 @@ class SipKeepAliveService : Service() {
       .setContentIntent(pi)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
       .build()
+  }
+
+  /**
+   * Persistent in-call notification — shown for the entire duration of an
+   * active call so the user can hang up / toggle speaker without bringing
+   * the app foreground.
+   *
+   * Uses CallStyle.forOngoingCall on Android 12+ so the system renders the
+   * familiar one-tap call surface. On older OS versions the same End +
+   * Speaker actions still appear as plain notification action buttons.
+   *
+   * The chronometer is anchored to the original call-confirmed timestamp
+   * (callStartedAtMs) so it shows the true wall-clock duration even after
+   * the notification is rebuilt mid-call (e.g. on a speaker toggle).
+   */
+  private fun buildInCallNotification(snap: InCallSnapshot): Notification {
+    val pendingFlags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+
+    // Tap on the body opens MainActivity so the in-app ActiveCallScreen takes
+    // over for full controls (keypad, transfer, etc.).
+    val openIntent = Intent(this, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    }
+    val openPi = PendingIntent.getActivity(this, 1, openIntent, pendingFlags)
+
+    val hangupPi = PendingIntent.getBroadcast(
+      this, 2,
+      Intent(NOTIF_ACTION_HANGUP).setPackage(packageName),
+      pendingFlags,
+    )
+    val speakerPi = PendingIntent.getBroadcast(
+      this, 3,
+      Intent(NOTIF_ACTION_TOGGLE_SPEAKER).setPackage(packageName),
+      pendingFlags,
+    )
+    val mutePi = PendingIntent.getBroadcast(
+      this, 4,
+      Intent(NOTIF_ACTION_TOGGLE_MUTE).setPackage(packageName),
+      pendingFlags,
+    )
+
+    val callerLabel = snap.callerName.ifBlank { "On a call" }
+    val person = Person.Builder().setName(callerLabel).setImportant(true).build()
+
+    val builder = NotificationCompat.Builder(this, IN_CALL_CHANNEL_ID)
+      .setSmallIcon(R.drawable.notification_icon)
+      .setContentTitle(callerLabel)
+      .setContentText(if (snap.muted) "Muted" else "On a call")
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setShowWhen(true)
+      .setWhen(snap.callStartedAtMs)
+      .setUsesChronometer(true)
+      .setCategory(NotificationCompat.CATEGORY_CALL)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setContentIntent(openPi)
+      .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+
+    // Android 12+ — use the system CallStyle. We pass the End action through
+    // forOngoingCall (it renders as a red hangup pill). The Speaker / Mute
+    // toggles are added as additional actions; CallStyle merges them next
+    // to the system buttons.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      builder.setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangupPi))
+    } else {
+      // Older OS — use plain action buttons with explicit labels.
+      builder.addAction(0, "End", hangupPi)
+    }
+
+    // Speaker + Mute action buttons. Labels reflect current state so the
+    // user knows what tapping will do (matches Android's stock dialer UX).
+    builder.addAction(
+      0,
+      if (snap.speakerOn) "Speaker on" else "Speaker",
+      speakerPi,
+    )
+    builder.addAction(
+      0,
+      if (snap.muted) "Unmute" else "Mute",
+      mutePi,
+    )
+
+    return builder.build()
   }
 
   private fun acquireWakeLock() {

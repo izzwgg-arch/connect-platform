@@ -980,6 +980,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   }, [authToken, hasProvisioning]);
 
   const prevCallStateRef = useRef<CallState>("idle");
+  // Anchor for the in-call notification chronometer. Set when the call
+  // first transitions to "connected" so the live timer in the persistent
+  // notification reflects the true wall-clock duration even after re-renders.
+  const callConnectedAtRef = useRef<number | null>(null);
   useEffect(() => {
     const prev = prevCallStateRef.current;
     prevCallStateRef.current = callState;
@@ -1005,6 +1009,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {
           console.warn("[NATIVE_DISMISS] stopRingtone on connect threw:", String(e));
         }
+        // Promote SipKeepAliveService to in-call mode so:
+        //   • foreground-service type ladder includes MICROPHONE — Android 14+
+        //     stops muting WebRTC capture when the app backgrounds (the
+        //     remote-party-hears-silence bug)
+        //   • the persistent notification swaps to a CallStyle.forOngoingCall
+        //     surface with End / Speaker / Mute action buttons + a live timer
+        callConnectedAtRef.current = Date.now();
+        try {
+          const mod = NativeModules.IncomingCallUi;
+          if (mod && typeof mod.startInCallNotification === "function") {
+            mod.startInCallNotification(
+              remoteParty || "On a call",
+              callConnectedAtRef.current,
+              speakerOn,
+              muted,
+            );
+          }
+        } catch (e) {
+          console.warn("[IN_CALL_NOTIF] startInCallNotification threw:", String(e));
+        }
       }
     }
     if (callState === "ended" && prev !== "ended") {
@@ -1025,9 +1049,75 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {
           console.warn("[NATIVE_DISMISS] stopRingtone on end threw:", String(e));
         }
+        // Drop SipKeepAliveService back to idle mode — the FGS goes from
+        // MICROPHONE-typed back to PHONE_CALL|DATA_SYNC, and the notification
+        // returns to the minimal "Ready to receive calls" surface.
+        try {
+          const mod = NativeModules.IncomingCallUi;
+          if (mod && typeof mod.stopInCallNotification === "function") {
+            mod.stopInCallNotification();
+          }
+        } catch (e) {
+          console.warn("[IN_CALL_NOTIF] stopInCallNotification threw:", String(e));
+        }
+        callConnectedAtRef.current = null;
       }
     }
-  }, [callState]);
+  }, [callState, remoteParty, speakerOn, muted]);
+
+  // Refresh the in-call notification's Speaker / Mute toggle visuals when
+  // the underlying audio routing flips mid-call. Skipped while idle so we
+  // don't spam the bridge.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (callState !== "connected") return;
+    try {
+      const mod = NativeModules.IncomingCallUi;
+      if (mod && typeof mod.updateInCallNotification === "function") {
+        mod.updateInCallNotification(speakerOn, muted);
+      }
+    } catch (e) {
+      console.warn("[IN_CALL_NOTIF] updateInCallNotification threw:", String(e));
+    }
+  }, [speakerOn, muted, callState]);
+
+  // Subscribe to taps on the in-call notification's End / Speaker / Mute
+  // action buttons. The native side updates its own snapshot synchronously
+  // so the icon flips immediately; we mirror the change in JS state and
+  // call into the JsSIP / ICM bridges so the actual call actually changes.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = DeviceEventEmitter.addListener(
+      "Sip.InCallNotificationAction",
+      (evt: { action?: string; value?: boolean }) => {
+        const action = evt?.action;
+        const value = evt?.value;
+        console.log("[IN_CALL_NOTIF] action received", { action, value });
+        switch (action) {
+          case "hangup": {
+            clientRef.current.hangup().catch((err) => {
+              console.warn("[IN_CALL_NOTIF] hangup from notification failed:", String(err));
+            });
+            break;
+          }
+          case "toggle_speaker": {
+            const next = typeof value === "boolean" ? value : !speakerOn;
+            try { clientRef.current.setSpeaker(next); } catch {}
+            setSpeakerOn(next);
+            setAudioRoute(next ? "speaker" : "earpiece");
+            break;
+          }
+          case "toggle_mute": {
+            const next = typeof value === "boolean" ? value : !muted;
+            try { clientRef.current.setMute(next); } catch {}
+            setMuted(next);
+            break;
+          }
+        }
+      },
+    );
+    return () => { sub.remove(); };
+  }, [speakerOn, muted]);
 
   const value = useMemo<SipState>(
     () => ({

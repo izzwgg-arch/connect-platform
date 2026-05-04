@@ -54,6 +54,13 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
      * before the PBX dials in ~6 seconds.
      */
     private const val EVENT_SIP_WAKE_REGISTER = "Sip.WakeRegister"
+    /**
+     * Fired when the user taps an action button on the persistent in-call
+     * notification (Hangup, Toggle Speaker, Toggle Mute). Payload:
+     *   { action: "hangup" | "toggle_speaker" | "toggle_mute", value?: bool }
+     * SipContext subscribes and translates each into a JsSIP / ICM call.
+     */
+    private const val EVENT_IN_CALL_ACTION = "Sip.InCallNotificationAction"
 
     @JvmStatic
     private var lastReactContext: WeakReference<ReactApplicationContext>? = null
@@ -113,6 +120,34 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         Log.i(TAG, "emitSipWakeRegister: dispatched $EVENT_SIP_WAKE_REGISTER to JS")
       } catch (t: Throwable) {
         Log.w(TAG, "emitSipWakeRegister failed: ${t.message}")
+      }
+    }
+
+    /**
+     * Forwards a tap on one of the in-call notification action buttons to
+     * the JS layer. Wrapped in a try/catch so a missing React context
+     * (extremely unlikely while a call is active, but possible during a
+     * mid-call cold-restart race) cannot crash the BroadcastReceiver.
+     */
+    @JvmStatic
+    fun emitInCallAction(action: String, value: Boolean? = null) {
+      val ctx = lastReactContext?.get() ?: run {
+        Log.w(TAG, "emitInCallAction($action): no ReactApplicationContext cached")
+        return
+      }
+      if (!ctx.hasActiveReactInstance()) {
+        Log.w(TAG, "emitInCallAction($action): ReactContext has no active instance")
+        return
+      }
+      try {
+        val payload = Arguments.createMap()
+        payload.putString("action", action)
+        if (value != null) payload.putBoolean("value", value)
+        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit(EVENT_IN_CALL_ACTION, payload)
+        Log.i(TAG, "emitInCallAction: dispatched $action value=$value")
+      } catch (t: Throwable) {
+        Log.w(TAG, "emitInCallAction failed: ${t.message}")
       }
     }
   }
@@ -506,6 +541,71 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
       Log.i(TAG, "routeAudioToSpeaker: speakerphone on")
     } catch (t: Throwable) {
       Log.w(TAG, "routeAudioToSpeaker failed: ${t.message}")
+    }
+  }
+
+  // ── In-call FGS bridge ─────────────────────────────────────────────────
+  // These tell SipKeepAliveService when an active call begins / ends / changes
+  // audio routing. The service uses this to:
+  //   1. Re-promote its foreground type to include MICROPHONE while a call is
+  //      live, which is the ONLY way Android 14+ keeps WebRTC mic capture
+  //      alive when the app is backgrounded (without it the remote party
+  //      hears silence the moment you switch apps).
+  //   2. Swap its persistent notification to a CallStyle.forOngoingCall
+  //      ringer with End / Speaker / Mute action buttons and a live
+  //      chronometer, so the user can manage the call without bringing the
+  //      app foreground.
+  // The companion-object methods on SipKeepAliveService are reachable from
+  // Kotlin without explicit `.Companion.` qualification.
+
+  /**
+   * Called by SipContext when a JsSIP session enters the `confirmed` state.
+   * Triggers the in-call FGS + CallStyle notification on Android. iOS / web
+   * have native CallKit handling so this is a no-op there.
+   */
+  @ReactMethod
+  fun startInCallNotification(callerName: String?, callStartedAtMs: Double, speakerOn: Boolean, muted: Boolean) {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      SipKeepAliveService.startInCall(
+        ctx,
+        callerName,
+        callStartedAtMs.toLong(),
+        speakerOn,
+        muted,
+      )
+    } catch (t: Throwable) {
+      Log.w(TAG, "startInCallNotification failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Refresh the in-call notification's Speaker / Mute toggle visuals when
+   * JS flips the underlying audio routing. No-op if no call is currently
+   * active (the service simply rebuilds with whatever state it has).
+   */
+  @ReactMethod
+  fun updateInCallNotification(speakerOn: Boolean, muted: Boolean) {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      SipKeepAliveService.updateInCallState(ctx, speakerOn, muted)
+    } catch (t: Throwable) {
+      Log.w(TAG, "updateInCallNotification failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Called when the call ends (ANY cause — normal, declined, ghosted, etc.).
+   * Tears down the in-call FGS / CallStyle notification and restores the
+   * idle "Ready to receive calls" minimal notification.
+   */
+  @ReactMethod
+  fun stopInCallNotification() {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      SipKeepAliveService.stopInCall(ctx)
+    } catch (t: Throwable) {
+      Log.w(TAG, "stopInCallNotification failed: ${t.message}")
     }
   }
 

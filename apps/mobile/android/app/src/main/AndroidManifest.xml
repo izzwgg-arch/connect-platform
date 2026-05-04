@@ -4,6 +4,15 @@
   <uses-permission android:name="android.permission.CAMERA"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+  <!--
+    Required on Android 14+ so SipKeepAliveService can run as a microphone-typed
+    foreground service while a call is active. Without this, Android silently
+    suppresses microphone capture the moment the app loses foreground (the
+    remote party hears silence). The permission is benign at install time —
+    it gates a foreground-service type, not the mic itself (RECORD_AUDIO
+    still gates actual capture).
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.MANAGE_OWN_CALLS"/>
@@ -41,7 +50,15 @@
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
       </intent-filter>
     </service>
-    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync"/>
+    <!--
+      foregroundServiceType bitmask: declared types this service is ALLOWED to
+      foreground itself with at runtime. We add `microphone` so that during an
+      active call the service can re-foreground itself with the microphone
+      type and Android 14+ will keep the WebRTC mic capture alive even when
+      the app is backgrounded. `phoneCall` keeps CallKeep / Telecom integration
+      happy; `dataSync` is the always-safe fallback when PHONE_CALL is rejected.
+    -->
+    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone"/>
     <receiver android:name="com.connectcommunications.mobile.BootReceiver" android:enabled="true" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
