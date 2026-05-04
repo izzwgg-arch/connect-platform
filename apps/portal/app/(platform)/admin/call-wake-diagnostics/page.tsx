@@ -74,6 +74,15 @@ interface RepublishWakeConfigResponse {
   }>;
 }
 
+interface ForceReregisterResponse {
+  ok: boolean;
+  deviceId: string;
+  syntheticPbxCallId: string;
+  queued: number;
+  simulated: boolean;
+  error: string | null;
+}
+
 // ── Stage taxonomy ────────────────────────────────────────────────────────────
 
 const STAGE_ORDER: Record<string, number> = {
@@ -180,12 +189,22 @@ function diagnoseCall(
 ): { text: string; color: string } {
   const stages = new Set(events.map((e) => e.stage));
   const any = (s: string) => stages.has(s);
+  const stageEvent = (s: string) => events.find((e) => e.stage === s);
+  const stageTime = (s: string): number | null => {
+    const e = stageEvent(s);
+    return e ? new Date(e.occurredAt).getTime() : null;
+  };
+  const gap = (a: string, b: string): number | null => {
+    const ta = stageTime(a);
+    const tb = stageTime(b);
+    return ta != null && tb != null ? tb - ta : null;
+  };
 
-  // Mic-permission diagnosis takes precedence when the call reached the
-  // device but answered-then-disconnected. Without RECORD_AUDIO, the SIP
-  // 200 OK is sent with no audio track and the PBX BYE's almost
-  // immediately, which the wake event timeline alone cannot distinguish
-  // from a generic media failure.
+  // Permission-class diagnoses take precedence when the call reached the
+  // device but the answer flow was blocked at a known choke point. Without
+  // RECORD_AUDIO, the SIP 200 OK is sent with no audio track and the PBX
+  // BYE's almost immediately — the wake event timeline alone cannot
+  // distinguish that from a generic media failure.
   if (
     device?.platform === "ANDROID" &&
     device.permRecordAudio === false &&
@@ -194,6 +213,16 @@ function diagnoseCall(
     return {
       text:
         "RECORD_AUDIO permission denied on this device — incoming calls answer-then-disconnect. Ask user to grant mic access (Settings → Apps → Connect → Permissions).",
+      color: "#ef4444",
+    };
+  }
+  if (
+    device?.platform === "ANDROID" &&
+    device.permNotifications === false
+  ) {
+    return {
+      text:
+        "POST_NOTIFICATIONS denied on this device — heads-up ringer + lock-screen full-screen intent are suppressed by Android, so calls won't visibly ring even when the wake push reaches the FGS. Ask user to enable notifications (Settings → Apps → Connect → Notifications).",
       color: "#ef4444",
     };
   }
@@ -224,31 +253,50 @@ function diagnoseCall(
   }
   if (!any("DEVICE_PUSH_RECEIVED")) {
     return {
-      text: "Push sent by server but device never confirmed receipt — Samsung/OEM dropped the FCM (Doze, missing notification permission, or app force-stopped)",
+      text: "Push sent by server but device never confirmed receipt — Samsung/OEM dropped the FCM (Doze, missing notification permission, or app force-stopped). Try Force re-register on this device card; if that also fails, the FCM token is dead and the user must re-open the app.",
+      color: "#ef4444",
+    };
+  }
+  // Slow-receive: push reached the device but more than 5 seconds after the
+  // server queued it. Indicates Samsung Doze / battery optimization is
+  // throttling FCM delivery — the wake_wait_secs window almost certainly
+  // expired before SIP could re-register.
+  const queueToReceive = gap("WAKE_PUSH_QUEUED", "DEVICE_PUSH_RECEIVED");
+  if (queueToReceive != null && queueToReceive > 5000) {
+    return {
+      text: `Wake push took ${(queueToReceive / 1000).toFixed(1)}s to reach the device — Samsung Doze / battery optimization is delaying FCM. Set battery to "Unrestricted" (Settings → Apps → Connect → Battery) and ensure SipKeepAliveService is running.`,
       color: "#ef4444",
     };
   }
   if (any("DEVICE_REGISTER_FAILED")) {
     return {
-      text: "Device received wake but SIP REGISTER failed — credentials invalid, network blocked, or PBX reachable",
+      text: "Device received wake but SIP REGISTER failed — credentials invalid, network blocked, or PBX unreachable",
       color: "#ef4444",
     };
   }
   if (!any("DEVICE_REGISTER_TRIGGERED")) {
     return {
-      text: "Device received wake but native handler did not fire JS bridge — SipKeepAliveService may not be running",
+      text: "Device received wake but native handler did not fire JS bridge — SipKeepAliveService probably did not start (Android 15 FGS rejection, or app was force-stopped). Try Force re-register; if this keeps happening on a Galaxy S25, check the SipKeepAliveService section in the in-app Diagnostics screen for the FGS error class.",
       color: "#ef4444",
     };
   }
   if (!any("DEVICE_REGISTER_COMPLETE")) {
     return {
-      text: "Register triggered but never completed within window — JS process slow to thaw, or WSS handshake stalled",
+      text: "Register triggered but never completed within window — JS process slow to thaw, or WSS handshake stalled. If wake_wait_secs is at the default 10s this should be enough on a healthy network.",
       color: "#fbbf24",
     };
   }
   if (!any("DEVICE_INVITE_RECEIVED")) {
+    // Did the phone register fast enough vs the dialplan budget?
+    const registerCompleteMs = gap("WAKE_REQUESTED", "DEVICE_REGISTER_COMPLETE");
+    if (registerCompleteMs != null && registerCompleteMs > 9000) {
+      return {
+        text: `Phone re-registered but it took ${(registerCompleteMs / 1000).toFixed(1)}s — longer than wake_wait_secs (10s default). The dialplan timed out and routed the call to voicemail. Either bump PBX_WAKE_WAIT_SECS in the API env or speed up the cold-start path (already on Hermes).`,
+        color: "#fbbf24",
+      };
+    }
     return {
-      text: "Phone re-registered but PBX never sent INVITE — wake_wait_secs too short OR PBX dialed before contact was online",
+      text: "Phone re-registered but PBX never sent INVITE — wake_wait_secs may be too short OR PBX dialed before the contact was online. Click Republish wake config to push the latest budget into AstDB.",
       color: "#fbbf24",
     };
   }
@@ -601,6 +649,9 @@ export default function CallWakeDiagnosticsPage() {
   const [republishing, setRepublishing] = useState(false);
   const [republishResult, setRepublishResult] = useState<RepublishWakeConfigResponse | null>(null);
   const [republishError, setRepublishError] = useState<string | null>(null);
+  const [forcing, setForcing] = useState(false);
+  const [forceResult, setForceResult] = useState<ForceReregisterResponse | null>(null);
+  const [forceError, setForceError] = useState<string | null>(null);
 
   const selectedDevice = useMemo(
     () => devices.find((d) => d.id === selectedDeviceId) || null,
@@ -668,6 +719,27 @@ export default function CallWakeDiagnosticsPage() {
       setRepublishing(false);
     }
   }, []);
+
+  const forceReregister = useCallback(async (deviceId: string) => {
+    setForcing(true);
+    setForceError(null);
+    setForceResult(null);
+    try {
+      const res = await apiPost<ForceReregisterResponse>(
+        `/admin/mobile/devices/${deviceId}/force-reregister`,
+        {},
+      );
+      setForceResult(res);
+      // After a few seconds the wake event timeline should have new
+      // entries — auto-refresh so the operator sees the round-trip
+      // without manually clicking refresh.
+      setTimeout(() => void loadEvents(), 4000);
+    } catch (e) {
+      setForceError(e instanceof Error ? e.message : "Force re-register failed");
+    } finally {
+      setForcing(false);
+    }
+  }, [loadEvents]);
 
   useEffect(() => {
     void loadDevices();
@@ -875,9 +947,90 @@ export default function CallWakeDiagnosticsPage() {
         {selectedDevice && (
           <>
             <section style={{ marginBottom: 16 }}>
-              <h3 style={{ margin: "0 0 10px 0", color: "#e2e8f0", fontSize: 16 }}>
-                Selected device · {selectedDevice.user?.name || "no user"}
-              </h3>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 10,
+                  flexWrap: "wrap",
+                  gap: 10,
+                }}
+              >
+                <h3 style={{ margin: 0, color: "#e2e8f0", fontSize: 16 }}>
+                  Selected device · {selectedDevice.user?.name || "no user"}
+                </h3>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={() => void forceReregister(selectedDevice.id)}
+                    disabled={forcing || !selectedDevice.active}
+                    title={
+                      !selectedDevice.active
+                        ? "Inactive device — token is stale, cannot force-reregister"
+                        : "Send a silent wake push to this device. The phone wakes the FGS, re-registers SIP, and shows no notification (synthetic payload has no caller info)."
+                    }
+                    style={{
+                      background:
+                        forcing || !selectedDevice.active ? "#374151" : "#0891b2",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 6,
+                      padding: "6px 14px",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor:
+                        forcing || !selectedDevice.active ? "default" : "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {forcing ? "Sending\u2026" : "Force re-register"}
+                  </button>
+                </div>
+              </div>
+
+              {forceError && (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    background: "#7f1d1d22",
+                    border: "1px solid #ef4444",
+                    color: "#fca5a5",
+                    padding: 10,
+                    borderRadius: 8,
+                    fontSize: 12,
+                  }}
+                >
+                  Force re-register failed: {forceError}
+                </div>
+              )}
+
+              {forceResult && (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    background: forceResult.ok ? "#14532d22" : "#7f1d1d22",
+                    border: `1px solid ${forceResult.ok ? "#22c55e" : "#ef4444"}`,
+                    color: "#cbd5e1",
+                    padding: 10,
+                    borderRadius: 8,
+                    fontSize: 12,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>
+                    {forceResult.ok ? "Wake push queued" : "Wake push failed"}
+                    {forceResult.simulated ? " (simulated)" : ""}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                    pbxCallId <code style={{ color: "#cbd5e1" }}>{forceResult.syntheticPbxCallId}</code> · queued{" "}
+                    {forceResult.queued} push{forceResult.queued === 1 ? "" : "es"}.
+                    Wake timeline will refresh in a few seconds.
+                  </div>
+                  {forceResult.error && (
+                    <div style={{ color: "#fca5a5", marginTop: 4 }}>{forceResult.error}</div>
+                  )}
+                </div>
+              )}
+
               <div
                 style={{
                   background: "#0f172a",

@@ -23340,6 +23340,81 @@ app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
   });
 });
 
+// Admin-authenticated remote action: send a synthetic INCOMING_CALL_WAKE
+// data-only push to a specific user/device so an operator can remotely
+// kick a phone's SIP socket without contacting the user. Powers the
+// "Force re-register" button on /admin/call-wake-diagnostics.
+//
+// The mobile native handler treats the wake push exactly like a real one:
+//   • starts SipKeepAliveService (FGS + wake lock)
+//   • emits Sip.WakeRegister so SipContext fires register({forceRestart:true})
+// But because the synthetic payload carries no caller info, the new
+// "wake placeholder" heads-up is intentionally suppressed (the placeholder
+// only fires when haveCallerInfo=true). So an operator can use this as a
+// silent diagnostic prod with zero user-visible side effect.
+app.post("/admin/mobile/devices/:id/force-reregister", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id: deviceId } = req.params as { id: string };
+  if (!deviceId) return reply.code(400).send({ error: "missing_device_id" });
+
+  const device = await db.mobileDevice.findUnique({
+    where: { id: deviceId },
+    select: { id: true, tenantId: true, userId: true, active: true, expoPushToken: true },
+  });
+  if (!device) return reply.code(404).send({ error: "device_not_found" });
+  if (!device.active) {
+    return reply.code(409).send({ error: "device_inactive", detail: "Cannot force-reregister an inactive device — token is stale." });
+  }
+
+  const syntheticPbxCallId = `admin-force-${Date.now()}`;
+  const wakeRequestedAtIso = new Date().toISOString();
+
+  let pushResult: { queued?: number; simulated?: boolean } | null = null;
+  let pushError: string | null = null;
+  try {
+    pushResult = await sendPushToUserDevices({
+      tenantId: device.tenantId,
+      userId: device.userId,
+      payload: {
+        type: "INCOMING_CALL_WAKE",
+        pbxCallId: syntheticPbxCallId,
+        // Empty caller info — mobile placeholder logic skips the heads-up
+        // when neither fromNumber nor fromDisplay is present. We still
+        // pass blank strings (not omitted) so the FCM data map shape
+        // matches a real wake.
+        fromNumber: "",
+        fromDisplay: null,
+        toExtension: "",
+        tenantId: device.tenantId,
+        pbxVitalTenantId: null,
+        timestamp: wakeRequestedAtIso,
+        wakeRequestedAt: wakeRequestedAtIso,
+      },
+    });
+  } catch (err: any) {
+    pushError = err?.message ?? "push_send_failed";
+    app.log.warn({ deviceId, err: pushError }, "force-reregister: push send threw");
+  }
+
+  await audit({
+    tenantId: device.tenantId,
+    actorUserId: admin.sub,
+    action: "MOBILE_DEVICE_FORCE_REREGISTER",
+    entityType: "MobileDevice",
+    entityId: device.id,
+  });
+
+  return reply.send({
+    ok: !!pushResult && !pushError,
+    deviceId: device.id,
+    syntheticPbxCallId,
+    queued: pushResult?.queued ?? 0,
+    simulated: pushResult?.simulated ?? false,
+    error: pushError,
+  });
+});
+
 // Admin-authenticated wrapper around publish-wake-config so an operator can
 // hit "Republish wake config" from /admin/call-wake-diagnostics after we tune
 // PBX_WAKE_WAIT_SECS or wake_api_url. The /internal/* sibling above is
