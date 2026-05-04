@@ -8135,7 +8135,6 @@ app.get("/voice/me/calls", async (req, reply) => {
   const userExtensions = await getUserExtensionNumbers(user);
   if (userExtensions.length === 0) return [];
   const tenantIdSet = await resolveTenantIdFilterSet(user.tenantId);
-  const extensionVisibility = buildCdrExtensionVisibilityClause(userExtensions);
 
   const normaliseDirection = (dir: string): string => {
     if (dir === "incoming") return "inbound";
@@ -8150,10 +8149,9 @@ app.get("/voice/me/calls", async (req, reply) => {
         ? tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } }
         : { tenantId: user.tenantId }),
       isForwarded: false,
-      ...(extensionVisibility ? { AND: [extensionVisibility] } : {}),
     },
     orderBy: { startedAt: "desc" },
-    take: 150,
+    take: 1000,
     select: {
       id: true,
       linkedId: true,
@@ -8165,11 +8163,15 @@ app.get("/voice/me/calls", async (req, reply) => {
       talkSec: true,
       durationSec: true,
       disposition: true,
+      channelsSeen: true,
+      dcontextsSeen: true,
+      dcontext: true,
     },
   });
+  const visibleCdrRows = cdrRows.filter((r) => cdrRowMatchesExtensions(r, userExtensions)).slice(0, 150);
 
-  if (cdrRows.length > 0) {
-    return cdrRows.map((r) => ({
+  if (visibleCdrRows.length > 0) {
+    return visibleCdrRows.map((r) => ({
       id: r.id,
       linkedId: r.linkedId,
       direction: normaliseDirection(r.direction),
@@ -8186,13 +8188,12 @@ app.get("/voice/me/calls", async (req, reply) => {
   const legacyRows = await db.callRecord.findMany({
     where: {
       tenantId: user.tenantId,
-      ...(extensionVisibility ? { AND: [extensionVisibility] } : {}),
     },
     orderBy: { startedAt: "desc" },
-    take: 150,
+    take: 1000,
   });
 
-  return legacyRows.map((r) => ({
+  return legacyRows.filter((r) => cdrRowMatchesExtensions(r, userExtensions)).slice(0, 150).map((r) => ({
     id: r.id,
     linkedId: null,
     direction: normaliseDirection(r.direction),
@@ -13982,6 +13983,24 @@ function buildCdrExtensionVisibilityClause(extensionNumbers: string[]): Record<s
       { toNumber: { in: exts } },
     ],
   };
+}
+
+function cdrRowMatchesExtensions(row: {
+  fromNumber?: string | null;
+  toNumber?: string | null;
+  channelsSeen?: unknown;
+  dcontextsSeen?: unknown;
+  dcontext?: string | null;
+}, extensionNumbers: string[]): boolean {
+  const exts = [...new Set(extensionNumbers.map((ext) => String(ext || "").replace(/\D/g, "").trim()).filter(Boolean))];
+  if (exts.length === 0) return false;
+  const fromDigits = String(row.fromNumber || "").replace(/\D/g, "");
+  const toDigits = String(row.toNumber || "").replace(/\D/g, "");
+  if (exts.includes(fromDigits) || exts.includes(toDigits)) return true;
+  const channels = Array.isArray(row.channelsSeen) ? row.channelsSeen.map(String) : [];
+  const dcontexts = Array.isArray(row.dcontextsSeen) ? row.dcontextsSeen.map(String) : [];
+  const haystack = [...channels, ...dcontexts, String(row.dcontext || "")].join(" ");
+  return exts.some((ext) => new RegExp(`(^|[^0-9])${ext}([^0-9]|$)`).test(haystack));
 }
 
 function canonicalCdrCallKey(linkedId: string | null | undefined, fallbackId: string): string {
@@ -20093,8 +20112,6 @@ app.get("/calls/history", async (req, reply) => {
       : {}),
   };
   const andClauses: any[] = [];
-  const extensionVisibility = buildCdrExtensionVisibilityClause(userExtensions);
-  if (extensionScoped && extensionVisibility) andClauses.push(extensionVisibility);
 
   if (query.direction !== "all") where.direction = query.direction;
 
@@ -20119,42 +20136,63 @@ app.get("/calls/history", async (req, reply) => {
   if (andClauses.length > 0) where.AND = andClauses;
 
   const skip = (query.page - 1) * query.pageSize;
-  const [total, rows, incoming, outgoing, internal] = await Promise.all([
-    db.connectCdr.count({ where }),
-    db.connectCdr.findMany({
+  const select = {
+    id: true,
+    linkedId: true,
+    fromNumber: true,
+    fromName: true,
+    toNumber: true,
+    dcontext: true,
+    dcontextsSeen: true,
+    channelsSeen: true,
+    direction: true,
+    disposition: true,
+    durationSec: true,
+    talkSec: true,
+    startedAt: true,
+    answeredAt: true,
+    endedAt: true,
+    tenantId: true,
+    pbxVitalTenantId: true,
+    pbxTenantCode: true,
+    tenantResolutionSource: true,
+    queueId: true,
+    hangupCause: true,
+    recordingPath: true,
+  } as const;
+  let total = 0;
+  let rows: any[] = [];
+  let incoming = 0;
+  let outgoing = 0;
+  let internal = 0;
+
+  if (extensionScoped) {
+    const allVisibleRows = (await db.connectCdr.findMany({
       where,
       orderBy: { startedAt: "desc" },
-      skip,
-      take: query.pageSize,
-      select: {
-        id: true,
-        linkedId: true,
-        fromNumber: true,
-        fromName: true,
-        toNumber: true,
-        dcontext: true,
-        dcontextsSeen: true,
-        channelsSeen: true,
-        direction: true,
-        disposition: true,
-        durationSec: true,
-        talkSec: true,
-        startedAt: true,
-        answeredAt: true,
-        endedAt: true,
-        tenantId: true,
-        pbxVitalTenantId: true,
-        pbxTenantCode: true,
-        tenantResolutionSource: true,
-        queueId: true,
-        hangupCause: true,
-        recordingPath: true,
-      },
-    }),
-    db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
-    db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
-    db.connectCdr.count({ where: { ...where, direction: "internal" } }),
-  ]);
+      take: 5000,
+      select,
+    })).filter((r) => cdrRowMatchesExtensions(r, userExtensions));
+    total = allVisibleRows.length;
+    rows = allVisibleRows.slice(skip, skip + query.pageSize);
+    incoming = allVisibleRows.filter((r) => r.direction === "incoming").length;
+    outgoing = allVisibleRows.filter((r) => r.direction === "outgoing").length;
+    internal = allVisibleRows.filter((r) => r.direction === "internal").length;
+  } else {
+    [total, rows, incoming, outgoing, internal] = await Promise.all([
+      db.connectCdr.count({ where }),
+      db.connectCdr.findMany({
+        where,
+        orderBy: { startedAt: "desc" },
+        skip,
+        take: query.pageSize,
+        select,
+      }),
+      db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
+      db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
+      db.connectCdr.count({ where: { ...where, direction: "internal" } }),
+    ]);
+  }
 
   const extensionCandidates = Array.from(new Set(
     rows
@@ -22735,16 +22773,26 @@ async function aggregateDashboardCallActivity(opts: {
   }> = [];
   let connectCdrSourceRows = 0;
   let legacyCallRecordRows = 0;
-  const extensionVisibility = buildCdrExtensionVisibilityClause(opts.extensionFilter ?? []);
-  const visibilityAnd = extensionVisibility ? [extensionVisibility] : undefined;
+  const extensionFilter = opts.extensionFilter ?? [];
 
   const connectRows = await db.connectCdr.findMany({
     where: {
       ...opts.tenantFilter,
       startedAt: timeWhere,
-      ...(visibilityAnd ? { AND: visibilityAnd } : {}),
     },
-    select: { id: true, linkedId: true, isForwarded: true, startedAt: true, direction: true, disposition: true },
+    select: {
+      id: true,
+      linkedId: true,
+      isForwarded: true,
+      startedAt: true,
+      direction: true,
+      disposition: true,
+      fromNumber: true,
+      toNumber: true,
+      channelsSeen: true,
+      dcontextsSeen: true,
+      dcontext: true,
+    },
     orderBy: { startedAt: "asc" },
     take: 20_000,
   });
@@ -22752,6 +22800,7 @@ async function aggregateDashboardCallActivity(opts: {
   const seenConnectCallKeys = new Set<string>();
   for (const row of connectRows) {
     if (row.isForwarded) continue;
+    if (extensionFilter.length > 0 && !cdrRowMatchesExtensions(row, extensionFilter)) continue;
     const key = canonicalCdrCallKey(row.linkedId, row.id);
     if (seenConnectCallKeys.has(key)) continue;
     seenConnectCallKeys.add(key);
@@ -22770,7 +22819,6 @@ async function aggregateDashboardCallActivity(opts: {
       where: {
         ...opts.tenantFilter,
         startedAt: timeWhere,
-        ...(visibilityAnd ? { AND: visibilityAnd } : {}),
       },
       orderBy: { startedAt: "asc" },
       take: 20_000,
@@ -22778,6 +22826,7 @@ async function aggregateDashboardCallActivity(opts: {
     legacyCallRecordRows = legacyRows.length;
     const seenLegacyCallKeys = new Set<string>();
     for (const row of legacyRows) {
+      if (extensionFilter.length > 0 && !cdrRowMatchesExtensions(row, extensionFilter)) continue;
       const key = canonicalCdrCallKey((row as any).pbxCallId, row.id);
       if (seenLegacyCallKeys.has(key)) continue;
       seenLegacyCallKeys.add(key);

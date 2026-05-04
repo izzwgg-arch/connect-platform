@@ -1,4 +1,4 @@
-import type { TelephonySnapshot } from "../types";
+import type { NormalizedCall, TelephonySnapshot } from "../types";
 import type { CallStateStore } from "../state/CallStateStore";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
@@ -33,6 +33,7 @@ export class SnapshotService {
     private readonly queues: QueueStateStore,
     private readonly health: HealthService,
     private readonly tenantAliasMatcher: TenantAliasMatcher | null = null,
+    private readonly activeCallProvider: (() => NormalizedCall[]) | null = null,
   ) {}
 
   // Returns a point-in-time snapshot suitable for sending to a new WS client.
@@ -46,8 +47,10 @@ export class SnapshotService {
     const extensionScoped = scope.extensionScoped === true;
     const viewerExtensions = new Set((scope.extensions ?? []).map((ext) => String(ext).trim()).filter(Boolean));
 
-    // Use AMI-tracked active calls for live call list (DID-based tenant resolution).
-    const allActive = this.calls.getActive().filter(
+    // Use the ARI bridge snapshot when available. It is the PBX-correct source:
+    // one active call equals one qualifying bridge, not one AMI channel/event.
+    const activeSource = this.activeCallProvider?.() ?? this.calls.getActive();
+    const allActive = activeSource.filter(
       (c) => !isLocalOnlyCall(c) && hasValidChannel(c),
     );
     let calls = allActive;

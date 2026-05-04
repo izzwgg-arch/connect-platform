@@ -119,6 +119,10 @@ export function createTelephonyModule(server: http.Server) {
     queueStore,
     healthService,
     tenantAliasMatcher,
+    () => {
+      const ariCalls = ariBridgedPoller.getCallsForSnapshot();
+      return ariCalls.length > 0 ? ariCalls : callStore.getActive();
+    },
   );
   const userExtensionsUrl = env.CDR_INGEST_URL
     ? (() => {
@@ -127,7 +131,7 @@ export function createTelephonyModule(server: http.Server) {
         u.search = "";
         return u.toString();
       })()
-    : undefined;
+    : "http://api:3001/internal/telephony/user-extensions";
   const resolveUserExtensions = async (input: { userId: string; tenantId: string; role: string }): Promise<string[]> => {
     if (!userExtensionsUrl) return [];
     try {
@@ -148,6 +152,9 @@ export function createTelephonyModule(server: http.Server) {
     }
   };
   const socketServer = new TelephonySocketServer(server, snapshotService, resolveUserExtensions);
+  ariBridgedPoller.on("update", () => {
+    socketServer.broadcastSnapshots();
+  });
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
     callStore,

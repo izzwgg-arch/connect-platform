@@ -95,6 +95,13 @@ export class TelephonySocketServer {
     this.wss.close();
   }
 
+  broadcastSnapshots(): void {
+    for (const client of this.clients) {
+      if (!client.isAlive || client.ws.readyState !== WebSocket.OPEN) continue;
+      this.sendSnapshot(client);
+    }
+  }
+
   private async handleConnection(ws: WebSocket, req: http.IncomingMessage): Promise<void> {
     const clientIp = req.socket.remoteAddress ?? "unknown";
     const currentCount = this.connectionsByIp.get(clientIp) ?? 0;
