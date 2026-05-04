@@ -11665,6 +11665,21 @@ app.post("/mobile/devices/register", async (req, reply) => {
       recordAudio: z.boolean().optional(),
       notifications: z.boolean().optional(),
     }).optional(),
+    // SipKeepAliveService FGS snapshot. Reported on every register so the
+    // admin diagnostics card stays fresh as Android promotes/demotes the
+    // service. We accept any combination of fields (older app builds may
+    // ship with a smaller subset) and store the payload as a single JSONB
+    // column on MobileDevice.
+    keepAlive: z.object({
+      isRunning: z.boolean().optional(),
+      serviceCreatedAtMs: z.number().optional(),
+      serviceDestroyedAtMs: z.number().optional(),
+      lastStartResult: z.string().max(120).optional(),
+      lastStartErrorClass: z.string().max(160).optional(),
+      lastForegroundResult: z.string().max(120).optional(),
+      lastForegroundTypeUsed: z.string().max(120).optional(),
+      lastForegroundErrorClass: z.string().max(160).optional(),
+    }).optional(),
   }).parse(req.body || {});
   const extension = await db.extension.findFirst({
     where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
@@ -11680,6 +11695,17 @@ app.post("/mobile/devices/register", async (req, reply) => {
           permRecordAudio: input.permissions.recordAudio ?? null,
           permNotifications: input.permissions.notifications ?? null,
           permissionsReportedAt: new Date(),
+        }
+      : {};
+
+  // Same idempotency rule as permissionsPatch — only touch the columns when
+  // the client included a keepAlive block, otherwise an older app build
+  // would clobber the previous snapshot with null on every register.
+  const keepAlivePatch =
+    input.keepAlive
+      ? {
+          keepAliveSnapshot: input.keepAlive as any,
+          keepAliveReportedAt: new Date(),
         }
       : {};
 
@@ -11699,6 +11725,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       model: input.model || null,
       osVersion: input.osVersion || null,
       ...permissionsPatch,
+      ...keepAlivePatch,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
@@ -11716,6 +11743,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       model: input.model || null,
       osVersion: input.osVersion || null,
       ...permissionsPatch,
+      ...keepAlivePatch,
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
@@ -11815,6 +11843,8 @@ app.get("/mobile/devices/me", async (req, _reply) => {
       permRecordAudio: d.permRecordAudio ?? null,
       permNotifications: d.permNotifications ?? null,
       permissionsReportedAt: d.permissionsReportedAt ?? null,
+      keepAliveSnapshot: d.keepAliveSnapshot ?? null,
+      keepAliveReportedAt: d.keepAliveReportedAt ?? null,
       // Tokens are sensitive; only return the trailing fingerprint.
       expoPushTokenTail: String(d.expoPushToken).slice(-12),
       voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
@@ -11899,6 +11929,8 @@ app.get("/admin/mobile/devices", async (req, reply) => {
       permRecordAudio: d.permRecordAudio ?? null,
       permNotifications: d.permNotifications ?? null,
       permissionsReportedAt: d.permissionsReportedAt ?? null,
+      keepAliveSnapshot: d.keepAliveSnapshot ?? null,
+      keepAliveReportedAt: d.keepAliveReportedAt ?? null,
       expoPushTokenTail: String(d.expoPushToken).slice(-12),
       voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
       createdAt: d.createdAt,

@@ -403,6 +403,45 @@ async function mobileDeviceRegistrationMetadata() {
         }
       : undefined;
 
+  // Snapshot the SipKeepAliveService FGS state at register time. This is
+  // the single most important signal for triaging "calls don't ring on
+  // backgrounded S25 / Android 15" — if isRunning=false +
+  // lastForegroundResult="threw" + lastForegroundErrorClass="ForegroundService
+  // TypeNotAllowedException", we know Android killed our PHONE_CALL FGS and
+  // the WSS socket is unprotected. Surfaced on /admin/call-wake-diagnostics
+  // so an operator can spot it without asking the user to open Diagnostics.
+  let keepAlive:
+    | {
+        isRunning?: boolean;
+        serviceCreatedAtMs?: number;
+        serviceDestroyedAtMs?: number;
+        lastStartResult?: string;
+        lastStartErrorClass?: string;
+        lastForegroundResult?: string;
+        lastForegroundTypeUsed?: string;
+        lastForegroundErrorClass?: string;
+      }
+    | undefined;
+  if (Platform.OS === "android") {
+    try {
+      const diag = (NativeModules as any).IncomingCallUi?.getCallWakeDiagnostics?.();
+      if (diag && typeof diag === "object") {
+        keepAlive = {
+          isRunning: Boolean(diag.keepAliveIsRunning),
+          serviceCreatedAtMs: Number(diag.keepAliveServiceCreatedAtMs) || 0,
+          serviceDestroyedAtMs: Number(diag.keepAliveServiceDestroyedAtMs) || 0,
+          lastStartResult: String(diag.keepAliveLastStartResult ?? ""),
+          lastStartErrorClass: String(diag.keepAliveLastStartErrorClass ?? ""),
+          lastForegroundResult: String(diag.keepAliveLastForegroundResult ?? ""),
+          lastForegroundTypeUsed: String(diag.keepAliveLastForegroundTypeUsed ?? ""),
+          lastForegroundErrorClass: String(diag.keepAliveLastForegroundErrorClass ?? ""),
+        };
+      }
+    } catch {
+      // Native module not available (older builds, iOS, etc.) — leave undefined.
+    }
+  }
+
   return {
     deviceId: await getStableInstallationDeviceId(),
     appVersion: mobileAppVersion(),
@@ -411,6 +450,7 @@ async function mobileDeviceRegistrationMetadata() {
     ...(model ? { model } : {}),
     ...(osVersion ? { osVersion } : {}),
     ...(permissions ? { permissions } : {}),
+    ...(keepAlive ? { keepAlive } : {}),
   };
 }
 

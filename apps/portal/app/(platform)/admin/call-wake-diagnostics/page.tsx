@@ -28,6 +28,17 @@ interface AdminMobileDevice {
   permRecordAudio: boolean | null;
   permNotifications: boolean | null;
   permissionsReportedAt: string | null;
+  keepAliveSnapshot: {
+    isRunning?: boolean;
+    serviceCreatedAtMs?: number;
+    serviceDestroyedAtMs?: number;
+    lastStartResult?: string;
+    lastStartErrorClass?: string;
+    lastForegroundResult?: string;
+    lastForegroundTypeUsed?: string;
+    lastForegroundErrorClass?: string;
+  } | null;
+  keepAliveReportedAt: string | null;
   expoPushTokenTail: string;
   voipPushTokenTail: string | null;
   createdAt: string;
@@ -223,6 +234,23 @@ function diagnoseCall(
     return {
       text:
         "POST_NOTIFICATIONS denied on this device — heads-up ringer + lock-screen full-screen intent are suppressed by Android, so calls won't visibly ring even when the wake push reaches the FGS. Ask user to enable notifications (Settings → Apps → Connect → Notifications).",
+      color: "#ef4444",
+    };
+  }
+  // SipKeepAliveService FGS rejection is the smoking gun for "calls don't
+  // ring on backgrounded S25 / Android 15". When PHONE_CALL FGS is rejected
+  // by One UI 7 the WSS socket goes unprotected and Doze freezes it within
+  // a minute — every subsequent wake push lands on a process that has lost
+  // its SIP socket and needs a full re-register before it can answer.
+  const ka = device?.keepAliveSnapshot;
+  if (
+    device?.platform === "ANDROID" &&
+    ka &&
+    ka.isRunning === false &&
+    (ka.lastForegroundErrorClass || "").includes("ForegroundServiceTypeNotAllowed")
+  ) {
+    return {
+      text: `SipKeepAliveService cannot start in foreground — Android 15 / One UI 7 rejected the PHONE_CALL FGS type (${ka.lastForegroundErrorClass}). The WSS socket is unprotected so Doze freezes it within ~1min. Already mitigated in the latest mobile build via the PHONE_CALL → DATA_SYNC ladder; ensure the user is on the newest APK.`,
       color: "#ef4444",
     };
   }
@@ -427,6 +455,11 @@ function DeviceCard({
           granted={device.permNotifications}
           reportedAt={device.permissionsReportedAt}
         />
+        <KeepAliveBadge
+          snapshot={device.keepAliveSnapshot}
+          reportedAt={device.keepAliveReportedAt}
+          platform={device.platform}
+        />
         {!device.active && (
           <span
             style={{
@@ -497,6 +530,238 @@ function PermissionBadge({
       {text}
     </span>
   );
+}
+
+/**
+ * Compact badge summarising the SipKeepAliveService FGS state on a
+ * MobileDevice card. Three actionable colors:
+ *   • green  — running and last foreground attempt succeeded
+ *   • amber  — last attempt was downgraded (Android 15 PHONE_CALL → DATA_SYNC
+ *              ladder; the FGS is alive but not as the call type we wanted)
+ *   • red    — not running OR last foreground attempt threw
+ *              (smoking gun for "calls don't ring on backgrounded S25")
+ *   • gray   — iOS, or older app build that doesn't report the snapshot
+ */
+function KeepAliveBadge({
+  snapshot,
+  reportedAt,
+  platform,
+}: {
+  snapshot: AdminMobileDevice["keepAliveSnapshot"];
+  reportedAt: string | null;
+  platform: "IOS" | "ANDROID";
+}) {
+  if (platform !== "ANDROID") {
+    return null;
+  }
+  if (!snapshot || (!reportedAt && snapshot.isRunning === undefined)) {
+    return (
+      <span
+        style={{
+          fontSize: 10,
+          padding: "2px 6px",
+          borderRadius: 3,
+          background: "#1f293722",
+          color: "#6b7280",
+          fontWeight: 600,
+        }}
+        title="No SipKeepAliveService snapshot yet — app needs to re-register on a build that reports it"
+      >
+        FGS (old app)
+      </span>
+    );
+  }
+  let bg: string;
+  let color: string;
+  let text: string;
+  let title: string;
+  const fgResult = (snapshot.lastForegroundResult || "").toLowerCase();
+  const fgClass = snapshot.lastForegroundErrorClass || "";
+  const startResult = (snapshot.lastStartResult || "").toLowerCase();
+  if (snapshot.isRunning && (fgResult === "ok" || fgResult === "success" || fgResult === "")) {
+    bg = "#14532d22";
+    color = "#22c55e";
+    text = "FGS \u2713";
+    title = `SipKeepAliveService running, last foreground type=${snapshot.lastForegroundTypeUsed || "unknown"}`;
+  } else if (snapshot.isRunning && fgResult.includes("downgrade")) {
+    bg = "#78350f22";
+    color = "#fbbf24";
+    text = "FGS \u26A0 downgraded";
+    title = `Running, but Android forced a foreground-type downgrade. Last type used: ${snapshot.lastForegroundTypeUsed || "unknown"}`;
+  } else if (!snapshot.isRunning && fgClass.includes("ForegroundServiceTypeNotAllowed")) {
+    bg = "#7f1d1d22";
+    color = "#ef4444";
+    text = "FGS \u2715 PHONE_CALL rejected";
+    title = `Android 15 / One UI 7 rejected PHONE_CALL FGS. Class: ${fgClass}. Calls will NOT ring when backgrounded.`;
+  } else if (!snapshot.isRunning) {
+    bg = "#7f1d1d22";
+    color = "#ef4444";
+    text = "FGS \u2715 not running";
+    title = `Service not in foreground. Last start result=${startResult || "n/a"}, last fg result=${fgResult || "n/a"}, class=${fgClass || "n/a"}`;
+  } else {
+    bg = "#1f293722";
+    color = "#6b7280";
+    text = "FGS ?";
+    title = "Inconclusive snapshot";
+  }
+  if (reportedAt) {
+    title += ` \u2022 reported ${new Date(reportedAt).toLocaleString()}`;
+  }
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        padding: "2px 6px",
+        borderRadius: 3,
+        background: bg,
+        color,
+        fontWeight: 600,
+      }}
+      title={title}
+    >
+      {text}
+    </span>
+  );
+}
+
+/**
+ * Detailed keep-alive FGS panel for the selected device. Renders the full
+ * snapshot (running state, last start/foreground attempts, error class) so
+ * an operator can read off the exact Android FGS rejection without opening
+ * logcat. The badge above gives the at-a-glance answer; this panel gives
+ * the underlying data for triaging unfamiliar OEMs.
+ */
+function KeepAlivePanel({
+  snapshot,
+  reportedAt,
+}: {
+  snapshot: AdminMobileDevice["keepAliveSnapshot"];
+  reportedAt: string | null;
+}) {
+  if (!snapshot && !reportedAt) {
+    return (
+      <section style={{ marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 10px 0", color: "#e2e8f0", fontSize: 16 }}>
+          SipKeepAliveService (FGS)
+        </h3>
+        <div
+          style={{
+            background: "#0f172a",
+            border: "1px solid #1f2937",
+            borderRadius: 10,
+            padding: 14,
+            color: "#6b7280",
+            fontSize: 13,
+          }}
+        >
+          No FGS snapshot reported yet — this device is on an older app build that
+          doesn&apos;t include the keep-alive telemetry. Ask the user to update the
+          app and re-open it once.
+        </div>
+      </section>
+    );
+  }
+  const k = snapshot ?? {};
+  const isRunning = k.isRunning === true;
+  const fgClass = k.lastForegroundErrorClass || "";
+  const fgRejected = fgClass.includes("ForegroundServiceTypeNotAllowed");
+  const headlineColor = isRunning && !fgRejected
+    ? "#22c55e"
+    : fgRejected || isRunning === false
+      ? "#ef4444"
+      : "#fbbf24";
+  const headlineText = isRunning
+    ? "Foreground service is running"
+    : fgRejected
+      ? "Android rejected the PHONE_CALL FGS — service is NOT in foreground"
+      : "Service not in foreground";
+  return (
+    <section style={{ marginBottom: 16 }}>
+      <h3 style={{ margin: "0 0 10px 0", color: "#e2e8f0", fontSize: 16 }}>
+        SipKeepAliveService (FGS)
+      </h3>
+      <div
+        style={{
+          background: "#0f172a",
+          border: `1px solid ${headlineColor}55`,
+          borderLeft: `4px solid ${headlineColor}`,
+          borderRadius: 10,
+          padding: 14,
+          fontSize: 12,
+          color: "#cbd5e1",
+        }}
+      >
+        <div style={{ color: headlineColor, fontWeight: 700, marginBottom: 6, fontSize: 13 }}>
+          {headlineText}
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 12,
+          }}
+        >
+          <KeepAliveField label="Reported" value={reportedAt ? fmtAgo(reportedAt) : "n/a"} />
+          <KeepAliveField label="Service created" value={fmtMs(k.serviceCreatedAtMs)} />
+          <KeepAliveField label="Service destroyed" value={fmtMs(k.serviceDestroyedAtMs)} />
+          <KeepAliveField label="Last start result" value={k.lastStartResult || "n/a"} />
+          <KeepAliveField
+            label="Last start error class"
+            value={k.lastStartErrorClass || "—"}
+            mono
+          />
+          <KeepAliveField label="Last foreground result" value={k.lastForegroundResult || "n/a"} />
+          <KeepAliveField
+            label="Last foreground type"
+            value={k.lastForegroundTypeUsed || "n/a"}
+          />
+          <KeepAliveField
+            label="Last foreground error class"
+            value={fgClass || "—"}
+            mono
+            warn={fgRejected}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function KeepAliveField({
+  label,
+  value,
+  mono,
+  warn,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  warn?: boolean;
+}) {
+  return (
+    <div>
+      <div style={{ color: "#6b7280", fontSize: 10, textTransform: "uppercase" }}>{label}</div>
+      <div
+        style={{
+          marginTop: 2,
+          color: warn ? "#fca5a5" : "#cbd5e1",
+          fontFamily: mono ? "monospace" : undefined,
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function fmtMs(ms: number | undefined | null): string {
+  if (!ms || ms <= 0) return "never";
+  try {
+    return fmtAgo(new Date(ms).toISOString());
+  } catch {
+    return String(ms);
+  }
 }
 
 function StageDot({ stage }: { stage: string }) {
@@ -1100,6 +1365,13 @@ export default function CallWakeDiagnosticsPage() {
                 )}
               </div>
             </section>
+
+            {selectedDevice.platform === "ANDROID" && (
+              <KeepAlivePanel
+                snapshot={selectedDevice.keepAliveSnapshot}
+                reportedAt={selectedDevice.keepAliveReportedAt}
+              />
+            )}
 
             <section>
               <div

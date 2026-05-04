@@ -1814,6 +1814,14 @@ model MobileDevice {
   permRecordAudio       Boolean?
   permNotifications     Boolean?
   permissionsReportedAt DateTime?
+  // SipKeepAliveService FGS snapshot reported by the mobile app on every
+  // /mobile/devices/register call. Stored as a single JSON blob because the
+  // schema is loose (Android-only, may grow as we add more diagnostic
+  // fields) and per-row at most ~250 bytes. Powers the FGS health card on
+  // /admin/call-wake-diagnostics — primary signal for "calls don't ring on
+  // backgrounded S25 / Android 15" (PHONE_CALL FGS rejected by One UI 7).
+  keepAliveSnapshot     Json?
+  keepAliveReportedAt   DateTime?
   active              Boolean              @default(true)
   deactivatedAt       DateTime?
   lastSeenAt          DateTime             @default(now())

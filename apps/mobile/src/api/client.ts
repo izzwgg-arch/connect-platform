@@ -415,6 +415,21 @@ export async function registerMobileDevice(token: string, input: {
     recordAudio?: boolean;
     notifications?: boolean;
   };
+  // Foreground-service keep-alive snapshot from the SipKeepAliveService
+  // companion object. Lets the admin diagnostics page tell whether the
+  // FGS that holds the WSS socket open is actually running, and (when it
+  // is not) which Android FGS rule rejected the start (for the S25 +
+  // Android 15 + One UI 7 PHONE_CALL FGS regression).
+  keepAlive?: {
+    isRunning?: boolean;
+    serviceCreatedAtMs?: number;
+    serviceDestroyedAtMs?: number;
+    lastStartResult?: string;
+    lastStartErrorClass?: string;
+    lastForegroundResult?: string;
+    lastForegroundTypeUsed?: string;
+    lastForegroundErrorClass?: string;
+  };
 }) {
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {
     method: "POST",
@@ -445,6 +460,17 @@ export type MobileDeviceDiagnostics = {
   permRecordAudio: boolean | null;
   permNotifications: boolean | null;
   permissionsReportedAt: string | null;
+  keepAliveSnapshot: {
+    isRunning?: boolean;
+    serviceCreatedAtMs?: number;
+    serviceDestroyedAtMs?: number;
+    lastStartResult?: string;
+    lastStartErrorClass?: string;
+    lastForegroundResult?: string;
+    lastForegroundTypeUsed?: string;
+    lastForegroundErrorClass?: string;
+  } | null;
+  keepAliveReportedAt: string | null;
   expoPushTokenTail: string;
   voipPushTokenTail: string | null;
   deactivatedAt: string | null;
