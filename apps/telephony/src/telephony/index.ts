@@ -120,7 +120,34 @@ export function createTelephonyModule(server: http.Server) {
     healthService,
     tenantAliasMatcher,
   );
-  const socketServer = new TelephonySocketServer(server, snapshotService);
+  const userExtensionsUrl = env.CDR_INGEST_URL
+    ? (() => {
+        const u = new URL(env.CDR_INGEST_URL);
+        u.pathname = "/internal/telephony/user-extensions";
+        u.search = "";
+        return u.toString();
+      })()
+    : undefined;
+  const resolveUserExtensions = async (input: { userId: string; tenantId: string; role: string }): Promise<string[]> => {
+    if (!userExtensionsUrl) return [];
+    try {
+      const u = new URL(userExtensionsUrl);
+      u.searchParams.set("userId", input.userId);
+      u.searchParams.set("tenantId", input.tenantId);
+      const headers: Record<string, string> = { accept: "application/json" };
+      if (env.CDR_INGEST_SECRET) headers["x-cdr-secret"] = env.CDR_INGEST_SECRET;
+      const res = await fetch(u, { headers, signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return [];
+      const body = (await res.json()) as { extensions?: unknown[] };
+      return Array.isArray(body.extensions)
+        ? [...new Set(body.extensions.map((ext) => String(ext || "").trim()).filter(Boolean))]
+        : [];
+    } catch (err) {
+      log.warn({ err: err instanceof Error ? err.message : String(err), role: input.role }, "WS user extension resolve failed");
+      return [];
+    }
+  };
+  const socketServer = new TelephonySocketServer(server, snapshotService, resolveUserExtensions);
   const broadcaster = new TelephonyBroadcaster(
     socketServer,
     callStore,

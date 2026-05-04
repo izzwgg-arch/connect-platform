@@ -20,6 +20,12 @@ export type TenantAliasMatcher = (
   viewerTenantId: string,
 ) => boolean;
 
+export type ViewerCallScope = {
+  tenantId?: string | null;
+  extensions?: string[];
+  extensionScoped?: boolean;
+};
+
 export class SnapshotService {
   constructor(
     private readonly calls: CallStateStore,
@@ -30,8 +36,15 @@ export class SnapshotService {
   ) {}
 
   // Returns a point-in-time snapshot suitable for sending to a new WS client.
-  getSnapshot(tenantId?: string | null): TelephonySnapshot {
+  getSnapshot(scopeOrTenantId?: string | null | ViewerCallScope): TelephonySnapshot {
     this.calls.runStaleCleanup();
+    const scope: ViewerCallScope =
+      typeof scopeOrTenantId === "object" && scopeOrTenantId !== null
+        ? scopeOrTenantId
+        : { tenantId: scopeOrTenantId };
+    const tenantId = scope.tenantId ?? null;
+    const extensionScoped = scope.extensionScoped === true;
+    const viewerExtensions = new Set((scope.extensions ?? []).map((ext) => String(ext).trim()).filter(Boolean));
 
     // Use AMI-tracked active calls for live call list (DID-based tenant resolution).
     const allActive = this.calls.getActive().filter(
@@ -56,9 +69,17 @@ export class SnapshotService {
       qs = qs.filter((q) => matches(q.tenantId));
     }
 
+    if (extensionScoped) {
+      calls = viewerExtensions.size === 0
+        ? []
+        : calls.filter((c) => c.extensions.some((ext) => viewerExtensions.has(ext)));
+    }
+
     log.info(
       {
         forTenantId: tenantId ?? "GLOBAL",
+        extensionScoped,
+        viewerExtensions: [...viewerExtensions],
         totalActiveCalls: allActive.length,
         callsInSnapshot: calls.length,
         droppedByTenantFilter: allActive.length - calls.length,

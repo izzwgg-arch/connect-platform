@@ -59,9 +59,9 @@ export class TelephonyBroadcaster {
           to: call.to,
           tenantId: call.tenantId,
           tenantName: call.tenantName,
-          callExtensions: call.extensions,
           totalWsClients: clientCount,
           matchingWsClients: matchingClients,
+          extensions: call.extensions,
         },
         "PIPE[4/6]: broadcasting callUpsert to WS clients",
       );
@@ -75,8 +75,6 @@ export class TelephonyBroadcaster {
 
     this.callStore.on("callRemove", (callId: string) => {
       // Broadcast remove to ALL clients (global + tenant-scoped) so everyone clears the row.
-      // Per-user extension scoping doesn't apply here: if the client never had
-      // the call in their list, removing a non-existent id is a no-op.
       this.socket.broadcast("telephony.call.remove", { callId }, undefined);
     });
   }
@@ -131,30 +129,14 @@ export class TelephonyBroadcaster {
     };
   }
 
-  /** Live-call filter: tenant scope first, then per-user extension scope.
-   *  • Admin / global clients (bypassExtensionFilter=true): tenant filter only.
-   *  • Per-user clients with extensions: must also have at least one of their
-   *    extensions appear in `call.extensions` (the source/dest extensions
-   *    Asterisk derived for this call).
-   *  • Per-user clients with NO extensions: never see live calls (their owned
-   *    extensions list is empty, so there's nothing to match).
-   *  This implements the spec's filterCallsForUser at the broadcast layer
-   *  rather than the frontend, so users cannot snoop on each other's calls.
-   */
-  private buildCallFilter(
-    call: NormalizedCall,
-  ): ((client: WsClient) => boolean) | undefined {
+  private buildCallFilter(call: NormalizedCall): ((client: WsClient) => boolean) | undefined {
     const tenantFilter = this.buildTenantFilter(call.tenantId);
-    return (client: WsClient) => {
+    return (client) => {
       if (tenantFilter && !tenantFilter(client)) return false;
-      if (client.bypassExtensionFilter) return true;
+      if (!client.extensionScoped) return true;
       if (client.extensions.length === 0) return false;
-      const callExts = call.extensions ?? [];
-      if (callExts.length === 0) return false;
-      for (const ext of client.extensions) {
-        if (callExts.includes(ext)) return true;
-      }
-      return false;
+      const allowed = new Set(client.extensions);
+      return call.extensions.some((ext) => allowed.has(ext));
     };
   }
 }

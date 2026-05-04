@@ -9,9 +9,9 @@
  *   ringing may already be bridged, so requiring "Up" only would under-count vs PBX.
  *
  * Connect counts:
- * 1) One call per qualifying bridge: ≥2 non-Local, non-Down party channels.
- * 2) Plus unbridged party clusters: not on any bridge, not Message/ or Local/, not Down;
- *    grouped by linkedid when present on the ARI channel object.
+ * 1) One call per qualifying bridge: ≥2 non-Local party channels and at least
+ *    one member channel in Up state.
+ * 2) Unbridged/orphan channels are diagnostics only and are not counted as calls.
  */
 
 export type AriChannelDoc = {
@@ -112,11 +112,6 @@ function isLocalHelperName(name: string): boolean {
   return name.startsWith("Local/");
 }
 
-function isDownState(state: string): boolean {
-  const s = state.trim().toLowerCase();
-  return s === "down" || s === "";
-}
-
 function isUpState(state: string): boolean {
   return state.trim().toLowerCase() === "up";
 }
@@ -136,21 +131,6 @@ function dialplanOf(ch: AriChannelDoc): { context: string; exten: string } {
     context: String(d?.context ?? "").trim(),
     exten: String(d?.exten ?? "").trim(),
   };
-}
-
-function readLinkedId(ch: AriChannelDoc & Record<string, unknown>): string {
-  const v =
-    ch.linkedid ??
-    ch.linked_id ??
-    (typeof ch.channelvars === "object" && ch.channelvars !== null
-      ? (ch.channelvars as Record<string, string>).LINKEDID
-      : undefined);
-  return String(v ?? "").trim();
-}
-
-/** PBX `core show channels` summary excludes Message/; Local/ is a helper leg on VitalPBX. */
-function isExcludedOrphanHelperName(name: string): boolean {
-  return name.startsWith("Message/") || name.startsWith("Local/");
 }
 
 function bridgeTypeLabel(br: AriBridgeDoc): string {
@@ -179,31 +159,6 @@ function buildMemberSummary(
     .join(" | ");
 }
 
-function twoPartyLabels(group: AriChannelDoc[]): { caller: string; callee: string } {
-  if (group.length === 0) return { caller: "—", callee: "—" };
-  if (group.length === 1) {
-    const ch = group[0]!;
-    const a = String(ch.caller?.number ?? "").trim();
-    const b = String(ch.connected?.number ?? "").trim();
-    return {
-      caller: a || partyLabel(ch),
-      callee: b || "—",
-    };
-  }
-  return {
-    caller: partyLabel(group[0]!),
-    callee: partyLabel(group[1]!) || partyLabel(group[0]!),
-  };
-}
-
-function pickDialplanForGroup(group: AriChannelDoc[]): { context: string; exten: string } {
-  for (const ch of group) {
-    const { context, exten } = dialplanOf(ch);
-    if (context) return { context, exten };
-  }
-  return dialplanOf(group[0]!);
-}
-
 /**
  * Extract the called/dialed DID from channels.
  * On inbound PSTN calls the trunk channel carries connected.number = the DID.
@@ -229,14 +184,6 @@ export function computeBridgedActiveCalls(
   for (const c of channels) {
     const id = String(c.id ?? "");
     if (id) byId.set(id, c);
-  }
-
-  const allBridgedMemberIds = new Set<string>();
-  for (const br of bridges) {
-    const memberIds = Array.isArray(br.channels) ? br.channels.map(String) : [];
-    for (const mid of memberIds) {
-      if (mid) allBridgedMemberIds.add(mid);
-    }
   }
 
   const excluded: BridgedActiveExcluded[] = [];
@@ -298,10 +245,6 @@ export function computeBridgedActiveCalls(
         localSkipped++;
         continue;
       }
-      if (isDownState(state)) {
-        downSkipped++;
-        continue;
-      }
       valid.push(ch);
     }
 
@@ -325,17 +268,20 @@ export function computeBridgedActiveCalls(
       continue;
     }
 
-    if (valid.length < 2) {
+    const upCount = valid.filter((ch) => isUpState(String(ch.state ?? ""))).length;
+
+    if (valid.length < 2 || upCount < 1) {
       const reasons = [
-        "lt2_valid_channels",
+        valid.length < 2 ? "lt2_valid_channels" : "no_up_channel",
         `valid=${valid.length}`,
+        `up=${upCount}`,
         `local_skipped=${localSkipped}`,
         `down_skipped=${downSkipped}`,
         `empty_name_skipped=${emptyNameSkipped}`,
       ];
       excluded.push({
         bridgeId,
-        reason: `lt2_valid(valid=${valid.length},local=${localSkipped},down=${downSkipped},emptyName=${emptyNameSkipped})`,
+        reason: `invalid_bridge(valid=${valid.length},up=${upCount},local=${localSkipped},down=${downSkipped},emptyName=${emptyNameSkipped})`,
       });
       excludedBridges.push({
         bridgeId,
@@ -345,8 +291,6 @@ export function computeBridgedActiveCalls(
       });
       continue;
     }
-
-    const upCount = valid.filter((ch) => isUpState(String(ch.state ?? ""))).length;
 
     const labels = valid.map(partyLabel);
     const caller = labels[0] ?? "—";
@@ -387,43 +331,7 @@ export function computeBridgedActiveCalls(
     });
   }
 
-  const orphanGroups = new Map<string, AriChannelDoc[]>();
-  for (const ch of channels) {
-    const id = String(ch.id ?? "");
-    if (!id || allBridgedMemberIds.has(id)) continue;
-    const name = channelName(ch);
-    if (!name || isExcludedOrphanHelperName(name)) continue;
-    if (isDownState(String(ch.state ?? ""))) continue;
-
-    const lid = readLinkedId(ch as AriChannelDoc & Record<string, unknown>);
-    const gkey = lid.length > 0 ? `linked:${lid}` : `solo:${id}`;
-    const list = orphanGroups.get(gkey);
-    if (list) list.push(ch);
-    else orphanGroups.set(gkey, [ch]);
-  }
-
   const orphanLegs: Array<{ groupKey: string; channelNames: string[] }> = [];
-  for (const [groupKey, group] of orphanGroups) {
-    group.sort((a, b) => channelName(a).localeCompare(channelName(b)));
-    const { caller, callee } = twoPartyLabels(group);
-    const { context, exten } = pickDialplanForGroup(group);
-    rows.push({
-      bridgeId: `orphan:${groupKey}`,
-      channelCount: group.length,
-      caller,
-      callee,
-      channelNames: group.map((ch) => channelName(ch) || ""),
-      channelIds: group.map((ch) => String(ch.id ?? "")),
-      sourceKind: "orphan_leg",
-      dialplanContext: context || undefined,
-      dialplanExten: exten || undefined,
-      calledNumber: pickCalledNumber(group),
-    });
-    orphanLegs.push({
-      groupKey,
-      channelNames: group.map((c) => channelName(c) || String(c.id ?? "?")),
-    });
-  }
 
   const bridgeBackedCallCount = rows.filter((r) => r.sourceKind === "bridge").length;
   const orphanLegCallCount = rows.filter((r) => r.sourceKind === "orphan_leg").length;

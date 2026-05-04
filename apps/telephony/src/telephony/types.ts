@@ -16,6 +16,9 @@ export interface NormalizedCall {
   fromName: string | null;
   to: string | null;
   connectedLine: string | null;
+  source_extension: string | null;
+  destination_extension: string | null;
+  channelState: string | null;
   channels: string[];
   bridgeIds: string[];
   extensions: string[];

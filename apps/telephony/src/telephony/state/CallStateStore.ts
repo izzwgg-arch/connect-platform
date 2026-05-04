@@ -5,6 +5,7 @@ import type { NormalizedCall, CallState, CallDirection } from "../types";
 import {
   isLocalOnlyCall,
   hasValidChannel,
+  hasValidBridgedParticipants,
   isHelperChannel,
 } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionFromChannel, looksLikeExtension } from "../normalizers/normalizeExtension";
@@ -98,13 +99,13 @@ export class CallStateStore extends EventEmitter {
     return [...this.calls.values()];
   }
 
-  /** Active calls only: state in [ringing,dialing,up,held], not Local-only, has ≥1 valid channel. */
+  /** Active calls only: PBX-call truth is one bridge with two or more non-helper participants. */
   getActive(): NormalizedCall[] {
     return [...this.calls.values()].filter((c) => {
       if (c.state === "hungup") return false;
-      if (!ACTIVE_STATES.includes(c.state)) return false; // exclude unknown/stale
+      if (c.state !== "up" && c.state !== "held") return false;
       if (isLocalOnlyCall(c)) return false;
-      if (!hasValidChannel(c)) return false;
+      if (!hasValidBridgedParticipants(c)) return false;
       return true;
     });
   }
@@ -258,7 +259,7 @@ export class CallStateStore extends EventEmitter {
       const uniqueIds = uniqueIdsFor(c.id);
       const whyActive = [
         ACTIVE_STATES.includes(c.state) ? `state=${c.state}` : `state=${c.state}(not in active list)`,
-        hasValidChannel(c) ? "hasValidChannel" : "NO_VALID_CHANNEL",
+        hasValidBridgedParticipants(c) ? "hasValidBridgedParticipants" : "NO_VALID_BRIDGE",
         !isLocalOnlyCall(c) ? "!isLocalOnlyCall" : "IS_LOCAL_ONLY",
       ].join("; ");
       const sharedBridgeCallIds = new Set<string>();
@@ -381,6 +382,13 @@ export class CallStateStore extends EventEmitter {
     } else if (!call.metadata["lastExten"] && params.exten) {
       call.metadata["lastExten"] = params.exten;
     }
+    call.channelState = params.channelState || call.channelState;
+    if (looksLikeExtension(params.callerIDNum) && !call.source_extension) {
+      call.source_extension = params.callerIDNum;
+    }
+    if (looksLikeExtension(params.exten) && !call.destination_extension) {
+      call.destination_extension = params.exten;
+    }
 
     // Upgrade tenantId/tenantName when newly resolved (e.g. trunk Newchannel fires after internal leg)
     if (!call.tenantId && params.tenantId) {
@@ -487,6 +495,7 @@ export class CallStateStore extends EventEmitter {
     if (params.connectedLineNum && !call.connectedLine) {
       call.connectedLine = params.connectedLineNum;
     }
+    call.channelState = params.channelState || call.channelState;
     const channel = this.channelByUniqueId.get(params.uniqueid);
     const channelExt = normalizeExtensionFromChannel(channel);
     if (channelExt && !call.extensions.includes(channelExt)) {
@@ -532,10 +541,12 @@ export class CallStateStore extends EventEmitter {
     if (destExt && !call.extensions.includes(destExt)) {
       call.extensions.push(destExt);
     }
+    if (destExt && !call.destination_extension) call.destination_extension = destExt;
     const callerExt = looksLikeExtension(params.callerIDNum) ? params.callerIDNum : null;
     if (callerExt && !call.extensions.includes(callerExt)) {
       call.extensions.push(callerExt);
     }
+    if (callerExt && !call.source_extension) call.source_extension = callerExt;
     this.debugBlfCallTransition(call, prevState, "DialBegin", {
       callerIDNum: params.callerIDNum,
       destination: params.destination,
@@ -618,6 +629,9 @@ export class CallStateStore extends EventEmitter {
     }
     if (fromCall.from && !intoCall.from) intoCall.from = fromCall.from;
     if (fromCall.to && !intoCall.to) intoCall.to = fromCall.to;
+    if (fromCall.source_extension && !intoCall.source_extension) intoCall.source_extension = fromCall.source_extension;
+    if (fromCall.destination_extension && !intoCall.destination_extension) intoCall.destination_extension = fromCall.destination_extension;
+    if (fromCall.channelState && !intoCall.channelState) intoCall.channelState = fromCall.channelState;
     if (fromCall.answeredAt && !intoCall.answeredAt) intoCall.answeredAt = fromCall.answeredAt;
     if (fromCall.state !== "hungup" && shouldUpgradeState(intoCall.state, fromCall.state)) {
       intoCall.state = fromCall.state;
@@ -725,6 +739,8 @@ export class CallStateStore extends EventEmitter {
     // Populate from/to from CDR source/destination if missing
     if (params.source && !call.from) call.from = params.source;
     if (params.destination && !call.to) call.to = params.destination;
+    if (looksLikeExtension(params.source) && !call.source_extension) call.source_extension = params.source!;
+    if (looksLikeExtension(params.destination) && !call.destination_extension) call.destination_extension = params.destination!;
 
     // Seed call.extensions from CDR source/destination when they are bare
     // extensions. This backfills the extension set for calls whose channel
@@ -1004,6 +1020,9 @@ export class CallStateStore extends EventEmitter {
       from: null,
       to: null,
       connectedLine: null,
+      source_extension: null,
+      destination_extension: null,
+      channelState: null,
       channels: [],
       bridgeIds: [],
       extensions: [],

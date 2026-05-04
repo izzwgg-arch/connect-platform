@@ -28,6 +28,12 @@ export function hasValidChannel(call: NormalizedCall): boolean {
   return call.channels.some((ch) => !isHelperChannel(ch));
 }
 
+/** PBX-call truth: one active call is one bridge with at least two non-helper participants. */
+export function hasValidBridgedParticipants(call: NormalizedCall): boolean {
+  if (call.bridgeIds.length === 0) return false;
+  return call.channels.filter((ch) => !isHelperChannel(ch)).length >= 2;
+}
+
 // Normalizes a NormalizedCall into a clean frontend-safe payload.
 // Strips internal engine fields that should not leave the service.
 // For active calls, durationSec is computed from timestamps (answeredAt or startedAt → now).
@@ -56,6 +62,9 @@ export function normalizeCallForClient(call: NormalizedCall): NormalizedCall {
     fromName: call.fromName ?? null,
     to: call.to ?? null,
     connectedLine: call.connectedLine,
+    source_extension: call.source_extension,
+    destination_extension: call.destination_extension,
+    channelState: call.channelState,
     channels: [...call.channels],
     bridgeIds: [...call.bridgeIds],
     extensions: [...call.extensions],
