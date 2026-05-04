@@ -153,7 +153,7 @@ export function createTelephonyModule(server: http.Server) {
   };
   const socketServer = new TelephonySocketServer(server, snapshotService, resolveUserExtensions);
   ariBridgedPoller.on("update", () => {
-    socketServer.broadcastSnapshots();
+    socketServer.broadcastCallSnapshots();
   });
   const broadcaster = new TelephonyBroadcaster(
     socketServer,

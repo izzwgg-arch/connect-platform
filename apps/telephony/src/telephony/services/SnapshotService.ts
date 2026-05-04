@@ -51,7 +51,7 @@ export class SnapshotService {
     // one active call equals one qualifying bridge, not one AMI channel/event.
     const activeSource = this.activeCallProvider?.() ?? this.calls.getActive();
     const allActive = activeSource.filter(
-      (c) => !isLocalOnlyCall(c) && hasValidChannel(c),
+      (c) => !isLocalOnlyCall(c) && (c.bridgeIds.length > 0 || hasValidChannel(c)),
     );
     let calls = allActive;
     let exts = this.extensions.getAll();

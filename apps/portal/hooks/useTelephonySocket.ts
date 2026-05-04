@@ -99,6 +99,14 @@ export function useTelephonySocket(): TelephonySocketState {
           applySnapshot(envelope.data as TelephonySnapshot);
           break;
 
+        case "telephony.calls.snapshot": {
+          const payload = envelope.data as Pick<TelephonySnapshot, "calls" | "health">;
+          setCalls(new Map(payload.calls.map((c) => [c.id, c])));
+          if (payload.health) setHealth(payload.health);
+          setLastSnapshotAt(new Date().toISOString());
+          break;
+        }
+
         case "telephony.call.upsert": {
           const call = envelope.data as LiveCall;
           console.log("[PIPE:5b/6] WS callUpsert received", {

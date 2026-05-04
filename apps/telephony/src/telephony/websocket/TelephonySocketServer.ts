@@ -102,6 +102,13 @@ export class TelephonySocketServer {
     }
   }
 
+  broadcastCallSnapshots(): void {
+    for (const client of this.clients) {
+      if (!client.isAlive || client.ws.readyState !== WebSocket.OPEN) continue;
+      this.sendCallSnapshot(client);
+    }
+  }
+
   private async handleConnection(ws: WebSocket, req: http.IncomingMessage): Promise<void> {
     const clientIp = req.socket.remoteAddress ?? "unknown";
     const currentCount = this.connectionsByIp.get(clientIp) ?? 0;
@@ -187,6 +194,22 @@ export class TelephonySocketServer {
       event: "telephony.snapshot",
       ts: new Date().toISOString(),
       data: snap,
+    };
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify(envelope));
+    }
+  }
+
+  private sendCallSnapshot(client: WsClient): void {
+    const snap = this.snapshot.getSnapshot({
+      tenantId: client.tenantId,
+      extensions: client.extensions,
+      extensionScoped: client.extensionScoped,
+    });
+    const envelope: TelephonyEventEnvelope = {
+      event: "telephony.calls.snapshot",
+      ts: new Date().toISOString(),
+      data: { calls: snap.calls, health: snap.health },
     };
     if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify(envelope));
