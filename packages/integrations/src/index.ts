@@ -304,6 +304,10 @@ export class TwilioSmsProvider implements SmsProvider {
   }
 }
 
+function voipMsPhoneDigits(value: string): string {
+  return String(value || "").replace(/\D/g, "");
+}
+
 export class VoipMsSmsProvider implements SmsProvider {
   private credentials: VoipMsCredentials;
   private testMode: boolean;
@@ -336,8 +340,8 @@ export class VoipMsSmsProvider implements SmsProvider {
     url.searchParams.set("api_username", this.credentials.username);
     url.searchParams.set("api_password", this.credentials.password);
     url.searchParams.set("method", "sendSMS");
-    url.searchParams.set("did", this.credentials.fromNumber || input.from);
-    url.searchParams.set("dst", input.to);
+    url.searchParams.set("did", voipMsPhoneDigits(this.credentials.fromNumber || input.from));
+    url.searchParams.set("dst", voipMsPhoneDigits(input.to));
     url.searchParams.set("message", input.body);
 
     try {
@@ -403,8 +407,8 @@ export class VoipMsSmsProvider implements SmsProvider {
     url.searchParams.set("api_username", this.credentials.username);
     url.searchParams.set("api_password", this.credentials.password);
     url.searchParams.set("method", "sendMMS");
-    url.searchParams.set("did", this.credentials.fromNumber || input.from);
-    url.searchParams.set("dst", input.to);
+    url.searchParams.set("did", voipMsPhoneDigits(this.credentials.fromNumber || input.from));
+    url.searchParams.set("dst", voipMsPhoneDigits(input.to));
     url.searchParams.set("message", input.body || "");
     urls.forEach((mediaUrl, i) => url.searchParams.set(`media${i + 1}`, mediaUrl));
 

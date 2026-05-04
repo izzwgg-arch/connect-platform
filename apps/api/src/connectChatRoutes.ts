@@ -4,6 +4,7 @@
  */
 
 import * as crypto from "node:crypto";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { Queue } from "bullmq";
 import { z } from "zod";
@@ -230,6 +231,31 @@ function inferAttachmentMessageType(attachments: Array<{ mimeType: string }>): "
   if (m.startsWith("video/")) return "VIDEO";
   if (m.startsWith("audio/")) return "AUDIO";
   return "FILE";
+}
+
+/** RN multipart uploads often report application/octet-stream; infer from filename so MMS/UI type is correct. */
+function inferMimeFromFilename(filename: string, reportedMime: string): string {
+  const cur = String(reportedMime || "").toLowerCase().split(";")[0].trim();
+  if (cur && cur !== "application/octet-stream") return cur;
+  const ext = path.extname(String(filename || "")).toLowerCase();
+  const map: Record<string, string> = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+  };
+  return map[ext] || cur || "application/octet-stream";
 }
 
 function metadataObject(value: unknown): Record<string, any> {
@@ -706,6 +732,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return reply.status(400).send({ error: "multipart_parse_failed", detail: err?.message });
     }
     if (!fileBuf || fileBuf.length === 0) return reply.status(400).send({ error: "file_required" });
+    mimeType = inferMimeFromFilename(originalFilename, mimeType);
     if (!isAllowedChatMime(mimeType)) return reply.status(400).send({ error: "MIME_NOT_ALLOWED" });
 
     const maxB = maxBytesForThread(part.thread.type === "SMS");
@@ -918,7 +945,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       let smsLinkFallback = false;
       if (atts.length > 0) {
         const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId } });
-        if (!cfg.mmsEnabled || !smsRow?.mmsCapable) {
+        const mmsOk = cfg.mmsEnabled && smsRow?.mmsCapable;
+        const allAudio = atts.every((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
+        const isVoiceNote = input.type === "VOICE_NOTE";
+        // Carrier MMS for audio is unreliable; always deliver voice notes / audio as SMS + signed HTTPS links.
+        if (!mmsOk || allAudio || isVoiceNote) {
           if (!publicChatDownloadBase()) {
             return reply.status(400).send({ error: "MEDIA_LINK_BASE_UNAVAILABLE", message: "Set PUBLIC_API_BASE_URL or PORTAL_PUBLIC_URL to send secure media links by SMS." });
           }

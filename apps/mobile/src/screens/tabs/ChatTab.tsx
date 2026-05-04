@@ -135,11 +135,22 @@ function fileKind(mimeType = ''): ChatMessageType {
   return 'FILE';
 }
 
-function attachmentPreviewType(attachment: ChatAttachment): MediaPreview['type'] {
+function attachmentPreviewType(attachment: ChatAttachment, messageType?: ChatMessageType): MediaPreview['type'] {
   const m = attachment.mimeType.toLowerCase();
-  if (m.startsWith('image/')) return 'image';
-  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('image/') || messageType === 'IMAGE') return 'image';
+  if (m.startsWith('video/') || messageType === 'VIDEO') return 'video';
+  const fn = (attachment.fileName || '').toLowerCase();
+  if (/\.(jpe?g|png|gif|webp|heic)$/i.test(fn)) return 'image';
+  if (/\.(mp4|mov|webm)$/i.test(fn)) return 'video';
   return 'file';
+}
+
+function attachmentShowsImageThumb(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+  if (!attachment.downloadUrl) return false;
+  const m = attachment.mimeType.toLowerCase();
+  if (m.startsWith('image/')) return true;
+  if (messageType === 'IMAGE') return true;
+  return /\.(jpe?g|png|gif|webp|heic)$/i.test(attachment.fileName || '');
 }
 
 function guessMimeFromUri(uri: string, fallback = 'application/octet-stream'): string {
@@ -362,10 +373,11 @@ export function ChatTab() {
   const pickLibrary = useCallback(async () => {
     setAttachOpen(false);
     await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const smsCompress = activeThread?.type === 'SMS';
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsMultipleSelection: true,
-      quality: 0.86,
+      quality: smsCompress ? 0.48 : 0.86,
     });
     if (res.canceled) return;
     for (const asset of res.assets.slice(0, 3 - pendingAttachments.length)) {
@@ -375,14 +387,15 @@ export function ChatTab() {
         type: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
       }).catch((err) => showToast(err?.message || 'Upload failed.'));
     }
-  }, [pendingAttachments.length, showToast, uploadLocalFile]);
+  }, [activeThread?.type, pendingAttachments.length, showToast, uploadLocalFile]);
 
   const captureCamera = useCallback(async (video = false) => {
     setAttachOpen(false);
     await ImagePicker.requestCameraPermissionsAsync();
+    const smsCompress = activeThread?.type === 'SMS';
     const res = await ImagePicker.launchCameraAsync({
       mediaTypes: video ? ImagePicker.MediaTypeOptions.Videos : ImagePicker.MediaTypeOptions.Images,
-      quality: 0.86,
+      quality: video ? 0.86 : smsCompress ? 0.48 : 0.86,
     });
     if (res.canceled || !res.assets[0]) return;
     const asset = res.assets[0];
@@ -391,7 +404,7 @@ export function ChatTab() {
       name: asset.fileName || fileNameFromUri(asset.uri, video ? `video-${Date.now()}.mp4` : `photo-${Date.now()}.jpg`),
       type: asset.mimeType || (video ? 'video/mp4' : 'image/jpeg'),
     }).catch((err) => showToast(err?.message || 'Upload failed.'));
-  }, [showToast, uploadLocalFile]);
+  }, [activeThread?.type, showToast, uploadLocalFile]);
 
   const sendPreparedMessage = useCallback(async (options?: { body?: string; type?: Exclude<ChatMessageType, 'SYSTEM'>; location?: ChatLocation; attachments?: PendingChatAttachment[]; retryId?: string }) => {
     if (!token || !activeThread) return;
@@ -558,16 +571,51 @@ export function ChatTab() {
     if (target && sip.registrationState === 'registered') sip.dial(target);
   }, [activeThread, sip]);
 
-  const retryMessage = useCallback((message: ChatMessage) => {
-    const localAtts: PendingChatAttachment[] = (message.attachments || []).map((a) => ({
-      storageKey: '',
-      mimeType: a.mimeType,
-      sizeBytes: a.sizeBytes,
-      fileName: a.fileName,
-      localUri: a.downloadUrl || undefined,
-    })).filter((a) => a.storageKey);
-    sendPreparedMessage({ body: message.body, type: message.type === 'SYSTEM' ? 'TEXT' : message.type, attachments: localAtts, retryId: message.id });
-  }, [sendPreparedMessage]);
+  const retryMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!token || !activeThread) return;
+      const localFiles = (message.attachments || [])
+        .map((a) => {
+          const u = a.downloadUrl || '';
+          const isLocal =
+            u.startsWith('file:') ||
+            u.startsWith('content:') ||
+            u.startsWith('ph://') ||
+            u.startsWith('ph:') ||
+            u.startsWith('asset:');
+          if (!isLocal) return null;
+          return {
+            uri: u,
+            name: a.fileName,
+            type: a.mimeType || guessMimeFromUri(u, 'image/jpeg'),
+          };
+        })
+        .filter(Boolean) as { uri: string; name: string; type: string }[];
+
+      if (!localFiles.length) {
+        showToast('Pick the photo again — retry uses your original file from this device.');
+        return;
+      }
+
+      let uploaded: PendingChatAttachment[] = [];
+      try {
+        for (const file of localFiles) {
+          uploaded.push(await uploadChatAttachment(token, activeThread.id, file));
+        }
+      } catch (err: any) {
+        showToast(err?.message || 'Upload failed.');
+        return;
+      }
+
+      await sendPreparedMessage({
+        body: message.body,
+        type: message.type === 'SYSTEM' ? 'TEXT' : message.type,
+        attachments: uploaded,
+        retryId: message.id,
+      });
+    },
+    [activeThread, sendPreparedMessage, showToast, token],
+  );
 
   const typingUsers = typingQuery.data ?? [];
   const directoryUsers = directoryQuery.data?.users ?? [];
@@ -908,14 +956,23 @@ const MessageBubble = memo(function MessageBubble({
                 <AttachmentChip
                   key={attachment.id}
                   attachment={attachment}
+                  messageType={message.type}
                   mine={message.mine}
-                  onPress={() => onOpenMedia({ type: attachmentPreviewType(attachment), url: attachment.downloadUrl, title: attachment.fileName, subtitle: attachment.mimeType })}
+                  onPress={() =>
+                    onOpenMedia({
+                      type: attachmentPreviewType(attachment, message.type),
+                      url: attachment.downloadUrl,
+                      title: attachment.fileName,
+                      subtitle: attachment.mimeType,
+                    })
+                  }
                 />
               ))}
               {message.mmsUrls?.map((url) => (
                 <AttachmentChip
                   key={url}
                   attachment={{ id: url, fileName: 'MMS media', mimeType: 'image/*', sizeBytes: 0, downloadUrl: url }}
+                  messageType="IMAGE"
                   mine={message.mine}
                   onPress={() => onOpenMedia({ type: 'image', url, title: 'MMS media' })}
                 />
@@ -947,12 +1004,22 @@ const MessageBubble = memo(function MessageBubble({
   );
 });
 
-function AttachmentChip({ attachment, mine, onPress }: { attachment: ChatAttachment; mine: boolean; onPress: () => void }) {
+function AttachmentChip({
+  attachment,
+  messageType,
+  mine,
+  onPress,
+}: {
+  attachment: ChatAttachment;
+  messageType?: ChatMessageType;
+  mine: boolean;
+  onPress: () => void;
+}) {
   const { colors } = useTheme();
-  const isImage = attachment.mimeType.toLowerCase().startsWith('image/') && attachment.downloadUrl;
+  const showThumb = attachmentShowsImageThumb(attachment, messageType);
   return (
     <TouchableOpacity style={[styles.attachmentChip, { backgroundColor: mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]} onPress={onPress} activeOpacity={0.84}>
-      {isImage ? <Image source={{ uri: attachment.downloadUrl! }} style={styles.attachmentThumb} /> : <Ionicons name="document-attach-outline" size={18} color={mine ? '#fff' : colors.primary} />}
+      {showThumb ? <Image source={{ uri: attachment.downloadUrl! }} style={styles.attachmentThumb} /> : <Ionicons name="document-attach-outline" size={18} color={mine ? '#fff' : colors.primary} />}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.attachmentName, { color: mine ? '#fff' : colors.text }]} numberOfLines={1}>{attachment.fileName}</Text>
         <Text style={[styles.attachmentMeta, { color: mine ? 'rgba(255,255,255,0.72)' : colors.textTertiary }]} numberOfLines={1}>{attachment.mimeType}</Text>
@@ -1346,7 +1413,7 @@ const styles = StyleSheet.create({
   locationCard: { marginTop: 7, borderRadius: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   locationText: { fontSize: 13, fontWeight: '800' },
   attachmentChip: { marginTop: 7, borderRadius: 14, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  attachmentThumb: { width: 44, height: 44, borderRadius: 11 },
+  attachmentThumb: { width: 96, height: 96, borderRadius: 14 },
   attachmentName: { fontSize: 12.5, fontWeight: '900' },
   attachmentMeta: { fontSize: 10.5, fontWeight: '700', marginTop: 2 },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 5 },

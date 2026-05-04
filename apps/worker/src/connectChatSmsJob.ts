@@ -84,13 +84,38 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     let r: { providerMessageId?: string };
     if (hasMedia && !linkFallback) {
       const mediaUrls = msg.attachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 3600));
-      r = await provider.sendMms({
-        tenantId: data.tenantId,
-        to: ext,
-        from: tenantDid,
-        body: msg.body || undefined,
-        mediaUrls,
-      });
+      try {
+        r = await provider.sendMms({
+          tenantId: data.tenantId,
+          to: ext,
+          from: tenantDid,
+          body: msg.body || undefined,
+          mediaUrls,
+        });
+      } catch (mmsErr: any) {
+        // VoIP.ms often rejects MMS when carrier limits apply or media URLs are not reachable from their servers.
+        // Fall back to one or more SMS segments with signed HTTPS links so delivery still succeeds.
+        const links = msg.attachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 86_400));
+        const fallbackBody = [String(msg.body || "").trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+        await db.connectChatMessage.update({
+          where: { id: msg.id },
+          data: {
+            body: fallbackBody,
+            metadata: {
+              ...metadata,
+              smsLinkFallback: true,
+              smsMediaLinks: links,
+              smsMmsFallbackReason: String(mmsErr?.message || mmsErr).slice(0, 500),
+            },
+          },
+        });
+        r = await provider.sendMessage({
+          tenantId: data.tenantId,
+          to: ext,
+          from: tenantDid,
+          body: fallbackBody,
+        });
+      }
     } else {
       r = await provider.sendMessage({
         tenantId: data.tenantId,
