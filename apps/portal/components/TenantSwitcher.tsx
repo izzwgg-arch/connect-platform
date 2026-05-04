@@ -121,7 +121,6 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
     return (
       <div className="ws-switcher ws-switcher-static">
         {workspaceCard}
-        {!railMode ? <div className="ws-switcher-static-hint">Workspace is fixed for your account.</div> : null}
       </div>
     );
   }

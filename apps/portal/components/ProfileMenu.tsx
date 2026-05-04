@@ -9,6 +9,7 @@ import { clearAuthSession } from "../services/session";
 import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
 import { ConnectSelect } from "./ConnectSelect";
+import { UserAvatarUpload } from "./UserAvatarUpload";
 
 type ControlPanelResponse = {
   extension: null | {
@@ -53,7 +54,7 @@ export function ProfileMenu() {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
-  const { user, tenant, role, setRole, theme, setTheme } = useAppContext();
+  const { user, tenant, role, setRole, theme, setTheme, setUserAvatarUrl } = useAppContext();
   const closeMenu = useCallback(() => setOpen(false), []);
   const displayName = formatTopbarUserName(user.name, user.email);
   const avatarText = initialsFor(displayName);
@@ -173,12 +174,19 @@ export function ProfileMenu() {
   return (
     <div className="menu-wrap">
       <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={displayName}>
-        <span className="profile-trigger-avatar" aria-hidden>{avatarText}</span>
+        <UserAvatarUpload name={displayName} avatarUrl={user.avatarUrl} size={28} className="profile-trigger-avatar" />
         <span className="profile-trigger-name">{displayName}</span>
       </button>
       <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closeMenu} width={390} className="extension-control-panel">
         <section className="ecp-header" aria-label="Extension control panel header">
-          <div className="ecp-avatar" aria-hidden>{avatarText}</div>
+          <UserAvatarUpload
+            name={displayName}
+            avatarUrl={user.avatarUrl}
+            size={52}
+            editable
+            onUploaded={setUserAvatarUrl}
+            className="ecp-avatar"
+          />
           <div className="ecp-identity">
             <div className="ecp-name">{displayName}</div>
             <div className="ecp-tenant">{tenant.name}</div>

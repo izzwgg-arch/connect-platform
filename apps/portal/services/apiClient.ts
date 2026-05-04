@@ -233,6 +233,44 @@ export async function apiUploadContactAvatar(
   }
 }
 
+/** Multipart upload for the signed-in user's own profile photo (field name `file`). */
+export async function apiUploadUserAvatar(
+  file: File,
+  token?: string,
+): Promise<{ ok: boolean; avatarUrl: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const res = await fetch(`${baseUrl()}/me/avatar`, {
+      method: "POST",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+      },
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: unknown = null;
+      try { errPayload = text.trim() ? JSON.parse(text) : null; } catch { errPayload = null; }
+      const ep = errPayload as { error?: string; message?: string } | null;
+      throw new ApiError(ep?.error || ep?.message || `Upload failed (${res.status})`, res.status);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Delete the signed-in user's profile photo. */
+export async function apiDeleteUserAvatar(): Promise<{ ok: boolean }> {
+  return apiDelete("/me/avatar");
+}
+
 /** Multipart upload for the signed-in user's extension voicemail greeting. */
 export async function apiUploadVoicemailGreeting(
   file: File,

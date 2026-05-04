@@ -24,6 +24,7 @@ type AppContextType = {
   setTenantId: (tenantId: string) => void;
   setRole: (role: Role) => void;
   setAdminScope: (scope: AdminScope) => void;
+  setUserAvatarUrl: (url: string | null) => void;
 };
 
 const FALLBACK_TENANT: Tenant = { id: "local", name: "My Workspace", plan: "Business", status: "ACTIVE" };
@@ -37,6 +38,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   /** When set, `can()` uses this list from the API instead of the bundled role map (platform permission overrides). */
   const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(undefined);
 
@@ -76,6 +78,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         portalPermissionSet?: string[] | null;
         tenantId?: string | null;
         tenantName?: string | null;
+        avatarUrl?: string | null;
       }>("/me")
         .then((me) => {
           if (!active) return;
@@ -90,6 +93,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               name: me.tenantName ?? null,
             });
           }
+          if (me.avatarUrl) setUserAvatarUrl(me.avatarUrl);
         })
         .catch(() => {
           if (!active) return;
@@ -173,8 +177,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       role,
       tenantId,
       presence: "AVAILABLE",
+      avatarUrl: userAvatarUrl,
     };
-  }, [role, tenantId]);
+  }, [role, tenantId, userAvatarUrl]);
 
   const tenant = useMemo<Tenant>(() => {
     // 1. Prefer a tenant loaded via the super-admin switcher (rich metadata).
@@ -209,9 +214,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setRole,
       setAdminScope: (scope: AdminScope) => {
         setAdminScopeState(scope);
-      }
+      },
+      setUserAvatarUrl,
     }),
-    [adminScope, backendJwtRole, canPermission, meTenant, role, tenant, tenantId, tenants, theme, user]
+    [adminScope, backendJwtRole, canPermission, meTenant, role, tenant, tenantId, tenants, theme, user, setUserAvatarUrl]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

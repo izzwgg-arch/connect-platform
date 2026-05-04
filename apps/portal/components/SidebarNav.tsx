@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useNavSectionExpansion } from "../hooks/useNavSectionExpansion";
-import { useTelephony } from "../contexts/TelephonyContext";
 import { TenantSwitcher } from "./TenantSwitcher";
+import { UserAvatarUpload } from "./UserAvatarUpload";
 import { NAV_SECTION_ORDER, navSectionMeta, type NavItem } from "../navigation/navConfig";
 import { CollapsibleNavSection } from "./CollapsibleNavSection";
 
@@ -34,18 +34,9 @@ export function SidebarNav({
   onToggleRail
 }: SidebarNavProps) {
   const pathname = usePathname();
-  const { user } = useAppContext();
-  const telephony = useTelephony();
+  const { user, setUserAvatarUrl } = useAppContext();
   const { isExpanded, toggle } = useNavSectionExpansion();
-  const isConnected = telephony.status === "connected";
   const displayName = formatUserDisplayName(user.name, user.email);
-
-  const initials = displayName
-    .split(" ")
-    .map((p) => p[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 
   const effectiveRail = !isMobile && railMode;
   const asideClass = [
@@ -62,21 +53,26 @@ export function SidebarNav({
       <div className={`drawer-profile ${effectiveRail ? "drawer-profile-rail" : ""}`}>
         {!effectiveRail ? (
           <div className="drawer-user">
-            <div className="drawer-user-avatar" aria-hidden>
-              {initials}
-            </div>
+            <UserAvatarUpload
+              name={displayName}
+              avatarUrl={user.avatarUrl}
+              size={38}
+              editable
+              onUploaded={setUserAvatarUrl}
+              className="drawer-user-avatar"
+            />
             <div className="drawer-user-details">
               <span className="drawer-user-name">{displayName}</span>
-              <span className={`drawer-user-status ${isConnected ? "connected" : "disconnected"}`}>
-                {isConnected ? "● Connected" : "● Disconnected"}
-              </span>
             </div>
           </div>
         ) : (
           <div className="drawer-user-rail" title={displayName}>
-            <div className="drawer-user-avatar drawer-user-avatar-sm" aria-hidden>
-              {initials}
-            </div>
+            <UserAvatarUpload
+              name={displayName}
+              avatarUrl={user.avatarUrl}
+              size={28}
+              className="drawer-user-avatar drawer-user-avatar-sm"
+            />
           </div>
         )}
         <div className={`drawer-tenant-wrap ${effectiveRail ? "drawer-tenant-wrap-rail" : ""}`}>

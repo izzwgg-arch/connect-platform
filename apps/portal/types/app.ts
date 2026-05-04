@@ -22,4 +22,5 @@ export type User = {
   role: Role;
   tenantId: string;
   presence: Presence;
+  avatarUrl?: string | null;
 };

@@ -4466,7 +4466,7 @@ app.addHook("preHandler", async (req, reply) => {
 
 app.get("/me", async (req) => {
   const user = getUser(req);
-  const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true } as any }).catch(() => null);
+  const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true, avatarUrl: true } as any }).catch(() => null);
   const portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(user.role);
   // Resolve tenant display name so the portal can build its tenant object for
   // regular (non-super-admin) users. Without this, AppProvider falls back to
@@ -4484,8 +4484,70 @@ app.get("/me", async (req) => {
     name: row ? displayNameForUser(row as any) : user.email,
     status: (row as any)?.status || "ACTIVE",
     lastLoginAt: (row as any)?.lastLoginAt || null,
+    avatarUrl: (row as any)?.avatarUrl ?? null,
     ...(portalPermissionSet ? { portalPermissionSet } : {}),
   };
+});
+
+// ─── Logged-in user profile photo ────────────────────────────────────────────
+function userAvatarRoot(): string {
+  return process.env.USER_AVATAR_STORAGE_DIR || path.join(process.cwd(), "data", "user-avatars");
+}
+
+app.get("/me/avatar", async (req, reply) => {
+  const authUser = await requirePermission(req, reply, () => true);
+  if (!authUser) return;
+  const row = await db.user.findUnique({ where: { id: authUser.sub }, select: { avatarStorageKey: true } as any }).catch(() => null);
+  if (!(row as any)?.avatarStorageKey) return reply.code(404).send({ error: "not_found" });
+  try {
+    const filePath = path.join(userAvatarRoot(), (row as any).avatarStorageKey);
+    const bytes = await fsp.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    reply.header("content-type", ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg");
+    reply.header("cache-control", "private, max-age=3600");
+    return reply.send(bytes);
+  } catch {
+    return reply.code(404).send({ error: "not_found" });
+  }
+});
+
+app.post("/me/avatar", async (req, reply) => {
+  const authUser = await requirePermission(req, reply, () => true);
+  if (!authUser) return;
+  if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+  const part = await (req as any).file();
+  if (!part) return reply.code(400).send({ error: "file_required" });
+  const mime = String(part.mimetype || "");
+  if (!["image/jpeg", "image/png", "image/webp"].includes(mime))
+    return reply.code(400).send({ error: "unsupported_image_type" });
+  const chunks: Buffer[] = [];
+  for await (const chunk of part.file) chunks.push(Buffer.from(chunk));
+  const bytes = Buffer.concat(chunks);
+  if (bytes.length > 2 * 1024 * 1024) return reply.code(413).send({ error: "file_too_large" });
+  const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
+  const sha = createHash("sha256").update(bytes).digest("hex").slice(0, 24);
+  const storageKey = `${authUser.sub}-${sha}${ext}`;
+  const filePath = path.join(userAvatarRoot(), storageKey);
+  await fsp.mkdir(userAvatarRoot(), { recursive: true });
+  await fsp.writeFile(filePath, bytes);
+  const existing = await db.user.findUnique({ where: { id: authUser.sub }, select: { avatarStorageKey: true } as any }).catch(() => null);
+  if ((existing as any)?.avatarStorageKey && (existing as any).avatarStorageKey !== storageKey) {
+    await fsp.unlink(path.join(userAvatarRoot(), (existing as any).avatarStorageKey)).catch(() => {});
+  }
+  const avatarUrl = `/api/me/avatar?v=${sha}`;
+  await (db.user as any).update({ where: { id: authUser.sub }, data: { avatarStorageKey: storageKey, avatarUrl } });
+  return reply.send({ ok: true, avatarUrl });
+});
+
+app.delete("/me/avatar", async (req, reply) => {
+  const authUser = await requirePermission(req, reply, () => true);
+  if (!authUser) return;
+  const row = await db.user.findUnique({ where: { id: authUser.sub }, select: { avatarStorageKey: true } as any }).catch(() => null);
+  if ((row as any)?.avatarStorageKey) {
+    await fsp.unlink(path.join(userAvatarRoot(), (row as any).avatarStorageKey)).catch(() => {});
+  }
+  await (db.user as any).update({ where: { id: authUser.sub }, data: { avatarStorageKey: null, avatarUrl: null } });
+  return reply.send({ ok: true });
 });
 
 app.get("/admin/users", async (req, reply) => {

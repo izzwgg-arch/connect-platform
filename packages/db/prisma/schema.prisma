@@ -411,6 +411,8 @@ model User {
   firstName                      String?
   lastName                       String?
   displayName                    String?
+  avatarUrl                      String?
+  avatarStorageKey               String?
   phone                          String?
   title                          String?
   department                     String?
