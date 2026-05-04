@@ -14372,10 +14372,13 @@ type IvrActiveOption = {
   enabled: boolean;
 };
 
-function normalizeTenantExtensionDestination(type: string | null | undefined, ref: string | null | undefined, tenantDialContext: string | null): string {
+function normalizeTenantDestinationRef(type: string | null | undefined, ref: string | null | undefined, tenantDialContext: string | null): string {
   const value = String(ref ?? "").trim();
-  if (!value || type !== "extension" || !tenantDialContext) return value;
-  return value.replace(/^from-internal,/i, `${tenantDialContext},`);
+  if (!value || !tenantDialContext) return value;
+  if (type === "extension") return value.replace(/^from-internal,/i, `${tenantDialContext},`);
+  if (type === "queue") return value.replace(/^ext-queues,/i, `${tenantDialContext},`);
+  if (type === "ring_group") return value.replace(/^ext-group,/i, `${tenantDialContext},`);
+  return value;
 }
 
 /** VitalPBX-parity defaults for the optional prompt slots. The dialplan
@@ -14456,9 +14459,9 @@ function buildIvrKeys(
     // read these keys will simply ignore them.
     { family: fam, key: "direct_dial",       value: (active?.directDialEnabled ?? false) ? "1" : "0" },
     { family: fam, key: "dest_invalid_type", value: (active?.invalidDestinationType ?? "").trim() },
-    { family: fam, key: "dest_invalid",      value: (active?.invalidDestinationRef  ?? "").trim() },
+    { family: fam, key: "dest_invalid",      value: normalizeTenantDestinationRef(active?.invalidDestinationType, active?.invalidDestinationRef, tenantDialContext) },
     { family: fam, key: "dest_timeout_type", value: (active?.timeoutDestinationType ?? "").trim() },
-    { family: fam, key: "dest_timeout",      value: (active?.timeoutDestinationRef  ?? "").trim() },
+    { family: fam, key: "dest_timeout",      value: normalizeTenantDestinationRef(active?.timeoutDestinationType, active?.timeoutDestinationRef, tenantDialContext) },
   ];
 
   // Per-digit option routing. Disabled options are treated as if missing so
@@ -14472,7 +14475,7 @@ function buildIvrKeys(
     keys.push({
       family: fam,
       key: `opt_${digit}/dest`,
-      value: normalizeTenantExtensionDestination(opt?.destinationType, opt?.destinationRef, tenantDialContext),
+      value: normalizeTenantDestinationRef(opt?.destinationType, opt?.destinationRef, tenantDialContext),
     });
     keys.push({ family: fam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" });
   }

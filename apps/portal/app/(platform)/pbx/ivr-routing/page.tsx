@@ -90,11 +90,11 @@ function describeDestination(dest: { type: DestinationType; ref: string } | null
     if (m) return `Extension ${m[1]}`;
   }
   if (type === "queue") {
-    const m = r.match(/^ext-queues,([^,]+),\d+$/i);
+    const m = r.match(/^(?:ext-queues|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return `Queue ${m[1]}`;
   }
   if (type === "ring_group") {
-    const m = r.match(/^ext-group,([^,]+),\d+$/i);
+    const m = r.match(/^(?:ext-group|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return `Ring Group ${m[1]}`;
   }
   if (type === "voicemail") {
@@ -2188,11 +2188,11 @@ function parseDestinationRef(type: DestinationType | "", ref: string): { selecte
     if (m) return { selected: m[1], free: "" };
   }
   if (type === "queue") {
-    const m = r.match(/^ext-queues,([^,]+),\d+$/i);
+    const m = r.match(/^(?:ext-queues|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return { selected: m[1], free: "" };
   }
   if (type === "ring_group") {
-    const m = r.match(/^ext-group,([^,]+),\d+$/i);
+    const m = r.match(/^(?:ext-group|T\d+_cos-all),([^,]+),\d+$/i);
     if (m) return { selected: m[1], free: "" };
     // Legacy/custom CEPs that aren't the canonical `ext-group,<n>,1` shape
     // round-trip as free text so they don't get silently blanked.
@@ -2216,18 +2216,27 @@ function tenantDialContextForExtension(row: ExtensionSuggestion | undefined): st
   return null;
 }
 
+function tenantDialContextFromSuggestions(rows: ExtensionSuggestion[]): string | null {
+  for (const row of rows) {
+    const ctx = tenantDialContextForExtension(row);
+    if (ctx) return ctx;
+  }
+  return null;
+}
+
 /** Turn a picker selection into the CEP the publisher writes to AstDB. */
 function buildDestinationRef(
   type: DestinationType | "",
   selected: string,
   free: string,
-  opts: { extensionRow?: ExtensionSuggestion } = {},
+  opts: { extensionRow?: ExtensionSuggestion; tenantDialContext?: string | null } = {},
 ): string {
   const s = (selected ?? "").trim();
   const f = (free ?? "").trim();
-  if (type === "extension"        && s) return `${tenantDialContextForExtension(opts.extensionRow) ?? "from-internal"},${s},1`;
-  if (type === "queue"            && s) return `ext-queues,${s},1`;
-  if (type === "ring_group"       && s) return `ext-group,${s},1`;
+  const tenantDialContext = opts.tenantDialContext ?? null;
+  if (type === "extension"        && s) return `${tenantDialContextForExtension(opts.extensionRow) ?? tenantDialContext ?? "from-internal"},${s},1`;
+  if (type === "queue"            && s) return `${tenantDialContext ?? "ext-queues"},${s},1`;
+  if (type === "ring_group"       && s) return `${tenantDialContext ?? "ext-group"},${s},1`;
   if (type === "ring_group")            return f; // legacy/custom free-text fallback
   if (type === "voicemail"        && s) return `ext-local,vmu${s},1`;
   if (type === "ivr")                   return f; // free text CEP for nested IVRs
@@ -2259,6 +2268,7 @@ function DestinationPicker({
   const queues     = useQueueSuggestions(tenantId);
   const ringGroups = useRingGroupSuggestions(tenantId);
   const parsed     = parseDestinationRef(value.type, value.ref);
+  const tenantDialContext = tenantDialContextFromSuggestions(extensions);
 
   const setType = (t: DestinationType | "") => {
     if (t === "terminate") { onChange({ type: t, ref: "connect-default-fallback,s,1" }); return; }
@@ -2270,14 +2280,14 @@ function DestinationPicker({
     const extensionRow = value.type === "extension"
       ? extensions.find((e) => e.extension === s)
       : undefined;
-    onChange({ type: value.type, ref: buildDestinationRef(value.type, s, "", { extensionRow }) });
+    onChange({ type: value.type, ref: buildDestinationRef(value.type, s, "", { extensionRow, tenantDialContext }) });
   };
   const setFree = (f: string) => {
-    onChange({ type: value.type, ref: buildDestinationRef(value.type, "", f) });
+    onChange({ type: value.type, ref: buildDestinationRef(value.type, "", f, { tenantDialContext }) });
   };
 
   const freePlaceholder: Partial<Record<DestinationType, string>> = {
-    ring_group:      "ext-group,601,1",
+    ring_group:      `${tenantDialContext ?? "ext-group"},601,1`,
     ivr:             "connect-tenant-ivr,<did>,1",
     announcement:    "app-daemon-announce,custom/notice,1",
     external_number: "+15551234567",
