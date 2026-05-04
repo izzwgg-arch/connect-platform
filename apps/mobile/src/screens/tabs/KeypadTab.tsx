@@ -9,20 +9,22 @@ import {
   Alert,
   Platform,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSip } from '../../context/SipContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { usePresence } from '../../context/PresenceContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { AppConfirmDialog } from '../../components/ui/AppPopup';
-import { getContacts, getVoiceExtension } from '../../api/client';
+import { getContacts, getOutboundRoutes, getVoiceExtension } from '../../api/client';
 import { loadLocalCallHistory } from '../../storage/callHistory';
-import type { Contact, CallRecord, VoiceExtension } from '../../types';
+import type { Contact, CallRecord, OutboundDialRoute, VoiceExtension } from '../../types';
 import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
 import { ensureMicPermissionOrAlert } from '../../sip/permissions';
@@ -52,6 +54,7 @@ const KEY_GAP = 8;
 const KEY_CELL_WIDTH = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
 const KEY_SIZE = 70;
 const SHORT_SCREEN = screenHeight < 740;
+const OUTBOUND_ROUTE_STORAGE_KEY = 'connect:mobile:selected-outbound-route-id';
 
 type Suggestion = {
   id: string;
@@ -202,6 +205,26 @@ function SuggestionRow({
   );
 }
 
+function normalizeDialTarget(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.includes('@')) return trimmed;
+  return trimmed.replace(/[()\-\s.]/g, '');
+}
+
+function isEmergencyDialTarget(value: string): boolean {
+  const digits = value.replace(/\D/g, '');
+  return digits === '911' || digits === '9911';
+}
+
+function applyOutboundPrefix(target: string, route: OutboundDialRoute | null): string {
+  const normalized = normalizeDialTarget(target);
+  const prefix = String(route?.prefix || '').trim();
+  if (!prefix || !/^\d{1,8}$/.test(prefix)) return normalized;
+  if (!normalized || normalized.includes('@') || normalized.startsWith('*') || normalized.startsWith('#')) return normalized;
+  if (isEmergencyDialTarget(normalized)) return normalized;
+  return normalized.startsWith(prefix) ? normalized : `${prefix}${normalized}`;
+}
+
 export function KeypadTab() {
   const { colors, isDark } = useTheme();
   const sip = useSip();
@@ -215,6 +238,8 @@ export function KeypadTab() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [recent, setRecent] = useState<CallRecord[]>([]);
   const [voice, setVoice] = useState<VoiceExtension | null>(null);
+  const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
+  const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState('');
   const [dndConfirmOpen, setDndConfirmOpen] = useState(false);
   const prevCallStateRef = useRef(sip.callState);
 
@@ -233,10 +258,31 @@ export function KeypadTab() {
         getVoiceExtension(token)
           .then((next) => { if (alive) setVoice(next); })
           .catch(() => {});
+        getOutboundRoutes(token)
+          .then(async (routes) => {
+            if (!alive) return;
+            const allowed = routes.filter((route) => route && route.id);
+            setOutboundRoutes(allowed);
+            const stored = await AsyncStorage.getItem(OUTBOUND_ROUTE_STORAGE_KEY).catch(() => null);
+            if (!alive) return;
+            const defaultRoute = allowed.find((route) => route.isDefault) || (allowed.length === 1 ? allowed[0] : null);
+            setSelectedOutboundRouteId(allowed.some((route) => route.id === stored) ? String(stored) : (defaultRoute?.id || ''));
+          })
+          .catch(() => {
+            if (alive) {
+              setOutboundRoutes([]);
+              setSelectedOutboundRouteId('');
+            }
+          });
       }
       return () => { alive = false; };
     }, [token]),
   );
+
+  useEffect(() => {
+    if (selectedOutboundRouteId) AsyncStorage.setItem(OUTBOUND_ROUTE_STORAGE_KEY, selectedOutboundRouteId).catch(() => {});
+    else AsyncStorage.removeItem(OUTBOUND_ROUTE_STORAGE_KEY).catch(() => {});
+  }, [selectedOutboundRouteId]);
 
   // Clear number when call ends and return to idle
   useEffect(() => {
@@ -256,6 +302,14 @@ export function KeypadTab() {
     sip.callState === 'ringing' ||
     sip.callState === 'ended';
   const registered = sip.registrationState === 'registered';
+  const selectedOutboundRoute = useMemo(
+    () => outboundRoutes.find((route) => route.id === selectedOutboundRouteId) || null,
+    [outboundRoutes, selectedOutboundRouteId],
+  );
+  const outboundPreview = useMemo(
+    () => number.trim() && selectedOutboundRoute ? applyOutboundPrefix(number, selectedOutboundRoute) : '',
+    [number, selectedOutboundRoute],
+  );
 
   const handleKey = (digit: string) => {
     playDtmfTone(digit);
@@ -329,7 +383,8 @@ export function KeypadTab() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     setDialing(true);
     try {
-      await sip.dial(target);
+      const pbxTarget = selectedOutboundRoute ? applyOutboundPrefix(target, selectedOutboundRoute) : target;
+      await sip.dial(pbxTarget, { displayTarget: target });
     } catch (e: any) {
       Alert.alert('Call Failed', e?.message || 'Could not start the call. Check your connection.');
     } finally {
@@ -477,6 +532,55 @@ export function KeypadTab() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {outboundRoutes.length > 0 && !callActive ? (
+        <View style={styles.outboundWrap}>
+          <Text style={[styles.outboundLabel, { color: colors.textTertiary }]}>Outbound</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.outboundScroller}>
+            <TouchableOpacity
+              style={[
+                styles.outboundChip,
+                {
+                  borderColor: !selectedOutboundRouteId ? colors.primary : colors.borderSubtle,
+                  backgroundColor: !selectedOutboundRouteId ? colors.primary + '1f' : colors.surface,
+                },
+              ]}
+              activeOpacity={0.78}
+              onPress={() => setSelectedOutboundRouteId('')}
+            >
+              <Text style={[styles.outboundChipText, { color: !selectedOutboundRouteId ? colors.primary : colors.textSecondary }]}>No prefix</Text>
+            </TouchableOpacity>
+            {outboundRoutes.map((route) => {
+              const selected = route.id === selectedOutboundRouteId;
+              return (
+                <TouchableOpacity
+                  key={route.id}
+                  style={[
+                    styles.outboundChip,
+                    {
+                      borderColor: selected ? colors.primary : colors.borderSubtle,
+                      backgroundColor: selected ? colors.primary + '1f' : colors.surface,
+                    },
+                  ]}
+                  activeOpacity={0.78}
+                  onPress={() => setSelectedOutboundRouteId(route.id)}
+                >
+                  <Text style={[styles.outboundChipText, { color: selected ? colors.primary : colors.textSecondary }]}>
+                    {route.prefix ? `${route.name} · ${route.prefix}` : `${route.name} · No prefix`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          {selectedOutboundRoute && number.trim() ? (
+            <Text style={[styles.outboundPreview, { color: colors.textTertiary }]} numberOfLines={1}>
+              {outboundPreview && outboundPreview !== normalizeDialTarget(number)
+                ? `PBX dial string: ${outboundPreview}`
+                : `Calling with ${selectedOutboundRoute.name}`}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* ── Live suggestions (contacts + recents) ── */}
       {suggestions.length > 0 && (
@@ -630,6 +734,35 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.2,
     includeFontPadding: false,
+  },
+  outboundWrap: {
+    paddingHorizontal: PAD_H_PADDING,
+    paddingTop: 6,
+    gap: 6,
+  },
+  outboundLabel: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  outboundScroller: {
+    gap: 8,
+    paddingRight: PAD_H_PADDING,
+  },
+  outboundChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  outboundChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  outboundPreview: {
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   // ── Display ──────────────────────────────────────────

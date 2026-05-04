@@ -32,7 +32,7 @@ type SipState = {
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
-  dial: (target: string) => Promise<void>;
+  dial: (target: string, options?: { displayTarget?: string }) => Promise<void>;
   answer: () => Promise<void>;
   answerIncomingInvite: (
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
@@ -1014,19 +1014,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         await clientRef.current.unregister();
       },
 
-      dial: async (target) => {
+      dial: async (target, options) => {
+        const displayTarget = options?.displayTarget || target;
         setCallDirection("outbound");
-        setRemoteParty(target);
+        setRemoteParty(displayTarget);
         setLastError(null);
         // Persist last dialed number for "redial" feature
-        setLastDialed(target);
-        SecureStore.setItemAsync(LAST_DIALED_KEY, target).catch(() => {});
+        setLastDialed(displayTarget);
+        SecureStore.setItemAsync(LAST_DIALED_KEY, displayTarget).catch(() => {});
         // Track call info for local history
         callInfoRef.current = {
           direction: "outbound",
           answered: false,
           startMs: Date.now(),
-          remoteParty: target,
+          remoteParty: displayTarget,
         };
         setAudioRoute("earpiece");
         await clientRef.current.dial(target);

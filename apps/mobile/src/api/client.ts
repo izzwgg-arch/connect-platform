@@ -10,6 +10,7 @@ import type {
   ContactsResponse,
   TeamDirectoryMember,
   VoiceExtension,
+  OutboundDialRoute,
   Voicemail,
   VoicemailFolder,
   VoicemailResponse,
@@ -44,6 +45,15 @@ export async function getVoiceExtension(token: string): Promise<VoiceExtension> 
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "VOICE_EXTENSION_FAILED");
   return json as VoiceExtension;
+}
+
+export async function getOutboundRoutes(token: string): Promise<OutboundDialRoute[]> {
+  const res = await fetch(`${API_BASE}/me/outbound-routes`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "OUTBOUND_ROUTES_FAILED");
+  return Array.isArray(json?.routes) ? (json.routes as OutboundDialRoute[]) : [];
 }
 
 export async function resetSipPassword(token: string): Promise<{ sipPassword: string; provisioning: any }> {

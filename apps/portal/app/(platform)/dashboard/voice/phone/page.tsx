@@ -420,6 +420,24 @@ function KeypadScreen({
         </span>
       </div>
 
+      {phone.outboundRoutes.length ? (
+        <div style={{ display: "grid", gap: 5, padding: 10, borderRadius: 14, background: T.greenSoft, border: `1px solid ${T.green}33` }}>
+          <label style={{ color: T.textSec, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1 }}>Outbound</label>
+          <select
+            className="input"
+            value={phone.selectedOutboundRouteId}
+            onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}
+          >
+            <option value="">No route prefix</option>
+            {phone.outboundRoutes.map((route) => (
+              <option key={route.id} value={route.id}>
+                {route.prefix ? `${route.name} · ${route.prefix}` : `${route.name} · No prefix`}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       {/* Number display */}
       <input
         id="sip-dialpad-input"

@@ -2094,6 +2094,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
   { prefix: "/admin/users", permission: "can_view_admin_users" },
   { prefix: "/admin/extensions", permission: "can_view_admin_users" },
+  { prefix: "/outbound-routes", permission: "can_view_admin_users" },
   { prefix: "/admin/tenants", permission: "can_view_admin_tenants" },
   { prefix: "/admin/pbx/events", permission: "can_view_admin_pbx_events" },
   { prefix: "/admin/pbx", permission: "can_view_admin_pbx_instances" },
@@ -2128,6 +2129,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/pbx/tenant-users", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/settings/webrtc", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/me/extension", permission: "can_view_pbx_softphone" },
+  { prefix: "/me/outbound-routes", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/me/reset-sip-password", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
@@ -4729,6 +4731,291 @@ app.get("/admin/users/:id", async (req, reply) => {
   });
   if (!row) return reply.status(404).send({ error: "user_not_found" });
   return { user: formatAdminUser(row), tokens: (row as any).passwordTokens || [] };
+});
+
+const outboundRouteInputSchema = z.object({
+  tenantId: z.string().optional(),
+  name: z.string().trim().min(1).max(120),
+  prefix: z.string().trim().max(8).optional().nullable(),
+  callerIdName: z.string().trim().max(120).optional().nullable(),
+  callerIdNumber: z.string().trim().max(40).optional().nullable(),
+  description: z.string().trim().max(500).optional().nullable(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(100000).optional(),
+});
+
+const outboundRoutePatchSchema = outboundRouteInputSchema.partial().extend({
+  tenantId: z.string().optional(),
+});
+
+const outboundRouteAssignmentSchema = z.object({
+  routes: z.array(z.object({
+    outboundRouteId: z.string().min(1),
+    enabled: z.boolean().optional(),
+    isDefault: z.boolean().optional(),
+  })).max(100),
+});
+
+function cleanOutboundPrefix(value: string | null | undefined): string | null {
+  const prefix = String(value ?? "").trim();
+  if (!prefix) return null;
+  if (!/^\d{1,8}$/.test(prefix)) throw new Error("invalid_prefix");
+  return prefix;
+}
+
+function cleanOptionalText(value: string | null | undefined): string | null {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+function cleanCallerIdNumber(value: string | null | undefined): string | null {
+  const text = cleanOptionalText(value);
+  if (!text) return null;
+  if (!/^[+()\-\s.\d]{3,40}$/.test(text)) throw new Error("invalid_caller_id_number");
+  return text;
+}
+
+function formatOutboundRoute(row: any, permission?: any) {
+  const prefix = row.prefix || "";
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    name: row.name,
+    prefix,
+    callerIdName: row.callerIdName || null,
+    callerIdNumber: row.callerIdNumber || null,
+    description: row.description || null,
+    isActive: row.isActive !== false,
+    sortOrder: row.sortOrder || 0,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    enabled: permission ? permission.enabled !== false : false,
+    isDefault: permission ? permission.isDefault === true : false,
+    label: prefix ? `${row.name} · ${prefix}` : `${row.name} · No prefix`,
+  };
+}
+
+async function resolveAdminTargetUser(admin: JwtUser, userId: string): Promise<any | null> {
+  return (db as any).user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id: userId } : { id: userId, tenantId: admin.tenantId },
+    select: { id: true, tenantId: true, email: true, role: true },
+  });
+}
+
+app.get("/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const tenantId = await resolveManagedTenant(admin, query.tenantId).catch((e) => {
+    const err = String((e as Error).message || "TENANT_NOT_FOUND");
+    reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err });
+    return null;
+  });
+  if (!tenantId || reply.sent) return;
+  const routes = await (db as any).outboundRoute.findMany({
+    where: { tenantId },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+  });
+  return { tenantId, routes: routes.map((r: any) => formatOutboundRoute(r)) };
+});
+
+app.post("/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const input = outboundRouteInputSchema.parse(req.body || {});
+  const tenantId = await resolveManagedTenant(admin, input.tenantId).catch((e) => {
+    const err = String((e as Error).message || "TENANT_NOT_FOUND");
+    reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err });
+    return null;
+  });
+  if (!tenantId || reply.sent) return;
+  let prefix: string | null;
+  let callerIdNumber: string | null;
+  try {
+    prefix = cleanOutboundPrefix(input.prefix);
+    callerIdNumber = cleanCallerIdNumber(input.callerIdNumber);
+  } catch (e) {
+    return reply.status(400).send({ error: String((e as Error).message || "invalid_outbound_route") });
+  }
+  const created = await (db as any).outboundRoute.create({
+    data: {
+      tenantId,
+      name: input.name.trim(),
+      prefix,
+      callerIdName: cleanOptionalText(input.callerIdName),
+      callerIdNumber,
+      description: cleanOptionalText(input.description),
+      isActive: input.isActive !== false,
+      sortOrder: input.sortOrder ?? 0,
+    },
+  });
+  await audit({
+    tenantId,
+    actorUserId: admin.sub,
+    action: "OUTBOUND_ROUTE_CREATED",
+    entityType: "OutboundRoute",
+    entityId: created.id,
+    metadata: { name: created.name, prefix: created.prefix || "" },
+  });
+  return { ok: true, route: formatOutboundRoute(created) };
+});
+
+app.patch("/outbound-routes/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = outboundRoutePatchSchema.parse(req.body || {});
+  const tenantId = await resolveManagedTenant(admin, input.tenantId).catch((e) => {
+    const err = String((e as Error).message || "TENANT_NOT_FOUND");
+    reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err });
+    return null;
+  });
+  if (!tenantId || reply.sent) return;
+  const current = await (db as any).outboundRoute.findFirst({ where: { id, tenantId } });
+  if (!current) return reply.status(404).send({ error: "outbound_route_not_found" });
+  const data: Record<string, unknown> = {};
+  try {
+    if (input.name !== undefined) data.name = input.name.trim();
+    if (input.prefix !== undefined) data.prefix = cleanOutboundPrefix(input.prefix);
+    if (input.callerIdName !== undefined) data.callerIdName = cleanOptionalText(input.callerIdName);
+    if (input.callerIdNumber !== undefined) data.callerIdNumber = cleanCallerIdNumber(input.callerIdNumber);
+    if (input.description !== undefined) data.description = cleanOptionalText(input.description);
+  } catch (e) {
+    return reply.status(400).send({ error: String((e as Error).message || "invalid_outbound_route") });
+  }
+  if (input.isActive !== undefined) data.isActive = input.isActive;
+  if (input.sortOrder !== undefined) data.sortOrder = input.sortOrder;
+  const updated = await (db as any).outboundRoute.update({ where: { id }, data });
+  if (updated.isActive === false) {
+    await (db as any).userOutboundRoutePermission.updateMany({
+      where: { tenantId, outboundRouteId: id, isDefault: true },
+      data: { isDefault: false },
+    });
+  }
+  await audit({
+    tenantId,
+    actorUserId: admin.sub,
+    action: "OUTBOUND_ROUTE_UPDATED",
+    entityType: "OutboundRoute",
+    entityId: updated.id,
+    metadata: { fields: Object.keys(data), name: updated.name, prefix: updated.prefix || "" },
+  });
+  return { ok: true, route: formatOutboundRoute(updated) };
+});
+
+app.delete("/outbound-routes/:id", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const query = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const tenantId = await resolveManagedTenant(admin, query.tenantId).catch((e) => {
+    const err = String((e as Error).message || "TENANT_NOT_FOUND");
+    reply.status(err === "TENANT_REQUIRED" ? 400 : 404).send({ error: err });
+    return null;
+  });
+  if (!tenantId || reply.sent) return;
+  const current = await (db as any).outboundRoute.findFirst({ where: { id, tenantId } });
+  if (!current) return reply.status(404).send({ error: "outbound_route_not_found" });
+  const permissionCount = await (db as any).userOutboundRoutePermission.count({ where: { tenantId, outboundRouteId: id } });
+  if (permissionCount > 0) {
+    const updated = await (db as any).outboundRoute.update({ where: { id }, data: { isActive: false } });
+    await (db as any).userOutboundRoutePermission.updateMany({ where: { tenantId, outboundRouteId: id }, data: { enabled: false, isDefault: false } });
+    await audit({ tenantId, actorUserId: admin.sub, action: "OUTBOUND_ROUTE_ARCHIVED", entityType: "OutboundRoute", entityId: id, metadata: { name: current.name, assignedUsers: permissionCount } });
+    return { ok: true, archived: true, route: formatOutboundRoute(updated) };
+  }
+  await (db as any).outboundRoute.delete({ where: { id } });
+  await audit({ tenantId, actorUserId: admin.sub, action: "OUTBOUND_ROUTE_DELETED", entityType: "OutboundRoute", entityId: id, metadata: { name: current.name } });
+  return { ok: true, deleted: true };
+});
+
+app.get("/me/outbound-routes", async (req) => {
+  const user = getUser(req);
+  const rows = await (db as any).userOutboundRoutePermission.findMany({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      enabled: true,
+      outboundRoute: { isActive: true, tenantId: user.tenantId },
+    },
+    include: { outboundRoute: true },
+    orderBy: [{ isDefault: "desc" }],
+  });
+  rows.sort((a: any, b: any) => {
+    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+    const sortDelta = (a.outboundRoute?.sortOrder || 0) - (b.outboundRoute?.sortOrder || 0);
+    if (sortDelta) return sortDelta;
+    return String(a.outboundRoute?.name || "").localeCompare(String(b.outboundRoute?.name || ""));
+  });
+  return {
+    tenantId: user.tenantId,
+    routes: rows.map((p: any) => formatOutboundRoute(p.outboundRoute, p)),
+  };
+});
+
+app.get("/admin/users/:id/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const [routes, permissions] = await Promise.all([
+    (db as any).outboundRoute.findMany({
+      where: { tenantId: target.tenantId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    }),
+    (db as any).userOutboundRoutePermission.findMany({
+      where: { tenantId: target.tenantId, userId: target.id },
+    }),
+  ]);
+  const byRoute = new Map<string, any>(permissions.map((p: any) => [p.outboundRouteId, p]));
+  return {
+    tenantId: target.tenantId,
+    userId: target.id,
+    routes: routes.map((r: any) => formatOutboundRoute(r, byRoute.get(r.id))),
+  };
+});
+
+app.put("/admin/users/:id/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = outboundRouteAssignmentSchema.parse(req.body || {});
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const enabled = input.routes.filter((r) => r.enabled !== false);
+  const routeIds = Array.from(new Set(enabled.map((r) => r.outboundRouteId)));
+  const validRoutes = routeIds.length
+    ? await (db as any).outboundRoute.findMany({ where: { id: { in: routeIds }, tenantId: target.tenantId, isActive: true }, select: { id: true } })
+    : [];
+  const validIds = new Set(validRoutes.map((r: any) => r.id));
+  const invalidIds = routeIds.filter((routeId) => !validIds.has(routeId));
+  if (invalidIds.length) return reply.status(400).send({ error: "invalid_outbound_route", routeIds: invalidIds });
+  const requestedDefault = enabled.find((r) => r.isDefault === true)?.outboundRouteId || null;
+  const defaultRouteId = requestedDefault && validIds.has(requestedDefault) ? requestedDefault : null;
+  await (db as any).$transaction(async (tx: any) => {
+    await tx.userOutboundRoutePermission.deleteMany({ where: { tenantId: target.tenantId, userId: target.id } });
+    if (routeIds.length) {
+      await tx.userOutboundRoutePermission.createMany({
+        data: routeIds.map((routeId) => ({
+          tenantId: target.tenantId,
+          userId: target.id,
+          outboundRouteId: routeId,
+          enabled: true,
+          isDefault: routeId === defaultRouteId,
+        })),
+      });
+    }
+  });
+  await audit({
+    tenantId: target.tenantId,
+    actorUserId: admin.sub,
+    targetUserId: target.id,
+    action: "USER_OUTBOUND_ROUTES_UPDATED",
+    entityType: "User",
+    entityId: target.id,
+    metadata: { routeIds, defaultRouteId },
+  });
+  return { ok: true, userId: target.id, tenantId: target.tenantId, routeIds, defaultRouteId };
 });
 
 app.patch("/admin/users/:id", async (req, reply) => {

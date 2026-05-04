@@ -276,62 +276,62 @@ enum CallInviteStatus {
 }
 
 model Tenant {
-  id                              String                    @id @default(cuid())
+  id                              String                        @id @default(cuid())
   name                            String
   /// Customer-facing business tenant vs. internal/test workspaces. Admin dropdowns default to CUSTOMER.
-  kind                            TenantKind                @default(CUSTOMER)
-  isApproved                      Boolean                   @default(false)
-  dailySmsCap                     Int                       @default(100)
-  perSecondRate                   Float                     @default(1.0)
-  firstCampaignRequiresApproval   Boolean                   @default(true)
-  smsSendMode                     SmsSendMode               @default(TEST)
+  kind                            TenantKind                    @default(CUSTOMER)
+  isApproved                      Boolean                       @default(false)
+  dailySmsCap                     Int                           @default(100)
+  perSecondRate                   Float                         @default(1.0)
+  firstCampaignRequiresApproval   Boolean                       @default(true)
+  smsSendMode                     SmsSendMode                   @default(TEST)
   smsLiveEnabledAt                DateTime?
   smsLiveEnabledByUserId          String?
-  dailySmsLimit                   Int                       @default(500)
-  hourlySmsLimit                  Int                       @default(100)
-  perSecondRateLimit              Int                       @default(5)
-  maxCampaignSize                 Int                       @default(2000)
-  smsSuspended                    Boolean                   @default(false)
+  dailySmsLimit                   Int                           @default(500)
+  hourlySmsLimit                  Int                           @default(100)
+  perSecondRateLimit              Int                           @default(5)
+  maxCampaignSize                 Int                           @default(2000)
+  smsSuspended                    Boolean                       @default(false)
   smsSuspendedReason              String?
   smsSuspendedAt                  DateTime?
-  smsRoutingMode                  SmsProviderRoutingMode    @default(FAILOVER)
-  smsPrimaryProvider              IntegrationProvider       @default(TWILIO)
-  smsSecondaryProvider            IntegrationProvider?      @default(VOIPMS)
+  smsRoutingMode                  SmsProviderRoutingMode        @default(FAILOVER)
+  smsPrimaryProvider              IntegrationProvider           @default(TWILIO)
+  smsSecondaryProvider            IntegrationProvider?          @default(VOIPMS)
   smsProviderLock                 IntegrationProvider?
   smsProviderLockReason           String?
   smsProviderLockedAt             DateTime?
   smsProviderLockedByUserId       String?
   defaultSmsFromNumberId          String?
   defaultVoiceFromNumberId        String?
-  numberPurchaseEnabled           Boolean                   @default(true)
-  smsSubscriptionRequired         Boolean                   @default(true)
-  smsBillingEnforced              Boolean                   @default(true)
-  webrtcEnabled                   Boolean                   @default(false)
-  webrtcRouteViaSbc               Boolean                   @default(false)
+  numberPurchaseEnabled           Boolean                       @default(true)
+  smsSubscriptionRequired         Boolean                       @default(true)
+  smsBillingEnforced              Boolean                       @default(true)
+  webrtcEnabled                   Boolean                       @default(false)
+  webrtcRouteViaSbc               Boolean                       @default(false)
   sipWsUrl                        String?
   sipDomain                       String?
   iceServers                      Json?
   outboundProxy                   String?
-  dtmfMode                        DtmfMode                  @default(RFC2833)
-  turnRequiredForMobile           Boolean                   @default(false)
-  turnValidationStatus            TurnValidationStatus      @default(UNKNOWN)
+  dtmfMode                        DtmfMode                      @default(RFC2833)
+  turnRequiredForMobile           Boolean                       @default(false)
+  turnValidationStatus            TurnValidationStatus          @default(UNKNOWN)
   turnValidatedAt                 DateTime?
   turnLastErrorCode               String?
   turnLastErrorAt                 DateTime?
-  mediaReliabilityGateEnabled     Boolean                   @default(false)
-  mediaTestStatus                 MediaTestStatus           @default(UNKNOWN)
+  mediaReliabilityGateEnabled     Boolean                       @default(false)
+  mediaTestStatus                 MediaTestStatus               @default(UNKNOWN)
   mediaTestedAt                   DateTime?
   mediaLastErrorCode              String?
   mediaLastErrorAt                DateTime?
-  mediaPolicy                     MediaPolicy               @default(TURN_ONLY)
-  sbcUdpExposureConfirmed         Boolean                   @default(false)
+  mediaPolicy                     MediaPolicy                   @default(TURN_ONLY)
+  sbcUdpExposureConfirmed         Boolean                       @default(false)
   sbcUdpExposureConfirmedAt       DateTime?
   sbcUdpExposureConfirmedByUserId String?
-  createdAt                       DateTime                  @default(now())
+  createdAt                       DateTime                      @default(now())
   users                           User[]
   tenDlcSubs                      TenDlcSubmission[]
   campaigns                       SmsCampaign[]
-  numbers                         PhoneNumber[]             @relation("TenantOwnedNumbers")
+  numbers                         PhoneNumber[]                 @relation("TenantOwnedNumbers")
   audits                          AuditLog[]
   providerCredentials             ProviderCredential[]
   billingSolaConfig               BillingSolaConfig?
@@ -391,21 +391,23 @@ model Tenant {
   mohPublishRecords               MohPublishRecord[]
   mohLastPublishedState           MohLastPublishedState?
   didRouteMappings                DidRouteMapping[]
+  outboundRoutes                  OutboundRoute[]
+  userOutboundRoutePermissions    UserOutboundRoutePermission[]
   mohAssets                       MohAsset[]
   pbxMohClasses                   PbxMohClass[]
   pbxCallEvents                   PbxCallEvent[]
-  smsLiveEnabledByUser            User?                     @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
-  smsProviderLockedByUser         User?                     @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
-  defaultSmsFromNumber            PhoneNumber?              @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
+  smsLiveEnabledByUser            User?                         @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
+  smsProviderLockedByUser         User?                         @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
+  defaultSmsFromNumber            PhoneNumber?                  @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
   tenantSmsNumbers                TenantSmsNumber[]
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
 }
 
 model User {
-  id                             String                    @id @default(cuid())
+  id                             String                        @id @default(cuid())
   tenantId                       String
-  email                          String                    @unique
+  email                          String                        @unique
   firstName                      String?
   lastName                       String?
   displayName                    String?
@@ -414,45 +416,46 @@ model User {
   department                     String?
   notes                          String?
   passwordHash                   String
-  role                           UserRole                  @default(USER)
-  status                         UserStatus                @default(ACTIVE)
+  role                           UserRole                      @default(USER)
+  status                         UserStatus                    @default(ACTIVE)
   emailVerifiedAt                DateTime?
   lastLoginAt                    DateTime?
-  forcePasswordReset             Boolean                   @default(false)
-  updatedAt                      DateTime                  @updatedAt
-  createdAt                      DateTime                  @default(now())
-  tenant                         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auditEvents                    AuditLog[]                @relation("AuditActor")
-  passwordTokens                 UserPasswordToken[]       @relation("UserPasswordTokens")
-  createdPasswordTokens          UserPasswordToken[]       @relation("UserPasswordTokenCreator")
-  createdProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialCreatedBy")
-  updatedProviderCredentials     ProviderCredential[]      @relation("ProviderCredentialUpdatedBy")
-  createdBillingSolaConfigs      BillingSolaConfig[]       @relation("BillingSolaConfigCreatedBy")
-  updatedBillingSolaConfigs      BillingSolaConfig[]       @relation("BillingSolaConfigUpdatedBy")
-  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]  @relation("WhatsAppProviderConfigCreatedBy")
-  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]  @relation("WhatsAppProviderConfigUpdatedBy")
-  createdEmailProviderConfigs    EmailProviderConfig[]     @relation("EmailProviderConfigCreatedBy")
-  updatedEmailProviderConfigs    EmailProviderConfig[]     @relation("EmailProviderConfigUpdatedBy")
-  smsLiveEnabledTenants          Tenant[]                  @relation("TenantSmsLiveEnabledBy")
-  smsProviderLockedTenants       Tenant[]                  @relation("TenantSmsProviderLockedBy")
-  ownedExtensions                Extension[]               @relation("ExtensionOwner")
+  forcePasswordReset             Boolean                       @default(false)
+  updatedAt                      DateTime                      @updatedAt
+  createdAt                      DateTime                      @default(now())
+  tenant                         Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents                    AuditLog[]                    @relation("AuditActor")
+  passwordTokens                 UserPasswordToken[]           @relation("UserPasswordTokens")
+  createdPasswordTokens          UserPasswordToken[]           @relation("UserPasswordTokenCreator")
+  createdProviderCredentials     ProviderCredential[]          @relation("ProviderCredentialCreatedBy")
+  updatedProviderCredentials     ProviderCredential[]          @relation("ProviderCredentialUpdatedBy")
+  createdBillingSolaConfigs      BillingSolaConfig[]           @relation("BillingSolaConfigCreatedBy")
+  updatedBillingSolaConfigs      BillingSolaConfig[]           @relation("BillingSolaConfigUpdatedBy")
+  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]      @relation("WhatsAppProviderConfigCreatedBy")
+  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]      @relation("WhatsAppProviderConfigUpdatedBy")
+  createdEmailProviderConfigs    EmailProviderConfig[]         @relation("EmailProviderConfigCreatedBy")
+  updatedEmailProviderConfigs    EmailProviderConfig[]         @relation("EmailProviderConfigUpdatedBy")
+  smsLiveEnabledTenants          Tenant[]                      @relation("TenantSmsLiveEnabledBy")
+  smsProviderLockedTenants       Tenant[]                      @relation("TenantSmsProviderLockedBy")
+  ownedExtensions                Extension[]                   @relation("ExtensionOwner")
   mobileDevices                  MobileDevice[]
   callInvites                    CallInvite[]
   callWakeEvents                 CallWakeEvent[]
   voiceClientSessions            VoiceClientSession[]
   voiceDiagEvents                VoiceDiagEvent[]
-  requestedTurnValidationJobs    TurnValidationJob[]       @relation("TurnValidationRequestedBy")
-  requestedMediaTestRuns         MediaTestRun[]            @relation("MediaTestRequestedBy")
+  requestedTurnValidationJobs    TurnValidationJob[]           @relation("TurnValidationRequestedBy")
+  requestedMediaTestRuns         MediaTestRun[]                @relation("MediaTestRequestedBy")
   mobileProvisioningTokens       MobileProvisioningToken[]
-  updatedSbcConfigs              SbcConfig[]               @relation("SbcConfigUpdatedBy")
+  updatedSbcConfigs              SbcConfig[]                   @relation("SbcConfigUpdatedBy")
   customerNotes                  CustomerNote[]
-  createdContacts                Contact[]                 @relation("ContactCreatedBy")
-  createdCustomerTasks           CustomerTask[]            @relation("CustomerTaskCreatedBy")
-  completedCustomerTasks         CustomerTask[]            @relation("CustomerTaskCompletedBy")
-  createdAutomationRules         AutomationRule[]          @relation("AutomationRuleCreatedBy")
-  tenantSmsNumbersAssigned       TenantSmsNumber[]         @relation("TenantSmsNumberAssignUser")
+  createdContacts                Contact[]                     @relation("ContactCreatedBy")
+  createdCustomerTasks           CustomerTask[]                @relation("CustomerTaskCreatedBy")
+  completedCustomerTasks         CustomerTask[]                @relation("CustomerTaskCompletedBy")
+  createdAutomationRules         AutomationRule[]              @relation("AutomationRuleCreatedBy")
+  tenantSmsNumbersAssigned       TenantSmsNumber[]             @relation("TenantSmsNumberAssignUser")
+  outboundRoutePermissions       UserOutboundRoutePermission[] @relation("UserOutboundRoutePermissionUser")
   connectChatParticipants        ConnectChatParticipant[]
-  connectChatMessages            ConnectChatMessage[]      @relation("ConnectChatMessageSenderUser")
+  connectChatMessages            ConnectChatMessage[]          @relation("ConnectChatMessageSenderUser")
 }
 
 enum UserRole {
@@ -1395,6 +1398,45 @@ model AuditLog {
   createdAt    DateTime             @default(now())
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   actorUser    User?                @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+model OutboundRoute {
+  id              String                        @id @default(cuid())
+  tenantId        String
+  name            String
+  prefix          String?
+  callerIdName    String?
+  callerIdNumber  String?
+  description     String?
+  isActive        Boolean                       @default(true)
+  sortOrder       Int                           @default(0)
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
+  tenant          Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userPermissions UserOutboundRoutePermission[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, sortOrder])
+}
+
+model UserOutboundRoutePermission {
+  id              String        @id @default(cuid())
+  tenantId        String
+  userId          String
+  outboundRouteId String
+  enabled         Boolean       @default(true)
+  isDefault       Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User          @relation("UserOutboundRoutePermissionUser", fields: [userId], references: [id], onDelete: Cascade)
+  outboundRoute   OutboundRoute @relation(fields: [outboundRouteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, outboundRouteId])
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@index([tenantId, outboundRouteId])
 }
 
 model UserPasswordToken {

@@ -32,6 +32,16 @@ export type ProvisioningBundle = {
   dtmfMode?: "RFC2833" | "SIP_INFO";
 };
 
+export type OutboundDialRoute = {
+  id: string;
+  name: string;
+  prefix: string;
+  callerIdName?: string | null;
+  callerIdNumber?: string | null;
+  isDefault?: boolean;
+  label?: string;
+};
+
 export type CallRecord = {
   id: string;
   linkedId?: string | null;
@@ -170,6 +180,30 @@ export type ChatThread = {
   deliveryError?: string | null;
 };
 
+export type ChatAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  scanStatus?: string | null;
+  downloadUrl: string | null;
+};
+
+export type PendingChatAttachment = {
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: number;
+  fileName: string;
+  localUri?: string;
+};
+
+export type ChatLocation = {
+  lat: number;
+  lng: number;
+  label?: string;
+  address?: string;
+};
+
 export type ChatMessage = {
   id: string;
   threadId: string;
@@ -183,6 +217,13 @@ export type ChatMessage = {
   deletedForEveryoneAt?: string | null;
   deliveryStatus?: string | null;
   deliveryError?: string | null;
+  clientStatus?: "sending" | "sent" | "failed";
+  reactions?: Array<{ emoji: string; userId: string }>;
+  mmsUrls?: string[];
+  location?: ChatLocation | null;
+  replyTo?: { id: string; body: string; type: ChatMessageType; senderName: string } | null;
+  readBy?: Array<{ userId: string; name: string; readAt: string }>;
+  attachments?: ChatAttachment[];
 };
 
 export type ChatDirectoryUser = {
@@ -256,7 +297,36 @@ export type IncomingCallPushPayload = {
   timestamp: string;
 };
 
-export type MobilePushPayload = IncomingCallPushPayload | InviteClaimedPushPayload | InviteCanceledPushPayload | MissedCallPushPayload;
+export type VoicemailPushPayload = {
+  type: "voicemail";
+  voicemailId: string;
+  tenantId: string;
+  extensionId: string;
+};
+
+export type MobileMissedCallPushPayload = {
+  type: "missed_call";
+  callId: string;
+  tenantId: string;
+  extensionId?: string | null;
+  callerNumber?: string | null;
+};
+
+export type ChatMessagePushPayload = {
+  type: "dm_message" | "sms_message";
+  conversationId: string;
+  messageId: string;
+  tenantId: string;
+};
+
+export type MobilePushPayload =
+  | IncomingCallPushPayload
+  | InviteClaimedPushPayload
+  | InviteCanceledPushPayload
+  | MissedCallPushPayload
+  | VoicemailPushPayload
+  | MobileMissedCallPushPayload
+  | ChatMessagePushPayload;
 
 export type SipRegistrationState =
   | "idle"          // no registration attempt has ever happened in this process

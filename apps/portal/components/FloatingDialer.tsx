@@ -411,6 +411,22 @@ export function FloatingDialer() {
     return blfEntries.filter((entry) => entry.extension.includes(query) || entry.name.toLowerCase().includes(query));
   }, [blfEntries, blfSearch]);
 
+  const selectedOutboundRoute = useMemo(
+    () => phone.outboundRoutes.find((route) => route.id === phone.selectedOutboundRouteId) || null,
+    [phone.outboundRoutes, phone.selectedOutboundRouteId],
+  );
+
+  const outboundPreview = useMemo(() => {
+    const raw = phone.dialpadInput.trim();
+    const prefix = selectedOutboundRoute?.prefix?.trim() || "";
+    if (!raw || !prefix) return "";
+    const normalized = raw.replace(/[()\-\s.]/g, "");
+    const digits = normalized.replace(/\D/g, "");
+    if (digits === "911" || digits === "9911" || normalized.startsWith(prefix)) return normalized;
+    if (normalized.includes("@") || normalized.startsWith("*") || normalized.startsWith("#")) return normalized;
+    return `${prefix}${normalized}`;
+  }, [phone.dialpadInput, selectedOutboundRoute]);
+
   const handleDigit = useCallback((digit: string) => {
     if (phone.callState === "connected") {
       phone.sendDtmf(digit);
@@ -498,6 +514,26 @@ export function FloatingDialer() {
 
             {!isInCall && (
               <div className="fd-body">
+                {phone.outboundRoutes.length ? (
+                  <div className="fd-outbound-route">
+                    <label htmlFor="fd-outbound-route">Outbound</label>
+                    <select
+                      id="fd-outbound-route"
+                      value={phone.selectedOutboundRouteId}
+                      onChange={(event) => phone.setSelectedOutboundRouteId(event.target.value)}
+                    >
+                      <option value="">No route prefix</option>
+                      {phone.outboundRoutes.map((route) => (
+                        <option key={route.id} value={route.id}>
+                          {route.prefix ? `${route.name} · ${route.prefix}` : `${route.name} · No prefix`}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedOutboundRoute && phone.dialpadInput.trim() ? (
+                      <span>{outboundPreview && outboundPreview !== phone.dialpadInput.trim() ? `PBX: ${outboundPreview}` : `Calling with ${selectedOutboundRoute.name}`}</span>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="fd-number-wrap">
                   <input
                     ref={inputRef}
@@ -668,6 +704,10 @@ const DIALER_CSS = `
 .fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
 .fd-icon-plain { width: 27px; display: inline-flex; align-items: center; justify-content: center; }
 .fd-body, .fd-active, .fd-call-state { padding: 11px; display: flex; flex-direction: column; gap: 9px; }
+.fd-outbound-route { display: grid; gap: 6px; padding: 9px 10px; border-radius: 15px; background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.18); }
+.fd-outbound-route label { color: var(--fd-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.fd-outbound-route select { width: 100%; border: 0; outline: 0; background: transparent; color: var(--fd-text); font-weight: 850; }
+.fd-outbound-route span { color: var(--fd-muted); font-size: 11px; font-weight: 750; }
 .fd-number-wrap { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 15px; background: var(--fd-soft); border: 1px solid var(--fd-border); }
 .fd-number-wrap input, .fd-transfer input, .fd-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--fd-text); }
 .fd-number-wrap input { text-align: center; font-size: 18px; font-weight: 850; letter-spacing: 1.3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; caret-color: #22c55e; }

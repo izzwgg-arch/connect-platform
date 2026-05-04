@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { CheckCircle2, Mail, Plus, Search, Shield, UserCog, XCircle } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
-import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
 type TenantOption = { id: string; name: string; status: string; kind?: string };
@@ -51,6 +51,24 @@ type AdminUser = {
   invite: null | { expiresAt: string; usedAt: string | null; createdAt: string };
 };
 type UsersResponse = { users: AdminUser[]; tenants: TenantOption[]; extensions: ExtensionOption[]; roles: string[]; tenantId: string };
+type OutboundRouteAssignment = {
+  id: string;
+  tenantId: string;
+  name: string;
+  prefix: string;
+  callerIdName: string | null;
+  callerIdNumber: string | null;
+  description: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  enabled: boolean;
+  isDefault: boolean;
+};
+type OutboundRoutesResponse = {
+  tenantId: string;
+  userId?: string;
+  routes: OutboundRouteAssignment[];
+};
 
 // Portal-bucket labels are the source of truth now (the API's /admin/users/catalog
 // returns { id, label } for each bucket). We keep this map around so legacy rows
@@ -325,7 +343,12 @@ function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => 
           <Info label="Notes" value={user.notes || "—"} />
         </div>
         <button className="btn" style={{ marginTop: 18 }} onClick={onEdit}><UserCog size={16} /> Edit User</button>
-        {user.extension ? <PhoneProvisioningPanel userId={user.id} /> : null}
+        {user.extension ? (
+          <>
+            <PhoneProvisioningPanel userId={user.id} />
+            <OutboundRoutePrefixesPanel user={user} />
+          </>
+        ) : null}
       </aside>
     </div>
   );
@@ -427,6 +450,253 @@ function PhoneProvisioningPanel({ userId }: { userId: string }) {
         <button className="btn ghost" disabled={busy !== null} onClick={() => run("disable")}>{busy === "disable" ? "Working..." : "Disable portal phone"}</button>
       </div>
       {message ? <div className="chip info" style={{ marginTop: 10 }}>{message}</div> : null}
+    </section>
+  );
+}
+
+const emptyOutboundRouteForm = {
+  name: "",
+  prefix: "",
+  callerIdName: "",
+  callerIdNumber: "",
+  description: "",
+};
+
+function OutboundRoutePrefixesPanel({ user }: { user: AdminUser }) {
+  const [routes, setRoutes] = useState<OutboundRouteAssignment[]>([]);
+  const [tenantId, setTenantId] = useState(user.tenantId);
+  const [draft, setDraft] = useState(emptyOutboundRouteForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState(emptyOutboundRouteForm);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const result = await apiGet<OutboundRoutesResponse>(`/admin/users/${user.id}/outbound-routes`);
+      setTenantId(result.tenantId || user.tenantId);
+      setRoutes(result.routes || []);
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to load outbound routes");
+      setRoutes([]);
+    }
+  }, [user.id, user.tenantId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function validateRouteForm(form: typeof emptyOutboundRouteForm): string | null {
+    if (!form.name.trim()) return "Company name is required.";
+    const prefix = form.prefix.trim();
+    if (prefix && !/^\d{1,8}$/.test(prefix)) return "Prefix must be 1-8 digits, or blank for no prefix.";
+    const callerIdNumber = form.callerIdNumber.trim();
+    if (callerIdNumber && !/^[+()\-\s.\d]{3,40}$/.test(callerIdNumber)) return "Caller ID number is not a valid phone format.";
+    return null;
+  }
+
+  async function saveAssignments(nextRoutes: OutboundRouteAssignment[]) {
+    const enabledRoutes = nextRoutes.filter((route) => route.enabled && route.isActive);
+    const hasDefault = enabledRoutes.some((route) => route.isDefault);
+    const normalized = nextRoutes.map((route) => ({
+      ...route,
+      isDefault: route.enabled && route.isActive && (route.isDefault || (!hasDefault && route.id === enabledRoutes[0]?.id)),
+    }));
+    setRoutes(normalized);
+    await apiPut(`/admin/users/${user.id}/outbound-routes`, {
+      routes: normalized
+        .filter((route) => route.enabled && route.isActive)
+        .map((route) => ({ outboundRouteId: route.id, enabled: true, isDefault: route.isDefault })),
+    });
+  }
+
+  async function toggleRoute(routeId: string, enabled: boolean) {
+    setBusy(`toggle:${routeId}`);
+    setMessage("");
+    try {
+      const next = routes.map((route) => route.id === routeId ? { ...route, enabled, isDefault: enabled ? route.isDefault : false } : route);
+      await saveAssignments(next);
+      setMessage("Outbound route permissions updated");
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to update route permissions");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setDefault(routeId: string) {
+    setBusy(`default:${routeId}`);
+    setMessage("");
+    try {
+      const next = routes.map((route) => ({ ...route, enabled: route.id === routeId ? true : route.enabled, isDefault: route.id === routeId }));
+      await saveAssignments(next);
+      setMessage("Default outbound route updated");
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to update default route");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createRoute() {
+    const validation = validateRouteForm(draft);
+    if (validation) {
+      setMessage(validation);
+      return;
+    }
+    setBusy("create");
+    setMessage("");
+    try {
+      const result = await apiPost<{ route: OutboundRouteAssignment }>("/outbound-routes", {
+        tenantId,
+        name: draft.name.trim(),
+        prefix: draft.prefix.trim(),
+        callerIdName: draft.callerIdName.trim() || null,
+        callerIdNumber: draft.callerIdNumber.trim() || null,
+        description: draft.description.trim() || null,
+        isActive: true,
+      });
+      const route = { ...result.route, enabled: true, isDefault: !routes.some((r) => r.enabled && r.isDefault) };
+      const next = [...routes, route];
+      await saveAssignments(next);
+      setDraft(emptyOutboundRouteForm);
+      setMessage("Outbound route created and assigned to this user");
+      await load();
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to create outbound route");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function startEdit(route: OutboundRouteAssignment) {
+    setEditingId(route.id);
+    setEditDraft({
+      name: route.name,
+      prefix: route.prefix || "",
+      callerIdName: route.callerIdName || "",
+      callerIdNumber: route.callerIdNumber || "",
+      description: route.description || "",
+    });
+  }
+
+  async function saveEdit(route: OutboundRouteAssignment) {
+    const validation = validateRouteForm(editDraft);
+    if (validation) {
+      setMessage(validation);
+      return;
+    }
+    setBusy(`edit:${route.id}`);
+    setMessage("");
+    try {
+      await apiPatch(`/outbound-routes/${route.id}`, {
+        tenantId,
+        name: editDraft.name.trim(),
+        prefix: editDraft.prefix.trim(),
+        callerIdName: editDraft.callerIdName.trim() || null,
+        callerIdNumber: editDraft.callerIdNumber.trim() || null,
+        description: editDraft.description.trim() || null,
+      });
+      setEditingId(null);
+      setMessage("Outbound route updated");
+      await load();
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to update outbound route");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function archiveRoute(route: OutboundRouteAssignment) {
+    const confirmed = typeof window !== "undefined" && window.confirm(`Disable or delete outbound route "${route.name}"?`);
+    if (!confirmed) return;
+    setBusy(`delete:${route.id}`);
+    setMessage("");
+    try {
+      await apiDelete(`/outbound-routes/${route.id}?tenantId=${encodeURIComponent(tenantId)}`);
+      setMessage("Outbound route removed");
+      await load();
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to remove outbound route");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 18, padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Outbound Route Prefixes</h3>
+          <p className="muted" style={{ margin: "4px 0 0" }}>Assign company prefixes this user can select in the dialer.</p>
+        </div>
+        <span className="chip info">{routes.filter((r) => r.enabled && r.isActive).length} allowed</span>
+      </div>
+      <div className="state-box" style={{ marginTop: 12 }}>
+        Prefix must match an outbound route/pattern configured in VitalPBX.
+      </div>
+
+      <div className="stack" style={{ gap: 10, marginTop: 12 }}>
+        {routes.length ? routes.map((route) => {
+          const editing = editingId === route.id;
+          return (
+            <div key={route.id} style={{ border: "1px solid var(--border)", borderRadius: 14, padding: 12, opacity: route.isActive ? 1 : .55 }}>
+              {editing ? (
+                <div className="stack" style={{ gap: 8 }}>
+                  <input className="input" placeholder="Company name" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} />
+                  <input className="input" placeholder="Prefix, e.g. 999" value={editDraft.prefix} onChange={(e) => setEditDraft({ ...editDraft, prefix: e.target.value.replace(/\D/g, "").slice(0, 8) })} />
+                  <input className="input" placeholder="Caller ID name (optional)" value={editDraft.callerIdName} onChange={(e) => setEditDraft({ ...editDraft, callerIdName: e.target.value })} />
+                  <input className="input" placeholder="Caller ID number (optional)" value={editDraft.callerIdNumber} onChange={(e) => setEditDraft({ ...editDraft, callerIdNumber: e.target.value })} />
+                  <textarea className="input" rows={2} placeholder="Description (optional)" value={editDraft.description} onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })} />
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button className="btn ghost" onClick={() => setEditingId(null)}>Cancel</button>
+                    <button className="btn" disabled={busy === `edit:${route.id}`} onClick={() => saveEdit(route)}>{busy === `edit:${route.id}` ? "Saving..." : "Save"}</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 10 }}>
+                    <div>
+                      <strong>{route.name}</strong>
+                      <div className="muted" style={{ fontSize: 13 }}>
+                        {route.prefix ? `Prefix ${route.prefix}` : "No prefix"}{route.callerIdNumber ? ` · ${route.callerIdNumber}` : ""}
+                      </div>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input type="checkbox" disabled={!route.isActive || busy !== null} checked={route.enabled && route.isActive} onChange={(e) => toggleRoute(route.id, e.target.checked)} />
+                      <span className="muted">Allowed</span>
+                    </label>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                    <button className="btn ghost" disabled={!route.isActive || !route.enabled || busy !== null} onClick={() => setDefault(route.id)}>
+                      {route.isDefault ? "Default" : "Make default"}
+                    </button>
+                    <button className="btn ghost" disabled={busy !== null} onClick={() => startEdit(route)}>Edit</button>
+                    <button className="btn ghost" disabled={busy !== null} onClick={() => archiveRoute(route)}>Remove</button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        }) : (
+          <p className="muted">No outbound route prefixes have been created for this tenant yet.</p>
+        )}
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+        <h4 style={{ margin: "0 0 8px" }}>Create Company Prefix</h4>
+        <div className="grid two">
+          <input className="input" placeholder="Company name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          <input className="input" placeholder="Prefix, e.g. 999" value={draft.prefix} onChange={(e) => setDraft({ ...draft, prefix: e.target.value.replace(/\D/g, "").slice(0, 8) })} />
+          <input className="input" placeholder="Caller ID name (optional)" value={draft.callerIdName} onChange={(e) => setDraft({ ...draft, callerIdName: e.target.value })} />
+          <input className="input" placeholder="Caller ID number (optional)" value={draft.callerIdNumber} onChange={(e) => setDraft({ ...draft, callerIdNumber: e.target.value })} />
+        </div>
+        <textarea className="input" rows={2} style={{ marginTop: 8 }} placeholder="Description (optional)" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+        <button className="btn" style={{ marginTop: 10 }} disabled={busy !== null || !draft.name.trim()} onClick={createRoute}>
+          <Plus size={16} /> {busy === "create" ? "Creating..." : "Create & assign"}
+        </button>
+      </div>
+      {message ? <div className={`chip ${message.toLowerCase().includes("failed") || message.toLowerCase().includes("invalid") || message.toLowerCase().includes("required") ? "danger" : "info"}`} style={{ marginTop: 10 }}>{message}</div> : null}
     </section>
   );
 }
