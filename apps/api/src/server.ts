@@ -23569,20 +23569,40 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         tenantId: input.connectTenantId,
         extNumber: input.toExtension,
         status: "ACTIVE",
-        ownerUserId: { not: null },
       },
       include: {
-        pbxLink: true,
         tenant: { select: { sipDomain: true } },
       },
     });
-    if (ext?.ownerUserId) {
-      target = {
-        tenantId: ext.tenantId,
-        userId: ext.ownerUserId,
-        extensionId: ext.id,
-        sipDomain: ext.tenant?.sipDomain ?? null,
-      };
+    if (ext) {
+      let resolvedUserId: string | null = ext.ownerUserId ?? null;
+      if (!resolvedUserId) {
+        const pairedDevice = await db.mobileDevice.findFirst({
+          where: {
+            tenantId: ext.tenantId,
+            extensionId: ext.id,
+            active: true,
+          } as any,
+          orderBy: { lastSeenAt: "desc" } as any,
+          select: { userId: true } as any,
+        });
+        const pairedUserId = pairedDevice?.userId as unknown;
+        resolvedUserId = typeof pairedUserId === "string" && pairedUserId.length > 0 ? pairedUserId : null;
+        if (resolvedUserId) {
+          app.log.info(
+            { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId, extensionId: ext.id, resolvedUserId },
+            "mobile-ring-notify: resolved target via active extension-paired device",
+          );
+        }
+      }
+      if (resolvedUserId) {
+        target = {
+          tenantId: ext.tenantId,
+          userId: resolvedUserId,
+          extensionId: ext.id,
+          sipDomain: ext.tenant?.sipDomain ?? null,
+        };
+      }
     }
   }
 
@@ -24051,12 +24071,33 @@ app.post("/internal/pbx/wake-extension", async (req, reply) => {
         tenantId: resolvedTenantId,
         extNumber: input.extensionNumber,
         status: "ACTIVE",
-        ownerUserId: { not: null },
       },
       select: { id: true, tenantId: true, ownerUserId: true },
     });
-    if (ext?.ownerUserId) {
-      target = { tenantId: ext.tenantId, userId: ext.ownerUserId, extensionId: ext.id };
+    if (ext) {
+      let resolvedUserId: string | null = ext.ownerUserId ?? null;
+      if (!resolvedUserId) {
+        const pairedDevice = await db.mobileDevice.findFirst({
+          where: {
+            tenantId: ext.tenantId,
+            extensionId: ext.id,
+            active: true,
+          } as any,
+          orderBy: { lastSeenAt: "desc" } as any,
+          select: { userId: true } as any,
+        });
+        const pairedUserId = pairedDevice?.userId as unknown;
+        resolvedUserId = typeof pairedUserId === "string" && pairedUserId.length > 0 ? pairedUserId : null;
+        if (resolvedUserId) {
+          app.log.info(
+            { pbxCallId: input.pbxCallId, extensionNumber: input.extensionNumber, tenantId: ext.tenantId, extensionId: ext.id, resolvedUserId },
+            "wake-extension: resolved target via active extension-paired device",
+          );
+        }
+      }
+      if (resolvedUserId) {
+        target = { tenantId: ext.tenantId, userId: resolvedUserId, extensionId: ext.id };
+      }
     }
   } catch (err: any) {
     app.log.warn({ err: err?.message, pbxCallId: input.pbxCallId }, "wake-extension: extension lookup failed");
