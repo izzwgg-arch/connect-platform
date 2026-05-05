@@ -546,12 +546,13 @@ def pjsip_contact_endpoints_for_extension(extension):
     if proc.returncode != 0:
         raise RuntimeError("pjsip_contacts_failed: " + ((proc.stdout + proc.stderr).strip() or str(proc.returncode)))
     endpoints = []
+    extension_endpoint_re = re.compile(r"^(?:T\d+_)?" + re.escape(extension) + r"(?:_\d+)?$")
     for line in (proc.stdout + proc.stderr).splitlines():
         match = re.search(r"\bContact:\s+([A-Za-z0-9_.-]+)\/", line)
         if not match:
             continue
         endpoint = match.group(1)
-        if endpoint == extension or endpoint.endswith("_" + extension):
+        if extension_endpoint_re.match(endpoint):
             if endpoint not in endpoints:
                 endpoints.append(endpoint)
     return endpoints

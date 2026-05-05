@@ -14325,12 +14325,12 @@ function pbxTenantIdForExtension(extension: any): string | null {
 
 function pjsipEndpointForExtension(extension: any): string | null {
   const candidates = [
-    extension?.pbxLink?.pbxSipUsername,
     extension?.pbxLink?.pbxDeviceName,
+    extension?.pbxLink?.pbxSipUsername,
   ];
   for (const raw of candidates) {
     const value = String(raw || "").trim().replace(/^PJSIP\//i, "");
-    const match = value.match(/^(T\d+_\d+)/);
+    const match = value.match(/^(T\d+_\d+(?:_\d+)?)/);
     if (match) return match[1];
   }
   return null;
