@@ -169,6 +169,13 @@ export function createTelephonyModule(server: http.Server) {
   const ariActions = new AriActions(ari);
   const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);
 
+  // ── Periodic extension presence refresh (every 3 minutes) ───────────────
+  // Re-sends ExtensionStateList + PJSIPShowContacts so that:
+  //  1. Extensions bootstrapped with tenantId=null (API not ready at startup)
+  //     get corrected once the PbxTenantMapCache has loaded.
+  //  2. BLF state stays consistent even if an AMI event was missed.
+  let _presenceRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
   // ── Periodic metrics refresh (every 5 s) ─────────────────────────────────
   let _metricsInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -192,10 +199,19 @@ export function createTelephonyModule(server: http.Server) {
     // Run stale ghost cleanup every 60 s so zombies are evicted even when no new WS clients connect
     callStore.startPeriodicStaleCleanup(60_000);
     _metricsInterval = setInterval(refreshMetrics, 5_000);
+    // Periodic BLF/presence refresh: re-sends ExtensionStateList + PJSIPShowContacts to the PBX
+    // every 3 minutes so extensions bootstrapped with tenantId=null (API not yet ready at startup)
+    // get corrected once the PbxTenantMapCache loads, and to keep BLF state fresh.
+    _presenceRefreshInterval = setInterval(
+      () => telephonyService.refreshExtensionPresence(),
+      3 * 60_000,
+    );
+    if (_presenceRefreshInterval.unref) _presenceRefreshInterval.unref();
   }
 
   function stop() {
     log.info("Stopping telephony module");
+    if (_presenceRefreshInterval) { clearInterval(_presenceRefreshInterval); _presenceRefreshInterval = null; }
     if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
     callStore.stopPeriodicStaleCleanup();
     healingEngine.stop();

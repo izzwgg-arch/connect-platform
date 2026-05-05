@@ -71,6 +71,15 @@ export class TelephonyService {
       // 500ms delay lets AMI finish its initial burst of FullyBooted/status events first.
       setTimeout(() => this.bootstrapActiveChannels(), 500);
       setTimeout(() => this.bootstrapExtensionPresence(), 1000);
+      // Re-run extension presence at 6s and 18s after connect.
+      // When the telephony and API containers restart together the PbxTenantMapCache
+      // HTTP request to the API may fail on the first attempt (API not ready yet).
+      // The first bootstrap at 1s would then store all extension states with
+      // tenantId=null, making BLF invisible to non-admin users.  The re-runs below
+      // fire after the map cache has had time to load, ensuring correct tenantId
+      // resolution even when the API was slow or temporarily unavailable.
+      setTimeout(() => { if (this.ami._isConnected) this.bootstrapExtensionPresence(); }, 6_000);
+      setTimeout(() => { if (this.ami._isConnected) this.bootstrapExtensionPresence(); }, 18_000);
     });
 
     this.ami.on("disconnected", (reason) => {
@@ -92,12 +101,20 @@ export class TelephonyService {
   }
 
   private bootstrapExtensionPresence(): void {
+    this.refreshExtensionPresence();
+  }
+
+  /** Publicly callable: re-sends ExtensionStateList + PJSIPShowContacts to the PBX
+   *  so the extension store is re-populated with current tenantId-resolved states.
+   *  Safe to call at any time (no-op when AMI is not connected). */
+  refreshExtensionPresence(): void {
+    if (!this.ami._isConnected) return;
     try {
       this.ami.sendAction("ExtensionStateList");
       this.ami.sendAction("PJSIPShowContacts");
-      log.info("AMI bootstrap: ExtensionStateList/PJSIPShowContacts sent — seeding BLF registration state");
+      log.info("AMI: ExtensionStateList/PJSIPShowContacts sent — refreshing BLF/presence state");
     } catch (err) {
-      log.warn({ err: (err as Error).message }, "AMI bootstrap: BLF presence bootstrap failed");
+      log.warn({ err: (err as Error).message }, "AMI: BLF presence refresh failed");
     }
   }
 
