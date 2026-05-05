@@ -189,7 +189,8 @@ export type ConnectChatRoutesDeps = {
 };
 
 function publicChatDownloadBase(): string {
-  return (process.env.PUBLIC_API_BASE_URL || process.env.PORTAL_PUBLIC_URL || "").replace(/\/+$/, "");
+  const raw = process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com/api";
+  return raw.replace(/\/+$/, "");
 }
 
 function pushPreview(body: string, fallback = "Sent an attachment"): string {
@@ -952,10 +953,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       if (atts.length > 0) {
         const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId } });
         const mmsOk = cfg.mmsEnabled && smsRow?.mmsCapable;
-        const allAudio = atts.every((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
-        const isVoiceNote = input.type === "VOICE_NOTE";
-        // Carrier MMS for audio is unreliable; always deliver voice notes / audio as SMS + signed HTTPS links.
-        if (!mmsOk || allAudio || isVoiceNote) {
+        // Only fall back before enqueue when the DID cannot send MMS at all.
+        // Audio/voice notes must reach the worker so it can convert to a
+        // carrier-friendly m4a and attempt true VoIP.ms MMS first.
+        if (!mmsOk) {
           if (!publicChatDownloadBase()) {
             return reply.status(400).send({ error: "MEDIA_LINK_BASE_UNAVAILABLE", message: "Set PUBLIC_API_BASE_URL or PORTAL_PUBLIC_URL to send secure media links by SMS." });
           }

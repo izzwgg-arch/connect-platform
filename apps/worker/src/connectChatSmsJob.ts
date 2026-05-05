@@ -2,6 +2,7 @@ import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { VoipMsSmsProvider } from "@connect/integrations";
 import { buildChatSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
+import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
@@ -66,7 +67,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     process.env.PUBLIC_API_BASE_URL ||
     process.env.API_PUBLIC_URL ||
     process.env.PORTAL_PUBLIC_URL ||
-    "http://127.0.0.1:3001"
+    "https://app.connectcomunications.com/api"
   ).replace(/\/+$/, "");
 
   const testMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
@@ -83,8 +84,38 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
   try {
     let r: { providerMessageId?: string };
     if (hasMedia && !linkFallback) {
-      const mediaUrls = msg.attachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 3600));
+      console.info(JSON.stringify({ event: "mms_send_requested", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: msg.attachments.length }));
+      const audioAttachments = msg.attachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
+      const nonAudioAttachments = msg.attachments.filter((a) => !String(a.mimeType || "").toLowerCase().startsWith("audio/"));
+      let mmsAttachments = nonAudioAttachments.map((a) => ({ storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }));
+      let forceFallbackErr: any = null;
+      if (audioAttachments.length) {
+        try {
+          const converted = await convertAudioAttachmentsForMms(
+            audioAttachments.map((a) => ({
+              id: a.id,
+              tenantId: a.tenantId,
+              messageId: a.messageId,
+              storageKey: a.storageKey,
+              mimeType: a.mimeType,
+              fileName: a.fileName,
+              sizeBytes: a.sizeBytes,
+            })),
+            msg.threadId,
+          );
+          for (const item of converted) {
+            console.info(JSON.stringify({ event: "voipms_audio_converted", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, fromAttachmentId: item.convertedFromAttachmentId, toBytes: item.sizeBytes, toMime: item.mimeType }));
+          }
+          mmsAttachments = [...mmsAttachments, ...converted];
+        } catch (convertErr: any) {
+          console.warn(JSON.stringify({ event: "voipms_audio_convert_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, err: String(convertErr?.message || convertErr).slice(0, 300) }));
+          forceFallbackErr = convertErr;
+        }
+      }
+      const mediaUrls = mmsAttachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 3600));
+      console.info(JSON.stringify({ event: "voipms_payload_prepared", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: mediaUrls.length, mediaUrls: mediaUrls.map((u) => u.replace(/([?&]sig=)[^&]+/i, "$1[redacted]")) }));
       try {
+        if (forceFallbackErr) throw forceFallbackErr;
         r = await provider.sendMms({
           tenantId: data.tenantId,
           to: ext,
@@ -92,7 +123,9 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
           body: msg.body || undefined,
           mediaUrls,
         });
+        console.info(JSON.stringify({ event: "voipms_response", ok: true, tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, providerMessageId: r.providerMessageId ?? null }));
       } catch (mmsErr: any) {
+        console.warn(JSON.stringify({ event: "mms_send_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, err: String(mmsErr?.message || mmsErr).slice(0, 300), falling_back: true }));
         // VoIP.ms often rejects MMS when carrier limits apply or media URLs are not reachable from their servers.
         // Fall back to one or more SMS segments with signed HTTPS links so delivery still succeeds.
         const links = msg.attachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 86_400));
@@ -115,6 +148,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
           from: tenantDid,
           body: fallbackBody,
         });
+        console.info(JSON.stringify({ event: "chat_link_fallback_sent", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: links.length, providerMessageId: r.providerMessageId ?? null }));
       }
     } else {
       r = await provider.sendMessage({

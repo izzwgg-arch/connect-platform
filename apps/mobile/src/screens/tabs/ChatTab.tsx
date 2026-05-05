@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Dimensions,
   Easing,
   FlatList,
   Image,
@@ -66,6 +67,8 @@ import { setActiveNotificationChatThread } from '../../notifications/notificatio
 type ChatFilter = 'all' | 'unread' | 'sms' | 'dms';
 type ComposerMode = 'dm' | 'sms' | null;
 type MediaPreview = { type: 'image' | 'video' | 'file' | 'location'; url?: string | null; title: string; subtitle?: string; location?: ChatLocation };
+
+const CHAT_MEDIA_MAX_WIDTH = Math.round(Dimensions.get('window').width * 0.7);
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EMOJIS = ['😀', '😄', '😂', '😊', '😍', '😘', '😎', '🤔', '😢', '😡', '👍', '👏', '🙏', '🔥', '🎉', '❤️', '💙', '✅', '⭐', '🚀', '📞', '💬', '📎', '📍'];
@@ -153,6 +156,42 @@ function attachmentShowsImageThumb(attachment: ChatAttachment, messageType?: Cha
   if (m.startsWith('image/')) return true;
   if (messageType === 'IMAGE') return true;
   return /\.(jpe?g|png|gif|webp|heic)$/i.test(attachment.fileName || '');
+}
+
+function isImageAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+  const kind = String(attachment.mediaKind || '').toLowerCase();
+  const mime = String(attachment.mimeType || '').toLowerCase();
+  const name = String(attachment.fileName || '').toLowerCase();
+  return kind === 'image' || mime.startsWith('image/') || messageType === 'IMAGE' || /\.(jpe?g|png|gif|webp|heic)$/i.test(name);
+}
+
+function isAudioAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+  const kind = String(attachment.mediaKind || '').toLowerCase();
+  const mime = String(attachment.mimeType || '').toLowerCase();
+  const name = String(attachment.fileName || '').toLowerCase();
+  return kind === 'audio' || mime.startsWith('audio/') || messageType === 'AUDIO' || messageType === 'VOICE_NOTE' || /\.(m4a|aac|mp3|wav|ogg|webm)$/i.test(name);
+}
+
+function formatVoiceDuration(ms?: number | null): string {
+  const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+function bodyWithoutMediaLinks(body: string, hasRenderedMedia: boolean): string {
+  if (!hasRenderedMedia) return body;
+  return String(body || '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      const s = line.trim();
+      if (!s) return false;
+      if (/^Media:\s*https?:\/\//i.test(s)) return false;
+      if (/^https?:\/\/[^ ]+\/chat\/attachments\/download\//i.test(s)) return false;
+      return true;
+    })
+    .join('\n')
+    .trim();
 }
 
 function guessMimeFromUri(uri: string, fallback = 'application/octet-stream'): string {
@@ -434,6 +473,10 @@ export function ChatTab() {
         mimeType: a.mimeType,
         sizeBytes: a.sizeBytes,
         downloadUrl: a.localUri || null,
+        mediaKind: a.mediaKind ?? null,
+        durationMs: a.durationMs ?? null,
+        width: a.width ?? null,
+        height: a.height ?? null,
       })),
       location: options?.location || null,
     };
@@ -996,6 +1039,20 @@ const MessageBubble = memo(function MessageBubble({
     ? [styles.bubble, styles.bubbleMine, { backgroundColor: highlighted ? colors.warningMuted : colors.primary, borderColor: 'transparent' }]
     : [styles.bubble, styles.bubbleTheirs, { backgroundColor: highlighted ? colors.warningMuted : colors.surfaceElevated, borderColor: colors.borderSubtle }];
   const textColor = message.mine ? '#fff' : colors.text;
+  const attachments = message.attachments || [];
+  const imageAttachments = attachments.filter((attachment) => isImageAttachment(attachment, message.type) && attachment.downloadUrl);
+  const audioAttachments = attachments.filter((attachment) => isAudioAttachment(attachment, message.type) && attachment.downloadUrl);
+  const otherAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment) && !audioAttachments.includes(attachment));
+  const mmsImages = (message.mmsUrls || []).map((url, index) => ({
+    id: `${message.id}:mms:${index}`,
+    fileName: 'MMS media',
+    mimeType: 'image/jpeg',
+    sizeBytes: 0,
+    downloadUrl: url,
+    mediaKind: 'image',
+  } satisfies ChatAttachment));
+  const renderedImages = [...imageAttachments, ...mmsImages];
+  const visibleBody = bodyWithoutMediaLinks(message.body || '', renderedImages.length > 0 || audioAttachments.length > 0 || otherAttachments.length > 0);
   return (
     <Animated.View style={[styles.messageRow, message.mine ? styles.messageRowMine : styles.messageRowTheirs, grouped ? styles.messageGrouped : null, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
       {!message.mine && !grouped ? <Avatar name={message.senderName || 'Connect'} size="sm" /> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
@@ -1014,7 +1071,7 @@ const MessageBubble = memo(function MessageBubble({
             <Text style={[styles.messageText, { color: textColor, fontStyle: 'italic', opacity: 0.75 }]}>This message was deleted</Text>
           ) : (
             <>
-              {message.body ? <Text style={[styles.messageText, { color: textColor }]}>{message.body}</Text> : null}
+              {visibleBody ? <Text style={[styles.messageText, { color: textColor }]}>{visibleBody}</Text> : null}
               {message.location ? (
                 <TouchableOpacity
                   style={[styles.locationCard, { backgroundColor: message.mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]}
@@ -1024,7 +1081,20 @@ const MessageBubble = memo(function MessageBubble({
                   <Text style={[styles.locationText, { color: textColor }]}>Shared location</Text>
                 </TouchableOpacity>
               ) : null}
-              {message.attachments?.map((attachment) => (
+              {renderedImages.length ? (
+                <ImageGrid
+                  attachments={renderedImages}
+                  mine={message.mine}
+                  failed={message.clientStatus === 'failed' || String(message.deliveryStatus || '').toLowerCase() === 'failed'}
+                  sending={message.clientStatus === 'sending' || String(message.deliveryStatus || '').toLowerCase() === 'queued'}
+                  onOpen={(attachment) => onOpenMedia({ type: 'image', url: attachment.downloadUrl, title: attachment.fileName || 'Image', subtitle: attachment.mimeType })}
+                  onRetry={onRetry}
+                />
+              ) : null}
+              {audioAttachments.map((attachment) => (
+                <VoiceNoteBubble key={attachment.id} attachment={attachment} mine={message.mine} failed={message.clientStatus === 'failed'} onRetry={onRetry} />
+              ))}
+              {otherAttachments.map((attachment) => (
                 <AttachmentChip
                   key={attachment.id}
                   attachment={attachment}
@@ -1038,15 +1108,6 @@ const MessageBubble = memo(function MessageBubble({
                       subtitle: attachment.mimeType,
                     })
                   }
-                />
-              ))}
-              {message.mmsUrls?.map((url) => (
-                <AttachmentChip
-                  key={url}
-                  attachment={{ id: url, fileName: 'MMS media', mimeType: 'image/*', sizeBytes: 0, downloadUrl: url }}
-                  messageType="IMAGE"
-                  mine={message.mine}
-                  onPress={() => onOpenMedia({ type: 'image', url, title: 'MMS media' })}
                 />
               ))}
             </>
@@ -1075,6 +1136,117 @@ const MessageBubble = memo(function MessageBubble({
     </Animated.View>
   );
 });
+
+function ImageGrid({
+  attachments,
+  mine,
+  failed,
+  sending,
+  onOpen,
+  onRetry,
+}: {
+  attachments: ChatAttachment[];
+  mine: boolean;
+  failed: boolean;
+  sending: boolean;
+  onOpen: (attachment: ChatAttachment) => void;
+  onRetry: () => void;
+}) {
+  const shown = attachments.slice(0, 4);
+  if (!shown.length) return null;
+  return (
+    <View style={[styles.imageGrid, shown.length === 1 ? styles.imageGridSingle : null]}>
+      {shown.map((attachment, index) => {
+        const aspect = attachment.width && attachment.height ? Math.max(0.56, Math.min(1.8, attachment.width / attachment.height)) : 4 / 3;
+        const isLargeThree = shown.length === 3 && index === 0;
+        return (
+          <TouchableOpacity
+            key={attachment.id}
+            activeOpacity={0.88}
+            onPress={() => onOpen(attachment)}
+            style={[
+              styles.imageCell,
+              shown.length === 1 ? { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: aspect } : null,
+              shown.length === 2 ? styles.imageCellHalf : null,
+              shown.length === 3 ? (isLargeThree ? styles.imageCellThreeLarge : styles.imageCellThreeSmall) : null,
+              shown.length >= 4 ? styles.imageCellHalf : null,
+            ]}
+          >
+            <Image source={{ uri: attachment.downloadUrl || undefined }} style={styles.imageBubble} resizeMode="cover" />
+            {attachments.length > 4 && index === 3 ? (
+              <View style={styles.imageOverflow}>
+                <Text style={styles.imageOverflowText}>+{attachments.length - 4}</Text>
+              </View>
+            ) : null}
+            {sending || failed ? (
+              <TouchableOpacity activeOpacity={failed ? 0.8 : 1} onPress={failed ? onRetry : undefined} style={styles.imageStateOverlay}>
+                {sending ? <ActivityIndicator color="#fff" /> : <Ionicons name="alert-circle" size={22} color="#fff" />}
+                <Text style={styles.imageStateText}>{sending ? 'Sending' : 'Retry'}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: ChatAttachment; mine: boolean; failed: boolean; onRetry: () => void }) {
+  const { colors } = useTheme();
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [durationMs, setDurationMs] = useState<number | null>(attachment.durationMs ?? null);
+
+  useEffect(() => () => {
+    soundRef.current?.unloadAsync().catch(() => undefined);
+    soundRef.current = null;
+  }, []);
+
+  const toggle = useCallback(async () => {
+    if (!attachment.downloadUrl) return;
+    if (!soundRef.current) {
+      const { sound } = await Audio.Sound.createAsync({ uri: attachment.downloadUrl }, { shouldPlay: false });
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        setPlaying(Boolean(status.isPlaying));
+        const dur = status.durationMillis || durationMs || 0;
+        if (dur > 0) {
+          setDurationMs(dur);
+          setProgress(Math.max(0, Math.min(1, (status.positionMillis || 0) / dur)));
+        }
+        if (status.didJustFinish) {
+          setPlaying(false);
+          setProgress(0);
+          sound.setPositionAsync(0).catch(() => undefined);
+        }
+      });
+    }
+    const status = await soundRef.current.getStatusAsync();
+    if (status.isLoaded && status.isPlaying) await soundRef.current.pauseAsync();
+    else await soundRef.current.playAsync();
+  }, [attachment.downloadUrl, durationMs]);
+
+  return (
+    <View style={[styles.voiceBubble, { backgroundColor: mine ? 'rgba(255,255,255,0.15)' : colors.bgSecondary }]}>
+      <TouchableOpacity onPress={toggle} style={[styles.voicePlay, { backgroundColor: mine ? 'rgba(255,255,255,0.22)' : colors.primaryMuted }]}>
+        <Ionicons name={playing ? 'pause' : 'play'} size={18} color={mine ? '#fff' : colors.primary} />
+      </TouchableOpacity>
+      <View style={styles.voiceTrackWrap}>
+        <View style={[styles.voiceTrack, { backgroundColor: mine ? 'rgba(255,255,255,0.24)' : colors.border }]}>
+          <View style={[styles.voiceTrackFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: mine ? '#fff' : colors.primary }]} />
+        </View>
+        <Text style={[styles.voiceDuration, { color: mine ? 'rgba(255,255,255,0.78)' : colors.textTertiary }]}>{formatVoiceDuration(durationMs)}</Text>
+      </View>
+      {failed ? (
+        <TouchableOpacity onPress={onRetry} style={styles.voiceRetry}>
+          <Ionicons name="alert-circle" size={17} color={colors.danger} />
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
 
 function AttachmentChip({
   attachment,
@@ -1668,6 +1840,24 @@ const styles = StyleSheet.create({
   replyInlineText: { flex: 1, fontSize: 11.5, fontWeight: '700' },
   locationCard: { marginTop: 7, borderRadius: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   locationText: { fontSize: 13, fontWeight: '800' },
+  imageGrid: { marginTop: 7, width: CHAT_MEDIA_MAX_WIDTH, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
+  imageGridSingle: { width: CHAT_MEDIA_MAX_WIDTH },
+  imageCell: { overflow: 'hidden', borderRadius: 18, backgroundColor: 'rgba(15,23,42,0.18)' },
+  imageCellHalf: { width: (CHAT_MEDIA_MAX_WIDTH - 4) / 2, aspectRatio: 1 },
+  imageCellThreeLarge: { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: 1.9 },
+  imageCellThreeSmall: { width: (CHAT_MEDIA_MAX_WIDTH - 4) / 2, aspectRatio: 1 },
+  imageBubble: { width: '100%', height: '100%' },
+  imageOverflow: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,6,23,0.52)' },
+  imageOverflowText: { color: '#fff', fontSize: 24, fontWeight: '900' },
+  imageStateOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(2,6,23,0.45)' },
+  imageStateText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  voiceBubble: { marginTop: 7, width: Math.min(CHAT_MEDIA_MAX_WIDTH, 260), borderRadius: 18, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  voicePlay: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  voiceTrackWrap: { flex: 1, minWidth: 0, gap: 5 },
+  voiceTrack: { height: 6, borderRadius: 999, overflow: 'hidden' },
+  voiceTrackFill: { height: '100%', borderRadius: 999 },
+  voiceDuration: { fontSize: 11, fontWeight: '800' },
+  voiceRetry: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   attachmentChip: { marginTop: 7, borderRadius: 14, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   attachmentThumb: { width: 96, height: 96, borderRadius: 14 },
   attachmentName: { fontSize: 12.5, fontWeight: '900' },
