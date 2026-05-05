@@ -6,6 +6,14 @@ import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
+function bodyWithoutMediaLinks(body: string | null | undefined): string {
+  return String(body || "")
+    .split(/\r?\n/)
+    .filter((line) => !/^Media:\s*https?:\/\//i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {
   const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
   if (!row?.credentialsEncrypted) return null;
@@ -129,7 +137,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
         // VoIP.ms often rejects MMS when carrier limits apply or media URLs are not reachable from their servers.
         // Fall back to one or more SMS segments with signed HTTPS links so delivery still succeeds.
         const links = msg.attachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(publicBase, a.id, 86_400, a.fileName));
-        const fallbackBody = [String(msg.body || "").trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+        const fallbackBody = [bodyWithoutMediaLinks(msg.body), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
         await db.connectChatMessage.update({
           where: { id: msg.id },
           data: {

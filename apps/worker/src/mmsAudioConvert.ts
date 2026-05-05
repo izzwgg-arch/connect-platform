@@ -5,8 +5,8 @@
  * downstream carrier MMS gateways (T-Mobile, AT&T, Verizon, Bell, Rogers …)
  * have wildly inconsistent codec support. The combination that actually
  * delivers reliably across the major NA carriers is:
- *   - container : `.m4a` (ISO/IEC 14496-14 MP4 audio)
- *   - codec     : AAC LC, mono, 16 kHz sample rate
+ *   - container : `.mp3`
+ *   - codec     : MP3, mono, 16 kHz sample rate
  *   - bitrate   : 24 kbps (≈ 3 KB/s) → comfortably under the per-MMS slot
  *
  * Total file budget: 590 KB hard cap. Most carriers reject above ~600 KB,
@@ -99,7 +99,7 @@ async function convertSingleAttachment(
   // First attempt: 24 kbps. Plenty of headroom for ~3 minutes of speech.
   let convertedBuffer: Buffer;
   try {
-    convertedBuffer = await ffmpegToMmsM4a(sourceBuffer, 24);
+    convertedBuffer = await ffmpegToMmsMp3(sourceBuffer, 24);
   } catch (err: any) {
     throw new Error(`mms_audio_ffmpeg_failed:${err?.message || err}`);
   }
@@ -109,7 +109,7 @@ async function convertSingleAttachment(
   // as an MMS — we surface a typed error so the worker can fall back.
   if (convertedBuffer.length > MMS_AUDIO_BUDGET_BYTES) {
     try {
-      convertedBuffer = await ffmpegToMmsM4a(sourceBuffer, 16);
+      convertedBuffer = await ffmpegToMmsMp3(sourceBuffer, 16);
     } catch (err: any) {
       throw new Error(`mms_audio_ffmpeg_retry_failed:${err?.message || err}`);
     }
@@ -125,9 +125,9 @@ async function convertSingleAttachment(
   const written = await writeChatAttachmentFile({
     tenantKey: att.tenantId,
     threadId,
-    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.m4a`,
+    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.mp3`,
     buffer: convertedBuffer,
-    mimeType: "audio/mp4",
+    mimeType: "audio/mpeg",
     maxBytes: MMS_AUDIO_BUDGET_BYTES + 64 * 1024,
   });
 
@@ -162,10 +162,10 @@ async function convertSingleAttachment(
   };
 }
 
-async function ffmpegToMmsM4a(input: Buffer, bitrateKbps: number): Promise<Buffer> {
+async function ffmpegToMmsMp3(input: Buffer, bitrateKbps: number): Promise<Buffer> {
   const id = crypto.randomBytes(6).toString("hex");
   const inPath = path.join(os.tmpdir(), `cc-mms-in-${id}`);
-  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.m4a`);
+  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.mp3`);
   await fs.promises.writeFile(inPath, input);
   try {
     await execFileAsync(
@@ -180,12 +180,10 @@ async function ffmpegToMmsM4a(input: Buffer, bitrateKbps: number): Promise<Buffe
         "1",
         "-ar",
         "16000",
-        "-c:a",
-        "aac",
+        "-codec:a",
+        "libmp3lame",
         "-b:a",
         `${bitrateKbps}k`,
-        "-movflags",
-        "+faststart",
         "-vn",
         outPath,
       ],
