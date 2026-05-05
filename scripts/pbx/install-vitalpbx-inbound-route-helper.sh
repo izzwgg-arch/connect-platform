@@ -46,11 +46,12 @@ if [[ -z "${REQUESTED_VM_RECORD_APP}" && "${VM_RECORD_APP}" == "VoiceMailMain" ]
   # deliberately supplied CONNECT_PBX_VM_RECORD_APP for this run.
   VM_RECORD_APP="Goto"
 fi
-if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" && "${VM_RECORD_CHANNEL_TEMPLATE}" == "PJSIP/{extension}" ]]; then
-  # Upgrade the original direct-endpoint default to tenant dialplan routing.
-  # Direct PJSIP can report success without ringing if the real endpoint is
-  # tenant/device-prefixed or if multiple devices need to ring.
-  VM_RECORD_CHANNEL_TEMPLATE='Local/{extension}@T{tenantId}_cos-all'
+if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" && ( "${VM_RECORD_CHANNEL_TEMPLATE}" == "PJSIP/{extension}" || "${VM_RECORD_CHANNEL_TEMPLATE}" == "Local/{extension}@T{tenantId}_cos-all" ) ]]; then
+  # Upgrade older defaults to direct tenant-prefixed PJSIP endpoint dialing.
+  # The Local/...@T<n>_cos-all path goes through the normal user dialplan and
+  # can end up in the user's own voicemail; call-to-record must only continue
+  # when a real registered endpoint answers.
+  VM_RECORD_CHANNEL_TEMPLATE='PJSIP/T{tenantId}_{extension}'
 fi
 MYSQL_ROOT_ARGS="${MYSQL_ROOT_ARGS:-}"
 TEST_DID="${TEST_DID:-}"
@@ -629,10 +630,9 @@ def vm_record_call(body):
         .replace("{tenantId_cos-all}", tenant_id + "_cos-all")
     )
     if "{" in channel or "}" in channel:
-        # Fail open to the known-safe VitalPBX tenant dialplan route rather
-        # than returning success without ringing or surfacing a template error
-        # for a manually edited env value.
-        channel = "Local/" + extension + "@T" + tenant_id + "_cos-all"
+        # Fail open to the tenant-prefixed endpoint route rather than the
+        # normal tenant dialplan, which can fall through to the user's voicemail.
+        channel = "PJSIP/T" + tenant_id + "_" + extension
     recording_exten = tenant_id + "_" + extension + "_" + target.stem
     if CFG.vm_record_app.lower() == "goto":
         app_data = "connect-vm-greeting-record," + recording_exten + ",1"
