@@ -14,6 +14,15 @@ function bodyWithoutMediaLinks(body: string | null | undefined): string {
     .trim();
 }
 
+function providerMmsBody(body: string | null | undefined, input: { audioCount: number; mediaCount: number }): string | undefined {
+  const cleanBody = bodyWithoutMediaLinks(body);
+  if (cleanBody) return cleanBody;
+  // Some MMS carrier paths silently drop audio-only MMS with an empty text part,
+  // even after VoIP.ms accepts and stores the media.
+  if (input.audioCount > 0 && input.audioCount === input.mediaCount) return "Voice note";
+  return undefined;
+}
+
 async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {
   const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
   if (!row?.credentialsEncrypted) return null;
@@ -121,14 +130,26 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
         }
       }
       const mediaUrls = mmsAttachments.map((a) => buildChatDbSignedDownloadUrl(publicBase, a.id, a.storageKey, a.sizeBytes, 3600));
-      console.info(JSON.stringify({ event: "voipms_payload_prepared", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: mediaUrls.length, mediaUrls: mediaUrls.map((u) => u.replace(/([?&]sig=)[^&]+/i, "$1[redacted]")) }));
+      const providerBody = providerMmsBody(msg.body, {
+        audioCount: mmsAttachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/")).length,
+        mediaCount: mmsAttachments.length,
+      });
+      console.info(JSON.stringify({
+        event: "voipms_payload_prepared",
+        tenantId: data.tenantId,
+        threadId: msg.threadId,
+        messageId: msg.id,
+        mediaCount: mediaUrls.length,
+        bodyLength: providerBody?.length ?? 0,
+        mediaUrls: mediaUrls.map((u) => u.replace(/([?&]sig=)[^&]+/i, "$1[redacted]")),
+      }));
       try {
         if (forceFallbackErr) throw forceFallbackErr;
         r = await provider.sendMms({
           tenantId: data.tenantId,
           to: ext,
           from: tenantDid,
-          body: msg.body || undefined,
+          body: providerBody,
           mediaUrls,
         });
         console.info(JSON.stringify({ event: "voipms_response", ok: true, tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, providerMessageId: r.providerMessageId ?? null }));
