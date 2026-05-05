@@ -38,7 +38,14 @@ CONNECT_DESTINATION_ID="${REQUESTED_CONNECT_DESTINATION_ID:-${CONNECT_PBX_CONNEC
 HELPER_BIND="${REQUESTED_HELPER_BIND:-${CONNECT_PBX_HELPER_BIND:-127.0.0.1}}"
 HELPER_PORT="${REQUESTED_HELPER_PORT:-${CONNECT_PBX_HELPER_PORT:-8757}}"
 VM_RECORD_CHANNEL_TEMPLATE="${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE:-${CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE:-Local/{extension}@T{tenantId}_cos-all}}"
-VM_RECORD_APP="${REQUESTED_VM_RECORD_APP:-${CONNECT_PBX_VM_RECORD_APP:-VoiceMailMain}}"
+VM_RECORD_APP="${REQUESTED_VM_RECORD_APP:-${CONNECT_PBX_VM_RECORD_APP:-Goto}}"
+if [[ -z "${REQUESTED_VM_RECORD_APP}" && "${VM_RECORD_APP}" == "VoiceMailMain" ]]; then
+  # Older helper installs used VoiceMailMain after answer. On VitalPBX this can
+  # ring the user but leave them with no guided recording audio, so upgrade the
+  # default to Connect's explicit recording dialplan unless the operator
+  # deliberately supplied CONNECT_PBX_VM_RECORD_APP for this run.
+  VM_RECORD_APP="Goto"
+fi
 if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" && "${VM_RECORD_CHANNEL_TEMPLATE}" == "PJSIP/{extension}" ]]; then
   # Upgrade the original direct-endpoint default to tenant dialplan routing.
   # Direct PJSIP can report success without ringing if the real endpoint is
@@ -610,6 +617,8 @@ def vm_record_call(body):
     job_id = str(uuid.uuid4())
     target = safe_vm_path(tenant_id, extension, greeting_type)
     backup = backup_vm_greeting(target, remove_original=False)
+    target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    apply_vm_dir_owner(target.parent)
     # Use explicit token replacement instead of str.format so Asterisk context
     # suffixes like `T{tenantId}_cos-all` cannot be misparsed as a single
     # `{tenantId_cos-all}` field if an operator edits the env by hand.
@@ -624,8 +633,12 @@ def vm_record_call(body):
         # than returning success without ringing or surfacing a template error
         # for a manually edited env value.
         channel = "Local/" + extension + "@T" + tenant_id + "_cos-all"
-    mailbox = extension + "@" + tenant_id
-    cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, mailbox)]
+    recording_exten = tenant_id + "_" + extension + "_" + target.stem
+    if CFG.vm_record_app.lower() == "goto":
+        app_data = "connect-vm-greeting-record," + recording_exten + ",1"
+    else:
+        app_data = extension + "@" + tenant_id
+    cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, app_data)]
     job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
@@ -761,6 +774,31 @@ EOF
 
 chmod 0600 /etc/connect-pbx-helper.env
 chown root:root /etc/connect-pbx-helper.env
+
+cat >/etc/asterisk/extensions__95_connect_vm_greeting.conf <<'EOF'
+; Installed by Connect PBX helper. This context is used only after Connect
+; originates a call to a user's extension for voicemail greeting recording.
+[connect-vm-greeting-record]
+exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
+ same => n,GotoIf($[${REGEX("^[0-9]+_[0-9]+_(unavail|busy|temp|greet)$" ${EXTEN})}]?valid:invalid)
+ same => n(valid),Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Answer()
+ same => n,Playback(vm-rec-unv)
+ same => n,Playback(beep)
+ same => n,Record(${CONNECT_VM_PATH},0,180,k)
+ same => n,System(chown asterisk:asterisk ${CONNECT_VM_PATH})
+ same => n,System(chmod 0644 ${CONNECT_VM_PATH})
+ same => n,Playback(auth-thankyou)
+ same => n,Hangup()
+ same => n(invalid),NoOp(Rejecting invalid Connect voicemail greeting record request ${EXTEN})
+ same => n,Hangup()
+EOF
+chown root:asterisk /etc/asterisk/extensions__95_connect_vm_greeting.conf
+chmod 0644 /etc/asterisk/extensions__95_connect_vm_greeting.conf
+asterisk -rx "dialplan reload" || true
 
 echo "Creating narrow MySQL user connect_route_helper..."
 mysql ${MYSQL_ROOT_ARGS} <<SQL
