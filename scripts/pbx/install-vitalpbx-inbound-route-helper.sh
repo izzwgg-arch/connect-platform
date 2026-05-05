@@ -93,6 +93,14 @@ install -d -o asterisk -g asterisk -m 0775 /var/lib/asterisk/sounds/custom 2>/de
   install -d -m 0775 /var/lib/asterisk/sounds/custom
 install -d -o asterisk -g asterisk -m 0775 /var/spool/asterisk/voicemail 2>/dev/null || \
   install -d -m 0775 /var/spool/asterisk/voicemail
+if id asterisk >/dev/null 2>&1; then
+  # Asterisk must be able to read/write its own voicemail spool. Some restored
+  # mailboxes can contain root-owned greeting files; repair those at install
+  # time because the runtime helper intentionally does not run as root.
+  chown -R asterisk:asterisk /var/spool/asterisk/voicemail
+  find /var/spool/asterisk/voicemail -type d -exec chmod 0750 {} +
+  find /var/spool/asterisk/voicemail -type f -exec chmod 0644 {} +
+fi
 
 HELPER_SECRET="${CONNECT_PBX_HELPER_SECRET:-}"
 if [[ -z "${HELPER_SECRET}" ]]; then
