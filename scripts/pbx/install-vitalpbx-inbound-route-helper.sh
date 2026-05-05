@@ -467,6 +467,7 @@ def apply_vm_owner(path_obj):
 def backup_vm_greeting(target, remove_original=True):
     if not target.exists():
         return None
+    apply_vm_owner(target)
     stamp = dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     backup = target.with_name(target.name + ".bak-" + stamp)
     seq = 1
@@ -480,6 +481,19 @@ def backup_vm_greeting(target, remove_original=True):
     apply_vm_owner(backup)
     return backup
 
+def apply_vm_dir_owner(path_obj):
+    try:
+        os.chmod(str(path_obj), 0o750)
+    except OSError:
+        pass
+    if CFG.voicemail_owner_user:
+        try:
+            uid = pwd.getpwnam(CFG.voicemail_owner_user).pw_uid
+            gid = grp.getgrnam(CFG.voicemail_owner_group).gr_gid if CFG.voicemail_owner_group else -1
+            os.chown(str(path_obj), uid, gid)
+        except (KeyError, PermissionError, OSError):
+            pass
+
 def voicemail_mailbox_dir(tenant_id, extension):
     tenant = require_num("tenant_id", tenant_id)
     ext = require_ext(extension)
@@ -487,9 +501,11 @@ def voicemail_mailbox_dir(tenant_id, extension):
     candidates = [root / tenant / ext, root / ("T" + tenant) / ext, root / "default" / ext]
     for p in candidates:
         if p.is_dir():
+            apply_vm_dir_owner(p)
             return p
     target = candidates[0]
     target.mkdir(mode=0o750, parents=True, exist_ok=True)
+    apply_vm_dir_owner(target)
     return target
 
 def safe_vm_path(tenant_id, extension, greeting_type):
@@ -529,6 +545,7 @@ def vm_greeting_status(body):
     include_bytes = bool(body.get("includeBytes", False))
     if not target.is_file():
         return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "sizeBytes": 0, "sha256": None, "updatedAt": None}
+    apply_vm_owner(target)
     data = target.read_bytes()
     stat = target.stat()
     out = {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": True, "pbxPath": str(target), "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "updatedAt": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(timespec="seconds")}
