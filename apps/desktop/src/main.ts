@@ -24,6 +24,7 @@ let phoneEngineWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
+let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
 
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
@@ -69,6 +70,10 @@ function loadPortal(win: BrowserWindow, route = "/"): void {
   const url = new URL(route, portalUrl);
   url.searchParams.set("desktop", "1");
   win.loadURL(url.toString());
+  win.webContents.once("did-finish-load", () => {
+    if (!latestPhoneStateEnvelope || win.isDestroyed()) return;
+    win.webContents.send("phone:engine-event", latestPhoneStateEnvelope);
+  });
 }
 
 function webPreferences(windowKind: string) {
@@ -289,6 +294,7 @@ function registerIpc(): void {
   });
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
+    if (envelope.type === "state") latestPhoneStateEnvelope = envelope;
     sendPhoneEventToRenderers(envelope);
     if (envelope.type === "state") {
       const state = envelope.payload as { callState?: string; ringingSessionIds?: unknown[]; remoteParty?: string | null };

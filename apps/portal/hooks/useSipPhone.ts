@@ -2089,6 +2089,13 @@ function LocalSipPhoneProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined" || window.connectDesktop?.windowKind !== "phone-engine") return;
     return window.connectDesktop.phone.onCommand(({ command, args }) => {
+      if (command === "requestStateSnapshot") {
+        window.connectDesktop?.phone.sendFromEngine({
+          type: "state",
+          payload: localStateSnapshot(latestPhone.current),
+        });
+        return;
+      }
       if (!SIP_PHONE_ACTIONS.includes(command as (typeof SIP_PHONE_ACTIONS)[number])) return;
       const target = latestPhone.current[command as keyof SipPhoneActions];
       if (typeof target !== "function") return;
@@ -2118,11 +2125,22 @@ function DesktopSipPhoneProxyProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.connectDesktop) return;
-    return window.connectDesktop.phone.onEngineEvent((envelope) => {
+    const unsubscribe = window.connectDesktop.phone.onEngineEvent((envelope) => {
       if (envelope.type !== "state") return;
       const next = envelope.payload as typeof snapshot;
       setSnapshot((prev) => ({ ...prev, ...next }));
     });
+    void window.connectDesktop.phone.sendCommand({ command: "requestStateSnapshot", args: [] }).catch(() => undefined);
+    const attempts = { count: 0 };
+    const timer = window.setInterval(() => {
+      attempts.count += 1;
+      void window.connectDesktop?.phone.sendCommand({ command: "requestStateSnapshot", args: [] }).catch(() => undefined);
+      if (attempts.count >= 8) window.clearInterval(timer);
+    }, 1_500);
+    return () => {
+      window.clearInterval(timer);
+      unsubscribe();
+    };
   }, []);
 
   const send = useCallback((command: string, args: unknown[] = []) => {
