@@ -19,9 +19,22 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-CONNECT_DESTINATION_ID="${CONNECT_DESTINATION_ID:-607}"
-HELPER_BIND="${CONNECT_PBX_HELPER_BIND:-127.0.0.1}"
-HELPER_PORT="${CONNECT_PBX_HELPER_PORT:-8757}"
+# Re-running the installer should not silently rotate credentials or reset
+# network binding. Preserve existing env values unless explicitly overridden
+# by the operator for this invocation.
+REQUESTED_CONNECT_DESTINATION_ID="${CONNECT_DESTINATION_ID:-}"
+REQUESTED_HELPER_BIND="${CONNECT_PBX_HELPER_BIND:-}"
+REQUESTED_HELPER_PORT="${CONNECT_PBX_HELPER_PORT:-}"
+if [[ -f /etc/connect-pbx-helper.env ]]; then
+  set +u
+  # shellcheck disable=SC1091
+  source /etc/connect-pbx-helper.env || true
+  set -u
+fi
+
+CONNECT_DESTINATION_ID="${REQUESTED_CONNECT_DESTINATION_ID:-${CONNECT_PBX_CONNECT_DESTINATION_ID:-607}}"
+HELPER_BIND="${REQUESTED_HELPER_BIND:-${CONNECT_PBX_HELPER_BIND:-127.0.0.1}}"
+HELPER_PORT="${REQUESTED_HELPER_PORT:-${CONNECT_PBX_HELPER_PORT:-8757}}"
 MYSQL_ROOT_ARGS="${MYSQL_ROOT_ARGS:-}"
 TEST_DID="${TEST_DID:-}"
 TEST_TENANT_ID="${TEST_TENANT_ID:-}"
@@ -80,16 +93,6 @@ install -d -o asterisk -g asterisk -m 0775 /var/lib/asterisk/sounds/custom 2>/de
   install -d -m 0775 /var/lib/asterisk/sounds/custom
 install -d -o asterisk -g asterisk -m 0775 /var/spool/asterisk/voicemail 2>/dev/null || \
   install -d -m 0775 /var/spool/asterisk/voicemail
-
-# Re-running the installer should not silently rotate the helper secret and
-# break the Connect API. Preserve existing env values unless explicitly
-# overridden by the operator.
-if [[ -f /etc/connect-pbx-helper.env ]]; then
-  set +u
-  # shellcheck disable=SC1091
-  source /etc/connect-pbx-helper.env || true
-  set -u
-fi
 
 HELPER_SECRET="${CONNECT_PBX_HELPER_SECRET:-}"
 if [[ -z "${HELPER_SECRET}" ]]; then
