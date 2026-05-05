@@ -821,6 +821,8 @@ class Handler(BaseHTTPRequestHandler):
                 "astdbConnectVmDialOutput": (astdb.stdout + astdb.stderr)[-2000:],
                 "dialplanReloadExitCode": reload_code,
                 "dialplanReloadOutput": reload_out,
+                "extensionsCustomConf": (Path(CONNECT_VM_INCLUDE_TARGET).read_text() if Path(CONNECT_VM_INCLUDE_TARGET).is_file() else "")[-6000:],
+                "vitalpbxDialplanDirListing": "\n".join(sorted(p.name for p in Path("/etc/asterisk/vitalpbx").iterdir())) if Path("/etc/asterisk/vitalpbx").is_dir() else "",
             })
         elif path.startswith("/voicemail/greeting/record-call/"):
             if not self.auth_ok():
