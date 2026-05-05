@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Info, Maximize2, MessageSquare, Phone, Search, X } from "lucide-react";
+import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
@@ -17,6 +17,14 @@ import { loadPbxResource } from "../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../services/liveCallState";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
+
+type DesktopDialerSettings = {
+  alwaysOnTop?: boolean;
+  startOnLogin?: boolean;
+  openMinimizedToTray?: boolean;
+  openMiniOnStartup?: boolean;
+  minimizeToTray?: boolean;
+};
 
 type BlfEntry = {
   id: string;
@@ -191,6 +199,93 @@ function RingerControl({ checked, onChange }: { checked: boolean; onChange: (nex
   );
 }
 
+function SettingsRow({
+  checked,
+  label,
+  hint,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  hint: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button type="button" className="fd-settings-row" onClick={() => onChange(!checked)}>
+      <span>
+        <strong>{label}</strong>
+        <small>{hint}</small>
+      </span>
+      <i data-on={checked ? "true" : "false"} />
+    </button>
+  );
+}
+
+function DesktopSettingsMenu({
+  open,
+  phone,
+  settings,
+  onToggle,
+  onUpdate,
+}: {
+  open: boolean;
+  phone: ReturnType<typeof useSipPhone>;
+  settings: DesktopDialerSettings;
+  onToggle: () => void;
+  onUpdate: (patch: Partial<DesktopDialerSettings>) => void;
+}) {
+  return (
+    <div className="fd-settings-wrap">
+      <button
+        className="fd-icon-plain"
+        type="button"
+        onClick={onToggle}
+        title="Headset and startup settings"
+        aria-expanded={open}
+      >
+        <Settings size={16} />
+      </button>
+      {open && (
+        <div className="fd-settings-popover">
+          <div className="fd-settings-title">
+            <Headphones size={15} />
+            <span>Headset & startup</span>
+          </div>
+          <label className="fd-settings-field">
+            <span>Headset output</span>
+            <select value={phone.currentSinkId} onChange={(event) => void phone.setAudioSinkId(event.target.value)}>
+              <option value="">System default</option>
+              {phone.audioOutputDevices.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label || `Audio device ${device.deviceId.slice(0, 6)}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <SettingsRow
+            checked={settings.startOnLogin !== false}
+            label="Start with Windows"
+            hint="Open Connect when this computer starts"
+            onChange={(checked) => onUpdate({ startOnLogin: checked })}
+          />
+          <SettingsRow
+            checked={settings.openMinimizedToTray !== false}
+            label="Open minimized"
+            hint="Start quietly in the system tray"
+            onChange={(checked) => onUpdate({ openMinimizedToTray: checked })}
+          />
+          <SettingsRow
+            checked={Boolean(settings.openMiniOnStartup)}
+            label="Open mini dialer"
+            hint="Show floating dialer on startup"
+            onChange={(checked) => onUpdate({ openMiniOnStartup: checked })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DiagnosticsPanel({
   phone,
 }: {
@@ -309,6 +404,8 @@ export function FloatingDialer() {
   const [showXfer, setShowXfer] = useState(false);
   const [xferTarget, setXferTarget] = useState("");
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [desktopSettings, setDesktopSettings] = useState<DesktopDialerSettings>({});
   const [blfOpen, setBlfOpen] = useState(false);
   const [rawBlfSearch, setRawBlfSearch] = useState("");
   const [ringerOn, setRingerOn] = useState(true);
@@ -336,6 +433,12 @@ export function FloatingDialer() {
   useEffect(() => {
     setRingerOn(getWebRingerEnabled());
   }, []);
+
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    window.connectDesktop?.window?.getSettings?.().then((value) => setDesktopSettings(value)).catch(() => undefined);
+    return window.connectDesktop?.window?.onSettings?.((value) => setDesktopSettings(value));
+  }, [isDesktop]);
 
   useEffect(() => {
     if (open) {
@@ -436,6 +539,11 @@ export function FloatingDialer() {
     setWebRingerEnabled(next);
   }, []);
 
+  const updateDesktopSettings = useCallback((patch: Partial<DesktopDialerSettings>) => {
+    setDesktopSettings((prev) => ({ ...prev, ...patch }));
+    void window.connectDesktop?.window?.updateSettings?.(patch).then((value) => setDesktopSettings(value)).catch(() => undefined);
+  }, []);
+
   const popOutMiniDialer = useCallback(() => {
     const openMini = window.connectDesktop?.window?.openMini;
     if (!openMini) return;
@@ -491,9 +599,18 @@ export function FloatingDialer() {
               <div className="fd-header-actions">
                 <RingerControl checked={ringerOn} onChange={updateRinger} />
                 {isDesktop && (
-                  <button className="fd-icon-plain" type="button" onClick={popOutMiniDialer} title="Pop out mini dialer">
-                    <Maximize2 size={16} />
-                  </button>
+                  <>
+                    <DesktopSettingsMenu
+                      open={settingsOpen}
+                      phone={phone}
+                      settings={desktopSettings}
+                      onToggle={() => setSettingsOpen((value) => !value)}
+                      onUpdate={updateDesktopSettings}
+                    />
+                    <button className="fd-icon-plain" type="button" onClick={popOutMiniDialer} title="Pop out mini dialer">
+                      <Maximize2 size={16} />
+                    </button>
+                  </>
                 )}
                 <button className="fd-chip-btn" type="button" onClick={() => setBlfOpen((value) => !value)} data-active={blfOpen ? "true" : "false"}>
                   BLF
@@ -693,11 +810,24 @@ const DIALER_CSS = `
 .fd-blf-led[data-presence="ringing"] { animation: fdLedBlink .75s ease-in-out infinite; }
 @keyframes fdLedBlink { 0%,100% { opacity: .35; box-shadow: 0 0 3px rgba(239,68,68,.3); } 50% { opacity: 1; box-shadow: 0 0 14px rgba(239,68,68,.95); } }
 .fd-header-actions { display: flex; align-items: center; gap: 5px; }
+.fd-settings-wrap { position: relative; }
 .fd-ringer-control { display: inline-flex; align-items: center; gap: 7px; height: 27px; padding: 0 8px; border: 1px solid var(--fd-border); border-radius: 999px; background: var(--fd-card-2); color: var(--fd-muted); font-size: 10px; font-weight: 900; letter-spacing: .02em; }
 .fd-chip-btn, .fd-icon-plain { border: 1px solid var(--fd-border); background: var(--fd-card-2); color: var(--fd-text); cursor: pointer; border-radius: 999px; height: 27px; }
 .fd-chip-btn { padding: 0 9px; font-weight: 800; font-size: 11px; }
 .fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
 .fd-icon-plain { width: 27px; display: inline-flex; align-items: center; justify-content: center; }
+.fd-settings-popover { position: absolute; top: 34px; right: -36px; z-index: 40; width: min(300px, calc(100vw - 28px)); padding: 12px; border-radius: 22px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(15,23,42,.98), rgba(7,17,31,.96)); border: 1px solid rgba(125,211,252,.18); box-shadow: 0 24px 70px rgba(0,0,0,.42); backdrop-filter: blur(22px); }
+.fd-settings-title { display: flex; align-items: center; gap: 8px; color: #f8fafc; font-size: 12px; font-weight: 900; margin-bottom: 10px; }
+.fd-settings-field { display: grid; gap: 6px; margin-bottom: 9px; color: #94a3b8; font-size: 11px; font-weight: 850; }
+.fd-settings-field select { width: 100%; min-width: 0; border: 1px solid rgba(148,163,184,.16); border-radius: 14px; padding: 9px 10px; color: #f8fafc; background: rgba(15,23,42,.82); outline: none; }
+.fd-settings-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border: 0; border-top: 1px solid rgba(148,163,184,.10); background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.fd-settings-row span { display: grid; gap: 2px; min-width: 0; }
+.fd-settings-row strong { color: #e5eefb; font-size: 12px; }
+.fd-settings-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
+.fd-settings-row i { position: relative; flex: 0 0 auto; width: 38px; height: 21px; border-radius: 999px; background: rgba(100,116,139,.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.fd-settings-row i:after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 999px; background: white; transition: transform .16s ease, background .16s ease; }
+.fd-settings-row i[data-on="true"] { background: linear-gradient(135deg, #22c55e, #0ea5e9); }
+.fd-settings-row i[data-on="true"]:after { transform: translateX(17px); }
 .fd-body, .fd-active, .fd-call-state { padding: 11px; display: flex; flex-direction: column; gap: 9px; }
 .fd-outbound-route { display: grid; gap: 6px; padding: 9px 10px; border-radius: 15px; background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.18); }
 .fd-outbound-route label { color: var(--fd-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
