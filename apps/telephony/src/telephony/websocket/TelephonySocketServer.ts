@@ -34,7 +34,7 @@ export class TelephonySocketServer {
   private clients = new Set<WsClient>();
   private pingTimer: NodeJS.Timeout | null = null;
   private connectionsByIp = new Map<string, number>();
-  private readonly MAX_CONNECTIONS_PER_IP = 10;
+  private readonly MAX_CONNECTIONS_PER_IP = 25;
 
   constructor(
     private readonly server: http.Server,
@@ -108,8 +108,27 @@ export class TelephonySocketServer {
     }
   }
 
+  /**
+   * Resolve the real client IP. When nginx proxies WebSocket connections, the
+   * TCP remote address is always the Docker gateway (172.x.x.x). nginx sets
+   * X-Forwarded-For with the real browser IP, so we use that for per-IP limits
+   * when the socket arrives from a private/loopback address.
+   */
+  private getRealClientIp(req: http.IncomingMessage): string {
+    const socketIp = req.socket.remoteAddress ?? "unknown";
+    const isProxied = /^(127\.|::1$|::ffff:127\.|172\.(1[6-9]|2\d|3[01])\.|10\.)/.test(socketIp);
+    if (isProxied) {
+      const forwarded = req.headers["x-forwarded-for"];
+      if (forwarded) {
+        const firstIp = String(forwarded).split(",")[0].trim();
+        if (firstIp) return firstIp;
+      }
+    }
+    return socketIp;
+  }
+
   private async handleConnection(ws: WebSocket, req: http.IncomingMessage): Promise<void> {
-    const clientIp = req.socket.remoteAddress ?? "unknown";
+    const clientIp = this.getRealClientIp(req);
     const currentCount = this.connectionsByIp.get(clientIp) ?? 0;
     if (currentCount >= this.MAX_CONNECTIONS_PER_IP) {
       log.warn({ ip: clientIp, count: currentCount }, "WS per-IP connection limit exceeded — closing");
