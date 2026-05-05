@@ -570,14 +570,9 @@ def resolve_record_channel(channel, tenant_id, extension):
         raise ValueError("invalid_pjsip_endpoint_template")
     tenant_matches = tenant_endpoints_for_extension(tenant_id, extension)
     if requested_endpoint in tenant_matches:
-        if len(tenant_matches) == 1:
-            return "PJSIP/" + requested_endpoint, "tenant_template_only"
-        ordered = [requested_endpoint] + [c for c in tenant_matches if c != requested_endpoint]
-        joined = "&".join("PJSIP/" + c for c in ordered)
-        return joined, "tenant_template_plus_siblings:" + ",".join(ordered)
+        return "PJSIP/" + requested_endpoint, "tenant_template_match"
     if tenant_matches:
-        joined = "&".join("PJSIP/" + c for c in tenant_matches)
-        return joined, "tenant_only:" + ",".join(tenant_matches)
+        return "PJSIP/" + tenant_matches[0], "tenant_first_registered:" + ",".join(tenant_matches)
     contacts = pjsip_contact_endpoints_for_extension(extension)
     if requested_endpoint in contacts:
         return "PJSIP/" + requested_endpoint, "template_registered"
