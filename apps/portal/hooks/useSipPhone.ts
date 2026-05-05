@@ -183,12 +183,21 @@ type ConnectDesktopApi = {
     closeMini: () => Promise<unknown>;
     minimize: () => Promise<unknown>;
     toggleAlwaysOnTop: () => Promise<unknown>;
-    getSettings: () => Promise<{ alwaysOnTop?: boolean }>;
-    onSettings: (listener: (settings: { alwaysOnTop?: boolean }) => void) => () => void;
+    getSettings: () => Promise<DesktopWindowSettings>;
+    updateSettings: (patch: Partial<DesktopWindowSettings>) => Promise<DesktopWindowSettings>;
+    onSettings: (listener: (settings: DesktopWindowSettings) => void) => () => void;
   };
   notifications?: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) => Promise<unknown>;
   };
+};
+
+type DesktopWindowSettings = {
+  alwaysOnTop?: boolean;
+  startOnLogin?: boolean;
+  openMinimizedToTray?: boolean;
+  openMiniOnStartup?: boolean;
+  minimizeToTray?: boolean;
 };
 
 declare global {

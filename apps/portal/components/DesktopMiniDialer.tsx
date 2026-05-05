@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   Clock3,
   Delete,
+  Headphones,
   Maximize2,
   MessageSquare,
   Mic,
@@ -21,6 +22,7 @@ import {
   PinOff,
   Plus,
   Send,
+  Settings,
   Voicemail,
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
@@ -58,6 +60,14 @@ type DialSuggestion = {
   label: string;
   number: string;
   meta: string;
+};
+
+type MiniDesktopSettings = {
+  alwaysOnTop?: boolean;
+  startOnLogin?: boolean;
+  openMinimizedToTray?: boolean;
+  openMiniOnStartup?: boolean;
+  minimizeToTray?: boolean;
 };
 
 const KEYS: Array<[string, string]> = [
@@ -217,6 +227,28 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
   );
 }
 
+function MiniToggle({
+  checked,
+  label,
+  hint,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  hint: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button type="button" className="settings-toggle-row" onClick={() => onChange(!checked)}>
+      <span>
+        <strong>{label}</strong>
+        <small>{hint}</small>
+      </span>
+      <i data-on={checked ? "true" : "false"} />
+    </button>
+  );
+}
+
 export function DesktopMiniDialer() {
   const phone = useSipPhone();
   const { user, tenant, adminScope } = useAppContext();
@@ -225,7 +257,8 @@ export function DesktopMiniDialer() {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
-  const [settings, setSettings] = useState<{ alwaysOnTop?: boolean }>({});
+  const [settings, setSettings] = useState<MiniDesktopSettings>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickReply, setQuickReply] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
   const timerSec = useCallTimer(phone.callState === "connected");
@@ -320,6 +353,11 @@ export function DesktopMiniDialer() {
     return window.connectDesktop?.window?.onSettings?.((value) => setSettings(value));
   }, []);
 
+  const updateDesktopSettings = useCallback((patch: Partial<MiniDesktopSettings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+    void window.connectDesktop?.window?.updateSettings?.(patch).then((value) => setSettings(value)).catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     if (phone.callState === "ringing") setTab("dialer");
   }, [phone.callState]);
@@ -348,6 +386,56 @@ export function DesktopMiniDialer() {
           </div>
         </div>
         <div className="mini-window-actions">
+          <div className="settings-wrap">
+            <button
+              title="Mini dialer settings"
+              aria-label="Mini dialer settings"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((value) => !value)}
+            >
+              <Settings size={15} />
+            </button>
+            {settingsOpen && (
+              <div className="settings-popover">
+                <div className="settings-title">
+                  <Headphones size={15} />
+                  <span>Headset & startup</span>
+                </div>
+                <label className="settings-field">
+                  <span>Headset output</span>
+                  <select
+                    value={phone.currentSinkId}
+                    onChange={(event) => void phone.setAudioSinkId(event.target.value)}
+                  >
+                    <option value="">System default</option>
+                    {phone.audioOutputDevices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label || `Audio device ${device.deviceId.slice(0, 6)}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <MiniToggle
+                  checked={settings.startOnLogin !== false}
+                  label="Start with Windows"
+                  hint="Open Connect when this computer starts"
+                  onChange={(checked) => updateDesktopSettings({ startOnLogin: checked })}
+                />
+                <MiniToggle
+                  checked={settings.openMinimizedToTray !== false}
+                  label="Open minimized"
+                  hint="Start quietly in the system tray"
+                  onChange={(checked) => updateDesktopSettings({ openMinimizedToTray: checked })}
+                />
+                <MiniToggle
+                  checked={Boolean(settings.openMiniOnStartup)}
+                  label="Open mini dialer"
+                  hint="Show this floating dialer on startup"
+                  onChange={(checked) => updateDesktopSettings({ openMiniOnStartup: checked })}
+                />
+              </div>
+            )}
+          </div>
           <button title="Always on top" onClick={() => window.connectDesktop?.window?.toggleAlwaysOnTop?.()}>
             {settings.alwaysOnTop ? <Pin size={15} /> : <PinOff size={15} />}
           </button>
@@ -560,6 +648,7 @@ export function DesktopMiniDialer() {
         .mini-status.yellow:before { background: #f59e0b; }
         .mini-status.red:before { background: #ef4444; }
         .mini-window-actions { -webkit-app-region: no-drag; display: flex; gap: 5px; }
+        .settings-wrap { position: relative; }
         button {
           border: 0;
           color: inherit;
@@ -575,6 +664,89 @@ export function DesktopMiniDialer() {
           background: rgba(15, 23, 42, 0.76);
           border: 1px solid rgba(148, 163, 184, 0.14);
         }
+        .settings-popover {
+          position: absolute;
+          top: 34px;
+          right: -74px;
+          z-index: 20;
+          width: min(300px, calc(100vw - 24px));
+          padding: 12px;
+          border-radius: 22px;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%),
+            linear-gradient(145deg, rgba(15,23,42,.98), rgba(7,17,31,.96));
+          border: 1px solid rgba(125, 211, 252, .18);
+          box-shadow: 0 24px 70px rgba(0,0,0,.42);
+          backdrop-filter: blur(22px);
+        }
+        .settings-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #f8fafc;
+          font-size: 12px;
+          font-weight: 900;
+          margin-bottom: 10px;
+        }
+        .settings-field {
+          display: grid;
+          gap: 6px;
+          margin-bottom: 9px;
+          color: #94a3b8;
+          font-size: 11px;
+          font-weight: 850;
+        }
+        .settings-field select {
+          width: 100%;
+          min-width: 0;
+          border: 1px solid rgba(148, 163, 184, .16);
+          border-radius: 14px;
+          padding: 9px 10px;
+          color: #f8fafc;
+          background: rgba(15, 23, 42, .82);
+          outline: none;
+        }
+        .settings-toggle-row {
+          width: 100%;
+          height: auto !important;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 9px 0;
+          border: 0 !important;
+          border-top: 1px solid rgba(148, 163, 184, .10) !important;
+          border-radius: 0 !important;
+          background: transparent !important;
+          text-align: left;
+        }
+        .settings-toggle-row span { display: grid; gap: 2px; min-width: 0; }
+        .settings-toggle-row strong { color: #e5eefb; font-size: 12px; }
+        .settings-toggle-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
+        .settings-toggle-row i {
+          position: relative;
+          flex: 0 0 auto;
+          width: 38px;
+          height: 21px;
+          border-radius: 999px;
+          background: rgba(100,116,139,.55);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+        }
+        .settings-toggle-row i:after {
+          content: "";
+          position: absolute;
+          top: 3px;
+          left: 3px;
+          width: 15px;
+          height: 15px;
+          border-radius: 999px;
+          background: white;
+          transition: transform .16s ease, background .16s ease;
+        }
+        .settings-toggle-row i[data-on="true"] {
+          background: linear-gradient(135deg, #22c55e, #0ea5e9);
+        }
+        .settings-toggle-row i[data-on="true"]:after { transform: translateX(17px); }
         .active-card {
           margin: 12px;
           padding: 14px;
