@@ -19343,12 +19343,22 @@ function canManageMoh(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
 }
 
+/** List MOH assets for the Hold Profile picker (manage MOH vs upload may diverge later). */
+function canListMohAssets(user: JwtUser): boolean {
+  return canManageMoh(user) || canUploadMoh(user);
+}
+
 function normalizeMohRuntimeClass(value: string | null | undefined): string {
   return String(value ?? "").trim();
 }
 
 function isMohRuntimeClass(value: string): boolean {
   return /^moh\d+$/i.test(value);
+}
+
+/** Connect-managed uploads use `connect_<tenantslug>_<name>` (see mohStorage.buildMohClassName). */
+function isConnectMohRuntimeClass(value: string): boolean {
+  return /^connect_[a-z0-9_]+$/i.test(value);
 }
 
 /** Full shape of a Hold Profile as needed for AstDB key construction. */
@@ -19392,10 +19402,24 @@ async function getMohSlugForTenant(tenantId: string): Promise<string> {
 
 async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
   const runtimeClass = normalizeMohRuntimeClass(value);
+  if (isConnectMohRuntimeClass(runtimeClass)) {
+    const asset = await (db as any).mohAsset.findFirst({
+      where: { tenantId, mohClassName: runtimeClass, status: "ready" },
+      select: { id: true },
+    });
+    if (!asset) {
+      throw Object.assign(new Error("moh_asset_not_found"), {
+        statusCode: 409,
+        detail: `No ready Connect MOH upload matches ${runtimeClass}. Open MOH → Assets, upload the file, wait for PBX media sync, then select it here.`,
+      });
+    }
+    return runtimeClass;
+  }
+
   if (!isMohRuntimeClass(runtimeClass)) {
     throw Object.assign(new Error("invalid_moh_runtime_class"), {
       statusCode: 400,
-      detail: "MOH profiles must store the Asterisk runtime class, e.g. moh3. VitalPBX display names such as main are not valid.",
+      detail: "MOH profiles must use a VitalPBX class (e.g. moh3) or a Connect upload class (connect_<slug>_<name>).",
     });
   }
 
@@ -19560,6 +19584,21 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
     extensionsUpdated: 0,
     errors: [],
   });
+
+  const rc = normalizeMohRuntimeClass(runtimeClass);
+  if (isConnectMohRuntimeClass(rc)) {
+    return {
+      skipped: false,
+      inboundTotal: 0,
+      inboundUpdated: 0,
+      extensionsTotal: 0,
+      extensionsUpdated: 0,
+      queuesTotal: 0,
+      queuesUpdated: 0,
+      errors: [],
+      helperResponse: { noop: true, reason: "connect_uploaded_moh_no_vitalpbx_music_group" },
+    };
+  }
 
   const [link, mohClass] = await Promise.all([
     db.tenantPbxLink.findFirst({
@@ -20256,7 +20295,7 @@ app.post("/voice/moh/assets", async (req, reply) => {
 
 // ── GET /voice/moh/assets ────────────────────────────────────────────────────
 app.get("/voice/moh/assets", async (req, reply) => {
-  const user = await requirePermission(req, reply, canUploadMoh);
+  const user = await requirePermission(req, reply, canListMohAssets);
   if (!user) return;
   const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
   const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";

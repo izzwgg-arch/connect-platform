@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.3"
+VERSION = "2026.05.05.4"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -314,6 +314,37 @@ def music_group_exists(conn, music_group_id):
     with conn.cursor() as cur:
         cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (music_group_id,))
         return cur.fetchone() is not None
+
+def queue_moh_table_name(conn):
+    """Queue hold music comes from queues.conf / this table, not inbound CHANNEL(musicclass)."""
+    candidates = ("ombu_queues", "ombu_call_queues")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT TABLE_NAME,
+                   SUM(CASE WHEN COLUMN_NAME = 'tenant_id' THEN 1 ELSE 0 END) AS has_tenant,
+                   SUM(CASE WHEN COLUMN_NAME = 'music_group_id' THEN 1 ELSE 0 END) AS has_moh
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME IN %s
+               AND COLUMN_NAME IN ('tenant_id', 'music_group_id')
+             GROUP BY TABLE_NAME
+            HAVING has_tenant = 1 AND has_moh = 1
+             ORDER BY FIELD(TABLE_NAME, 'ombu_queues', 'ombu_call_queues')
+             LIMIT 1
+            """,
+            (candidates,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    name = str(row.get("TABLE_NAME") or "").strip()
+    return name or None
+
+def sample_queue_moh_rows(conn, table, tenant_id):
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM `{table}` WHERE tenant_id = %s ORDER BY 1 LIMIT 10", (tenant_id,))
+        return cur.fetchall()
 
 def count_rows_for_tenant(conn, table, tenant_id):
     if table not in {"ombu_inbound_routes", "ombu_extensions"}:
@@ -481,6 +512,10 @@ def restore_route(body):
 def sync_tenant_moh(body):
     tenant_id = require_num("tenant_id", body.get("tenantId"))
     music_group_id = require_num("music_group_id", body.get("musicGroupId"))
+    queue_table = None
+    queues_total = 0
+    queues_updated = 0
+    queue_sample = []
     with db_conn() as conn:
         try:
             conn.begin()
@@ -488,6 +523,12 @@ def sync_tenant_moh(body):
                 raise RuntimeError("music_group_not_found")
             inbound_total = count_rows_for_tenant(conn, "ombu_inbound_routes", tenant_id)
             extension_total = count_rows_for_tenant(conn, "ombu_extensions", tenant_id)
+            queue_table = queue_moh_table_name(conn)
+            if queue_table:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT COUNT(*) AS n FROM `{queue_table}` WHERE tenant_id = %s", (tenant_id,))
+                    row = cur.fetchone() or {}
+                    queues_total = int(row.get("n") or 0)
             with conn.cursor() as cur:
                 cur.execute("""
                 UPDATE ombu_inbound_routes
@@ -503,6 +544,14 @@ def sync_tenant_moh(body):
                   AND (music_group_id IS NULL OR music_group_id <> %s)
                 """, (music_group_id, tenant_id, music_group_id))
                 extensions_updated = int(cur.rowcount or 0)
+                if queue_table:
+                    cur.execute(f"""
+                    UPDATE `{queue_table}`
+                    SET music_group_id = %s
+                    WHERE tenant_id = %s
+                      AND (music_group_id IS NULL OR music_group_id <> %s)
+                    """, (music_group_id, tenant_id, music_group_id))
+                    queues_updated = int(cur.rowcount or 0)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -511,6 +560,8 @@ def sync_tenant_moh(body):
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
         extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
+        if queue_table and queues_total:
+            queue_sample = sample_queue_moh_rows(conn, queue_table, tenant_id)
     return {
         "ok": True,
         "tenantId": tenant_id,
@@ -519,8 +570,12 @@ def sync_tenant_moh(body):
         "inboundUpdated": inbound_updated,
         "extensionsTotal": extension_total,
         "extensionsUpdated": extensions_updated,
+        "queuesTotal": queues_total,
+        "queuesUpdated": queues_updated,
+        "queueTable": queue_table or "",
         "inboundSample": inbound_sample,
         "extensionSample": extension_sample,
+        "queueSample": queue_sample,
         "apply": apply_result,
     }
 
@@ -1325,12 +1380,16 @@ GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost
 GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
 GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_queues TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_queues TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
 FLUSH PRIVILEGES;

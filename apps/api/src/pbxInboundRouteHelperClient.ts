@@ -84,6 +84,11 @@ export type PbxTenantMohSyncResponse = {
   inboundUpdated: number;
   extensionsTotal: number;
   extensionsUpdated: number;
+  /** Per-queue MOH in VitalPBX (Asterisk Queue() ignores inbound CHANNEL musicclass). */
+  queuesTotal?: number;
+  queuesUpdated?: number;
+  queueTable?: string;
+  queueSample?: Array<Record<string, unknown>>;
   inboundSample?: Array<Record<string, unknown>>;
   extensionSample?: Array<Record<string, unknown>>;
   apply?: {

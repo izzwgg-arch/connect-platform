@@ -6,7 +6,7 @@ This service intentionally exposes narrow mutating surfaces:
   - inspect one DID/tenant
   - retarget that exact route to a preconfigured Connect destination_id
   - restore that exact route to a captured destination_id
-  - sync one tenant's inbound-route and extension MOH group
+  - sync one tenant's inbound-route, extension, and queue MOH groups
 
 It does not expose arbitrary SQL, does not update trunks/extensions/tenants,
 and rejects missing or ambiguous DID matches.
@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.03"
+VERSION = "2026.05.05"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 TENANT_RE = re.compile(r"^\d{1,10}$")
 DEST_RE = re.compile(r"^\d{1,10}$")
@@ -208,6 +208,43 @@ def music_group_exists(conn, music_group_id: str) -> bool:
     with conn.cursor() as cur:
         cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (music_group_id,))
         return cur.fetchone() is not None
+
+
+def queue_moh_table_name(conn) -> str | None:
+    """Return a VitalPBX queue table that has tenant-scoped music_group_id, if any.
+
+    Inbound CHANNEL(musicclass) does not override Asterisk app_queue hold music — queues use
+    the class from queues.conf, which VitalPBX derives from this row.
+    """
+    candidates = ("ombu_queues", "ombu_call_queues")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT TABLE_NAME,
+                   SUM(CASE WHEN COLUMN_NAME = 'tenant_id' THEN 1 ELSE 0 END) AS has_tenant,
+                   SUM(CASE WHEN COLUMN_NAME = 'music_group_id' THEN 1 ELSE 0 END) AS has_moh
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME IN %s
+               AND COLUMN_NAME IN ('tenant_id', 'music_group_id')
+             GROUP BY TABLE_NAME
+            HAVING has_tenant = 1 AND has_moh = 1
+             ORDER BY FIELD(TABLE_NAME, 'ombu_queues', 'ombu_call_queues')
+             LIMIT 1
+            """,
+            (candidates,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    name = str((row or {}).get("TABLE_NAME") or "").strip()
+    return name or None
+
+
+def sample_queue_moh_rows(conn, table: str, tenant_id: str) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM `{table}` WHERE tenant_id = %s ORDER BY 1 LIMIT 10", (tenant_id,))
+        return cur.fetchall()
 
 
 def count_rows_for_tenant(conn, table: str, tenant_id: str) -> int:
@@ -515,6 +552,11 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
     tenant_id = require_numeric("tenant_id", body.get("tenantId"), TENANT_RE)
     music_group_id = require_numeric("music_group_id", body.get("musicGroupId"), MUSIC_GROUP_RE)
 
+    queue_table: str | None = None
+    queues_total = 0
+    queues_updated = 0
+    queue_sample: list[dict[str, Any]] = []
+
     with db_conn() as conn:
         try:
             conn.begin()
@@ -523,6 +565,12 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
 
             inbound_total = count_rows_for_tenant(conn, "ombu_inbound_routes", tenant_id)
             extension_total = count_rows_for_tenant(conn, "ombu_extensions", tenant_id)
+            queue_table = queue_moh_table_name(conn)
+            if queue_table:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT COUNT(*) AS n FROM `{queue_table}` WHERE tenant_id = %s", (tenant_id,))
+                    row = cur.fetchone() or {}
+                    queues_total = int(row.get("n") or 0)
 
             with conn.cursor() as cur:
                 cur.execute(
@@ -545,6 +593,17 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
                     (music_group_id, tenant_id, music_group_id),
                 )
                 extensions_updated = int(cur.rowcount or 0)
+                if queue_table:
+                    cur.execute(
+                        f"""
+                        UPDATE `{queue_table}`
+                        SET music_group_id = %s
+                        WHERE tenant_id = %s
+                          AND (music_group_id IS NULL OR music_group_id <> %s)
+                        """,
+                        (music_group_id, tenant_id, music_group_id),
+                    )
+                    queues_updated = int(cur.rowcount or 0)
 
             conn.commit()
         except Exception:
@@ -555,6 +614,8 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
         extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
+        if queue_table and queues_total:
+            queue_sample = sample_queue_moh_rows(conn, queue_table, tenant_id)
 
     return {
         "ok": True,
@@ -564,8 +625,12 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
         "inboundUpdated": inbound_updated,
         "extensionsTotal": extension_total,
         "extensionsUpdated": extensions_updated,
+        "queuesTotal": queues_total,
+        "queuesUpdated": queues_updated,
+        "queueTable": queue_table or "",
         "inboundSample": inbound_sample,
         "extensionSample": extension_sample,
+        "queueSample": queue_sample,
         "apply": apply_result,
     }
 

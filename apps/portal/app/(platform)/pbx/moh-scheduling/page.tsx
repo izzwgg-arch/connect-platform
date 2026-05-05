@@ -311,9 +311,10 @@ interface PbxMohClassRow {
 //   2. The PBX-wide "system" classes the admin tenant ships (default / main /
 //      No Music) — always appended so a tenant with zero own classes still has
 //      working options to pick from.
-//   3. Runtime values are always the synced Asterisk class names (moh<groupId>).
+//   3. Connect-uploaded MOH assets (MohAsset → class connect_<slug>_<name>).
+//   4. Runtime values for PBX-native classes are moh<groupId> from ombu_music_groups.
 // Legacy-safe: if the saved value isn't in the merged catalog we still render
-// it at the top of the options, but the API will block saving until a synced
+// it at the top of the options, but the API will block saving until a valid
 // runtime class is selected.
 function MohClassPicker({
   value, onChange, pbxClasses, assets, loading, placeholder,
@@ -345,14 +346,13 @@ function MohClassPicker({
     yours:  tenantSlug ? `This tenant (${tenantSlug})` : "This tenant",
     system: "System (available to all tenants)",
     other:  "Other tenants on this PBX",
-    upload: "Uploaded on Connect (pending PBX sync)",
+    upload: "Uploaded on Connect (connect_* — PBX needs connect-media-sync + musiconhold include)",
     legacy: "Saved value (not in catalog)",
   };
 
   const options: Opt[] = [];
   const seen = new Set<string>();
   void placeholder;
-  void assets;
 
   const classify = (c: PbxMohClassRow): Opt["group"] => {
     // tenantSlug "vitalpbx" / pbxTenantId "1" is the PBX-admin tenant —
@@ -384,6 +384,20 @@ function MohClassPicker({
       tenantLabel: c.tenantSlug ?? null,
     });
   }
+
+  for (const a of assets) {
+    if (a.status !== "ready") continue;
+    const v = (a.mohClassName || "").trim();
+    if (!v.startsWith("connect_")) continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    options.push({
+      value: v,
+      label: `${a.name} → ${v} · Connect upload`,
+      group: "upload",
+    });
+  }
+
   const hasCurrent = !!value && seen.has(value);
   if (value && !hasCurrent) {
     options.unshift({ value, label: `${value} (not in synced PBX catalog — save blocked)`, group: "legacy" });
@@ -401,11 +415,13 @@ function MohClassPicker({
   const ownCount    = (grouped.get("yours") ?? []).length;
   const systemCount = (grouped.get("system") ?? []).length;
   const otherCount  = (grouped.get("other") ?? []).length;
+  const uploadCount = (grouped.get("upload") ?? []).length;
 
   const controls = (
     <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
       <span>
         {ownCount} yours · {systemCount} system
+        {uploadCount ? ` · ${uploadCount} Connect upload${uploadCount === 1 ? "" : "s"}` : ""}
         {otherCount ? ` · ${otherCount} other` : ""}
       </span>
       {canSyncPbx && onSync && (

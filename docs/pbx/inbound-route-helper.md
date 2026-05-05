@@ -29,11 +29,13 @@ Tenant MOH sync updates only native MOH pointers for one VitalPBX tenant:
 - Table: `ombutel.ombu_extensions`
 - Match guard: `tenant_id = <VitalPBX tenant_id>`
 - Updated field: `music_group_id`
+- Table: `ombutel.ombu_queues` (auto-detected when the schema includes `tenant_id` + `music_group_id`) — **callers holding in a queue hear this MOH**; Asterisk `Queue()` does not use the inbound caller’s `CHANNEL(musicclass)`.
 
 The helper reads `ombutel.ombu_destinations` only to verify the target
 `destination_id` exists. It reads `ombutel.ombu_music_groups` only to verify
-the selected MOH group exists. It does not touch SIP trunks, tenants, queues,
-IVRs, devices, or any Asterisk config files.
+the selected MOH group exists. It does not touch SIP trunks, tenant records,
+IVR definitions, devices, or Asterisk config files directly (aside from optional
+`dialplan reload` / `moh reload` apply hooks).
 
 ## Endpoints
 
@@ -115,12 +117,16 @@ GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1
 GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
 GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
 GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_queues TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_queues TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'localhost';
 FLUSH PRIVILEGES;

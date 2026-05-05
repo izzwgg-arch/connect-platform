@@ -64,6 +64,25 @@ Five-minute cadence is a good default. It's fast enough that operators never
 feel "stuck" after uploading, and slow enough that the PBX sees no noticeable
 CPU/IO load.
 
+### One-time: tell Asterisk about `connect_*` MOH classes
+
+The sync script downloads files under `/var/lib/asterisk/moh/connect_*/` **and**
+rewrites `/etc/asterisk/musiconhold__99_connect_assets.conf` with one
+`[connect_…]` stanza per class (`mode=directory`). Asterisk only loads classes
+that are **included** from `musiconhold.conf`.
+
+On VitalPBX, add a line the Asterisk config loader will read (exact path varies
+by version — common pattern is a custom file under `/etc/asterisk/`):
+
+```bash
+# Example: append to a file already included by musiconhold.conf, or use VitalPBX “custom config”
+echo '#tryinclude /etc/asterisk/musiconhold__99_connect_assets.conf' >> /etc/asterisk/musiconhold_custom.conf
+asterisk -rx "module reload res_musiconhold.so"
+```
+
+If your install has no `musiconhold_custom.conf`, ask VitalPBX docs where to put
+`#tryinclude` for MOH, then reload the musiconhold module (or restart Asterisk).
+
 ---
 
 ## 3. Verify
@@ -73,12 +92,15 @@ From the PBX host:
 ```bash
 sudo /usr/local/sbin/connect-media-sync
 ls -l /var/lib/asterisk/moh/ | grep connect_
-sudo asterisk -rx "moh show classes" | head
+sudo grep '^\[connect_' /etc/asterisk/musiconhold__99_connect_assets.conf
+sudo asterisk -rx "moh show classes" | grep connect_
 ```
 
 You should see one `connect_<tenantslug>_<name>` directory per uploaded MOH
-asset, each containing the `asset.<ext>` file and a short log in
-`/var/log/connect-media-sync.log`.
+asset, each containing the `asset.<ext>` file, matching stanzas in
+`musiconhold__99_connect_assets.conf`, and entries under `moh show classes` once
+the `#tryinclude` step above is done. Check `/var/log/connect-media-sync.log`
+for errors.
 
 ---
 
