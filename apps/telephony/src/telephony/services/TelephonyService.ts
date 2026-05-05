@@ -253,6 +253,9 @@ export class TelephonyService {
           linkedId: dialLinkedId,
           callerIDNum: typed.callerIDNum,
           destination: typed.destination,
+          channel: typed.channel,
+          context: typed.context,
+          exten: typed.exten,
         });
         this.applyOutboundMohOnDialBegin(typed).catch((err) => {
           log.warn(
@@ -843,19 +846,52 @@ export class TelephonyService {
       };
     }
 
-    const channel = call.channels.find((name) => !isHelperChannel(name));
+    // Prefer the trunk leg as the redirect channel — that's the leg the
+    // dialplan needs to re-execute Dial() against. Fall back to the first
+    // non-helper channel only if no trunk-recorded channel is known.
+    const trunkDialChannel =
+      typeof call.metadata["trunkDialChannel"] === "string"
+        ? call.metadata["trunkDialChannel"]
+        : null;
+    const channel =
+      (trunkDialChannel && call.channels.includes(trunkDialChannel) && trunkDialChannel) ||
+      call.channels.find((name) => !isHelperChannel(name));
     if (!channel) {
       throw new Error(`no redirectable channel found for linkedId=${params.linkedId}`);
     }
 
-    const context =
-      (typeof call.metadata["lastContext"] === "string" && call.metadata["lastContext"]) ||
-      params.fallbackContext ||
-      "";
-    const exten =
-      (typeof call.metadata["lastExten"] === "string" && call.metadata["lastExten"]) ||
-      params.fallbackExten ||
-      "";
+    // Prefer the trunk leg's Dial() position (captured by DialBegin) over
+    // the most-recent Newchannel context/exten — extension-leg Newchannel
+    // events overwrite `lastContext`/`lastExten` with the extension's COS
+    // context (e.g. `T2_cos-all`) and/or the DID number, which makes the
+    // requeue Redirect loop the trunk leg back to the inbound IVR (or, with
+    // the extension's COS context, dial the original caller-ID through the
+    // outbound trunk — a dial loop). The trunk's recorded Dial position is
+    // the only reliable place to redirect to.
+    //
+    // See: Connect 2 incident 2026-05-04 — call cmorz309305kkkb4c78to2yh5
+    //      reproduced "AMI mobile invite requeue sent" → existing extension
+    //      dial torn down → outbound dial-back via trunk → mobile never
+    //      received a fresh INVITE → user got "session_not_found_timeout".
+    const trunkContext =
+      typeof call.metadata["trunkDialContext"] === "string"
+        ? call.metadata["trunkDialContext"]
+        : null;
+    const trunkExten =
+      typeof call.metadata["trunkDialExten"] === "string"
+        ? call.metadata["trunkDialExten"]
+        : null;
+    const lastContext =
+      typeof call.metadata["lastContext"] === "string"
+        ? call.metadata["lastContext"]
+        : null;
+    const lastExten =
+      typeof call.metadata["lastExten"] === "string"
+        ? call.metadata["lastExten"]
+        : null;
+    const context = trunkContext || lastContext || params.fallbackContext || "";
+    const exten = trunkExten || lastExten || params.fallbackExten || "";
+    const targetSource = trunkContext && trunkExten ? "trunk_dial_position" : "last_newchannel";
 
     if (!context || !exten) {
       throw new Error(`missing dialplan target for linkedId=${params.linkedId}`);
@@ -866,7 +902,21 @@ export class TelephonyService {
       exten,
       context,
     });
-    log.info({ linkedId: params.linkedId, channel, exten, context, actionId }, "AMI mobile invite requeue sent");
+    log.info(
+      {
+        linkedId: params.linkedId,
+        channel,
+        exten,
+        context,
+        actionId,
+        targetSource,
+        trunkContext,
+        trunkExten,
+        lastContext,
+        lastExten,
+      },
+      "AMI mobile invite requeue sent",
+    );
     return { actionId, channel, exten, context, skipped: false };
   }
 }

@@ -95,6 +95,8 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         linkedid: g("Linkedid"),
         destUniqueid: g("DestUniqueid"),
         dialString: g("DialString"),
+        context: g("Context"),
+        exten: g("Exten"),
       } satisfies AmiDialBegin;
 
     case "DialEnd":

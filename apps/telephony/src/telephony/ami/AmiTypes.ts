@@ -73,6 +73,12 @@ export interface AmiDialBegin {
   linkedid: string;
   destUniqueid: string;
   dialString: string;
+  /** Context/Exten of the channel that called Dial() — i.e., the dialplan
+   *  position to redirect back to in order to re-execute the same Dial()
+   *  application. Used by the mobile-wake answer pipeline to retarget the
+   *  trunk leg into a fresh dial of the called extension. */
+  context: string;
+  exten: string;
 }
 
 export interface AmiDialEnd {

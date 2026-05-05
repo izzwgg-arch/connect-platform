@@ -548,9 +548,40 @@ export class CallStateStore extends EventEmitter {
     linkedId: string;
     callerIDNum: string;
     destination: string;
+    /** Channel that invoked Dial() — used to discriminate trunk vs extension. */
+    channel?: string;
+    /** Dialplan context of the dialing channel at Dial() invocation time. */
+    context?: string;
+    /** Dialplan exten of the dialing channel at Dial() invocation time. */
+    exten?: string;
   }): void {
     const call = this.calls.get(params.linkedId);
     if (!call || call.state === "hungup") return;
+
+    // Capture the TRUNK leg's dialplan position at Dial() invocation time so
+    // {@link TelephonyService.requeueLiveCallToDialplan} can issue an AMI
+    // Redirect that re-executes the same Dial() (i.e., re-rings the dialed
+    // extension) when the mobile cold-start answer flow asks for a requeue.
+    //
+    // We MUST gate on the dialing channel being a non-extension (trunk) leg.
+    // Extension legs that themselves call Dial() (e.g., call-pickup, attended
+    // transfer) would otherwise overwrite the trunk's position and the
+    // requeue would loop the call back into an extension's COS dialplan
+    // with the DID as the dialed number — producing the "answer then bounce
+    // back to caller" failure mode observed in the 2026-05-04 incident.
+    if (
+      params.channel &&
+      params.context &&
+      params.exten &&
+      params.exten !== "s" &&
+      params.exten !== "h" &&
+      !isExtensionLegChannel(params.channel) &&
+      !isHelperChannel(params.channel)
+    ) {
+      call.metadata["trunkDialContext"] = params.context;
+      call.metadata["trunkDialExten"] = params.exten;
+      call.metadata["trunkDialChannel"] = params.channel;
+    }
 
     const callerDigits = (params.callerIDNum ?? "").replace(/\D/g, "");
     const callerShort = callerDigits.length >= 2 && callerDigits.length <= 6;
