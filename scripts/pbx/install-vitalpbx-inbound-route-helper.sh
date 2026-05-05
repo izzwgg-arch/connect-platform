@@ -346,12 +346,33 @@ def sample_music_groups(conn, table, tenant_id):
         cur.execute(sql, (tenant_id,))
         return cur.fetchall()
 
-def apply_changes():
+def run_apply_command(command):
+    start = time.time()
+    proc = subprocess.run(shlex.split(command), text=True, capture_output=True, timeout=CFG.apply_timeout, check=False)
+    return {
+        "argv": shlex.split(command),
+        "exitCode": proc.returncode,
+        "elapsedMs": int((time.time() - start) * 1000),
+        "stdout": proc.stdout[-4000:],
+        "stderr": proc.stderr[-4000:],
+    }
+
+def apply_changes(reload_moh=False):
     if not CFG.apply_command:
         return {"ran": False, "reason": "apply_command_not_configured"}
-    start = time.time()
-    proc = subprocess.run(shlex.split(CFG.apply_command), text=True, capture_output=True, timeout=CFG.apply_timeout, check=False)
-    return {"ran": True, "exitCode": proc.returncode, "elapsedMs": int((time.time() - start) * 1000), "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:]}
+    commands = [CFG.apply_command]
+    if reload_moh:
+        commands.append('asterisk -rx "moh reload"')
+    results = [run_apply_command(command) for command in commands]
+    failed = next((r for r in results if r["exitCode"] != 0), None)
+    return {
+        "ran": True,
+        "reloadMoh": reload_moh,
+        "exitCode": int(failed["exitCode"]) if failed else 0,
+        "commands": results,
+        "stdout": "\n".join(str(r.get("stdout") or "") for r in results)[-4000:],
+        "stderr": "\n".join(str(r.get("stderr") or "") for r in results)[-4000:],
+    }
 
 def inspect_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -486,7 +507,7 @@ def sync_tenant_moh(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes()
+    apply_result = apply_changes(reload_moh=True)
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
         extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)

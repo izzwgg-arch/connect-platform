@@ -356,7 +356,7 @@ function MohClassPicker({
 
   const classify = (c: PbxMohClassRow): Opt["group"] => {
     // tenantSlug "vitalpbx" / pbxTenantId "1" is the PBX-admin tenant —
-    // its classes are the built-in "system" classes everyone can use.
+    // its classes are the shared library this PBX uses across customer tenants.
     if (c.tenantSlug === "vitalpbx" || c.pbxTenantId === "1" || c.isDefault) return "system";
     if (tenantSlug && c.tenantSlug && c.tenantSlug.toLowerCase() === tenantSlug.toLowerCase()) return "yours";
     if (!tenantSlug) return "yours";

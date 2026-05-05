@@ -19528,7 +19528,7 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
       where: {
         mohClassName: runtimeClass,
         isActive: true,
-        OR: [{ tenantId }, { tenantId: null }],
+        OR: [{ tenantId }, { tenantId: null }, { pbxTenantId: "1" }],
       },
       select: { pbxGroupId: true },
     }),
@@ -20359,10 +20359,10 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       const slug = rawScope.slice(5).toLowerCase();
       const resolved = await resolveConnectTenantIdFromScope(rawScope);
       pbxClassWhere = resolved
-        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }, { tenantId: null, tenantSlug: null }] }
-        : { OR: [{ tenantSlug: slug }, { tenantId: null, tenantSlug: null }] };
+        ? { OR: [{ tenantId: resolved }, { tenantSlug: slug }, { tenantId: null, tenantSlug: null }, { pbxTenantId: "1" }] }
+        : { OR: [{ tenantSlug: slug }, { tenantId: null, tenantSlug: null }, { pbxTenantId: "1" }] };
     } else {
-      pbxClassWhere = { OR: [{ tenantId: rawScope }, { tenantId: null }] };
+      pbxClassWhere = { OR: [{ tenantId: rawScope }, { tenantId: null }, { pbxTenantId: "1" }] };
       if (!isSA && rawScope !== user.tenantId) {
         return reply.code(403).send({ error: "forbidden" });
       }
@@ -20377,7 +20377,7 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
     orderBy: [{ name: "asc" }],
     select: {
       id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
-      pbxGroupId: true, name: true, mohClassName: true, classType: true,
+      pbxGroupId: true, pbxTenantId: true, name: true, mohClassName: true, classType: true,
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
     },
   });

@@ -243,10 +243,8 @@ def sample_music_groups(conn, table: str, tenant_id: str) -> list[dict[str, Any]
         return cur.fetchall()
 
 
-def apply_changes() -> dict[str, Any]:
-    if not CFG.apply_command:
-        return {"ran": False, "reason": "apply_command_not_configured"}
-    argv = shlex.split(CFG.apply_command)
+def run_apply_command(command: str) -> dict[str, Any]:
+    argv = shlex.split(command)
     started = time.time()
     proc = subprocess.run(
         argv,
@@ -256,12 +254,29 @@ def apply_changes() -> dict[str, Any]:
         check=False,
     )
     return {
-        "ran": True,
         "argv": argv,
         "exitCode": proc.returncode,
         "elapsedMs": int((time.time() - started) * 1000),
         "stdout": proc.stdout[-4000:],
         "stderr": proc.stderr[-4000:],
+    }
+
+
+def apply_changes(*, reload_moh: bool = False) -> dict[str, Any]:
+    if not CFG.apply_command:
+        return {"ran": False, "reason": "apply_command_not_configured"}
+    commands = [CFG.apply_command]
+    if reload_moh:
+        commands.append('asterisk -rx "moh reload"')
+    results = [run_apply_command(command) for command in commands]
+    failed = next((r for r in results if r["exitCode"] != 0), None)
+    return {
+        "ran": True,
+        "reloadMoh": reload_moh,
+        "exitCode": int(failed["exitCode"]) if failed else 0,
+        "commands": results,
+        "stdout": "\n".join(str(r.get("stdout") or "") for r in results)[-4000:],
+        "stderr": "\n".join(str(r.get("stderr") or "") for r in results)[-4000:],
     }
 
 
@@ -481,7 +496,7 @@ def set_route_moh(body: dict[str, Any]) -> dict[str, Any]:
             conn.rollback()
             raise
 
-    apply_result = apply_changes()
+    apply_result = apply_changes(reload_moh=True)
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {
@@ -536,7 +551,7 @@ def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
             conn.rollback()
             raise
 
-    apply_result = apply_changes()
+    apply_result = apply_changes(reload_moh=True)
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
         extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
