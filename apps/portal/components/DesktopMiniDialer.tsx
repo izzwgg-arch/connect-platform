@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   Bell,
   ChevronLeft,
   Clock3,
@@ -10,10 +11,12 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  Pause,
   Phone,
   PhoneCall,
   PhoneIncoming,
   PhoneOff,
+  Play,
   Pin,
   PinOff,
   Plus,
@@ -119,6 +122,99 @@ function useCallTimer(active: boolean): number {
     return () => clearInterval(timer);
   }, [active]);
   return seconds;
+}
+
+function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: number }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(durationSec || 0);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const audio = new Audio(src);
+    audio.preload = "metadata";
+    audioRef.current = audio;
+
+    const updateTime = () => setCurrent(audio.currentTime || 0);
+    const updateDuration = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
+    };
+    const markEnded = () => {
+      setPlaying(false);
+      setCurrent(0);
+      audio.currentTime = 0;
+    };
+    const markError = () => {
+      setPlaying(false);
+      setError(true);
+    };
+
+    audio.addEventListener("timeupdate", updateTime);
+    audio.addEventListener("loadedmetadata", updateDuration);
+    audio.addEventListener("durationchange", updateDuration);
+    audio.addEventListener("ended", markEnded);
+    audio.addEventListener("error", markError);
+
+    return () => {
+      audio.pause();
+      audio.removeEventListener("timeupdate", updateTime);
+      audio.removeEventListener("loadedmetadata", updateDuration);
+      audio.removeEventListener("durationchange", updateDuration);
+      audio.removeEventListener("ended", markEnded);
+      audio.removeEventListener("error", markError);
+      audioRef.current = null;
+    };
+  }, [src]);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setError(false);
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+      return;
+    }
+    audio.play()
+      .then(() => setPlaying(true))
+      .catch(() => {
+        setPlaying(false);
+        setError(true);
+      });
+  };
+
+  const seek = (value: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = value;
+    setCurrent(value);
+  };
+
+  const max = Math.max(duration, durationSec, 1);
+
+  return (
+    <div className="vm-player" data-error={error ? "true" : "false"}>
+      <button type="button" className="vm-play" onClick={toggle} aria-label={playing ? "Pause voicemail" : "Play voicemail"}>
+        {error ? <AlertCircle size={14} /> : playing ? <Pause size={15} /> : <Play size={15} />}
+      </button>
+      <div className="vm-progress-wrap">
+        <input
+          className="vm-progress"
+          type="range"
+          min={0}
+          max={max}
+          step={0.1}
+          value={Math.min(current, max)}
+          onChange={(event) => seek(Number(event.target.value))}
+        />
+        <div className="vm-time">
+          <span>{formatDuration(current)}</span>
+          <span>{error ? "Can't play" : formatDuration(max)}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function DesktopMiniDialer() {
@@ -396,7 +492,7 @@ export function DesktopMiniDialer() {
                 <div>
                   <strong>{vm.callerName || vm.callerId}</strong>
                   <span>{shortTime(vm.receivedAt)} · {formatDuration(vm.durationSec)}</span>
-                  <audio controls preload="none" src={vm.streamUrl || voicemailStreamUrl(vm.id)} />
+                  <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} />
                 </div>
                 <button onClick={() => callTarget(vm.callerId)}>Call</button>
               </article>
@@ -633,7 +729,48 @@ export function DesktopMiniDialer() {
         .row-icon { width: 36px; height: 36px; border-radius: 14px; }
         .row-icon.missed { background: rgba(239,68,68,.18); }
         .row-icon.new { background: rgba(34,197,94,.20); }
-        .voicemail-row audio { width: 100%; height: 34px; margin-top: 7px; }
+        .vm-player {
+          margin-top: 9px;
+          display: grid;
+          grid-template-columns: 34px 1fr;
+          gap: 9px;
+          align-items: center;
+          padding: 8px;
+          border-radius: 16px;
+          background: linear-gradient(135deg, rgba(14,165,233,.13), rgba(99,102,241,.08));
+          border: 1px solid rgba(125, 211, 252, .18);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+        }
+        .vm-player[data-error="true"] {
+          background: rgba(239, 68, 68, .10);
+          border-color: rgba(248, 113, 113, .24);
+        }
+        .vm-play {
+          width: 34px;
+          height: 34px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          color: #e0f2fe;
+          background: linear-gradient(135deg, rgba(56,189,248,.32), rgba(14,165,233,.16));
+          border: 1px solid rgba(125,211,252,.24);
+          box-shadow: 0 10px 24px rgba(14,165,233,.13);
+        }
+        .vm-progress-wrap { min-width: 0; display: grid; gap: 5px; }
+        .vm-progress {
+          width: 100%;
+          height: 4px;
+          accent-color: #38bdf8;
+          cursor: pointer;
+        }
+        .vm-time {
+          display: flex;
+          justify-content: space-between;
+          color: #8fb3c8;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .02em;
+        }
         .quick-reply { display: grid; grid-template-columns: 1fr 42px; gap: 8px; margin-top: 8px; }
         .open-full { margin-top: 4px; width: 100%; }
         .empty { text-align: center; color: #94a3b8; padding: 32px 10px; }

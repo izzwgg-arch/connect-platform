@@ -9,6 +9,7 @@ import net from "net";
 import dgram from "dgram";
 import nodemailer from "nodemailer";
 import { promises as fsp } from "fs";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -14756,6 +14757,38 @@ app.get("/voicemail/greeting/record-call/:jobId", async (req, reply) => {
 });
 
 // ── Audio helper — fetches voicemail audio from PBX and streams to client ────
+async function transcodeVoicemailToMp3(input: Buffer, extension: string): Promise<Buffer<ArrayBufferLike>> {
+  const token = randomBytes(8).toString("hex");
+  const safeExt = extension.replace(/[^a-z0-9]/gi, "").toLowerCase() || "wav";
+  const base = path.join(os.tmpdir(), `connect-vm-${token}`);
+  const inputPath = `${base}.${safeExt}`;
+  const outputPath = `${base}.mp3`;
+  try {
+    await fsp.writeFile(inputPath, input);
+    await execFileAsync("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "48k",
+      outputPath,
+    ], { timeout: 20_000 });
+    return await fsp.readFile(outputPath);
+  } finally {
+    await Promise.allSettled([fsp.unlink(inputPath), fsp.unlink(outputPath)]);
+  }
+}
+
 async function streamVoicemailAudio(
   vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; readAt: Date | null },
   reply: any,
@@ -14816,18 +14849,30 @@ async function streamVoicemailAudio(
     gsm:   "audio/x-gsm",
   };
   const contentType = mimeByExt[fileExt] ?? "audio/wav";
-  const buf = Buffer.from(await pbxResp.arrayBuffer());
+  const sourceBuf = Buffer.from(await pbxResp.arrayBuffer());
+  let buf: Buffer<ArrayBufferLike> = sourceBuf;
+  let responseContentType = contentType;
+  let responseExt = contentType.includes("mpeg") ? "mp3"
+    : contentType.includes("ogg") ? "ogg"
+    : contentType.includes("mp4") ? "m4a"
+    : "wav";
 
-  reply.header("Content-Type", contentType);
+  if (!asAttachment) {
+    try {
+      buf = await transcodeVoicemailToMp3(sourceBuf, fileExt);
+      responseContentType = "audio/mpeg";
+      responseExt = "mp3";
+    } catch (err: any) {
+      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: mp3 transcode failed, streaming original audio");
+    }
+  }
+
+  reply.header("Content-Type", responseContentType);
   reply.header("Content-Length", String(buf.byteLength));
   reply.header("Accept-Ranges", "bytes");
   reply.header("Cache-Control", "private, max-age=3600");
   if (asAttachment) {
-    const downloadExt = contentType.includes("mpeg") ? "mp3"
-      : contentType.includes("ogg") ? "ogg"
-      : contentType.includes("mp4") ? "m4a"
-      : "wav";
-    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${downloadExt}"`);
+    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
 
   if (!vm.readAt) {
