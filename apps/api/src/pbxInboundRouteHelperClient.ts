@@ -209,6 +209,8 @@ export type PbxVoicemailGreetingRecordCallResponse = {
   jobId: string;
   callId?: string | null;
   status: "ringing" | "recording" | "completed" | "failed" | "canceled";
+  channel?: string;
+  channelSource?: string;
 };
 
 export function uploadPbxVoicemailGreeting(
@@ -241,7 +243,7 @@ export function resetPbxVoicemailGreeting(
 
 export function requestPbxVoicemailGreetingRecordCall(
   cfg: PbxRouteHelperConfig,
-  body: { tenantId: string; extension: string; greetingType: PbxVoicemailGreetingType },
+  body: { tenantId: string; extension: string; greetingType: PbxVoicemailGreetingType; pjsipEndpoint?: string; endpointTenantId?: string },
 ): Promise<PbxVoicemailGreetingRecordCallResponse> {
   return callHelper<PbxVoicemailGreetingRecordCallResponse>(cfg, "/voicemail/greeting/record-call", body);
 }

@@ -14323,6 +14323,19 @@ function pbxTenantIdForExtension(extension: any): string | null {
   return extension?.tenant?.pbxTenantLink?.pbxTenantId ? String(extension.tenant.pbxTenantLink.pbxTenantId) : null;
 }
 
+function pjsipEndpointForExtension(extension: any): string | null {
+  const candidates = [
+    extension?.pbxLink?.pbxSipUsername,
+    extension?.pbxLink?.pbxDeviceName,
+  ];
+  for (const raw of candidates) {
+    const value = String(raw || "").trim().replace(/^PJSIP\//i, "");
+    const match = value.match(/^(T\d+_\d+)/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 async function readExtensionGreetingMetadata(tenantId: string, extensionId: string): Promise<ExtensionGreetingMetadata | null> {
   try {
     const raw = await fsp.readFile(path.join(extensionGreetingDir(tenantId, extensionId), "metadata.json"), "utf8");
@@ -14655,6 +14668,7 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
       tenantId: pbxTenantId,
       extension: extension.extNumber,
       greetingType: normalizeGreetingType(input.greetingType),
+      pjsipEndpoint: pjsipEndpointForExtension(extension) || undefined,
     });
     return reply.send(res);
   } catch (err: any) {

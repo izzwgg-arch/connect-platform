@@ -574,6 +574,20 @@ def resolve_record_channel(channel, tenant_id, extension):
         raise ValueError("ambiguous_pjsip_endpoint_for_extension: " + ",".join(contacts[:10]))
     raise ValueError("no_registered_pjsip_endpoint_for_extension")
 
+def endpoint_hint_channel(body, extension):
+    raw = str(body.get("pjsipEndpoint") or body.get("pbxSipUsername") or "").strip()
+    if raw.startswith("PJSIP/"):
+        raw = raw[len("PJSIP/"):]
+    if raw:
+        if not re.match(r"^[A-Za-z0-9_.-]+$", raw):
+            raise ValueError("invalid_pjsip_endpoint_hint")
+        return "PJSIP/" + raw
+    endpoint_tenant_id = str(body.get("endpointTenantId") or "").strip()
+    if endpoint_tenant_id:
+        endpoint_tenant_id = require_num("endpointTenantId", endpoint_tenant_id)
+        return "PJSIP/T" + endpoint_tenant_id + "_" + extension
+    return None
+
 def decode_verified_wav(body):
     sha = str(body.get("sha256") or "").strip().lower()
     if not SHA256_RE.match(sha):
@@ -666,6 +680,7 @@ def vm_record_call(body):
         # Fail open to the tenant-prefixed endpoint route rather than the
         # normal tenant dialplan, which can fall through to the user's voicemail.
         channel = "PJSIP/T" + tenant_id + "_" + extension
+    channel = endpoint_hint_channel(body, extension) or channel
     channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
     recording_exten = tenant_id + "_" + extension + "_" + target.stem
     if CFG.vm_record_app.lower() == "goto":
