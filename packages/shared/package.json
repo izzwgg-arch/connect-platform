@@ -16,6 +16,10 @@
     "./chatAttachmentStorage": {
       "types": "./src/chatAttachmentStorage.ts",
       "default": "./src/chatAttachmentStorage.ts"
+    },
+    "./voipMsInboundMms": {
+      "types": "./src/voipMsInboundMms.ts",
+      "default": "./src/voipMsInboundMms.ts"
     }
   },
   "scripts": {

@@ -27,6 +27,7 @@ import {
   statChatAttachment,
   writeChatAttachmentFile,
 } from "./chatAttachmentStorage";
+import { fetchVoipMsMmsToChatFile } from "../../../packages/shared/src/voipMsInboundMms";
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -320,6 +321,46 @@ async function persistMessageAttachments(
         mimeType: row.mimeType,
         sizeBytes: row.sizeBytes,
         storageKey: row.storageKey,
+        scanStatus: "pending",
+      },
+    });
+  }
+}
+
+/** Persist VoIP.ms MMS URLs as normal chat attachments so mobile/web render voice/video reliably. */
+async function mirrorVoipMsInboundMmsRows(input: {
+  tenantId: string;
+  threadId: string;
+  messageId: string;
+  urls: string[];
+  log?: { warn?: (obj: object, msg?: string) => void };
+}): Promise<void> {
+  const urls = input.urls.filter((u) => /^https?:\/\//i.test(String(u || "").trim())).slice(0, 3);
+  if (!urls.length) return;
+  const existing = await db.connectChatMessageAttachment.count({ where: { messageId: input.messageId } });
+  if (existing > 0) return;
+  for (const url of urls) {
+    const written = await fetchVoipMsMmsToChatFile({
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      sourceUrl: url,
+      isSmsThread: true,
+    });
+    if (!written) {
+      input.log?.warn?.(
+        { event: "voipms_inbound_mms_mirror_failed", messageId: input.messageId, urlPrefix: url.slice(0, 96) },
+        "chat: inbound MMS mirror failed",
+      );
+      continue;
+    }
+    await db.connectChatMessageAttachment.create({
+      data: {
+        messageId: input.messageId,
+        tenantId: input.tenantId,
+        fileName: written.fileName,
+        mimeType: written.mimeType,
+        sizeBytes: written.sizeBytes,
+        storageKey: written.storageKey,
         scanStatus: "pending",
       },
     });
@@ -1768,6 +1809,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         smsProviderMessageId: providerMessageId ? `voipms:${providerMessageId}` : null,
         metadata: mmsUrls.length ? { mms: { urls: mmsUrls } } : undefined,
       },
+    });
+    await mirrorVoipMsInboundMmsRows({
+      tenantId: num.tenantId,
+      threadId: thread.id,
+      messageId: msg.id,
+      urls: mmsUrls,
+      log: req.log,
     });
     await db.connectChatThread.update({
       where: { id: thread.id },

@@ -1,6 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { canonicalSmsPhone } from "@connect/shared";
+import { fetchVoipMsMmsToChatFile } from "../../../packages/shared/src/voipMsInboundMms";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
@@ -279,6 +280,47 @@ async function upsertParticipants(input: { threadId: string; tenantId: string; i
   }
 }
 
+async function mirrorInboundMmsToAttachments(input: {
+  tenantId: string;
+  threadId: string;
+  messageId: string;
+  externalUrls: string[];
+}) {
+  const urls = input.externalUrls.filter((u) => /^https?:\/\//i.test(String(u || "").trim())).slice(0, 3);
+  if (!urls.length) return;
+  const existing = await db.connectChatMessageAttachment.count({ where: { messageId: input.messageId } });
+  if (existing > 0) return;
+  for (const url of urls) {
+    const written = await fetchVoipMsMmsToChatFile({
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      sourceUrl: url,
+      isSmsThread: true,
+    });
+    if (!written) {
+      console.warn(
+        JSON.stringify({
+          event: "voipms_inbound_mms_mirror_failed",
+          messageId: input.messageId,
+          urlPrefix: url.slice(0, 96),
+        }),
+      );
+      continue;
+    }
+    await db.connectChatMessageAttachment.create({
+      data: {
+        messageId: input.messageId,
+        tenantId: input.tenantId,
+        fileName: written.fileName,
+        mimeType: written.mimeType,
+        sizeBytes: written.sizeBytes,
+        storageKey: written.storageKey,
+        scanStatus: "pending",
+      },
+    });
+  }
+}
+
 async function importInboundMessage(input: {
   tenantId: string;
   tenantDidE164: string;
@@ -292,22 +334,34 @@ async function importInboundMessage(input: {
   });
   if (existingMsg) {
     // Earlier polls only used getSMS — MMS often had no URLs until getMMS merge; backfill metadata.
-    if (input.row.mediaUrls.length > 0) {
-      const meta = (existingMsg.metadata && typeof existingMsg.metadata === "object" ? existingMsg.metadata : {}) as {
+    const row = await db.connectChatMessage.findFirst({
+      where: { id: existingMsg.id },
+      select: { id: true, threadId: true, tenantId: true, metadata: true },
+    });
+    if (row) {
+      let meta = (row.metadata && typeof row.metadata === "object" ? row.metadata : {}) as {
         mms?: { urls?: string[] };
         source?: string;
       };
       const cur = Array.isArray(meta.mms?.urls) ? meta.mms!.urls! : [];
-      if (cur.length === 0) {
+      if (input.row.mediaUrls.length > 0 && cur.length === 0) {
+        meta = { ...meta, mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS_getMMS" };
         await db.connectChatMessage.update({
           where: { id: existingMsg.id },
           data: {
             type: "IMAGE",
-            metadata: { ...meta, mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS_getMMS" } as object,
+            metadata: meta as object,
             updatedAt: new Date(),
           },
         });
       }
+      const urls = Array.isArray(meta.mms?.urls) ? meta.mms!.urls! : [];
+      await mirrorInboundMmsToAttachments({
+        tenantId: row.tenantId,
+        threadId: row.threadId,
+        messageId: row.id,
+        externalUrls: urls,
+      });
     }
     return;
   }
@@ -371,6 +425,12 @@ async function importInboundMessage(input: {
       ...(input.row.createdAt ? { createdAt: input.row.createdAt } : {}),
     },
   } as any);
+  await mirrorInboundMmsToAttachments({
+    tenantId: input.tenantId,
+    threadId: thread.id,
+    messageId: msg.id,
+    externalUrls: input.row.mediaUrls,
+  });
   const newLastAt = input.row.createdAt || msg.createdAt;
   // Only advance lastMessageAt — never regress it for older out-of-order imports.
   if (!thread.lastMessageAt || newLastAt > thread.lastMessageAt) {
