@@ -143,6 +143,7 @@ function statusFromRegistration(regState: SipRegState, hasError: boolean): { lab
 function friendlyError(error: string | null, micPermission: string, regState: SipRegState): string | null {
   const raw = (error ?? "").toLowerCase();
   if (raw.includes("extension_not_assigned") || raw.includes("extension not assigned")) return "No extension assigned";
+  if (raw.includes("extension_not_provisioned")) return "Extension not linked to PBX";
   if (raw.includes("microphone") || micPermission === "denied") return "Microphone permission needed";
   if (raw.includes("register") || regState === "failed") return "Phone not registered";
   if (raw.includes("connection") || raw.includes("transport") || raw.includes("websocket")) return "Connection issue";

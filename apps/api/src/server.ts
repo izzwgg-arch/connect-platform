@@ -1975,12 +1975,16 @@ async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPass
   // Always require ownerUserId for ALL roles — admins get their own assigned extension,
   // not an arbitrary first-in-tenant extension. This prevents cross-user credential bleed
   // within a tenant when multiple admins exist.
-  const row = await db.pbxExtensionLink.findFirst({
-    where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
-    include: { extension: true },
-    orderBy: { createdAt: "asc" }
+  const ext = await db.extension.findFirst({
+    where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+    include: { pbxLink: true },
+    orderBy: { createdAt: "asc" },
   });
-  if (!row) throw new Error("EXTENSION_NOT_ASSIGNED");
+  if (!ext) throw new Error("EXTENSION_NOT_ASSIGNED");
+  const row = ext.pbxLink;
+  if (!row) {
+    throw Object.assign(new Error("EXTENSION_NOT_PROVISIONED"), { extensionNumber: ext.extNumber });
+  }
 
   let sipPassword = "";
   if (voiceSimulate) {
@@ -2133,9 +2137,11 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/tenant-users", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/settings/webrtc", permission: "can_view_pbx_softphone" },
-  { prefix: "/voice/me/extension", permission: "can_view_pbx_softphone" },
-  { prefix: "/me/outbound-routes", permission: "can_view_pbx_softphone" },
-  { prefix: "/voice/me/reset-sip-password", permission: "can_view_pbx_softphone" },
+  // Self-scoped softphone config for the logged-in user only — same bar as Overview.
+  // The floating dialer is global; gate with workspace overview, not PBX admin nav.
+  { prefix: "/voice/me/extension", permission: "can_view_workspace_overview" },
+  { prefix: "/me/outbound-routes", permission: "can_view_workspace_overview" },
+  { prefix: "/voice/me/reset-sip-password", permission: "can_view_workspace_overview" },
   { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
@@ -7741,20 +7747,30 @@ app.get("/voice/me/extension", async (req, reply) => {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
 
-  // Always scope to this user's own assigned extension — never fall back to first-in-tenant
-  const row = await db.pbxExtensionLink.findFirst({
-    where: { tenantId: user.tenantId, extension: { ownerUserId: user.sub } },
-    include: { extension: true },
-    orderBy: { createdAt: "asc" }
+  // Always scope to this user's own assigned extension — never fall back to first-in-tenant.
+  // Resolve via Extension + optional PbxExtensionLink (matches voicemail control-panel logic).
+  const ext = await db.extension.findFirst({
+    where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+    include: { pbxLink: true },
+    orderBy: { createdAt: "asc" },
   });
-  if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
+  if (!ext) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
+
+  const row = ext.pbxLink;
+  if (!row) {
+    return reply.status(404).send({
+      error: "EXTENSION_NOT_PROVISIONED",
+      extensionNumber: ext.extNumber,
+      message: "Extension exists in Connect but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
+    });
+  }
 
   const cfg = resolveWebrtcConfig(tenant, link);
   return {
-    extensionId: row.extension.id,
+    extensionId: ext.id,
     pbxExtensionLinkId: row.id,
-    extensionNumber: row.extension.extNumber,
-    displayName: row.extension.displayName,
+    extensionNumber: ext.extNumber,
+    displayName: ext.displayName,
     sipUsername: row.pbxSipUsername,
     // authUsername = the PJSIP auth object username in Asterisk (= pbxDeviceName e.g. "T2_103_1").
     // VitalPBX creates auth objects named after the device_name, so this is what goes in
@@ -7874,12 +7890,20 @@ app.post("/voice/me/reset-sip-password", async (req, reply) => {
     return { sipPassword: out.sipPassword, provisioning: out.provisioning };
   } catch (e: any) {
     const code = String(e?.message || "VOICE_PROVISIONING_FAILED");
+    const extensionNumber = typeof e?.extensionNumber === "string" ? e.extensionNumber : undefined;
     // Audit failures for known setup problems so admins can investigate
-    if (code === "EXTENSION_NOT_ASSIGNED" || code === "SIP_CREDENTIAL_NOT_SET") {
+    if (code === "EXTENSION_NOT_ASSIGNED" || code === "SIP_CREDENTIAL_NOT_SET" || code === "EXTENSION_NOT_PROVISIONED") {
       await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: `VOICE_ME_PROVISION_FAILED_${code}`, entityType: "User", entityId: user.sub }).catch(() => undefined);
     }
     if (code === "PBX_NOT_LINKED") return reply.status(400).send({ error: code });
     if (code === "EXTENSION_NOT_ASSIGNED") return reply.status(404).send({ error: code });
+    if (code === "EXTENSION_NOT_PROVISIONED") {
+      return reply.status(404).send({
+        error: code,
+        extensionNumber,
+        message: "Extension exists in Connect but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
+      });
+    }
     return reply.status(400).send({ error: code });
   }
 });

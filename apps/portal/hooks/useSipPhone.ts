@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { apiGet, apiPost } from "../services/apiClient";
+import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -868,14 +868,27 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         ext = await apiGet<VoiceExtension>("/voice/me/extension");
       } catch (e: unknown) {
         if (cancelled) return;
+        const fromBody =
+          e instanceof ApiError && e.body && typeof e.body === "object"
+            ? (e.body as { extensionNumber?: string; message?: string })
+            : null;
+        const extNum = fromBody?.extensionNumber?.trim() || null;
         const raw = e instanceof Error ? e.message : "EXTENSION_NOT_FOUND";
-        const msg = raw.includes("EXTENSION_NOT_ASSIGNED") || raw.includes("EXTENSION_NOT_FOUND")
-          ? "EXTENSION_NOT_ASSIGNED — No extension is assigned to your account. Contact your administrator to assign one via PBX → Extensions."
-          : raw.includes("PBX_NOT_LINKED")
-          ? "PBX_NOT_LINKED — The PBX is not configured for your account. Contact your administrator."
-          : raw;
+        const msg =
+          e instanceof ApiError && e.status === 403
+            ? "FORBIDDEN — Your account cannot load Connect phone settings. Ask an administrator to update your permissions."
+            : raw.includes("EXTENSION_NOT_PROVISIONED")
+              ? `EXTENSION_NOT_PROVISIONED — ${fromBody?.message || `Extension ${extNum || "?"} is not linked to the PBX yet. Ask an administrator to sync or re-provision WebRTC.`}`
+              : raw.includes("EXTENSION_NOT_ASSIGNED") || raw.includes("EXTENSION_NOT_FOUND")
+                ? "EXTENSION_NOT_ASSIGNED — No extension is assigned to your account. Contact your administrator to assign one via PBX → Extensions."
+                : raw.includes("PBX_NOT_LINKED")
+                  ? "PBX_NOT_LINKED — The PBX is not configured for your account. Contact your administrator."
+                  : raw;
         setError(msg);
-        patchDiag({ webrtcEnabled: false });
+        patchDiag({
+          webrtcEnabled: false,
+          ...(extNum ? { extensionNumber: extNum } : {}),
+        });
         return;
       }
       if (cancelled) return;
@@ -924,14 +937,21 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         sipPassword = reset.sipPassword ?? reset.provisioning?.sipPassword ?? "";
       } catch (e: unknown) {
         if (cancelled) return;
+        const fromBody =
+          e instanceof ApiError && e.body && typeof e.body === "object"
+            ? (e.body as { extensionNumber?: string; message?: string })
+            : null;
+        const extNum = fromBody?.extensionNumber?.trim() || null;
         const raw = e instanceof Error ? e.message : "SIP_CREDENTIAL_FETCH_FAILED";
-        const msg = raw.includes("SIP_CREDENTIAL_NOT_SET")
-          ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension."
-          : raw.includes("RATE_LIMITED")
-          ? "RATE_LIMITED — Too many credential requests. Reload the page to retry."
-          : `Failed to fetch SIP credentials: ${raw}. Try refreshing the page.`;
+        const msg = raw.includes("EXTENSION_NOT_PROVISIONED")
+          ? `EXTENSION_NOT_PROVISIONED — ${fromBody?.message || `Extension ${extNum || "?"} is not linked to the PBX yet.`}`
+          : raw.includes("SIP_CREDENTIAL_NOT_SET")
+            ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension."
+            : raw.includes("RATE_LIMITED")
+              ? "RATE_LIMITED — Too many credential requests. Reload the page to retry."
+              : `Failed to fetch SIP credentials: ${raw}. Try refreshing the page.`;
         setError(msg);
-        patchDiag({ lastRegError: msg });
+        patchDiag({ lastRegError: msg, ...(extNum ? { extensionNumber: extNum } : {}) });
         return;
       }
 
