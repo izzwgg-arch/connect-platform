@@ -4,10 +4,10 @@
  * Why this exists: VoIP.ms `sendMMS` happily accepts arbitrary audio URLs but
  * downstream carrier MMS gateways (T-Mobile, AT&T, Verizon, Bell, Rogers …)
  * have wildly inconsistent codec support. The combination that actually
- * delivers reliably across the major NA carriers is:
- *   - container : `.mp3`
- *   - codec     : MP3, mono, 16 kHz sample rate
- *   - bitrate   : 24 kbps (≈ 3 KB/s) → comfortably under the per-MMS slot
+ * is most likely to survive the provider/carrier MMS path:
+ *   - container : `.wav`
+ *   - codec     : PCM signed 16-bit, mono, 8 kHz sample rate
+ *   - size      : ≈ 16 KB/s, so a 30 s voice note stays below the MMS budget
  *
  * Total file budget: 590 KB hard cap. Most carriers reject above ~600 KB,
  * a few above 1 MB. We size to the worst case so a 30 s voice note still
@@ -69,7 +69,7 @@ export class MmsAudioTooLargeError extends Error {
 }
 
 /**
- * Convert each audio attachment to an MMS-friendly `.m4a` file and persist
+ * Convert each audio attachment to an MMS-friendly `.wav` file and persist
  * it as a new attachment row. Returns the converted attachment metadata
  * (one per input). On any failure, throws — the caller is expected to fall
  * back to the SMS + signed link path.
@@ -96,38 +96,27 @@ async function convertSingleAttachment(
     throw new Error(`mms_audio_source_missing:${att.storageKey}`);
   }
 
-  // First attempt: 24 kbps. Plenty of headroom for ~3 minutes of speech.
   let convertedBuffer: Buffer;
   try {
-    convertedBuffer = await ffmpegToMmsMp3(sourceBuffer, 24);
+    convertedBuffer = await ffmpegToMmsWav(sourceBuffer);
   } catch (err: any) {
     throw new Error(`mms_audio_ffmpeg_failed:${err?.message || err}`);
   }
 
-  // If the first encode busts the budget (e.g. very long voice note),
-  // retry at 16 kbps. Anything beyond that is genuinely too long to send
-  // as an MMS — we surface a typed error so the worker can fall back.
   if (convertedBuffer.length > MMS_AUDIO_BUDGET_BYTES) {
-    try {
-      convertedBuffer = await ffmpegToMmsMp3(sourceBuffer, 16);
-    } catch (err: any) {
-      throw new Error(`mms_audio_ffmpeg_retry_failed:${err?.message || err}`);
-    }
-    if (convertedBuffer.length > MMS_AUDIO_FALLBACK_BUDGET_BYTES) {
-      throw new MmsAudioTooLargeError(
-        `mms_audio_too_large:${convertedBuffer.length}`,
-        convertedBuffer.length,
-      );
-    }
+    throw new MmsAudioTooLargeError(
+      `mms_audio_too_large:${convertedBuffer.length}`,
+      convertedBuffer.length,
+    );
   }
 
   const baseName = path.basename(att.fileName || "voice-note", path.extname(att.fileName || ""));
   const written = await writeChatAttachmentFile({
     tenantKey: att.tenantId,
     threadId,
-    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.mp3`,
+    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.wav`,
     buffer: convertedBuffer,
-    mimeType: "audio/mpeg",
+    mimeType: "audio/wav",
     maxBytes: MMS_AUDIO_BUDGET_BYTES + 64 * 1024,
   });
 
@@ -162,10 +151,10 @@ async function convertSingleAttachment(
   };
 }
 
-async function ffmpegToMmsMp3(input: Buffer, bitrateKbps: number): Promise<Buffer> {
+async function ffmpegToMmsWav(input: Buffer): Promise<Buffer> {
   const id = crypto.randomBytes(6).toString("hex");
   const inPath = path.join(os.tmpdir(), `cc-mms-in-${id}`);
-  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.mp3`);
+  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.wav`);
   await fs.promises.writeFile(inPath, input);
   try {
     await execFileAsync(
@@ -179,11 +168,9 @@ async function ffmpegToMmsMp3(input: Buffer, bitrateKbps: number): Promise<Buffe
         "-ac",
         "1",
         "-ar",
-        "16000",
-        "-codec:a",
-        "libmp3lame",
-        "-b:a",
-        `${bitrateKbps}k`,
+        "8000",
+        "-c:a",
+        "pcm_s16le",
         "-vn",
         outPath,
       ],
