@@ -81,16 +81,33 @@ install -d -o asterisk -g asterisk -m 0775 /var/lib/asterisk/sounds/custom 2>/de
 install -d -o asterisk -g asterisk -m 0775 /var/spool/asterisk/voicemail 2>/dev/null || \
   install -d -m 0775 /var/spool/asterisk/voicemail
 
-HELPER_SECRET="$(openssl rand -hex 32 2>/dev/null || python3 - <<'PY'
+# Re-running the installer should not silently rotate the helper secret and
+# break the Connect API. Preserve existing env values unless explicitly
+# overridden by the operator.
+if [[ -f /etc/connect-pbx-helper.env ]]; then
+  set +u
+  # shellcheck disable=SC1091
+  source /etc/connect-pbx-helper.env || true
+  set -u
+fi
+
+HELPER_SECRET="${CONNECT_PBX_HELPER_SECRET:-}"
+if [[ -z "${HELPER_SECRET}" ]]; then
+  HELPER_SECRET="$(openssl rand -hex 32 2>/dev/null || python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
 )"
-MYSQL_PASS="$(openssl rand -base64 32 2>/dev/null | tr -d '\n' || python3 - <<'PY'
+fi
+
+MYSQL_PASS="${OMBU_MYSQL_PASSWORD:-}"
+if [[ -z "${MYSQL_PASS}" ]]; then
+  MYSQL_PASS="$(openssl rand -base64 32 2>/dev/null | tr -d '\n' || python3 - <<'PY'
 import secrets
 print(secrets.token_urlsafe(32))
 PY
 )"
+fi
 
 python3 -m venv /opt/connect-pbx-helper/.venv
 /opt/connect-pbx-helper/.venv/bin/pip install --upgrade pip >/dev/null
