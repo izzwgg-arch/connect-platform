@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
 
 const portalUrl = (process.env.CONNECT_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
 const preloadPath = path.join(__dirname, "preload.js");
+const iconPath = path.join(__dirname, "..", "assets", "icon.png");
 
 let fullWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -80,6 +81,11 @@ function webPreferences(windowKind: string) {
   };
 }
 
+function createAppIcon(size?: number) {
+  const icon = nativeImage.createFromPath(iconPath);
+  return size ? icon.resize({ width: size, height: size }) : icon;
+}
+
 function createFullWindow(show = true): BrowserWindow {
   if (fullWindow && !fullWindow.isDestroyed()) {
     if (show) {
@@ -97,6 +103,7 @@ function createFullWindow(show = true): BrowserWindow {
     show,
     title: "Connect",
     backgroundColor: "#07111f",
+    icon: iconPath,
     webPreferences: webPreferences("full"),
   });
 
@@ -131,13 +138,20 @@ function createMiniWindow(show = true): BrowserWindow {
     y: settings.miniBounds.y,
     minWidth: 320,
     minHeight: 560,
-    show,
+    show: false,
     title: "Connect Mini Dialer",
     frame: false,
     resizable: true,
     alwaysOnTop: settings.alwaysOnTop,
     backgroundColor: "#07111f",
+    icon: iconPath,
     webPreferences: webPreferences("mini"),
+  });
+
+  miniWindow.once("ready-to-show", () => {
+    if (!show || !miniWindow || miniWindow.isDestroyed()) return;
+    miniWindow.show();
+    miniWindow.focus();
   });
 
   miniWindow.on("close", (event) => {
@@ -175,6 +189,7 @@ function createPhoneEngineWindow(): BrowserWindow {
     show: false,
     title: "Connect Phone Engine",
     backgroundColor: "#07111f",
+    icon: iconPath,
     webPreferences: webPreferences("phone-engine"),
   });
 
@@ -197,7 +212,7 @@ function showMiniForIncomingCall(): void {
 
 function rebuildTray(): void {
   if (!tray) {
-    tray = new Tray(nativeImage.createEmpty());
+    tray = new Tray(createAppIcon(16));
     tray.setToolTip("Connect");
   }
 
@@ -264,7 +279,7 @@ function registerIpc(): void {
   });
   ipcMain.handle("desktop:notification", (_event, payload: { kind: string; title: string; body?: string; route?: string }) => {
     if (!Notification.isSupported()) return false;
-    const note = new Notification({ title: payload.title, body: payload.body || "" });
+    const note = new Notification({ title: payload.title, body: payload.body || "", icon: iconPath });
     note.on("click", () => {
       if (payload.kind === "incoming-call") showMiniForIncomingCall();
       else if (payload.route) createFullWindow(true) && loadPortal(createFullWindow(true), payload.route);
@@ -283,6 +298,7 @@ function registerIpc(): void {
           const note = new Notification({
             title: "Incoming call",
             body: state.remoteParty ? String(state.remoteParty) : "Connect call",
+            icon: iconPath,
           });
           note.on("click", showMiniForIncomingCall);
           note.show();
@@ -299,6 +315,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
   applyLoginSettings();
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

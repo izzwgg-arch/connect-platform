@@ -18,11 +18,17 @@
     },
     "files": [
       "dist/**",
+      "assets/**",
       "package.json"
     ],
     "win": {
       "target": "nsis",
+      "icon": "assets/icon.ico",
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
     }
   },
   "devDependencies": {

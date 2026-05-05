@@ -436,6 +436,12 @@ export function FloatingDialer() {
     setWebRingerEnabled(next);
   }, []);
 
+  const popOutMiniDialer = useCallback(() => {
+    const openMini = window.connectDesktop?.window?.openMini;
+    if (!openMini) return;
+    void openMini().then(() => setOpen(false));
+  }, []);
+
   const requestClose = useCallback(() => {
     if (!isInCall) setOpen(false);
   }, [isInCall]);
@@ -485,7 +491,7 @@ export function FloatingDialer() {
               <div className="fd-header-actions">
                 <RingerControl checked={ringerOn} onChange={updateRinger} />
                 {isDesktop && (
-                  <button className="fd-icon-plain" type="button" onClick={() => window.connectDesktop?.window?.openMini?.()} title="Pop out mini dialer">
+                  <button className="fd-icon-plain" type="button" onClick={popOutMiniDialer} title="Pop out mini dialer">
                     <Maximize2 size={16} />
                   </button>
                 )}
