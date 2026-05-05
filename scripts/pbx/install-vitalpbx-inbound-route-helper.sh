@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.03"
+VERSION = "2026.05.05"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -803,12 +803,26 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json(500, {"ok": False, "error": str(exc)})
                 return
+            try:
+                file_stat = Path(CONNECT_VM_DIALPLAN_PATH).stat()
+                file_owner = pwd.getpwuid(file_stat.st_uid).pw_name
+                file_group = grp.getgrgid(file_stat.st_gid).gr_name
+                file_mode = oct(file_stat.st_mode & 0o777)
+            except (OSError, KeyError):
+                file_owner = file_group = file_mode = ""
+            try:
+                ext_conf = Path("/etc/asterisk/extensions.conf").read_text()
+            except OSError:
+                ext_conf = ""
             self.send_json(200, {
                 "ok": True,
                 "version": VERSION,
                 "dialplanFilePath": CONNECT_VM_DIALPLAN_PATH,
                 "dialplanFilePresent": Path(CONNECT_VM_DIALPLAN_PATH).is_file(),
                 "dialplanFileSize": len(file_text),
+                "dialplanFileOwner": file_owner,
+                "dialplanFileGroup": file_group,
+                "dialplanFileMode": file_mode,
                 "dialplanFileBody": file_text[:6000],
                 "dialplanShowExitCode": dp.returncode,
                 "dialplanShowOutput": (dp.stdout + dp.stderr)[-4000:],
@@ -821,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
                 "astdbConnectVmDialOutput": (astdb.stdout + astdb.stderr)[-2000:],
                 "dialplanReloadExitCode": reload_code,
                 "dialplanReloadOutput": reload_out,
-                "extensionsCustomConf": (Path(CONNECT_VM_INCLUDE_TARGET).read_text() if Path(CONNECT_VM_INCLUDE_TARGET).is_file() else "")[-6000:],
+                "extensionsConf": ext_conf[-6000:],
                 "vitalpbxDialplanDirListing": "\n".join(sorted(p.name for p in Path("/etc/asterisk/vitalpbx").iterdir())) if Path("/etc/asterisk/vitalpbx").is_dir() else "",
             })
         elif path.startswith("/voicemail/greeting/record-call/"):
@@ -872,11 +886,19 @@ class Handler(BaseHTTPRequestHandler):
             audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(409, {"error": str(exc)})
 
-CONNECT_VM_INLINE_TARGET = "/etc/asterisk/extensions_custom.conf"
-CONNECT_VM_INLINE_BEGIN = "; >>> CONNECT_VM_GREETING_BLOCK_BEGIN (auto-managed by connect-pbx-helper, do not edit) >>>"
-CONNECT_VM_INLINE_END = "; <<< CONNECT_VM_GREETING_BLOCK_END <<<"
-CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf"
-CONNECT_VM_LEGACY_DIALPLAN_PATHS = ("/etc/asterisk/extensions__95_connect_vm_greeting.conf",)
+CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/vitalpbx/extensions__95-connect-vm-greeting.conf"
+CONNECT_VM_LEGACY_DIALPLAN_PATHS = (
+    "/etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf",
+    "/etc/asterisk/extensions__95_connect_vm_greeting.conf",
+    "/etc/asterisk/extensions_95_connect_vm_greeting.conf",
+)
+CONNECT_VM_LEGACY_INLINE_TARGETS = (
+    "/etc/asterisk/extensions_custom.conf",
+    "/etc/asterisk/extensions__88_custom.conf",
+    "/etc/asterisk/extensions__60_custom.conf",
+)
+CONNECT_VM_LEGACY_BEGIN = "; >>> CONNECT_VM_GREETING_BLOCK_BEGIN (auto-managed by connect-pbx-helper, do not edit) >>>"
+CONNECT_VM_LEGACY_END = "; <<< CONNECT_VM_GREETING_BLOCK_END <<<"
 CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
@@ -923,68 +945,77 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
 exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 """
 
-CONNECT_VM_INCLUDE_TARGET = CONNECT_VM_INLINE_TARGET
+def _strip_legacy_inline_blocks():
+    """Earlier installer revisions tried to embed the dialplan inside one of
+    the *_custom.conf files using BEGIN/END markers. On this VitalPBX install
+    those files were either not actually included or ended up with the wrong
+    ownership and were silently ignored by Asterisk. Strip any such block so
+    there is exactly one source of truth (the drop-in file)."""
+    pattern = re.compile(
+        r"(?ms)^[ \t]*"
+        + re.escape(CONNECT_VM_LEGACY_BEGIN)
+        + r".*?"
+        + re.escape(CONNECT_VM_LEGACY_END)
+        + r"\s*\n?"
+    )
+    for legacy in CONNECT_VM_LEGACY_INLINE_TARGETS:
+        try:
+            p = Path(legacy)
+            if not p.is_file():
+                continue
+            body = p.read_text()
+            new_body = pattern.sub("", body)
+            new_body = re.sub(r"\n{3,}", "\n\n", new_body)
+            if new_body != body:
+                p.write_text(new_body)
+        except (OSError, PermissionError) as exc:
+            sys.stderr.write("strip_legacy_inline_block_failed: " + legacy + ": " + str(exc) + "\n")
 
-def ensure_connect_vm_inline_block():
-    """Embed the Connect VM greeting dialplan directly inside
-    /etc/asterisk/extensions_custom.conf, replacing any previous block
-    delimited by the BEGIN/END markers. This avoids relying on nested
-    `#include`/`#tryinclude` resolution which has been unreliable on this
-    VitalPBX install."""
+def _apply_dialplan_owner(path_obj):
     try:
-        target = Path(CONNECT_VM_INLINE_TARGET)
-        existing = target.read_text() if target.is_file() else ""
-        block = (
-            CONNECT_VM_INLINE_BEGIN
-            + "\n"
-            + CONNECT_VM_DIALPLAN_BODY.rstrip()
-            + "\n"
-            + CONNECT_VM_INLINE_END
-            + "\n"
-        )
-        begin = existing.find(CONNECT_VM_INLINE_BEGIN)
-        end = existing.find(CONNECT_VM_INLINE_END)
-        if begin != -1 and end != -1 and end > begin:
-            stripped_existing = existing[begin : end + len(CONNECT_VM_INLINE_END) + 1]
-            if stripped_existing.rstrip() == block.rstrip():
-                return False
-            new_body = existing[:begin] + block + existing[end + len(CONNECT_VM_INLINE_END):]
-            new_body = new_body.replace("\n\n\n", "\n\n")
-        else:
-            sep = "" if not existing or existing.endswith("\n") else "\n"
-            new_body = existing + sep + "\n" + block
-        try:
-            target.write_text(new_body)
-        except PermissionError as exc:
-            sys.stderr.write("ensure_connect_vm_inline_block_skip_no_write: " + str(exc) + "\n")
-            return False
-        try:
-            os.chmod(str(target), 0o644)
-        except OSError:
-            pass
-        try:
-            uid = pwd.getpwnam("asterisk").pw_uid
-            gid = grp.getgrnam("asterisk").gr_gid
-            os.chown(str(target), uid, gid)
-        except (KeyError, PermissionError, OSError):
-            pass
-        return True
-    except OSError as exc:
-        sys.stderr.write("ensure_connect_vm_inline_block_failed: " + str(exc) + "\n")
-        return False
+        os.chmod(str(path_obj), 0o644)
+    except OSError:
+        pass
+    try:
+        uid = pwd.getpwnam("asterisk").pw_uid
+        gid = grp.getgrnam("asterisk").gr_gid
+        os.chown(str(path_obj), uid, gid)
+    except (KeyError, PermissionError, OSError):
+        pass
 
 def ensure_connect_vm_dialplan():
+    """Write the Connect voicemail-greeting dialplan to the canonical drop-in
+    path /etc/asterisk/vitalpbx/extensions__95-connect-vm-greeting.conf with
+    asterisk:asterisk 0644. The double-underscore prefix is REQUIRED so the
+    file is matched by VitalPBX's `#include vitalpbx/extensions__*.conf` glob
+    in /etc/asterisk/extensions.conf — single-underscore drop-ins are NOT
+    picked up by `dialplan reload` on this install.
+
+    Reload only happens if the on-disk content actually changed, to avoid
+    spurious reloads on every helper restart."""
     try:
-        # Remove the older dropped-in vitalpbx file and any legacy paths so
-        # there is exactly one source of truth (the inline block in
-        # extensions_custom.conf).
-        for legacy in (CONNECT_VM_DIALPLAN_PATH,) + CONNECT_VM_LEGACY_DIALPLAN_PATHS:
+        # Drop any legacy locations from prior installer revisions so the
+        # dialplan never has two competing copies.
+        for legacy in CONNECT_VM_LEGACY_DIALPLAN_PATHS:
             try:
                 Path(legacy).unlink(missing_ok=True)
             except (OSError, PermissionError):
                 pass
-        wrote = ensure_connect_vm_inline_block()
-        if wrote:
+        _strip_legacy_inline_blocks()
+
+        target = Path(CONNECT_VM_DIALPLAN_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        desired = CONNECT_VM_DIALPLAN_BODY
+        existing = target.read_text() if target.is_file() else ""
+        changed = existing != desired
+        if changed:
+            try:
+                target.write_text(desired)
+            except PermissionError as exc:
+                sys.stderr.write("ensure_connect_vm_dialplan_skip_no_write: " + str(exc) + "\n")
+                return
+        _apply_dialplan_owner(target)
+        if changed:
             subprocess.run(["asterisk", "-rx", "dialplan reload"], capture_output=True, timeout=15, check=False)
     except OSError as exc:
         sys.stderr.write("ensure_connect_vm_dialplan_failed: " + str(exc) + "\n")
@@ -1036,13 +1067,65 @@ EOF
 chmod 0600 /etc/connect-pbx-helper.env
 chown root:root /etc/connect-pbx-helper.env
 
-# Drop any older drop-in dialplan files. The dialplan is now embedded
-# directly inside /etc/asterisk/extensions_custom.conf (delimited by
-# CONNECT_VM_GREETING_BLOCK markers) because nested wildcard #include
-# resolution has been unreliable on this VitalPBX install.
-rm -f /etc/asterisk/extensions__95_connect_vm_greeting.conf
-rm -f /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
-cat >/tmp/connect-vm-greeting.dialplan <<'EOF'
+# Install the Connect VM greeting dialplan as a drop-in file matching
+# VitalPBX's `#include vitalpbx/extensions__*.conf` glob in
+# /etc/asterisk/extensions.conf. The DOUBLE underscore in the filename
+# is REQUIRED — single-underscore drop-ins are not picked up by
+# `dialplan reload` on this VitalPBX install. Ownership must be
+# asterisk:asterisk 0644, otherwise the asterisk process (which does
+# not run as root) cannot read the file and silently skips it.
+DIALPLAN_TARGET=/etc/asterisk/vitalpbx/extensions__95-connect-vm-greeting.conf
+DIALPLAN_LEGACY_FILES=(
+  /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
+  /etc/asterisk/extensions__95_connect_vm_greeting.conf
+  /etc/asterisk/extensions_95_connect_vm_greeting.conf
+)
+DIALPLAN_LEGACY_INLINE_FILES=(
+  /etc/asterisk/extensions_custom.conf
+  /etc/asterisk/extensions__88_custom.conf
+  /etc/asterisk/extensions__60_custom.conf
+)
+
+# Remove old drop-in files from prior installer revisions so there is
+# exactly one source of truth.
+for f in "${DIALPLAN_LEGACY_FILES[@]}"; do
+  rm -f "${f}"
+done
+
+# Strip any embedded BEGIN/END block from prior `extensions_custom.conf`
+# inline-embed strategy. We stopped doing that because not every VitalPBX
+# install actually `#includes` extensions_custom.conf.
+for f in "${DIALPLAN_LEGACY_INLINE_FILES[@]}"; do
+  if [[ -f "${f}" ]]; then
+    python3 - "${f}" <<'PY'
+import sys, re
+p = sys.argv[1]
+try:
+    with open(p, "r") as fh:
+        body = fh.read()
+except FileNotFoundError:
+    sys.exit(0)
+new_body = re.sub(
+    r"(?ms)^[ \t]*; >>> CONNECT_VM_GREETING_BLOCK_BEGIN.*?; <<< CONNECT_VM_GREETING_BLOCK_END <<<\s*\n?",
+    "",
+    body,
+)
+new_body = re.sub(
+    r"(?m)^\s*#tryinclude\s+/etc/asterisk/vitalpbx/extensions_(?:_)?95[-_]connect[-_]vm[-_]greeting\.conf\s*\n?",
+    "",
+    new_body,
+)
+new_body = re.sub(r"\n{3,}", "\n\n", new_body)
+if new_body != body:
+    with open(p, "w") as fh:
+        fh.write(new_body)
+PY
+  fi
+done
+
+install -d -o asterisk -g asterisk -m 0755 /etc/asterisk/vitalpbx 2>/dev/null || true
+
+cat >"${DIALPLAN_TARGET}" <<'EOF'
 ; Installed by Connect PBX helper. This context is used only after Connect
 ; originates a call to a user's extension for voicemail greeting recording.
 ; The helper writes the registered PJSIP dial string into Asterisk's built-in
@@ -1092,49 +1175,17 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
 
 exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 EOF
-CUSTOM_CONF=/etc/asterisk/extensions_custom.conf
-BEGIN_MARKER='; >>> CONNECT_VM_GREETING_BLOCK_BEGIN (auto-managed by connect-pbx-helper, do not edit) >>>'
-END_MARKER='; <<< CONNECT_VM_GREETING_BLOCK_END <<<'
-
-touch "${CUSTOM_CONF}"
-# Strip any prior block (matched between markers), plus any stale #tryinclude
-# line from earlier installer revisions.
-python3 - "${CUSTOM_CONF}" <<'PY'
-import sys, re
-p = sys.argv[1]
-try:
-    with open(p, "r") as fh:
-        body = fh.read()
-except FileNotFoundError:
-    body = ""
-body = re.sub(
-    r"(?ms)^[ \t]*; >>> CONNECT_VM_GREETING_BLOCK_BEGIN.*?; <<< CONNECT_VM_GREETING_BLOCK_END <<<\s*\n?",
-    "",
-    body,
-)
-body = re.sub(
-    r"(?m)^\s*#tryinclude\s+/etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting\.conf\s*\n?",
-    "",
-    body,
-)
-body = re.sub(r"\n{3,}", "\n\n", body)
-with open(p, "w") as fh:
-    fh.write(body)
-PY
-
-# Append the fresh block.
-{
-  printf '\n%s\n' "${BEGIN_MARKER}"
-  cat /tmp/connect-vm-greeting.dialplan
-  printf '%s\n' "${END_MARKER}"
-} >> "${CUSTOM_CONF}"
-rm -f /tmp/connect-vm-greeting.dialplan
-chown asterisk:asterisk "${CUSTOM_CONF}"
-chmod 0644 "${CUSTOM_CONF}"
-echo "Installed Connect VM greeting dialplan block in ${CUSTOM_CONF}"
+chown asterisk:asterisk "${DIALPLAN_TARGET}"
+chmod 0644 "${DIALPLAN_TARGET}"
+echo "Installed Connect VM greeting dialplan: ${DIALPLAN_TARGET}"
+ls -la "${DIALPLAN_TARGET}" || true
 
 asterisk -rx "dialplan reload" || true
 asterisk -rx "dialplan show connect-vm-greeting-record" >/tmp/connect-vm-dialplan-check.txt 2>&1 || true
+asterisk -rx "dialplan show connect-vm-greeting-dispatch" >>/tmp/connect-vm-dialplan-check.txt 2>&1 || true
+echo
+echo "Dialplan load check:"
+head -20 /tmp/connect-vm-dialplan-check.txt 2>/dev/null || true
 
 echo "Creating narrow MySQL user connect_route_helper..."
 mysql ${MYSQL_ROOT_ARGS} <<SQL
