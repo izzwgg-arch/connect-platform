@@ -72,6 +72,7 @@ export function normalizeCallForClient(call: NormalizedCall): NormalizedCall {
     trunk: call.trunk,
     startedAt: call.startedAt,
     answeredAt: call.answeredAt,
+    extensionAnsweredAt: call.extensionAnsweredAt ?? null,
     endedAt: call.endedAt,
     durationSec,
     billableSec: call.billableSec,

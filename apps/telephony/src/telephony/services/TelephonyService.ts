@@ -797,32 +797,41 @@ export class TelephonyService {
       throw new Error(`active call not found for linkedId=${params.linkedId}`);
     }
 
-    // CRITICAL: If the call is already answered (Asterisk has bridged the legs
-    // because the called party sent SIP 200 OK), an AMI Redirect at this point
-    // would TEAR DOWN the working bridge and re-enter the dialplan from
-    // (lastContext, lastExten, 1) — which for inbound DID→IVR→ext is the DID
-    // number inside T<id>_cos-all, i.e. an outbound dial back through the
-    // trunk that loops the caller right back into the IVR they came from.
+    // CRITICAL: If a tenant-extension leg has already answered (Asterisk has
+    // bridged the trunk leg with the extension's PJSIP/WebRTC endpoint that
+    // sent SIP 200 OK), an AMI Redirect at this point would TEAR DOWN the
+    // working bridge and re-enter the dialplan from (lastContext, lastExten, 1)
+    // — which for inbound DID→IVR→ext is the DID number inside T<id>_cos-all,
+    // i.e. an outbound dial back through the trunk that loops the caller right
+    // back into the IVR they came from.
     //
     // The mobile app's `/respond` POST only signals "user tapped Answer" for
     // bookkeeping. The actual call is established by the SIP 200 OK from the
     // mobile's PJSIP/WebRTC endpoint; no AMI action is required to bridge it.
     //
-    // The requeue is only meaningful while the trunk caller leg is parked or
-    // still in the IVR/Local-channel pre-answer phase. Once the call is up,
-    // skipping is the correct, safe behavior.
+    // We MUST gate on `extensionAnsweredAt` (set only when an extension leg
+    // goes Up), NOT `state === "up"` or `answeredAt`. Both of those are tripped
+    // by the inbound trunk leg's IVR `Answer()` to play a greeting — which
+    // happens 5–30 seconds before the extension is even rung in DID→IVR→ext
+    // flows. Using the looser gate previously caused mobile cold-start answer
+    // attempts to be silently dropped: the mobile sees "user tapped Answer"
+    // but no SIP INVITE ever arrives because the requeue refused to redirect
+    // the trunk leg into the extension's hunt group.
     //
     // See: Connect 2 incident 2026-05-04 — external IVR→mobile calls
-    //      reproduced "answer then bounce back to IVR".
-    if (call.state === "up" || call.answeredAt) {
+    //      reproduced "answer then bounce back to IVR" (old over-eager gate),
+    //      then "answer but never connects" (gate refused legitimate requeue
+    //      because trunk leg's IVR Answer() looked like an extension answer).
+    if (call.extensionAnsweredAt) {
       log.info(
         {
           linkedId: params.linkedId,
           state: call.state,
           answeredAt: call.answeredAt,
+          extensionAnsweredAt: call.extensionAnsweredAt,
           channels: call.channels,
         },
-        "mobile invite requeue skipped — call already bridged",
+        "mobile invite requeue skipped — extension already answered",
       );
       return {
         actionId: null,
@@ -830,7 +839,7 @@ export class TelephonyService {
         exten: null,
         context: null,
         skipped: true,
-        skipReason: "call_already_bridged",
+        skipReason: "extension_already_answered",
       };
     }
 

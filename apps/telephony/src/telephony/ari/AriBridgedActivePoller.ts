@@ -127,6 +127,7 @@ function bridgeRowsToNormalizedCalls(
       trunk: null,
       startedAt: firstSeenAt?.get(b.bridgeId) ?? now,
       answeredAt: now,
+      extensionAnsweredAt: extensions.length > 0 ? now : null,
       endedAt: null,
       durationSec: 0,
       billableSec: 0,

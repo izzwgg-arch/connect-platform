@@ -25,7 +25,34 @@ export interface NormalizedCall {
   queueId: string | null;
   trunk: string | null;
   startedAt: string;
+  /**
+   * First moment ANY channel of the call reached the "up" state — including
+   * the inbound trunk leg's IVR `Answer()` to play the greeting. Used for CDR
+   * billing and "answered vs missed" classification.
+   *
+   * NOTE: This is NOT a reliable signal that the *called extension* actually
+   * answered. For DID→IVR→ext routes the trunk leg goes "up" 5–30 seconds
+   * before the dialed extension is even rung. If you need to know "is the
+   * caller currently talking to my extension's endpoint?", use
+   * {@link extensionAnsweredAt} instead.
+   */
   answeredAt: string | null;
+  /**
+   * First moment a tenant-extension leg (`PJSIP/T<id>_<exten>...` — including
+   * WebRTC `_<n>` suffix variants) reached the "up" state or joined a real
+   * bridge. This is the truthful "the called extension answered" timestamp.
+   *
+   * Used by the mobile-wake answer pipeline's "already bridged" gate in
+   * {@link TelephonyService.requeueLiveCallToDialplan} so an inbound IVR
+   * call can still be redirected to ring the extension when the user taps
+   * Answer in the cold-start mobile UI — the mobile cold-start path needs
+   * this redirect because its SIP UA wasn't running when the original
+   * Asterisk dial fired and so it never received the original SIP INVITE.
+   *
+   * Null until at least one extension leg actually answers; remains null
+   * forever for missed calls / IVR-only journeys / voicemail-handled calls.
+   */
+  extensionAnsweredAt: string | null;
   endedAt: string | null;
   durationSec: number;
   billableSec: number;

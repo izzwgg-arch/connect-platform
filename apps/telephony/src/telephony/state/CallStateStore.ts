@@ -34,6 +34,22 @@ const MAX_CALL_DURATION_SECONDS = 8000;
 // Shared VitalPBX multi-tenant context prefixes. Used to extract tenant slug from dcontext/accountCode.
 const VPBX_CTX_PREFIXES = ["ext-local-", "from-pstn-", "from-internal-", "from-trunk-", "outbound-", "from-external-"];
 
+/**
+ * Returns true when the channel name matches a tenant-extension leg pattern
+ * (`PJSIP/T<id>_<exten>...` — including WebRTC `_<n>` suffix variants like
+ * `T2_103_1`). Trunk legs (`PJSIP/<numeric>_<provider_slug>...`) and helper
+ * channels (Local/, mixing/, Message/, …) return false.
+ *
+ * Used to gate the {@link NormalizedCall.extensionAnsweredAt} timestamp so a
+ * trunk leg's IVR `Answer()` (which fires up to 30 seconds before the dialed
+ * extension is even rung) does NOT make the call appear "already answered by
+ * the called extension" to the mobile-wake answer pipeline.
+ */
+function isExtensionLegChannel(channel: string | null | undefined): boolean {
+  if (!channel) return false;
+  return /^PJSIP\/T\d+_\d+/i.test(channel);
+}
+
 /** Extract a "vpbx:{slug}" tenantId from a CDR dcontext or accountCode value (or null if none found). */
 function resolveTenantFromCdrFields(dcontext?: string, accountCode?: string): string | null {
   const contextToCheck = dcontext || "";
@@ -443,6 +459,13 @@ export class CallStateStore extends EventEmitter {
       if (channelState === "up" && !call.answeredAt) {
         call.answeredAt = new Date().toISOString();
       }
+      if (
+        channelState === "up" &&
+        !call.extensionAnsweredAt &&
+        isExtensionLegChannel(params.channel)
+      ) {
+        call.extensionAnsweredAt = new Date().toISOString();
+      }
     }
     this.debugBlfCallTransition(call, prevState, "Newchannel", {
       uniqueid: params.uniqueid,
@@ -481,12 +504,24 @@ export class CallStateStore extends EventEmitter {
 
     const prevState = call.state;
     const newState = channelStateToCallState(params.channelState);
+    const channel = this.channelByUniqueId.get(params.uniqueid);
     if (shouldUpgradeState(call.state, newState)) {
       call.state = newState;
       // Mark answeredAt the first time a channel goes Up (state 6).
       // BridgeEnter also sets this; whichever fires first wins (both are guarded by !answeredAt).
       if (newState === "up" && !call.answeredAt) {
         call.answeredAt = new Date().toISOString();
+      }
+      // Mark extensionAnsweredAt ONLY when the channel that just went Up is a
+      // tenant-extension leg (mobile/desk/WebRTC). Trunk-leg "up" events
+      // (e.g. inbound IVR `Answer()` to play a greeting) intentionally do NOT
+      // trip this flag — see {@link NormalizedCall.extensionAnsweredAt}.
+      if (
+        newState === "up" &&
+        !call.extensionAnsweredAt &&
+        isExtensionLegChannel(channel)
+      ) {
+        call.extensionAnsweredAt = new Date().toISOString();
       }
       if (env.ENABLE_TELEPHONY_DEBUG && (newState === "ringing" || newState === "up")) {
         log.debug({ callId: params.linkedId, state: newState }, "live_call: call_marked_ringing_or_talking");
@@ -496,7 +531,6 @@ export class CallStateStore extends EventEmitter {
       call.connectedLine = params.connectedLineNum;
     }
     call.channelState = params.channelState || call.channelState;
-    const channel = this.channelByUniqueId.get(params.uniqueid);
     const channelExt = normalizeExtensionFromChannel(channel);
     if (channelExt && !call.extensions.includes(channelExt)) {
       call.extensions.push(channelExt);
@@ -596,6 +630,19 @@ export class CallStateStore extends EventEmitter {
           log.debug({ callId: call.id }, "live_call: call_marked_talking");
         }
       }
+      // Mark extensionAnsweredAt only when an extension leg is the one
+      // joining (or already in) this multi-party bridge. A bridge of trunk +
+      // IVR Local helper would not satisfy this — the joining channel must
+      // be a real `PJSIP/T<id>_<exten>...` leg.
+      if (!call.extensionAnsweredAt) {
+        const joiningChannel = this.channelByUniqueId.get(params.uniqueid);
+        const anyExtensionInBridge =
+          isExtensionLegChannel(joiningChannel) ||
+          call.channels.some((ch) => isExtensionLegChannel(ch));
+        if (anyExtensionInBridge) {
+          call.extensionAnsweredAt = new Date().toISOString();
+        }
+      }
     }
     this.debugBlfCallTransition(call, prevState, "BridgeEnter", {
       uniqueid: params.uniqueid,
@@ -633,6 +680,9 @@ export class CallStateStore extends EventEmitter {
     if (fromCall.destination_extension && !intoCall.destination_extension) intoCall.destination_extension = fromCall.destination_extension;
     if (fromCall.channelState && !intoCall.channelState) intoCall.channelState = fromCall.channelState;
     if (fromCall.answeredAt && !intoCall.answeredAt) intoCall.answeredAt = fromCall.answeredAt;
+    if (fromCall.extensionAnsweredAt && !intoCall.extensionAnsweredAt) {
+      intoCall.extensionAnsweredAt = fromCall.extensionAnsweredAt;
+    }
     if (fromCall.state !== "hungup" && shouldUpgradeState(intoCall.state, fromCall.state)) {
       intoCall.state = fromCall.state;
     }
@@ -1030,6 +1080,7 @@ export class CallStateStore extends EventEmitter {
       trunk: null,
       startedAt: new Date().toISOString(),
       answeredAt: null,
+      extensionAnsweredAt: null,
       endedAt: null,
       durationSec: 0,
       billableSec: 0,
