@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.2"
+VERSION = "2026.05.05.3"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -813,18 +813,18 @@ def vm_record_call(body):
     dispatch_endpoints: list = []
     if channel.startswith("Local/") and "connect-vm-greeting-dispatch" in channel:
         # Build the dial string from KNOWN endpoint names rather than querying
-        # pjsip show contacts. The dispatch dialplan context includes Wait(10)
+        # pjsip show contacts. The dispatch dialplan context includes Wait(15)
         # before Dial() so the mobile has time to finish SIP registration after
         # the FCM wake sent by the API. This avoids the race where the mobile
         # hasn't yet completed its REGISTER/200-OK cycle at originate time.
         #
-        # If the API provides a pjsipEndpoint hint (the device-specific endpoint
-        # name from the DB, e.g. "T21_101_1"), use ONLY that endpoint. Both the
-        # mobile app and the WebRTC portal share the same device-specific
-        # endpoint, so one entry is enough to ring all of the user's softphones.
-        #
-        # Only fall back to the base endpoint "T{tenant}_{ext}" when no hint is
-        # provided — for deployments that use un-suffixed desk-phone endpoints.
+        # Build the dial string from BOTH the base endpoint AND the device-specific
+        # hint endpoint (if provided). Using both in parallel is more robust than
+        # targeting only one: the base endpoint T{tenant}_{ext} covers desk phones
+        # and any multi-device AOR configured in VitalPBX, while the hint endpoint
+        # T{tenant}_{ext}_{device} covers the specific mobile/WebRTC registration.
+        # This handles cases where the contacts output ordering is non-obvious and
+        # prevents silent failures when only one endpoint type is registered.
         base_ep = "T" + tenant_id + "_" + extension
         hint_raw = str(body.get("pjsipEndpoint") or "").strip()
         if hint_raw.lower().startswith("pjsip/"):
@@ -833,11 +833,13 @@ def vm_record_call(body):
         tenant_prefix = "T" + tenant_id + "_" + extension
         if (hint_raw
                 and valid_ep_re.match(hint_raw)
-                and hint_raw.startswith(tenant_prefix)):
-            # Hint is valid and belongs to this tenant/extension — use it only.
-            dispatch_endpoints = [hint_raw]
+                and hint_raw.startswith(tenant_prefix)
+                and hint_raw != base_ep):
+            # Include both base endpoint and device-specific hint endpoint.
+            # Asterisk's Dial() will ring whichever is currently registered.
+            dispatch_endpoints = [base_ep, hint_raw]
         else:
-            # No valid hint — fall back to the base endpoint.
+            # No valid hint or hint equals base — just use the base endpoint.
             dispatch_endpoints = [base_ep]
         dispatch_dial_string = "&".join("PJSIP/" + ep for ep in dispatch_endpoints)
         astdb_key = "T" + tenant_id + "_" + extension
@@ -954,7 +956,7 @@ class Handler(BaseHTTPRequestHandler):
                 "vmRecordApp": CFG.vm_record_app,
                 "vmRecordChannelTemplate": CFG.vm_record_channel_template,
                 "pjsipContactsExitCode": contacts.returncode,
-                "pjsipContactsOutput": (contacts.stdout + contacts.stderr)[-4000:],
+                "pjsipContactsOutput": (contacts.stdout + contacts.stderr)[:8000],
                 "astdbConnectVmDialOutput": (astdb.stdout + astdb.stderr)[-2000:],
                 "dialplanReloadExitCode": reload_code,
                 "dialplanReloadOutput": reload_out,
@@ -1028,7 +1030,7 @@ CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit 
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(10)
+ same => n,Wait(15)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},30)
@@ -1260,7 +1262,7 @@ cat >"${DIALPLAN_TARGET}" <<'EOF'
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(10)
+ same => n,Wait(15)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},30)

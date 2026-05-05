@@ -14675,10 +14675,12 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   // Mirrors the wake-then-Wait()-then-Dial() pattern used for incoming PSTN
   // calls in [connect-dial-with-wake].
   const ownerUserId = (extension as any).ownerUserId as string | null;
-  // The PBX dispatch dialplan context now includes Wait(10) before Dial(), so
+  // The PBX dispatch dialplan context includes Wait(15) before Dial(), so
   // the mobile has time to finish SIP registration after the FCM wake inside
   // Asterisk itself. We only do a short 2-second pause here to let the FCM
   // delivery confirm before we ask the PBX to originate the call.
+  // The mobile app also no longer does forceRestart for vm-greeting wakes when
+  // already registered, so the existing SIP contact stays valid throughout.
   const wakeWaitMs = 2000;
   let wakeMeta: { devicesNotified: number; waitedMs: number; sent: boolean; error?: string } = {
     devicesNotified: 0,

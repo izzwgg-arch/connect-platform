@@ -858,26 +858,33 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Stage B — DEVICE_REGISTER_TRIGGERED. ALWAYS force-restart on a wake
-      // push: the whole point is that we expect the prior UA to be stale
-      // (Doze, killed JS, broken WS). A no-op register won't help.
+      // Stage B — DEVICE_REGISTER_TRIGGERED.
+      // For VM-greeting recording wakes: if the UA is already registered, skip
+      // forceRestart. The existing contact in Asterisk is valid — tearing it
+      // down and re-registering creates a timing race where Asterisk's Dial()
+      // runs before the new 200-OK arrives, making the phone appear offline.
+      // For all other wakes (normal incoming call): always forceRestart because
+      // the UA may be stale (Doze, killed JS, broken WS).
+      const isVmGreetingWake = fromNumber === "vm-greeting";
+      const prevRegState = registrationStateRef.current;
+      const needsForceRestart = !(isVmGreetingWake && prevRegState === "registered");
       const triggeredAt = Date.now();
       await postWakeEvent(authToken, {
         pbxCallId,
         stage: "DEVICE_REGISTER_TRIGGERED",
         details: {
-          forceRestart: true,
-          previousRegState: registrationStateRef.current,
+          forceRestart: needsForceRestart,
+          previousRegState: prevRegState,
           appState,
           latencySinceWakeMs: triggeredAt - t0,
         },
       });
 
       try {
-        await clientRef.current.register({ forceRestart: true });
+        await clientRef.current.register({ forceRestart: needsForceRestart });
         const completedAt = Date.now();
         console.log(
-          "[CALL_WAKE] register({forceRestart:true}) resolved",
+          "[CALL_WAKE] register({forceRestart:" + needsForceRestart + "}) resolved",
           JSON.stringify({
             pbxCallId,
             registerLatencyMs: completedAt - triggeredAt,
@@ -895,7 +902,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           },
         });
       } catch (e: any) {
-        console.warn("[CALL_WAKE] register({forceRestart:true}) threw:", e?.message);
+        console.warn("[CALL_WAKE] register({forceRestart:" + needsForceRestart + "}) threw:", e?.message);
         await postWakeEvent(authToken, {
           pbxCallId,
           stage: "DEVICE_REGISTER_FAILED",
