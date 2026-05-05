@@ -461,6 +461,22 @@ def apply_vm_owner(path_obj):
         except (KeyError, PermissionError, OSError):
             pass
 
+def backup_vm_greeting(target, remove_original=True):
+    if not target.exists():
+        return None
+    stamp = dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    backup = target.with_name(target.name + ".bak-" + stamp)
+    seq = 1
+    while backup.exists():
+        backup = target.with_name(target.name + ".bak-" + stamp + "-" + str(seq))
+        seq += 1
+    if remove_original:
+        target.replace(backup)
+    else:
+        backup.write_bytes(target.read_bytes())
+    apply_vm_owner(backup)
+    return backup
+
 def voicemail_mailbox_dir(tenant_id, extension):
     tenant = require_num("tenant_id", tenant_id)
     ext = require_ext(extension)
@@ -524,10 +540,7 @@ def vm_greeting_upload(body):
     wav_bytes, sha = decode_verified_wav(body)
     target = safe_vm_path(tenant_id, extension, greeting_type)
     target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
-    if target.exists():
-        backup = target.with_name(target.name + ".bak-" + dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
-        target.replace(backup)
-        apply_vm_owner(backup)
+    backup = backup_vm_greeting(target, remove_original=False)
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="." + target.stem + ".", suffix=".tmp", dir=str(target.parent))
     try:
         with os.fdopen(tmp_fd, "wb") as fh:
@@ -542,28 +555,27 @@ def vm_greeting_upload(body):
         except OSError:
             pass
         raise
-    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "pbxPath": str(target), "sizeBytes": len(wav_bytes), "sha256": sha, "active": True, "updatedAt": utc_now()}
+    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "pbxPath": str(target), "backupPath": str(backup) if backup else None, "sizeBytes": len(wav_bytes), "sha256": sha, "active": True, "updatedAt": utc_now()}
 
 def vm_greeting_reset(body):
     tenant_id = require_num("tenant_id", body.get("tenantId"))
     extension = require_ext(body.get("extension"))
     greeting_type = require_greeting_type(body.get("greetingType"))
     target = safe_vm_path(tenant_id, extension, greeting_type)
-    if target.exists():
-        backup = target.with_name(target.name + ".bak-" + dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
-        target.replace(backup)
-        apply_vm_owner(backup)
-    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "sizeBytes": 0, "sha256": None, "updatedAt": utc_now()}
+    backup = backup_vm_greeting(target)
+    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "backupPath": str(backup) if backup else None, "sizeBytes": 0, "sha256": None, "updatedAt": utc_now()}
 
 def vm_record_call(body):
     tenant_id = require_num("tenant_id", body.get("tenantId"))
     extension = require_ext(body.get("extension"))
     greeting_type = require_greeting_type(body.get("greetingType"))
     job_id = str(uuid.uuid4())
+    target = safe_vm_path(tenant_id, extension, greeting_type)
+    backup = backup_vm_greeting(target, remove_original=False)
     channel = CFG.vm_record_channel_template.format(tenantId=tenant_id, extension=extension)
     mailbox = extension + "@" + tenant_id
     cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, mailbox)]
-    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
         job["asteriskExitCode"] = proc.returncode
