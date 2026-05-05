@@ -11,6 +11,7 @@ import {
   Contact,
   CreditCard,
   Disc,
+  Download,
   FileCheck,
   FileText,
   GitBranch,
@@ -56,6 +57,7 @@ export type NavItem = {
   section: PortalSidebarSectionKey;
   sectionPermission: Permission;
   permission: Permission;
+  download?: boolean;
 };
 
 export const navItems: NavItem[] = [
@@ -65,6 +67,7 @@ export const navItems: NavItem[] = [
   { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail" },
   { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
+  { id: "workspace.install", href: "/downloads/Connect-Setup-0.1.0.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
 
   { id: "pbx.extensions", href: "/pbx/extensions", label: "Extensions", icon: "EX", lucide: UserCog, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_extensions" },
   { id: "pbx.time_conditions", href: "/pbx/time-conditions", label: "Time Conditions", icon: "TC", lucide: Clock, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_time_conditions" },

@@ -20,6 +20,7 @@ type SidebarNavProps = {
 };
 
 function navLinkActive(pathname: string, href: string) {
+  if (href.startsWith("/downloads/")) return false;
   if (pathname === href) return true;
   if (href === "/dashboard") return false;
   return pathname.startsWith(`${href}/`);
@@ -95,6 +96,8 @@ export function SidebarNav({
                       <Link
                         key={item.href}
                         href={item.href}
+                        download={item.download ? "" : undefined}
+                        prefetch={item.download ? false : undefined}
                         className={`drawer-nav-link drawer-nav-link-rail ${active ? "active" : ""}`}
                         title={item.label}
                         onClick={onCloseMobile}
@@ -131,6 +134,8 @@ export function SidebarNav({
                     <Link
                       key={item.href}
                       href={item.href}
+                      download={item.download ? "" : undefined}
+                      prefetch={item.download ? false : undefined}
                       className={`drawer-nav-link ${active ? "active" : ""}`}
                       onClick={onCloseMobile}
                     >
