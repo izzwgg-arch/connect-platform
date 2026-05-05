@@ -760,7 +760,8 @@ env \
   /opt/connect-pbx-helper/.venv/bin/python /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py --check >/tmp/connect-pbx-helper-check.json
 
 systemctl daemon-reload
-systemctl enable --now connect-pbx-helper
+systemctl enable connect-pbx-helper
+systemctl restart connect-pbx-helper
 sleep 1
 
 echo

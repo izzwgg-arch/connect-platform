@@ -14650,12 +14650,24 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   const helperCfg = pbxHelperForExtension(extension);
   const pbxTenantId = pbxTenantIdForExtension(extension);
   if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
-  const res = await requestPbxVoicemailGreetingRecordCall(helperCfg, {
-    tenantId: pbxTenantId,
-    extension: extension.extNumber,
-    greetingType: normalizeGreetingType(input.greetingType),
-  });
-  return reply.send(res);
+  try {
+    const res = await requestPbxVoicemailGreetingRecordCall(helperCfg, {
+      tenantId: pbxTenantId,
+      extension: extension.extNumber,
+      greetingType: normalizeGreetingType(input.greetingType),
+    });
+    return reply.send(res);
+  } catch (err: any) {
+    const status = Number(err?.httpStatus || 502);
+    const helperError = String(err?.message || "PBX helper request failed");
+    return reply.code(status === 404 ? 503 : Math.min(Math.max(status, 400), 599)).send({
+      error: status === 404 ? "pbx_helper_voicemail_routes_missing" : "pbx_helper_record_call_failed",
+      message: status === 404
+        ? "The PBX helper is reachable, but it is still running an older version without voicemail greeting endpoints. Re-run the updated PBX helper installer."
+        : helperError,
+      detail: err?.payload || null,
+    });
+  }
 });
 
 app.get("/voicemail/greeting/record-call/:jobId", async (req, reply) => {
