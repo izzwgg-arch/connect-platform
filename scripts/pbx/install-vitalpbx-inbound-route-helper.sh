@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05"
+VERSION = "2026.05.05.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -791,13 +791,21 @@ def vm_record_call(body):
     dispatch_dial_string = ""
     dispatch_endpoints: list = []
     if channel.startswith("Local/") and "connect-vm-greeting-dispatch" in channel:
-        try:
-            dispatch_endpoints = tenant_endpoints_for_extension(tenant_id, extension)
-        except Exception as exc:
-            sys.stderr.write("dispatch_lookup_failed: " + str(exc) + "\n")
-            dispatch_endpoints = []
-        if not dispatch_endpoints:
-            raise ValueError("no_registered_pjsip_endpoint_for_extension")
+        # Build the dial string from KNOWN endpoint names rather than querying
+        # pjsip show contacts. The dispatch dialplan context includes Wait(10)
+        # before Dial() so the mobile has time to finish SIP registration after
+        # the FCM wake sent by the API. This avoids the race where the mobile
+        # hasn't yet completed its REGISTER/200-OK cycle at originate time.
+        base_ep = "T" + tenant_id + "_" + extension
+        hint_raw = str(body.get("pjsipEndpoint") or "").strip().lstrip("PJSIP/").lstrip("pjsip/")
+        valid_ep_re = re.compile(r"^[A-Za-z0-9_.-]+$")
+        tenant_prefix = "T" + tenant_id + "_" + extension
+        dispatch_endpoints = [base_ep]
+        if (hint_raw
+                and hint_raw != base_ep
+                and valid_ep_re.match(hint_raw)
+                and hint_raw.startswith(tenant_prefix)):
+            dispatch_endpoints.append(hint_raw)
         dispatch_dial_string = "&".join("PJSIP/" + ep for ep in dispatch_endpoints)
         astdb_key = "T" + tenant_id + "_" + extension
         try:
@@ -987,9 +995,10 @@ CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit 
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Wait(10)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},45)
+ same => n,Dial(${CONNECT_VM_DIAL},30)
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
@@ -1218,9 +1227,10 @@ cat >"${DIALPLAN_TARGET}" <<'EOF'
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Wait(10)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},45)
+ same => n,Dial(${CONNECT_VM_DIAL},30)
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
