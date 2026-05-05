@@ -4,8 +4,61 @@ import { Check, MoreHorizontal, Pencil, Reply, Smile, Trash2 } from "lucide-reac
 import { useEffect, useRef, useState } from "react";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { fmtChatTime, mapUrl } from "./formatting";
-import type { ChatMessage } from "./types";
+import type { ChatAttachment, ChatMessage } from "./types";
 import { QUICK_REACTIONS } from "./types";
+
+function mmsUrlToAttachment(url: string, messageId: string, index: number): ChatAttachment {
+  const lower = url.toLowerCase();
+  const path = lower.split(/[?#]/)[0];
+  if (/\.(jpe?g|png|gif|webp|heic)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: "MMS image",
+      mimeType: "image/jpeg",
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: "image",
+    };
+  }
+  if (/\.(mp3|m4a|aac|wav|ogg|amr)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: "MMS audio",
+      mimeType: "audio/mpeg",
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: "audio",
+    };
+  }
+  if (/\.(mp4|webm|3gp|mov)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: "MMS video",
+      mimeType: "video/mp4",
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: "video",
+    };
+  }
+  if (lower.includes("media.php")) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: "MMS media",
+      mimeType: "video/mp4",
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: "video",
+    };
+  }
+  return {
+    id: `${messageId}:mms:${index}`,
+    fileName: "MMS attachment",
+    mimeType: "application/octet-stream",
+    sizeBytes: 0,
+    downloadUrl: url,
+    mediaKind: "file",
+  };
+}
 
 export function MessageBubble({
   message,
@@ -70,17 +123,7 @@ export function MessageBubble({
               {message.mmsUrls?.length ? (
                 <div className="cc-attach-stack">
                   {message.mmsUrls.map((url, idx) => (
-                    <AttachmentPreview
-                      key={url}
-                      attachment={{
-                        id: `${message.id}:mms:${idx}`,
-                        fileName: "MMS media",
-                        mimeType: "image/*",
-                        sizeBytes: 0,
-                        downloadUrl: url,
-                        mediaKind: "image",
-                      }}
-                    />
+                    <AttachmentPreview key={url} attachment={mmsUrlToAttachment(url, message.id, idx)} />
                   ))}
                 </div>
               ) : null}

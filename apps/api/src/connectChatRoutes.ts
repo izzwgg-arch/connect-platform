@@ -220,6 +220,8 @@ function extractInboundMmsUrls(payload: Record<string, unknown>): string[] {
     if (Array.isArray(v)) for (const x of v) push(x);
   };
   pushCommaUrls(payload.media);
+  pushCommaUrls(payload.files);
+  pushCommaUrls(payload.MEDIA);
   push(payload.media_url);
   push(payload.mediaurl);
   push(payload.MediaUrl);
@@ -228,6 +230,8 @@ function extractInboundMmsUrls(payload: Record<string, unknown>): string[] {
   for (let i = 1; i <= 6; i += 1) {
     push((payload as Record<string, unknown>)[`media${i}`]);
     push((payload as Record<string, unknown>)[`Media${i}`]);
+    push((payload as Record<string, unknown>)[`col_media${i}`]);
+    push((payload as Record<string, unknown>)[`Col_Media${i}`]);
   }
   return [...new Set(out)];
 }
@@ -1677,7 +1681,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       }
     }
     if (!authorized && cfg.webhookSecretEncrypted) {
-      return reply.status(401).send({ error: "unauthorized" });
+      return reply.status(401).type("text/plain").send("unauthorized");
     }
 
     const payload = mergeVoipMsPayload(req);
@@ -1702,7 +1706,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           payload: payload as object,
         },
       });
-      return { ok: false };
+      return reply.type("text/plain").send("ok");
     }
 
     const num = await db.tenantSmsNumber.findUnique({
@@ -1722,7 +1726,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           payload: payload as object,
         },
       });
-      return { ok: true, accepted: true };
+      return reply.type("text/plain").send("ok");
     }
 
     const extE164 = nf.ok ? nf.e164 : rawFrom;
@@ -1790,7 +1794,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         select: { userId: true },
       });
       const tenantId = num.tenantId;
-      if (!tenantId) return { ok: true, threadId: thread.id, messageId: msg.id };
+      if (!tenantId) return reply.type("text/plain").send("ok");
       await Promise.all(recipients.map((recipient) =>
         recipient.userId
           ? deps.sendPushToUserDevices!({
@@ -1809,7 +1813,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           : Promise.resolve(),
       ));
     }
-    return { ok: true, threadId: thread.id, messageId: msg.id };
+    return reply.type("text/plain").send("ok");
   }
 
   app.post("/webhooks/voipms/sms", handleVoipMsInbound);

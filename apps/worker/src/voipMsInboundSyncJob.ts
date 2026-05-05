@@ -37,7 +37,11 @@ function parseMediaUrls(row: Record<string, unknown>): string[] {
   const text = String(direct || "").trim();
   const split = text ? text.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : [];
   const numbered = [row.media1, row.media2, row.media3].map((x) => String(x || "").trim()).filter(Boolean);
-  return [...split, ...numbered].slice(0, 3);
+  // VoIP.ms getMMS returns col_media1..3 (HTTPS links to media.php, etc.)
+  const colNumbered = [row.col_media1, row.col_media2, row.col_media3, row.Col_Media1, row.Col_Media2, row.Col_Media3].map((x) =>
+    String(x || "").trim(),
+  ).filter(Boolean);
+  return [...split, ...numbered, ...colNumbered].slice(0, 6);
 }
 
 /** VoIP.ms returns bare `YYYY-MM-DD HH:MM:SS` in America/New_York wall time (no TZ suffix). */
@@ -142,34 +146,102 @@ async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
   }
 }
 
-async function fetchRecentSmsForDid(creds: VoipMsStoredCreds, didE164: string): Promise<InboundRow[]> {
+function messageArrayFromVoipMsJson(json: any): any[] {
+  return asArray(json.sms).length ? asArray(json.sms)
+    : asArray(json.mms).length ? asArray(json.mms)
+    : asArray(json.messages).length ? asArray(json.messages)
+    : asArray(json.data).length ? asArray(json.data)
+    : asArray(json.response);
+}
+
+function rowMessageId(row: Record<string, unknown>): string {
+  return firstString(row, ["id", "sms", "sms_id", "message_id", "mms", "mms_id"]);
+}
+
+/** Last 2 days (UTC date) — same window for getSMS + getMMS. */
+function voipMsDateFromParam(): string {
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${twoDaysAgo.getUTCFullYear()}-${pad(twoDaysAgo.getUTCMonth() + 1)}-${pad(twoDaysAgo.getUTCDate())}`;
+}
+
+async function fetchVoipMsMethod(
+  creds: VoipMsStoredCreds,
+  didE164: string,
+  method: "getSMS" | "getMMS",
+): Promise<Record<string, unknown>[]> {
   const base = creds.apiBaseUrl || DEFAULT_VOIPMS_API;
   const url = new URL(base);
   url.searchParams.set("api_username", creds.username);
   url.searchParams.set("api_password", creds.password);
-  url.searchParams.set("method", "getSMS");
-  url.searchParams.set("did", digits(didE164));
-  url.searchParams.set("limit", "50");
-
-  // Request last 2 days so we never miss messages around midnight UTC.
-  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const dateFrom = `${twoDaysAgo.getUTCFullYear()}-${pad(twoDaysAgo.getUTCMonth() + 1)}-${pad(twoDaysAgo.getUTCDate())}`;
-  url.searchParams.set("date_from", dateFrom);
+  url.searchParams.set("method", method);
+  const dateFrom = voipMsDateFromParam();
+  if (method === "getMMS") {
+    // getMMS uses `from` (VoIP.ms docs); did/limit are not in the published example — filter rows client-side.
+    url.searchParams.set("from", dateFrom);
+  } else {
+    url.searchParams.set("did", digits(didE164));
+    url.searchParams.set("limit", "50");
+    url.searchParams.set("date_from", dateFrom);
+  }
 
   const res = await fetch(url);
   const json: any = await res.json().catch(() => ({}));
   const status = String(json?.status || "").toLowerCase();
-  if (!res.ok || (status && status !== "success" && status !== "no_sms")) {
-    throw new Error(`VoIP.ms getSMS rejected for ${didE164}: ${json?.status || res.status}`);
+  const emptyOk = method === "getMMS" ? ["no_mms", "no_sms"] : ["no_sms"];
+  if (!res.ok || (status && status !== "success" && !emptyOk.includes(status))) {
+    throw new Error(`VoIP.ms ${method} rejected for ${didE164}: ${json?.status || res.status}`);
   }
-  if (status === "no_sms") return [];
-  const rows =
-    asArray(json.sms).length ? asArray(json.sms)
-    : asArray(json.messages).length ? asArray(json.messages)
-    : asArray(json.data).length ? asArray(json.data)
-    : asArray(json.response);
-  return rows.map((row) => normalizeInboundRow(row, didE164)).filter((row): row is InboundRow => !!row);
+  if (emptyOk.includes(status)) return [];
+  return messageArrayFromVoipMsJson(json) as Record<string, unknown>[];
+}
+
+/**
+ * Merge getSMS + getMMS: SMS poll often omits MMS URLs; getMMS includes col_media1..3.
+ */
+async function fetchRecentSmsForDid(creds: VoipMsStoredCreds, didE164: string): Promise<InboundRow[]> {
+  const [smsRaw, mmsRaw] = await Promise.all([
+    fetchVoipMsMethod(creds, didE164, "getSMS").catch((err: any) => {
+      console.warn("[voipms-inbound] getSMS failed", didE164, err?.message || err);
+      return [] as Record<string, unknown>[];
+    }),
+    fetchVoipMsMethod(creds, didE164, "getMMS").catch((err: any) => {
+      console.warn("[voipms-inbound] getMMS failed", didE164, err?.message || err);
+      return [] as Record<string, unknown>[];
+    }),
+  ]);
+
+  const mergeMap = new Map<string, InboundRow>();
+
+  function ingest(raw: Record<string, unknown>) {
+    const rowDid = firstString(raw, ["did", "recipient", "to", "dst"]);
+    if (rowDid) {
+      const d = canonicalSmsPhone(rowDid);
+      if (d.ok && d.e164 !== didE164) return;
+    }
+    const n = normalizeInboundRow(raw, didE164);
+    if (!n) return;
+    const idKey = rowMessageId(raw);
+    if (!idKey) {
+      mergeMap.set(`${n.providerMessageId}:${mergeMap.size}`, n);
+      return;
+    }
+    const prev = mergeMap.get(idKey);
+    if (!prev) {
+      mergeMap.set(idKey, n);
+      return;
+    }
+    prev.mediaUrls = [...new Set([...prev.mediaUrls, ...n.mediaUrls])].slice(0, 10);
+    if (!String(prev.body || "").trim() && String(n.body || "").trim()) prev.body = n.body;
+    const pt = prev.createdAt?.getTime() ?? 0;
+    const nt = n.createdAt?.getTime() ?? 0;
+    if (nt && (!prev.createdAt || nt < pt)) prev.createdAt = n.createdAt;
+  }
+
+  for (const raw of smsRaw) ingest(raw);
+  for (const raw of mmsRaw) ingest(raw);
+
+  return [...mergeMap.values()];
 }
 
 async function resolveInboxOwnerUserId(input: { tenantId: string; assignedUserId?: string | null; assignedExtensionId?: string | null }): Promise<string> {
@@ -214,11 +286,31 @@ async function importInboundMessage(input: {
   assignedExtensionId?: string | null;
   row: InboundRow;
 }) {
-  const exists = await db.connectChatMessage.findFirst({
+  const existingMsg = await db.connectChatMessage.findFirst({
     where: { smsProviderMessageId: input.row.providerMessageId, direction: "INBOUND" },
-    select: { id: true },
+    select: { id: true, metadata: true, type: true },
   });
-  if (exists) return;
+  if (existingMsg) {
+    // Earlier polls only used getSMS — MMS often had no URLs until getMMS merge; backfill metadata.
+    if (input.row.mediaUrls.length > 0) {
+      const meta = (existingMsg.metadata && typeof existingMsg.metadata === "object" ? existingMsg.metadata : {}) as {
+        mms?: { urls?: string[] };
+        source?: string;
+      };
+      const cur = Array.isArray(meta.mms?.urls) ? meta.mms!.urls! : [];
+      if (cur.length === 0) {
+        await db.connectChatMessage.update({
+          where: { id: existingMsg.id },
+          data: {
+            type: "IMAGE",
+            metadata: { ...meta, mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS_getMMS" } as object,
+            updatedAt: new Date(),
+          },
+        });
+      }
+    }
+    return;
+  }
 
   const inboxScope = await resolveInboxOwnerUserId(input);
   const dedupeKey = `sms:${input.tenantId}:${input.tenantDidE164}:${input.row.from}:${inboxScope}`;
@@ -273,7 +365,9 @@ async function importInboundMessage(input: {
       body: input.row.body,
       deliveryStatus: "delivered",
       smsProviderMessageId: input.row.providerMessageId,
-      metadata: input.row.mediaUrls.length ? { mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS" } : { source: "voipms_getSMS" },
+      metadata: input.row.mediaUrls.length
+        ? { mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS_getMMS" }
+        : { source: "voipms_getSMS_getMMS" },
       ...(input.row.createdAt ? { createdAt: input.row.createdAt } : {}),
     },
   } as any);

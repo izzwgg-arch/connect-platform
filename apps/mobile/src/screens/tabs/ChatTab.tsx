@@ -160,16 +160,74 @@ function attachmentShowsImageThumb(attachment: ChatAttachment, messageType?: Cha
 
 function isImageAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
   const kind = String(attachment.mediaKind || '').toLowerCase();
+  if (kind === 'video' || kind === 'audio' || kind === 'file') return false;
   const mime = String(attachment.mimeType || '').toLowerCase();
+  if (mime.startsWith('video/') || mime.startsWith('audio/')) return false;
   const name = String(attachment.fileName || '').toLowerCase();
-  return kind === 'image' || mime.startsWith('image/') || messageType === 'IMAGE' || /\.(jpe?g|png|gif|webp|heic)$/i.test(name);
+  if (kind === 'image' || mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|heic)$/i.test(name)) return true;
+  return messageType === 'IMAGE';
 }
 
 function isAudioAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
   const kind = String(attachment.mediaKind || '').toLowerCase();
   const mime = String(attachment.mimeType || '').toLowerCase();
+  if (kind === 'video' || mime.startsWith('video/')) return false;
   const name = String(attachment.fileName || '').toLowerCase();
   return kind === 'audio' || mime.startsWith('audio/') || messageType === 'AUDIO' || messageType === 'VOICE_NOTE' || /\.(m4a|aac|mp3|wav|ogg|webm)$/i.test(name);
+}
+
+/** Inbound MMS URLs (e.g. VoIP.ms media.php) — infer kind so we do not feed video/audio into Image. */
+function mmsUrlToAttachment(url: string, messageId: string, index: number): ChatAttachment {
+  const lower = url.toLowerCase();
+  const path = lower.split(/[?#]/)[0];
+  if (/\.(jpe?g|png|gif|webp|heic)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: 'MMS image',
+      mimeType: 'image/jpeg',
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: 'image',
+    };
+  }
+  if (/\.(mp3|m4a|aac|wav|ogg|amr)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: 'MMS audio',
+      mimeType: 'audio/mpeg',
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: 'audio',
+    };
+  }
+  if (/\.(mp4|webm|3gp|mov)(\?|$)/.test(path)) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: 'MMS video',
+      mimeType: 'video/mp4',
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: 'video',
+    };
+  }
+  if (lower.includes('media.php')) {
+    return {
+      id: `${messageId}:mms:${index}`,
+      fileName: 'MMS media',
+      mimeType: 'video/mp4',
+      sizeBytes: 0,
+      downloadUrl: url,
+      mediaKind: 'video',
+    };
+  }
+  return {
+    id: `${messageId}:mms:${index}`,
+    fileName: 'MMS attachment',
+    mimeType: 'application/octet-stream',
+    sizeBytes: 0,
+    downloadUrl: url,
+    mediaKind: 'file',
+  };
 }
 
 function formatVoiceDuration(ms?: number | null): string {
@@ -1040,18 +1098,13 @@ const MessageBubble = memo(function MessageBubble({
     : [styles.bubble, styles.bubbleTheirs, { backgroundColor: highlighted ? colors.warningMuted : colors.surfaceElevated, borderColor: colors.borderSubtle }];
   const textColor = message.mine ? '#fff' : colors.text;
   const attachments = message.attachments || [];
-  const imageAttachments = attachments.filter((attachment) => isImageAttachment(attachment, message.type) && attachment.downloadUrl);
-  const audioAttachments = attachments.filter((attachment) => isAudioAttachment(attachment, message.type) && attachment.downloadUrl);
-  const otherAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment) && !audioAttachments.includes(attachment));
-  const mmsImages = (message.mmsUrls || []).map((url, index) => ({
-    id: `${message.id}:mms:${index}`,
-    fileName: 'MMS media',
-    mimeType: 'image/jpeg',
-    sizeBytes: 0,
-    downloadUrl: url,
-    mediaKind: 'image',
-  } satisfies ChatAttachment));
-  const renderedImages = [...imageAttachments, ...mmsImages];
+  const mmsDerived = (message.mmsUrls || []).map((url, index) => mmsUrlToAttachment(url, message.id, index));
+  const imageAttachments = [...attachments, ...mmsDerived].filter((attachment) => isImageAttachment(attachment, message.type) && attachment.downloadUrl);
+  const audioAttachments = [...attachments, ...mmsDerived].filter((attachment) => isAudioAttachment(attachment, message.type) && attachment.downloadUrl);
+  const otherAttachments = [...attachments, ...mmsDerived].filter(
+    (attachment) => !imageAttachments.includes(attachment) && !audioAttachments.includes(attachment),
+  );
+  const renderedImages = imageAttachments;
   const visibleBody = bodyWithoutMediaLinks(message.body || '', renderedImages.length > 0 || audioAttachments.length > 0 || otherAttachments.length > 0);
   const mediaOnly = !deleted && !visibleBody && !message.location && (renderedImages.length > 0 || audioAttachments.length > 0) && otherAttachments.length === 0;
   const metaColor = mediaOnly ? colors.textTertiary : (message.mine ? 'rgba(255,255,255,0.75)' : colors.textTertiary);
