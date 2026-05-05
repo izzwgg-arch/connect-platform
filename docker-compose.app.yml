@@ -1,5 +1,6 @@
 services:
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -109,6 +110,7 @@ services:
       - infra_default
 
   portal:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/portal/Dockerfile
@@ -132,6 +134,7 @@ services:
       - default
 
   realtime:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/realtime/Dockerfile
@@ -143,6 +146,7 @@ services:
       - default
 
   telephony:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/telephony/Dockerfile
@@ -175,6 +179,7 @@ services:
       - infra_default
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/worker/Dockerfile

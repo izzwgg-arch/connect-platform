@@ -75,7 +75,7 @@ rollback() {
   deploy_common_rollback_git "$ROOT" "$OLD_HEAD" || true
   deploy_common_run_heavy "deploy-queue:${SERVICE}:rollback-build" \
     docker compose -f "$COMPOSE" build "$SERVICE"
-  docker compose -f "$COMPOSE" up -d "$SERVICE" || true
+  deploy_common_compose_up "$COMPOSE" "$SERVICE" || true
 }
 
 trap 'rollback' ERR
@@ -90,7 +90,7 @@ deploy_common_log_timing "build" "$(deploy_common_stopwatch_elapsed_ms "$BUILD_S
 deploy_common_emit_stage "restart"
 RESTART_START="$(deploy_common_stopwatch_start)"
 log "docker up ${SERVICE}"
-docker compose -f "$COMPOSE" up -d "$SERVICE"
+deploy_common_compose_up "$COMPOSE" "$SERVICE"
 deploy_common_log_timing "restart" "$(deploy_common_stopwatch_elapsed_ms "$RESTART_START")"
 
 deploy_common_emit_stage "health"

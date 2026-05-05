@@ -305,6 +305,19 @@ deploy_common_compose_file() {
   echo "${DEPLOY_COMPOSE_FILE:-docker-compose.app.yml}"
 }
 
+# Safe compose up: prune any Dead or Created containers for the service before
+# recreating. Without this, Docker Compose can rename the dead container
+# (e.g. f61e75b52945_app-api-1) and start the new one with the wrong name,
+# which breaks health checks and leaves orphan containers behind.
+deploy_common_compose_up() {
+  local compose_file="$1"
+  local service="$2"
+  # Remove any stopped/dead/created containers for this service so Docker
+  # Compose gets a clean slate. `rm -sf` is a no-op when nothing matches.
+  docker compose -f "$compose_file" rm -sf "$service" 2>/dev/null || true
+  docker compose -f "$compose_file" up -d "$service"
+}
+
 deploy_common_rollback_git() {
   local ROOT="$1"
   local OLD_HEAD="$2"
