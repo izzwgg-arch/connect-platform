@@ -78,6 +78,7 @@ import {
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
   resetPbxVoicemailGreeting,
+  setPbxInboundRouteMoh,
   type PbxRouteHelperInspectResponse,
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
@@ -2557,7 +2558,7 @@ async function sendPushToUserDevices(input: {
               ? input.payload.senderName || "New message"
               : input.payload.type === "sms_message"
                 ? input.payload.phoneNumber
-                : "Missed call";
+        : "Missed call";
   const body = input.payload.type === "INCOMING_CALL"
     ? `Call from ${input.payload.fromDisplay || input.payload.fromNumber}`
     : input.payload.type === "INVITE_CLAIMED"
@@ -2572,7 +2573,7 @@ async function sendPushToUserDevices(input: {
               ? (input.payload.preview || "Sent a message")
               : input.payload.type === "sms_message"
                 ? (input.payload.preview || "Sent an attachment")
-                : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
+        : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
 
   const isIncomingCall = input.payload.type === "INCOMING_CALL";
   // INCOMING_CALL_WAKE travels the same data-only/high-priority path as
@@ -4610,7 +4611,7 @@ app.get("/admin/users", async (req, reply) => {
   const [users, tenants] = await Promise.all([
     db.user.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+    orderBy: { createdAt: "desc" },
       include: {
         tenant: { select: { id: true, name: true } },
         ownedExtensions: { take: 1, select: { id: true, extNumber: true, displayName: true, status: true, pbxUserEmail: true } },
@@ -12986,8 +12987,8 @@ function startPbxTenantListWarm() {
         const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
         if (cached && Date.now() - cached.at < PBX_TENANT_LIST_STALE_MS) continue;
         void startPbxTenantListRefresh(instance, auth, cacheKey).catch(() => undefined);
-      }
-    } catch (e: any) {
+    }
+  } catch (e: any) {
       app.log.warn({ err: e?.message || String(e) }, "pbx_tenant_list_warm_failed");
     }
   };
@@ -13260,26 +13261,26 @@ function mapDirectoryExtensionRow(e: any): Record<string, unknown> {
     ? null
     : e.pbxLink?.pbxDeviceName ?? null;
   return {
-    id: e.pbxLink?.pbxExtensionId ?? e.id,
+        id: e.pbxLink?.pbxExtensionId ?? e.id,
     extension: extNumber,
     name: displayName,
     callerName: displayName,
     displayName,
-    technology: "pjsip",
-    status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
-    tenantName: e.tenant?.name ?? null,
-    tenantId: e.tenantId,
-    pbxExtensionId: e.pbxLink?.pbxExtensionId,
-    pbxSipUsername: e.pbxLink?.pbxSipUsername,
+        technology: "pjsip",
+        status: e.pbxLink?.isSuspended ? "disabled" : "enabled",
+        tenantName: e.tenant?.name ?? null,
+        tenantId: e.tenantId,
+        pbxExtensionId: e.pbxLink?.pbxExtensionId,
+        pbxSipUsername: e.pbxLink?.pbxSipUsername,
     pbxDeviceName: safePbxDeviceName,
-    webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
-    connectExtensionId: e.id,
-    // Provisioning metadata
-    pbxExtensionLinkId: e.pbxLink?.id,
-    ownerUserId: e.ownerUserId,
-    assignedUser: e.ownerUser?.email ?? null,
-    pbxUserEmail: e.pbxUserEmail ?? null,
-    sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
+        webrtcEnabled: e.pbxLink?.webrtcEnabled ?? false,
+        connectExtensionId: e.id,
+        // Provisioning metadata
+        pbxExtensionLinkId: e.pbxLink?.id,
+        ownerUserId: e.ownerUserId,
+        assignedUser: e.ownerUser?.email ?? null,
+        pbxUserEmail: e.pbxUserEmail ?? null,
+        sipPasswordIssuedAt: e.pbxLink?.sipPasswordIssuedAt?.toISOString() ?? null,
   };
 }
 
@@ -13358,11 +13359,11 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
       return { resource, rows: [], source: "connect_db", tenantScoped: true };
     }
 
-    const dbExts = await db.extension.findMany({
+      const dbExts = await db.extension.findMany({
       where: { tenantId: queryTenantId, status: "ACTIVE", billable: true },
-      include: {
-        pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
-        ownerUser: { select: { id: true, email: true } },
+        include: {
+          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
+          ownerUser: { select: { id: true, email: true } },
         tenant: { select: { name: true } },
       },
       orderBy: { extNumber: "asc" },
@@ -14664,6 +14665,61 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   const helperCfg = pbxHelperForExtension(extension);
   const pbxTenantId = pbxTenantIdForExtension(extension);
   if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+
+  // ── Wake any associated mobile devices BEFORE asking the PBX to originate ──
+  // The PBX helper builds the parallel-Dial string from `pjsip show contacts`
+  // at originate time. Mobiles only register after FCM wakes the JS bundle
+  // (see /internal/pbx/wake-extension), so without a pre-wake here the helper
+  // would only see the WebRTC contact and the user's mobile would not ring.
+  // Mirrors the wake-then-Wait()-then-Dial() pattern used for incoming PSTN
+  // calls in [connect-dial-with-wake].
+  const ownerUserId = (extension as any).ownerUserId as string | null;
+  const wakeWaitMs = Math.min(
+    Math.max(Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "8", 10) || 8, 0),
+    20,
+  ) * 1000;
+  let wakeMeta: { devicesNotified: number; waitedMs: number; sent: boolean; error?: string } = {
+    devicesNotified: 0,
+    waitedMs: 0,
+    sent: false,
+  };
+  if (ownerUserId) {
+    try {
+      const devices = await db.mobileDevice.findMany({
+        where: { tenantId: extension.tenantId, userId: ownerUserId, active: true } as any,
+        select: { id: true } as any,
+      });
+      if (devices.length > 0) {
+        const wakePbxCallId = "vm-greeting-record-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        const pushed = await sendPushToUserDevices({
+          tenantId: extension.tenantId,
+          userId: ownerUserId,
+          payload: {
+            type: "INCOMING_CALL_WAKE",
+            pbxCallId: wakePbxCallId,
+            fromNumber: "vm-greeting",
+            fromDisplay: "Voicemail Greeting Recording",
+            toExtension: extension.extNumber,
+            tenantId: extension.tenantId,
+            pbxVitalTenantId: pbxTenantId,
+            timestamp: new Date().toISOString(),
+            wakeRequestedAt: new Date().toISOString(),
+          },
+        });
+        wakeMeta = { devicesNotified: pushed?.queued ?? devices.length, waitedMs: wakeWaitMs, sent: true };
+        if (wakeWaitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, wakeWaitMs));
+        }
+      }
+    } catch (err: any) {
+      wakeMeta.error = String(err?.message || err);
+      app.log.warn(
+        { err: err?.message, tenantId: extension.tenantId, userId: ownerUserId, extension: extension.extNumber },
+        "voicemail-greeting-record-call: wake push failed",
+      );
+    }
+  }
+
   try {
     const res = await requestPbxVoicemailGreetingRecordCall(helperCfg, {
       tenantId: pbxTenantId,
@@ -14671,7 +14727,7 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
       greetingType: normalizeGreetingType(input.greetingType),
       pjsipEndpoint: pjsipEndpointForExtension(extension) || undefined,
     });
-    return reply.send(res);
+    return reply.send({ ...res, wake: wakeMeta });
   } catch (err: any) {
     const status = Number(err?.httpStatus || 502);
     const helperError = String(err?.message || "PBX helper request failed");
@@ -14683,6 +14739,7 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
         ? "The PBX helper is reachable, but it is still running an older version without voicemail greeting endpoints. Re-run the updated PBX helper installer."
         : helperError,
       detail: err?.payload || null,
+      wake: wakeMeta,
     });
   }
 });
@@ -18330,14 +18387,14 @@ app.post("/voice/did/publish", async (req, reply) => {
           if (result?.id) pbxInboundRouteId = String(result.id);
           resolvedPbxInstanceId = resolved.pbxInstanceId;
           app.log.info({ tenantId: mapping.tenantId, e164, pbxInboundRouteId }, "did: inbound route upserted");
-        } catch (err: any) {
-          // PBX REST failure is non-fatal: AstDB write already succeeded so the
-          // call flow still works once the operator creates the inbound route
-          // manually. Record the failure on the publish record for triage.
-          app.log.warn({ err: err?.message, e164 }, "did: inbound_numbers upsert failed (non-fatal)");
-          await (db as any).ivrPublishRecord.update({
-            where: { id: record.id }, data: { error: `inbound_route_upsert_failed: ${err?.message ?? "unknown"}` },
-          });
+      } catch (err: any) {
+        // PBX REST failure is non-fatal: AstDB write already succeeded so the
+        // call flow still works once the operator creates the inbound route
+        // manually. Record the failure on the publish record for triage.
+        app.log.warn({ err: err?.message, e164 }, "did: inbound_numbers upsert failed (non-fatal)");
+        await (db as any).ivrPublishRecord.update({
+          where: { id: record.id }, data: { error: `inbound_route_upsert_failed: ${err?.message ?? "unknown"}` },
+        });
         }
       }
     }
@@ -19348,6 +19405,98 @@ async function publishMohToAstDb(
   }
 }
 
+type NativeInboundMohSyncResult = {
+  skipped: boolean;
+  reason?: string;
+  updatedRoutes: number;
+  dids: string[];
+  pbxGroupId?: number;
+  errors: string[];
+};
+
+async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string): Promise<NativeInboundMohSyncResult> {
+  const empty = (reason: string): NativeInboundMohSyncResult => ({
+    skipped: true,
+    reason,
+    updatedRoutes: 0,
+    dids: [],
+    errors: [],
+  });
+
+  const [link, mohClass] = await Promise.all([
+    db.tenantPbxLink.findFirst({
+      where: { tenantId },
+      select: {
+        pbxInstanceId: true,
+        pbxTenantId: true,
+      },
+    }),
+    (db as any).pbxMohClass.findFirst({
+      where: {
+        mohClassName: runtimeClass,
+        isActive: true,
+        OR: [{ tenantId }, { tenantId: null }],
+      },
+      select: { pbxGroupId: true },
+    }),
+  ]);
+
+  const pbxTenantId = String(link?.pbxTenantId || "").trim();
+  const pbxGroupId = Number(mohClass?.pbxGroupId);
+  if (!link?.pbxInstanceId || !/^\d{1,10}$/.test(pbxTenantId)) return empty("tenant_pbx_link_missing");
+  if (!Number.isFinite(pbxGroupId) || pbxGroupId <= 0) return empty("moh_class_missing_pbx_group_id");
+
+  const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!helperCfg) return empty("pbx_route_helper_not_configured");
+
+  const didRows = await db.pbxTenantInboundDid.findMany({
+    where: {
+      pbxInstanceId: link.pbxInstanceId,
+      connectTenantId: tenantId,
+      active: true,
+    },
+    select: { e164: true },
+  });
+  const dids = Array.from(new Set(didRows.map((row) => String(row.e164 || "").replace(/\D/g, "")).filter(Boolean)));
+  if (dids.length === 0) return empty("no_synced_inbound_dids");
+
+  const errors: string[] = [];
+  let updatedRoutes = 0;
+  for (const did of dids) {
+    try {
+      const result = await setPbxInboundRouteMoh(helperCfg, {
+        tenantId: pbxTenantId,
+        did,
+        musicGroupId: pbxGroupId,
+        requestId: `moh:${tenantId}`,
+        actor: "connect:moh-publish",
+      });
+      if (!result.noop) updatedRoutes++;
+    } catch (err: any) {
+      errors.push(`${did}: ${err?.message || String(err)}`);
+    }
+  }
+
+  if (errors.length === dids.length) {
+    return {
+      skipped: true,
+      reason: "native_inbound_route_moh_sync_failed",
+      updatedRoutes,
+      dids,
+      pbxGroupId,
+      errors,
+    };
+  }
+
+  return {
+    skipped: false,
+    updatedRoutes,
+    dids,
+    pbxGroupId,
+    errors,
+  };
+}
+
 /** Shared publish helper — loads state, computes effective profile, writes AstDB, logs record.
  *  Called by explicit publish, override activate/deactivate, and rollback paths.
  *  Throws on error (caller must handle). */
@@ -19392,7 +19541,19 @@ async function doMohPublish(
   });
 
   await publishMohToAstDb(slug, keys);
-  await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+  const nativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
+  if (nativeSync.errors.length) {
+    app.log.warn({ tenantId, recordId: record.id, nativeSync }, "moh: native inbound route MOH sync failed");
+  } else {
+    app.log.info({ tenantId, recordId: record.id, nativeSync }, "moh: native inbound route MOH sync complete");
+  }
+  await (db as any).mohPublishRecord.update({
+    where: { id: record.id },
+    data: {
+      status: "success",
+      error: nativeSync.errors.length ? `native_inbound_moh_sync_failed: ${nativeSync.errors.slice(0, 2).join("; ")}` : null,
+    },
+  });
 
   // Update last-published state cache (used by reconciliation worker)
   await (db as any).mohLastPublishedState.upsert({
@@ -20422,28 +20583,28 @@ app.get("/calls/history", async (req, reply) => {
 
   const skip = (query.page - 1) * query.pageSize;
   const select = {
-    id: true,
-    linkedId: true,
-    fromNumber: true,
-    fromName: true,
-    toNumber: true,
-    dcontext: true,
-    dcontextsSeen: true,
-    channelsSeen: true,
-    direction: true,
-    disposition: true,
-    durationSec: true,
-    talkSec: true,
-    startedAt: true,
-    answeredAt: true,
-    endedAt: true,
-    tenantId: true,
-    pbxVitalTenantId: true,
-    pbxTenantCode: true,
-    tenantResolutionSource: true,
-    queueId: true,
-    hangupCause: true,
-    recordingPath: true,
+        id: true,
+        linkedId: true,
+        fromNumber: true,
+        fromName: true,
+        toNumber: true,
+        dcontext: true,
+        dcontextsSeen: true,
+        channelsSeen: true,
+        direction: true,
+        disposition: true,
+        durationSec: true,
+        talkSec: true,
+        startedAt: true,
+        answeredAt: true,
+        endedAt: true,
+        tenantId: true,
+        pbxVitalTenantId: true,
+        pbxTenantCode: true,
+        tenantResolutionSource: true,
+        queueId: true,
+        hangupCause: true,
+        recordingPath: true,
   } as const;
   let total = 0;
   let rows: any[] = [];
@@ -20472,11 +20633,11 @@ app.get("/calls/history", async (req, reply) => {
         skip,
         take: query.pageSize,
         select,
-      }),
-      db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
-      db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
-      db.connectCdr.count({ where: { ...where, direction: "internal" } }),
-    ]);
+    }),
+    db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
+    db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
+    db.connectCdr.count({ where: { ...where, direction: "internal" } }),
+  ]);
   }
 
   const extensionCandidates = Array.from(new Set(
@@ -23878,12 +24039,12 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         }
       }
       if (resolvedUserId) {
-        target = {
-          tenantId: ext.tenantId,
+      target = {
+        tenantId: ext.tenantId,
           userId: resolvedUserId,
-          extensionId: ext.id,
-          sipDomain: ext.tenant?.sipDomain ?? null,
-        };
+        extensionId: ext.id,
+        sipDomain: ext.tenant?.sipDomain ?? null,
+      };
       }
     }
   }
