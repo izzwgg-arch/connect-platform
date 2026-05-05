@@ -617,9 +617,13 @@ def vm_record_call(body):
         CFG.vm_record_channel_template
         .replace("{tenantId}", tenant_id)
         .replace("{extension}", extension)
+        .replace("{tenantId_cos-all}", tenant_id + "_cos-all")
     )
     if "{" in channel or "}" in channel:
-        raise ValueError("invalid_vm_record_channel_template")
+        # Fail open to the known-safe VitalPBX tenant dialplan route rather
+        # than returning success without ringing or surfacing a template error
+        # for a manually edited env value.
+        channel = "Local/" + extension + "@T" + tenant_id + "_cos-all"
     mailbox = extension + "@" + tenant_id
     cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, mailbox)]
     job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
