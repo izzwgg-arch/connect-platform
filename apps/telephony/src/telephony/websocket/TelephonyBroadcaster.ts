@@ -44,8 +44,14 @@ export class TelephonyBroadcaster {
 
   private bindCallStore(): void {
     this.callStore.on("callUpsert", (call: NormalizedCall) => {
-      // Only broadcast active (non-hungup) calls.
-      if (call.state === "hungup") return;
+      // When a call transitions to "hungup" immediately send callRemove so the
+      // frontend clears it in real-time.  Without this, the frontend map retains
+      // the call until the 60-second stale cleanup fires, leaving the extension
+      // stuck in "On Call" status for up to a minute after the call ends.
+      if (call.state === "hungup") {
+        this.socket.broadcast("telephony.call.remove", { callId: call.id }, undefined);
+        return;
+      }
 
       const filter = this.buildCallFilter(call);
       const clientCount = this.socket.clientCount();
