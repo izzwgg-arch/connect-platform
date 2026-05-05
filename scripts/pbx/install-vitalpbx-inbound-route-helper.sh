@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.1"
+VERSION = "2026.05.05.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -817,16 +817,28 @@ def vm_record_call(body):
         # before Dial() so the mobile has time to finish SIP registration after
         # the FCM wake sent by the API. This avoids the race where the mobile
         # hasn't yet completed its REGISTER/200-OK cycle at originate time.
+        #
+        # If the API provides a pjsipEndpoint hint (the device-specific endpoint
+        # name from the DB, e.g. "T21_101_1"), use ONLY that endpoint. Both the
+        # mobile app and the WebRTC portal share the same device-specific
+        # endpoint, so one entry is enough to ring all of the user's softphones.
+        #
+        # Only fall back to the base endpoint "T{tenant}_{ext}" when no hint is
+        # provided — for deployments that use un-suffixed desk-phone endpoints.
         base_ep = "T" + tenant_id + "_" + extension
-        hint_raw = str(body.get("pjsipEndpoint") or "").strip().lstrip("PJSIP/").lstrip("pjsip/")
+        hint_raw = str(body.get("pjsipEndpoint") or "").strip()
+        if hint_raw.lower().startswith("pjsip/"):
+            hint_raw = hint_raw[len("pjsip/"):]
         valid_ep_re = re.compile(r"^[A-Za-z0-9_.-]+$")
         tenant_prefix = "T" + tenant_id + "_" + extension
-        dispatch_endpoints = [base_ep]
         if (hint_raw
-                and hint_raw != base_ep
                 and valid_ep_re.match(hint_raw)
                 and hint_raw.startswith(tenant_prefix)):
-            dispatch_endpoints.append(hint_raw)
+            # Hint is valid and belongs to this tenant/extension — use it only.
+            dispatch_endpoints = [hint_raw]
+        else:
+            # No valid hint — fall back to the base endpoint.
+            dispatch_endpoints = [base_ep]
         dispatch_dial_string = "&".join("PJSIP/" + ep for ep in dispatch_endpoints)
         astdb_key = "T" + tenant_id + "_" + extension
         try:
