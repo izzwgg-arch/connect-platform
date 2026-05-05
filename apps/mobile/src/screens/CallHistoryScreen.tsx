@@ -29,6 +29,9 @@ export function CallHistoryScreen() {
           <FlatList
             data={rows}
             keyExtractor={(item) => item.id}
+            bounces={false}
+            alwaysBounceVertical={false}
+            overScrollMode="never"
             renderItem={({ item }) => (
               <View style={{ borderBottomWidth: 1, borderBottomColor: "#e3e8ed", paddingVertical: 8 }}>
                 <Text style={ui.text}>{item.direction.toUpperCase()}  {item.fromNumber} -&gt; {item.toNumber}</Text>

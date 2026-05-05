@@ -514,6 +514,71 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             ? fromDisp
             : (fromNum != null && !fromNum.isEmpty() ? fromNum : "Unknown");
         boolean appInForeground = isAppInForeground();
+
+        // ── Android Telecom (primary path) ─────────────────────────────────
+        // When the app is not foregrounded and we are not already in a call,
+        // hand the incoming-call UI to the OS via Telecom. This works
+        // reliably from a fully killed / swiped-away state because Android
+        // owns the ConnectionService lifecycle — no JS engine, no React
+        // RootView, no Background Activity Launch restrictions. The system
+        // ringer + lock-screen UI behave exactly like WhatsApp / native
+        // dialer, and onAnswer / onReject in ConnectIncomingConnection
+        // forward the user action into JS via TelecomBridge.
+        //
+        // We deliberately do NOT route foregrounded calls through Telecom:
+        // when the user is already inside our app the React IncomingCallScreen
+        // gives a richer experience (avatar, recent context, in-call notes).
+        // Multi-call (inActiveCall) also stays on the JS path so the
+        // CallWaitingBanner can render the second call inline.
+        boolean telecomDispatched = false;
+        if (!appInForeground && !inActiveCall) {
+            try {
+                telecomDispatched = TelecomBridge.INSTANCE.startIncomingCall(
+                    getApplicationContext(),
+                    inviteId == null ? "" : inviteId,
+                    fromNum,
+                    fromDisp,
+                    data.get("pbxCallId")
+                );
+            } catch (Throwable t) {
+                Log.w(TAG, "[CALL_INCOMING] TelecomBridge.startIncomingCall threw: " + t.getMessage());
+                telecomDispatched = false;
+            }
+            try {
+                JSONObject e = new JSONObject();
+                e.put("dispatched", telecomDispatched);
+                emitCallFlowNative("TELECOM_INCOMING_DISPATCH", inviteId, e);
+            } catch (Exception ignored) { }
+            Log.i(TAG, "[CALL_INCOMING] telecom_dispatch result=" + telecomDispatched + " inviteId=" + inviteId);
+        }
+        if (telecomDispatched) {
+            // Telecom owns the system ringer + lock-screen card, but we ALSO
+            // post our own CallStyle notification as a guaranteed fallback.
+            //
+            // Samsung One UI's SamsungAutoAnswerCallsManagerListener can
+            // auto-reject SELF_MANAGED calls within 1 second when another
+            // managed call (cellular / IMS) is concurrently active — a race
+            // we cannot prevent from inside our ConnectionService. Without
+            // the notification fallback, that silent rejection cascades into
+            // a SIP BYE → voicemail scenario with no UI shown to the user.
+            //
+            // The native ringtone is already playing (startIncomingCallRingtone
+            // was called BEFORE handleIncomingCallNative, so it runs regardless
+            // of the Telecom path). No double-ring: our MediaPlayer uses an
+            // AudioFocus request that yields to the system Telecom ringer
+            // (AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE).
+            writeCacheFile(data, inviteId, fromNum, fromDisp, true, "telecom");
+            try {
+                launchIncomingCallUi(data, inviteId, displayName, fromNum, true);
+            } catch (Throwable t) {
+                Log.w(TAG, "[CALL_INCOMING] telecom fallback notification failed: " + t.getMessage());
+            }
+            lastIncomingUiDisplayedAtMs = System.currentTimeMillis();
+            lastIncomingUiPresentation = "telecom";
+            // Do NOT return — fall through to nothing (we already posted
+            // the cache file and the notification above).
+            return;
+        }
         if (!appInForeground) {
             // Side-effect: logs launcher / lock context for diagnostics.
             shouldUseFullScreenUi();
@@ -575,6 +640,21 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             } catch (Exception e) {
                 Log.w(TAG, "[CALL_INCOMING] emitForegroundInvite failed: " + e.getMessage());
             }
+            // ── Fallback CallStyle notification ──────────────────────────────
+            // The user has been hitting "ringtone fires but in-app screen never
+            // mounts" when the React listener for IncomingCall.ForegroundInvite
+            // is briefly absent (cold-resume race, hermes GC pause, listener
+            // unmount/remount during navigation). To guarantee the user can
+            // ALWAYS answer, post the CallStyle heads-up here too — it stays
+            // out of the way when IncomingCallScreen mounts (React modal
+            // overlays it) and becomes the interactive surface when JS fails
+            // to mount in time. Heads-up only (preferFullScreen=false) so we
+            // do not rip the user out of whatever screen they were on.
+            try {
+                launchIncomingCallUi(data, inviteId, displayName, fromNum, false);
+            } catch (Throwable t) {
+                Log.w(TAG, "[CALL_INCOMING] foreground fallback CallStyle post failed: " + t.getMessage());
+            }
             // Native ringtone keeps playing. JS no longer layers expo-av on top
             // (that caused the lock-screen double-ringtone). The native ringtone
             // is stopped exclusively via: intent_answer/decline onNewIntent,
@@ -606,6 +686,25 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         cancelWakePlaceholderNotification(this, "native_termination:" + type);
         dismissIncomingCallUi(this, inviteId, "native_termination:" + type);
         deleteCacheFile();
+        // If Telecom had an incoming Connection up for this invite (because
+        // we dispatched via TelecomBridge in handleIncomingCallNative), tear
+        // it down too so the OS call UI / lock-screen ringer stops the
+        // moment the cancel push arrives — otherwise the system would keep
+        // ringing until its own 60s no-answer timeout fires.
+        if (inviteId != null && !inviteId.isEmpty()) {
+            try {
+                ConnectIncomingConnection conn = TelecomBridge.INSTANCE.getActiveConnection(inviteId);
+                if (conn != null) {
+                    String reason = "MISSED_CALL".equals(type)
+                        ? "missed"
+                        : ("INVITE_CANCELED".equals(type) ? "canceled" : "remote_hangup");
+                    conn.terminate(reason);
+                    Log.i(TAG, "[CALL_INCOMING] telecom_terminate inviteId=" + inviteId + " reason=" + reason);
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "[CALL_INCOMING] telecom_terminate failed: " + t.getMessage());
+            }
+        }
     }
 
     /**

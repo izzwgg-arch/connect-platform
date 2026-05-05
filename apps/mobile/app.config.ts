@@ -47,13 +47,14 @@ const voiceSimulate = isProdProfile ? false : requestedVoiceSimulate;
 const logLevel = (process.env.EXPO_PUBLIC_LOG_LEVEL || (isProdProfile ? 'warn' : profile === 'preview' ? 'info' : 'debug')).toLowerCase();
 const easProjectId = '53c72ced-180c-4885-a3ff-7d5da5717ead';
 const appVersion = '1.0.0';
+const runtimeVersion = process.env.SHIP_BUILD_ID ? `${appVersion}+${process.env.SHIP_BUILD_ID}` : appVersion;
 
 const config: ExpoConfig = {
   name: 'Connect',
   slug: 'connect-mobile',
   owner: 'izz8457s-organization',
   version: appVersion,
-  runtimeVersion: appVersion,
+  runtimeVersion,
   updates: {
     enabled: true,
     url: `https://u.expo.dev/${easProjectId}`,
@@ -166,6 +167,42 @@ const config: ExpoConfig = {
             id: 'connect-calls',
             sound: 'default',
             bypassDnd: false,
+          },
+          {
+            id: 'connect-messages',
+            name: 'Messages',
+            importance: 4,
+            vibrationPattern: [0, 160],
+            lockScreenVisibility: 0,
+            enableVibrate: true,
+            enableLights: true,
+            lightColor: '#1d4ed8',
+            showBadge: true,
+            sound: 'default',
+          },
+          {
+            id: 'connect-voicemail',
+            name: 'Voicemail',
+            importance: 4,
+            vibrationPattern: [0, 220, 120, 220],
+            lockScreenVisibility: 0,
+            enableVibrate: true,
+            enableLights: true,
+            lightColor: '#06b6d4',
+            showBadge: true,
+            sound: 'default',
+          },
+          {
+            id: 'connect-missed-calls',
+            name: 'Missed Calls',
+            importance: 4,
+            vibrationPattern: [0, 300, 120, 300],
+            lockScreenVisibility: 0,
+            enableVibrate: true,
+            enableLights: true,
+            lightColor: '#f97316',
+            showBadge: true,
+            sound: 'default',
           },
         ],
       },

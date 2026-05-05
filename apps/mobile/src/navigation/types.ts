@@ -6,7 +6,7 @@ export type TabParamList = {
   Contact: undefined;
   Keypad: undefined;
   Recent: undefined;
-  Chat: undefined;
+  Chat: { threadId?: string } | undefined;
   Voicemail: undefined;
   Settings: undefined;
 };

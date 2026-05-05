@@ -118,6 +118,17 @@ function Clear-ExpoAvCxx([string]$root) {
   }
 }
 
+function Set-ExpoRuntimeVersion([string]$root, [string]$runtimeVersion) {
+  $stringsPath = Join-Path $root "apps\mobile\android\app\src\main\res\values\strings.xml"
+  if (-not (Test-Path $stringsPath)) { return }
+  $content = Get-Content -LiteralPath $stringsPath -Raw
+  $updated = $content -replace '<string name="expo_runtime_version">[^<]*</string>', "<string name=`"expo_runtime_version`">$runtimeVersion</string>"
+  if ($updated -ne $content) {
+    Set-Content -LiteralPath $stringsPath -Value $updated -NoNewline
+    Write-Host "expo_runtime_version=$runtimeVersion"
+  }
+}
+
 Write-Step "Connect mobile - android-ship"
 Write-Host "Real repo: $realRepo"
 
@@ -143,6 +154,9 @@ Write-Host "Using build root: $buildRoot"
 $env:SHIP_BUILD_ID = Get-Date -Format "yyyyMMdd-HHmmss"
 $env:SHIP_VERSION_CODE = [string]([int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() % 2100000000))
 Write-Host "SHIP_BUILD_ID=$env:SHIP_BUILD_ID SHIP_VERSION_CODE=$env:SHIP_VERSION_CODE"
+
+Write-Step "Expo runtime version"
+Set-ExpoRuntimeVersion $buildRoot "1.0.0+$env:SHIP_BUILD_ID"
 
 Write-Step "Clean expo-av CMake output"
 Clear-ExpoAvCxx $buildRoot

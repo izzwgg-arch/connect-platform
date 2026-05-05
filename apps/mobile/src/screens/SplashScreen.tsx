@@ -3,8 +3,7 @@
  *
  * Design system: option #7
  * - Dark premium navy-black gradient background
- * - Centered ConnectIcon with radial glow
- * - Three concentric orbit rings (slow animated rotation)
+ * - Centered ConnectIcon
  * - "Connect" wordmark + elegant subtitle
  * - NO buttons · NO "Get Started" · NO CTAs
  *
@@ -19,23 +18,13 @@ import {
   Text,
   StyleSheet,
   Animated,
-  Dimensions,
   Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ConnectIcon } from '../components/ConnectIcon';
 
-const { width } = Dimensions.get('window');
-
 /** Minimum time the splash is visible regardless of how fast auth resolves. */
 const MIN_SHOW_MS = 2_400;
-
-/** Orbit ring config: size, border opacity, rotation direction, full-cycle ms. */
-const RINGS = [
-  { diameter: 176, opacity: 0.45, color: '#38bdf8', dir: 1,  cycleDuration: 9_000 },
-  { diameter: 240, opacity: 0.28, color: '#818cf8', dir: -1, cycleDuration: 14_000 },
-  { diameter: 308, opacity: 0.15, color: '#38bdf8', dir: 1,  cycleDuration: 20_000 },
-] as const;
 
 interface Props {
   /** Set to true once auth state is resolved. The splash will then finish on its own schedule. */
@@ -51,10 +40,6 @@ export function SplashScreen({ authReady, onReady }: Props) {
   const iconScale   = useRef(new Animated.Value(0.78)).current;
   const textFade    = useRef(new Animated.Value(0)).current;
   const textSlide   = useRef(new Animated.Value(14)).current;
-  const glowPulse   = useRef(new Animated.Value(0.55)).current;
-
-  // ── Orbit ring rotations (one Animated.Value per ring, 0→1) ───────────────
-  const ringAnims = useRef(RINGS.map(() => new Animated.Value(0))).current;
 
   // ── Internal state ─────────────────────────────────────────────────────────
   const minTimeDone  = useRef(false);
@@ -108,28 +93,7 @@ export function SplashScreen({ authReady, onReady }: Props) {
       ]).start();
     }, 700);
 
-    // 3. Glow breathing loop
-    const glowLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(glowPulse, { toValue: 1,    duration: 1_800, useNativeDriver: true }),
-        Animated.timing(glowPulse, { toValue: 0.55, duration: 1_800, useNativeDriver: true }),
-      ]),
-    );
-    glowLoop.start();
-
-    // 4. Orbit rings — slow continuous rotation
-    const ringLoops = RINGS.map(({ cycleDuration, dir }, i) =>
-      Animated.loop(
-        Animated.timing(ringAnims[i], {
-          toValue: dir === 1 ? 1 : -1,
-          duration: cycleDuration,
-          useNativeDriver: true,
-        }),
-      ),
-    );
-    ringLoops.forEach((l) => l.start());
-
-    // 5. Min-display timer
+    // 3. Min-display timer
     const minTimer = setTimeout(() => {
       minTimeDone.current = true;
       maybeExit();
@@ -138,8 +102,6 @@ export function SplashScreen({ authReady, onReady }: Props) {
     return () => {
       clearTimeout(textTimer);
       clearTimeout(minTimer);
-      glowLoop.stop();
-      ringLoops.forEach((l) => l.stop());
     };
   }, []);
 
@@ -156,39 +118,6 @@ export function SplashScreen({ authReady, onReady }: Props) {
         colors={['#040810', '#060c18', '#0a1020', '#08111e', '#040810']}
         locations={[0, 0.2, 0.5, 0.8, 1]}
         style={StyleSheet.absoluteFill}
-      />
-
-      {/* Ambient background glow — large soft radial bloom */}
-      <View pointerEvents="none" style={styles.ambientGlow} />
-
-      {/* ── Orbit rings ── */}
-      {RINGS.map(({ diameter, opacity, color, dir }, i) => {
-        const spin = ringAnims[i].interpolate({
-          inputRange: [dir === 1 ? 0 : -1, dir === 1 ? 1 : 0],
-          outputRange: ['0deg', `${dir === 1 ? 360 : -360}deg`],
-        });
-        return (
-          <Animated.View
-            key={i}
-            pointerEvents="none"
-            style={[
-              styles.ring,
-              {
-                width: diameter,
-                height: diameter,
-                borderRadius: diameter / 2,
-                borderColor: `${color}${opacityToHex(opacity)}`,
-                transform: [{ rotate: spin }],
-              },
-            ]}
-          />
-        );
-      })}
-
-      {/* ── Icon glow halo ── */}
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.glowHalo, { opacity: glowPulse }]}
       />
 
       {/* ── App icon ── */}
@@ -219,11 +148,6 @@ export function SplashScreen({ authReady, onReady }: Props) {
   );
 }
 
-/** Convert 0–1 float opacity to a 2-char hex string for CSS color notation. */
-function opacityToHex(opacity: number): string {
-  return Math.round(opacity * 255).toString(16).padStart(2, '0').toUpperCase();
-}
-
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
@@ -231,54 +155,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#040810',
   },
-
-  // Large soft ambient glow behind icon
-  ambientGlow: {
-    position: 'absolute',
-    width: width * 0.75,
-    height: width * 0.75,
-    borderRadius: (width * 0.75) / 2,
-    backgroundColor: 'transparent',
-    // Glow via shadow (iOS)
-    ...Platform.select({
-      ios: {
-        shadowColor: '#1d4ed8',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.55,
-        shadowRadius: 80,
-      },
-    }),
-  },
-
-  // Orbit ring base style (size/color overridden per ring)
-  ring: {
-    position: 'absolute',
-    borderWidth: 1,
-    borderStyle: 'solid',
-  },
-
-  // Tight blue glow halo directly behind icon
-  glowHalo: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'transparent',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#38bdf8',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 1,
-        shadowRadius: 48,
-      },
-      android: {
-        // Android elevation gives a coloured halo when elevation + bg applied
-        elevation: 24,
-        backgroundColor: 'rgba(56,189,248,0.05)',
-      },
-    }),
-  },
-
   iconShadow: {
     ...Platform.select({
       ios: {

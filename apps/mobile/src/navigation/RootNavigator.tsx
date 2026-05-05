@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { NativeModules, Platform, StyleSheet, View } from 'react-native';
-import { CommonActions, NavigationContainer } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
+import { CommonActions, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +21,7 @@ import { logCallFlow } from '../debug/callFlowDebug';
 import { moveAppToBackground } from '../sip/callkeep';
 import type { CallDirection, CallState } from '../types';
 import { findCallModalNavigator } from './callStackNav';
+import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 
 function hasActiveOrPendingCall(
   callState: CallState,
@@ -315,6 +317,7 @@ function AppNavigator() {
 }
 
 export function RootNavigator() {
+  const navRef = useNavigationContainerRef<any>();
   const { token, isLoading } = useAuth();
   const { callState, callDirection } = useSip();
   const { colors } = useTheme();
@@ -325,6 +328,8 @@ export function RootNavigator() {
   //   1. The minimum display time has elapsed (enforced inside SplashScreen)
   //   2. Auth state is resolved (isLoading === false)
   const [splashDone, setSplashDone] = useState(false);
+  const [navReady, setNavReady] = useState(false);
+  const pendingNotificationRouteRef = useRef<MobileNotificationRoute | null>(null);
 
   void answerHandoffTick;
   const answerHandoffActive = !!answerHandoffInviteIdRef.current;
@@ -351,11 +356,68 @@ export function RootNavigator() {
     }
   }, [token, isLoading, hasActiveCallUi]);
 
+  const routeFromNotification = (target: MobileNotificationRoute) => {
+    const tabRoute =
+      target.type === 'voicemail'
+        ? { name: 'Voicemail' }
+        : target.type === 'missed_call'
+          ? { name: 'Recent' }
+          : { name: 'Chat', params: { threadId: target.conversationId } };
+
+    navRef.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'App',
+            state: {
+              index: 0,
+              routes: [
+                {
+                  name: 'Tabs',
+                  state: {
+                    index: 0,
+                    routes: [tabRoute],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+  };
+
+  useEffect(() => {
+    const queueRoute = (data: any) => {
+      const target = notificationDataToRoute(data);
+      if (target) pendingNotificationRouteRef.current = target;
+    };
+
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => queueRoute(response?.notification.request.content.data))
+      .catch(() => undefined);
+
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      queueRoute(response.notification.request.content.data);
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!token || !navReady || isLoading) return;
+    const target = pendingNotificationRouteRef.current;
+    if (!target) return;
+    pendingNotificationRouteRef.current = null;
+    routeFromNotification(target);
+  }, [token, navReady, isLoading]);
+
   return (
     <>
       {/* Keep navigation mounted even while splash is visible so incoming-call
           handoff never tears down and rebuilds the app shell. */}
-      <NavigationContainer>
+      <NavigationContainer ref={navRef} onReady={() => setNavReady(true)}>
         <RootStack.Navigator screenOptions={{ headerShown: false }}>
           {!token ? (
             <RootStack.Screen name="Auth" component={AuthNavigator} />

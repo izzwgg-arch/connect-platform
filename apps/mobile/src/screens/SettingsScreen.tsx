@@ -198,6 +198,9 @@ export function SettingsScreen() {
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + spacing['8'], padding: spacing['4'] }}
         showsVerticalScrollIndicator={false}
+        bounces={false}
+        alwaysBounceVertical={false}
+        overScrollMode="never"
       >
         {/* Profile */}
         <View style={[styles.profileCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -235,12 +238,6 @@ export function SettingsScreen() {
             value={voice?.extensionNumber ? `Ext ${voice.extensionNumber}` : '—'}
             iconColor={colors.teal}
           />
-          <SettingRow
-            icon="server-outline"
-            label="SIP Domain"
-            value={voice?.sipDomain || '—'}
-            iconColor={colors.indigo}
-          />
         </SectionCard>
 
         {/* Phone setup */}
@@ -259,12 +256,6 @@ export function SettingsScreen() {
             subtitle="Reconnect to the PBX"
             iconColor={colors.teal}
             onPress={() => sip.register()}
-          />
-          <SettingRow
-            icon="construct-outline"
-            label="Connection Diagnostics"
-            iconColor={colors.purple}
-            onPress={() => nav.navigate('Diagnostics')}
           />
         </SectionCard>
 
@@ -308,12 +299,6 @@ export function SettingsScreen() {
             label="Version"
             value="1.0.0"
             iconColor={colors.textTertiary}
-          />
-          <SettingRow
-            icon="shield-checkmark-outline"
-            label="Security"
-            subtitle="Tokens stored in secure device storage"
-            iconColor={colors.success}
           />
         </SectionCard>
 
@@ -389,47 +374,67 @@ export function SettingsScreen() {
               />
 
               {/* 2. Push token registered */}
-              <SettingRow
-                icon="cloud-outline"
-                label="Push Token"
-                subtitle={
-                  callReadiness.pushTokenRegistered
-                    ? 'Registered — server can reach this device'
-                    : retryingPushToken
-                      ? 'Registering…'
+              {/*
+                The auto-retry effect in NotificationsContext flips
+                `pushTokenRetrying` to true while a backoff timer is pending
+                for the next FCM registration attempt (Google Play Services
+                SERVICE_NOT_AVAILABLE on Moto G / Lenovo / older Android 14
+                builds typically self-heals within 30s–10min). Render that as
+                an amber "Retrying…" row so the user knows the app is actively
+                recovering and they don't need to keep tapping.
+              */}
+              {(() => {
+                const autoRetrying = !!callReadiness.pushTokenRetrying;
+                const showRetrying = retryingPushToken || autoRetrying;
+                const subtitle = callReadiness.pushTokenRegistered
+                  ? 'Registered — server can reach this device'
+                  : retryingPushToken
+                    ? 'Registering…'
+                    : autoRetrying
+                      ? `Retrying automatically… (${callReadiness.pushTokenError ?? 'transient error'})`
                       : callReadiness.pushTokenError
                         ? `Error: ${callReadiness.pushTokenError}`
-                        : 'Not registered — tap to retry'
-                }
-                iconColor={
-                  callReadiness.pushTokenRegistered
-                    ? colors.success
-                    : retryingPushToken
-                      ? colors.warning
-                      : colors.danger
-                }
-                onPress={!callReadiness.pushTokenRegistered && !retryingPushToken ? handleRetryPushToken : undefined}
-                disabled={retryingPushToken}
-                rightElement={
-                  <View style={[styles.statusChip, {
-                    backgroundColor: callReadiness.pushTokenRegistered
-                      ? colors.successMuted
-                      : retryingPushToken
-                        ? colors.warningMuted
-                        : colors.dangerMuted,
-                  }]}>
-                    <Text style={[typography.labelSm, {
-                      color: callReadiness.pushTokenRegistered
-                        ? colors.success
-                        : retryingPushToken
-                          ? colors.warning
-                          : colors.danger,
-                    }]}>
-                      {callReadiness.pushTokenRegistered ? '✓ OK' : retryingPushToken ? '…' : '✗ Missing'}
-                    </Text>
-                  </View>
-                }
-              />
+                        : 'Not registered — tap to retry';
+                const iconColor = callReadiness.pushTokenRegistered
+                  ? colors.success
+                  : showRetrying
+                    ? colors.warning
+                    : colors.danger;
+                const chipBg = callReadiness.pushTokenRegistered
+                  ? colors.successMuted
+                  : showRetrying
+                    ? colors.warningMuted
+                    : colors.dangerMuted;
+                const chipColor = callReadiness.pushTokenRegistered
+                  ? colors.success
+                  : showRetrying
+                    ? colors.warning
+                    : colors.danger;
+                const chipLabel = callReadiness.pushTokenRegistered
+                  ? '✓ OK'
+                  : retryingPushToken
+                    ? '…'
+                    : autoRetrying
+                      ? 'Retrying'
+                      : '✗ Missing';
+                return (
+                  <SettingRow
+                    icon="cloud-outline"
+                    label="Push Token"
+                    subtitle={subtitle}
+                    iconColor={iconColor}
+                    onPress={!callReadiness.pushTokenRegistered && !retryingPushToken ? handleRetryPushToken : undefined}
+                    disabled={retryingPushToken}
+                    rightElement={
+                      <View style={[styles.statusChip, { backgroundColor: chipBg }]}>
+                        <Text style={[typography.labelSm, { color: chipColor }]}>
+                          {chipLabel}
+                        </Text>
+                      </View>
+                    }
+                  />
+                );
+              })()}
 
               {/* 3. Battery optimization */}
               <SettingRow

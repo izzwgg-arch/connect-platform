@@ -38,6 +38,11 @@ import {
   showIncomingNativeCall,
   subscribeNativeCallActions,
 } from "../sip/callkeep";
+import {
+  subscribeTelecomActions,
+  terminateTelecomCall,
+  markTelecomActive,
+} from "../sip/telecom";
 import { initVoipPushListener, getCachedVoipPushToken } from "../sip/voipPush";
 // NOTE: stopAllTelephonyAudio is imported statically here rather than via
 // `void import("../audio/telephonyAudio").then(...)`. The dynamic-import
@@ -159,6 +164,15 @@ export type CallReadiness = {
   pushTokenRegistered: boolean;
   /** Non-null when push token registration failed — contains the error reason */
   pushTokenError: string | null;
+  /**
+   * True when the auto-retry loop has a backoff timer pending for the next
+   * registration attempt. Used by the Settings UI to render "Retrying…" rather
+   * than a flat "Missing" so users on devices where Google Play Services is
+   * temporarily unavailable (common on Moto G / Lenovo / older Android 14
+   * builds returning SERVICE_NOT_AVAILABLE) understand the app is recovering
+   * on its own and they don't need to keep tapping the row.
+   */
+  pushTokenRetrying: boolean;
   /** Android: whether we believe battery optimization may interfere */
   batteryOptimizationWarning: boolean;
   /** True only when all hard requirements are met */
@@ -461,6 +475,41 @@ async function readCachedInvite(matchInviteId?: string): Promise<CallInvite | nu
   if (!cached?.inviteId) return null;
   if (matchInviteId && cached.inviteId !== matchInviteId) return null;
   return payloadToInvite(cached);
+}
+
+/**
+ * Classifies a push-token error string as worth retrying automatically.
+ *
+ * The most common one we see in the wild is Google Play Services' transient
+ * `SERVICE_NOT_AVAILABLE` (Moto G / Lenovo / some Samsung Android 14 builds
+ * after a Play Services update or after the user clears Play Services data —
+ * Play Services takes 30s to several minutes to mint a fresh FCM registration
+ * token, and during that window every getToken() call throws). These errors
+ * self-heal as soon as Play Services is ready, so retrying with backoff turns
+ * a permanent-looking "Push Token Missing" into a "registers within 1–10
+ * minutes without the user touching anything".
+ *
+ * Non-retryable cases include misconfigured `google-services.json`, missing
+ * EAS project ID, or notification permission denied — those will never fix
+ * themselves and we should let the user act on the error message.
+ */
+function isRetryablePushTokenError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const lower = error.toLowerCase();
+  return (
+    lower.includes("service_not_available") ||
+    lower.includes("io.ioexception") ||
+    lower.includes("ioexception") ||
+    lower.includes("network") ||
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("unavailable") ||
+    lower.includes("temporarily") ||
+    // Expo's getDevicePushTokenAsync wraps the underlying FCM exception in
+    // strings like "FCM unavailable: …" — match that prefix too.
+    lower.includes("fcm unavailable") ||
+    lower.includes("execution") // ExecutionException from FCM getToken()
+  );
 }
 
 /** Returns the Expo push token, or null with a reason string on failure. */
@@ -786,6 +835,7 @@ export function NotificationsProvider({
     notificationPermission: "undetermined",
     pushTokenRegistered: false,
     pushTokenError: null,
+    pushTokenRetrying: false,
     batteryOptimizationWarning: Platform.OS === "android" && !!Device.isDevice,
     isFullyReady: false,
   });
@@ -1037,6 +1087,36 @@ export function NotificationsProvider({
         // normal flow handle it — we'd rather accept a suspicious invite
         // than drop a real call.
       }
+
+      // ── Self-loop guard ────────────────────────────────────────────────
+      // A push-layer invite where the caller (`fromNumber`) and the
+      // recipient (`toExtension`) are the same extension is always
+      // nonsense — there is no legitimate way for an extension to ring
+      // itself. In practice this happens when the user dials an external
+      // DID that loops back through the PBX (IVR option, follow-me, or
+      // a trunk-routed callback) and Asterisk re-injects the call as an
+      // "inbound" leg with caller-id preserved from the original outbound
+      // dial. The PBX-level "is this a loopback?" check isn't reachable
+      // from the push notifier (different pbxCallId / linkedId on the
+      // loop-back leg), so we filter at the device using the data the
+      // invite already carries. Without this the user sees a phantom
+      // "Call Waiting" banner from their own extension on top of an
+      // active outbound call.
+      const fromExtRaw = (invite.fromNumber ?? "").trim();
+      const toExtRaw = (invite.toExtension ?? "").trim();
+      if (fromExtRaw && toExtRaw && fromExtRaw === toExtRaw) {
+        console.log(
+          '[Notif] Suppressing self-loop invite id=' + invite.id +
+          ' fromNumber=' + fromExtRaw +
+          ' toExtension=' + toExtRaw,
+        );
+        suppressedIncomingInviteIdsRef.current.add(invite.id);
+        try {
+          callSessions.removeInboundInvite(invite.id, 'self_loop');
+        } catch { /* ignore */ }
+        return;
+      }
+
       shownInviteIdRef.current = invite.id;
       console.log('[LOCK_CALL] incoming_received inviteId=' + invite.id + ' from=' + (invite.fromNumber || 'unknown'));
 
@@ -1237,23 +1317,46 @@ export function NotificationsProvider({
   }, []);
 
   // ── Retry push token registration ────────────────────────────────────────
+  //
+  // `pushRetryAttemptRef` is consumed by the auto-retry useEffect lower in this
+  // provider to drive exponential backoff on transient FCM errors (the most
+  // common one being Google Play Services' SERVICE_NOT_AVAILABLE on Moto G /
+  // Lenovo / older Android 14 devices, which self-heals as soon as Play
+  // Services finishes minting a fresh registration token). Manual retries
+  // reset the counter so the user always gets a fast first attempt; automatic
+  // retries preserve it so backoff actually grows.
 
-  const retryPushTokenRegistration = useCallback(async () => {
+  const pushRetryAttemptRef = useRef(0);
+  const pushRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const retryPushTokenRegistration = useCallback(async (source: "manual" | "auto" = "manual") => {
     if (!token) return;
-    console.log("[PUSH_RETRY] Retrying push token registration...");
+    const tag = source === "auto" ? "PUSH_RETRY_AUTO" : "PUSH_RETRY";
+    console.log(`[${tag}] Retrying push token registration...`);
+
+    if (source === "manual") {
+      // User pressed Settings → Push Token → reset backoff so the next failure
+      // restarts the auto-retry ladder from the shortest delay.
+      pushRetryAttemptRef.current = 0;
+      if (pushRetryTimerRef.current) {
+        clearTimeout(pushRetryTimerRef.current);
+        pushRetryTimerRef.current = null;
+      }
+    }
 
     // Re-check permission first
     const perm = await Notifications.getPermissionsAsync().catch(() => null);
     const granted = perm?.status === "granted";
     if (!granted) {
-      console.log("[PUSH_RETRY] Permission not granted, requesting...");
+      console.log(`[${tag}] Permission not granted, requesting...`);
       const req = await Notifications.requestPermissionsAsync().catch(() => null);
       if (req?.status !== "granted") {
-        console.warn("[PUSH_RETRY] Permission denied — cannot register push token");
+        console.warn(`[${tag}] Permission denied — cannot register push token`);
         setCallReadiness((prev) => ({
           ...prev,
           notificationPermission: (req?.status ?? "denied") as CallReadiness["notificationPermission"],
           pushTokenRegistered: false,
+          pushTokenRetrying: false,
           isFullyReady: false,
         }));
         return;
@@ -1265,10 +1368,19 @@ export function NotificationsProvider({
     }
 
     const { token: pushToken, error: pushErr } = await getExpoToken();
-    console.log("[PUSH_RETRY] Token result:", pushToken ? "OK" : `FAILED (${pushErr})`);
+    console.log(`[${tag}] Token result:`, pushToken ? "OK" : `FAILED (${pushErr})`);
     if (!pushToken) {
-      console.warn("[PUSH_RETRY] Still no token after retry. Reason:", pushErr);
-      setCallReadiness((prev) => ({ ...prev, pushTokenRegistered: false, pushTokenError: pushErr, isFullyReady: false }));
+      console.warn(`[${tag}] Still no token after retry. Reason:`, pushErr);
+      setCallReadiness((prev) => ({
+        ...prev,
+        pushTokenRegistered: false,
+        pushTokenError: pushErr,
+        // The auto-retry effect will set `pushTokenRetrying: true` again when
+        // it schedules the next backoff; flip it off here so the UI reflects
+        // "this attempt completed (and failed)" before the next timer fires.
+        pushTokenRetrying: false,
+        isFullyReady: false,
+      }));
       return;
     }
 
@@ -1284,22 +1396,120 @@ export function NotificationsProvider({
       ...(voipToken ? { voipPushToken: voipToken } : {}),
       ...metadata,
     }).catch((e) => {
-      console.warn("[PUSH_RETRY] registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
+      console.warn(`[${tag}] registerMobileDevice failed:`, e instanceof Error ? e.message : String(e));
       return null;
     });
 
     if (reg?.id) deviceIdRef.current = String(reg.id);
     await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, pushToken).catch(() => undefined);
-    console.log("[PUSH_RETRY] Registration result — id:", reg?.id ?? "(none)", "voip:", voipToken ? "yes" : "no");
+    console.log(`[${tag}] Registration result — id:`, reg?.id ?? "(none)", "voip:", voipToken ? "yes" : "no");
+
+    pushRetryAttemptRef.current = 0;
+    if (pushRetryTimerRef.current) {
+      clearTimeout(pushRetryTimerRef.current);
+      pushRetryTimerRef.current = null;
+    }
 
     setExpoPushToken(pushToken);
     setCallReadiness((prev) => ({
       ...prev,
       pushTokenRegistered: true,
       pushTokenError: null,
+      pushTokenRetrying: false,
       isFullyReady: prev.notificationPermission === "granted",
     }));
   }, [token]);
+
+  // The Settings screen and the AppState foreground listener still call
+  // `retryPushTokenRegistration()` with no args (treat as "manual"). Surface
+  // an explicit auto-only entrypoint for the backoff effect below so its
+  // intent is unambiguous in the call site.
+  const autoRetryPushTokenRegistration = useCallback(() => {
+    return retryPushTokenRegistration("auto");
+  }, [retryPushTokenRegistration]);
+
+  // ── Auto-retry push token registration on transient FCM errors ───────────
+  //
+  // Goal: turn the user-facing "Push Token: Missing — Error: SERVICE_NOT_AVAILABLE"
+  // into a self-healing recovery without the user needing to keep tapping the
+  // Settings row. Google Play Services on Moto / Lenovo / older Samsung
+  // Android 14 builds frequently throws SERVICE_NOT_AVAILABLE for 30s to a
+  // few minutes after Play Services is updated, the device is rebooted, the
+  // user clears Play Services data, or comes off airplane mode — and then
+  // succeeds without any other change.
+  //
+  // Strategy:
+  //   • Attempt counter (`pushRetryAttemptRef`) tracks how many auto-retries
+  //     we've already burned. Reset to 0 on success or on any manual retry.
+  //   • Backoff schedule: 8s, 20s, 45s, 90s, 180s, 300s. After the 6th attempt
+  //     (~10.8 minutes total) we stop. The user can still tap the Settings
+  //     row to manually retry, which resets the ladder.
+  //   • Only retry if pushTokenError is classified as retryable
+  //     (isRetryablePushTokenError) — non-retryable causes like missing
+  //     google-services.json or denied permission stop the loop immediately.
+  //   • Do NOT retry if notification permission isn't granted — the OS won't
+  //     even let getExpoPushTokenAsync run, and we'd just re-fail forever.
+  const PUSH_RETRY_BACKOFFS_MS = [8_000, 20_000, 45_000, 90_000, 180_000, 300_000];
+  useEffect(() => {
+    if (pushRetryTimerRef.current) {
+      clearTimeout(pushRetryTimerRef.current);
+      pushRetryTimerRef.current = null;
+    }
+
+    if (callReadiness.pushTokenRegistered) {
+      // Recovery completed — leave the counter reset done by retry helper.
+      return;
+    }
+    if (!token) return;
+    if (callReadiness.notificationPermission !== "granted") return;
+    if (!isRetryablePushTokenError(callReadiness.pushTokenError)) return;
+
+    const attempt = pushRetryAttemptRef.current;
+    if (attempt >= PUSH_RETRY_BACKOFFS_MS.length) {
+      console.warn(
+        `[PUSH_RETRY_AUTO] Giving up after ${attempt} attempts. ` +
+          `User can still tap the Push Token row in Settings to manually retry. ` +
+          `Last error: ${callReadiness.pushTokenError}`,
+      );
+      // Surface to Settings UI: stop showing "Retrying…" so user knows they
+      // need to act.
+      setCallReadiness((prev) => (prev.pushTokenRetrying ? { ...prev, pushTokenRetrying: false } : prev));
+      return;
+    }
+
+    const delay = PUSH_RETRY_BACKOFFS_MS[attempt];
+    console.log(
+      `[PUSH_RETRY_AUTO] Scheduling retry #${attempt + 1}/${PUSH_RETRY_BACKOFFS_MS.length} ` +
+        `in ${Math.round(delay / 1000)}s (last error: ${callReadiness.pushTokenError})`,
+    );
+
+    // Mark retrying = true so SettingsScreen can render "Retrying…" instead
+    // of just "Missing" while the timer is pending.
+    setCallReadiness((prev) => (prev.pushTokenRetrying ? prev : { ...prev, pushTokenRetrying: true }));
+
+    pushRetryTimerRef.current = setTimeout(() => {
+      pushRetryAttemptRef.current = attempt + 1;
+      autoRetryPushTokenRegistration().catch((e) => {
+        console.warn(
+          `[PUSH_RETRY_AUTO] Retry attempt #${attempt + 1} threw:`,
+          e instanceof Error ? e.message : String(e),
+        );
+      });
+    }, delay);
+
+    return () => {
+      if (pushRetryTimerRef.current) {
+        clearTimeout(pushRetryTimerRef.current);
+        pushRetryTimerRef.current = null;
+      }
+    };
+  }, [
+    callReadiness.pushTokenRegistered,
+    callReadiness.pushTokenError,
+    callReadiness.notificationPermission,
+    token,
+    autoRetryPushTokenRegistration,
+  ]);
 
   // ── runMediaTest ──────────────────────────────────────────────────────────
 
@@ -2024,6 +2234,17 @@ export function NotificationsProvider({
 
   useEffect(() => {
     if (sip.callState !== "connected") return;
+    // ── Telecom: flip the OS Connection to ACTIVE on SIP connect ────────────
+    // Fires the moment the SIP UA reports the call is up so the system
+    // call UI shows the in-call timer + clears the lock-screen ringer
+    // banner. Idempotent on the native side — safe to call even when the
+    // call did not originate via Telecom (no-op if no Connection exists).
+    try {
+      const inviteId = answerInviteRef.current?.id || incomingInvite?.id || null;
+      if (inviteId) markTelecomActive(inviteId);
+    } catch (e) {
+      console.warn("[TELECOM] markTelecomActive on connect threw:", e instanceof Error ? e.message : String(e));
+    }
     if (!answerHandoffInviteIdRef.current) return;
     answerHandoffInviteIdRef.current = null;
     setAnswerHandoffTick((n) => n + 1);
@@ -2035,6 +2256,17 @@ export function NotificationsProvider({
     if (sip.callState === "idle") {
       console.log('[CALL_CLEANUP] sip_idle clearing answerInviteRef, deferring suppressed id clear');
       console.log('[LOCK_CALL_CLEANUP] sip_idle — clearing per-call refs so next incoming call starts fresh');
+      // ── Telecom: tear down any OS Connection still up for this call ──────
+      // Fires on every SIP idle transition (remote hangup, local hangup,
+      // missed). Idempotent — no-op if no Connection exists. Without this
+      // the OS lock-screen call UI would linger until its 60s no-answer
+      // timeout when the remote party hangs up first.
+      try {
+        const lingerId = answerInviteRef.current?.id || incomingInvite?.id || null;
+        if (lingerId) terminateTelecomCall(lingerId, "remote_hangup");
+      } catch (e) {
+        console.warn("[TELECOM] terminateTelecomCall on idle threw:", e instanceof Error ? e.message : String(e));
+      }
       answerInviteRef.current = null;
       // Defensive: ensure shownInviteIdRef and the in-flight action sets are
       // empty so the NEXT incoming call (especially from the lock screen) can
@@ -2551,6 +2783,81 @@ export function NotificationsProvider({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sip.callState, sip.callDirection]);
+
+  // ── Telecom (SELF_MANAGED ConnectionService) event listener ──────────────
+  // ConnectIncomingConnection forwards user actions in the OS-level call UI
+  // (Answer / Decline / Hangup) into JS via TelecomBridge. We pipe each
+  // event into the same handleAcceptInvite / handleDeclineInvite functions
+  // the in-app IncomingCallScreen uses, so there is exactly one SIP-answer
+  // pipeline regardless of where the answer originated. This is the
+  // primary path for "app killed → call wakes phone → user taps Answer
+  // on lock screen" on every Android 14/15+ device.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const unsub = subscribeTelecomActions({
+      onAnswer: async (payload) => {
+        const inviteId = payload.inviteId;
+        if (!inviteId) {
+          console.warn("[TELECOM] onAnswer with empty inviteId — ignoring");
+          return;
+        }
+        console.log("[TELECOM] onAnswer inviteId=" + inviteId + " — resolving invite + driving handleAcceptInvite");
+        let invite = await resolveInviteForAction(inviteId);
+        if (!invite && tokenRef.current) {
+          // Telecom can fire onAnswer faster than the JS process boots
+          // from a killed state — give the cache / pending-invites API a
+          // brief window to populate before giving up.
+          await new Promise<void>((r) => setTimeout(r, 250));
+          invite = await resolveInviteForAction(inviteId);
+        }
+        if (!invite) {
+          console.warn("[TELECOM] onAnswer: no invite found for inviteId=" + inviteId + " — terminating Connection");
+          terminateTelecomCall(inviteId, "other");
+          return;
+        }
+        try {
+          await handleAcceptInvite(invite, inviteId);
+        } catch (e) {
+          console.warn("[TELECOM] handleAcceptInvite threw, terminating Connection:", e instanceof Error ? e.message : String(e));
+          terminateTelecomCall(inviteId, "other");
+        }
+      },
+      onReject: async (payload) => {
+        const inviteId = payload.inviteId;
+        // Samsung's SamsungAutoAnswerCallsManagerListener can auto-reject our
+        // SELF_MANAGED Telecom call within <1 second of creation when a managed
+        // cellular/IMS call is concurrently active. If we forward that system
+        // rejection into handleDeclineInvite we send a SIP BYE → the caller
+        // reaches voicemail before the user sees any UI.
+        //
+        // We intentionally do NOT call handleDeclineInvite here. The SIP INVITE
+        // stays alive and the user can answer/decline via our CallStyle
+        // notification (which is now always posted in parallel with the Telecom
+        // dispatch — see IncomingCallFirebaseService). The call will reach
+        // voicemail only if the user ignores the notification until PBX timeout.
+        console.log("[TELECOM] onReject inviteId=" + (inviteId || "(empty)") + " reason=" + payload.reason + " — Telecom layer dismissed; notification UI remains for user action (SIP NOT cancelled)");
+      },
+      onDisconnect: async (payload) => {
+        const inviteId = payload.inviteId;
+        if (!inviteId) return;
+        console.log("[TELECOM] onDisconnect inviteId=" + inviteId + " reason=" + payload.reason);
+        // Same as reject for our SIP layer: hang up the live session.
+        const invite = await resolveInviteForAction(inviteId);
+        try {
+          await handleDeclineInvite(invite, inviteId);
+        } catch (e) {
+          console.warn("[TELECOM] handleDeclineInvite (disconnect) threw:", e instanceof Error ? e.message : String(e));
+        }
+      },
+      onFailed: (payload) => {
+        console.warn("[TELECOM] onFailed inviteId=" + payload.inviteId + " reason=" + payload.reason + " — Telecom rejected the call; legacy CallStyle path will fire next time");
+      },
+    });
+    return () => {
+      try { unsub(); } catch { /* ignore */ }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Native foreground-invite event listener ──────────────────────────────
   // IncomingCallFirebaseService emits `IncomingCall.ForegroundInvite` via the
@@ -3096,6 +3403,7 @@ export function NotificationsProvider({
             ...prev,
             pushTokenRegistered: true,
             pushTokenError: null,
+            pushTokenRetrying: false,
             isFullyReady: prev.notificationPermission === "granted",
           }));
         }
@@ -3106,6 +3414,9 @@ export function NotificationsProvider({
             ...prev,
             pushTokenRegistered: false,
             pushTokenError: pushErr,
+            // The auto-retry effect will look at pushTokenError and schedule
+            // the next attempt with backoff; we just record the failure here.
+            pushTokenRetrying: false,
             isFullyReady: false,
           }));
         }
@@ -3432,6 +3743,24 @@ export function NotificationsProvider({
         // from enabling notifications in Android settings).
         if (wasNotGranted && nowGranted && tokenMissing && token) {
           // Fire-and-forget — errors are logged inside retryPushTokenRegistration
+          retryPushTokenRegistration().catch(() => undefined);
+        } else if (
+          // Permission already granted, but the token is still missing because
+          // a previous attempt hit a retryable error (typically Google Play
+          // Services SERVICE_NOT_AVAILABLE on Moto G / Lenovo / older Android
+          // 14 builds). Coming back to the foreground is a strong signal that
+          // the user is actively using the app — Play Services has often
+          // recovered by now, and even if not, a fresh attempt with a reset
+          // backoff ladder is much friendlier than waiting up to 5 minutes
+          // for the next scheduled retry timer to fire.
+          nowGranted &&
+          tokenMissing &&
+          token &&
+          isRetryablePushTokenError(prev.pushTokenError)
+        ) {
+          console.log(
+            "[PUSH_RETRY_AUTO] App returned to foreground with retryable token error — kicking immediate retry",
+          );
           retryPushTokenRegistration().catch(() => undefined);
         }
 

@@ -17,13 +17,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
-import { getCallHistory } from '../../api/client';
+import { AppActionSheet } from '../../components/ui/AppPopup';
+import { getCallHistory, mobileQueryKeys } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
@@ -250,54 +252,40 @@ export function RecentTab() {
   const sip = useSip();
   const insets = useSafeAreaInsets();
 
-  const [calls, setCalls] = useState<CallRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<CallFilter>('all');
   const [query, setQuery] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [detailGroup, setDetailGroup] = useState<CallGroup | null>(null);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [menuGroup, setMenuGroup] = useState<CallGroup | null>(null);
 
-  const load = useCallback(
-    async (isRefresh = false) => {
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
-      setError(null);
-
-      // 1. Show local history immediately (no network needed)
+  const callHistoryQuery = useQuery({
+    queryKey: mobileQueryKeys.callHistory,
+    enabled: Boolean(token),
+    queryFn: async () => {
       const local = await loadLocalCallHistory();
-      if (local.length > 0) {
-        setCalls(local);
-        setLoading(false);
-      }
-
-      // 2. Fetch from server and merge
-      if (token) {
-        try {
-          const remote = await getCallHistory(token);
-          if (remote.length > 0) {
-            const merged = mergeCallRecords(remote, local);
-            setCalls(merged);
-          } else if (local.length === 0) {
-            setCalls([]);
-          }
-        } catch {
-          if (local.length === 0) {
-            setError('Could not load call history from server.');
-          }
-        }
-      }
-
-      setLoading(false);
-      setRefreshing(false);
+      if (!token) return local;
+      const remote = await getCallHistory(token);
+      return mergeCallRecords(remote, local);
     },
-    [token],
-  );
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const calls = callHistoryQuery.data ?? [];
+  const loading = callHistoryQuery.isLoading && calls.length === 0;
+  const refreshing = callHistoryQuery.isRefetching;
+  const error = callHistoryQuery.error && calls.length === 0 ? 'Could not load call history from server.' : null;
+  const refetchCallHistory = callHistoryQuery.refetch;
+  const load = useCallback(() => {
+    refetchCallHistory().catch(() => undefined);
+  }, [refetchCallHistory]);
 
   useFocusEffect(
     useCallback(() => {
-      load(false);
-    }, [load]),
+      if (!callHistoryQuery.data || callHistoryQuery.isStale) load();
+    }, [callHistoryQuery.data, callHistoryQuery.isStale, load]),
   );
 
   // Reload 3 seconds after a call ends (gives the append a moment to settle)
@@ -307,7 +295,7 @@ export function RecentTab() {
     const prev = prevCallRef.current;
     prevCallRef.current = callState;
     if (callState === 'idle' && (prev === 'ended' || prev === 'connected')) {
-      const t = setTimeout(() => load(false), 3000);
+      const t = setTimeout(() => load(), 3000);
       return () => clearTimeout(t);
     }
   }, [callState, load]);
@@ -388,6 +376,7 @@ export function RecentTab() {
         <TouchableOpacity
           activeOpacity={0.78}
           style={[styles.headerIcon, { backgroundColor: colors.surfaceElevated + 'cc', borderColor: colors.border }]}
+          onPress={() => setFilterMenuOpen(true)}
         >
           <Ionicons name="options-outline" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
@@ -433,6 +422,9 @@ export function RecentTab() {
         <FlatList
           data={timeline}
           keyExtractor={(item) => item.id}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
           renderItem={({ item }) =>
             item.type === 'section' ? (
               <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>{item.title}</Text>
@@ -442,22 +434,15 @@ export function RecentTab() {
                 onOpen={() => setDetailGroup(item)}
                 onCall={() => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0]))}
                 onMessage={() => handleMessage(item)}
-                onMore={() =>
-                  Alert.alert(item.displayName, `${kindLabel(item.kind)} · ${formatFullDateTime(item.latestAt)}`, [
-                    { text: 'Call back', onPress: () => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0])) },
-                    { text: 'Message', onPress: () => handleMessage(item) },
-                    { text: 'Add to contacts', onPress: () => handleAddContact(item) },
-                    { text: 'Cancel', style: 'cancel' },
-                  ])
-                }
+                onMore={() => setMenuGroup(item)}
               />
             )
           }
-          contentContainerStyle={{ paddingBottom: insets.bottom + 100, paddingHorizontal: spacing['5'] }}
+          contentContainerStyle={{ paddingBottom: spacing['5'], paddingHorizontal: spacing['5'] }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={() => load(true)}
+              onRefresh={load}
               tintColor={colors.primary}
               colors={[colors.primary]}
             />
@@ -471,6 +456,33 @@ export function RecentTab() {
         onCall={handleCall}
         onMessage={() => detailGroup && handleMessage(detailGroup)}
         onAddContact={() => detailGroup && handleAddContact(detailGroup)}
+      />
+      <AppActionSheet
+        visible={filterMenuOpen}
+        title="Filter calls"
+        message="Choose which calls to show."
+        onClose={() => setFilterMenuOpen(false)}
+        actions={[
+          { label: 'All', icon: filter === 'all' ? 'checkmark-circle' : 'ellipse-outline', onPress: () => setFilter('all') },
+          { label: 'Missed', icon: filter === 'missed' ? 'checkmark-circle' : 'call-outline', onPress: () => setFilter('missed') },
+          { label: 'Incoming', icon: filter === 'incoming' ? 'checkmark-circle' : 'arrow-down-outline', onPress: () => setFilter('incoming') },
+          { label: 'Outgoing', icon: filter === 'outgoing' ? 'checkmark-circle' : 'arrow-up-outline', onPress: () => setFilter('outgoing') },
+        ]}
+      />
+      <AppActionSheet
+        visible={Boolean(menuGroup)}
+        title={menuGroup?.displayName}
+        message={menuGroup ? `${kindLabel(menuGroup.kind)} · ${formatFullDateTime(menuGroup.latestAt)}` : undefined}
+        onClose={() => setMenuGroup(null)}
+        actions={[
+          {
+            label: 'Call back',
+            icon: 'call-outline',
+            onPress: () => menuGroup && handleCall(menuGroup.canonicalNumber || callDisplayNumber(menuGroup.calls[0])),
+          },
+          { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuGroup && handleMessage(menuGroup) },
+          { label: 'Add to contacts', icon: 'person-add-outline', onPress: () => menuGroup && handleAddContact(menuGroup) },
+        ]}
       />
     </View>
   );
@@ -764,7 +776,13 @@ function CallDetailModal({
           <Text style={[styles.attemptsHeader, { color: colors.textTertiary }]}>
             Attempts · {group.count}
           </Text>
-          <ScrollView style={styles.attemptsList} contentContainerStyle={{ paddingBottom: spacing['4'] }}>
+          <ScrollView
+            style={styles.attemptsList}
+            contentContainerStyle={{ paddingBottom: spacing['4'] }}
+            bounces={false}
+            alwaysBounceVertical={false}
+            overScrollMode="never"
+          >
             {group.calls.map((call) => {
               const kind = callKind(call);
               const c = kindAccent(kind, colors);
@@ -857,9 +875,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radius.full,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     borderWidth: 1,
   },
   filterText: {

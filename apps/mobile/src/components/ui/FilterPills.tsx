@@ -77,9 +77,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radius.full,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     borderWidth: 1,
   },
   label: {

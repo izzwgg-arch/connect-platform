@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -13,6 +14,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -72,6 +74,9 @@ class SipKeepAliveService : Service() {
     private const val IN_CALL_CHANNEL_NAME = "On a call"
     private const val NOTIFICATION_ID = 4242
     private const val WAKE_LOCK_TAG = "ConnectCommunications:SipKeepAlive"
+    private const val PREFS_NAME = "connect_keepalive"
+    private const val PREF_KEEPALIVE_ENABLED = "enabled"
+    private const val ACTION_RESTART_KEEPALIVE = "com.connectcommunications.mobile.SipKeepAlive.RESTART"
 
     // ── Foreground state intents ─────────────────────────────────────────────
     /**
@@ -120,7 +125,27 @@ class SipKeepAliveService : Service() {
     @JvmStatic @Volatile var serviceDestroyedAtMs: Long = 0
     @JvmStatic @Volatile var isRunning: Boolean = false
 
+    private fun setKeepAliveEnabledFlag(context: Context, enabled: Boolean) {
+      try {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .edit()
+          .putBoolean(PREF_KEEPALIVE_ENABLED, enabled)
+          .apply()
+      } catch (_: Throwable) {}
+    }
+
+    @JvmStatic
+    fun isKeepAliveEnabled(context: Context): Boolean {
+      return try {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .getBoolean(PREF_KEEPALIVE_ENABLED, false)
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
     fun start(context: Context) {
+      setKeepAliveEnabledFlag(context, true)
       lastStartAttemptAtMs = System.currentTimeMillis()
       lastStartErrorClass = ""
       lastStartErrorMessage = ""
@@ -142,6 +167,7 @@ class SipKeepAliveService : Service() {
     }
 
     fun stop(context: Context) {
+      setKeepAliveEnabledFlag(context, false)
       try {
         context.stopService(Intent(context, SipKeepAliveService::class.java))
         Log.i(TAG, "stop: dispatched stopService")
@@ -313,17 +339,23 @@ class SipKeepAliveService : Service() {
     Log.i(TAG, "onDestroy")
     serviceDestroyedAtMs = System.currentTimeMillis()
     isRunning = false
+    if (isKeepAliveEnabled(applicationContext)) {
+      scheduleSelfRestart("onDestroy")
+    }
     releaseWakeLock()
     unregisterNotifReceiver()
     super.onDestroy()
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
-    // The user swiped the app away from recents. On most OEMs the OS tears
-    // down non-foreground services here; because we ARE foreground with a
-    // valid notification, we survive. Log it so we can correlate during
-    // latency testing.
-    Log.i(TAG, "onTaskRemoved — user swiped recents. keepalive persists.")
+    // Samsung can kill our process shortly after recents-swipe even while this
+    // service is foreground. Schedule a one-shot restart alarm so wake pushes
+    // still have a resident process instead of waiting for ActivityManager's
+    // delayed crash-restart backoff.
+    if (isKeepAliveEnabled(applicationContext)) {
+      scheduleSelfRestart("onTaskRemoved")
+    }
+    Log.i(TAG, "onTaskRemoved — recents swipe detected")
     super.onTaskRemoved(rootIntent)
   }
 
@@ -722,6 +754,22 @@ class SipKeepAliveService : Service() {
       Log.w(TAG, "releaseWakeLock failed: ${t.message}")
     } finally {
       wakeLock = null
+    }
+  }
+
+  private fun scheduleSelfRestart(reason: String) {
+    try {
+      val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+      val restartIntent = Intent(this, KeepAliveRestartReceiver::class.java).apply {
+        action = ACTION_RESTART_KEEPALIVE
+      }
+      val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      val pi = PendingIntent.getBroadcast(this, 24424, restartIntent, flags)
+      val triggerAtMs = SystemClock.elapsedRealtime() + 2_000L
+      alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi)
+      Log.i(TAG, "scheduleSelfRestart reason=$reason in=2000ms")
+    } catch (t: Throwable) {
+      Log.w(TAG, "scheduleSelfRestart failed: ${t.message}")
     }
   }
 }

@@ -8,6 +8,7 @@ import {
   Modal,
   PanResponder,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +17,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
@@ -23,7 +26,8 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
-import { createContact, getContacts } from '../../api/client';
+import { AppActionSheet } from '../../components/ui/AppPopup';
+import { createContact, getContacts, mobileQueryKeys } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
@@ -51,6 +55,10 @@ function contactMeta(contact: Contact): string {
   return `External · ${contact.primaryPhone?.numberRaw || contact.primaryEmail?.email || contact.company || 'Contact'}`;
 }
 
+function contactSubtitle(contact: Contact): string {
+  return contactMeta(contact);
+}
+
 function isExternal(contact: Contact): boolean {
   return contact.type !== 'internal_extension';
 }
@@ -60,36 +68,38 @@ export function ContactTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const queryClient = useQueryClient();
   const [live, setLive] = useState<LiveTelephonyState | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [selected, setSelected] = useState<Contact | null>(null);
+  const [menuContact, setMenuContact] = useState<Contact | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (!token) return;
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-    try {
-      const data = await getContacts(token, query);
-      setContacts(data.rows ?? []);
-    } catch {
-      setError('Could not load contacts.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [query, token]);
+  const contactsQuery = useQuery({
+    queryKey: mobileQueryKeys.contacts(''),
+    enabled: Boolean(token),
+    queryFn: () => getContacts(token!, ''),
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
 
-  useEffect(() => {
-    const t = setTimeout(() => load(false), 250);
-    return () => clearTimeout(t);
-  }, [load]);
+  const contacts = contactsQuery.data?.rows ?? [];
+  const loading = contactsQuery.isLoading && contacts.length === 0;
+  const refreshing = contactsQuery.isRefetching;
+  const error = contactsQuery.error && contacts.length === 0 ? 'Could not load contacts.' : null;
+  const refetchContacts = contactsQuery.refetch;
+  const load = useCallback(() => {
+    refetchContacts().catch(() => undefined);
+  }, [refetchContacts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!contactsQuery.data || contactsQuery.isStale) load();
+    }, [contactsQuery.data, contactsQuery.isStale, load]),
+  );
 
   useEffect(() => {
     if (!token) return undefined;
@@ -261,7 +271,10 @@ export function ContactTab() {
         <FlatList
           data={listItems}
           keyExtractor={(item) => item.id}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.primary} />}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => item.type === 'section' ? (
             <View style={styles.sectionHeader}>
@@ -281,12 +294,7 @@ export function ContactTab() {
               onPress={() => setSelected(item.contact)}
               onCall={() => callContact(item.contact)}
               onMessage={() => messageContact(item.contact)}
-              onMore={() => Alert.alert(item.contact.displayName, 'Contact actions', [
-                { text: 'Favorite' },
-                { text: 'Message', onPress: () => messageContact(item.contact) },
-                { text: 'Call', onPress: () => callContact(item.contact) },
-                { text: 'Cancel', style: 'cancel' },
-              ])}
+              onMore={() => setMenuContact(item.contact)}
             />
           )}
         />
@@ -305,8 +313,19 @@ export function ContactTab() {
         onClose={() => setShowAddContact(false)}
         onCreated={() => {
           setShowAddContact(false);
-          load(true);
+          queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
         }}
+      />
+      <AppActionSheet
+        visible={Boolean(menuContact)}
+        title={menuContact?.displayName}
+        message={menuContact ? contactSubtitle(menuContact) : undefined}
+        onClose={() => setMenuContact(null)}
+        actions={[
+          { label: 'Favorite', icon: 'star-outline', muted: true },
+          { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuContact && messageContact(menuContact) },
+          { label: 'Call', icon: 'call-outline', onPress: () => menuContact && callContact(menuContact) },
+        ]}
       />
     </View>
   );
@@ -580,10 +599,18 @@ function AddContactModal({
             </TouchableOpacity>
           </View>
 
+          <ScrollView
+            style={styles.addFormScroll}
+            contentContainerStyle={styles.addFormContent}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            alwaysBounceVertical={false}
+            overScrollMode="never"
+            keyboardShouldPersistTaps="handled"
+          >
           <View style={styles.fieldGroup}>
-            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>NAME</Text>
-            <View style={styles.fieldRow}>
-              <View style={[styles.fieldInput, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>FIRST NAME</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
                 <TextInput
                   value={firstName}
                   onChangeText={setFirstName}
@@ -593,7 +620,11 @@ function AddContactModal({
                   autoCapitalize="words"
                 />
               </View>
-              <View style={[styles.fieldInput, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>LAST NAME</Text>
+            <View style={[styles.fieldInput, styles.fieldInputFull, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
                 <TextInput
                   value={lastName}
                   onChangeText={setLastName}
@@ -603,7 +634,6 @@ function AddContactModal({
                   autoCapitalize="words"
                 />
               </View>
-            </View>
           </View>
 
           <View style={styles.fieldGroup}>
@@ -672,6 +702,7 @@ function AddContactModal({
               Enter a name plus a phone number or email.
             </Text>
           ) : null}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -825,9 +856,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radius.full,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     borderWidth: 1,
   },
   filterText: {
@@ -842,7 +873,7 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: spacing['5'],
     paddingTop: spacing['1'],
-    paddingBottom: 120,
+    paddingBottom: spacing['5'],
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -981,7 +1012,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderWidth: 1,
-    paddingHorizontal: spacing['5'],
+    paddingHorizontal: spacing['6'],
     paddingBottom: spacing['8'],
     paddingTop: spacing['3'],
     maxHeight: '92%',
@@ -991,41 +1022,42 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 4,
-    marginBottom: spacing['4'],
+    marginBottom: spacing['5'],
   },
   addHeaderCancel: { fontSize: 15, fontWeight: '600' },
   addHeaderTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
   addHeaderSave: { fontSize: 15, fontWeight: '800' },
+  addFormScroll: {
+    flexShrink: 1,
+  },
+  addFormContent: {
+    paddingBottom: spacing['2'],
+  },
   fieldGroup: {
-    marginBottom: spacing['3'],
+    marginBottom: spacing['4'],
   },
   fieldLabel: {
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.9,
-    marginBottom: 6,
+    marginBottom: 8,
     marginLeft: 4,
   },
-  fieldRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
   fieldInput: {
-    flex: 1,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    minHeight: 44,
+    minHeight: 50,
   },
   fieldInputFull: {
     alignSelf: 'stretch',
   },
   fieldInputMultiline: {
-    minHeight: 80,
-    paddingVertical: 10,
+    minHeight: 96,
+    paddingVertical: 12,
     alignItems: 'flex-start',
   },
   fieldInputText: {

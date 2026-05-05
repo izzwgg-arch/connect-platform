@@ -1,7 +1,9 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, FlatList, PanResponder, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
@@ -9,7 +11,8 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
-import { getTeamDirectory } from '../../api/client';
+import { AppActionSheet } from '../../components/ui/AppPopup';
+import { getTeamDirectory, mobileQueryKeys } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { LiveCall, TeamDirectoryMember, TeamPresence } from '../../types';
 import { typography } from '../../theme/typography';
@@ -49,16 +52,14 @@ function livePresence(member: TeamDirectoryMember, live: LiveTelephonyState | nu
     ext.extension === member.extension && (!member.tenantId || !ext.tenantId || ext.tenantId === member.tenantId),
   );
   const state = String(direct?.status || '').toLowerCase();
-  if (['idle', 'not_inuse', 'registered', '0'].includes(state)) return 'available';
-  if (['ringing'].includes(state)) return 'ringing';
-  if (['inuse', 'busy', 'onhold', '1', '2', '3'].includes(state)) return 'on_call';
+  if (['idle', 'not_inuse', 'registered', 'inuse', 'busy', 'onhold', 'ringing', '0', '1', '2', '3'].includes(state)) return 'available';
   return 'offline';
 }
 
 function presenceColor(presence: TeamPresence, colors: ReturnType<typeof useTheme>['colors']) {
   if (presence === 'available') return colors.success;
   if (presence === 'ringing') return colors.warning;
-  if (presence === 'on_call') return colors.danger;
+  if (presence === 'on_call') return colors.primary;
   return colors.textTertiary;
 }
 
@@ -98,7 +99,7 @@ function activeCallStartedAt(member: TeamDirectoryMember, live: LiveTelephonySta
 }
 
 function isDisplayableMember(member: TeamDirectoryMember): boolean {
-  if (!/^\d{3}$/.test(member.extension)) return false;
+  if (!/^\d{2,6}$/.test(member.extension)) return false;
   const n = member.name.trim().toLowerCase();
   return !(
     n === 'pbx user' ||
@@ -118,43 +119,56 @@ export function TeamTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
-  const [members, setMembers] = useState<TeamDirectoryMember[]>([]);
   const [live, setLive] = useState<LiveTelephonyState | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TeamFilter>('all');
+  const [menuMember, setMenuMember] = useState<TeamDirectoryMember | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const teamDirectoryScope = token ? token.slice(-16) : 'signed-out';
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (!token) return;
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-    try {
-      setMembers(await getTeamDirectory(token));
-    } catch {
-      setError('Could not load team directory.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [token]);
+  const teamQuery = useQuery({
+    queryKey: mobileQueryKeys.teamDirectory(teamDirectoryScope),
+    enabled: Boolean(token),
+    queryFn: () => getTeamDirectory(token!),
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
 
-  useEffect(() => {
-    load(false);
-  }, [load]);
+  const members = teamQuery.data ?? [];
+  const loading = teamQuery.isLoading && members.length === 0;
+  const refreshing = teamQuery.isRefetching;
+  const error = teamQuery.error && members.length === 0 ? 'Could not load team directory.' : null;
+  const refetchTeam = teamQuery.refetch;
+  const load = useCallback(() => {
+    refetchTeam().catch(() => undefined);
+  }, [refetchTeam]);
 
-  useEffect(() => {
-    if (!token) return undefined;
-    return subscribeToBLF(token, setLive);
-  }, [token]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!teamQuery.data || teamQuery.isStale) load();
+    }, [load, teamQuery.data, teamQuery.isStale]),
+  );
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 15000);
-    return () => clearInterval(timer);
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      if (!token) return undefined;
+      setLive(null);
+      const unsubscribe = subscribeToBLF(token, setLive);
+      return () => {
+        unsubscribe();
+        setLive(null);
+      };
+    }, [token]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const timer = setInterval(() => setNow(Date.now()), 15000);
+      return () => clearInterval(timer);
+    }, []),
+  );
 
   const enriched = useMemo(() => members
     .map((member) => ({ ...member, presence: livePresence(member, live) }))
@@ -190,14 +204,6 @@ export function TeamTab() {
     Alert.alert('Message', `Chat actions for ${member.name} will open from Chat.`);
   }, []);
 
-  const showQuickActions = useCallback((member: TeamDirectoryMember) => {
-    Alert.alert(member.name, `Extension ${member.extension}`, [
-      { text: 'Call', onPress: () => callExtension(member.extension) },
-      { text: 'Message', onPress: () => messageMember(member) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [callExtension, messageMember]);
-
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -229,7 +235,7 @@ export function TeamTab() {
       <HorizontalFilterScroll marginBottom={spacing['3']}>
         <SummaryChip id="all" label="All" color={colors.primary} active={filter === 'all'} onPress={setFilter} />
         <SummaryChip id="available" label="Available" color={colors.success} active={filter === 'available'} onPress={setFilter} />
-        <SummaryChip id="on_call" label="On Call" color={colors.danger} active={filter === 'on_call'} onPress={setFilter} />
+        <SummaryChip id="on_call" label="On Call" color={colors.primary} active={filter === 'on_call'} onPress={setFilter} />
         <SummaryChip id="ringing" label="Ringing" color={colors.warning} active={filter === 'ringing'} onPress={setFilter} />
         <SummaryChip id="offline" label="Offline" color={colors.textTertiary} active={filter === 'offline'} onPress={setFilter} />
       </HorizontalFilterScroll>
@@ -247,14 +253,17 @@ export function TeamTab() {
         <FlatList
           data={visible}
           keyExtractor={(item) => item.id}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.primary} />}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             return (
               <TeamMemberCard
                 member={item}
                 elapsed={formatElapsed(activeCallStartedAt(item, live), now)}
-                onPress={() => showQuickActions(item)}
+                onPress={() => setMenuMember(item)}
                 onCall={() => callExtension(item.extension)}
                 onMessage={() => messageMember(item)}
               />
@@ -262,6 +271,16 @@ export function TeamTab() {
           }}
         />
       )}
+      <AppActionSheet
+        visible={Boolean(menuMember)}
+        title={menuMember?.name}
+        message={menuMember ? `Extension ${menuMember.extension}` : undefined}
+        onClose={() => setMenuMember(null)}
+        actions={[
+          { label: 'Call', icon: 'call-outline', onPress: () => menuMember && callExtension(menuMember.extension) },
+          { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuMember && messageMember(menuMember) },
+        ]}
+      />
     </View>
   );
 }
@@ -352,7 +371,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member, elapsed, onPress, 
             styles.card,
             {
               backgroundColor: colors.surface,
-              borderColor: onCallAccent ? colors.danger + '33' : colors.borderSubtle,
+              borderColor: onCallAccent ? colors.primary + '33' : colors.borderSubtle,
               shadowColor: '#000',
             },
           ]}
@@ -361,7 +380,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member, elapsed, onPress, 
             style={[
               styles.avatarWrap,
               onCallAccent
-                ? { shadowColor: colors.danger, shadowOpacity: 0.25, shadowRadius: 10, elevation: 4 }
+                ? { shadowColor: colors.primary, shadowOpacity: 0.25, shadowRadius: 10, elevation: 4 }
                 : null,
             ]}
           >
@@ -478,9 +497,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radius.full,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     borderWidth: 1,
   },
   filterText: {
@@ -492,7 +511,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'center',
   },
 
-  list: { paddingHorizontal: spacing['5'], paddingTop: spacing['1'], paddingBottom: 120 },
+  list: { paddingHorizontal: spacing['5'], paddingTop: spacing['1'], paddingBottom: spacing['5'] },
 
   swipeWrap: { overflow: 'hidden', borderRadius: 18, marginBottom: 10 },
   swipeBg: {

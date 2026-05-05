@@ -13,12 +13,13 @@ type Props = {
 /**
  * Horizontal filter chips wrapped in a ScrollView.
  *
- * IMPORTANT: do NOT constrain this scroller to a fixed height. On Android,
- * if the ScrollView height is tighter than the pill's rendered box (which
- * includes the 1px border AND the hidden font metrics padding inside
- * `<Text>`), the bottom of the rounded border gets clipped. Let the row
- * size itself from the children, and add a tiny `paddingVertical` so the
- * border curves have subpixel breathing room.
+ * The enclosed chips own their 36-px height. Do not pin the ScrollView height:
+ * Android clips the bottom of rounded active backgrounds when the viewport is
+ * even a pixel tighter than the rendered border curve. Let the content padding
+ * define the row height instead.
+ * The bottom-clipping Android bug is addressed inside each chip via
+ * `includeFontPadding: false` on the label — do not re-introduce a tighter
+ * height cap here.
  */
 export function HorizontalFilterScroll({
   children,
@@ -29,6 +30,10 @@ export function HorizontalFilterScroll({
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
+      bounces={false}
+      alwaysBounceHorizontal={false}
+      alwaysBounceVertical={false}
+      overScrollMode="never"
       style={[styles.scroller, { marginBottom }]}
       contentContainerStyle={[styles.row, { paddingHorizontal }]}
     >
@@ -40,11 +45,13 @@ export function HorizontalFilterScroll({
 const styles = StyleSheet.create({
   scroller: {
     flexGrow: 0,
+    flexShrink: 0,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 4,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
 });

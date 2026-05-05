@@ -45,6 +45,22 @@
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATE_URL" android:value="https://u.expo.dev/53c72ced-180c-4885-a3ff-7d5da5717ead"/>
     <meta-data android:name="expo.modules.updates.EXPO_RUNTIME_VERSION" android:value="@string/expo_runtime_version"/>
+    <!--
+      IncomingCallFirebaseService MUST run in the default (main) process — the
+      same process as FirebaseInitProvider — otherwise FCM silently drops
+      every push. Firebase only routes MESSAGING_EVENT intents to a service
+      whose process has been initialized via FirebaseApp.initializeApp(),
+      which only happens automatically in the process that hosts
+      FirebaseInitProvider (the default process).
+
+      We previously declared this service in `:keepalive` to survive recents
+      swipe, but the side effect was zero FCM deliveries — every wake push
+      reached Expo/FCM successfully but never invoked onMessageReceived.
+      The service still wakes the main process via FCM (Android starts the
+      process automatically on incoming push), and from there it kicks
+      SipKeepAliveService (which DOES live in `:keepalive` for FGS
+      isolation) so the SIP REGISTER stays alive after the wake completes.
+    -->
     <service android:name="com.connectcommunications.mobile.IncomingCallFirebaseService" android:exported="false">
       <intent-filter>
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
@@ -58,7 +74,8 @@
       the app is backgrounded. `phoneCall` keeps CallKeep / Telecom integration
       happy; `dataSync` is the always-safe fallback when PHONE_CALL is rejected.
     -->
-    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone"/>
+    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone" android:process=":keepalive"/>
+    <receiver android:name="com.connectcommunications.mobile.KeepAliveRestartReceiver" android:enabled="true" android:exported="false" android:process=":keepalive"/>
     <receiver android:name="com.connectcommunications.mobile.BootReceiver" android:enabled="true" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
@@ -69,6 +86,23 @@
     </receiver>
     <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove"/>
     <service android:name="io.wazo.callkeep.VoiceConnectionService" android:label="Calls" android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE" android:exported="true" android:foregroundServiceType="phoneCall">
+      <intent-filter>
+        <action android:name="android.telecom.ConnectionService"/>
+      </intent-filter>
+    </service>
+    <!--
+      Connect's own SELF_MANAGED Telecom ConnectionService. Registered so the
+      OS can spawn ConnectConnectionService → ConnectIncomingConnection when
+      TelecomManager.addNewIncomingCall() is called from
+      IncomingCallFirebaseService on FCM data pushes — the only path that
+      reliably wakes a fully killed app on Android 14/15+ across Samsung One
+      UI, Pixel, OnePlus, Xiaomi MIUI etc. (Background Activity Launch
+      restrictions silently drop direct startActivity() calls; full-screen
+      intents work but require the user to leave POST_NOTIFICATIONS +
+      USE_FULL_SCREEN_INTENT enabled — Telecom is the OEM-canonical wake
+      path and bypasses both restrictions.)
+    -->
+    <service android:name="com.connectcommunications.mobile.ConnectConnectionService" android:label="Connect Voice" android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE" android:exported="true" android:foregroundServiceType="phoneCall|microphone">
       <intent-filter>
         <action android:name="android.telecom.ConnectionService"/>
       </intent-filter>

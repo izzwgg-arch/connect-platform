@@ -3,8 +3,10 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { ThemeProvider } from './src/context/ThemeContext';
 import { AuthProvider } from './src/context/AuthContext';
+import { useAuth } from './src/context/AuthContext';
 import { SipProvider } from './src/context/SipContext';
 import { CallSessionProvider } from './src/context/CallSessionManager';
 import { NotificationsProvider } from './src/context/NotificationsContext';
@@ -13,6 +15,20 @@ import { RootNavigator } from './src/navigation/RootNavigator';
 import { CallFlowDebugOverlay } from './src/debug/CallFlowDebugOverlay';
 import { ensureCallFlowAppStateHook, logCallFlowBootDiagnostics } from './src/debug/callFlowDebug';
 import { PENDING_CALL_STORAGE_KEY } from './src/notifications/backgroundCallTask';
+import { getCallHistory, getContacts, getTeamDirectory, getVoicemails, mobileQueryKeys } from './src/api/client';
+
+const mobileQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 3 * 60 * 1000,
+      gcTime: 20 * 60 * 1000,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      retry: 1,
+    },
+  },
+});
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -47,6 +63,33 @@ const styles = StyleSheet.create({
   errorStack: { color: '#aaaaaa', fontSize: 11, fontFamily: 'monospace' },
 });
 
+function MobileDataPrefetcher() {
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!token) return;
+    queryClient.prefetchQuery({
+      queryKey: mobileQueryKeys.contacts(''),
+      queryFn: () => getContacts(token, ''),
+    }).catch(() => undefined);
+    queryClient.prefetchQuery({
+      queryKey: mobileQueryKeys.callHistory,
+      queryFn: () => getCallHistory(token),
+    }).catch(() => undefined);
+    queryClient.prefetchQuery({
+      queryKey: mobileQueryKeys.voicemails('all'),
+      queryFn: () => getVoicemails(token),
+    }).catch(() => undefined);
+    queryClient.prefetchQuery({
+      queryKey: mobileQueryKeys.teamDirectory(token.slice(-16)),
+      queryFn: () => getTeamDirectory(token),
+    }).catch(() => undefined);
+  }, [queryClient, token]);
+
+  return null;
+}
+
 export default function App() {
   useEffect(() => {
     ensureCallFlowAppStateHook();
@@ -59,20 +102,23 @@ export default function App() {
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <ThemeProvider>
-            <AuthProvider>
-              <PresenceProvider>
-                <SipProvider>
-                  <CallSessionProvider>
-                    <NotificationsProvider>
-                      <RootNavigator />
-                      <CallFlowDebugOverlay />
-                    </NotificationsProvider>
-                  </CallSessionProvider>
-                </SipProvider>
-              </PresenceProvider>
-            </AuthProvider>
-          </ThemeProvider>
+          <QueryClientProvider client={mobileQueryClient}>
+            <ThemeProvider>
+              <AuthProvider>
+                <MobileDataPrefetcher />
+                <PresenceProvider>
+                  <SipProvider>
+                    <CallSessionProvider>
+                      <NotificationsProvider>
+                        <RootNavigator />
+                        <CallFlowDebugOverlay />
+                      </NotificationsProvider>
+                    </CallSessionProvider>
+                  </SipProvider>
+                </PresenceProvider>
+              </AuthProvider>
+            </ThemeProvider>
+          </QueryClientProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

@@ -31,8 +31,8 @@ const TAB_CONFIG: Array<{
 }> = [
   { name: 'Team', label: 'Team', icon: 'people-outline', iconActive: 'people' },
   { name: 'Contact', label: 'Contacts', icon: 'person-outline', iconActive: 'person' },
-  { name: 'Keypad', label: 'Keypad', icon: 'keypad-outline', iconActive: 'keypad' },
   { name: 'Recent', label: 'Recent', icon: 'time-outline', iconActive: 'time' },
+  { name: 'Keypad', label: 'Keypad', icon: 'keypad-outline', iconActive: 'keypad' },
   { name: 'Chat', label: 'Chat', icon: 'chatbubbles-outline', iconActive: 'chatbubbles' },
   { name: 'Voicemail', label: 'Voicemail', icon: 'recording-outline', iconActive: 'recording' },
   { name: 'Settings', label: 'Settings', icon: 'settings-outline', iconActive: 'settings' },
@@ -170,12 +170,17 @@ export function TabNavigator() {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      detachInactiveScreens={false}
+      screenOptions={{
+        headerShown: false,
+        lazy: true,
+        unmountOnBlur: false,
+      }}
     >
       <Tab.Screen name="Team" component={TeamTab} />
       <Tab.Screen name="Contact" component={ContactTab} />
-      <Tab.Screen name="Keypad" component={KeypadTab} />
       <Tab.Screen name="Recent" component={RecentTab} />
+      <Tab.Screen name="Keypad" component={KeypadTab} />
       <Tab.Screen name="Chat" component={ChatTab} />
       <Tab.Screen name="Voicemail" component={VoicemailTab} />
       <Tab.Screen name="Settings" component={SettingsScreen} />

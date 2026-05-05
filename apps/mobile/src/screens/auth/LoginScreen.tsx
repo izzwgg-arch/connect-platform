@@ -74,6 +74,9 @@ export function LoginScreen() {
         <ScrollView
           contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing['6'], paddingBottom: insets.bottom + spacing['8'] }]}
           keyboardShouldPersistTaps="handled"
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
         >
           {/* Back */}
           <TouchableOpacity

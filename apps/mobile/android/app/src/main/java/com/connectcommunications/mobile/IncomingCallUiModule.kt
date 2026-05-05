@@ -42,6 +42,13 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   override fun initialize() {
     super.initialize()
     lastReactContext = WeakReference(reactApplicationContext)
+    // Telecom events that fired while the React instance was still booting
+    // are buffered by TelecomBridge — flush them now that JS is alive.
+    try {
+      TelecomBridge.drainPendingEvents()
+    } catch (t: Throwable) {
+      Log.w(TAG, "TelecomBridge.drainPendingEvents failed: ${t.message}")
+    }
   }
 
   companion object {
@@ -129,6 +136,39 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
      * (extremely unlikely while a call is active, but possible during a
      * mid-call cold-restart race) cannot crash the BroadcastReceiver.
      */
+    /**
+     * Returns true iff the React Native context exists AND the JS instance
+     * is alive. Used by TelecomBridge to decide whether to emit an event
+     * straight to JS or buffer it for replay once the bundle has booted.
+     */
+    @JvmStatic
+    fun hasActiveReactContext(): Boolean {
+      val ctx = lastReactContext?.get() ?: return false
+      return try { ctx.hasActiveReactInstance() } catch (_: Throwable) { false }
+    }
+
+    /**
+     * Telecom→JS event emitter. The event name is dynamic
+     * (Telecom.Answer / Telecom.Reject / Telecom.Disconnect / Telecom.Failed)
+     * so a single helper handles every Telecom callback. JS subscribes to
+     * each name via DeviceEventEmitter in NotificationsContext.
+     */
+    @JvmStatic
+    fun emitTelecomEvent(name: String, payload: WritableMap) {
+      val ctx = lastReactContext?.get()
+      if (ctx == null || !ctx.hasActiveReactInstance()) {
+        Log.w(TAG, "emitTelecomEvent($name): no active React context — TelecomBridge will buffer")
+        return
+      }
+      try {
+        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit(name, payload)
+        Log.i(TAG, "emitTelecomEvent: dispatched $name to JS")
+      } catch (t: Throwable) {
+        Log.w(TAG, "emitTelecomEvent($name) failed: ${t.message}")
+      }
+    }
+
     @JvmStatic
     fun emitInCallAction(action: String, value: Boolean? = null) {
       val ctx = lastReactContext?.get() ?: run {
@@ -607,6 +647,59 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     } catch (t: Throwable) {
       Log.w(TAG, "stopInCallNotification failed: ${t.message}")
     }
+  }
+
+  // ── Telecom JS bridge ─────────────────────────────────────────────────
+  //
+  // JS calls these to drive the OS-level call UI when the SIP layer
+  // detects state transitions that did not originate from the user
+  // tapping Answer / Decline in the system UI. The connection lookup is
+  // by inviteId (the same id Telecom passed to JS on Telecom.Answer).
+
+  /**
+   * JS reports the SIP UA acknowledged the user's answer (200 OK sent /
+   * media established). Flips the OS Connection to ACTIVE so the system
+   * call UI shows the in-call timer and the lock-screen banner clears.
+   */
+  @ReactMethod
+  fun telecomMarkActive(inviteId: String?) {
+    val id = inviteId ?: return
+    try {
+      TelecomBridge.getActiveConnection(id)?.markActive()
+        ?: Log.w(TAG, "telecomMarkActive: no Connection for inviteId=$id")
+    } catch (t: Throwable) {
+      Log.w(TAG, "telecomMarkActive failed: ${t.message}")
+    }
+  }
+
+  /**
+   * JS reports the call ended (remote hangup, network loss, server cancel,
+   * JS-side decline). Tears down the OS Connection cleanly with a reason
+   * code so the system call log reflects what actually happened.
+   *
+   * Reasons accepted: remote_hangup | missed | canceled | rejected | other
+   */
+  @ReactMethod
+  fun telecomTerminate(inviteId: String?, reason: String?) {
+    val id = inviteId ?: return
+    try {
+      TelecomBridge.getActiveConnection(id)?.terminate(reason ?: "other")
+        ?: Log.w(TAG, "telecomTerminate: no Connection for inviteId=$id")
+    } catch (t: Throwable) {
+      Log.w(TAG, "telecomTerminate failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Synchronous lookup — true iff Telecom currently owns a Connection for
+   * this inviteId. Lets the JS answer pipeline distinguish "OS-driven
+   * answer (Telecom UI)" from "in-app answer (React UI)" so it does not
+   * try to mark a non-Telecom call active.
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun telecomHasConnection(inviteId: String?): Boolean {
+    val id = inviteId ?: return false
+    return try { TelecomBridge.getActiveConnection(id) != null } catch (_: Throwable) { false }
   }
 
   // NativeEventEmitter support — required by React Native on Android so that

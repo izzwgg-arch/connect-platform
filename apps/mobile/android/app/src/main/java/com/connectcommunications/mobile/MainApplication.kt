@@ -48,6 +48,17 @@ class MainApplication : Application(), ReactApplication {
       load()
     }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
+    // Register the SELF_MANAGED Telecom PhoneAccount as early as possible.
+    // Idempotent — Android dedups by ComponentName + accountId. Doing this
+    // in Application.onCreate() means the account is also registered when
+    // the FirebaseMessagingService process is spawned without an Activity,
+    // so TelecomManager.addNewIncomingCall() works from a fully killed
+    // app the first time a wake push arrives after install.
+    try {
+      TelecomBridge.ensurePhoneAccountRegistered(this)
+    } catch (t: Throwable) {
+      android.util.Log.w("MainApplication", "TelecomBridge.ensurePhoneAccountRegistered failed: ${t.message}")
+    }
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
