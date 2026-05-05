@@ -15403,9 +15403,35 @@ function ivrValidatePromptRef(ref: string | null | undefined): string | null {
   return null;
 }
 
-/** Resolve (or derive) the IVR slug for a tenant. Uses the tenant's name. */
+/** Resolve (or derive) the runtime PBX slug for a tenant.
+ *  Prefer the synced VitalPBX directory slug because inbound routes/DID maps
+ *  use that value at call time; tenant display names can drift or contain typos. */
 async function getIvrSlugForTenant(tenantId: string): Promise<string> {
-  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+  const [tenant, link] = await Promise.all([
+    db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
+    db.tenantPbxLink.findFirst({
+      where: { tenantId },
+      select: { pbxInstanceId: true, pbxTenantId: true, pbxTenantCode: true },
+    }),
+  ]);
+  const directoryWhere =
+    link?.pbxInstanceId && (link.pbxTenantId || link.pbxTenantCode)
+      ? {
+          pbxInstanceId: link.pbxInstanceId,
+          OR: [
+            ...(link.pbxTenantId ? [{ vitalTenantId: link.pbxTenantId }] : []),
+            ...(link.pbxTenantCode ? [{ tenantCode: link.pbxTenantCode }] : []),
+          ],
+        }
+      : null;
+  if (directoryWhere) {
+    const directory = await db.pbxTenantDirectory.findFirst({
+      where: directoryWhere,
+      select: { tenantSlug: true },
+    });
+    const pbxSlug = toIvrSlug(directory?.tenantSlug ?? "");
+    if (pbxSlug) return pbxSlug;
+  }
   return toIvrSlug(tenant?.name ?? tenantId);
 }
 
@@ -19174,8 +19200,7 @@ async function resolveMohTenantId(raw: string | null | undefined): Promise<strin
 
 /** Slug for AstDB family — same derivation as IVR. */
 async function getMohSlugForTenant(tenantId: string): Promise<string> {
-  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
-  return (tenant?.name ?? tenantId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return getIvrSlugForTenant(tenantId);
 }
 
 async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
