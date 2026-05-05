@@ -722,6 +722,9 @@ FLUSH PRIVILEGES;
 SQL
 
 chown -R connect-route-helper:connect-route-helper /var/lib/connect-pbx-helper
+if id asterisk >/dev/null 2>&1; then
+  chown -R asterisk:asterisk /var/lib/connect-pbx-helper
+fi
 
 cat >/etc/systemd/system/connect-pbx-helper.service <<'EOF'
 [Unit]
@@ -734,8 +737,8 @@ EnvironmentFile=/etc/connect-pbx-helper.env
 ExecStart=/opt/connect-pbx-helper/.venv/bin/python /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py
 Restart=on-failure
 RestartSec=3
-User=connect-route-helper
-Group=connect-route-helper
+User=asterisk
+Group=asterisk
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
