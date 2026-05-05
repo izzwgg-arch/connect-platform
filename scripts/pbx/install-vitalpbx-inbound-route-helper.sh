@@ -693,8 +693,26 @@ def vm_record_call(body):
         # Fail open to the dispatch local channel which rings all of the
         # extension's registered devices and runs the recording dialplan.
         channel = "Local/" + recording_exten + "@connect-vm-greeting-dispatch/n"
+    dispatch_dial_string = ""
+    dispatch_endpoints: list = []
     if channel.startswith("Local/") and "connect-vm-greeting-dispatch" in channel:
-        channel_source = "dispatch_local"
+        try:
+            dispatch_endpoints = tenant_endpoints_for_extension(tenant_id, extension)
+        except Exception as exc:
+            sys.stderr.write("dispatch_lookup_failed: " + str(exc) + "\n")
+            dispatch_endpoints = []
+        if not dispatch_endpoints:
+            raise ValueError("no_registered_pjsip_endpoint_for_extension")
+        dispatch_dial_string = "&".join("PJSIP/" + ep for ep in dispatch_endpoints)
+        astdb_key = "T" + tenant_id + "_" + extension
+        try:
+            subprocess.run(
+                ["asterisk", "-rx", "database put connect_vm_dial " + astdb_key + " " + dispatch_dial_string],
+                capture_output=True, timeout=10, check=False,
+            )
+        except Exception as exc:
+            sys.stderr.write("astdb_put_failed: " + str(exc) + "\n")
+        channel_source = "dispatch_local:" + ",".join(dispatch_endpoints)
     else:
         channel = endpoint_hint_channel(body, extension) or channel
         channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
@@ -705,7 +723,7 @@ def vm_record_call(body):
         target_descriptor = extension + "@" + tenant_id
         cmd_str = "channel originate " + channel + " application " + CFG.vm_record_app + " " + target_descriptor
     cmd = ["asterisk", "-rx", cmd_str]
-    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source, "asteriskCommand": cmd_str, "targetDescriptor": target_descriptor}
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source, "asteriskCommand": cmd_str, "targetDescriptor": target_descriptor, "dispatchEndpoints": dispatch_endpoints, "dispatchDialString": dispatch_dial_string}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
         job["asteriskExitCode"] = proc.returncode
@@ -820,9 +838,9 @@ CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/extensions__95_connect_vm_greeting.con
 CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
- same => n,Set(__CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
- same => n,Set(__CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Set(CONNECT_VM_DIAL=${SHELL(/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh ${CONNECT_VM_TENANT} ${CONNECT_VM_EXT})})
+ same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},45)
  same => n,Hangup()
@@ -935,50 +953,17 @@ EOF
 chmod 0600 /etc/connect-pbx-helper.env
 chown root:root /etc/connect-pbx-helper.env
 
-install -d -m 0755 /opt/connect-pbx-helper/bin
-cat >/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh <<'EOF'
-#!/usr/bin/env bash
-# Resolve all registered PJSIP contacts for tenant T<tenantId>_<extension>(_<n>)?
-# and emit them joined by '&' for use inside Asterisk Dial(). Outputs nothing
-# (so Dial() will return CHANUNAVAIL) when no contacts are registered.
-set -uo pipefail
-TENANT="${1:-}"
-EXT="${2:-}"
-[[ -n "${TENANT}" && -n "${EXT}" ]] || exit 0
-asterisk -rx "pjsip show contacts" 2>/dev/null \
-  | awk -v want="^T${TENANT}_${EXT}(_[0-9]+)?$" '
-      /Contact:[[:space:]]+/ {
-        n = split($0, a, " ");
-        for (i = 1; i <= n; i++) {
-          if (a[i] == "Contact:" && i + 1 <= n) {
-            split(a[i+1], parts, "/");
-            ep = parts[1];
-            if (ep ~ want && !(ep in seen)) {
-              seen[ep] = 1;
-              order[++c] = ep;
-            }
-          }
-        }
-      }
-      END {
-        for (i = 1; i <= c; i++) {
-          if (i > 1) printf "&";
-          printf "PJSIP/%s", order[i];
-        }
-      }
-    '
-EOF
-chown asterisk:asterisk /opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh
-chmod 0755 /opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh
-
 cat >/etc/asterisk/extensions__95_connect_vm_greeting.conf <<'EOF'
 ; Installed by Connect PBX helper. This context is used only after Connect
 ; originates a call to a user's extension for voicemail greeting recording.
+; The helper writes the registered PJSIP dial string into Asterisk's built-in
+; database (DB(connect_vm_dial/T<tenantId>_<extension>)) before originate, so
+; this context never has to shell out and never depends on live_dangerously.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
- same => n,Set(__CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
- same => n,Set(__CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Set(CONNECT_VM_DIAL=${SHELL(/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh ${CONNECT_VM_TENANT} ${CONNECT_VM_EXT})})
+ same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},45)
  same => n,Hangup()
