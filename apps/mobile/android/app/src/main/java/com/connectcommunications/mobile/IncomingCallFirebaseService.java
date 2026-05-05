@@ -242,9 +242,10 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         if ("INCOMING_CALL_WAKE".equals(type)) {
             // Push-wake (Option 2): silently kick the SIP keep-alive service so
             // the JS process gets the FOREGROUND_SERVICE importance bump, then
-            // signal SipContext to register({ forceRestart: true }). The actual
-            // ringing UI is driven by the SIP INVITE that arrives ~6 seconds
-            // later from the PBX dialplan, OR by a separate INCOMING_CALL push.
+            // signal SipContext to register(). Ringtone + full incoming UI are
+            // driven ONLY by the SIP INVITE from the PBX (~10–20s); there is no
+            // INCOMING_CALL FCM for this path. The placeholder notification is
+            // informational only (see postWakePlaceholderNotification).
             try {
                 handleWakePushNative(appData);
             } catch (Exception e) {
@@ -376,8 +377,9 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      *      FOREGROUND_SERVICE importance bump and a partial wake lock so
      *      Samsung doze cannot freeze the WSS socket while we re-register.
      *      Idempotent (no-op if already running).
-     *   2. Emit the Sip.WakeRegister event so SipContext kicks
-     *      register({ forceRestart: true }).
+     *   2. Emit the Sip.WakeRegister event so SipContext kicks register()
+     *      (forceRestart for PSTN wakes; often skipped for vm-greeting when
+     *      the SIP stack is already healthy — see SipContext).
      *   3. Append a JSON line tagged ConnectCallFlow so logcat shows the
      *      full timeline.
      *
@@ -773,10 +775,20 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             pendingIntentFlags
         );
 
+        // Voicemail "call to record" uses INCOMING_CALL_WAKE only — there is no
+        // separate INCOMING_CALL FCM. Ringtone starts only when JsSIP receives
+        // the SIP INVITE from the PBX (~15s later). A generic "Incoming call —
+        // connecting…" looks like a stuck normal call; use explicit copy.
+        boolean vmGreetingWake = "vm-greeting".equals(fromNum);
+        String title = vmGreetingWake ? "Voicemail recording" : "Incoming call";
+        String text = vmGreetingWake
+            ? "Your phone will ring shortly (~15s). Keep Connect online — this is not a normal incoming call yet."
+            : (displayName + " — connecting…");
+
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
-            .setContentTitle("Incoming call")
-            .setContentText(displayName + " — connecting…")
+            .setContentTitle(title)
+            .setContentText(text)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)

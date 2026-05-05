@@ -859,15 +859,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Stage B — DEVICE_REGISTER_TRIGGERED.
-      // For VM-greeting recording wakes: if the UA is already registered, skip
-      // forceRestart. The existing contact in Asterisk is valid — tearing it
-      // down and re-registering creates a timing race where Asterisk's Dial()
-      // runs before the new 200-OK arrives, making the phone appear offline.
-      // For all other wakes (normal incoming call): always forceRestart because
-      // the UA may be stale (Doze, killed JS, broken WS).
+      // For VM-greeting recording wakes: skip forceRestart only when the JsSIP
+      // stack is *actually* connected + registered. React's registrationStateRef
+      // can say "registered" while the WebSocket is dead (no DISCONNECTED event),
+      // which would make us skip restart and leave Asterisk with no contact.
+      // When the stack is healthy, skipping restart avoids a race where Dial()
+      // runs before a fresh 200 OK after a needless UA teardown.
+      // For all other wakes (normal incoming PSTN): always forceRestart.
       const isVmGreetingWake = fromNumber === "vm-greeting";
       const prevRegState = registrationStateRef.current;
-      const needsForceRestart = !(isVmGreetingWake && prevRegState === "registered");
+      let sipConnected = false;
+      let sipRegistered = false;
+      try {
+        sipConnected = clientRef.current.isConnected();
+        sipRegistered = clientRef.current.isRegistered();
+      } catch {
+        sipConnected = false;
+        sipRegistered = false;
+      }
+      const sipStackHealthy = sipConnected && sipRegistered;
+      const needsForceRestart = !(isVmGreetingWake && sipStackHealthy);
       const triggeredAt = Date.now();
       await postWakeEvent(authToken, {
         pbxCallId,
@@ -875,6 +886,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         details: {
           forceRestart: needsForceRestart,
           previousRegState: prevRegState,
+          sipConnected,
+          sipRegistered,
+          sipStackHealthy,
           appState,
           latencySinceWakeMs: triggeredAt - t0,
         },
