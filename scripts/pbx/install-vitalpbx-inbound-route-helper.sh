@@ -37,7 +37,13 @@ fi
 CONNECT_DESTINATION_ID="${REQUESTED_CONNECT_DESTINATION_ID:-${CONNECT_PBX_CONNECT_DESTINATION_ID:-607}}"
 HELPER_BIND="${REQUESTED_HELPER_BIND:-${CONNECT_PBX_HELPER_BIND:-127.0.0.1}}"
 HELPER_PORT="${REQUESTED_HELPER_PORT:-${CONNECT_PBX_HELPER_PORT:-8757}}"
-VM_RECORD_CHANNEL_TEMPLATE="${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE:-${CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE:-Local/{recordingExten}@connect-vm-greeting-dispatch/n}}"
+# Default expansion is intentionally split off into its own variable. Inlining
+# 'Local/{recordingExten}@connect-vm-greeting-dispatch/n' into a `${X:-default}`
+# substitution causes bash to match the FIRST `}` (after `recordingExten}`) as
+# the closing brace of the substitution, producing a corrupted value that grows
+# every install. Always assign the default to a normal variable first.
+DEFAULT_VM_RECORD_CHANNEL_TEMPLATE='Local/{recordingExten}@connect-vm-greeting-dispatch/n'
+VM_RECORD_CHANNEL_TEMPLATE="${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE:-${CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE:-${DEFAULT_VM_RECORD_CHANNEL_TEMPLATE}}}"
 VM_RECORD_APP="${REQUESTED_VM_RECORD_APP:-${CONNECT_PBX_VM_RECORD_APP:-Goto}}"
 if [[ -z "${REQUESTED_VM_RECORD_APP}" && "${VM_RECORD_APP}" == "VoiceMailMain" ]]; then
   # Older helper installs used VoiceMailMain after answer. On VitalPBX this can
@@ -52,9 +58,16 @@ if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" ]]; then
       # Upgrade older defaults to the dispatch-context Local channel which rings
       # all registered devices for the user's extension at once and avoids
       # accidental fall-through into the normal tenant dialplan/voicemail.
-      VM_RECORD_CHANNEL_TEMPLATE='Local/{recordingExten}@connect-vm-greeting-dispatch/n'
+      VM_RECORD_CHANNEL_TEMPLATE="${DEFAULT_VM_RECORD_CHANNEL_TEMPLATE}"
       ;;
   esac
+  # Heal previously-corrupted values written by a prior installer that suffered
+  # from the brace-parsing quirk above.
+  if [[ "${VM_RECORD_CHANNEL_TEMPLATE}" == *"@T{tenantId_cos-all}"* \
+     || "${VM_RECORD_CHANNEL_TEMPLATE}" == *"}}"* \
+     || "${VM_RECORD_CHANNEL_TEMPLATE}" != *"{recordingExten}"*"connect-vm-greeting-dispatch"* ]]; then
+    VM_RECORD_CHANNEL_TEMPLATE="${DEFAULT_VM_RECORD_CHANNEL_TEMPLATE}"
+  fi
 fi
 MYSQL_ROOT_ARGS="${MYSQL_ROOT_ARGS:-}"
 TEST_DID="${TEST_DID:-}"
@@ -769,22 +782,45 @@ class Handler(BaseHTTPRequestHandler):
             if not self.auth_ok():
                 self.send_json(401, {"error": "unauthorized"})
                 return
+            do_reload = "reload" in (parsed.query or "")
+            file_text = ""
+            try:
+                if Path(CONNECT_VM_DIALPLAN_PATH).is_file():
+                    file_text = Path(CONNECT_VM_DIALPLAN_PATH).read_text()
+            except OSError:
+                file_text = ""
+            reload_out = ""
+            reload_code = None
+            if do_reload:
+                rl = subprocess.run(["asterisk", "-rx", "dialplan reload"], text=True, capture_output=True, timeout=15, check=False)
+                reload_out = (rl.stdout + rl.stderr)[-2000:]
+                reload_code = rl.returncode
             try:
                 dp = subprocess.run(["asterisk", "-rx", "dialplan show connect-vm-greeting-record"], text=True, capture_output=True, timeout=10, check=False)
+                dispatch = subprocess.run(["asterisk", "-rx", "dialplan show connect-vm-greeting-dispatch"], text=True, capture_output=True, timeout=10, check=False)
                 contacts = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], text=True, capture_output=True, timeout=10, check=False)
+                astdb = subprocess.run(["asterisk", "-rx", "database show connect_vm_dial"], text=True, capture_output=True, timeout=10, check=False)
             except Exception as exc:
                 self.send_json(500, {"ok": False, "error": str(exc)})
                 return
             self.send_json(200, {
                 "ok": True,
                 "version": VERSION,
+                "dialplanFilePath": CONNECT_VM_DIALPLAN_PATH,
                 "dialplanFilePresent": Path(CONNECT_VM_DIALPLAN_PATH).is_file(),
+                "dialplanFileSize": len(file_text),
+                "dialplanFileBody": file_text[:6000],
                 "dialplanShowExitCode": dp.returncode,
                 "dialplanShowOutput": (dp.stdout + dp.stderr)[-4000:],
+                "dispatchShowExitCode": dispatch.returncode,
+                "dispatchShowOutput": (dispatch.stdout + dispatch.stderr)[-4000:],
                 "vmRecordApp": CFG.vm_record_app,
                 "vmRecordChannelTemplate": CFG.vm_record_channel_template,
                 "pjsipContactsExitCode": contacts.returncode,
                 "pjsipContactsOutput": (contacts.stdout + contacts.stderr)[-4000:],
+                "astdbConnectVmDialOutput": (astdb.stdout + astdb.stderr)[-2000:],
+                "dialplanReloadExitCode": reload_code,
+                "dialplanReloadOutput": reload_out,
             })
         elif path.startswith("/voicemail/greeting/record-call/"):
             if not self.auth_ok():
