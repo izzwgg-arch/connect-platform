@@ -14790,7 +14790,7 @@ async function transcodeVoicemailToMp3(input: Buffer, extension: string): Promis
 }
 
 async function streamVoicemailAudio(
-  vm: { id: string; tenantId: string | null; extension: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; readAt: Date | null },
+  vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null },
   reply: any,
   asAttachment: boolean,
 ): Promise<void> {
@@ -14809,15 +14809,20 @@ async function streamVoicemailAudio(
   // voicemail_records. It embeds its own auth token so we can stream it directly
   // without app-key/Tenant headers. `/api/v2/voicemail/:mailbox/:folder/:msg`
   // was previously attempted but returns "501 Invalid Operation" on this PBX.
-  const recfile = vm.pbxRecfile && vm.pbxRecfile.startsWith("/") ? vm.pbxRecfile : null;
-  const audioUrl = recfile ? `${baseUrl}${recfile}` : null;
+  let recfile = vm.pbxRecfile?.trim() || null;
+  const audioUrlForRecfile = (value: string | null): string | null => {
+    if (!value) return null;
+    if (/^https?:\/\//i.test(value)) return value;
+    return value.startsWith("/") ? `${baseUrl}${value}` : `${baseUrl}/${value}`;
+  };
+  let audioUrl = audioUrlForRecfile(recfile);
 
   if (!audioUrl) {
     reply.code(503).send({ error: "audio_unavailable", reason: "no_recfile" });
     return;
   }
 
-  const pbxResp = await fetch(audioUrl, {
+  const fetchPbxAudio = (url: string) => fetch(url, {
     headers: {
       // recfile tokens are self-authenticating, but send app-key too in case the
       // PBX version enforces header auth on /static for some tenants.
@@ -14827,7 +14832,44 @@ async function streamVoicemailAudio(
     signal: AbortSignal.timeout(15_000),
   });
 
+  let pbxResp = await fetchPbxAudio(audioUrl);
+
+  if (!pbxResp.ok && vm.pbxExtensionId) {
+    app.log.warn({ vmId: vm.id, pbxStatus: pbxResp.status, recfile }, "voicemail: stored audio URL failed, refreshing recfile");
+    try {
+      const pbx = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const records = await pbx.getExtensionVoicemailRecords(vm.pbxExtensionId, link.pbxTenantId ?? undefined);
+      const receivedEpoch = Math.floor(new Date(vm.receivedAt).getTime() / 1000);
+      const refreshed = records.find((rec: any) => {
+        const candidateRecfile = String(rec.recfile ?? "");
+        const candidateFilename = String(rec.filename ?? "");
+        const candidateMsgId = String(rec.msg_id ?? "");
+        const fileDerivedMsgNum = (candidateFilename || candidateRecfile).split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
+        const candidateMsgNum = String(
+          rec.msg_num ?? rec.msgnum ?? rec.id ?? fileDerivedMsgNum,
+        );
+        const candidateDate = Number(rec.date ?? rec.origtime ?? rec.orig_time ?? 0);
+        return (
+          (candidateMsgId && candidateMsgId === vm.pbxMessageId) ||
+          (candidateMsgNum && candidateMsgNum === vm.pbxMsgNum) ||
+          (candidateDate > 0 && Math.abs(candidateDate - receivedEpoch) <= 2)
+        );
+      });
+      const refreshedRecfile = String((refreshed as any)?.recfile ?? "").trim();
+      const refreshedUrl = audioUrlForRecfile(refreshedRecfile);
+      if (refreshedUrl) {
+        recfile = refreshedRecfile;
+        audioUrl = refreshedUrl;
+        await db.voicemail.update({ where: { id: vm.id }, data: { pbxRecfile: refreshedRecfile } }).catch(() => undefined);
+        pbxResp = await fetchPbxAudio(refreshedUrl);
+      }
+    } catch (err: any) {
+      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: recfile refresh failed");
+    }
+  }
+
   if (!pbxResp.ok) {
+    app.log.warn({ vmId: vm.id, pbxStatus: pbxResp.status, recfile, audioHost: audioUrl ? new URL(audioUrl).host : null }, "voicemail: audio fetch failed");
     reply.code(503).send({ error: "audio_fetch_failed", pbxStatus: pbxResp.status });
     return;
   }

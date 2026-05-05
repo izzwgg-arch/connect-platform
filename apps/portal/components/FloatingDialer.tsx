@@ -24,6 +24,8 @@ type DesktopDialerSettings = {
   openMinimizedToTray?: boolean;
   openMiniOnStartup?: boolean;
   minimizeToTray?: boolean;
+  selectedMicDeviceId?: string;
+  selectedSpeakerDeviceId?: string;
 };
 
 type BlfEntry = {
@@ -234,6 +236,20 @@ function DesktopSettingsMenu({
   onToggle: () => void;
   onUpdate: (patch: Partial<DesktopDialerSettings>) => void;
 }) {
+  useEffect(() => {
+    if (open) void phone.refreshAudioDevices();
+  }, [open, phone.refreshAudioDevices]);
+
+  const updateMic = (deviceId: string) => {
+    void phone.setAudioInputDeviceId(deviceId).catch(() => undefined);
+    onUpdate({ selectedMicDeviceId: deviceId });
+  };
+
+  const updateSpeaker = (deviceId: string) => {
+    void phone.setAudioSinkId(deviceId);
+    onUpdate({ selectedSpeakerDeviceId: deviceId });
+  };
+
   return (
     <div className="fd-settings-wrap">
       <button
@@ -248,20 +264,35 @@ function DesktopSettingsMenu({
       {open && (
         <div className="fd-settings-popover">
           <div className="fd-settings-title">
-            <Headphones size={15} />
-            <span>Headset & startup</span>
+            <span className="fd-settings-icon"><Headphones size={15} /></span>
+            <span>
+              <strong>Headset settings</strong>
+              <small>Choose the devices Connect uses for calls.</small>
+            </span>
           </div>
           <label className="fd-settings-field">
-            <span>Headset output</span>
-            <select value={phone.currentSinkId} onChange={(event) => void phone.setAudioSinkId(event.target.value)}>
-              <option value="">System default</option>
-              {phone.audioOutputDevices.map((device) => (
+            <span>Microphone</span>
+            <select value={phone.currentMicDeviceId} onChange={(event) => updateMic(event.target.value)}>
+              <option value="">System default microphone</option>
+              {phone.audioInputDevices.map((device) => (
                 <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Audio device ${device.deviceId.slice(0, 6)}`}
+                  {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
                 </option>
               ))}
             </select>
           </label>
+          <label className="fd-settings-field">
+            <span>Speaker / headset output</span>
+            <select value={phone.currentSinkId} onChange={(event) => updateSpeaker(event.target.value)}>
+              <option value="">System default speaker</option>
+              {phone.audioOutputDevices.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="fd-settings-section-label">Startup</div>
           <SettingsRow
             checked={settings.startOnLogin !== false}
             label="Start with Windows"
@@ -816,18 +847,23 @@ const DIALER_CSS = `
 .fd-chip-btn { padding: 0 9px; font-weight: 800; font-size: 11px; }
 .fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
 .fd-icon-plain { width: 27px; display: inline-flex; align-items: center; justify-content: center; }
-.fd-settings-popover { position: absolute; top: 34px; right: -36px; z-index: 40; width: min(300px, calc(100vw - 28px)); padding: 12px; border-radius: 22px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(15,23,42,.98), rgba(7,17,31,.96)); border: 1px solid rgba(125,211,252,.18); box-shadow: 0 24px 70px rgba(0,0,0,.42); backdrop-filter: blur(22px); }
-.fd-settings-title { display: flex; align-items: center; gap: 8px; color: #f8fafc; font-size: 12px; font-weight: 900; margin-bottom: 10px; }
-.fd-settings-field { display: grid; gap: 6px; margin-bottom: 9px; color: #94a3b8; font-size: 11px; font-weight: 850; }
-.fd-settings-field select { width: 100%; min-width: 0; border: 1px solid rgba(148,163,184,.16); border-radius: 14px; padding: 9px 10px; color: #f8fafc; background: rgba(15,23,42,.82); outline: none; }
-.fd-settings-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border: 0; border-top: 1px solid rgba(148,163,184,.10); background: transparent; color: inherit; cursor: pointer; text-align: left; }
-.fd-settings-row span { display: grid; gap: 2px; min-width: 0; }
-.fd-settings-row strong { color: #e5eefb; font-size: 12px; }
-.fd-settings-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
-.fd-settings-row i { position: relative; flex: 0 0 auto; width: 38px; height: 21px; border-radius: 999px; background: rgba(100,116,139,.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
-.fd-settings-row i:after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 999px; background: white; transition: transform .16s ease, background .16s ease; }
-.fd-settings-row i[data-on="true"] { background: linear-gradient(135deg, #22c55e, #0ea5e9); }
-.fd-settings-row i[data-on="true"]:after { transform: translateX(17px); }
+.fd-settings-popover { position: absolute; top: 34px; right: -36px; z-index: 40; width: min(330px, calc(100vw - 28px)); padding: 14px; border-radius: 24px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.20), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125,211,252,.20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
+.fd-settings-title { display: flex; align-items: center; gap: 10px; color: #f8fafc; margin-bottom: 12px; }
+.fd-settings-title span:last-child { display: grid; gap: 2px; }
+.fd-settings-title strong { font-size: 13px; font-weight: 950; }
+.fd-settings-title small { color: #8fb3c8; font-size: 10px; font-weight: 750; line-height: 1.25; }
+.fd-settings-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 13px; background: linear-gradient(135deg, rgba(14,165,233,.26), rgba(34,197,94,.18)); color: #bae6fd; }
+.fd-settings-field { display: grid; gap: 7px; margin-bottom: 10px; color: #9fb4c8; font-size: 11px; font-weight: 900; }
+.fd-settings-field select { width: 100%; min-width: 0; border: 1px solid rgba(148,163,184,.16); border-radius: 15px; padding: 10px 11px; color: #f8fafc; background: rgba(15,23,42,.88); outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+.fd-settings-section-label { margin: 11px 0 3px; color: #64748b; font-size: 10px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }
+.fd-settings-popover .fd-settings-row { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 2px; border: 0; border-top: 1px solid rgba(148,163,184,.10); background: transparent; color: inherit; cursor: pointer; text-align: left; appearance: none; }
+.fd-settings-popover .fd-settings-row span { display: grid; gap: 2px; min-width: 0; }
+.fd-settings-popover .fd-settings-row strong { color: #e5eefb; font-size: 12px; }
+.fd-settings-popover .fd-settings-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
+.fd-settings-popover .fd-settings-row i { position: relative; flex: 0 0 auto; width: 38px; height: 21px; border-radius: 999px; background: rgba(100,116,139,.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.fd-settings-popover .fd-settings-row i:after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 999px; background: white; transition: transform .16s ease, background .16s ease; }
+.fd-settings-popover .fd-settings-row i[data-on="true"] { background: linear-gradient(135deg, #22c55e, #0ea5e9); }
+.fd-settings-popover .fd-settings-row i[data-on="true"]:after { transform: translateX(17px); }
 .fd-body, .fd-active, .fd-call-state { padding: 11px; display: flex; flex-direction: column; gap: 9px; }
 .fd-outbound-route { display: grid; gap: 6px; padding: 9px 10px; border-radius: 15px; background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.18); }
 .fd-outbound-route label { color: var(--fd-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }

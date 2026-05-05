@@ -6,6 +6,8 @@ export type DesktopSettings = {
   openMinimizedToTray: boolean;
   openMiniOnStartup: boolean;
   minimizeToTray: boolean;
+  selectedMicDeviceId?: string;
+  selectedSpeakerDeviceId?: string;
   miniBounds: {
     width: number;
     height: number;

@@ -108,8 +108,12 @@ export type SipPhoneState = {
   speakerOn: boolean;
   /** Available audio output devices for routing. Empty until first enumeration. */
   audioOutputDevices: MediaDeviceInfo[];
+  /** Available microphone/input devices for call media. Empty until enumeration. */
+  audioInputDevices: MediaDeviceInfo[];
   /** Current audio output sink id (empty string = browser default). */
   currentSinkId: string;
+  /** Current microphone device id (empty string = browser/default communications device). */
+  currentMicDeviceId: string;
   error: string | null;
   diag: SipDiagnostics;
   outboundRoutes: OutboundDialRoute[];
@@ -127,6 +131,10 @@ export type SipPhoneActions = {
   toggleSpeaker: () => void;
   /** Set audio output to a specific device sink id. */
   setAudioSinkId: (sinkId: string) => Promise<void>;
+  /** Set microphone input for future outbound/answered calls. */
+  setAudioInputDeviceId: (deviceId: string) => Promise<void>;
+  /** Refresh input/output audio device lists. */
+  refreshAudioDevices: () => Promise<void>;
   sendDtmf: (digit: string) => void;
   /** Play a local DTMF keypad tone without sending SIP DTMF (for pre-call dialpad). */
   playDtmfTone: (digit: string) => void;
@@ -198,6 +206,8 @@ type DesktopWindowSettings = {
   openMinimizedToTray?: boolean;
   openMiniOnStartup?: boolean;
   minimizeToTray?: boolean;
+  selectedMicDeviceId?: string;
+  selectedSpeakerDeviceId?: string;
 };
 
 declare global {
@@ -230,6 +240,24 @@ const VOICE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   channelCount: 1,
   sampleRate: { ideal: 48_000 },
 };
+
+function voiceAudioConstraints(deviceId?: string): MediaTrackConstraints {
+  const cleanDeviceId = (deviceId ?? "").trim();
+  if (!cleanDeviceId || cleanDeviceId === "default") return VOICE_AUDIO_CONSTRAINTS;
+  return {
+    ...VOICE_AUDIO_CONSTRAINTS,
+    deviceId: { exact: cleanDeviceId },
+  };
+}
+
+function preferHeadsetDevice(devices: MediaDeviceInfo[]): MediaDeviceInfo | undefined {
+  const usable = devices.filter((device) => device.deviceId && device.deviceId !== "default");
+  const headset = usable.find((device) => {
+    const label = device.label.toLowerCase();
+    return label.includes("headset") || label.includes("headphone") || label.includes("airpods") || label.includes("jabra") || label.includes("poly") || label.includes("plantronics");
+  });
+  return headset ?? usable.find((device) => device.deviceId === "communications") ?? usable[0];
+}
 
 // ── JsSIP dynamic import ────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -428,7 +456,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [onHold, setOnHold] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
   const [audioOutputDevices, setAudioOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentSinkId, setCurrentSinkId] = useState("");
+  const [currentMicDeviceId, setCurrentMicDeviceId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [diag, setDiag] = useState<SipDiagnostics>(DEFAULT_DIAG);
   const [dialpadInput, setDialpadInput] = useState("");
@@ -452,6 +482,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   /** Unique id counter for sessions that JsSIP doesn't expose a stable id on. */
   const sessionIdCounterRef = useRef<number>(0);
   const activeSessionIdRef = useRef<string | null>(null);
+  const currentMicDeviceIdRef = useRef("");
   const MAX_CONCURRENT_SESSIONS_WEB = 5;
 
   function getOrAssignSessionId(s: unknown): string {
@@ -487,6 +518,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         .join(",")}]`,
     );
   }
+
+  useEffect(() => {
+    currentMicDeviceIdRef.current = currentMicDeviceId;
+  }, [currentMicDeviceId]);
 
   function registerSessionMeta(
     id: string,
@@ -959,7 +994,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             // shows the "Allow microphone" prompt while the softphone is visible.
             if (navigator.mediaDevices?.getUserMedia) {
               navigator.mediaDevices
-                .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+                .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
                 .then((s) => {
                   s.getTracks().forEach((t) => t.stop());
                   patchDiag({ micPermission: "granted" });
@@ -1493,7 +1528,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
       resolveDialTarget
         .then((pbxDialTarget) => navigator.mediaDevices
-        .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+        .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
         .then((localStream) => {
           localStreamRef.current = localStream;
           try {
@@ -1541,7 +1576,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     if (!sessionRef.current) return;
     stopAllAudio(); // Stop ringtone immediately on answer
     navigator.mediaDevices
-      .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+      .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
       .then((localStream) => {
         localStreamRef.current = localStream;
         try {
@@ -1668,17 +1703,38 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     [callState, playDtmfTone],
   );
 
-  // ── Audio output (speaker) routing ─────────────────────────────────────────
+  // ── Audio device routing ───────────────────────────────────────────────────
 
-  /** Enumerate audio output devices and refresh state. */
-  const refreshOutputDevices = useCallback(async () => {
+  /** Enumerate audio input/output devices and refresh state. */
+  const refreshAudioDevices = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === "audioinput");
       const outputs = devices.filter((d) => d.kind === "audiooutput");
+      setAudioInputDevices(inputs);
       setAudioOutputDevices(outputs);
+      if (!currentMicDeviceIdRef.current) {
+        const preferred = preferHeadsetDevice(inputs);
+        if (preferred?.deviceId) setCurrentMicDeviceId(preferred.deviceId);
+      }
     } catch { /* permissions not granted yet */ }
   }, []);
+
+  const setAudioInputDeviceId = useCallback(async (deviceId: string) => {
+    setCurrentMicDeviceId(deviceId);
+    currentMicDeviceIdRef.current = deviceId;
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(deviceId), video: false });
+      probe.getTracks().forEach((track) => track.stop());
+      patchDiag({ micPermission: "granted", lastCallError: null });
+      await refreshAudioDevices();
+    } catch (err: any) {
+      patchDiag({ micPermission: "denied", lastCallError: `mic_select_failed: ${err?.name ?? "unknown"}` });
+      throw err;
+    }
+  }, [refreshAudioDevices]);
 
   const setAudioSinkId = useCallback(async (sinkId: string) => {
     const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
@@ -1693,6 +1749,38 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       console.warn("[SipPhone] setSinkId failed:", e);
     }
   }, []);
+
+  useEffect(() => {
+    void refreshAudioDevices();
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.addEventListener) return undefined;
+    const handleDeviceChange = () => void refreshAudioDevices();
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+  }, [refreshAudioDevices]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.connectDesktop?.window) return undefined;
+    let cancelled = false;
+    window.connectDesktop.window.getSettings()
+      .then((desktopSettings) => {
+        if (cancelled) return;
+        if (desktopSettings.selectedMicDeviceId) void setAudioInputDeviceId(desktopSettings.selectedMicDeviceId).catch(() => undefined);
+        if (desktopSettings.selectedSpeakerDeviceId) void setAudioSinkId(desktopSettings.selectedSpeakerDeviceId);
+      })
+      .catch(() => undefined);
+    const unsubscribe = window.connectDesktop.window.onSettings((desktopSettings) => {
+      if (desktopSettings.selectedMicDeviceId != null && desktopSettings.selectedMicDeviceId !== currentMicDeviceIdRef.current) {
+        void setAudioInputDeviceId(desktopSettings.selectedMicDeviceId).catch(() => undefined);
+      }
+      if (desktopSettings.selectedSpeakerDeviceId != null && desktopSettings.selectedSpeakerDeviceId !== currentSinkId) {
+        void setAudioSinkId(desktopSettings.selectedSpeakerDeviceId);
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [currentSinkId, setAudioInputDeviceId, setAudioSinkId]);
 
   const toggleSpeaker = useCallback(async () => {
     if (speakerOn) {
@@ -1730,8 +1818,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   // Enumerate devices whenever a call connects
   useEffect(() => {
-    if (callState === "connected") refreshOutputDevices();
-  }, [callState, refreshOutputDevices]);
+    if (callState === "connected") void refreshAudioDevices();
+  }, [callState, refreshAudioDevices]);
 
   // Reset speaker state on call end
   useEffect(() => {
@@ -1759,7 +1847,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     }
     stopAllAudio();
     navigator.mediaDevices
-      .getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })
+      .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
       .then((localStream) => {
         localStreamRef.current = localStream;
         try {
@@ -1841,7 +1929,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     onHold,
     speakerOn,
     audioOutputDevices,
+    audioInputDevices,
     currentSinkId,
+    currentMicDeviceId,
     error,
     diag,
     outboundRoutes,
@@ -1854,6 +1944,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     toggleHold,
     toggleSpeaker,
     setAudioSinkId,
+    setAudioInputDeviceId,
+    refreshAudioDevices,
     sendDtmf,
     playDtmfTone,
     transfer,
@@ -1880,6 +1972,8 @@ const SIP_PHONE_ACTIONS = [
   "toggleHold",
   "toggleSpeaker",
   "setAudioSinkId",
+  "setAudioInputDeviceId",
+  "refreshAudioDevices",
   "sendDtmf",
   "playDtmfTone",
   "transfer",
@@ -1915,7 +2009,15 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
       label: device.label,
       toJSON: () => ({}),
     }) as MediaDeviceInfo),
+    audioInputDevices: phone.audioInputDevices.map((device) => ({
+      deviceId: device.deviceId,
+      groupId: device.groupId,
+      kind: device.kind,
+      label: device.label,
+      toJSON: () => ({}),
+    }) as MediaDeviceInfo),
     currentSinkId: phone.currentSinkId,
+    currentMicDeviceId: phone.currentMicDeviceId,
     error: phone.error,
     diag: phone.diag,
     outboundRoutes: phone.outboundRoutes,
@@ -1942,7 +2044,9 @@ const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   onHold: false,
   speakerOn: false,
   audioOutputDevices: [],
+  audioInputDevices: [],
   currentSinkId: "",
+  currentMicDeviceId: "",
   error: null,
   diag: DEFAULT_DIAG,
   outboundRoutes: [],
@@ -1955,6 +2059,8 @@ const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   toggleHold: () => undefined,
   toggleSpeaker: () => undefined,
   setAudioSinkId: () => Promise.resolve(),
+  setAudioInputDeviceId: () => Promise.resolve(),
+  refreshAudioDevices: () => Promise.resolve(),
   sendDtmf: () => undefined,
   playDtmfTone: () => undefined,
   transfer: () => undefined,
@@ -2033,6 +2139,8 @@ function DesktopSipPhoneProxyProvider({ children }: { children: ReactNode }) {
     toggleHold: () => { void send("toggleHold"); },
     toggleSpeaker: () => { void send("toggleSpeaker"); },
     setAudioSinkId: (sinkId) => send("setAudioSinkId", [sinkId]),
+    setAudioInputDeviceId: (deviceId) => send("setAudioInputDeviceId", [deviceId]),
+    refreshAudioDevices: () => send("refreshAudioDevices"),
     sendDtmf: (digit) => { void send("sendDtmf", [digit]); },
     playDtmfTone: (digit) => { void send("playDtmfTone", [digit]); },
     transfer: (target) => { void send("transfer", [target]); },

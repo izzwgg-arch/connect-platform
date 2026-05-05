@@ -68,6 +68,8 @@ type MiniDesktopSettings = {
   openMinimizedToTray?: boolean;
   openMiniOnStartup?: boolean;
   minimizeToTray?: boolean;
+  selectedMicDeviceId?: string;
+  selectedSpeakerDeviceId?: string;
 };
 
 const KEYS: Array<[string, string]> = [
@@ -359,6 +361,20 @@ export function DesktopMiniDialer() {
   }, []);
 
   useEffect(() => {
+    if (settingsOpen) void phone.refreshAudioDevices();
+  }, [phone.refreshAudioDevices, settingsOpen]);
+
+  const updateMicDevice = useCallback((deviceId: string) => {
+    void phone.setAudioInputDeviceId(deviceId).catch(() => undefined);
+    updateDesktopSettings({ selectedMicDeviceId: deviceId });
+  }, [phone.setAudioInputDeviceId, updateDesktopSettings]);
+
+  const updateSpeakerDevice = useCallback((deviceId: string) => {
+    void phone.setAudioSinkId(deviceId);
+    updateDesktopSettings({ selectedSpeakerDeviceId: deviceId });
+  }, [phone.setAudioSinkId, updateDesktopSettings]);
+
+  useEffect(() => {
     if (phone.callState === "ringing") setTab("dialer");
   }, [phone.callState]);
 
@@ -398,23 +414,41 @@ export function DesktopMiniDialer() {
             {settingsOpen && (
               <div className="settings-popover">
                 <div className="settings-title">
-                  <Headphones size={15} />
-                  <span>Headset & startup</span>
+                  <span className="settings-title-icon"><Headphones size={15} /></span>
+                  <span>
+                    <strong>Headset settings</strong>
+                    <small>Choose the microphone and speaker used for calls.</small>
+                  </span>
                 </div>
                 <label className="settings-field">
-                  <span>Headset output</span>
+                  <span>Microphone</span>
                   <select
-                    value={phone.currentSinkId}
-                    onChange={(event) => void phone.setAudioSinkId(event.target.value)}
+                    value={phone.currentMicDeviceId}
+                    onChange={(event) => updateMicDevice(event.target.value)}
                   >
-                    <option value="">System default</option>
-                    {phone.audioOutputDevices.map((device) => (
+                    <option value="">System default microphone</option>
+                    {phone.audioInputDevices.map((device) => (
                       <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Audio device ${device.deviceId.slice(0, 6)}`}
+                        {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
                       </option>
                     ))}
                   </select>
                 </label>
+                <label className="settings-field">
+                  <span>Speaker / headset output</span>
+                  <select
+                    value={phone.currentSinkId}
+                    onChange={(event) => updateSpeakerDevice(event.target.value)}
+                  >
+                    <option value="">System default speaker</option>
+                    {phone.audioOutputDevices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="settings-section-label">Startup</div>
                 <MiniToggle
                   checked={settings.startOnLogin !== false}
                   label="Start with Windows"
@@ -669,61 +703,83 @@ export function DesktopMiniDialer() {
           top: 34px;
           right: -74px;
           z-index: 20;
-          width: min(300px, calc(100vw - 24px));
-          padding: 12px;
-          border-radius: 22px;
+          width: min(330px, calc(100vw - 24px));
+          padding: 14px;
+          border-radius: 24px;
           background:
-            radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%),
-            linear-gradient(145deg, rgba(15,23,42,.98), rgba(7,17,31,.96));
-          border: 1px solid rgba(125, 211, 252, .18);
-          box-shadow: 0 24px 70px rgba(0,0,0,.42);
+            radial-gradient(circle at 0% 0%, rgba(56,189,248,.20), transparent 42%),
+            linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98));
+          border: 1px solid rgba(125, 211, 252, .20);
+          box-shadow: 0 24px 70px rgba(0,0,0,.50);
           backdrop-filter: blur(22px);
         }
         .settings-title {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
           color: #f8fafc;
-          font-size: 12px;
-          font-weight: 900;
-          margin-bottom: 10px;
+          margin-bottom: 12px;
+        }
+        .settings-title span:last-child { display: grid; gap: 2px; }
+        .settings-title strong { font-size: 13px; font-weight: 950; }
+        .settings-title small { color: #8fb3c8; font-size: 10px; font-weight: 750; line-height: 1.25; }
+        .settings-title-icon {
+          display: inline-grid;
+          place-items: center;
+          width: 30px;
+          height: 30px;
+          border-radius: 13px;
+          background: linear-gradient(135deg, rgba(14,165,233,.26), rgba(34,197,94,.18));
+          color: #bae6fd;
         }
         .settings-field {
           display: grid;
-          gap: 6px;
-          margin-bottom: 9px;
-          color: #94a3b8;
+          gap: 7px;
+          margin-bottom: 10px;
+          color: #9fb4c8;
           font-size: 11px;
-          font-weight: 850;
+          font-weight: 900;
         }
         .settings-field select {
           width: 100%;
           min-width: 0;
           border: 1px solid rgba(148, 163, 184, .16);
-          border-radius: 14px;
-          padding: 9px 10px;
+          border-radius: 15px;
+          padding: 10px 11px;
           color: #f8fafc;
-          background: rgba(15, 23, 42, .82);
+          background: rgba(15, 23, 42, .88);
           outline: none;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
         }
-        .settings-toggle-row {
-          width: 100%;
+        .settings-section-label {
+          margin: 11px 0 3px;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+        .settings-popover .settings-toggle-row {
+          width: 100% !important;
+          min-height: 48px;
           height: auto !important;
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          padding: 9px 0;
+          padding: 9px 2px;
           border: 0 !important;
           border-top: 1px solid rgba(148, 163, 184, .10) !important;
           border-radius: 0 !important;
           background: transparent !important;
+          color: inherit !important;
           text-align: left;
+          appearance: none;
         }
-        .settings-toggle-row span { display: grid; gap: 2px; min-width: 0; }
-        .settings-toggle-row strong { color: #e5eefb; font-size: 12px; }
-        .settings-toggle-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
-        .settings-toggle-row i {
+        .settings-popover .settings-toggle-row span { display: grid; gap: 2px; min-width: 0; }
+        .settings-popover .settings-toggle-row strong { color: #e5eefb; font-size: 12px; }
+        .settings-popover .settings-toggle-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
+        .settings-popover .settings-toggle-row i {
           position: relative;
           flex: 0 0 auto;
           width: 38px;
@@ -732,7 +788,7 @@ export function DesktopMiniDialer() {
           background: rgba(100,116,139,.55);
           box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
         }
-        .settings-toggle-row i:after {
+        .settings-popover .settings-toggle-row i:after {
           content: "";
           position: absolute;
           top: 3px;
@@ -743,10 +799,10 @@ export function DesktopMiniDialer() {
           background: white;
           transition: transform .16s ease, background .16s ease;
         }
-        .settings-toggle-row i[data-on="true"] {
+        .settings-popover .settings-toggle-row i[data-on="true"] {
           background: linear-gradient(135deg, #22c55e, #0ea5e9);
         }
-        .settings-toggle-row i[data-on="true"]:after { transform: translateX(17px); }
+        .settings-popover .settings-toggle-row i[data-on="true"]:after { transform: translateX(17px); }
         .active-card {
           margin: 12px;
           padding: 14px;
