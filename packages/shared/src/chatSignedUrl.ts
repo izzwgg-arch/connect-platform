@@ -22,6 +22,23 @@ export function buildChatSignedDownloadUrl(publicBaseUrl: string, storageKey: st
   return `${base}/chat/attachments/download/${encodeURIComponent(storageKey)}?exp=${exp}&sig=${sig}`;
 }
 
+export function chatDbSignedPayload(attachmentId: string, storageKey: string, sizeBytes: number, exp: number): string {
+  return `chat-db:${attachmentId}:${storageKey}:${sizeBytes}:${exp}`;
+}
+
+export function buildChatDbSignedDownloadUrl(
+  publicBaseUrl: string,
+  attachmentId: string,
+  storageKey: string,
+  sizeBytes: number,
+  expiresInSec: number = 3600,
+): string {
+  const exp = Math.floor(Date.now() / 1000) + Math.max(60, expiresInSec);
+  const sig = crypto.createHash("sha256").update(chatDbSignedPayload(attachmentId, storageKey, sizeBytes, exp)).digest("hex");
+  const base = publicBaseUrl.replace(/\/+$/, "");
+  return `${base}/chat/attachments/download/${encodeURIComponent(storageKey)}?exp=${exp}&sig=${sig}`;
+}
+
 export function chatAttachmentIdSignedPayload(attachmentId: string, exp: number): string {
   return `chat-attachment:${attachmentId}:${exp}`;
 }
@@ -57,6 +74,27 @@ export function verifyChatSignedDownload(
     return { ok: false, reason: "invalid" };
   }
   const expected = crypto.createHmac("sha256", signingSecret()).update(chatSignedPayload(storageKey, exp)).digest("hex");
+  const a = Buffer.from(sigRaw, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { ok: false, reason: "invalid" };
+  return { ok: true };
+}
+
+export function verifyChatDbSignedDownload(
+  attachmentId: string,
+  storageKey: string,
+  sizeBytes: number,
+  expRaw: string | undefined,
+  sigRaw: string | undefined,
+): { ok: true } | { ok: false; reason: "expired" | "invalid" } {
+  const exp = Number(expRaw);
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) {
+    return { ok: false, reason: "expired" };
+  }
+  if (typeof sigRaw !== "string" || sigRaw.length !== 64) {
+    return { ok: false, reason: "invalid" };
+  }
+  const expected = crypto.createHash("sha256").update(chatDbSignedPayload(attachmentId, storageKey, sizeBytes, exp)).digest("hex");
   const a = Buffer.from(sigRaw, "hex");
   const b = Buffer.from(expected, "hex");
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { ok: false, reason: "invalid" };

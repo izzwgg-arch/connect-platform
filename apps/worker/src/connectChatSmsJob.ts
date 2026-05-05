@@ -1,7 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { VoipMsSmsProvider } from "@connect/integrations";
-import { buildChatAttachmentIdSignedDownloadUrl, buildChatSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
+import { buildChatAttachmentIdSignedDownloadUrl, buildChatDbSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
 import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
@@ -112,7 +112,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
           forceFallbackErr = convertErr;
         }
       }
-      const mediaUrls = mmsAttachments.map((a) => buildChatSignedDownloadUrl(publicBase, a.storageKey, 3600));
+      const mediaUrls = mmsAttachments.map((a) => buildChatDbSignedDownloadUrl(publicBase, a.id, a.storageKey, a.sizeBytes, 3600));
       console.info(JSON.stringify({ event: "voipms_payload_prepared", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: mediaUrls.length, mediaUrls: mediaUrls.map((u) => u.replace(/([?&]sig=)[^&]+/i, "$1[redacted]")) }));
       try {
         if (forceFallbackErr) throw forceFallbackErr;

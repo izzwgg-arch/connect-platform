@@ -15,6 +15,7 @@ import {
   buildChatAttachmentIdSignedDownloadUrl,
   buildChatSignedDownloadUrl,
   verifyChatAttachmentIdSignedDownload,
+  verifyChatDbSignedDownload,
   verifyChatSignedDownload,
 } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
@@ -411,7 +412,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const storageKey = decodeURIComponent(String(wildcardPath || ""));
     if (!storageKey) return reply.code(400).send({ error: "missing_key" });
     const q = req.query as { exp?: string; sig?: string };
-    const verified = verifyChatSignedDownload(storageKey, q.exp, q.sig);
+    let verified = verifyChatSignedDownload(storageKey, q.exp, q.sig);
+    if (!verified.ok && verified.reason === "invalid") {
+      const attachment = await db.connectChatMessageAttachment.findFirst({
+        where: { storageKey },
+        select: { id: true, sizeBytes: true },
+      });
+      if (attachment) {
+        verified = verifyChatDbSignedDownload(attachment.id, storageKey, attachment.sizeBytes, q.exp, q.sig);
+      }
+    }
     if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: "reason" in verified ? verified.reason : "invalid" });
     try {
       const stored = await readChatAttachment(storageKey);
