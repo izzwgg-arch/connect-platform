@@ -541,6 +541,39 @@ def safe_vm_path(tenant_id, extension, greeting_type):
         raise ValueError("voicemail_path_outside_root")
     return mbox / GREETING_TYPES[require_greeting_type(greeting_type)]
 
+def pjsip_contact_endpoints_for_extension(extension):
+    proc = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], text=True, capture_output=True, timeout=10, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError("pjsip_contacts_failed: " + ((proc.stdout + proc.stderr).strip() or str(proc.returncode)))
+    endpoints = []
+    for line in (proc.stdout + proc.stderr).splitlines():
+        match = re.search(r"\bContact:\s+([A-Za-z0-9_.-]+)\/", line)
+        if not match:
+            continue
+        endpoint = match.group(1)
+        if endpoint == extension or endpoint.endswith("_" + extension):
+            if endpoint not in endpoints:
+                endpoints.append(endpoint)
+    return endpoints
+
+def resolve_record_channel(channel, tenant_id, extension):
+    if not channel.startswith("PJSIP/"):
+        return channel, "template"
+    requested_endpoint = channel[len("PJSIP/"):]
+    if not re.match(r"^[A-Za-z0-9_.-]+$", requested_endpoint):
+        raise ValueError("invalid_pjsip_endpoint_template")
+    contacts = pjsip_contact_endpoints_for_extension(extension)
+    exact_endpoint = "T" + tenant_id + "_" + extension
+    if exact_endpoint in contacts:
+        return "PJSIP/" + exact_endpoint, "exact_registered"
+    if requested_endpoint in contacts:
+        return "PJSIP/" + requested_endpoint, "template_registered"
+    if len(contacts) == 1:
+        return "PJSIP/" + contacts[0], "single_registered_match"
+    if contacts:
+        raise ValueError("ambiguous_pjsip_endpoint_for_extension: " + ",".join(contacts[:10]))
+    raise ValueError("no_registered_pjsip_endpoint_for_extension")
+
 def decode_verified_wav(body):
     sha = str(body.get("sha256") or "").strip().lower()
     if not SHA256_RE.match(sha):
@@ -633,13 +666,14 @@ def vm_record_call(body):
         # Fail open to the tenant-prefixed endpoint route rather than the
         # normal tenant dialplan, which can fall through to the user's voicemail.
         channel = "PJSIP/T" + tenant_id + "_" + extension
+    channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
     recording_exten = tenant_id + "_" + extension + "_" + target.stem
     if CFG.vm_record_app.lower() == "goto":
         app_data = "connect-vm-greeting-record," + recording_exten + ",1"
     else:
         app_data = extension + "@" + tenant_id
     cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, app_data)]
-    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
         job["asteriskExitCode"] = proc.returncode
