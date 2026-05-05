@@ -26,11 +26,22 @@ export function chatAttachmentIdSignedPayload(attachmentId: string, exp: number)
   return `chat-attachment:${attachmentId}:${exp}`;
 }
 
-export function buildChatAttachmentIdSignedDownloadUrl(publicBaseUrl: string, attachmentId: string, expiresInSec: number = 3600): string {
+function safeUrlFileName(fileName?: string | null): string {
+  const cleaned = String(fileName || "media").replace(/[/\\?%*:|"<>]/g, "-").trim();
+  return cleaned || "media";
+}
+
+export function buildChatAttachmentIdSignedDownloadUrl(
+  publicBaseUrl: string,
+  attachmentId: string,
+  expiresInSec: number = 3600,
+  fileName?: string | null,
+): string {
   const exp = Math.floor(Date.now() / 1000) + Math.max(60, expiresInSec);
   const sig = crypto.createHmac("sha256", signingSecret()).update(chatAttachmentIdSignedPayload(attachmentId, exp)).digest("hex");
   const base = publicBaseUrl.replace(/\/+$/, "");
-  return `${base}/chat/a/${encodeURIComponent(attachmentId)}?e=${exp}&s=${sig}`;
+  const suffix = fileName ? `/${encodeURIComponent(safeUrlFileName(fileName))}` : "";
+  return `${base}/chat/a/${encodeURIComponent(attachmentId)}${suffix}?e=${exp}&s=${sig}`;
 }
 
 export function verifyChatSignedDownload(

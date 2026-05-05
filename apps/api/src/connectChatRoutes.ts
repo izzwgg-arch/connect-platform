@@ -424,7 +424,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
   });
 
-  app.get("/chat/a/:attachmentId", async (req, reply) => {
+  const handleAttachmentIdDownload = async (req: any, reply: any) => {
     const { attachmentId } = req.params as { attachmentId: string };
     const q = req.query as { e?: string; s?: string };
     const verified = verifyChatAttachmentIdSignedDownload(attachmentId, q.e, q.s);
@@ -444,7 +444,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     } catch {
       return reply.code(400).send({ error: "invalid_key" });
     }
-  });
+  };
+  app.get("/chat/a/:attachmentId", handleAttachmentIdDownload);
+  app.get("/chat/a/:attachmentId/:fileName", handleAttachmentIdDownload);
 
   // ── Chat threads (JWT) ─────────────────────────────────────────────────────
   app.get("/chat/threads", async (req, reply) => {
@@ -1022,10 +1024,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         const base = publicChatDownloadBase();
         const persistedAttachments = await db.connectChatMessageAttachment.findMany({
           where: { messageId: msg.id, tenantId },
-          select: { id: true },
+          select: { id: true, fileName: true },
           orderBy: { createdAt: "asc" },
         });
-        const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400));
+        const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400, a.fileName));
         const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
         await db.connectChatMessage.update({
           where: { id: msg.id },
