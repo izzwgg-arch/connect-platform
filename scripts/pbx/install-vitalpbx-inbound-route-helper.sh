@@ -610,7 +610,16 @@ def vm_record_call(body):
     job_id = str(uuid.uuid4())
     target = safe_vm_path(tenant_id, extension, greeting_type)
     backup = backup_vm_greeting(target, remove_original=False)
-    channel = CFG.vm_record_channel_template.format(tenantId=tenant_id, extension=extension)
+    # Use explicit token replacement instead of str.format so Asterisk context
+    # suffixes like `T{tenantId}_cos-all` cannot be misparsed as a single
+    # `{tenantId_cos-all}` field if an operator edits the env by hand.
+    channel = (
+        CFG.vm_record_channel_template
+        .replace("{tenantId}", tenant_id)
+        .replace("{extension}", extension)
+    )
+    if "{" in channel or "}" in channel:
+        raise ValueError("invalid_vm_record_channel_template")
     mailbox = extension + "@" + tenant_id
     cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, mailbox)]
     job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now()}

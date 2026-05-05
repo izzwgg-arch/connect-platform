@@ -14660,9 +14660,11 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   } catch (err: any) {
     const status = Number(err?.httpStatus || 502);
     const helperError = String(err?.message || "PBX helper request failed");
-    return reply.code(status === 404 ? 503 : Math.min(Math.max(status, 400), 599)).send({
-      error: status === 404 ? "pbx_helper_voicemail_routes_missing" : "pbx_helper_record_call_failed",
-      message: status === 404
+    const helperPayloadError = String(err?.payload?.error || "").trim();
+    const routesMissing = status === 404 && helperPayloadError === "not_found";
+    return reply.code(routesMissing ? 503 : Math.min(Math.max(status, 400), 599)).send({
+      error: routesMissing ? "pbx_helper_voicemail_routes_missing" : "pbx_helper_record_call_failed",
+      message: routesMissing
         ? "The PBX helper is reachable, but it is still running an older version without voicemail greeting endpoints. Re-run the updated PBX helper installer."
         : helperError,
       detail: err?.payload || null,
