@@ -70,11 +70,17 @@ import {
   type PortalRoleBucket,
 } from "./userManagementRoles";
 import {
+  getPbxVoicemailGreeting,
+  getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
+  requestPbxVoicemailGreetingRecordCall,
   resolvePbxRouteHelperConfig,
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
+  resetPbxVoicemailGreeting,
   type PbxRouteHelperInspectResponse,
+  type PbxVoicemailGreetingType,
+  uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
@@ -14227,6 +14233,9 @@ type ExtensionGreetingMetadata = {
   updatedAt: string;
   publishStatus: "stored" | "published" | "publish_unavailable";
   publishDetail?: string | null;
+  greetingType?: PbxVoicemailGreetingType;
+  pbxPath?: string | null;
+  pbxTenantId?: string | null;
 };
 
 function extensionGreetingRoot(): string {
@@ -14261,6 +14270,57 @@ async function loadOwnedExtensionForGreeting(user: JwtUser) {
     include: { pbxLink: true },
     orderBy: { createdAt: "asc" },
   });
+}
+
+async function resolveVoicemailGreetingExtension(user: JwtUser, input?: { tenantId?: string; extensionId?: string; extension?: string }) {
+  const isAdmin = canManageUsers(user);
+  const isSuper = isRole(user, ["SUPER_ADMIN"]);
+  const tenantId = isSuper ? (input?.tenantId || user.tenantId) : user.tenantId;
+  if (!tenantId) return null;
+
+  if (input?.extensionId || input?.extension) {
+    if (!isAdmin && !isSuper) return null;
+    return db.extension.findFirst({
+      where: input?.extensionId ? { id: input.extensionId, tenantId } : { tenantId, extNumber: input.extension, status: "ACTIVE" },
+      include: { pbxLink: true, tenant: { include: { pbxTenantLink: { include: { pbxInstance: true } } } } },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
+  return db.extension.findFirst({
+    where: { tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+    include: { pbxLink: true, tenant: { include: { pbxTenantLink: { include: { pbxInstance: true } } } } },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+function normalizeGreetingType(value: unknown): PbxVoicemailGreetingType {
+  const v = String(value || "unavailable").trim().toLowerCase();
+  if (v === "busy" || v === "temporary" || v === "name") return v;
+  return "unavailable";
+}
+
+function greetingPbxBaseName(type: PbxVoicemailGreetingType): string {
+  if (type === "busy") return "busy";
+  if (type === "temporary") return "temp";
+  if (type === "name") return "greet";
+  return "unavail";
+}
+
+function greetingPreviewUrl(extension: any, metadata: ExtensionGreetingMetadata | null, type: PbxVoicemailGreetingType): string | null {
+  if (metadata?.publishStatus === "published" && metadata.sha256) {
+    return `/api/voice/extensions/me/voicemail-greeting/stream?type=${encodeURIComponent(type)}&v=${metadata.sha256}`;
+  }
+  return metadata?.convertedStorageKey ? `/api/voice/extensions/me/voicemail-greeting/stream?type=${encodeURIComponent(type)}&v=${metadata.sha256}` : null;
+}
+
+function pbxHelperForExtension(extension: any) {
+  const pbxInstanceId = extension?.tenant?.pbxTenantLink?.pbxInstanceId || extension?.tenant?.pbxTenantLink?.pbxInstance?.id || null;
+  return resolvePbxRouteHelperConfig(pbxInstanceId);
+}
+
+function pbxTenantIdForExtension(extension: any): string | null {
+  return extension?.tenant?.pbxTenantLink?.pbxTenantId ? String(extension.tenant.pbxTenantLink.pbxTenantId) : null;
 }
 
 async function readExtensionGreetingMetadata(tenantId: string, extensionId: string): Promise<ExtensionGreetingMetadata | null> {
@@ -14303,7 +14363,8 @@ async function convertGreetingToPbxWav(sourcePath: string, targetPath: string): 
 }
 
 function formatExtensionControlPanel(extension: any, metadata: ExtensionGreetingMetadata | null) {
-  const hasCustomGreeting = Boolean(metadata?.convertedStorageKey);
+  const hasCustomGreeting = Boolean(metadata?.convertedStorageKey || (metadata?.publishStatus === "published" && metadata?.sha256));
+  const greetingType = metadata?.greetingType || "unavailable";
   return {
     extension: extension ? {
       id: extension.id,
@@ -14318,9 +14379,10 @@ function formatExtensionControlPanel(extension: any, metadata: ExtensionGreeting
       durationSec: metadata?.durationSec ?? null,
       updatedAt: metadata?.updatedAt ?? null,
       originalFilename: metadata?.originalFilename ?? null,
-      previewUrl: hasCustomGreeting ? `/api/voice/extensions/me/voicemail-greeting/stream?v=${metadata?.sha256}` : null,
+      previewUrl: hasCustomGreeting ? greetingPreviewUrl(extension, metadata, greetingType) : null,
       publishStatus: metadata?.publishStatus ?? "publish_unavailable",
       publishDetail: metadata?.publishDetail ?? null,
+      greetingType,
     },
   };
 }
@@ -14328,7 +14390,7 @@ function formatExtensionControlPanel(extension: any, metadata: ExtensionGreeting
 app.get("/voice/extensions/me/control-panel", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
-  const extension = await loadOwnedExtensionForGreeting(user);
+  const extension = await resolveVoicemailGreetingExtension(user);
   if (!extension || !user.tenantId) return reply.send(formatExtensionControlPanel(null, null));
   const metadata = await readExtensionGreetingMetadata(user.tenantId, extension.id);
   return reply.send(formatExtensionControlPanel(extension, metadata));
@@ -14341,9 +14403,29 @@ app.get("/voice/extensions/me/voicemail-greeting/stream", async (req, reply) => 
   }
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
-  const extension = await loadOwnedExtensionForGreeting(user);
+  const greetingType = normalizeGreetingType((req.query as Record<string, string | undefined>)["type"]);
+  const extension = await resolveVoicemailGreetingExtension(user);
   if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
   const metadata = await readExtensionGreetingMetadata(user.tenantId, extension.id);
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (helperCfg && pbxTenantId) {
+    try {
+      const current = await getPbxVoicemailGreeting(helperCfg, {
+        tenantId: pbxTenantId,
+        extension: extension.extNumber,
+        greetingType,
+        includeBytes: true,
+      });
+      if (current.bytesB64) {
+        reply.header("content-type", "audio/wav");
+        reply.header("cache-control", "private, max-age=60");
+        return reply.send(Buffer.from(current.bytesB64, "base64"));
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, extension: extension.extNumber }, "voicemail-greeting: pbx stream fallback");
+    }
+  }
   if (!metadata?.convertedStorageKey) return reply.code(404).send({ error: "greeting_not_found" });
   try {
     const bytes = await fsp.readFile(resolveExtensionGreetingPath(metadata.convertedStorageKey));
@@ -14355,11 +14437,69 @@ app.get("/voice/extensions/me/voicemail-greeting/stream", async (req, reply) => 
   }
 });
 
-app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
+app.get("/voicemail/greeting", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
-  const extension = await loadOwnedExtensionForGreeting(user);
-  if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const q = req.query as Record<string, string | undefined>;
+  const greetingType = normalizeGreetingType(q.type);
+  const extension = await resolveVoicemailGreetingExtension(user, {
+    tenantId: q.tenantId,
+    extensionId: q.extensionId,
+    extension: q.extension,
+  });
+  if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  let metadata = await readExtensionGreetingMetadata(extension.tenantId, extension.id);
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (helperCfg && pbxTenantId) {
+    try {
+      const current = await getPbxVoicemailGreeting(helperCfg, {
+        tenantId: pbxTenantId,
+        extension: extension.extNumber,
+        greetingType,
+      });
+      if (current.active && current.sha256) {
+        metadata = {
+          originalFilename: metadata?.originalFilename || `${greetingPbxBaseName(greetingType)}.wav`,
+          originalContentType: metadata?.originalContentType || "audio/wav",
+          originalStorageKey: metadata?.originalStorageKey || "",
+          convertedStorageKey: metadata?.convertedStorageKey || "",
+          sha256: current.sha256,
+          sizeBytes: current.sizeBytes || metadata?.sizeBytes || 0,
+          durationSec: metadata?.durationSec ?? null,
+          updatedAt: current.updatedAt || metadata?.updatedAt || new Date().toISOString(),
+          publishStatus: "published",
+          publishDetail: null,
+          greetingType,
+          pbxPath: current.pbxPath || null,
+          pbxTenantId,
+        };
+      } else if (metadata?.publishStatus !== "published") {
+        metadata = null;
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, extension: extension.extNumber }, "voicemail-greeting: pbx status failed");
+    }
+  }
+  return reply.send({ ok: true, ...formatExtensionControlPanel(extension, metadata).greeting });
+});
+
+async function handleVoicemailGreetingUpload(req: any, reply: any) {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = req.query as Record<string, string | undefined>;
+  const greetingType = normalizeGreetingType(q.type);
+  const extension = await resolveVoicemailGreetingExtension(user, {
+    tenantId: q.tenantId,
+    extensionId: q.extensionId,
+    extension: q.extension,
+  });
+  if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (!helperCfg || !pbxTenantId) {
+    return reply.code(503).send({ error: "pbx_helper_not_configured", message: "This tenant is not linked to a PBX voicemail helper." });
+  }
   if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
 
   const part = await (req as any).file();
@@ -14375,11 +14515,11 @@ app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
   if (!bytes || bytes.length === 0) return reply.code(400).send({ error: "file_required" });
   if (bytes.length > maxBytes) return reply.code(413).send({ error: "file_too_large", limit: maxBytes });
 
-  const dir = extensionGreetingDir(user.tenantId, extension.id);
+  const dir = extensionGreetingDir(extension.tenantId, extension.id);
   await fsp.mkdir(dir, { recursive: true });
   const originalExt = ext === ".mp3" ? ".mp3" : ".wav";
   const originalPath = path.join(dir, `original${originalExt}`);
-  const convertedPath = path.join(dir, "greeting.wav");
+  const convertedPath = path.join(dir, `${greetingPbxBaseName(greetingType)}.wav`);
   await fsp.writeFile(originalPath, bytes);
 
   try {
@@ -14395,8 +14535,26 @@ app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
   const converted = await fsp.readFile(convertedPath);
   const sha256 = createHash("sha256").update(converted).digest("hex");
   const durationSec = await probeAudioDurationSec(convertedPath);
-  const convertedStorageKey = extensionGreetingStorageKey(user.tenantId, extension.id, "greeting.wav");
-  const originalStorageKey = extensionGreetingStorageKey(user.tenantId, extension.id, `original${originalExt}`);
+  const convertedStorageKey = extensionGreetingStorageKey(extension.tenantId, extension.id, `${greetingPbxBaseName(greetingType)}.wav`);
+  const originalStorageKey = extensionGreetingStorageKey(extension.tenantId, extension.id, `original${originalExt}`);
+
+  let publish = null as Awaited<ReturnType<typeof uploadPbxVoicemailGreeting>> | null;
+  try {
+    publish = await uploadPbxVoicemailGreeting(helperCfg, {
+      tenantId: pbxTenantId,
+      extension: extension.extNumber,
+      greetingType,
+      fileBaseName: greetingPbxBaseName(greetingType),
+      sha256,
+      bytesB64: converted.toString("base64"),
+    });
+  } catch (err: any) {
+    return reply.code(err?.httpStatus && err.httpStatus < 500 ? err.httpStatus : 502).send({
+      error: "pbx_publish_failed",
+      message: String(err?.message || "PBX helper could not install the greeting."),
+      detail: err?.payload || null,
+    });
+  }
 
   const metadata: ExtensionGreetingMetadata = {
     originalFilename,
@@ -14407,12 +14565,15 @@ app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
     sizeBytes: converted.length,
     durationSec,
     updatedAt: new Date().toISOString(),
-    publishStatus: "publish_unavailable",
-    publishDetail: "PBX extension greeting publish endpoint is not available in the current VitalPBX integration registry.",
+    publishStatus: "published",
+    publishDetail: null,
+    greetingType,
+    pbxPath: publish?.pbxPath || null,
+    pbxTenantId,
   };
   await fsp.writeFile(path.join(dir, "metadata.json"), JSON.stringify(metadata, null, 2));
   await audit({
-    tenantId: user.tenantId,
+    tenantId: extension.tenantId,
     actorUserId: user.sub,
     action: "VOICEMAIL_GREETING_UPLOADED",
     entityType: "Extension",
@@ -14423,22 +14584,89 @@ app.post("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
     ok: true,
     ...formatExtensionControlPanel(extension, metadata).greeting,
   });
-});
+}
+
+app.post("/voice/extensions/me/voicemail-greeting", handleVoicemailGreetingUpload);
+app.post("/voicemail/greeting/upload", handleVoicemailGreetingUpload);
 
 app.delete("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
-  const extension = await loadOwnedExtensionForGreeting(user);
-  if (!extension || !user.tenantId) return reply.code(404).send({ error: "extension_not_found" });
-  await fsp.rm(extensionGreetingDir(user.tenantId, extension.id), { recursive: true, force: true });
+  const q = req.query as Record<string, string | undefined>;
+  const greetingType = normalizeGreetingType(q.type);
+  const extension = await resolveVoicemailGreetingExtension(user, {
+    tenantId: q.tenantId,
+    extensionId: q.extensionId,
+    extension: q.extension,
+  });
+  if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+  await resetPbxVoicemailGreeting(helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  await fsp.rm(extensionGreetingDir(extension.tenantId, extension.id), { recursive: true, force: true });
   await audit({
-    tenantId: user.tenantId,
+    tenantId: extension.tenantId,
     actorUserId: user.sub,
     action: "VOICEMAIL_GREETING_RESET",
     entityType: "Extension",
     entityId: extension.id,
   });
   return reply.send({ ok: true, ...formatExtensionControlPanel(extension, null).greeting });
+});
+
+app.post("/voicemail/greeting/reset", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const input = z.object({
+    tenantId: z.string().optional(),
+    extensionId: z.string().optional(),
+    extension: z.string().optional(),
+    greetingType: z.enum(["unavailable", "busy", "temporary", "name"]).optional(),
+  }).parse(req.body || {});
+  const extension = await resolveVoicemailGreetingExtension(user, input);
+  if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+  const greetingType = normalizeGreetingType(input.greetingType);
+  await resetPbxVoicemailGreeting(helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  await fsp.rm(extensionGreetingDir(extension.tenantId, extension.id), { recursive: true, force: true });
+  await audit({ tenantId: extension.tenantId, actorUserId: user.sub, action: "VOICEMAIL_GREETING_RESET", entityType: "Extension", entityId: extension.id });
+  return reply.send({ ok: true, ...formatExtensionControlPanel(extension, null).greeting });
+});
+
+app.post("/voicemail/greeting/record-call", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const input = z.object({
+    tenantId: z.string().optional(),
+    extensionId: z.string().optional(),
+    extension: z.string().optional(),
+    greetingType: z.enum(["unavailable", "busy", "temporary", "name"]).optional(),
+  }).parse(req.body || {});
+  const extension = await resolveVoicemailGreetingExtension(user, input);
+  if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
+  const helperCfg = pbxHelperForExtension(extension);
+  const pbxTenantId = pbxTenantIdForExtension(extension);
+  if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+  const res = await requestPbxVoicemailGreetingRecordCall(helperCfg, {
+    tenantId: pbxTenantId,
+    extension: extension.extNumber,
+    greetingType: normalizeGreetingType(input.greetingType),
+  });
+  return reply.send(res);
+});
+
+app.get("/voicemail/greeting/record-call/:jobId", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const extension = await resolveVoicemailGreetingExtension(user);
+  if (!extension) return reply.code(404).send({ error: "extension_not_found" });
+  const helperCfg = pbxHelperForExtension(extension);
+  if (!helperCfg) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+  const { jobId } = req.params as { jobId: string };
+  return reply.send(await getPbxVoicemailGreetingRecordCallStatus(helperCfg, jobId));
 });
 
 // ── Audio helper — fetches voicemail audio from PBX and streams to client ────

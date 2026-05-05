@@ -78,6 +78,8 @@ fi
 # tool yet. We create with group write so the helper can drop files.
 install -d -o asterisk -g asterisk -m 0775 /var/lib/asterisk/sounds/custom 2>/dev/null || \
   install -d -m 0775 /var/lib/asterisk/sounds/custom
+install -d -o asterisk -g asterisk -m 0775 /var/spool/asterisk/voicemail 2>/dev/null || \
+  install -d -m 0775 /var/spool/asterisk/voicemail
 
 HELPER_SECRET="$(openssl rand -hex 32 2>/dev/null || python3 - <<'PY'
 import secrets
@@ -111,6 +113,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -124,6 +127,8 @@ PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_WAV_BYTES = 12 * 1024 * 1024
+GREETING_TYPES = {"unavailable": "unavail.wav", "busy": "busy.wav", "temporary": "temp.wav", "name": "greet.wav"}
+RECORD_JOBS = {}
 
 def utc_now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -162,6 +167,12 @@ class Config:
         self.sounds_owner_user = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_USER", "asterisk").strip()
         self.sounds_owner_group = os.environ.get("CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP", "asterisk").strip()
         self.sounds_file_mode = int(os.environ.get("CONNECT_PBX_HELPER_SOUNDS_FILE_MODE", "0o644"), 0)
+        self.voicemail_dir = Path(os.environ.get("CONNECT_PBX_HELPER_VOICEMAIL_DIR", "/var/spool/asterisk/voicemail"))
+        self.voicemail_owner_user = os.environ.get("CONNECT_PBX_HELPER_VOICEMAIL_OWNER_USER", "asterisk").strip()
+        self.voicemail_owner_group = os.environ.get("CONNECT_PBX_HELPER_VOICEMAIL_OWNER_GROUP", "asterisk").strip()
+        self.voicemail_file_mode = int(os.environ.get("CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE", "0o644"), 0)
+        self.vm_record_channel_template = os.environ.get("CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE", "PJSIP/{extension}").strip()
+        self.vm_record_app = os.environ.get("CONNECT_PBX_VM_RECORD_APP", "VoiceMailMain").strip()
     def validate(self):
         if len(self.secret) < 32:
             raise SystemExit("CONNECT_PBX_HELPER_SECRET must be at least 32 chars")
@@ -408,6 +419,147 @@ def upload_prompt(body):
         raise
     return {"ok": True, "fileBaseName": base, "pbxPath": str(target), "sha256": sha, "sizeBytes": len(wav_bytes)}
 
+def require_ext(raw):
+    value = str(raw or "").strip()
+    if not re.match(r"^\d{2,10}$", value):
+        raise ValueError("invalid_extension")
+    return value
+
+def require_greeting_type(raw):
+    value = str(raw or "unavailable").strip().lower()
+    if value not in GREETING_TYPES:
+        raise ValueError("invalid_greetingType")
+    return value
+
+def apply_vm_owner(path_obj):
+    try:
+        os.chmod(str(path_obj), CFG.voicemail_file_mode)
+    except OSError:
+        pass
+    if CFG.voicemail_owner_user:
+        try:
+            uid = pwd.getpwnam(CFG.voicemail_owner_user).pw_uid
+            gid = grp.getgrnam(CFG.voicemail_owner_group).gr_gid if CFG.voicemail_owner_group else -1
+            os.chown(str(path_obj), uid, gid)
+        except (KeyError, PermissionError, OSError):
+            pass
+
+def voicemail_mailbox_dir(tenant_id, extension):
+    tenant = require_num("tenant_id", tenant_id)
+    ext = require_ext(extension)
+    root = CFG.voicemail_dir.resolve()
+    candidates = [root / tenant / ext, root / ("T" + tenant) / ext, root / "default" / ext]
+    for p in candidates:
+        if p.is_dir():
+            return p
+    target = candidates[0]
+    target.mkdir(mode=0o750, parents=True, exist_ok=True)
+    return target
+
+def safe_vm_path(tenant_id, extension, greeting_type):
+    mbox = voicemail_mailbox_dir(tenant_id, extension).resolve()
+    root = CFG.voicemail_dir.resolve()
+    if root not in mbox.parents and mbox != root:
+        raise ValueError("voicemail_path_outside_root")
+    return mbox / GREETING_TYPES[require_greeting_type(greeting_type)]
+
+def decode_verified_wav(body):
+    sha = str(body.get("sha256") or "").strip().lower()
+    if not SHA256_RE.match(sha):
+        raise ValueError("invalid_sha256")
+    bytes_b64 = body.get("bytesB64")
+    if not isinstance(bytes_b64, str) or not bytes_b64:
+        raise ValueError("bytesB64_required")
+    try:
+        wav_bytes = base64.b64decode(bytes_b64, validate=True)
+    except Exception as exc:
+        raise ValueError("base64_decode_failed: " + str(exc))
+    if not wav_bytes:
+        raise ValueError("empty_decoded_bytes")
+    if len(wav_bytes) > MAX_WAV_BYTES:
+        raise ValueError("wav_too_large")
+    actual_sha = hashlib.sha256(wav_bytes).hexdigest()
+    if not hmac.compare_digest(actual_sha, sha):
+        raise ValueError("sha256_mismatch")
+    if not (wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
+        raise ValueError("not_a_riff_wav")
+    return wav_bytes, sha
+
+def vm_greeting_status(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    extension = require_ext(body.get("extension"))
+    greeting_type = require_greeting_type(body.get("greetingType"))
+    target = safe_vm_path(tenant_id, extension, greeting_type)
+    include_bytes = bool(body.get("includeBytes", False))
+    if not target.is_file():
+        return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "sizeBytes": 0, "sha256": None, "updatedAt": None}
+    data = target.read_bytes()
+    stat = target.stat()
+    out = {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": True, "pbxPath": str(target), "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "updatedAt": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(timespec="seconds")}
+    if include_bytes:
+        out["bytesB64"] = base64.b64encode(data).decode("ascii")
+    return out
+
+def vm_greeting_upload(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    extension = require_ext(body.get("extension"))
+    greeting_type = require_greeting_type(body.get("greetingType"))
+    wav_bytes, sha = decode_verified_wav(body)
+    target = safe_vm_path(tenant_id, extension, greeting_type)
+    target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    if target.exists():
+        backup = target.with_name(target.name + ".bak-" + dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
+        target.replace(backup)
+        apply_vm_owner(backup)
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="." + target.stem + ".", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(tmp_fd, "wb") as fh:
+            fh.write(wav_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+        apply_vm_owner(Path(tmp_path))
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "pbxPath": str(target), "sizeBytes": len(wav_bytes), "sha256": sha, "active": True, "updatedAt": utc_now()}
+
+def vm_greeting_reset(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    extension = require_ext(body.get("extension"))
+    greeting_type = require_greeting_type(body.get("greetingType"))
+    target = safe_vm_path(tenant_id, extension, greeting_type)
+    if target.exists():
+        backup = target.with_name(target.name + ".bak-" + dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
+        target.replace(backup)
+        apply_vm_owner(backup)
+    return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "sizeBytes": 0, "sha256": None, "updatedAt": utc_now()}
+
+def vm_record_call(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    extension = require_ext(body.get("extension"))
+    greeting_type = require_greeting_type(body.get("greetingType"))
+    job_id = str(uuid.uuid4())
+    channel = CFG.vm_record_channel_template.format(tenantId=tenant_id, extension=extension)
+    mailbox = extension + "@" + tenant_id
+    cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, mailbox)]
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "status": "ringing", "callId": job_id, "createdAt": utc_now()}
+    try:
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
+        job["asteriskExitCode"] = proc.returncode
+        job["asteriskOutput"] = (proc.stdout + proc.stderr)[-2000:]
+        if proc.returncode != 0:
+            job["status"] = "failed"
+            job["error"] = job["asteriskOutput"] or "asterisk_originate_failed"
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)
+    RECORD_JOBS[job_id] = job
+    return job
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConnectPbxRouteHelper/" + VERSION
     def log_message(self, fmt, *args):
@@ -432,8 +584,16 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("body_must_be_object")
         return parsed
     def do_GET(self):
-        if urlparse(self.path).path == "/health":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/health":
             self.send_json(200, {"ok": True, "version": VERSION})
+        elif path.startswith("/voicemail/greeting/record-call/"):
+            if not self.auth_ok():
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            job_id = path.rsplit("/", 1)[-1]
+            self.send_json(200, RECORD_JOBS.get(job_id) or {"ok": True, "jobId": job_id, "status": "failed", "error": "job_not_found"})
         else:
             self.send_json(404, {"error": "not_found"})
     def do_POST(self):
@@ -441,7 +601,16 @@ class Handler(BaseHTTPRequestHandler):
         if not self.auth_ok():
             self.send_json(401, {"error": "unauthorized"})
             return
-        actions = {"/inspect": inspect_route, "/retarget": retarget_route, "/restore": restore_route, "/upload-prompt": upload_prompt}
+        actions = {
+            "/inspect": inspect_route,
+            "/retarget": retarget_route,
+            "/restore": restore_route,
+            "/upload-prompt": upload_prompt,
+            "/voicemail/greeting/upload": vm_greeting_upload,
+            "/voicemail/greeting/get": vm_greeting_status,
+            "/voicemail/greeting/reset": vm_greeting_reset,
+            "/voicemail/greeting/record-call": vm_record_call,
+        }
         fn = actions.get(path)
         if not fn:
             self.send_json(404, {"error": "not_found"})
@@ -502,6 +671,12 @@ CONNECT_PBX_HELPER_SOUNDS_DIR=/var/lib/asterisk/sounds/custom
 CONNECT_PBX_HELPER_SOUNDS_OWNER_USER=asterisk
 CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP=asterisk
 CONNECT_PBX_HELPER_SOUNDS_FILE_MODE=0o644
+CONNECT_PBX_HELPER_VOICEMAIL_DIR=/var/spool/asterisk/voicemail
+CONNECT_PBX_HELPER_VOICEMAIL_OWNER_USER=asterisk
+CONNECT_PBX_HELPER_VOICEMAIL_OWNER_GROUP=asterisk
+CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE=0o644
+CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE='PJSIP/{extension}'
+CONNECT_PBX_VM_RECORD_APP=VoiceMailMain
 EOF
 
 chmod 0600 /etc/connect-pbx-helper.env
@@ -536,7 +711,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom
+ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom /var/spool/asterisk/voicemail /run/asterisk
 SupplementaryGroups=asterisk
 
 [Install]
@@ -559,6 +734,12 @@ env \
   CONNECT_PBX_HELPER_SOUNDS_OWNER_USER=asterisk \
   CONNECT_PBX_HELPER_SOUNDS_OWNER_GROUP=asterisk \
   CONNECT_PBX_HELPER_SOUNDS_FILE_MODE=0o644 \
+  CONNECT_PBX_HELPER_VOICEMAIL_DIR=/var/spool/asterisk/voicemail \
+  CONNECT_PBX_HELPER_VOICEMAIL_OWNER_USER=asterisk \
+  CONNECT_PBX_HELPER_VOICEMAIL_OWNER_GROUP=asterisk \
+  CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE=0o644 \
+  CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE='PJSIP/{extension}' \
+  CONNECT_PBX_VM_RECORD_APP=VoiceMailMain \
   /opt/connect-pbx-helper/.venv/bin/python /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py --check >/tmp/connect-pbx-helper-check.json
 
 systemctl daemon-reload
@@ -601,6 +782,13 @@ echo "Helper now also accepts /upload-prompt for Connect-uploaded IVR audio."
 echo "When an admin uploads a greeting in Connect's IVR section, the API"
 echo "POSTs the normalised WAV to ${HELPER_BIND}:${HELPER_PORT}/upload-prompt and"
 echo "this service writes it to /var/lib/asterisk/sounds/custom/<base>.wav."
+echo
+echo "Helper also accepts PBX voicemail greeting endpoints:"
+echo "  POST /voicemail/greeting/upload"
+echo "  POST /voicemail/greeting/get"
+echo "  POST /voicemail/greeting/reset"
+echo "  POST /voicemail/greeting/record-call"
+echo "and writes custom greetings under /var/spool/asterisk/voicemail/<tenant>/<extension>/."
 echo
 echo "Verify with:"
 echo "  curl -sS http://${HELPER_BIND}:${HELPER_PORT}/health"

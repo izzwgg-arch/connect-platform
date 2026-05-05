@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { getWebRingerEnabled, setWebRingerEnabled } from "../hooks/telephonyAudioPreferences";
-import { apiDelete, apiGet, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
 import { clearAuthSession } from "../services/session";
 import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
@@ -50,6 +50,7 @@ export function ProfileMenu() {
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [recordingCall, setRecordingCall] = useState(false);
   const [panelData, setPanelData] = useState<ControlPanelResponse | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -171,6 +172,21 @@ export function ProfileMenu() {
     }
   }
 
+  async function callToRecordGreeting() {
+    setRecordingCall(true);
+    setUploadMessage("Calling your extension to record a greeting...");
+    try {
+      const res = await apiPost<{ ok: boolean; jobId: string; status: string; error?: string }>("/voicemail/greeting/record-call", { greetingType: "unavailable" }, undefined, { timeoutMs: 20000 });
+      setUploadMessage(res.status === "failed" ? (res.error || "Could not start recording call.") : "Answer your extension and follow the voicemail prompts to record your greeting.");
+      setTimeout(() => void refreshPanel().catch(() => undefined), 3500);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not start recording call.";
+      setUploadMessage(message);
+    } finally {
+      setRecordingCall(false);
+    }
+  }
+
   return (
     <div className="menu-wrap">
       <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={displayName}>
@@ -255,6 +271,9 @@ export function ProfileMenu() {
           <div className="ecp-actions-row">
             <button className="ecp-secondary-btn" type="button" disabled={!previewUrl} onClick={() => previewUrl && window.open(previewUrl, "_blank", "noopener,noreferrer")}>Play</button>
             <button className="ecp-secondary-btn danger-soft" type="button" disabled={uploading || greeting.status !== "custom"} onClick={() => void resetGreeting()}>Reset to Default</button>
+            <button className="ecp-secondary-btn" type="button" disabled={uploading || recordingCall || !panelData?.extension} onClick={() => void callToRecordGreeting()}>
+              {recordingCall ? "Calling..." : "Call to Record"}
+            </button>
           </div>
         </section>
 

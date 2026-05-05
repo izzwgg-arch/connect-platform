@@ -290,7 +290,7 @@ export async function apiUploadVoicemailGreeting(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120000);
   try {
-    const res = await fetch(`${baseUrl()}/voice/extensions/me/voicemail-greeting`, {
+    const res = await fetch(`${baseUrl()}/voicemail/greeting/upload`, {
       method: "POST",
       headers: {
         ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
