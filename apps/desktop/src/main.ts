@@ -55,6 +55,15 @@ function applyLoginSettings(): void {
   });
 }
 
+function shouldStartHidden(): boolean {
+  if (!settings.openMinimizedToTray) return false;
+  if (process.argv.some((arg) => arg === "--hidden" || arg === "--background" || arg === "--minimized")) {
+    return true;
+  }
+  const loginSettings = app.getLoginItemSettings();
+  return Boolean(loginSettings.wasOpenedAsHidden);
+}
+
 function loadPortal(win: BrowserWindow, route = "/"): void {
   const url = new URL(route, portalUrl);
   url.searchParams.set("desktop", "1");
@@ -298,8 +307,7 @@ app.whenReady().then(() => {
   registerIpc();
   rebuildTray();
   createPhoneEngineWindow();
-  if (!settings.openMinimizedToTray) createFullWindow(true);
-  else createFullWindow(false);
+  createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
 
   app.on("activate", () => createFullWindow(true));
