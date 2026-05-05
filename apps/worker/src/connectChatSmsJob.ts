@@ -23,6 +23,27 @@ function providerMmsBody(body: string | null | undefined, input: { audioCount: n
   return undefined;
 }
 
+function isMmsConvertedVoiceArtifact(attachment: { fileName: string; mimeType: string }): boolean {
+  const fileName = String(attachment.fileName || "").toLowerCase();
+  const mimeType = String(attachment.mimeType || "").toLowerCase();
+  return /^voice-note-.*\.(mp3|wav|mp4)$/.test(fileName) && (
+    mimeType === "audio/mpeg" ||
+    mimeType === "audio/wav" ||
+    mimeType === "video/mp4"
+  );
+}
+
+function smsSegmentsForBody(body: string | null | undefined): string[] {
+  const clean = bodyWithoutMediaLinks(body);
+  if (!clean) return [];
+  const segments: string[] = [];
+  for (let i = 0; i < clean.length; i += 150) {
+    const segment = clean.slice(i, i + 150).trim();
+    if (segment) segments.push(segment);
+  }
+  return segments;
+}
+
 async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {
   const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
   if (!row?.credentialsEncrypted) return null;
@@ -102,8 +123,9 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     let r: { providerMessageId?: string };
     if (hasMedia && !linkFallback) {
       console.info(JSON.stringify({ event: "mms_send_requested", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: msg.attachments.length }));
-      const audioAttachments = msg.attachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
-      const nonAudioAttachments = msg.attachments.filter((a) => !String(a.mimeType || "").toLowerCase().startsWith("audio/"));
+      const sourceAttachments = msg.attachments.filter((a) => !isMmsConvertedVoiceArtifact(a));
+      const audioAttachments = sourceAttachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
+      const nonAudioAttachments = sourceAttachments.filter((a) => !String(a.mimeType || "").toLowerCase().startsWith("audio/"));
       let mmsAttachments = nonAudioAttachments.map((a) => ({ id: a.id, storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }));
       let forceFallbackErr: any = null;
       if (audioAttachments.length) {
@@ -131,7 +153,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       }
       const mediaUrls = mmsAttachments.map((a) => buildChatDbSignedDownloadUrl(publicBase, a.id, a.storageKey, a.sizeBytes, 3600));
       const providerBody = providerMmsBody(msg.body, {
-        audioCount: mmsAttachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/")).length,
+        audioCount: audioAttachments.length,
         mediaCount: mmsAttachments.length,
       });
       console.info(JSON.stringify({
@@ -157,12 +179,11 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
         console.warn(JSON.stringify({ event: "mms_send_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, err: String(mmsErr?.message || mmsErr).slice(0, 300), falling_back: true }));
         // VoIP.ms often rejects MMS when carrier limits apply or media URLs are not reachable from their servers.
         // Fall back to one or more SMS segments with signed HTTPS links so delivery still succeeds.
-        const links = msg.attachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(publicBase, a.id, 86_400, a.fileName));
-        const fallbackBody = [bodyWithoutMediaLinks(msg.body), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+        const links = sourceAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(publicBase, a.id, 86_400));
+        const fallbackMessages = [...smsSegmentsForBody(msg.body), ...links];
         await db.connectChatMessage.update({
           where: { id: msg.id },
           data: {
-            body: fallbackBody,
             metadata: {
               ...metadata,
               smsLinkFallback: true,
@@ -171,13 +192,18 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
             },
           },
         });
-        r = await provider.sendMessage({
-          tenantId: data.tenantId,
-          to: ext,
-          from: tenantDid,
-          body: fallbackBody,
-        });
-        console.info(JSON.stringify({ event: "chat_link_fallback_sent", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: links.length, providerMessageId: r.providerMessageId ?? null }));
+        let fallbackResult: { providerMessageId?: string } | null = null;
+        for (const fallbackBody of fallbackMessages) {
+          fallbackResult = await provider.sendMessage({
+            tenantId: data.tenantId,
+            to: ext,
+            from: tenantDid,
+            body: fallbackBody,
+          });
+        }
+        if (!fallbackResult) throw new Error("MMS_FALLBACK_EMPTY");
+        r = fallbackResult;
+        console.info(JSON.stringify({ event: "chat_link_fallback_sent", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: links.length, segmentCount: fallbackMessages.length, providerMessageId: r.providerMessageId ?? null }));
       }
     } else {
       r = await provider.sendMessage({

@@ -5,9 +5,9 @@
  * downstream carrier MMS gateways (T-Mobile, AT&T, Verizon, Bell, Rogers …)
  * have wildly inconsistent codec support. The combination that actually
  * is most likely to survive the provider/carrier MMS path:
- *   - container : `.wav`
- *   - codec     : PCM signed 16-bit, mono, 8 kHz sample rate
- *   - size      : ≈ 16 KB/s, so a 30 s voice note stays below the MMS budget
+ *   - container : `.mp4`
+ *   - codec     : AAC audio plus a tiny black H.264 video track
+ *   - size      : low bitrate, so a 30 s voice note stays below the MMS budget
  *
  * Total file budget: 590 KB hard cap. Most carriers reject above ~600 KB,
  * a few above 1 MB. We size to the worst case so a 30 s voice note still
@@ -69,7 +69,7 @@ export class MmsAudioTooLargeError extends Error {
 }
 
 /**
- * Convert each audio attachment to an MMS-friendly `.wav` file and persist
+ * Convert each audio attachment to an MMS-friendly `.mp4` file and persist
  * it as a new attachment row. Returns the converted attachment metadata
  * (one per input). On any failure, throws — the caller is expected to fall
  * back to the SMS + signed link path.
@@ -98,7 +98,7 @@ async function convertSingleAttachment(
 
   let convertedBuffer: Buffer;
   try {
-    convertedBuffer = await ffmpegToMmsWav(sourceBuffer);
+    convertedBuffer = await ffmpegToMmsMp4(sourceBuffer);
   } catch (err: any) {
     throw new Error(`mms_audio_ffmpeg_failed:${err?.message || err}`);
   }
@@ -114,9 +114,9 @@ async function convertSingleAttachment(
   const written = await writeChatAttachmentFile({
     tenantKey: att.tenantId,
     threadId,
-    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.wav`,
+    originalFilename: `${sanitizePathSegment(baseName) || "voice-note"}.mp4`,
     buffer: convertedBuffer,
-    mimeType: "audio/wav",
+    mimeType: "video/mp4",
     maxBytes: MMS_AUDIO_BUDGET_BYTES + 64 * 1024,
   });
 
@@ -129,7 +129,7 @@ async function convertSingleAttachment(
       sizeBytes: written.sizeBytes,
       storageKey: written.storageKey,
       scanStatus: "pending",
-      mediaKind: "audio",
+      mediaKind: "video",
       // Pointer back to the original so the SMS+link fallback can keep
       // sending the higher-quality file. Persisted on the attachment row's
       // own metadata via raw JSON since the model has no relational FK
@@ -151,10 +151,10 @@ async function convertSingleAttachment(
   };
 }
 
-async function ffmpegToMmsWav(input: Buffer): Promise<Buffer> {
+async function ffmpegToMmsMp4(input: Buffer): Promise<Buffer> {
   const id = crypto.randomBytes(6).toString("hex");
   const inPath = path.join(os.tmpdir(), `cc-mms-in-${id}`);
-  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.wav`);
+  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.mp4`);
   await fs.promises.writeFile(inPath, input);
   try {
     await execFileAsync(
@@ -165,13 +165,33 @@ async function ffmpegToMmsWav(input: Buffer): Promise<Buffer> {
         "error",
         "-i",
         inPath,
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=160x90:r=1",
+        "-shortest",
         "-ac",
         "1",
         "-ar",
-        "8000",
+        "16000",
         "-c:a",
-        "pcm_s16le",
-        "-vn",
+        "aac",
+        "-b:a",
+        "24k",
+        "-c:v",
+        "libx264",
+        "-tune",
+        "stillimage",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.0",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "8k",
+        "-movflags",
+        "+faststart",
         outPath,
       ],
       { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
