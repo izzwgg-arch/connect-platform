@@ -240,6 +240,16 @@ function inferAttachmentMessageType(attachments: Array<{ mimeType: string }>): "
   return "FILE";
 }
 
+function cleanAttachmentContentType(contentType?: string | null): string | null {
+  const mime = String(contentType || "").split(";")[0].split(",")[0].trim().toLowerCase();
+  return mime && isAllowedChatMime(mime) ? mime : null;
+}
+
+function inlineAttachmentDisposition(fileName?: string | null): string {
+  const safeName = String(fileName || "attachment").replace(/["\r\n]/g, "").slice(0, 180) || "attachment";
+  return `inline; filename="${safeName}"`;
+}
+
 /** RN multipart uploads often report application/octet-stream; infer from filename so MMS/UI type is correct. */
 function inferMimeFromFilename(filename: string, reportedMime: string): string {
   const cur = String(reportedMime || "").toLowerCase().split(";")[0].trim();
@@ -412,11 +422,12 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const storageKey = decodeURIComponent(String(wildcardPath || ""));
     if (!storageKey) return reply.code(400).send({ error: "missing_key" });
     const q = req.query as { exp?: string; sig?: string };
+    let attachment: { id: string; sizeBytes: number; mimeType: string; fileName: string } | null = null;
     let verified = verifyChatSignedDownload(storageKey, q.exp, q.sig);
     if (!verified.ok && verified.reason === "invalid") {
-      const attachment = await db.connectChatMessageAttachment.findFirst({
+      attachment = await db.connectChatMessageAttachment.findFirst({
         where: { storageKey },
-        select: { id: true, sizeBytes: true },
+        select: { id: true, sizeBytes: true, mimeType: true, fileName: true },
       });
       if (attachment) {
         verified = verifyChatDbSignedDownload(attachment.id, storageKey, attachment.sizeBytes, q.exp, q.sig);
@@ -424,10 +435,17 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: "reason" in verified ? verified.reason : "invalid" });
     try {
+      if (!attachment) {
+        attachment = await db.connectChatMessageAttachment.findFirst({
+          where: { storageKey },
+          select: { id: true, sizeBytes: true, mimeType: true, fileName: true },
+        });
+      }
       const stored = await readChatAttachment(storageKey);
       if (!stored) return reply.code(404).send({ error: "not_found" });
       if (stored.sizeBytes) reply.header("content-length", stored.sizeBytes);
-      reply.header("content-type", stored.contentType || "application/octet-stream");
+      reply.header("content-type", cleanAttachmentContentType(attachment?.mimeType) || cleanAttachmentContentType(stored.contentType) || "application/octet-stream");
+      if (attachment?.fileName) reply.header("content-disposition", inlineAttachmentDisposition(attachment.fileName));
       return reply.send(stored.body);
     } catch {
       return reply.code(400).send({ error: "invalid_key" });
@@ -448,8 +466,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       const stored = await readChatAttachment(attachment.storageKey);
       if (!stored) return reply.code(404).send({ error: "not_found" });
       if (stored.sizeBytes) reply.header("content-length", stored.sizeBytes);
-      reply.header("content-type", stored.contentType || attachment.mimeType || "application/octet-stream");
-      reply.header("content-disposition", `inline; filename="${String(attachment.fileName || "attachment").replace(/"/g, "")}"`);
+      reply.header("content-type", cleanAttachmentContentType(attachment.mimeType) || cleanAttachmentContentType(stored.contentType) || "application/octet-stream");
+      reply.header("content-disposition", inlineAttachmentDisposition(attachment.fileName));
       return reply.send(stored.body);
     } catch {
       return reply.code(400).send({ error: "invalid_key" });
