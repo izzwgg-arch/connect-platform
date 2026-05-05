@@ -1903,11 +1903,8 @@ async function createUserPasswordToken(params: {
 }
 
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
-  // Invite emails point to a lightweight Connect download page, not directly
-  // to the APK. Gmail's google.com wrapper has trouble finalizing direct APK
-  // downloads; starting the APK from our page is more reliable on Android.
-  const pageOverride = String(process.env.ANDROID_APK_DOWNLOAD_PAGE_URL || "").trim();
-  const androidApkUrl = pageOverride.length > 0 ? pageOverride : androidApkDownloadPageUrl();
+  // Android block uses getAndroidApkUrlForInviteEmail() (defined with APK routes).
+  const androidApkUrl = await getAndroidApkUrlForInviteEmail();
   const template = welcomeCreatePasswordEmail({
     userName: displayNameForUser(input.user),
     userFirstName: String(input.user.firstName || "").trim() || null,
@@ -3679,6 +3676,25 @@ function apkDownloadHref(filename = APK_LATEST_FILENAME): string {
 
 function androidApkDownloadPageUrl(): string {
   return `${APK_PUBLIC_BASE_URL.replace(/\/downloads$/, "")}/mobile/android/download`;
+}
+
+/**
+ * URL shown in user invite / welcome emails for the Android app.
+ * - ANDROID_APK_DOWNLOAD_PAGE_URL: optional override (Play Store, landing page, etc.).
+ * - Otherwise: same HTML download page as /mobile/android/download, but only if
+ *   connectcomms-latest.apk exists under APK_DOWNLOAD_DIR (avoids broken links).
+ */
+async function getAndroidApkUrlForInviteEmail(): Promise<string | null> {
+  const pageOverride = String(process.env.ANDROID_APK_DOWNLOAD_PAGE_URL || "").trim();
+  if (pageOverride.length > 0) return pageOverride;
+  try {
+    const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
+    const st = await fsp.stat(latestPath);
+    if (!st.isFile() || st.size < 1024) return null;
+    return androidApkDownloadPageUrl();
+  } catch {
+    return null;
+  }
 }
 
 function renderAndroidApkDownloadPage(input: { apkUrl: string; version: string | null; sizeBytes: number | null }): string {
@@ -19502,6 +19518,9 @@ type NativeInboundMohSyncResult = {
   inboundUpdated: number;
   extensionsTotal: number;
   extensionsUpdated: number;
+  queuesTotal?: number;
+  queuesUpdated?: number;
+  queueTable?: string;
   pbxGroupId?: number;
   errors: string[];
   helperResponse?: Record<string, unknown>;
@@ -19557,6 +19576,9 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
       inboundUpdated: Number(result.inboundUpdated || 0),
       extensionsTotal: Number(result.extensionsTotal || 0),
       extensionsUpdated: Number(result.extensionsUpdated || 0),
+      queuesTotal: Number(result.queuesTotal ?? 0),
+      queuesUpdated: Number(result.queuesUpdated ?? 0),
+      queueTable: typeof result.queueTable === "string" ? result.queueTable : undefined,
       pbxGroupId,
       errors: [],
       helperResponse: result as any,

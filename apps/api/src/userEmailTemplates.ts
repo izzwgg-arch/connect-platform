@@ -146,10 +146,10 @@ export function welcomeCreatePasswordEmail(input: {
     ? `
 ${divider()}
 
-<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Get the Android App</p>
-<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After creating your password, install the Android app from the link below.</p>
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Connect Mobile (Android)</p>
+<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Connect app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
 
-${secondaryCtaButton("Download Android App", input.androidApkUrl)}
+${secondaryCtaButton("Download Connect for Android", input.androidApkUrl)}
 
 <p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
 `
@@ -186,10 +186,10 @@ ${divider()}
     ``,
     ...(input.androidApkUrl
       ? [
-          `Get the Android App:`,
-          `After creating your password, install the Android app from this link:`,
+          `Connect Mobile (Android):`,
+          `After creating your password, install the app from:`,
           input.androidApkUrl,
-          `(Android may ask you to allow installs from this source the first time.)`,
+          `(Opens the Connect download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
           ``,
         ]
       : []),
