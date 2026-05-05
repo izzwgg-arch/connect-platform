@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Info, MessageSquare, Phone, Search, X } from "lucide-react";
+import { Info, Maximize2, MessageSquare, Phone, Search, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
@@ -301,6 +301,7 @@ export function FloatingDialer() {
   const telephony = useTelephony();
   const { tenantId, tenant, adminScope } = useAppContext();
   const router = useRouter();
+  const isDesktop = typeof window !== "undefined" && Boolean(window.connectDesktop?.isDesktop);
 
   const [open, setOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -483,6 +484,11 @@ export function FloatingDialer() {
               </div>
               <div className="fd-header-actions">
                 <RingerControl checked={ringerOn} onChange={updateRinger} />
+                {isDesktop && (
+                  <button className="fd-icon-plain" type="button" onClick={() => window.connectDesktop?.window?.openMini?.()} title="Pop out mini dialer">
+                    <Maximize2 size={16} />
+                  </button>
+                )}
                 <button className="fd-chip-btn" type="button" onClick={() => setBlfOpen((value) => !value)} data-active={blfOpen ? "true" : "false"}>
                   BLF
                 </button>

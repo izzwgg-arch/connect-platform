@@ -1,0 +1,33 @@
+{
+  "name": "@connect/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "pnpm build && electron .",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist": "pnpm build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.connectcommunications.desktop",
+    "productName": "Connect",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "typescript": "^6.0.3"
+  }
+}

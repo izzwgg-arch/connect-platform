@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet, apiPost } from "../services/apiClient";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 
@@ -167,6 +167,36 @@ export interface MultiCallSession {
   startedAt: number;
 }
 
+type ConnectDesktopApi = {
+  isDesktop: boolean;
+  windowKind?: "full" | "mini" | "phone-engine";
+  phone: {
+    sendFromEngine: (envelope: { type: "state" | "event"; payload?: unknown; event?: string }) => void;
+    sendCommand: (command: { command: string; args: unknown[] }) => Promise<unknown>;
+    onEngineEvent: (listener: (envelope: { type: "state" | "event"; payload?: unknown; event?: string }) => void) => () => void;
+    onCommand: (listener: (command: { command: string; args: unknown[] }) => void) => () => void;
+  };
+  window?: {
+    openMini: () => Promise<unknown>;
+    openFull: (route?: string) => Promise<unknown>;
+    expandToFull: (route?: string) => Promise<unknown>;
+    closeMini: () => Promise<unknown>;
+    minimize: () => Promise<unknown>;
+    toggleAlwaysOnTop: () => Promise<unknown>;
+    getSettings: () => Promise<{ alwaysOnTop?: boolean }>;
+    onSettings: (listener: (settings: { alwaysOnTop?: boolean }) => void) => () => void;
+  };
+  notifications?: {
+    show: (payload: { kind: string; title: string; body?: string; route?: string }) => Promise<unknown>;
+  };
+};
+
+declare global {
+  interface Window {
+    connectDesktop?: ConnectDesktopApi;
+  }
+}
+
 type VoiceExtension = {
   extensionNumber: string;
   displayName: string;
@@ -199,7 +229,7 @@ type JsSIPModule = any;
 async function loadJsSIP(): Promise<JsSIPModule> {
   if (typeof window === "undefined") throw new Error("JsSIP requires a browser");
   const mod = await import("jssip");
-  mod.default?.debug?.disable?.("JsSIP:*");
+  (mod.default as JsSIPModule)?.debug?.disable?.("JsSIP:*");
   return mod.default ?? mod;
 }
 
@@ -378,9 +408,9 @@ const DEFAULT_DIAG: SipDiagnostics = {
   sipDomainConfigured: false,
 };
 
-// ── Hook ──────────────────────────────────────────────────────────────────
+// ── Local JsSIP engine hook ────────────────────────────────────────────────
 
-export function useSipPhone(): SipPhoneState & SipPhoneActions {
+function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [regState, setRegState] = useState<SipRegState>("idle");
   const [callState, setCallState] = useState<SipCallState>("idle");
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
@@ -1831,4 +1861,214 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
     hangupSession,
     swapToSession,
   };
+}
+
+const SIP_PHONE_ACTIONS = [
+  "dial",
+  "answer",
+  "hangup",
+  "setMute",
+  "toggleHold",
+  "toggleSpeaker",
+  "setAudioSinkId",
+  "sendDtmf",
+  "playDtmfTone",
+  "transfer",
+  "setDialpadInput",
+  "setSelectedOutboundRouteId",
+  "answerSession",
+  "holdSession",
+  "resumeSession",
+  "hangupSession",
+  "swapToSession",
+] as const;
+
+const SipPhoneContext = createContext<(SipPhoneState & SipPhoneActions) | null>(null);
+
+function isDesktopProxyWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(window.connectDesktop?.isDesktop && window.connectDesktop.windowKind !== "phone-engine");
+}
+
+function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneState & Pick<SipPhoneActions, "dialpadInput" | "sessions" | "activeSessionId" | "heldSessionIds" | "ringingSessionIds"> {
+  return {
+    regState: phone.regState,
+    callState: phone.callState,
+    callDirection: phone.callDirection,
+    remoteParty: phone.remoteParty,
+    muted: phone.muted,
+    onHold: phone.onHold,
+    speakerOn: phone.speakerOn,
+    audioOutputDevices: phone.audioOutputDevices.map((device) => ({
+      deviceId: device.deviceId,
+      groupId: device.groupId,
+      kind: device.kind,
+      label: device.label,
+      toJSON: () => ({}),
+    }) as MediaDeviceInfo),
+    currentSinkId: phone.currentSinkId,
+    error: phone.error,
+    diag: phone.diag,
+    outboundRoutes: phone.outboundRoutes,
+    selectedOutboundRouteId: phone.selectedOutboundRouteId,
+    selectedOutboundRoute: phone.selectedOutboundRoute,
+    dialpadInput: phone.dialpadInput,
+    sessions: phone.sessions,
+    activeSessionId: phone.activeSessionId,
+    heldSessionIds: phone.heldSessionIds,
+    ringingSessionIds: phone.ringingSessionIds,
+  };
+}
+
+function noopSetState<T>(_value: React.SetStateAction<T>): void {
+  // Replaced by real implementations in local/proxy providers.
+}
+
+const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
+  regState: "idle",
+  callState: "idle",
+  callDirection: null,
+  remoteParty: null,
+  muted: false,
+  onHold: false,
+  speakerOn: false,
+  audioOutputDevices: [],
+  currentSinkId: "",
+  error: null,
+  diag: DEFAULT_DIAG,
+  outboundRoutes: [],
+  selectedOutboundRouteId: "",
+  selectedOutboundRoute: null,
+  dial: () => undefined,
+  answer: () => undefined,
+  hangup: () => undefined,
+  setMute: () => undefined,
+  toggleHold: () => undefined,
+  toggleSpeaker: () => undefined,
+  setAudioSinkId: () => Promise.resolve(),
+  sendDtmf: () => undefined,
+  playDtmfTone: () => undefined,
+  transfer: () => undefined,
+  dialpadInput: "",
+  setDialpadInput: noopSetState,
+  setSelectedOutboundRouteId: noopSetState,
+  sessions: [],
+  activeSessionId: null,
+  heldSessionIds: [],
+  ringingSessionIds: [],
+  answerSession: () => undefined,
+  holdSession: () => undefined,
+  resumeSession: () => undefined,
+  hangupSession: () => undefined,
+  swapToSession: () => undefined,
+};
+
+function LocalSipPhoneProvider({ children }: { children: ReactNode }) {
+  const phone = useLocalSipPhone();
+  const latestPhone = useRef(phone);
+
+  useEffect(() => {
+    latestPhone.current = phone;
+  }, [phone]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.connectDesktop?.windowKind !== "phone-engine") return;
+    return window.connectDesktop.phone.onCommand(({ command, args }) => {
+      if (!SIP_PHONE_ACTIONS.includes(command as (typeof SIP_PHONE_ACTIONS)[number])) return;
+      const target = latestPhone.current[command as keyof SipPhoneActions];
+      if (typeof target !== "function") return;
+      try {
+        (target as (...values: unknown[]) => unknown)(...(args ?? []));
+      } catch (err) {
+        console.error("[DESKTOP_PHONE_ENGINE] command failed", command, err);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.connectDesktop?.windowKind !== "phone-engine") return;
+    window.connectDesktop.phone.sendFromEngine({
+      type: "state",
+      payload: localStateSnapshot(phone),
+    });
+  }, [phone]);
+
+  return React.createElement(SipPhoneContext.Provider, { value: phone }, children);
+}
+
+function DesktopSipPhoneProxyProvider({ children }: { children: ReactNode }) {
+  const [snapshot, setSnapshot] = useState<SipPhoneState & Pick<SipPhoneActions, "dialpadInput" | "sessions" | "activeSessionId" | "heldSessionIds" | "ringingSessionIds">>(
+    localStateSnapshot(DEFAULT_PHONE_CONTEXT),
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.connectDesktop) return;
+    return window.connectDesktop.phone.onEngineEvent((envelope) => {
+      if (envelope.type !== "state") return;
+      const next = envelope.payload as typeof snapshot;
+      setSnapshot((prev) => ({ ...prev, ...next }));
+    });
+  }, []);
+
+  const send = useCallback((command: string, args: unknown[] = []) => {
+    if (typeof window === "undefined" || !window.connectDesktop) return Promise.resolve();
+    return window.connectDesktop.phone.sendCommand({ command, args }).then(() => undefined);
+  }, []);
+
+  const value = useMemo<SipPhoneState & SipPhoneActions>(() => ({
+    ...snapshot,
+    dial: (target) => { void send("dial", [target]); },
+    answer: () => { void send("answer"); },
+    hangup: () => { void send("hangup"); },
+    setMute: (mute) => { void send("setMute", [mute]); },
+    toggleHold: () => { void send("toggleHold"); },
+    toggleSpeaker: () => { void send("toggleSpeaker"); },
+    setAudioSinkId: (sinkId) => send("setAudioSinkId", [sinkId]),
+    sendDtmf: (digit) => { void send("sendDtmf", [digit]); },
+    playDtmfTone: (digit) => { void send("playDtmfTone", [digit]); },
+    transfer: (target) => { void send("transfer", [target]); },
+    setDialpadInput: (nextValue) => {
+      setSnapshot((prev) => {
+        const next = typeof nextValue === "function" ? nextValue(prev.dialpadInput) : nextValue;
+        void send("setDialpadInput", [next]);
+        return { ...prev, dialpadInput: next };
+      });
+    },
+    setSelectedOutboundRouteId: (nextValue) => {
+      setSnapshot((prev) => {
+        const next = typeof nextValue === "function" ? nextValue(prev.selectedOutboundRouteId) : nextValue;
+        void send("setSelectedOutboundRouteId", [next]);
+        return {
+          ...prev,
+          selectedOutboundRouteId: next,
+          selectedOutboundRoute: prev.outboundRoutes.find((route) => route.id === next) ?? null,
+        };
+      });
+    },
+    answerSession: (id) => { void send("answerSession", [id]); },
+    holdSession: (id) => { void send("holdSession", [id]); },
+    resumeSession: (id) => { void send("resumeSession", [id]); },
+    hangupSession: (id) => { void send("hangupSession", [id]); },
+    swapToSession: (id) => { void send("swapToSession", [id]); },
+  }), [send, snapshot]);
+
+  return React.createElement(SipPhoneContext.Provider, { value }, children);
+}
+
+export function SipPhoneProvider({ children }: { children: ReactNode }) {
+  const [mode, setMode] = useState<"detecting" | "local" | "proxy">("detecting");
+
+  useEffect(() => {
+    setMode(isDesktopProxyWindow() ? "proxy" : "local");
+  }, []);
+
+  if (mode === "detecting") return null;
+  if (mode === "proxy") return React.createElement(DesktopSipPhoneProxyProvider, null, children);
+  return React.createElement(LocalSipPhoneProvider, null, children);
+}
+
+export function useSipPhone(): SipPhoneState & SipPhoneActions {
+  const ctx = useContext(SipPhoneContext);
+  if (!ctx) throw new Error("useSipPhone must be used inside SipPhoneProvider");
+  return ctx;
 }
