@@ -870,7 +870,8 @@ class Handler(BaseHTTPRequestHandler):
             audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(409, {"error": str(exc)})
 
-CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/extensions__95_connect_vm_greeting.conf"
+CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf"
+CONNECT_VM_LEGACY_DIALPLAN_PATHS = ("/etc/asterisk/extensions__95_connect_vm_greeting.conf",)
 CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
@@ -920,6 +921,15 @@ exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 def ensure_connect_vm_dialplan():
     try:
         path = Path(CONNECT_VM_DIALPLAN_PATH)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            pass
+        for legacy in CONNECT_VM_LEGACY_DIALPLAN_PATHS:
+            try:
+                Path(legacy).unlink(missing_ok=True)
+            except (OSError, PermissionError):
+                pass
         existing = path.read_text() if path.is_file() else ""
         if existing == CONNECT_VM_DIALPLAN_BODY:
             return
@@ -989,7 +999,12 @@ EOF
 chmod 0600 /etc/connect-pbx-helper.env
 chown root:root /etc/connect-pbx-helper.env
 
-cat >/etc/asterisk/extensions__95_connect_vm_greeting.conf <<'EOF'
+# Drop any older copy at the legacy location. The helper now writes its
+# dialplan into /etc/asterisk/vitalpbx/, which the stock VitalPBX
+# extensions.conf includes via `#include vitalpbx/extensions_*.conf`.
+rm -f /etc/asterisk/extensions__95_connect_vm_greeting.conf
+install -d -m 0755 /etc/asterisk/vitalpbx
+cat >/etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf <<'EOF'
 ; Installed by Connect PBX helper. This context is used only after Connect
 ; originates a call to a user's extension for voicemail greeting recording.
 ; The helper writes the registered PJSIP dial string into Asterisk's built-in
@@ -1039,8 +1054,8 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
 
 exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 EOF
-chown asterisk:asterisk /etc/asterisk/extensions__95_connect_vm_greeting.conf
-chmod 0644 /etc/asterisk/extensions__95_connect_vm_greeting.conf
+chown asterisk:asterisk /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
+chmod 0644 /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
 asterisk -rx "dialplan reload" || true
 asterisk -rx "dialplan show connect-vm-greeting-record" >/tmp/connect-vm-dialplan-check.txt 2>&1 || true
 
