@@ -37,7 +37,7 @@ fi
 CONNECT_DESTINATION_ID="${REQUESTED_CONNECT_DESTINATION_ID:-${CONNECT_PBX_CONNECT_DESTINATION_ID:-607}}"
 HELPER_BIND="${REQUESTED_HELPER_BIND:-${CONNECT_PBX_HELPER_BIND:-127.0.0.1}}"
 HELPER_PORT="${REQUESTED_HELPER_PORT:-${CONNECT_PBX_HELPER_PORT:-8757}}"
-VM_RECORD_CHANNEL_TEMPLATE="${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE:-${CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE:-Local/{extension}@T{tenantId}_cos-all}}"
+VM_RECORD_CHANNEL_TEMPLATE="${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE:-${CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE:-Local/{recordingExten}@connect-vm-greeting-dispatch/n}}"
 VM_RECORD_APP="${REQUESTED_VM_RECORD_APP:-${CONNECT_PBX_VM_RECORD_APP:-Goto}}"
 if [[ -z "${REQUESTED_VM_RECORD_APP}" && "${VM_RECORD_APP}" == "VoiceMailMain" ]]; then
   # Older helper installs used VoiceMailMain after answer. On VitalPBX this can
@@ -46,12 +46,15 @@ if [[ -z "${REQUESTED_VM_RECORD_APP}" && "${VM_RECORD_APP}" == "VoiceMailMain" ]
   # deliberately supplied CONNECT_PBX_VM_RECORD_APP for this run.
   VM_RECORD_APP="Goto"
 fi
-if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" && ( "${VM_RECORD_CHANNEL_TEMPLATE}" == "PJSIP/{extension}" || "${VM_RECORD_CHANNEL_TEMPLATE}" == "Local/{extension}@T{tenantId}_cos-all" ) ]]; then
-  # Upgrade older defaults to direct tenant-prefixed PJSIP endpoint dialing.
-  # The Local/...@T<n>_cos-all path goes through the normal user dialplan and
-  # can end up in the user's own voicemail; call-to-record must only continue
-  # when a real registered endpoint answers.
-  VM_RECORD_CHANNEL_TEMPLATE='PJSIP/T{tenantId}_{extension}'
+if [[ -z "${REQUESTED_VM_RECORD_CHANNEL_TEMPLATE}" ]]; then
+  case "${VM_RECORD_CHANNEL_TEMPLATE}" in
+    "PJSIP/{extension}"|"Local/{extension}@T{tenantId}_cos-all"|"PJSIP/T{tenantId}_{extension}")
+      # Upgrade older defaults to the dispatch-context Local channel which rings
+      # all registered devices for the user's extension at once and avoids
+      # accidental fall-through into the normal tenant dialplan/voicemail.
+      VM_RECORD_CHANNEL_TEMPLATE='Local/{recordingExten}@connect-vm-greeting-dispatch/n'
+      ;;
+  esac
 fi
 MYSQL_ROOT_ARGS="${MYSQL_ROOT_ARGS:-}"
 TEST_DID="${TEST_DID:-}"
@@ -678,19 +681,23 @@ def vm_record_call(body):
     # Use explicit token replacement instead of str.format so Asterisk context
     # suffixes like `T{tenantId}_cos-all` cannot be misparsed as a single
     # `{tenantId_cos-all}` field if an operator edits the env by hand.
+    recording_exten = tenant_id + "_" + extension + "_" + target.stem
     channel = (
         CFG.vm_record_channel_template
         .replace("{tenantId}", tenant_id)
         .replace("{extension}", extension)
+        .replace("{recordingExten}", recording_exten)
         .replace("{tenantId_cos-all}", tenant_id + "_cos-all")
     )
     if "{" in channel or "}" in channel:
-        # Fail open to the tenant-prefixed endpoint route rather than the
-        # normal tenant dialplan, which can fall through to the user's voicemail.
-        channel = "PJSIP/T" + tenant_id + "_" + extension
-    channel = endpoint_hint_channel(body, extension) or channel
-    channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
-    recording_exten = tenant_id + "_" + extension + "_" + target.stem
+        # Fail open to the dispatch local channel which rings all of the
+        # extension's registered devices and runs the recording dialplan.
+        channel = "Local/" + recording_exten + "@connect-vm-greeting-dispatch/n"
+    if channel.startswith("Local/") and "connect-vm-greeting-dispatch" in channel:
+        channel_source = "dispatch_local"
+    else:
+        channel = endpoint_hint_channel(body, extension) or channel
+        channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
     if CFG.vm_record_app.lower() == "goto":
         target_descriptor = recording_exten + "@connect-vm-greeting-record"
         cmd_str = "channel originate " + channel + " extension " + target_descriptor
@@ -811,6 +818,17 @@ class Handler(BaseHTTPRequestHandler):
 
 CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/extensions__95_connect_vm_greeting.conf"
 CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
+[connect-vm-greeting-dispatch]
+exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
+ same => n,Set(__CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(__CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_DIAL=${SHELL(/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh ${CONNECT_VM_TENANT} ${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
+ same => n,Dial(${CONNECT_VM_DIAL},45)
+ same => n,Hangup()
+ same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
+ same => n,Hangup()
+
 [connect-vm-greeting-record]
 exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
@@ -917,9 +935,56 @@ EOF
 chmod 0600 /etc/connect-pbx-helper.env
 chown root:root /etc/connect-pbx-helper.env
 
+install -d -m 0755 /opt/connect-pbx-helper/bin
+cat >/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh <<'EOF'
+#!/usr/bin/env bash
+# Resolve all registered PJSIP contacts for tenant T<tenantId>_<extension>(_<n>)?
+# and emit them joined by '&' for use inside Asterisk Dial(). Outputs nothing
+# (so Dial() will return CHANUNAVAIL) when no contacts are registered.
+set -uo pipefail
+TENANT="${1:-}"
+EXT="${2:-}"
+[[ -n "${TENANT}" && -n "${EXT}" ]] || exit 0
+asterisk -rx "pjsip show contacts" 2>/dev/null \
+  | awk -v want="^T${TENANT}_${EXT}(_[0-9]+)?$" '
+      /Contact:[[:space:]]+/ {
+        n = split($0, a, " ");
+        for (i = 1; i <= n; i++) {
+          if (a[i] == "Contact:" && i + 1 <= n) {
+            split(a[i+1], parts, "/");
+            ep = parts[1];
+            if (ep ~ want && !(ep in seen)) {
+              seen[ep] = 1;
+              order[++c] = ep;
+            }
+          }
+        }
+      }
+      END {
+        for (i = 1; i <= c; i++) {
+          if (i > 1) printf "&";
+          printf "PJSIP/%s", order[i];
+        }
+      }
+    '
+EOF
+chown asterisk:asterisk /opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh
+chmod 0755 /opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh
+
 cat >/etc/asterisk/extensions__95_connect_vm_greeting.conf <<'EOF'
 ; Installed by Connect PBX helper. This context is used only after Connect
 ; originates a call to a user's extension for voicemail greeting recording.
+[connect-vm-greeting-dispatch]
+exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
+ same => n,Set(__CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(__CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_DIAL=${SHELL(/opt/connect-pbx-helper/bin/connect-vm-greeting-dial-string.sh ${CONNECT_VM_TENANT} ${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
+ same => n,Dial(${CONNECT_VM_DIAL},45)
+ same => n,Hangup()
+ same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
+ same => n,Hangup()
+
 [connect-vm-greeting-record]
 exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
