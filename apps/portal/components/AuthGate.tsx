@@ -10,13 +10,40 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const token = readAuthToken();
-    if (!token) {
+    const isDesktopPassiveWindow =
+      typeof window !== "undefined" &&
+      Boolean(window.connectDesktop?.isDesktop && window.connectDesktop.windowKind && window.connectDesktop.windowKind !== "full");
+
+    const hasToken = () => Boolean(readAuthToken());
+    if (hasToken()) {
+      setReady(true);
+      return undefined;
+    }
+
+    setReady(false);
+
+    if (!isDesktopPassiveWindow) {
       const next = encodeURIComponent(pathname || "/dashboard");
       router.replace(`/login?next=${next}`);
-      return;
+      return undefined;
     }
-    setReady(true);
+
+    // Desktop mini/phone-engine windows should wait for token instead of
+    // redirecting to /login, otherwise hidden windows can get stuck there.
+    const onStorage = () => {
+      if (hasToken()) setReady(true);
+    };
+    window.addEventListener("storage", onStorage);
+    const timer = window.setInterval(() => {
+      if (hasToken()) {
+        setReady(true);
+        window.clearInterval(timer);
+      }
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [pathname, router]);
 
   if (!ready) {
