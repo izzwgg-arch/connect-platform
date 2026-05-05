@@ -11,7 +11,12 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone } from "@connect/shared";
-import { buildChatSignedDownloadUrl, verifyChatSignedDownload } from "@connect/shared/chatSignedUrl";
+import {
+  buildChatAttachmentIdSignedDownloadUrl,
+  buildChatSignedDownloadUrl,
+  verifyChatAttachmentIdSignedDownload,
+  verifyChatSignedDownload,
+} from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
 import {
   assertStorageKeyForThread,
@@ -413,6 +418,28 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       if (!stored) return reply.code(404).send({ error: "not_found" });
       if (stored.sizeBytes) reply.header("content-length", stored.sizeBytes);
       reply.header("content-type", stored.contentType || "application/octet-stream");
+      return reply.send(stored.body);
+    } catch {
+      return reply.code(400).send({ error: "invalid_key" });
+    }
+  });
+
+  app.get("/chat/a/:attachmentId", async (req, reply) => {
+    const { attachmentId } = req.params as { attachmentId: string };
+    const q = req.query as { e?: string; s?: string };
+    const verified = verifyChatAttachmentIdSignedDownload(attachmentId, q.e, q.s);
+    if (!verified.ok) return reply.code(401).send({ error: "bad_signature", reason: "reason" in verified ? verified.reason : "invalid" });
+    const attachment = await db.connectChatMessageAttachment.findUnique({
+      where: { id: attachmentId },
+      select: { storageKey: true, mimeType: true, sizeBytes: true, fileName: true },
+    });
+    if (!attachment) return reply.code(404).send({ error: "not_found" });
+    try {
+      const stored = await readChatAttachment(attachment.storageKey);
+      if (!stored) return reply.code(404).send({ error: "not_found" });
+      if (stored.sizeBytes) reply.header("content-length", stored.sizeBytes);
+      reply.header("content-type", stored.contentType || attachment.mimeType || "application/octet-stream");
+      reply.header("content-disposition", `inline; filename="${String(attachment.fileName || "attachment").replace(/"/g, "")}"`);
       return reply.send(stored.body);
     } catch {
       return reply.code(400).send({ error: "invalid_key" });
@@ -993,7 +1020,12 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       }
       if (smsLinkFallback && atts.length) {
         const base = publicChatDownloadBase();
-        const links = atts.map((a) => buildChatSignedDownloadUrl(base, a.storageKey, 86400));
+        const persistedAttachments = await db.connectChatMessageAttachment.findMany({
+          where: { messageId: msg.id, tenantId },
+          select: { id: true },
+          orderBy: { createdAt: "asc" },
+        });
+        const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400));
         const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
         await db.connectChatMessage.update({
           where: { id: msg.id },
