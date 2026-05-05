@@ -2,10 +2,11 @@
 """
 VitalPBX inbound-route retarget helper for Connect.
 
-This service intentionally exposes only three mutating surfaces:
+This service intentionally exposes narrow mutating surfaces:
   - inspect one DID/tenant
   - retarget that exact route to a preconfigured Connect destination_id
   - restore that exact route to a captured destination_id
+  - sync one tenant's inbound-route and extension MOH group
 
 It does not expose arbitrary SQL, does not update trunks/extensions/tenants,
 and rejects missing or ambiguous DID matches.
@@ -40,6 +41,7 @@ VERSION = "2026.05.03"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 TENANT_RE = re.compile(r"^\d{1,10}$")
 DEST_RE = re.compile(r"^\d{1,10}$")
+MUSIC_GROUP_RE = re.compile(r"^\d{1,10}$")
 # IVR prompt basename: same character set the rest of Connect's catalog
 # enforces. We additionally cap at 120 chars so the on-disk filename
 # remains comfortably under ext4 limits even with the .wav suffix.
@@ -200,6 +202,45 @@ def destination_exists(conn, destination_id: str) -> bool:
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM ombu_destinations WHERE id = %s", (destination_id,))
         return cur.fetchone() is not None
+
+
+def music_group_exists(conn, music_group_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (music_group_id,))
+        return cur.fetchone() is not None
+
+
+def count_rows_for_tenant(conn, table: str, tenant_id: str) -> int:
+    if table not in {"ombu_inbound_routes", "ombu_extensions"}:
+        raise ValueError("invalid_count_table")
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE tenant_id = %s", (tenant_id,))
+        row = cur.fetchone() or {}
+        return int(row.get("n") or 0)
+
+
+def sample_music_groups(conn, table: str, tenant_id: str) -> list[dict[str, Any]]:
+    if table == "ombu_inbound_routes":
+        sql = """
+            SELECT inbound_route_id AS id, did AS label, description, music_group_id
+            FROM ombu_inbound_routes
+            WHERE tenant_id = %s
+            ORDER BY inbound_route_id
+            LIMIT 20
+        """
+    elif table == "ombu_extensions":
+        sql = """
+            SELECT extension_id AS id, extension AS label, name AS description, music_group_id
+            FROM ombu_extensions
+            WHERE tenant_id = %s
+            ORDER BY extension_id
+            LIMIT 20
+        """
+    else:
+        raise ValueError("invalid_sample_table")
+    with conn.cursor() as cur:
+        cur.execute(sql, (tenant_id,))
+        return cur.fetchall()
 
 
 def apply_changes() -> dict[str, Any]:
@@ -399,6 +440,121 @@ def restore_route(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def set_route_moh(body: dict[str, Any]) -> dict[str, Any]:
+    did_digits, did_e164 = normalize_did(body.get("did"))
+    tenant_id = require_numeric("tenant_id", body.get("tenantId"), TENANT_RE)
+    music_group_id = require_numeric("music_group_id", body.get("musicGroupId"), MUSIC_GROUP_RE)
+
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            route = find_route(conn, tenant_id, did_digits)
+            route_id = int(route["inbound_route_id"])
+            current_music_group_id = "" if route.get("music_group_id") is None else str(route.get("music_group_id"))
+            if current_music_group_id == music_group_id:
+                conn.rollback()
+                return {
+                    "ok": True,
+                    "noop": True,
+                    "did": did_e164,
+                    "tenantId": tenant_id,
+                    "musicGroupId": music_group_id,
+                    "route": route,
+                }
+            if not music_group_exists(conn, music_group_id):
+                raise RuntimeError("music_group_not_found")
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ombu_inbound_routes
+                    SET music_group_id = %s
+                    WHERE inbound_route_id = %s
+                      AND tenant_id = %s
+                    """,
+                    (music_group_id, route_id, tenant_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError("moh_update_guard_failed")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    apply_result = apply_changes()
+    with db_conn() as conn:
+        after = find_route(conn, tenant_id, did_digits)
+    return {
+        "ok": True,
+        "did": did_e164,
+        "tenantId": tenant_id,
+        "routeId": route_id,
+        "musicGroupId": music_group_id,
+        "before": route,
+        "after": after,
+        "apply": apply_result,
+    }
+
+
+def sync_tenant_moh(body: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = require_numeric("tenant_id", body.get("tenantId"), TENANT_RE)
+    music_group_id = require_numeric("music_group_id", body.get("musicGroupId"), MUSIC_GROUP_RE)
+
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            if not music_group_exists(conn, music_group_id):
+                raise RuntimeError("music_group_not_found")
+
+            inbound_total = count_rows_for_tenant(conn, "ombu_inbound_routes", tenant_id)
+            extension_total = count_rows_for_tenant(conn, "ombu_extensions", tenant_id)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ombu_inbound_routes
+                    SET music_group_id = %s
+                    WHERE tenant_id = %s
+                      AND (music_group_id IS NULL OR music_group_id <> %s)
+                    """,
+                    (music_group_id, tenant_id, music_group_id),
+                )
+                inbound_updated = int(cur.rowcount or 0)
+                cur.execute(
+                    """
+                    UPDATE ombu_extensions
+                    SET music_group_id = %s
+                    WHERE tenant_id = %s
+                      AND (music_group_id IS NULL OR music_group_id <> %s)
+                    """,
+                    (music_group_id, tenant_id, music_group_id),
+                )
+                extensions_updated = int(cur.rowcount or 0)
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    apply_result = apply_changes()
+    with db_conn() as conn:
+        inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
+        extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
+
+    return {
+        "ok": True,
+        "tenantId": tenant_id,
+        "musicGroupId": music_group_id,
+        "inboundTotal": inbound_total,
+        "inboundUpdated": inbound_updated,
+        "extensionsTotal": extension_total,
+        "extensionsUpdated": extensions_updated,
+        "inboundSample": inbound_sample,
+        "extensionSample": extension_sample,
+        "apply": apply_result,
+    }
+
+
 def upload_prompt(body: dict[str, Any]) -> dict[str, Any]:
     """Write a Connect-supplied IVR prompt audio file to /var/lib/asterisk/sounds/custom/.
 
@@ -572,6 +728,8 @@ class Handler(BaseHTTPRequestHandler):
             "/inspect": inspect_route,
             "/retarget": retarget_route,
             "/restore": restore_route,
+            "/set-moh": set_route_moh,
+            "/sync-tenant-moh": sync_tenant_moh,
             "/upload-prompt": upload_prompt,
         }
         fn = actions.get(path)

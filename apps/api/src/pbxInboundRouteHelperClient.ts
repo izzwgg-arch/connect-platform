@@ -57,6 +57,44 @@ export type PbxRouteHelperSwitchResponse = {
   };
 };
 
+export type PbxRouteHelperMohResponse = {
+  ok: true;
+  noop?: boolean;
+  did: string;
+  tenantId: string;
+  routeId?: number;
+  musicGroupId: string;
+  before?: PbxRouteHelperRoute;
+  after?: PbxRouteHelperRoute;
+  route?: PbxRouteHelperRoute;
+  apply?: {
+    ran: boolean;
+    reason?: string;
+    exitCode?: number;
+    stdout?: string;
+    stderr?: string;
+  };
+};
+
+export type PbxTenantMohSyncResponse = {
+  ok: true;
+  tenantId: string;
+  musicGroupId: string;
+  inboundTotal: number;
+  inboundUpdated: number;
+  extensionsTotal: number;
+  extensionsUpdated: number;
+  inboundSample?: Array<Record<string, unknown>>;
+  extensionSample?: Array<Record<string, unknown>>;
+  apply?: {
+    ran: boolean;
+    reason?: string;
+    exitCode?: number;
+    stdout?: string;
+    stderr?: string;
+  };
+};
+
 type HelperMapEntry = {
   baseUrl?: string;
   url?: string;
@@ -105,6 +143,8 @@ async function callHelper<T>(
     | "/inspect"
     | "/retarget"
     | "/restore"
+    | "/set-moh"
+    | "/sync-tenant-moh"
     | "/voicemail/greeting/upload"
     | "/voicemail/greeting/get"
     | "/voicemail/greeting/reset"
@@ -187,6 +227,20 @@ export function restorePbxInboundRoute(
   body: { did: string; tenantId: string; requestId?: string; actor?: string; force?: boolean },
 ): Promise<PbxRouteHelperSwitchResponse> {
   return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/restore", body);
+}
+
+export function setPbxInboundRouteMoh(
+  cfg: PbxRouteHelperConfig,
+  body: { did: string; tenantId: string; musicGroupId: string | number; requestId?: string; actor?: string },
+): Promise<PbxRouteHelperMohResponse> {
+  return callHelper<PbxRouteHelperMohResponse>(cfg, "/set-moh", body);
+}
+
+export function syncPbxTenantMoh(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId: string; musicGroupId: string | number; requestId?: string; actor?: string },
+): Promise<PbxTenantMohSyncResponse> {
+  return callHelper<PbxTenantMohSyncResponse>(cfg, "/sync-tenant-moh", body);
 }
 
 export type PbxVoicemailGreetingType = "unavailable" | "busy" | "temporary" | "name";

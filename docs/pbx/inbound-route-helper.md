@@ -1,8 +1,8 @@
 # VitalPBX Inbound Route Helper
 
 This helper lets Connect safely retarget any explicitly selected VitalPBX DID
-inbound route to the Connect IVR entry and restore it later without giving
-Connect broad MySQL or root access.
+inbound route to the Connect IVR entry, restore it later, and sync tenant-wide
+Music-On-Hold settings without giving Connect broad MySQL or root access.
 
 The helper is not tied to one phone number. Connect passes `{ did, tenantId }`
 on every request. The DID Routing page decides which Connect IVR profile answers
@@ -11,7 +11,9 @@ the PBX route.
 
 ## Write Surface
 
-The helper updates exactly one table and one field during retarget/restore:
+The helper has two narrow write surfaces.
+
+DID retarget/restore updates exactly one table and one field:
 
 - Table: `ombutel.ombu_inbound_routes`
 - Match guard: `tenant_id = <VitalPBX tenant_id>` and normalized `did = <DID>`
@@ -19,9 +21,19 @@ The helper updates exactly one table and one field during retarget/restore:
 - Drift guard: the `WHERE` clause also includes the current `destination_id`
   read earlier in the transaction.
 
+Tenant MOH sync updates only native MOH pointers for one VitalPBX tenant:
+
+- Table: `ombutel.ombu_inbound_routes`
+- Match guard: `tenant_id = <VitalPBX tenant_id>`
+- Updated field: `music_group_id`
+- Table: `ombutel.ombu_extensions`
+- Match guard: `tenant_id = <VitalPBX tenant_id>`
+- Updated field: `music_group_id`
+
 The helper reads `ombutel.ombu_destinations` only to verify the target
-`destination_id` exists. It does not touch SIP trunks, extensions, tenants,
-queues, IVRs, devices, or any Asterisk config files.
+`destination_id` exists. It reads `ombutel.ombu_music_groups` only to verify
+the selected MOH group exists. It does not touch SIP trunks, tenants, queues,
+IVRs, devices, or any Asterisk config files.
 
 ## Endpoints
 
@@ -31,6 +43,7 @@ Bind it to loopback or a private address only.
 - `POST /inspect`
 - `POST /retarget`
 - `POST /restore`
+- `POST /sync-tenant-moh`
 
 Every `POST` requires `x-connect-pbx-helper-secret`. Bodies use strict numeric
 DID and tenant validation:
@@ -46,6 +59,21 @@ DID and tenant validation:
 
 `/retarget` also uses `connectDestinationId`, either from the request body or
 from `CONNECT_PBX_CONNECT_DESTINATION_ID`.
+
+`/sync-tenant-moh` uses tenant-wide payloads:
+
+```json
+{
+  "tenantId": "21",
+  "musicGroupId": "8",
+  "requestId": "connect-log-id",
+  "actor": "connect:moh-publish"
+}
+```
+
+It returns row counts for inbound routes and extensions, plus small verification
+samples. Connect treats this as part of the MOH publish contract so the portal
+does not show a false success when native VitalPBX rows were not updated.
 
 ## PBX Install
 
@@ -82,9 +110,19 @@ Create a narrow MySQL user on the PBX:
 
 ```sql
 CREATE USER 'connect_route_helper'@'127.0.0.1' IDENTIFIED BY 'replace-with-limited-password';
+CREATE USER 'connect_route_helper'@'localhost' IDENTIFIED BY 'replace-with-limited-password';
 GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
-GRANT UPDATE (destination_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
@@ -162,6 +200,10 @@ Restore:
 
 If the DID is missing, multiple rows match, or the current destination drifted,
 the helper rejects the request and leaves the PBX untouched.
+
+MOH sync is idempotent. If all inbound routes and extensions are already on the
+requested `music_group_id`, the helper returns success with zero updated rows
+and still reports totals/samples for verification.
 
 ## Example Test DID: Landau Home
 

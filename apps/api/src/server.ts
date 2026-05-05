@@ -79,7 +79,7 @@ import {
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
   resetPbxVoicemailGreeting,
-  setPbxInboundRouteMoh,
+  syncPbxTenantMoh,
   type PbxRouteHelperInspectResponse,
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
@@ -19453,18 +19453,23 @@ async function publishMohToAstDb(
 type NativeInboundMohSyncResult = {
   skipped: boolean;
   reason?: string;
-  updatedRoutes: number;
-  dids: string[];
+  inboundTotal: number;
+  inboundUpdated: number;
+  extensionsTotal: number;
+  extensionsUpdated: number;
   pbxGroupId?: number;
   errors: string[];
+  helperResponse?: Record<string, unknown>;
 };
 
 async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string): Promise<NativeInboundMohSyncResult> {
   const empty = (reason: string): NativeInboundMohSyncResult => ({
     skipped: true,
     reason,
-    updatedRoutes: 0,
-    dids: [],
+    inboundTotal: 0,
+    inboundUpdated: 0,
+    extensionsTotal: 0,
+    extensionsUpdated: 0,
     errors: [],
   });
 
@@ -19494,52 +19499,35 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
   const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
   if (!helperCfg) return empty("pbx_route_helper_not_configured");
 
-  const didRows = await db.pbxTenantInboundDid.findMany({
-    where: {
-      pbxInstanceId: link.pbxInstanceId,
-      connectTenantId: tenantId,
-      active: true,
-    },
-    select: { e164: true },
-  });
-  const dids = Array.from(new Set(didRows.map((row) => String(row.e164 || "").replace(/\D/g, "")).filter(Boolean)));
-  if (dids.length === 0) return empty("no_synced_inbound_dids");
-
-  const errors: string[] = [];
-  let updatedRoutes = 0;
-  for (const did of dids) {
-    try {
-      const result = await setPbxInboundRouteMoh(helperCfg, {
-        tenantId: pbxTenantId,
-        did,
-        musicGroupId: pbxGroupId,
-        requestId: `moh:${tenantId}`,
-        actor: "connect:moh-publish",
-      });
-      if (!result.noop) updatedRoutes++;
-    } catch (err: any) {
-      errors.push(`${did}: ${err?.message || String(err)}`);
-    }
-  }
-
-  if (errors.length === dids.length) {
+  try {
+    const result = await syncPbxTenantMoh(helperCfg, {
+      tenantId: pbxTenantId,
+      musicGroupId: pbxGroupId,
+      requestId: `moh:${tenantId}`,
+      actor: "connect:moh-publish",
+    });
+    return {
+      skipped: false,
+      inboundTotal: Number(result.inboundTotal || 0),
+      inboundUpdated: Number(result.inboundUpdated || 0),
+      extensionsTotal: Number(result.extensionsTotal || 0),
+      extensionsUpdated: Number(result.extensionsUpdated || 0),
+      pbxGroupId,
+      errors: [],
+      helperResponse: result as any,
+    };
+  } catch (err: any) {
     return {
       skipped: true,
-      reason: "native_inbound_route_moh_sync_failed",
-      updatedRoutes,
-      dids,
+      reason: "native_tenant_moh_sync_failed",
+      inboundTotal: 0,
+      inboundUpdated: 0,
+      extensionsTotal: 0,
+      extensionsUpdated: 0,
       pbxGroupId,
-      errors,
+      errors: [err?.message || String(err)],
     };
   }
-
-  return {
-    skipped: false,
-    updatedRoutes,
-    dids,
-    pbxGroupId,
-    errors,
-  };
 }
 
 /** Shared publish helper — loads state, computes effective profile, writes AstDB, logs record.
@@ -19549,7 +19537,7 @@ async function doMohPublish(
   tenantId: string,
   publishedBy: string,
   source: string,
-): Promise<{ profile: HoldProfileData; mode: string; slug: string; recordId: string }> {
+): Promise<{ profile: HoldProfileData; mode: string; slug: string; recordId: string; nativeSync: NativeInboundMohSyncResult }> {
   const [config, rulesRaw, overrideRaw, profilesRaw, lastPublish] = await Promise.all([
     (db as any).mohScheduleConfig.findUnique({ where: { tenantId } }),
     (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId }, isActive: true } }),
@@ -19587,16 +19575,31 @@ async function doMohPublish(
 
   await publishMohToAstDb(slug, keys);
   const nativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
-  if (nativeSync.errors.length) {
-    app.log.warn({ tenantId, recordId: record.id, nativeSync }, "moh: native inbound route MOH sync failed");
-  } else {
-    app.log.info({ tenantId, recordId: record.id, nativeSync }, "moh: native inbound route MOH sync complete");
+  if (nativeSync.skipped || nativeSync.errors.length) {
+    const reason = nativeSync.reason || nativeSync.errors[0] || "native_tenant_moh_sync_failed";
+    app.log.warn({ tenantId, recordId: record.id, nativeSync }, "moh: native tenant MOH sync failed");
+    await (db as any).mohPublishRecord.update({
+      where: { id: record.id },
+      data: {
+        status: "failed",
+        error: `native_tenant_moh_sync_failed: ${reason}${nativeSync.errors.length ? `: ${nativeSync.errors.slice(0, 2).join("; ")}` : ""}`,
+        nativeSync: nativeSync as any,
+      },
+    });
+    throw Object.assign(new Error("native_tenant_moh_sync_failed"), {
+      statusCode: 502,
+      detail: "Connect wrote the runtime AstDB keys, but could not update the tenant's native VitalPBX inbound routes/extensions. Fix the PBX helper and republish.",
+      nativeSync,
+    });
   }
+
+  app.log.info({ tenantId, recordId: record.id, nativeSync }, "moh: native tenant MOH sync complete");
   await (db as any).mohPublishRecord.update({
     where: { id: record.id },
     data: {
       status: "success",
-      error: nativeSync.errors.length ? `native_inbound_moh_sync_failed: ${nativeSync.errors.slice(0, 2).join("; ")}` : null,
+      error: null,
+      nativeSync: nativeSync as any,
     },
   });
 
@@ -19607,7 +19610,7 @@ async function doMohPublish(
     update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date() },
   });
 
-  return { profile, mode, slug, recordId: record.id };
+  return { profile, mode, slug, recordId: record.id, nativeSync };
 }
 
 // ── GET /voice/moh/profiles ───────────────────────────────────────────────────
@@ -19964,10 +19967,17 @@ app.post("/voice/moh/publish", async (req, reply) => {
   try {
     const r = await doMohPublish(tenantId, (user as any).id ?? "unknown", "manual");
     app.log.info({ tenantId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug }, "moh: publish success");
-    return reply.send({ ok: true, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug, recordId: r.recordId, profile: r.profile });
+    return reply.send({ ok: true, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug, recordId: r.recordId, profile: r.profile, nativeSync: r.nativeSync });
   } catch (err: any) {
     const code = (err as any).statusCode;
     if (code === 409) return reply.code(409).send({ error: err.message });
+    if (code === 502) {
+      return reply.code(502).send({
+        error: err.message || "publish_failed",
+        detail: err?.detail || err?.message,
+        nativeSync: err?.nativeSync ?? null,
+      });
+    }
     app.log.warn({ tenantId, err: err?.message }, "moh: publish failed");
     return reply.code(503).send({ error: "publish_failed", detail: err?.message });
   }

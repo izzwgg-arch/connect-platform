@@ -2419,6 +2419,7 @@ model MohPublishRecord {
   newMohClass          String // VitalPBX MOH class name written
   keysWritten          Json // [{family,key,value}] — all keys written this publish
   previousKeysSnapshot Json     @default("[]") // full AstDB key snapshot before this publish (for rollback)
+  nativeSync           Json? // PBX helper result for native inbound-route/extension MOH sync
   status               String   @default("pending") // "pending" | "success" | "failed"
   error                String?
   isRollback           Boolean  @default(false)

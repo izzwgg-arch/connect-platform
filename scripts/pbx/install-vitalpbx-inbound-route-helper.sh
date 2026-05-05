@@ -310,6 +310,42 @@ def destination_exists(conn, destination_id):
         cur.execute("SELECT id FROM ombu_destinations WHERE id = %s", (destination_id,))
         return cur.fetchone() is not None
 
+def music_group_exists(conn, music_group_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (music_group_id,))
+        return cur.fetchone() is not None
+
+def count_rows_for_tenant(conn, table, tenant_id):
+    if table not in {"ombu_inbound_routes", "ombu_extensions"}:
+        raise ValueError("invalid_count_table")
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE tenant_id = %s", (tenant_id,))
+        row = cur.fetchone() or {}
+        return int(row.get("n") or 0)
+
+def sample_music_groups(conn, table, tenant_id):
+    if table == "ombu_inbound_routes":
+        sql = """
+            SELECT inbound_route_id AS id, did AS label, description, music_group_id
+            FROM ombu_inbound_routes
+            WHERE tenant_id = %s
+            ORDER BY inbound_route_id
+            LIMIT 20
+        """
+    elif table == "ombu_extensions":
+        sql = """
+            SELECT extension_id AS id, extension AS label, name AS description, music_group_id
+            FROM ombu_extensions
+            WHERE tenant_id = %s
+            ORDER BY extension_id
+            LIMIT 20
+        """
+    else:
+        raise ValueError("invalid_sample_table")
+    with conn.cursor() as cur:
+        cur.execute(sql, (tenant_id,))
+        return cur.fetchall()
+
 def apply_changes():
     if not CFG.apply_command:
         return {"ran": False, "reason": "apply_command_not_configured"}
@@ -420,6 +456,52 @@ def restore_route(body):
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
+
+def sync_tenant_moh(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    music_group_id = require_num("music_group_id", body.get("musicGroupId"))
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            if not music_group_exists(conn, music_group_id):
+                raise RuntimeError("music_group_not_found")
+            inbound_total = count_rows_for_tenant(conn, "ombu_inbound_routes", tenant_id)
+            extension_total = count_rows_for_tenant(conn, "ombu_extensions", tenant_id)
+            with conn.cursor() as cur:
+                cur.execute("""
+                UPDATE ombu_inbound_routes
+                SET music_group_id = %s
+                WHERE tenant_id = %s
+                  AND (music_group_id IS NULL OR music_group_id <> %s)
+                """, (music_group_id, tenant_id, music_group_id))
+                inbound_updated = int(cur.rowcount or 0)
+                cur.execute("""
+                UPDATE ombu_extensions
+                SET music_group_id = %s
+                WHERE tenant_id = %s
+                  AND (music_group_id IS NULL OR music_group_id <> %s)
+                """, (music_group_id, tenant_id, music_group_id))
+                extensions_updated = int(cur.rowcount or 0)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    apply_result = apply_changes()
+    with db_conn() as conn:
+        inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
+        extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
+    return {
+        "ok": True,
+        "tenantId": tenant_id,
+        "musicGroupId": music_group_id,
+        "inboundTotal": inbound_total,
+        "inboundUpdated": inbound_updated,
+        "extensionsTotal": extension_total,
+        "extensionsUpdated": extensions_updated,
+        "inboundSample": inbound_sample,
+        "extensionSample": extension_sample,
+        "apply": apply_result,
+    }
 
 def upload_prompt(body):
     base = str(body.get("fileBaseName") or "").strip()
@@ -855,6 +937,7 @@ class Handler(BaseHTTPRequestHandler):
             "/inspect": inspect_route,
             "/retarget": retarget_route,
             "/restore": restore_route,
+            "/sync-tenant-moh": sync_tenant_moh,
             "/upload-prompt": upload_prompt,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,
@@ -1189,10 +1272,21 @@ head -20 /tmp/connect-vm-dialplan-check.txt 2>/dev/null || true
 
 echo "Creating narrow MySQL user connect_route_helper..."
 mysql ${MYSQL_ROOT_ARGS} <<SQL
+CREATE USER IF NOT EXISTS 'connect_route_helper'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
+ALTER USER 'connect_route_helper'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
 CREATE USER IF NOT EXISTS 'connect_route_helper'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PASS}';
 ALTER USER 'connect_route_helper'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PASS}';
+GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'localhost';
+GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'localhost';
 GRANT SELECT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
-GRANT UPDATE ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (destination_id, music_group_id) ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (music_group_id) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
