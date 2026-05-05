@@ -918,6 +918,25 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
 exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 """
 
+CONNECT_VM_INCLUDE_TARGET = "/etc/asterisk/extensions_custom.conf"
+CONNECT_VM_INCLUDE_LINE = "#tryinclude /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf"
+
+def ensure_connect_vm_include():
+    try:
+        target = Path(CONNECT_VM_INCLUDE_TARGET)
+        existing = target.read_text() if target.is_file() else ""
+        if any(line.strip() == CONNECT_VM_INCLUDE_LINE for line in existing.splitlines()):
+            return
+        try:
+            with open(str(target), "a") as fh:
+                if existing and not existing.endswith("\n"):
+                    fh.write("\n")
+                fh.write(CONNECT_VM_INCLUDE_LINE + "\n")
+        except PermissionError as exc:
+            sys.stderr.write("ensure_connect_vm_include_skip_no_write: " + str(exc) + "\n")
+    except OSError as exc:
+        sys.stderr.write("ensure_connect_vm_include_failed: " + str(exc) + "\n")
+
 def ensure_connect_vm_dialplan():
     try:
         path = Path(CONNECT_VM_DIALPLAN_PATH)
@@ -931,24 +950,27 @@ def ensure_connect_vm_dialplan():
             except (OSError, PermissionError):
                 pass
         existing = path.read_text() if path.is_file() else ""
-        if existing == CONNECT_VM_DIALPLAN_BODY:
-            return
-        try:
-            path.write_text(CONNECT_VM_DIALPLAN_BODY)
-        except PermissionError as exc:
-            sys.stderr.write("ensure_connect_vm_dialplan_skip_no_write: " + str(exc) + "\n")
-            return
-        try:
-            os.chmod(str(path), 0o644)
-        except OSError:
-            pass
-        try:
-            uid = pwd.getpwnam("asterisk").pw_uid
-            gid = grp.getgrnam("asterisk").gr_gid
-            os.chown(str(path), uid, gid)
-        except (KeyError, PermissionError, OSError):
-            pass
-        subprocess.run(["asterisk", "-rx", "dialplan reload"], capture_output=True, timeout=15, check=False)
+        wrote = False
+        if existing != CONNECT_VM_DIALPLAN_BODY:
+            try:
+                path.write_text(CONNECT_VM_DIALPLAN_BODY)
+                wrote = True
+            except PermissionError as exc:
+                sys.stderr.write("ensure_connect_vm_dialplan_skip_no_write: " + str(exc) + "\n")
+                return
+            try:
+                os.chmod(str(path), 0o644)
+            except OSError:
+                pass
+            try:
+                uid = pwd.getpwnam("asterisk").pw_uid
+                gid = grp.getgrnam("asterisk").gr_gid
+                os.chown(str(path), uid, gid)
+            except (KeyError, PermissionError, OSError):
+                pass
+        ensure_connect_vm_include()
+        if wrote:
+            subprocess.run(["asterisk", "-rx", "dialplan reload"], capture_output=True, timeout=15, check=False)
     except OSError as exc:
         sys.stderr.write("ensure_connect_vm_dialplan_failed: " + str(exc) + "\n")
 
@@ -1056,6 +1078,20 @@ exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 EOF
 chown asterisk:asterisk /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
 chmod 0644 /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf
+
+# VitalPBX's stock extensions.conf has `#include vitalpbx/extensions_*.conf`
+# but that wildcard does not actually pull in new files in some Asterisk
+# builds. The reliable path is an explicit #tryinclude line in
+# extensions_custom.conf (which the same VitalPBX setup already does for
+# its own per-tenant dialplans). Make sure ours is in there exactly once.
+INCLUDE_LINE='#tryinclude /etc/asterisk/vitalpbx/extensions_95-connect-vm-greeting.conf'
+INCLUDE_TARGET=/etc/asterisk/extensions_custom.conf
+touch "${INCLUDE_TARGET}"
+if ! grep -Fxq "${INCLUDE_LINE}" "${INCLUDE_TARGET}"; then
+  printf '\n%s\n' "${INCLUDE_LINE}" >> "${INCLUDE_TARGET}"
+  echo "Added #tryinclude for connect-vm-greeting dialplan to ${INCLUDE_TARGET}"
+fi
+
 asterisk -rx "dialplan reload" || true
 asterisk -rx "dialplan show connect-vm-greeting-record" >/tmp/connect-vm-dialplan-check.txt 2>&1 || true
 
