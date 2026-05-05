@@ -971,6 +971,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         const ua = new JsSIP.UA(uaConfig);
         uaRef.current = ua;
         let regFailCount = 0;
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        const queueReconnect = (delayMs = 2_500) => {
+          if (reconnectTimer) return;
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            if (cancelled || uaRef.current !== ua) return;
+            try {
+              setRegState("connecting");
+              ua.start();
+            } catch (err) {
+              console.warn("[SipPhone] reconnect start failed", err);
+            }
+          }, delayMs);
+        };
 
         ua.on("connecting", () => { if (!cancelled) setRegState("connecting"); });
         ua.on("connected",  () => { if (!cancelled) setRegState("registering"); });
@@ -981,6 +995,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             const msg = "SIP WebSocket disconnected. Check PBX WSS transport on port 8089.";
             setError(msg);
             patchDiag({ lastRegError: msg });
+            queueReconnect(2_500);
           }
         });
 
@@ -1008,7 +1023,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           }
         });
 
-        ua.on("unregistered", () => { if (!cancelled) setRegState("idle"); });
+        ua.on("unregistered", () => {
+          if (cancelled) return;
+          // Desktop phone engine should remain registered. When we are unexpectedly
+          // unregistered after login/reload, trigger a reconnect instead of idling
+          // forever (which shows as "Offline" in the mini dialer).
+          setRegState("registering");
+          queueReconnect(1_000);
+        });
 
         ua.on("registrationFailed", (e: { cause: string; response?: { status_code?: number } }) => {
           if (!cancelled) {
@@ -1020,11 +1042,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             setRegState("failed");
             setError(msg);
             patchDiag({ lastRegError: msg });
-            // Stop hammering the PBX after 3 consecutive failures — require manual reload.
+            // Keep retrying in desktop so users do not get stuck on Offline after reload.
             if (regFailCount >= 3) {
-              try { ua.stop(); } catch { /* ignore */ }
-              uaRef.current = null;
-              setError(`SIP registration failed after 3 attempts: ${e.cause}. Reload the page to retry.`);
+              setError(`SIP registration failed: ${e.cause}. Reconnecting...`);
+              queueReconnect(3_000);
             }
           }
         });
@@ -1116,6 +1137,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setRegState("failed");
         setError(msg);
         patchDiag({ lastRegError: msg });
+        setTimeout(() => {
+          if (cancelled || uaRef.current) return;
+          try { init(); } catch { /* ignore */ }
+        }, 3_000);
       }
     }
 
