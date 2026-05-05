@@ -557,16 +557,28 @@ def pjsip_contact_endpoints_for_extension(extension):
                 endpoints.append(endpoint)
     return endpoints
 
+def tenant_endpoints_for_extension(tenant_id, extension):
+    contacts = pjsip_contact_endpoints_for_extension(extension)
+    prefix = "T" + tenant_id + "_"
+    return [c for c in contacts if c == prefix + extension or c.startswith(prefix + extension + "_")]
+
 def resolve_record_channel(channel, tenant_id, extension):
     if not channel.startswith("PJSIP/"):
         return channel, "template"
     requested_endpoint = channel[len("PJSIP/"):]
     if not re.match(r"^[A-Za-z0-9_.-]+$", requested_endpoint):
         raise ValueError("invalid_pjsip_endpoint_template")
+    tenant_matches = tenant_endpoints_for_extension(tenant_id, extension)
+    if requested_endpoint in tenant_matches:
+        if len(tenant_matches) == 1:
+            return "PJSIP/" + requested_endpoint, "tenant_template_only"
+        ordered = [requested_endpoint] + [c for c in tenant_matches if c != requested_endpoint]
+        joined = "&".join("PJSIP/" + c for c in ordered)
+        return joined, "tenant_template_plus_siblings:" + ",".join(ordered)
+    if tenant_matches:
+        joined = "&".join("PJSIP/" + c for c in tenant_matches)
+        return joined, "tenant_only:" + ",".join(tenant_matches)
     contacts = pjsip_contact_endpoints_for_extension(extension)
-    exact_endpoint = "T" + tenant_id + "_" + extension
-    if exact_endpoint in contacts:
-        return "PJSIP/" + exact_endpoint, "exact_registered"
     if requested_endpoint in contacts:
         return "PJSIP/" + requested_endpoint, "template_registered"
     if len(contacts) == 1:
@@ -685,11 +697,13 @@ def vm_record_call(body):
     channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
     recording_exten = tenant_id + "_" + extension + "_" + target.stem
     if CFG.vm_record_app.lower() == "goto":
-        app_data = "connect-vm-greeting-record," + recording_exten + ",1"
+        target_descriptor = recording_exten + "@connect-vm-greeting-record"
+        cmd_str = "channel originate " + channel + " extension " + target_descriptor
     else:
-        app_data = extension + "@" + tenant_id
-    cmd = ["asterisk", "-rx", "channel originate %s application %s %s" % (channel, CFG.vm_record_app, app_data)]
-    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source}
+        target_descriptor = extension + "@" + tenant_id
+        cmd_str = "channel originate " + channel + " application " + CFG.vm_record_app + " " + target_descriptor
+    cmd = ["asterisk", "-rx", cmd_str]
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source, "asteriskCommand": cmd_str, "targetDescriptor": target_descriptor}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
         job["asteriskExitCode"] = proc.returncode
@@ -731,6 +745,27 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/health":
             self.send_json(200, {"ok": True, "version": VERSION})
+        elif path == "/voicemail/greeting/diag":
+            if not self.auth_ok():
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            try:
+                dp = subprocess.run(["asterisk", "-rx", "dialplan show connect-vm-greeting-record"], text=True, capture_output=True, timeout=10, check=False)
+                contacts = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], text=True, capture_output=True, timeout=10, check=False)
+            except Exception as exc:
+                self.send_json(500, {"ok": False, "error": str(exc)})
+                return
+            self.send_json(200, {
+                "ok": True,
+                "version": VERSION,
+                "dialplanFilePresent": Path(CONNECT_VM_DIALPLAN_PATH).is_file(),
+                "dialplanShowExitCode": dp.returncode,
+                "dialplanShowOutput": (dp.stdout + dp.stderr)[-4000:],
+                "vmRecordApp": CFG.vm_record_app,
+                "vmRecordChannelTemplate": CFG.vm_record_channel_template,
+                "pjsipContactsExitCode": contacts.returncode,
+                "pjsipContactsOutput": (contacts.stdout + contacts.stderr)[-4000:],
+            })
         elif path.startswith("/voicemail/greeting/record-call/"):
             if not self.auth_ok():
                 self.send_json(401, {"error": "unauthorized"})
@@ -779,10 +814,72 @@ class Handler(BaseHTTPRequestHandler):
             audit(path.strip("/"), False, {k: v for k, v in body.items() if k != "bytesB64"}, error=str(exc))
             self.send_json(409, {"error": str(exc)})
 
+CONNECT_VM_DIALPLAN_PATH = "/etc/asterisk/extensions__95_connect_vm_greeting.conf"
+CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
+[connect-vm-greeting-record]
+exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
+ same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
+ same => n,GotoIf($["${CONNECT_VM_PARSE}" = "1"]?valid:invalid)
+ same => n(valid),Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
+ same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
+ same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Answer()
+ same => n,Wait(1)
+ same => n(start),Playback(custom/connect-vm-record-greeting)
+ same => n,Playback(beep)
+ same => n,Record(${CONNECT_VM_TMP}.wav,0,180,kq)
+ same => n,Playback(custom/connect-vm-review)
+ same => n,Playback(${CONNECT_VM_TMP})
+ same => n(choose),Read(CONNECT_VM_CHOICE,custom/connect-vm-save-redo,1,,3,10)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "1"]?save)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "2"]?redo)
+ same => n,Playback(custom/connect-vm-invalid-choice)
+ same => n,Goto(choose)
+ same => n(redo),System(rm -f ${CONNECT_VM_TMP}.wav)
+ same => n,Goto(start)
+ same => n(save),System(mv -f ${CONNECT_VM_TMP}.wav ${CONNECT_VM_PATH})
+ same => n,System(chown asterisk:asterisk ${CONNECT_VM_PATH})
+ same => n,System(chmod 0644 ${CONNECT_VM_PATH})
+ same => n,Playback(custom/connect-vm-saved)
+ same => n,Hangup()
+ same => n(invalid),Verbose(1,Rejecting invalid Connect voicemail greeting record request ${EXTEN})
+ same => n,Hangup()
+
+exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
+"""
+
+def ensure_connect_vm_dialplan():
+    try:
+        path = Path(CONNECT_VM_DIALPLAN_PATH)
+        existing = path.read_text() if path.is_file() else ""
+        if existing == CONNECT_VM_DIALPLAN_BODY:
+            return
+        try:
+            path.write_text(CONNECT_VM_DIALPLAN_BODY)
+        except PermissionError as exc:
+            sys.stderr.write("ensure_connect_vm_dialplan_skip_no_write: " + str(exc) + "\n")
+            return
+        try:
+            os.chmod(str(path), 0o644)
+        except OSError:
+            pass
+        try:
+            uid = pwd.getpwnam("asterisk").pw_uid
+            gid = grp.getgrnam("asterisk").gr_gid
+            os.chown(str(path), uid, gid)
+        except (KeyError, PermissionError, OSError):
+            pass
+        subprocess.run(["asterisk", "-rx", "dialplan reload"], capture_output=True, timeout=15, check=False)
+    except OSError as exc:
+        sys.stderr.write("ensure_connect_vm_dialplan_failed: " + str(exc) + "\n")
+
 def main():
     CFG.validate()
     with snap_conn():
         pass
+    ensure_connect_vm_dialplan()
     if "--check" in sys.argv:
         print(json.dumps({"ok": True, "version": VERSION, "bind": CFG.bind, "port": CFG.port}))
         return
@@ -830,13 +927,15 @@ cat >/etc/asterisk/extensions__95_connect_vm_greeting.conf <<'EOF'
 ; originates a call to a user's extension for voicemail greeting recording.
 [connect-vm-greeting-record]
 exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
- same => n,GotoIf($[${REGEX("^[0-9]+_[0-9]+_(unavail|busy|temp|greet)$" ${EXTEN})}]?valid:invalid)
+ same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
+ same => n,GotoIf($["${CONNECT_VM_PARSE}" = "1"]?valid:invalid)
  same => n(valid),Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
  same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
  same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Answer()
+ same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
  same => n,Playback(beep)
  same => n,Record(${CONNECT_VM_TMP}.wav,0,180,kq)
@@ -854,14 +953,15 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,System(chmod 0644 ${CONNECT_VM_PATH})
  same => n,Playback(custom/connect-vm-saved)
  same => n,Hangup()
- same => n(invalid),NoOp(Rejecting invalid Connect voicemail greeting record request ${EXTEN})
+ same => n(invalid),Verbose(1,Rejecting invalid Connect voicemail greeting record request ${EXTEN})
  same => n,Hangup()
 
 exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 EOF
-chown root:asterisk /etc/asterisk/extensions__95_connect_vm_greeting.conf
+chown asterisk:asterisk /etc/asterisk/extensions__95_connect_vm_greeting.conf
 chmod 0644 /etc/asterisk/extensions__95_connect_vm_greeting.conf
 asterisk -rx "dialplan reload" || true
+asterisk -rx "dialplan show connect-vm-greeting-record" >/tmp/connect-vm-dialplan-check.txt 2>&1 || true
 
 echo "Creating narrow MySQL user connect_route_helper..."
 mysql ${MYSQL_ROOT_ARGS} <<SQL
@@ -895,7 +995,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom /var/spool/asterisk/voicemail /run/asterisk
+ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom /var/spool/asterisk/voicemail /run/asterisk /etc/asterisk
 SupplementaryGroups=asterisk
 
 [Install]
