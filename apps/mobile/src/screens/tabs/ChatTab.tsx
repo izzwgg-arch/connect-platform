@@ -1053,11 +1053,13 @@ const MessageBubble = memo(function MessageBubble({
   } satisfies ChatAttachment));
   const renderedImages = [...imageAttachments, ...mmsImages];
   const visibleBody = bodyWithoutMediaLinks(message.body || '', renderedImages.length > 0 || audioAttachments.length > 0 || otherAttachments.length > 0);
+  const mediaOnly = !deleted && !visibleBody && !message.location && (renderedImages.length > 0 || audioAttachments.length > 0) && otherAttachments.length === 0;
+  const metaColor = mediaOnly ? colors.textTertiary : (message.mine ? 'rgba(255,255,255,0.75)' : colors.textTertiary);
+  const statusColor = mediaOnly ? colors.textTertiary : 'rgba(255,255,255,0.7)';
   return (
     <Animated.View style={[styles.messageRow, message.mine ? styles.messageRowMine : styles.messageRowTheirs, grouped ? styles.messageGrouped : null, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
-      {!message.mine && !grouped ? <Avatar name={message.senderName || 'Connect'} size="sm" /> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
       <View style={styles.messageStack}>
-        <TouchableOpacity activeOpacity={0.86} onPress={onAction} onLongPress={onAction} style={bubbleStyle}>
+        <TouchableOpacity activeOpacity={0.86} onPress={onAction} onLongPress={onAction} style={mediaOnly ? [styles.bubbleMediaOnly, message.mine ? styles.bubbleMine : styles.bubbleTheirs] : bubbleStyle}>
           {!message.mine && !grouped ? <Text style={[styles.senderName, { color: colors.teal }]}>{message.senderName}</Text> : null}
           {message.replyTo ? (
             <View style={[styles.replyInline, { backgroundColor: message.mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]}>
@@ -1112,16 +1114,16 @@ const MessageBubble = memo(function MessageBubble({
               ))}
             </>
           )}
-          <View style={styles.bubbleMeta}>
-            <Text style={[styles.timeText, { color: message.mine ? 'rgba(255,255,255,0.75)' : colors.textTertiary }]}>{formatMessageTime(message.sentAt)}</Text>
-            {message.mine ? <Ionicons name={statusIcon(message.deliveryStatus, message.clientStatus)} size={12} color={message.clientStatus === 'failed' ? colors.danger : '#dbeafe'} /> : null}
+          <View style={[styles.bubbleMeta, mediaOnly ? styles.bubbleMetaMediaOnly : null]}>
+            <Text style={[styles.timeText, { color: metaColor }]}>{formatMessageTime(message.sentAt)}</Text>
+            {message.mine ? <Ionicons name={statusIcon(message.deliveryStatus, message.clientStatus)} size={12} color={message.clientStatus === 'failed' ? colors.danger : (mediaOnly ? colors.textTertiary : '#dbeafe')} /> : null}
             {message.clientStatus === 'failed' ? (
               <TouchableOpacity onPress={onRetry}>
                 <Text style={[styles.retryText, { color: message.mine ? '#fff' : colors.danger }]}>Retry</Text>
               </TouchableOpacity>
             ) : null}
           </View>
-          {message.mine ? <Text style={[styles.statusTiny, { color: 'rgba(255,255,255,0.7)' }]}>{statusLabel(message.deliveryStatus, message.clientStatus)}</Text> : null}
+          {message.mine ? <Text style={[styles.statusTiny, { color: statusColor }]}>{statusLabel(message.deliveryStatus, message.clientStatus)}</Text> : null}
         </TouchableOpacity>
         {Object.keys(reactionCounts).length ? (
           <View style={[styles.reactionSummary, message.mine ? styles.reactionMine : styles.reactionTheirs, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderSubtle }]}>
@@ -1229,12 +1231,12 @@ function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: Ch
   }, [attachment.downloadUrl, durationMs]);
 
   return (
-    <View style={[styles.voiceBubble, { backgroundColor: mine ? 'rgba(255,255,255,0.15)' : colors.bgSecondary }]}>
+    <View style={[styles.voiceBubble, { backgroundColor: mine ? colors.primary : colors.surfaceElevated, borderColor: mine ? 'transparent' : colors.borderSubtle }]}>
       <TouchableOpacity onPress={toggle} style={[styles.voicePlay, { backgroundColor: mine ? 'rgba(255,255,255,0.22)' : colors.primaryMuted }]}>
         <Ionicons name={playing ? 'pause' : 'play'} size={18} color={mine ? '#fff' : colors.primary} />
       </TouchableOpacity>
       <View style={styles.voiceTrackWrap}>
-        <View style={[styles.voiceTrack, { backgroundColor: mine ? 'rgba(255,255,255,0.24)' : colors.border }]}>
+        <View style={[styles.voiceTrack, { backgroundColor: mine ? 'rgba(255,255,255,0.26)' : colors.border }]}>
           <View style={[styles.voiceTrackFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: mine ? '#fff' : colors.primary }]} />
         </View>
         <Text style={[styles.voiceDuration, { color: mine ? 'rgba(255,255,255,0.78)' : colors.textTertiary }]}>{formatVoiceDuration(durationMs)}</Text>
@@ -1832,6 +1834,7 @@ const styles = StyleSheet.create({
   avatarSpacer: { width: 32 },
   messageStack: { maxWidth: '78%' },
   bubble: { borderRadius: 20, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  bubbleMediaOnly: { borderWidth: 0, paddingHorizontal: 0, paddingVertical: 0, backgroundColor: 'transparent' },
   bubbleMine: { alignSelf: 'flex-end', borderBottomRightRadius: 7 },
   bubbleTheirs: { alignSelf: 'flex-start', borderBottomLeftRadius: 7 },
   senderName: { fontSize: 11, fontWeight: '900', marginBottom: 3 },
@@ -1840,7 +1843,7 @@ const styles = StyleSheet.create({
   replyInlineText: { flex: 1, fontSize: 11.5, fontWeight: '700' },
   locationCard: { marginTop: 7, borderRadius: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   locationText: { fontSize: 13, fontWeight: '800' },
-  imageGrid: { marginTop: 7, width: CHAT_MEDIA_MAX_WIDTH, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
+  imageGrid: { marginTop: 0, width: CHAT_MEDIA_MAX_WIDTH, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
   imageGridSingle: { width: CHAT_MEDIA_MAX_WIDTH },
   imageCell: { overflow: 'hidden', borderRadius: 18, backgroundColor: 'rgba(15,23,42,0.18)' },
   imageCellHalf: { width: (CHAT_MEDIA_MAX_WIDTH - 4) / 2, aspectRatio: 1 },
@@ -1851,7 +1854,7 @@ const styles = StyleSheet.create({
   imageOverflowText: { color: '#fff', fontSize: 24, fontWeight: '900' },
   imageStateOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(2,6,23,0.45)' },
   imageStateText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  voiceBubble: { marginTop: 7, width: Math.min(CHAT_MEDIA_MAX_WIDTH, 260), borderRadius: 18, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  voiceBubble: { marginTop: 7, width: Math.min(CHAT_MEDIA_MAX_WIDTH, 260), borderRadius: 18, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
   voicePlay: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   voiceTrackWrap: { flex: 1, minWidth: 0, gap: 5 },
   voiceTrack: { height: 6, borderRadius: 999, overflow: 'hidden' },
@@ -1863,6 +1866,7 @@ const styles = StyleSheet.create({
   attachmentName: { fontSize: 12.5, fontWeight: '900' },
   attachmentMeta: { fontSize: 10.5, fontWeight: '700', marginTop: 2 },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 5 },
+  bubbleMetaMediaOnly: { marginTop: 4, paddingHorizontal: 4 },
   timeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2 },
   retryText: { fontSize: 10, fontWeight: '900', marginLeft: 4 },
   statusTiny: { marginTop: 2, alignSelf: 'flex-end', fontSize: 9, fontWeight: '800' },

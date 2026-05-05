@@ -4427,6 +4427,7 @@ app.addHook("preHandler", async (req, reply) => {
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")
+    || path.includes("/chat/a/")
     // Public Android APK distribution + lightweight manifest used by the
     // invitation email button and future in-app update checks. Filenames are
     // tightly allow-listed inside the handler so this is not a directory
