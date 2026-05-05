@@ -150,7 +150,16 @@ export default function ChatPage() {
     for (const file of files.slice(0, 3)) {
       try {
         const r = await apiUploadChatAttachment(activeThread.id, file);
-        setPendingAttachments((prev) => [...prev, { storageKey: r.storageKey, mimeType: r.mimeType, sizeBytes: r.sizeBytes, fileName: r.fileName }].slice(0, 3));
+        setPendingAttachments((prev) => [...prev, {
+          storageKey: r.storageKey,
+          mimeType: r.mimeType,
+          sizeBytes: r.sizeBytes,
+          fileName: r.fileName,
+          mediaKind: r.mediaKind ?? undefined,
+          durationMs: r.durationMs ?? null,
+          width: r.width ?? null,
+          height: r.height ?? null,
+        }].slice(0, 3));
       } catch (err) {
         showToast(String((err as Error)?.message || "Upload failed"));
       }

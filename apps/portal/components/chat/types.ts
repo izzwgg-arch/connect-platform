@@ -26,6 +26,13 @@ export interface ChatAttachment {
   sizeBytes: number;
   scanStatus?: string;
   downloadUrl: string | null;
+  /** Server-classified media kind: "image" | "audio" | "video" | "file". */
+  mediaKind?: string | null;
+  /** Audio/video duration in milliseconds (server-probed via ffprobe). */
+  durationMs?: number | null;
+  /** Image/video pixel dimensions (server-probed). */
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface ChatLocation {
@@ -71,6 +78,10 @@ export interface PendingAttachment {
   mimeType: string;
   sizeBytes: number;
   fileName: string;
+  mediaKind?: string;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];

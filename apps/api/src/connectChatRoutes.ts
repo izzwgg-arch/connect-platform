@@ -748,8 +748,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return { ok: true, ...written };
     } catch (e: any) {
       const m = String(e?.message || e);
-      if (m === "mime_not_allowed") return reply.status(400).send({ error: "MIME_NOT_ALLOWED" });
-      if (m === "file_too_large") return reply.status(400).send({ error: "FILE_TOO_LARGE" });
+      if (m === "mime_not_allowed") {
+        req.log?.warn?.({ event: "chat_attachment_validation_failed", reason: "mime_not_allowed", tenantId, threadId, mimeType });
+        return reply.status(400).send({ error: "MIME_NOT_ALLOWED" });
+      }
+      if (m === "file_too_large") {
+        req.log?.warn?.({ event: "chat_attachment_validation_failed", reason: "file_too_large", tenantId, threadId, sizeBytes: fileBuf?.length ?? 0, limitBytes: maxB });
+        return reply.status(400).send({ error: "FILE_TOO_LARGE" });
+      }
       throw e;
     }
   });

@@ -187,6 +187,13 @@ export type ChatAttachment = {
   sizeBytes: number;
   scanStatus?: string | null;
   downloadUrl: string | null;
+  /** "image" | "audio" | "video" | "file" — server-derived classifier for UI branching. */
+  mediaKind?: string | null;
+  /** Audio/video duration in milliseconds (server-probed via ffprobe). */
+  durationMs?: number | null;
+  /** Image/video pixel dimensions (server-probed). */
+  width?: number | null;
+  height?: number | null;
 };
 
 export type PendingChatAttachment = {
@@ -195,6 +202,11 @@ export type PendingChatAttachment = {
   sizeBytes: number;
   fileName: string;
   localUri?: string;
+  /** Optional metadata captured at upload time so optimistic bubbles size correctly. */
+  mediaKind?: string;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
 };
 
 export type ChatLocation = {

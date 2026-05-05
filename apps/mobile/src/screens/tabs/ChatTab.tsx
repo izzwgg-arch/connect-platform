@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -21,6 +22,7 @@ import {
 import { Audio, ResizeMode, Video } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -194,6 +196,7 @@ export function ChatTab() {
   const [newMode, setNewMode] = useState<ComposerMode>(null);
   const [newSmsPhone, setNewSmsPhone] = useState('');
   const [attachOpen, setAttachOpen] = useState(false);
+  const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
   const [recording, setRecording] = useState(false);
@@ -213,7 +216,7 @@ export function ChatTab() {
 
   const directoryQuery = useQuery({
     queryKey: ['mobile', 'chatDirectory'],
-    enabled: Boolean(token) && Boolean(newMode),
+    enabled: Boolean(token) && (Boolean(newMode) || contactPickerOpen),
     queryFn: () => getChatDirectoryFull(token!),
     staleTime: 5 * 60 * 1000,
     gcTime: 20 * 60 * 1000,
@@ -507,15 +510,59 @@ export function ChatTab() {
     setRecording(false);
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     try {
+      // Capture the duration *before* stopAndUnloadAsync — once the
+      // recorder is unloaded its status no longer reports a duration.
+      let durationMs: number | undefined;
+      try {
+        const status = await rec.getStatusAsync();
+        if (status?.isRecording || status?.isDoneRecording !== undefined) {
+          const ms = Number((status as any)?.durationMillis);
+          if (Number.isFinite(ms) && ms > 0) durationMs = Math.round(ms);
+        }
+      } catch {
+        /* non-fatal — server-side ffprobe will fill in durationMs */
+      }
       await rec.stopAndUnloadAsync();
+      // Discard ultra-short taps (under 600ms) — almost certainly an
+      // accidental press, not a voice note.
+      if (durationMs !== undefined && durationMs < 600) {
+        const uri = rec.getURI();
+        if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+        return;
+      }
       const uri = rec.getURI();
       if (!uri) return;
       const attachment = await uploadLocalFile({ uri, name: `voice-note-${Date.now()}.m4a`, type: 'audio/mp4' });
-      if (attachment) await sendPreparedMessage({ body: '', type: 'VOICE_NOTE', attachments: [attachment] });
+      if (attachment) {
+        const enriched: PendingChatAttachment = {
+          ...attachment,
+          mediaKind: attachment.mediaKind ?? 'audio',
+          durationMs: attachment.durationMs ?? durationMs ?? null,
+        };
+        await sendPreparedMessage({ body: '', type: 'VOICE_NOTE', attachments: [enriched] });
+      }
     } catch (err: any) {
       showToast(err?.message || 'Could not send voice note.');
     }
   }, [sendPreparedMessage, showToast, uploadLocalFile]);
+
+  const cancelRecording = useCallback(async () => {
+    const rec = recordingRef.current;
+    if (!rec) {
+      setRecording(false);
+      return;
+    }
+    recordingRef.current = null;
+    setRecording(false);
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+    } catch {
+      /* recorder already torn down */
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+  }, []);
 
   const handleDraftChange = useCallback((value: string) => {
     setDraft(value);
@@ -776,6 +823,7 @@ export function ChatTab() {
             onSend={send}
             onRecordStart={startRecording}
             onRecordEnd={stopRecording}
+            onRecordCancel={cancelRecording}
             recording={recording}
             bottomInset={Math.max(insets.bottom, 10)}
           />
@@ -807,7 +855,31 @@ export function ChatTab() {
         onCamera={() => captureCamera(false)}
         onVideo={() => captureCamera(true)}
         onLocation={shareLocation}
-        onContact={() => showToast('Contact sharing uses directory selection in this build.')}
+        onContact={() => {
+          setAttachOpen(false);
+          setContactPickerOpen(true);
+        }}
+      />
+      <ContactPicker
+        visible={contactPickerOpen}
+        users={(directoryQuery.data?.users ?? []).filter((u) => !u.self)}
+        loading={directoryQuery.isLoading}
+        onClose={() => setContactPickerOpen(false)}
+        onPick={(user) => {
+          // Build a tiny vCard-style snippet that survives both DM rendering
+          // and SMS character encoding. The recipient can copy/paste into
+          // their own contacts app — no native Contacts permission needed.
+          const lines = [
+            'BEGIN:VCARD',
+            'VERSION:3.0',
+            `FN:${user.name || user.email}`,
+            user.email ? `EMAIL:${user.email}` : null,
+            user.extensionNumber ? `TEL;TYPE=WORK,VOICE:Ext ${user.extensionNumber}` : null,
+            'END:VCARD',
+          ].filter(Boolean).join('\n');
+          setDraft((current) => current ? `${current}\n${lines}` : lines);
+          setContactPickerOpen(false);
+        }}
       />
       <EmojiPanel visible={emojiOpen} onPick={(emoji) => setDraft((v) => `${v}${emoji}`)} onClose={() => setEmojiOpen(false)} />
       <MessageActions
@@ -1041,6 +1113,7 @@ function Composer({
   onSend,
   onRecordStart,
   onRecordEnd,
+  onRecordCancel,
   recording,
   bottomInset,
 }: {
@@ -1056,11 +1129,98 @@ function Composer({
   onSend: () => void;
   onRecordStart: () => void;
   onRecordEnd: () => void;
+  onRecordCancel: () => void;
   recording: boolean;
   bottomInset: number;
 }) {
   const { colors } = useTheme();
   const canSend = Boolean(draft.trim() || pending.length);
+
+  // Slide-to-cancel state for the WhatsApp-style mic button. Drag the
+  // mic upward (or leftward >= CANCEL_THRESHOLD_PX) to discard the
+  // recording instead of sending it. We track the gesture with a
+  // PanResponder bound to the mic button's wrapper so the parent's
+  // existing scroll/pan handlers don't fight us.
+  const CANCEL_THRESHOLD_PX = 80;
+  const cancelOffset = useRef(new Animated.Value(0)).current;
+  const cancelTriggeredRef = useRef(false);
+  const recordingStartRef = useRef<number | null>(null);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const recordTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (recording) {
+      recordingStartRef.current = Date.now();
+      setRecordSecs(0);
+      recordTickRef.current = setInterval(() => {
+        if (recordingStartRef.current) {
+          setRecordSecs(Math.floor((Date.now() - recordingStartRef.current) / 1000));
+        }
+      }, 250);
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+          Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+        ]),
+      ).start();
+    } else {
+      if (recordTickRef.current) {
+        clearInterval(recordTickRef.current);
+        recordTickRef.current = null;
+      }
+      recordingStartRef.current = null;
+      setRecordSecs(0);
+      pulse.stopAnimation();
+      pulse.setValue(0);
+      cancelTriggeredRef.current = false;
+      cancelOffset.setValue(0);
+    }
+    return () => {
+      if (recordTickRef.current) {
+        clearInterval(recordTickRef.current);
+        recordTickRef.current = null;
+      }
+    };
+  }, [cancelOffset, pulse, recording]);
+
+  const micPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          cancelTriggeredRef.current = false;
+          cancelOffset.setValue(0);
+          onRecordStart();
+        },
+        onPanResponderMove: (_, gesture) => {
+          // Either upward (-dy) or leftward (-dx). We track the larger
+          // axis so the user can flick in whichever direction feels
+          // natural with their thumb.
+          const offset = Math.max(0, Math.max(-gesture.dy, -gesture.dx));
+          cancelOffset.setValue(offset);
+          if (offset >= CANCEL_THRESHOLD_PX && !cancelTriggeredRef.current) {
+            cancelTriggeredRef.current = true;
+          }
+        },
+        onPanResponderRelease: () => {
+          if (cancelTriggeredRef.current) {
+            onRecordCancel();
+          } else {
+            onRecordEnd();
+          }
+        },
+        onPanResponderTerminate: () => {
+          if (cancelTriggeredRef.current) onRecordCancel();
+          else onRecordEnd();
+        },
+      }),
+    [cancelOffset, onRecordCancel, onRecordEnd, onRecordStart],
+  );
+
+  const recordingTimeText = `${Math.floor(recordSecs / 60)}:${(recordSecs % 60).toString().padStart(2, '0')}`;
+
   return (
     <View style={[styles.composerShell, { paddingBottom: bottomInset }]}>
       {replyingTo ? (
@@ -1081,10 +1241,35 @@ function Composer({
         </ScrollView>
       ) : null}
       {recording ? (
-        <View style={[styles.recordingBar, { backgroundColor: colors.dangerMuted, borderColor: colors.danger }]}>
-          <View style={[styles.recordDot, { backgroundColor: colors.danger }]} />
-          <Text style={[styles.recordingText, { color: colors.dangerText }]}>Recording... release to send</Text>
-        </View>
+        <Animated.View
+          style={[
+            styles.recordingBar,
+            { backgroundColor: colors.dangerMuted, borderColor: colors.danger, opacity: cancelOffset.interpolate({ inputRange: [0, CANCEL_THRESHOLD_PX], outputRange: [1, 0.55], extrapolate: 'clamp' }) },
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.recordDot,
+              { backgroundColor: colors.danger, opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) },
+            ]}
+          />
+          <Text style={[styles.recordingText, { color: colors.dangerText }]}>{recordingTimeText}</Text>
+          <Animated.Text
+            style={[
+              styles.recordSlideHint,
+              {
+                color: colors.dangerText,
+                transform: [{ translateX: cancelOffset.interpolate({ inputRange: [0, CANCEL_THRESHOLD_PX], outputRange: [0, -CANCEL_THRESHOLD_PX], extrapolate: 'clamp' }) }],
+              },
+            ]}
+            numberOfLines={1}
+          >
+            ◀ Slide to cancel
+          </Animated.Text>
+          <TouchableOpacity style={[styles.recordCancelChip, { backgroundColor: colors.danger }]} onPress={onRecordCancel}>
+            <Text style={[styles.recordCancelText, { color: '#fff' }]}>Cancel</Text>
+          </TouchableOpacity>
+        </Animated.View>
       ) : null}
       <View style={styles.composeRow}>
         <View style={[styles.composerField, { borderColor: colors.border }]}>
@@ -1109,7 +1294,21 @@ function Composer({
         {canSend ? (
           <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.primary }]} onPress={onSend}><Ionicons name="send" size={18} color="#fff" /></TouchableOpacity>
         ) : (
-          <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.primary }]} onPressIn={onRecordStart} onPressOut={onRecordEnd}><Ionicons name="mic" size={19} color="#fff" /></TouchableOpacity>
+          <Animated.View
+            style={[
+              styles.sendBtn,
+              {
+                backgroundColor: colors.primary,
+                transform: [
+                  { translateY: cancelOffset.interpolate({ inputRange: [0, CANCEL_THRESHOLD_PX], outputRange: [0, -CANCEL_THRESHOLD_PX], extrapolate: 'clamp' }) },
+                  { scale: recording ? 1.18 : 1 },
+                ],
+              },
+            ]}
+            {...micPanResponder.panHandlers}
+          >
+            <Ionicons name="mic" size={19} color="#fff" />
+          </Animated.View>
         )}
       </View>
     </View>
@@ -1244,6 +1443,63 @@ function AttachmentMenu({ visible, onClose, onDocument, onLibrary, onCamera, onV
               </TouchableOpacity>
             ))}
           </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function ContactPicker({ visible, users, loading, onClose, onPick }: {
+  visible: boolean;
+  users: ChatDirectoryUser[];
+  loading: boolean;
+  onClose: () => void;
+  onPick: (user: ChatDirectoryUser) => void;
+}) {
+  const { colors } = useTheme();
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || String(u.extensionNumber || '').includes(q));
+  }, [search, users]);
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={[styles.sheetCard, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => undefined}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Share contact</Text>
+              <Text style={[styles.modalSub, { color: colors.textSecondary }]}>Insert a teammate's contact card.</Text>
+            </View>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={colors.textSecondary} /></TouchableOpacity>
+          </View>
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search teammates"
+            placeholderTextColor={colors.textTertiary}
+            style={[styles.modalInput, { color: colors.text, backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}
+          />
+          {loading ? <ActivityIndicator color={colors.primary} /> : (
+            <FlatList
+              data={filtered}
+              keyExtractor={(item) => item.id}
+              style={styles.userList}
+              bounces={false}
+              overScrollMode="never"
+              renderItem={({ item }) => (
+                <TouchableOpacity style={[styles.userRow, { borderBottomColor: colors.borderSubtle }]} onPress={() => onPick(item)}>
+                  <Avatar name={item.name || item.email} size="sm" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.userName, { color: colors.text }]}>{item.name || item.email}</Text>
+                    <Text style={[styles.userMeta, { color: colors.textSecondary }]}>{item.extensionNumber ? `Ext ${item.extensionNumber}` : item.email}</Text>
+                  </View>
+                  <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+                </TouchableOpacity>
+              )}
+            />
+          )}
         </Pressable>
       </Pressable>
     </Modal>
@@ -1438,6 +1694,9 @@ const styles = StyleSheet.create({
   recordingBar: { borderRadius: 16, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 8 },
   recordDot: { width: 9, height: 9, borderRadius: 5 },
   recordingText: { fontSize: 12, fontWeight: '900' },
+  recordSlideHint: { flex: 1, fontSize: 12, fontWeight: '800', textAlign: 'center', opacity: 0.85 },
+  recordCancelChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  recordCancelText: { fontSize: 12, fontWeight: '900' },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)', padding: spacing['5'] },
   sheetCard: { borderRadius: 24, borderWidth: 1, padding: spacing['4'], maxHeight: '82%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing['3'] },

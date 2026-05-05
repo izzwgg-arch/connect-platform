@@ -12,6 +12,10 @@
     "./chatSignedUrl": {
       "types": "./src/chatSignedUrl.ts",
       "default": "./src/chatSignedUrl.ts"
+    },
+    "./chatAttachmentStorage": {
+      "types": "./src/chatAttachmentStorage.ts",
+      "default": "./src/chatAttachmentStorage.ts"
     }
   },
   "scripts": {
@@ -20,6 +24,7 @@
     "lint": "echo lint-shared"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1037.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

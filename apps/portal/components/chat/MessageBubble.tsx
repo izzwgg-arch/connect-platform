@@ -67,9 +67,23 @@ export function MessageBubble({
                   <small>{message.location.address || `${message.location.lat.toFixed(5)}, ${message.location.lng.toFixed(5)}`}</small>
                 </a>
               ) : null}
-              {message.mmsUrls?.map((url) => (
-                <a key={url} href={url} target="_blank" rel="noreferrer" className="cc-mms-link">Open MMS media</a>
-              ))}
+              {message.mmsUrls?.length ? (
+                <div className="cc-attach-stack">
+                  {message.mmsUrls.map((url, idx) => (
+                    <AttachmentPreview
+                      key={url}
+                      attachment={{
+                        id: `${message.id}:mms:${idx}`,
+                        fileName: "MMS media",
+                        mimeType: "image/*",
+                        sizeBytes: 0,
+                        downloadUrl: url,
+                        mediaKind: "image",
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
               {message.attachments?.length ? (
                 <div className="cc-attach-stack">
                   {message.attachments.map((attachment) => <AttachmentPreview key={attachment.id} attachment={attachment} />)}

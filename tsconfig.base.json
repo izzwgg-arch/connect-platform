@@ -16,6 +16,9 @@
       "@connect/shared/chatSignedUrl": [
         "packages/shared/src/chatSignedUrl.ts"
       ],
+      "@connect/shared/chatAttachmentStorage": [
+        "packages/shared/src/chatAttachmentStorage.ts"
+      ],
       "@connect/db": [
         "packages/db/src"
       ],

@@ -2775,6 +2775,15 @@ model ConnectChatMessageAttachment {
   storageKey  String
   contentHash String?
   scanStatus  String             @default("pending")
+  // Cached classifier ("image" | "audio" | "video" | "file") so the chat UI
+  // can pick a bubble renderer without re-parsing the MIME on every render.
+  mediaKind   String             @default("file")
+  // Audio + video duration captured at upload time (ffprobe); null for images
+  // and any media we couldn't probe.
+  durationMs  Int?
+  // Image + video pixel dimensions captured at upload time; null otherwise.
+  width       Int?
+  height      Int?
   createdAt   DateTime           @default(now())
   message     ConnectChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 

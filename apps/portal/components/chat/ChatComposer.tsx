@@ -58,13 +58,21 @@ export function ChatComposer({
     // Voice notes upload through the same tenant-scoped attachment pipeline.
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") return;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : undefined });
+    // Prefer audio/mp4 so the server-side worker converter is fed the same
+    // container as the mobile recorder. webm is the cross-browser fallback.
+    const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
+      ? "audio/mp4"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : undefined;
+    const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     chunksRef.current = [];
     rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     rec.onstop = () => {
       stream.getTracks().forEach((track) => track.stop());
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
-      const file = new File([blob], `voice-note-${Date.now()}.webm`, { type: blob.type });
+      const ext = (rec.mimeType || "audio/webm").includes("mp4") ? "m4a" : "webm";
+      const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
       onAttachFiles([file]);
       setRecording(false);
       setRecordSeconds(0);
@@ -73,6 +81,12 @@ export function ChatComposer({
     rec.start();
     setRecordSeconds(0);
     setRecording(true);
+  }
+
+  function formatRecordTime(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
   function stopRecording(send: boolean) {
@@ -124,7 +138,9 @@ export function ChatComposer({
       {recording ? (
         <div className="cc-recording">
           <span className="cc-record-dot" />
-          Recording {recordSeconds}s
+          <strong>Recording voice note</strong>
+          <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatRecordTime(recordSeconds)}</span>
+          {thread.type === "SMS" ? <small>Will send as MMS audio</small> : null}
           <button type="button" onClick={() => stopRecording(false)}><Trash2 size={15} /> Cancel</button>
           <button type="button" onClick={() => stopRecording(true)}><Square size={15} /> Stop</button>
         </div>

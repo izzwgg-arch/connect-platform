@@ -160,6 +160,13 @@ export async function apiUploadChatAttachment(
   sizeBytes: number;
   mimeType: string;
   fileName: string;
+  /** Server-classified media kind: "image" | "audio" | "video" | "file". */
+  mediaKind?: string | null;
+  /** ffprobe-derived duration for audio/video (milliseconds). */
+  durationMs?: number | null;
+  /** image-size / ffprobe pixel dimensions for image/video. */
+  width?: number | null;
+  height?: number | null;
 }> {
   const fd = new FormData();
   fd.append("file", file);

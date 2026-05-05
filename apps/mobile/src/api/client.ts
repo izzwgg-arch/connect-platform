@@ -325,6 +325,10 @@ export async function uploadChatAttachment(
     sizeBytes: Number(json.sizeBytes || 0),
     fileName: String(json.fileName || file.name),
     localUri: file.uri,
+    mediaKind: typeof json.mediaKind === "string" ? json.mediaKind : undefined,
+    durationMs: typeof json.durationMs === "number" ? json.durationMs : null,
+    width: typeof json.width === "number" ? json.width : null,
+    height: typeof json.height === "number" ? json.height : null,
   };
 }
 
@@ -334,7 +338,16 @@ export async function sendChatMessage(token: string, threadId: string, input: st
     type: input.type,
     replyToMessageId: input.replyToMessageId,
     location: input.location,
-    attachments: input.attachments?.map(({ storageKey, mimeType, sizeBytes, fileName }) => ({ storageKey, mimeType, sizeBytes, fileName })),
+    attachments: input.attachments?.map(({ storageKey, mimeType, sizeBytes, fileName, mediaKind, durationMs, width, height }) => ({
+      storageKey,
+      mimeType,
+      sizeBytes,
+      fileName,
+      mediaKind,
+      durationMs: durationMs ?? undefined,
+      width: width ?? undefined,
+      height: height ?? undefined,
+    })),
   };
   const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
     method: "POST",

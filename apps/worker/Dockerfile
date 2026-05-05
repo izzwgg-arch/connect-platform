@@ -1,7 +1,10 @@
 FROM node:20-bookworm-slim
 WORKDIR /app
 ENV CI=true
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+# ffmpeg powers the MMS audio converter (apps/worker/src/mmsAudioConvert.ts)
+# which transcodes voice notes into a tiny mono AAC m4a so they survive
+# carrier MMS gateways. openssl stays for prisma + general TLS.
+RUN apt-get update -y && apt-get install -y openssl ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY . .
 # Install workspace deps (identical to api image so tsx / prisma / mysql2 etc.
