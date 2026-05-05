@@ -22,8 +22,9 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { apiGet } from "../services/apiClient";
-import { loadSmsThreads, type SmsThread } from "../services/platformData";
+import { apiGet, getPortalApiBaseUrl } from "../services/apiClient";
+import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
+import { readAuthToken } from "../services/session";
 
 type TabKey = "dialer" | "calls" | "messages" | "voicemail";
 
@@ -47,6 +48,13 @@ type MiniVoicemail = {
   durationSec: number;
   listened: boolean;
   streamUrl?: string;
+};
+
+type DialSuggestion = {
+  id: string;
+  label: string;
+  number: string;
+  meta: string;
 };
 
 const KEYS: Array<[string, string]> = [
@@ -89,6 +97,16 @@ function callStatusLabel(callState: string): string {
   return "Idle";
 }
 
+function digitsOnly(value: string | null | undefined): string {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function voicemailStreamUrl(id: string): string {
+  const token = readAuthToken();
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${getPortalApiBaseUrl()}/voice/voicemail/${encodeURIComponent(id)}/stream${tokenQuery}`;
+}
+
 function useCallTimer(active: boolean): number {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
@@ -108,6 +126,7 @@ export function DesktopMiniDialer() {
   const { user, tenant, adminScope } = useAppContext();
   const [tab, setTab] = useState<TabKey>("dialer");
   const [calls, setCalls] = useState<MiniCallRow[]>([]);
+  const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
   const [settings, setSettings] = useState<{ alwaysOnTop?: boolean }>({});
@@ -126,6 +145,41 @@ export function DesktopMiniDialer() {
     [phone.outboundRoutes],
   );
 
+  const dialQuery = digitsOnly(phone.dialpadInput);
+
+  const dialSuggestions = useMemo<DialSuggestion[]>(() => {
+    if (dialQuery.length < 2) return [];
+    const suggestions = new Map<string, DialSuggestion>();
+    const addSuggestion = (suggestion: DialSuggestion) => {
+      const numberDigits = digitsOnly(suggestion.number);
+      if (!numberDigits.includes(dialQuery)) return;
+      if (!suggestions.has(numberDigits)) suggestions.set(numberDigits, suggestion);
+    };
+
+    for (const contact of contacts) {
+      if (!contact.number || contact.number === "-") continue;
+      addSuggestion({
+        id: `contact-${contact.id}`,
+        label: contact.name || contact.company || contact.number,
+        number: contact.number,
+        meta: contact.company && contact.company !== "-" ? contact.company : "Contact",
+      });
+    }
+
+    for (const call of calls) {
+      const target = call.direction === "outgoing" ? call.toNumber : call.fromNumber;
+      if (!target) continue;
+      addSuggestion({
+        id: `call-${call.rowId || call.callId || target}-${call.startedAt || ""}`,
+        label: call.fromName || target,
+        number: target,
+        meta: shortTime(call.startedAt) || "Recent call",
+      });
+    }
+
+    return Array.from(suggestions.values()).slice(0, 3);
+  }, [calls, contacts, dialQuery]);
+
   const refreshLists = useCallback(() => {
     apiGet<{ items?: MiniCallRow[] }>("/calls/history?page=1&pageSize=20")
       .then((result) => setCalls(Array.isArray(result.items) ? result.items : []))
@@ -137,6 +191,27 @@ export function DesktopMiniDialer() {
       .then((result) => setVoicemails(Array.isArray(result.voicemails) ? result.voicemails : []))
       .catch(() => setVoicemails([]));
   }, [adminScope]);
+
+  useEffect(() => {
+    if (dialQuery.length < 2) {
+      setContacts([]);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      loadContacts(dialQuery, adminScope)
+        .then((result) => {
+          if (active) setContacts(result.rows.slice(0, 8));
+        })
+        .catch(() => {
+          if (active) setContacts([]);
+        });
+    }, 150);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [adminScope, dialQuery]);
 
   useEffect(() => {
     refreshLists();
@@ -223,20 +298,6 @@ export function DesktopMiniDialer() {
         </section>
       )}
 
-      <nav className="mini-tabs">
-        {[
-          ["dialer", Phone, "Dialer"],
-          ["calls", Clock3, "Calls"],
-          ["messages", MessageSquare, "Messages"],
-          ["voicemail", Voicemail, "Voicemail"],
-        ].map(([key, Icon, label]) => (
-          <button key={String(key)} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
-            <Icon size={16} />
-            <span>{label as string}</span>
-          </button>
-        ))}
-      </nav>
-
       <section className="mini-content">
         {tab === "dialer" && (
           <div className="dialer-pane">
@@ -257,17 +318,16 @@ export function DesktopMiniDialer() {
             >
               {routeOptions.map((route) => <option key={route.id || "none"} value={route.id}>{route.name}</option>)}
             </select>
-            <div className="suggestions">
-              {calls.slice(0, 3).map((call) => {
-                const target = call.direction === "outgoing" ? call.toNumber : call.fromNumber;
-                return (
-                  <button key={call.rowId || call.callId || target} onClick={() => target && phone.setDialpadInput(target)}>
-                    <span>{call.fromName || target || "Recent call"}</span>
-                    <small>{shortTime(call.startedAt)}</small>
+            {dialSuggestions.length > 0 && (
+              <div className="suggestions">
+                {dialSuggestions.map((suggestion) => (
+                  <button key={suggestion.id} onClick={() => phone.setDialpadInput(suggestion.number)}>
+                    <span>{suggestion.label}</span>
+                    <small>{suggestion.number} · {suggestion.meta}</small>
                   </button>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
             <div className="keypad">
               {KEYS.map(([digit, letters]) => (
                 <button key={digit} onClick={() => appendDigit(digit)}>
@@ -336,7 +396,7 @@ export function DesktopMiniDialer() {
                 <div>
                   <strong>{vm.callerName || vm.callerId}</strong>
                   <span>{shortTime(vm.receivedAt)} · {formatDuration(vm.durationSec)}</span>
-                  {vm.streamUrl && <audio controls preload="none" src={vm.streamUrl} />}
+                  <audio controls preload="none" src={vm.streamUrl || voicemailStreamUrl(vm.id)} />
                 </div>
                 <button onClick={() => callTarget(vm.callerId)}>Call</button>
               </article>
@@ -347,9 +407,26 @@ export function DesktopMiniDialer() {
         )}
       </section>
 
+      <nav className="mini-tabs">
+        {[
+          ["dialer", Phone, "Dialer"],
+          ["calls", Clock3, "Calls"],
+          ["messages", MessageSquare, "Messages"],
+          ["voicemail", Voicemail, "Voicemail"],
+        ].map(([key, Icon, label]) => (
+          <button key={String(key)} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
+            <Icon size={16} />
+            <span>{label as string}</span>
+          </button>
+        ))}
+      </nav>
+
       <style jsx>{`
         .mini-shell {
+          height: 100vh;
           min-height: 100vh;
+          display: flex;
+          flex-direction: column;
           color: #e5eefb;
           background:
             radial-gradient(circle at 10% 0%, rgba(33, 150, 243, 0.20), transparent 34%),
@@ -454,7 +531,10 @@ export function DesktopMiniDialer() {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: 7px;
-          padding: 8px 12px;
+          padding: 8px 12px 12px;
+          border-top: 1px solid rgba(148, 163, 184, 0.10);
+          background: rgba(7, 17, 31, 0.72);
+          backdrop-filter: blur(16px);
         }
         .mini-tabs button {
           padding: 9px 5px;
@@ -473,7 +553,7 @@ export function DesktopMiniDialer() {
           background: rgba(14, 165, 233, .18);
           border-color: rgba(56, 189, 248, .34);
         }
-        .mini-content { height: calc(100vh - 116px); overflow: auto; padding: 0 12px 14px; }
+        .mini-content { flex: 1; min-height: 0; overflow: auto; padding: 12px 12px 14px; }
         .dialer-pane { display: flex; flex-direction: column; gap: 10px; }
         .number-input, .route-select, .quick-reply input {
           width: 100%;
@@ -490,11 +570,13 @@ export function DesktopMiniDialer() {
         .suggestions button {
           display: flex;
           justify-content: space-between;
+          align-items: center;
+          gap: 10px;
           padding: 8px 10px;
           border-radius: 14px;
           background: rgba(255,255,255,.05);
         }
-        .suggestions small { color: #94a3b8; }
+        .suggestions small { color: #94a3b8; text-align: right; }
         .keypad {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
@@ -551,7 +633,7 @@ export function DesktopMiniDialer() {
         .row-icon { width: 36px; height: 36px; border-radius: 14px; }
         .row-icon.missed { background: rgba(239,68,68,.18); }
         .row-icon.new { background: rgba(34,197,94,.20); }
-        .voicemail-row audio { width: 100%; height: 30px; margin-top: 6px; }
+        .voicemail-row audio { width: 100%; height: 34px; margin-top: 7px; }
         .quick-reply { display: grid; grid-template-columns: 1fr 42px; gap: 8px; margin-top: 8px; }
         .open-full { margin-top: 4px; width: 100%; }
         .empty { text-align: center; color: #94a3b8; padding: 32px 10px; }
