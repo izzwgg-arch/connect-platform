@@ -2137,11 +2137,11 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/tenant-users", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/settings/webrtc", permission: "can_view_pbx_softphone" },
-  // Self-scoped softphone config for the logged-in user only — same bar as Overview.
-  // The floating dialer is global; gate with workspace overview, not PBX admin nav.
-  { prefix: "/voice/me/extension", permission: "can_view_workspace_overview" },
-  { prefix: "/me/outbound-routes", permission: "can_view_workspace_overview" },
-  { prefix: "/voice/me/reset-sip-password", permission: "can_view_workspace_overview" },
+  // Self-scoped softphone config — accessible to any authenticated user.
+  // These return ONLY the calling user's own data; no permission gate needed beyond JWT auth.
+  // Removing from the rule list lets them fall through to the handler's own checks.
+  // (A stored DB permission snapshot could strip "can_view_workspace_overview" from END_USER,
+  //  so gating on any portal permission here would silently block all regular users.)
   { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
