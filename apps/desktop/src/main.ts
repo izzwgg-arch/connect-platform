@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   miniBounds: DEFAULT_MINI_BOUNDS,
 };
 
-const portalUrl = (process.env.CONNECT_PORTAL_URL || "http://localhost:3000").replace(/\/$/, "");
+const portalUrl = (process.env.CONNECT_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
 const preloadPath = path.join(__dirname, "preload.js");
 
 let fullWindow: BrowserWindow | null = null;
