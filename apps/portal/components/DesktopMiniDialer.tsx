@@ -145,7 +145,7 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
 
   useEffect(() => {
     const audio = new Audio(src);
-    audio.preload = "metadata";
+    audio.preload = "none";
     audioRef.current = audio;
 
     const updateTime = () => setCurrent(audio.currentTime || 0);
@@ -188,6 +188,7 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
       setPlaying(false);
       return;
     }
+    setError(false);
     audio.play()
       .then(() => setPlaying(true))
       .catch(() => {

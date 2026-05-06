@@ -14828,11 +14828,6 @@ async function streamVoicemailAudio(
   };
   let audioUrl = audioUrlForRecfile(recfile);
 
-  if (!audioUrl) {
-    reply.code(503).send({ error: "audio_unavailable", reason: "no_recfile" });
-    return;
-  }
-
   const fetchPbxAudio = (url: string) => fetch(url, {
     headers: {
       // recfile tokens are self-authenticating, but send app-key too in case the
@@ -14842,6 +14837,43 @@ async function streamVoicemailAudio(
     },
     signal: AbortSignal.timeout(15_000),
   });
+
+  // No recfile stored yet — try to look it up from PBX before giving up.
+  if (!audioUrl && vm.pbxExtensionId) {
+    app.log.info({ vmId: vm.id }, "voicemail: no stored recfile — fetching from PBX");
+    try {
+      const pbx = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+      const records = await pbx.getExtensionVoicemailRecords(vm.pbxExtensionId, link.pbxTenantId ?? undefined);
+      const receivedEpoch = Math.floor(new Date(vm.receivedAt).getTime() / 1000);
+      const refreshed = records.find((rec: any) => {
+        const candidateRecfile = String(rec.recfile ?? "");
+        const candidateFilename = String(rec.filename ?? "");
+        const candidateMsgId = String(rec.msg_id ?? "");
+        const fileDerivedMsgNum = (candidateFilename || candidateRecfile).split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
+        const candidateMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? fileDerivedMsgNum);
+        const candidateDate = Number(rec.date ?? rec.origtime ?? rec.orig_time ?? 0);
+        return (
+          (candidateMsgId && candidateMsgId === vm.pbxMessageId) ||
+          (candidateMsgNum && candidateMsgNum === vm.pbxMsgNum) ||
+          (candidateDate > 0 && Math.abs(candidateDate - receivedEpoch) <= 2)
+        );
+      });
+      const refreshedRecfile = String((refreshed as any)?.recfile ?? "").trim();
+      const refreshedUrl = audioUrlForRecfile(refreshedRecfile);
+      if (refreshedUrl) {
+        recfile = refreshedRecfile;
+        audioUrl = refreshedUrl;
+        await db.voicemail.update({ where: { id: vm.id }, data: { pbxRecfile: refreshedRecfile } }).catch(() => undefined);
+      }
+    } catch (err: any) {
+      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: initial recfile fetch from PBX failed");
+    }
+  }
+
+  if (!audioUrl) {
+    reply.code(503).send({ error: "audio_unavailable", reason: "no_recfile" });
+    return;
+  }
 
   let pbxResp = await fetchPbxAudio(audioUrl);
 

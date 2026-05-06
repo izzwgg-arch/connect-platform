@@ -297,8 +297,13 @@ function registerIpc(): void {
     if (envelope.type === "state") latestPhoneStateEnvelope = envelope;
     sendPhoneEventToRenderers(envelope);
     if (envelope.type === "state") {
-      const state = envelope.payload as { callState?: string; ringingSessionIds?: unknown[]; remoteParty?: string | null };
-      if (state.callState === "ringing" || (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0)) {
+      const state = envelope.payload as { callState?: string; callDirection?: string; ringingSessionIds?: unknown[]; remoteParty?: string | null };
+      // Only react to genuinely inbound ringing — never for outbound calls where
+      // the remote phone is ringing (callDirection === "outbound").
+      const isInboundRing =
+        (state.callState === "ringing" && state.callDirection !== "outbound") ||
+        (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
+      if (isInboundRing) {
         showMiniForIncomingCall();
         if (Notification.isSupported()) {
           const note = new Notification({
