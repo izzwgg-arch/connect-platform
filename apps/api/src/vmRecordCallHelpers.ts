@@ -34,6 +34,33 @@ export type VmRecordErrorCode =
   | "internal_error";
 
 /**
+ * Validate a caller-supplied PJSIP endpoint hint.
+ *
+ * Rules:
+ *   1. Strip optional "PJSIP/" prefix (case-insensitive).
+ *   2. Must match /^T\d+_\d+(?:_\d+)?$/ (no slashes, no shell chars, no spaces).
+ *   3. Tenant segment must equal pbxTenantId digits.
+ *   4. Extension segment must equal extensionNumber digits.
+ *   5. Optional device-index suffix (_\d+) is allowed.
+ *
+ * Returns the cleaned endpoint string (e.g. "T21_101_2") or null when invalid.
+ */
+export function validateCallerSipEndpoint(
+  raw: string | null | undefined,
+  pbxTenantId: string,
+  extensionNumber: string,
+): string | null {
+  if (!raw) return null;
+  const cleaned = String(raw).trim().replace(/^PJSIP\//i, "");
+  if (!/^T\d+_\d+(?:_\d+)?$/.test(cleaned)) return null;
+  const tenantNum = String(pbxTenantId).replace(/\D/g, "");
+  const extNum = String(extensionNumber).replace(/\D/g, "");
+  const expected = `T${tenantNum}_${extNum}`;
+  if (cleaned !== expected && !cleaned.startsWith(`${expected}_`)) return null;
+  return cleaned;
+}
+
+/**
  * Parse `pjsip show contacts` (or helper-captured equivalent) for Avail contacts
  * whose endpoint name matches T{tenant}_{ext} or T{tenant}_{ext}_suffix.
  */

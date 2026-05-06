@@ -6,6 +6,7 @@ import { useAppContext } from "../hooks/useAppContext";
 import { getWebRingerEnabled, setWebRingerEnabled } from "../hooks/telephonyAudioPreferences";
 import { apiDelete, apiGet, apiPost, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
 import { clearAuthSession } from "../services/session";
+import { useSipPhone } from "../hooks/useSipPhone";
 import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
 import { ConnectSelect } from "./ConnectSelect";
@@ -53,6 +54,8 @@ type VmRecordJobStatus = {
   pbxTenantId?: string;
   greetingType?: string;
   pjsipEndpointHint?: string | null;
+  callerSipEndpointRequested?: string | null;
+  callerSipEndpointAccepted?: string | null;
   wake?: {
     sent?: boolean;
     registered?: boolean;
@@ -116,6 +119,7 @@ export function ProfileMenu() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
   const { user, tenant, role, setRole, theme, setTheme, setUserAvatarUrl } = useAppContext();
+  const sipPhone = useSipPhone();
   const closeMenu = useCallback(() => setOpen(false), []);
   const displayName = formatTopbarUserName(user.name, user.email);
   const avatarText = initialsFor(displayName);
@@ -241,9 +245,10 @@ export function ProfileMenu() {
     setVmRecordJob(null);
     setUploadMessage("Starting Call to Record…");
     try {
+      const callerSipEndpoint = sipPhone.diag.sipUsername || undefined;
       const res = await apiPost<VmRecordJobStatus>(
         "/voicemail/greeting/record-call",
-        { greetingType: "unavailable" },
+        { greetingType: "unavailable", callerSipEndpoint },
         undefined,
         { timeoutMs: 120_000 },
       );
@@ -372,7 +377,21 @@ export function ProfileMenu() {
                 <div>
                   <strong>Extension</strong> {vmRecordJob.extension}
                   {vmRecordJob.pbxTenantId ? ` · PBX tenant ${vmRecordJob.pbxTenantId}` : null}
-                  {vmRecordJob.pjsipEndpointHint ? ` · Endpoint ${vmRecordJob.pjsipEndpointHint}` : null}
+                  {vmRecordJob.pjsipEndpointHint ? ` · Hint ${vmRecordJob.pjsipEndpointHint}` : null}
+                </div>
+              ) : null}
+              {(vmRecordJob.callerSipEndpointRequested != null || vmRecordJob.callerSipEndpointAccepted != null) ? (
+                <div>
+                  <strong>Caller endpoint</strong>{" "}
+                  requested: {vmRecordJob.callerSipEndpointRequested || "—"}
+                  {" · "}
+                  accepted: {vmRecordJob.callerSipEndpointAccepted || "rejected"}
+                </div>
+              ) : null}
+              {typeof vmRecordJob.helper?.channel === "string" ? (
+                <div>
+                  <strong>Helper channel</strong> {vmRecordJob.helper.channel}
+                  {typeof vmRecordJob.helper?.channelSource === "string" ? ` (${vmRecordJob.helper.channelSource})` : null}
                 </div>
               ) : null}
               {vmRecordJob.wake ? (

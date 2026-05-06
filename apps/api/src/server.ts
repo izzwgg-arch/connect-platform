@@ -99,6 +99,7 @@ import {
   runVmRecordCallJob,
   type VmRecordCallDeps,
 } from "./vmRecordCallJobs";
+import { validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
 const MAX_DAILY_LIMIT = 10000;
@@ -14715,6 +14716,8 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
     extensionId: z.string().optional(),
     extension: z.string().optional(),
     greetingType: z.enum(["unavailable", "busy", "temporary", "name"]).optional(),
+    /** Requesting device's own SIP endpoint — used to originate to the exact device. */
+    callerSipEndpoint: z.string().max(80).optional(),
   }).parse(req.body || {});
   const extension = await resolveVoicemailGreetingExtension(user, input);
   if (!extension || !extension.tenantId) return reply.code(404).send({ error: "extension_not_found" });
@@ -14727,6 +14730,14 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
     (extension as any)?.tenant?.pbxTenantLink?.pbxInstance?.id ??
     null;
 
+  const callerSipEndpointRequested = typeof input.callerSipEndpoint === "string"
+    ? input.callerSipEndpoint.trim() || null
+    : null;
+  const callerSipEndpointAccepted = callerSipEndpointRequested
+    ? validateCallerSipEndpoint(callerSipEndpointRequested, String(pbxTenantId), String(extension.extNumber))
+    : null;
+  const pjsipEndpointHint = callerSipEndpointAccepted ?? pjsipEndpointForExtension(extension);
+
   const jobId = createVmRecordJob({
     ownerUserId: user.sub,
     connectTenantId: extension.tenantId,
@@ -14734,8 +14745,10 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
     extNumber: String(extension.extNumber),
     pbxTenantId: String(pbxTenantId),
     greetingType: normalizeGreetingType(input.greetingType),
-    pjsipEndpointHint: pjsipEndpointForExtension(extension),
+    pjsipEndpointHint,
     pbxInstanceId: pbxInstanceId == null ? null : String(pbxInstanceId),
+    callerSipEndpointRequested,
+    callerSipEndpointAccepted,
   });
 
   const deps: VmRecordCallDeps = {

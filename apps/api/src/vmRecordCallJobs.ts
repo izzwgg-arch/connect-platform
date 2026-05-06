@@ -65,6 +65,10 @@ type InternalVmRecordJob = {
     sha256: string | null;
   } | null;
   error?: VmRecordJobError;
+  /** Caller-supplied endpoint from client request (before validation). */
+  callerSipEndpointRequested?: string | null;
+  /** Endpoint accepted after validation (null when absent or invalid). */
+  callerSipEndpointAccepted?: string | null;
   /** Snapshot before originate — not returned to client */
   beforeActive: boolean;
   beforeSha: string | null;
@@ -114,6 +118,8 @@ export type CreateVmRecordJobInput = {
   greetingType: PbxVoicemailGreetingType;
   pjsipEndpointHint: string | null;
   pbxInstanceId: string | null;
+  callerSipEndpointRequested?: string | null;
+  callerSipEndpointAccepted?: string | null;
 };
 
 export function createVmRecordJob(input: CreateVmRecordJobInput): string {
@@ -138,6 +144,8 @@ export function createVmRecordJob(input: CreateVmRecordJobInput): string {
     matchedEndpoints: [],
     diagAvailable: false,
     diagBypassWithoutDiag: false,
+    callerSipEndpointRequested: input.callerSipEndpointRequested ?? null,
+    callerSipEndpointAccepted: input.callerSipEndpointAccepted ?? null,
     beforeActive: false,
     beforeSha: null,
     beforeUpdatedAt: null,
@@ -170,6 +178,8 @@ export function buildVmRecordJobPublicView(job: InternalVmRecordJob): Record<str
     pbxTenantId: job.pbxTenantId,
     greetingType: job.greetingType,
     pjsipEndpointHint: job.pjsipEndpointHint,
+    callerSipEndpointRequested: job.callerSipEndpointRequested ?? null,
+    callerSipEndpointAccepted: job.callerSipEndpointAccepted ?? null,
     wake: job.wake,
     pjsipContactOk: job.pjsipContactOk,
     matchedEndpoints: job.matchedEndpoints,

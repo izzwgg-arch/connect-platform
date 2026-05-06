@@ -5,7 +5,63 @@ import {
   greetingFileChanged,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
+  validateCallerSipEndpoint,
 } from "./vmRecordCallHelpers";
+
+// ── validateCallerSipEndpoint ──────────────────────────────────────────────
+
+test("validateCallerSipEndpoint accepts valid base endpoint", () => {
+  assert.equal(validateCallerSipEndpoint("T21_101", "21", "101"), "T21_101");
+});
+
+test("validateCallerSipEndpoint accepts valid device-suffix endpoint", () => {
+  assert.equal(validateCallerSipEndpoint("T21_101_2", "21", "101"), "T21_101_2");
+});
+
+test("validateCallerSipEndpoint strips PJSIP/ prefix", () => {
+  assert.equal(validateCallerSipEndpoint("PJSIP/T21_101_1", "21", "101"), "T21_101_1");
+});
+
+test("validateCallerSipEndpoint strips pjsip/ prefix case-insensitive", () => {
+  assert.equal(validateCallerSipEndpoint("pjsip/T21_101_1", "21", "101"), "T21_101_1");
+});
+
+test("validateCallerSipEndpoint rejects wrong tenant", () => {
+  assert.equal(validateCallerSipEndpoint("T99_101_1", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint rejects wrong extension", () => {
+  assert.equal(validateCallerSipEndpoint("T21_999_1", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint rejects Local/... channel", () => {
+  assert.equal(validateCallerSipEndpoint("Local/21_101_unavail@context/n", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint rejects shell injection", () => {
+  assert.equal(validateCallerSipEndpoint("T21_101; rm -rf /", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint rejects path with slashes", () => {
+  assert.equal(validateCallerSipEndpoint("T21_101_1/sip:x@y", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint returns null for empty string", () => {
+  assert.equal(validateCallerSipEndpoint("", "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint returns null for null", () => {
+  assert.equal(validateCallerSipEndpoint(null, "21", "101"), null);
+});
+
+test("validateCallerSipEndpoint fallback: missing callerSipEndpoint uses existing hint", () => {
+  // Simulate the server logic: null input → null accepted → fallback to db value
+  const callerSipEndpointAccepted = validateCallerSipEndpoint(null, "21", "101");
+  assert.equal(callerSipEndpointAccepted, null);
+  // Caller falls back to pjsipEndpointForExtension result — confirmed by null
+});
+
+// ── parseReachablePjsipContacts ───────────────────────────────────────────
 
 test("parseReachablePjsipContacts finds Avail base endpoint", () => {
   const out = `

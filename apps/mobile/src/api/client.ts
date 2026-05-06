@@ -875,6 +875,35 @@ export async function clearCallQualityPing(token: string) {
   }).catch(() => {});
 }
 
+/**
+ * Initiate a voicemail greeting Call-to-Record from the mobile app.
+ *
+ * Pass `callerSipEndpoint` (e.g. "T21_101_2") so the PBX helper originates to
+ * this device's endpoint instead of the stored extension default. The API
+ * validates the endpoint against the authenticated user's tenant + extension;
+ * an invalid value is silently ignored and the stored default is used instead.
+ */
+export async function callVoicemailGreetingRecord(
+  token: string,
+  input: {
+    greetingType?: "unavailable" | "busy" | "temporary" | "name";
+    /** Mobile's own SIP endpoint (e.g. from provisioning bundle sipUsername). */
+    callerSipEndpoint?: string;
+  } = {},
+): Promise<{ ok: boolean; jobId: string; state: string; [key: string]: unknown }> {
+  const res = await fetch(`${API_BASE}/voicemail/greeting/record-call`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      greetingType: input.greetingType ?? "unavailable",
+      ...(input.callerSipEndpoint ? { callerSipEndpoint: input.callerSipEndpoint } : {}),
+    }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VM_GREETING_RECORD_CALL_FAILED");
+  return json;
+}
+
 export async function uploadCallFlightSession(token: string, body: {
   session: Record<string, unknown>;
   stats: Record<string, unknown>;
