@@ -82,6 +82,8 @@ const config: ExpoConfig = {
     infoPlist: {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',
+      NSContactsUsageDescription:
+        'Connect needs access to your phone contacts so you can import them into the app and call them quickly.',
       UIBackgroundModes: ['voip', 'remote-notification', 'audio'],
     },
   },
@@ -120,6 +122,10 @@ const config: ExpoConfig = {
         // (android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).
         // Without this declaration Android rejects the intent with SecurityException.
         'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+        // expo-contacts — required to read the device address book during
+        // an *explicit* user-initiated import. The plugin block below also
+        // adds NSContactsUsageDescription on iOS.
+        'READ_CONTACTS',
       ],
   },
   extra: {
@@ -212,6 +218,13 @@ const config: ExpoConfig = {
       'expo-camera',
       {
         cameraPermission: 'Allow Connect to scan provisioning QR codes.',
+      },
+    ],
+    [
+      'expo-contacts',
+      {
+        contactsPermission:
+          'Allow Connect to access your phone contacts so you can import them into the app and call them quickly.',
       },
     ],
     [

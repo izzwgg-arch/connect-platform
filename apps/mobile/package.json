@@ -19,7 +19,8 @@
     "update:preview": "eas update --channel preview",
     "update:production": "eas update --channel production",
     "typecheck": "tsc --noEmit",
-    "lint": "echo lint-mobile"
+    "lint": "echo lint-mobile",
+    "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.26.0",
@@ -35,6 +36,7 @@
     "expo-camera": "^15.0.16",
     "expo-clipboard": "^6.0.3",
     "expo-constants": "^16.0.2",
+    "expo-contacts": "~13.0.5",
     "expo-dev-client": "^4.0.28",
     "expo-device": "^6.0.2",
     "expo-document-picker": "^12.0.2",
@@ -68,6 +70,7 @@
     }
   },
   "devDependencies": {
+    "tsx": "^4.20.5",
     "@babel/core": "^7.26.0",
     "@types/node": "^25.5.2",
     "@types/node-forge": "^1.3.14",

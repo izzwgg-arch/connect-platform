@@ -17,6 +17,7 @@ import {
   initAudioSession,
   restoreAudioSession,
 } from "../audio/telephonyAudio";
+import { audioRouteManager, getAudioDevicesSnapshot } from "../audio/audioRouteManager";
 import {
   markCallLatency,
   linkCallLatencyIds,
@@ -460,7 +461,14 @@ export class JsSipClient implements SipClient {
       }
       stopAllTelephonyAudio().catch(() => undefined);
       ICM.start("audio");
-      setTimeout(() => ICM.routeToEarpiece(), 150);
+      // Refresh device list and re-apply the desired route. This was
+      // previously a hard `routeToEarpiece()` 150 ms after confirmed,
+      // which yanked audio away from a connected Bluetooth headset.
+      // The route manager respects: user override > BT > wired > earpiece.
+      setTimeout(() => {
+        audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+        audioRouteManager.noteCallConnected();
+      }, 150);
       if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.setSessionState(session, "connected");
       this.events.onCallState?.("connected");
@@ -518,6 +526,7 @@ export class JsSipClient implements SipClient {
         stopAllTelephonyAudio().catch(() => undefined);
         this.stopLivePing();
         ICM.stop();
+        audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
@@ -558,6 +567,7 @@ export class JsSipClient implements SipClient {
         stopAllTelephonyAudio().catch(() => undefined);
         this.stopLivePing();
         ICM.stop();
+        audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
@@ -1128,6 +1138,7 @@ export class JsSipClient implements SipClient {
         stopAllTelephonyAudio().catch(() => undefined);
         this.stopLivePing();
         ICM.stop();
+        audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
         if (this.session === oldSession) this.session = null;
         if (this.incomingSessions.length === 0) this.lastAnswerMatch = undefined;
@@ -1346,9 +1357,15 @@ export class JsSipClient implements SipClient {
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
     // Start InCallManager early so there is always a matching stop() later.
-    // On Android this sets MODE_IN_COMMUNICATION; expo-av ringback audio will
-    // play through the earpiece, which is correct behaviour for a VoIP call.
+    // On Android this sets MODE_IN_COMMUNICATION; the audio route manager
+    // then chooses Bluetooth / wired / earpiece based on what's available
+    // (or the user's per-call override). Ringback follows the same sink as
+    // the live call audio — so a BT headset plays ringback on BT, not on
+    // the earpiece.
     ICM.start("audio");
+    audioRouteManager.noteCallStarted("outbound");
+    audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+    audioRouteManager.noteCallConnected();
     initAudioSession().then(() => startRingback()).catch(() => undefined);
     try {
       this.session = this.ua.call(dest, {
@@ -1373,7 +1390,11 @@ export class JsSipClient implements SipClient {
   async answer() {
     stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on answer
     ICM.start("audio");
-    setTimeout(() => ICM.routeToEarpiece(), 150);
+    audioRouteManager.noteCallStarted("inbound");
+    audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+    // Apply the right route immediately (BT if available, else earpiece)
+    // — the previous unconditional `routeToEarpiece` ignored Bluetooth.
+    setTimeout(() => audioRouteManager.noteCallConnected(), 150);
     this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
   }
 
@@ -1603,6 +1624,7 @@ export class JsSipClient implements SipClient {
     this.stopLivePing();
     await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});
     ICM.stop();
+    audioRouteManager.noteCallEnded();
     restoreAudioSession().catch(() => undefined);
     try {
       this.session?.terminate?.();
@@ -1627,7 +1649,11 @@ export class JsSipClient implements SipClient {
   }
 
   setSpeaker(speakerOn: boolean) {
-    ICM.setSpeaker(speakerOn);
+    // Route through the durable manager so we don't fight the BT route.
+    // Speaker ON ⇒ user override = "speaker".
+    // Speaker OFF ⇒ clear override (manager picks BT > wired > earpiece).
+    audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+    audioRouteManager.setUserOverride(speakerOn ? "speaker" : null);
     console.log('[SIP] Speaker', speakerOn ? 'on' : 'off');
   }
 

@@ -9,6 +9,8 @@ import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegis
 import type { SipAnswerTraceEvent, SipSessionInfo } from "../sip/types";
 import { useAuth } from "./AuthContext";
 import { logCallFlow, setCallFlowLastError } from "../debug/callFlowDebug";
+import { rememberVmGreetingWake } from "../voicemail/vmGreetingWakeBridge";
+import { audioRouteManager, getAudioDevicesSnapshot } from "../audio/audioRouteManager";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -111,10 +113,6 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
    * Speaker ↔ Bluetooth; when false, Speaker ↔ Earpiece.
    */
   const [bluetoothAvailable, setBluetoothAvailable] = useState<boolean>(false);
-  const bluetoothAvailableRef = useRef(false);
-  useEffect(() => {
-    bluetoothAvailableRef.current = bluetoothAvailable;
-  }, [bluetoothAvailable]);
 
   // Refs for call record tracking — updated synchronously, read when call ends
   const callInfoRef = useRef({
@@ -157,7 +155,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       setCallDirection(null);
       setOnHold(false);
       setMuted(false);
+      setSpeakerOn(false);
       setAudioRoute("earpiece");
+      // Per-call user override is cleared inside the route manager when
+      // the SIP client fires its end handler — this just keeps the React
+      // state in sync.
 
       // Save call record locally — this is the reliable path for call history
       const info = callInfoRef.current;
@@ -269,14 +271,27 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       try {
         const result = mod.getAudioDevices();
         const bt = !!result?.bluetoothConnected;
+        const wired = !!result?.wiredHeadsetConnected;
         const speakerOnNow = !!result?.speakerphoneOn;
         setBluetoothAvailable((prev) => (prev !== bt ? bt : prev));
-        setAudioRoute((prev) => {
-          if (speakerOnNow) return "speaker";
-          if (bt && prev !== "speaker") return "bluetooth";
-          if (!bt && prev === "bluetooth") return "earpiece";
-          return prev;
+        // Feed the durable audio route manager. It re-evaluates the chosen
+        // sink on every change and re-applies it (e.g. BT plug-back during
+        // a call returns to BT unless the user explicitly chose speaker).
+        const changed = audioRouteManager.refreshDevices({
+          bluetoothConnected: bt,
+          wiredHeadsetConnected: wired,
+          speakerphoneOn: speakerOnNow,
         });
+        if (changed) {
+          // Mirror the manager's chosen route into the React state so the
+          // speaker button label/icon stays accurate.
+          const next = audioRouteManager.getCurrentRoute();
+          setAudioRoute((prev) => (
+            prev === next ? prev :
+            next === "wired" ? "earpiece" : // UI only knows earpiece/speaker/bluetooth
+            next
+          ));
+        }
       } catch (e) {
         // Swallow — watcher is best-effort; SIP call is not affected.
       }
@@ -818,6 +833,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
       lastHandledWakeRef.current = { pbxCallId, ts: t0 };
 
+      if (fromNumber === "vm-greeting" || pbxCallId.startsWith("vm-greeting-record")) {
+        void rememberVmGreetingWake(pbxCallId, fromNumber || "vm-greeting").catch(() => undefined);
+      }
+
       // Lazy-load the API helper to avoid a top-level cycle.
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { postWakeEvent } = require("../api/client") as typeof import("../api/client");
@@ -1188,7 +1207,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           startMs: Date.now(),
           remoteParty: displayTarget,
         };
-        setAudioRoute("earpiece");
+        // Initial UI hint — the audio route manager (called from JsSipClient)
+        // will overwrite this with the real route (Bluetooth if available)
+        // before the first ringback tone is heard.
+        const snapshot = getAudioDevicesSnapshot();
+        setAudioRoute(snapshot.bluetoothConnected ? "bluetooth" : "earpiece");
         await clientRef.current.dial(target);
       },
 
@@ -1216,88 +1239,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       toggleSpeaker: () => {
-        const next = !speakerOn;
-        clientRef.current.setSpeaker(next);
-        setSpeakerOn(next);
-        setAudioRoute(next ? "speaker" : "earpiece");
+        // Delegate to the route manager so the call audio sink follows a
+        // single, durable policy (user override > BT > wired > earpiece).
+        // Toggling speaker on sets a per-call override; toggling speaker off
+        // clears the override so BT comes back automatically.
+        audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+        const nextRoute = audioRouteManager.toggleSpeaker();
+        const isSpeaker = nextRoute === "speaker";
+        setSpeakerOn(isSpeaker);
+        setAudioRoute(isSpeaker ? "speaker" : nextRoute === "bluetooth" ? "bluetooth" : "earpiece");
       },
 
       cycleAudioRoute: () => {
-        // Two-state cycle that adapts to the current output devices:
-        //   • Bluetooth connected   → Speaker ⇄ Bluetooth
-        //   • Bluetooth NOT present → Speaker ⇄ Earpiece
-        //
-        // On Android we drive AudioManager directly through the
-        // IncomingCallUi native bridge. `chooseAudioRoute("BLUETOOTH")`
-        // from react-native-incall-manager is unreliable on several
-        // OEM builds (Samsung One UI in particular silently falls back
-        // to earpiece), so we call startBluetoothSco() / setSpeakerphoneOn
-        // ourselves — the same mechanism the stock phone app uses.
-        //
-        // On iOS we fall back to the original InCallManager toggle
-        // because CallKit + the route picker own the BT selection UX.
-        const btAvailable = bluetoothAvailableRef.current;
-        const nativeAudio: any = (NativeModules as any)?.IncomingCallUi;
-        const hasNativeRouter =
-          Platform.OS === "android" &&
-          nativeAudio &&
-          typeof nativeAudio.routeAudioToBluetooth === "function" &&
-          typeof nativeAudio.routeAudioToEarpiece === "function" &&
-          typeof nativeAudio.routeAudioToSpeaker === "function";
-
-        if (hasNativeRouter) {
-          try {
-            if (audioRoute === "speaker") {
-              if (btAvailable) {
-                nativeAudio.routeAudioToBluetooth();
-                setSpeakerOn(false);
-                setAudioRoute("bluetooth");
-              } else {
-                nativeAudio.routeAudioToEarpiece();
-                setSpeakerOn(false);
-                setAudioRoute("earpiece");
-              }
-            } else {
-              // Going TO speaker from earpiece OR bluetooth. Stopping the
-              // SCO link is the native side's responsibility — it's done
-              // inside routeAudioToSpeaker().
-              nativeAudio.routeAudioToSpeaker();
-              setSpeakerOn(true);
-              setAudioRoute("speaker");
-            }
-            return;
-          } catch (e) {
-            // Fall through to the InCallManager path if the native
-            // router throws for any reason.
-            console.warn("[SIP] native routeAudio failed:", e);
-          }
-        }
-
-        // iOS / missing native router fallback.
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const ICMModule = require("react-native-incall-manager").default;
-          if (audioRoute === "speaker") {
-            try {
-              if (typeof ICMModule.chooseAudioRoute === "function") {
-                ICMModule.chooseAudioRoute(btAvailable ? "BLUETOOTH" : "EARPIECE");
-              } else {
-                ICMModule.setSpeakerphoneOn(false);
-              }
-            } catch { /* ignore */ }
-            setSpeakerOn(false);
-            setAudioRoute(btAvailable ? "bluetooth" : "earpiece");
-          } else {
-            try { ICMModule.setSpeakerphoneOn(true); } catch { /* ignore */ }
-            setSpeakerOn(true);
-            setAudioRoute("speaker");
-          }
-        } catch {
-          const next = !speakerOn;
-          clientRef.current.setSpeaker(next);
-          setSpeakerOn(next);
-          setAudioRoute(next ? "speaker" : "earpiece");
-        }
+        // Single-tap toggle between speaker and the best non-speaker route
+        // (BT if connected, else wired, else earpiece). Implementation lives
+        // in the route manager so every code path agrees on which sink wins.
+        audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
+        const nextRoute = audioRouteManager.cycleSpeakerRoute();
+        const isSpeaker = nextRoute === "speaker";
+        setSpeakerOn(isSpeaker);
+        setAudioRoute(isSpeaker ? "speaker" : nextRoute === "bluetooth" ? "bluetooth" : "earpiece");
       },
 
       toggleHold: () => {

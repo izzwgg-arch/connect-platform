@@ -33,6 +33,7 @@ import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
+import { ImportPhoneContactsModal } from '../../components/ImportPhoneContactsModal';
 
 type ContactFilter = 'all' | 'extensions' | 'external' | 'favorites';
 type ContactStatus = {
@@ -75,6 +76,7 @@ export function ContactTab() {
   const [selected, setSelected] = useState<Contact | null>(null);
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
+  const [showImportFromPhone, setShowImportFromPhone] = useState(false);
 
   const contactsQuery = useQuery({
     queryKey: mobileQueryKeys.contacts(''),
@@ -214,6 +216,18 @@ export function ContactTab() {
         </View>
         <TouchableOpacity
           activeOpacity={0.78}
+          onPress={() => setShowImportFromPhone(true)}
+          style={[
+            styles.headerIcon,
+            { backgroundColor: colors.surfaceElevated, borderColor: colors.border, marginRight: 8 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Import contacts from phone"
+        >
+          <Ionicons name="cloud-download-outline" size={18} color={colors.text} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          activeOpacity={0.78}
           onPress={() => setShowAddContact(true)}
           style={[
             styles.headerIcon,
@@ -266,6 +280,16 @@ export function ContactTab() {
           icon={query.trim() ? 'search-outline' : 'person-outline'}
           title={emptyTitle}
           subtitle={emptySubtitle}
+          action={!query.trim() ? (
+            <TouchableOpacity
+              activeOpacity={0.84}
+              onPress={() => setShowImportFromPhone(true)}
+              style={[styles.emptyImportBtn, { backgroundColor: colors.primary, shadowColor: colors.primary }]}
+            >
+              <Ionicons name="cloud-download-outline" size={17} color="#fff" />
+              <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>Import from phone</Text>
+            </TouchableOpacity>
+          ) : undefined}
         />
       ) : (
         <FlatList
@@ -314,6 +338,16 @@ export function ContactTab() {
         onCreated={() => {
           setShowAddContact(false);
           queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
+        }}
+      />
+      <ImportPhoneContactsModal
+        visible={showImportFromPhone}
+        authToken={token}
+        onClose={() => setShowImportFromPhone(false)}
+        onImported={(result) => {
+          if (result.imported > 0 || result.duplicatesMerged > 0) {
+            queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
+          }
         }}
       />
       <AppActionSheet
@@ -818,6 +852,18 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
+  },
+  emptyImportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 18,
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
 
   searchRow: {

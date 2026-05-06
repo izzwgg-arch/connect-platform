@@ -155,6 +155,9 @@ importers:
       expo-constants:
         specifier: ^16.0.2
         version: 16.0.2(expo@51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0))
+      expo-contacts:
+        specifier: ~13.0.5
+        version: 13.0.5(expo@51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0))
       expo-dev-client:
         specifier: ^4.0.28
         version: 4.0.29(expo@51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0))
@@ -246,6 +249,9 @@ importers:
       node-forge:
         specifier: ^1.4.0
         version: 1.4.0
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
       typescript:
         specifier: ~5.3.3
         version: 5.3.3
@@ -3689,6 +3695,11 @@ packages:
 
   expo-constants@16.0.2:
     resolution: {integrity: sha512-9tNY3OVO0jfiMzl7ngb6IOyR5VFzNoN5OOazUWoeGfmMqVB5kltTemRvKraK9JRbBKIw+SOYLEmF0sEqgFZ6OQ==}
+    peerDependencies:
+      expo: '*'
+
+  expo-contacts@13.0.5:
+    resolution: {integrity: sha512-jFdmrh0c7iMfaxEmt7bbDTBoz5Onyq3uLhvLxWzhb3dFXsEtQ/6SsdATtXbNQ9cP8gsD3itz3Ev2oxYXGFAMQw==}
     peerDependencies:
       expo: '*'
 
@@ -11544,6 +11555,10 @@ snapshots:
       expo: 51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0)
     transitivePeerDependencies:
       - supports-color
+
+  expo-contacts@13.0.5(expo@51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0)):
+    dependencies:
+      expo: 51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0)
 
   expo-dev-client@4.0.29(expo@51.0.39(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(react-native@0.74.5(@babel/core@7.29.0)(@babel/preset-env@7.29.0(@babel/core@7.29.0))(@types/react@18.2.79)(react@18.2.0))(react@18.2.0)):
     dependencies:
