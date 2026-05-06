@@ -1336,15 +1336,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         if (iceRestartAttemptsRef.current < MAX_ICE_RESTARTS && sessionRef.current?.connection === pc) {
           iceRestartAttemptsRef.current += 1;
           console.warn(
-            "[SipPhone] ICE_FAILED — attempting ICE restart " +
+            "[SipPhone] ICE_FAILED — attempting ICE restart via SIP re-INVITE " +
             iceRestartAttemptsRef.current + "/" + MAX_ICE_RESTARTS,
           );
-          patchDiag({ lastCallError: `ICE failed — auto-restarting (attempt ${iceRestartAttemptsRef.current}/${MAX_ICE_RESTARTS})…` });
+          patchDiag({ lastCallError: `ICE failed — auto-restarting audio (attempt ${iceRestartAttemptsRef.current}/${MAX_ICE_RESTARTS})…` });
           try {
-            pc.restartIce();
-            console.log("[SipPhone] ICE restart triggered via restartIce()");
+            // renegotiate() sends a SIP re-INVITE with a new SDP offer that has
+            // iceRestart:true — this exchanges new ICE ufrag/pwd with the PBX so
+            // connectivity checks use fresh credentials. Calling pc.restartIce()
+            // alone is insufficient because it only marks the PC locally; the PBX
+            // never learns the new credentials without the re-INVITE.
+            sessionRef.current.renegotiate({ iceRestart: true });
+            console.log("[SipPhone] ICE restart re-INVITE sent");
           } catch (e) {
-            console.warn("[SipPhone] restartIce() not supported, skipping", e);
+            console.warn("[SipPhone] ICE restart renegotiate failed", e);
           }
         } else {
           const hasTurn = diag.hasTurn;
@@ -1365,13 +1370,19 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         if (iceRestartTimerRef.current) clearTimeout(iceRestartTimerRef.current);
         // If still disconnected after 4s, attempt ICE restart
         iceRestartTimerRef.current = setTimeout(() => {
-          if (pc.iceConnectionState === "disconnected" && sessionRef.current?.connection === pc) {
+          const sess = sessionRef.current;
+          if (pc.iceConnectionState === "disconnected" && sess?.connection === pc) {
             const MAX_ICE_RESTARTS = 2;
             if (iceRestartAttemptsRef.current < MAX_ICE_RESTARTS) {
               iceRestartAttemptsRef.current += 1;
-              console.warn("[SipPhone] ICE still disconnected after 4s — triggering ICE restart " + iceRestartAttemptsRef.current);
-              patchDiag({ lastCallError: `Network issue — auto-restarting audio connection (attempt ${iceRestartAttemptsRef.current})…` });
-              try { pc.restartIce(); } catch (e) { console.warn("[SipPhone] restartIce() failed", e); }
+              console.warn("[SipPhone] ICE still disconnected after 4s — sending SIP re-INVITE for ICE restart " + iceRestartAttemptsRef.current);
+              patchDiag({ lastCallError: `Network issue — restarting audio connection (attempt ${iceRestartAttemptsRef.current})…` });
+              try {
+                // Must use renegotiate() to send a SIP re-INVITE — pc.restartIce()
+                // alone only refreshes credentials locally; the PBX never learns
+                // the new ICE ufrag/pwd and connectivity checks fail.
+                sess.renegotiate({ iceRestart: true });
+              } catch (e) { console.warn("[SipPhone] ICE restart renegotiate() failed", e); }
             }
           }
           iceRestartTimerRef.current = null;
@@ -1575,6 +1586,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       const normalised = target.trim();
       if (!normalised) return;
 
+      // Prune any sessions whose underlying JsSIP session is already ended.
+      // This prevents a session that ended after hangup() but before JsSIP
+      // fires the asynchronous "ended" event from being seen as "active" below
+      // and incorrectly auto-held, which would create a phantom On-Hold entry.
+      for (const [id] of Array.from(sessionMetaRef.current.entries())) {
+        const s = sessionsByIdRef.current.get(id);
+        if (!s || s.isEnded?.()) {
+          sessionMetaRef.current.delete(id);
+          sessionsByIdRef.current.delete(id);
+        }
+      }
+
       // Multi-call policy: if another session is currently active, put it on
       // hold before starting the new outbound call.
       const currentActive = Array.from(sessionMetaRef.current.values()).find(
@@ -1690,6 +1713,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     hangupAtRef.current = hangupIso;
 
     if (sessionRef.current) {
+      // Eagerly evict from the multi-call map BEFORE terminate() so that a
+      // rapid re-dial() call (which checks sessionMetaRef for an "active"
+      // session to auto-hold) does not find this ended session and create a
+      // phantom "On Hold" entry in the MultiCallPanel. JsSIP fires "ended"
+      // asynchronously (after BYE 200 OK comes back), so without this eager
+      // eviction the stale entry can linger for hundreds of milliseconds.
+      const evictId = getOrAssignSessionId(sessionRef.current);
+      if (sessionMetaRef.current.has(evictId)) {
+        sessionMetaRef.current.delete(evictId);
+        sessionsByIdRef.current.delete(evictId);
+        publishMultiCallState();
+      }
       submitCallQualityReport("user_hangup");
       try { sessionRef.current.terminate(); } catch { /* already ended */ }
       sessionRef.current = null;
