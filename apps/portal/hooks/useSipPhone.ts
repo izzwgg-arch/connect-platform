@@ -2064,14 +2064,14 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
       groupId: device.groupId,
       kind: device.kind,
       label: device.label,
-      toJSON: () => ({}),
+      // No toJSON — Electron IPC uses Structured Clone which cannot serialize functions.
     }) as MediaDeviceInfo),
     audioInputDevices: phone.audioInputDevices.map((device) => ({
       deviceId: device.deviceId,
       groupId: device.groupId,
       kind: device.kind,
       label: device.label,
-      toJSON: () => ({}),
+      // No toJSON — Electron IPC uses Structured Clone which cannot serialize functions.
     }) as MediaDeviceInfo),
     currentSinkId: phone.currentSinkId,
     currentMicDeviceId: phone.currentMicDeviceId,
