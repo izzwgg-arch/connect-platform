@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.6"
+VERSION = "2026.05.05.7"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -953,7 +953,16 @@ def vm_record_call(body):
         # bridged to Leg 2 via the Local channel). Prompts therefore play before the
         # user's phone even rings. Direct originate eliminates this race:
         #   phone rings → user answers → channel enters record context → prompts play.
+        #
+        # After poll confirms Avail, wait 5 seconds before sending the INVITE.
+        # The API sends an FCM wake ~2s before calling us. The mobile needs
+        # ~7s total from FCM wake for WebSocket re-initialization + SIP re-registration
+        # to fully settle. The INVITE arriving too early (at t=2s) hits a contact that
+        # may still be mid-transition and gets silently dropped. This sleep bridges the
+        # gap: poll returns at ~t=2s → sleep 5s → INVITE sent at ~t=7s (same timing
+        # as the old Local channel dispatch Wait(5) that made the phone ring).
         if poll_registered and hint_raw and hint_raw != base_ep:
+            time.sleep(5)
             channel = "PJSIP/" + hint_raw
             channel_source = "direct_pjsip:" + hint_raw
     else:
