@@ -80,6 +80,11 @@ export function MessageBubble({
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const deleted = Boolean(message.deletedForEveryoneAt);
+  /** Raw VoIP.ms MMS URLs are redundant once mirrored into `attachments` — avoid double stack + empty image cells. */
+  const mmsUrlsEffective =
+    (message.attachments?.length ?? 0) > 0
+      ? []
+      : (message.mmsUrls || []).map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u));
   const reactions = (message.reactions || []).reduce<Record<string, number>>((acc, row) => {
     acc[row.emoji] = (acc[row.emoji] || 0) + 1;
     return acc;
@@ -120,9 +125,9 @@ export function MessageBubble({
                   <small>{message.location.address || `${message.location.lat.toFixed(5)}, ${message.location.lng.toFixed(5)}`}</small>
                 </a>
               ) : null}
-              {message.mmsUrls?.length ? (
+              {mmsUrlsEffective.length ? (
                 <div className="cc-attach-stack">
-                  {message.mmsUrls.map((url, idx) => (
+                  {mmsUrlsEffective.map((url, idx) => (
                     <AttachmentPreview key={url} attachment={mmsUrlToAttachment(url, message.id, idx)} />
                   ))}
                 </div>

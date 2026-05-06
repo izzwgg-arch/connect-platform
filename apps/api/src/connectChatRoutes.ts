@@ -896,7 +896,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const base = publicChatDownloadBase();
     const messages = rows.map((m) => {
       const meta = metadataObject(m.metadata);
-      const mmsUrls = Array.isArray(meta?.mms?.urls) ? meta!.mms!.urls! : [];
+      const rawMms = Array.isArray(meta?.mms?.urls) ? meta!.mms!.urls! : [];
+      const mmsUrlsSanitized = rawMms.map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u));
+      // Mirrored inbound MMS is stored as normal attachments; omit raw VoIP.ms URLs so UIs do not double-render (empty image slots + voice).
+      const mmsUrls = (m.attachments && m.attachments.length > 0) ? [] : mmsUrlsSanitized;
       const deletedForEveryone = Boolean(m.deletedForEveryoneAt);
       return {
         id: m.id,

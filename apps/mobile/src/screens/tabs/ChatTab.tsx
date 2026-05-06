@@ -142,11 +142,12 @@ function fileKind(mimeType = ''): ChatMessageType {
 
 function attachmentPreviewType(attachment: ChatAttachment, messageType?: ChatMessageType): MediaPreview['type'] {
   const m = attachment.mimeType.toLowerCase();
-  if (m.startsWith('image/') || messageType === 'IMAGE') return 'image';
+  if (m.startsWith('image/')) return 'image';
   if (m.startsWith('video/') || messageType === 'VIDEO') return 'video';
   const fn = (attachment.fileName || '').toLowerCase();
   if (/\.(jpe?g|png|gif|webp|heic)$/i.test(fn)) return 'image';
   if (/\.(mp4|mov|webm)$/i.test(fn)) return 'video';
+  if (m.startsWith('audio/') || messageType === 'AUDIO' || messageType === 'VOICE_NOTE') return 'file';
   return 'file';
 }
 
@@ -154,18 +155,17 @@ function attachmentShowsImageThumb(attachment: ChatAttachment, messageType?: Cha
   if (!attachment.downloadUrl) return false;
   const m = attachment.mimeType.toLowerCase();
   if (m.startsWith('image/')) return true;
-  if (messageType === 'IMAGE') return true;
   return /\.(jpe?g|png|gif|webp|heic)$/i.test(attachment.fileName || '');
 }
 
-function isImageAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+function isImageAttachment(attachment: ChatAttachment, _messageType?: ChatMessageType): boolean {
   const kind = String(attachment.mediaKind || '').toLowerCase();
   if (kind === 'video' || kind === 'audio' || kind === 'file') return false;
   const mime = String(attachment.mimeType || '').toLowerCase();
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return false;
   const name = String(attachment.fileName || '').toLowerCase();
   if (kind === 'image' || mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|heic)$/i.test(name)) return true;
-  return messageType === 'IMAGE';
+  return false;
 }
 
 function isAudioAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
@@ -1098,7 +1098,11 @@ const MessageBubble = memo(function MessageBubble({
     : [styles.bubble, styles.bubbleTheirs, { backgroundColor: highlighted ? colors.warningMuted : colors.surfaceElevated, borderColor: colors.borderSubtle }];
   const textColor = message.mine ? '#fff' : colors.text;
   const attachments = message.attachments || [];
-  const mmsDerived = (message.mmsUrls || []).map((url, index) => mmsUrlToAttachment(url, message.id, index));
+  const mmsSource =
+    attachments.length > 0
+      ? []
+      : (message.mmsUrls || []).map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u));
+  const mmsDerived = mmsSource.map((url, index) => mmsUrlToAttachment(url, message.id, index));
   const imageAttachments = [...attachments, ...mmsDerived].filter((attachment) => isImageAttachment(attachment, message.type) && attachment.downloadUrl);
   const audioAttachments = [...attachments, ...mmsDerived].filter((attachment) => isAudioAttachment(attachment, message.type) && attachment.downloadUrl);
   const otherAttachments = [...attachments, ...mmsDerived].filter(
