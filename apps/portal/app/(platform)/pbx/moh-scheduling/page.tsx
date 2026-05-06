@@ -147,6 +147,30 @@ interface MohAsset {
   contentHash: string;
   status: string;
   createdAt: string;
+  conversionStatus?: string | null;
+  conversionError?: string | null;
+  pbxStorageKey?: string | null;
+  originalStorageKey?: string | null;
+  pbxFormat?: string | null;
+}
+
+interface MohStatusPayload {
+  tenantId: string;
+  mohClassName: string;
+  classType: "native" | "connect";
+  db: {
+    profileExists: boolean;
+    assetExists: boolean;
+    assetStatus: string | null;
+    conversionStatus: string | null;
+    pbxStorageKey: string | null;
+    lastPublishedState: { mohClass: string; holdMode: string; publishedAt: string } | null;
+    activeClass: string | null;
+  };
+  storage: { originalExists: boolean; pbxArtifactExists: boolean; pbxArtifactFormat: string | null; sizeBytes: number | null };
+  sync: { manifestAvailable: boolean; lastSyncAt: string | null; lastSyncStatus: string | null };
+  pbxExpected: { mohDirectory: string; configFile: string; expectedConfigBlock: string };
+  warnings: string[];
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -387,6 +411,7 @@ function MohClassPicker({
 
   for (const a of assets) {
     if (a.status !== "ready") continue;
+    if (a.conversionStatus && a.conversionStatus !== "ready") continue;
     const v = (a.mohClassName || "").trim();
     if (!v.startsWith("connect_")) continue;
     if (seen.has(v)) continue;
@@ -470,6 +495,11 @@ function MohClassPicker({
         searchable
         options={allMohOptions}
       />
+      {value.trim().toLowerCase().startsWith("connect_") && (
+        <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 8, lineHeight: 1.45, padding: "8px 10px", borderRadius: 6, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)" }}>
+          <strong>Queues / inbound routes:</strong> Connect-uploaded MOH applies to tenant default/channel hold (AstDB). VitalPBX queue hold music still follows native <code style={{ color: "#fde68a" }}>mohN</code> unless you add a separate PBX-side queue musicclass mapping.
+        </div>
+      )}
       {controls}
     </div>
   );
@@ -1051,6 +1081,9 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
             Writes the current effective Hold Profile as AstDB keys to VitalPBX/Asterisk via AMI.
             VitalPBX reads these at hold/queue time — Connect never handles media.
           </p>
+          <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 12px", lineHeight: 1.5 }}>
+            <strong style={{ color: "#94a3b8" }}>Scope:</strong> this publish targets the tenant&apos;s default/channel hold profile (AstDB). Inbound-route MOH on DIDs is configured under DID routing. Queue hold music in VitalPBX remains native <code style={{ color: "#cbd5e1" }}>mohN</code> unless mapped separately on the PBX.
+          </p>
 
           {/* Current runtime state table */}
           {preview?.profile && (
@@ -1144,6 +1177,9 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyFor, setVerifyFor] = useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = useState<MohStatusPayload | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -1199,13 +1235,29 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
     } catch (e: any) { setError(e?.message ?? "Delete failed"); }
   }, [reload]);
 
+  const verifyMoh = useCallback(async (mohClassName: string) => {
+    setVerifyBusy(true);
+    setError(null);
+    setVerifyFor(mohClassName);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}&mohClassName=${encodeURIComponent(mohClassName)}`;
+      const r = await apiGet<MohStatusPayload>(`/voice/moh/status${qs}`);
+      setVerifyResult(r);
+    } catch (e: any) {
+      setVerifyResult(null);
+      setError(e?.message ?? "Verify failed");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }, [tenantId]);
+
   return (
     <div>
       {canUpload && (
         <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 12, padding: 20, marginBottom: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 700 }}>Upload music on hold</div>
           <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>
-            MP3 / WAV / AAC up to 50 MB. A new VitalPBX MOH class is created on the next PBX sync run.
+            Audio up to 50 MB. The API transcodes to 8 kHz mono 16-bit WAV for Asterisk; the PBX <code style={{ color: "#cbd5e1" }}>connect-media-sync</code> job pulls only that WAV.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
             <input
@@ -1235,6 +1287,20 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
         </div>
       )}
 
+      {verifyResult && verifyFor && (
+        <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 10, marginBottom: 16, fontSize: 12, color: "#cbd5e1" }}>
+          <div style={{ fontWeight: 700, color: "#e2e8f0" }}>Verify: <code style={{ color: "#93c5fd" }}>{verifyFor}</code></div>
+          <div>Asset uploaded: {verifyResult.db.assetExists ? "yes" : "no"} · Conversion: {verifyResult.db.conversionStatus ?? "—"} · PBX artifact on Connect disk: {verifyResult.storage.pbxArtifactExists ? "yes" : "no"} · Manifest row: {verifyResult.sync.manifestAvailable ? "yes" : "no"}</div>
+          <div>Last publish (proxy): {verifyResult.sync.lastSyncStatus ?? "—"} {verifyResult.sync.lastSyncAt ?? ""}</div>
+          {verifyResult.warnings.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#fbbf24" }}>
+              {verifyResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          )}
+          <button type="button" onClick={() => { setVerifyResult(null); setVerifyFor(null); }} style={btnSmall("#334155")}>Close</button>
+        </div>
+      )}
+
       <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", padding: 0 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
@@ -1243,13 +1309,14 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
               <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>MOH Class</th>
               <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>Size</th>
               <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>Status</th>
+              <th style={{ textAlign: "left", padding: "10px 14px", color: "#cbd5e1" }}>PBX</th>
               <th style={{ textAlign: "right", padding: "10px 14px", color: "#cbd5e1" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={5} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>Loading…</td></tr>}
+            {loading && <tr><td colSpan={6} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>Loading…</td></tr>}
             {!loading && assets.length === 0 && (
-              <tr><td colSpan={5} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>
+              <tr><td colSpan={6} style={{ padding: 18, textAlign: "center", color: "#94a3b8" }}>
                 No MOH assets uploaded yet.
               </td></tr>
             )}
@@ -1258,9 +1325,17 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
                 <td style={{ padding: "10px 14px" }}>{a.name}</td>
                 <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12 }}>{a.mohClassName}</td>
                 <td style={{ padding: "10px 14px" }}>{(a.sizeBytes / 1024 / 1024).toFixed(2)} MB</td>
-                <td style={{ padding: "10px 14px", color: a.status === "ready" ? "#22c55e" : "#f59e0b" }}>{a.status}</td>
+                <td style={{ padding: "10px 14px", color: a.status === "ready" ? "#22c55e" : "#f59e0b" }}>{a.status}{a.conversionStatus && a.conversionStatus !== "ready" ? ` · ${a.conversionStatus}` : ""}</td>
+                <td style={{ padding: "10px 14px", fontSize: 11, color: a.conversionStatus === "ready" ? "#86efac" : "#94a3b8" }}>
+                  {a.conversionStatus === "ready" ? "WAV ready" : (a.conversionError || a.conversionStatus || "—")}
+                </td>
                 <td style={{ padding: "10px 14px", textAlign: "right" }}>
-                  {canUpload && <button onClick={() => remove(a.id)} style={btnSmall("#ef444480")}>Archive</button>}
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => verifyMoh(a.mohClassName)} disabled={verifyBusy} style={btnSmall("#334155")}>
+                      {verifyBusy && verifyFor === a.mohClassName ? "…" : "Verify"}
+                    </button>
+                    {canUpload && <button onClick={() => remove(a.id)} style={btnSmall("#ef444480")}>Archive</button>}
+                  </div>
                 </td>
               </tr>
             ))}

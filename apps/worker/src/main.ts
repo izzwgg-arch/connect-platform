@@ -16,6 +16,12 @@ import {
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoipMsInboundSyncCycle } from "./voipMsInboundSyncJob";
+import {
+  isConnectMohRuntimeClass,
+  isNativeMohRuntimeClass,
+  isValidMohRuntimeClass,
+  normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+} from "@connect/shared";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -1601,16 +1607,45 @@ type WorkerHoldProfile = {
 };
 
 function normalizeWorkerMohRuntimeClass(value: string | null | undefined): string {
-  return String(value ?? "").trim();
+  return normalizeSharedMohRuntimeClass(value);
 }
 
-function isWorkerMohRuntimeClass(value: string): boolean {
-  return /^moh\d+$/i.test(value);
+function workerMohLog(payload: Record<string, unknown>): void {
+  console.log(JSON.stringify(payload));
 }
 
 async function workerHasSyncedMohRuntimeClass(tenantId: string, value: string): Promise<boolean> {
   const runtimeClass = normalizeWorkerMohRuntimeClass(value);
-  if (!isWorkerMohRuntimeClass(runtimeClass)) return false;
+  if (!isValidMohRuntimeClass(runtimeClass)) {
+    workerMohLog({ event: "moh.worker.class.rejected", tenantId, runtimeClass, reason: "invalid_runtime_class" });
+    return false;
+  }
+
+  if (isConnectMohRuntimeClass(runtimeClass)) {
+    const asset = await (db as any).mohAsset.findFirst({
+      where: {
+        tenantId,
+        mohClassName: runtimeClass,
+        status: "ready",
+        conversionStatus: "ready",
+        pbxStorageKey: { not: null },
+      },
+      select: { id: true, pbxStorageKey: true },
+    });
+    if (!asset?.pbxStorageKey) {
+      workerMohLog({ event: "moh.worker.connect_asset.missing", tenantId, runtimeClass });
+      return false;
+    }
+    workerMohLog({ event: "moh.worker.connect_asset.ready", tenantId, runtimeClass, pbxStorageKey: asset.pbxStorageKey });
+    workerMohLog({ event: "moh.worker.class.accepted", tenantId, runtimeClass, classKind: "connect" });
+    return true;
+  }
+
+  if (!isNativeMohRuntimeClass(runtimeClass)) {
+    workerMohLog({ event: "moh.worker.class.rejected", tenantId, runtimeClass, reason: "not_native_or_connect" });
+    return false;
+  }
+
   const row = await (db as any).pbxMohClass.findFirst({
     where: {
       mohClassName: runtimeClass,
@@ -1623,6 +1658,11 @@ async function workerHasSyncedMohRuntimeClass(tenantId: string, value: string): 
     },
     select: { id: true },
   });
+  if (row) {
+    workerMohLog({ event: "moh.worker.class.accepted", tenantId, runtimeClass, classKind: "native" });
+  } else {
+    workerMohLog({ event: "moh.worker.class.rejected", tenantId, runtimeClass, classKind: "native", reason: "not_in_pbx_catalog" });
+  }
   return !!row;
 }
 

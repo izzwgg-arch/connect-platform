@@ -186,13 +186,14 @@ async function callHelper<T>(
 async function getHelper<T>(
   cfg: PbxRouteHelperConfig,
   path: string,
+  timeoutMs = 15_000,
 ): Promise<T> {
   const resp = await fetch(`${cfg.baseUrl}${path}`, {
     method: "GET",
     headers: {
       "x-connect-pbx-helper-secret": cfg.secret,
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await resp.text();
   let parsed: any = null;
@@ -271,6 +272,31 @@ export type PbxVoicemailGreetingRecordCallResponse = {
   status: "ringing" | "recording" | "completed" | "failed" | "canceled";
   channel?: string;
   channelSource?: string;
+  /** Present when helper ran `asterisk -rx channel originate …` */
+  asteriskCommand?: string;
+  asteriskExitCode?: number;
+  asteriskOutput?: string;
+  error?: string;
+  targetPath?: string;
+  pollRegistered?: boolean;
+  pollElapsedSecs?: number;
+  dispatchDialString?: string;
+  dispatchEndpoints?: string[];
+};
+
+/** Read-only PBX diagnostics from helper (GET /voicemail/greeting/diag). Never pass reload=1 from Connect. */
+export type PbxVoicemailGreetingDiagResponse = {
+  ok: boolean;
+  version?: string;
+  dialplanFilePath?: string;
+  dialplanFilePresent?: boolean;
+  dialplanShowExitCode?: number;
+  dialplanShowOutput?: string;
+  dispatchShowExitCode?: number;
+  dispatchShowOutput?: string;
+  pjsipContactsExitCode?: number;
+  pjsipContactsOutput?: string;
+  error?: string;
 };
 
 export function uploadPbxVoicemailGreeting(
@@ -313,5 +339,9 @@ export function getPbxVoicemailGreetingRecordCallStatus(
   cfg: PbxRouteHelperConfig,
   jobId: string,
 ): Promise<PbxVoicemailGreetingRecordCallResponse> {
-  return getHelper<PbxVoicemailGreetingRecordCallResponse>(cfg, `/voicemail/greeting/record-call/${encodeURIComponent(jobId)}`);
+  return getHelper<PbxVoicemailGreetingRecordCallResponse>(cfg, `/voicemail/greeting/record-call/${encodeURIComponent(jobId)}`, 15_000);
+}
+
+export function getPbxVoicemailGreetingDiag(cfg: PbxRouteHelperConfig): Promise<PbxVoicemailGreetingDiagResponse> {
+  return getHelper<PbxVoicemailGreetingDiagResponse>(cfg, "/voicemail/greeting/diag", 22_000);
 }

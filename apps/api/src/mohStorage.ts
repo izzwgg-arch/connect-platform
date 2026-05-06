@@ -28,6 +28,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_ROOT = path.resolve(process.cwd(), "data/moh-assets");
 
@@ -71,11 +75,8 @@ export function resolveStoragePath(storageKey: string): string {
   return full;
 }
 
-/** Write an upload buffer to disk under the tenant/class folder and return the
- *  storageKey + sha256 hash + size. ffprobe validation is intentionally
- *  optional — we don't require it to be installed; when it's missing we still
- *  accept the file (the PBX-side moh reload is the authoritative "does this
- *  actually play?" check). */
+/** Write the original upload bytes as `asset_orig.<ext>` so `asset.wav` stays
+ *  reserved for the PBX-safe transcoded artifact. */
 export async function writeMohFile(input: {
   tenantSlug: string;
   mohClassName: string;
@@ -87,7 +88,7 @@ export async function writeMohFile(input: {
   if (!tenantSeg || !classSeg) throw new Error("invalid_tenant_or_class");
 
   const ext = path.extname(input.originalFilename || "").toLowerCase().replace(/[^.a-z0-9]/g, "");
-  const baseName = `asset${ext || ""}`;
+  const baseName = `asset_orig${ext || ""}`;
   const storageKey = `${tenantSeg}/${classSeg}/${baseName}`;
   const absolutePath = resolveStoragePath(storageKey);
   await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -95,6 +96,66 @@ export async function writeMohFile(input: {
 
   const sha256 = crypto.createHash("sha256").update(input.buffer).digest("hex");
   return { storageKey, sha256, sizeBytes: input.buffer.length, absolutePath };
+}
+
+/** PBX sync artifact path (8 kHz mono 16-bit PCM WAV) under the same folder. */
+export function buildMohPbxWavStorageKey(tenantSlug: string, mohClassName: string): string {
+  const tenantSeg = sanitizePathSegment(tenantSlug);
+  const classSeg = sanitizePathSegment(mohClassName);
+  if (!tenantSeg || !classSeg) throw new Error("invalid_tenant_or_class");
+  return `${tenantSeg}/${classSeg}/asset.wav`;
+}
+
+/** Transcode any supported ffmpeg input into Asterisk-friendly WAV. */
+export async function transcodeMohToPbxWav(input: {
+  sourceAbsolutePath: string;
+  destAbsolutePath: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const dir = path.dirname(input.destAbsolutePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const tmpOut = `${input.destAbsolutePath}.tmp.${process.pid}`;
+  try {
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        input.sourceAbsolutePath,
+        "-ar",
+        "8000",
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        tmpOut,
+      ],
+      { timeout: 180_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+  } catch (e: any) {
+    await fs.promises.rm(tmpOut, { force: true }).catch(() => void 0);
+    const stderr = e?.stderr ? String(e.stderr) : "";
+    const msg = stderr || e?.message || String(e);
+    if (e?.code === "ENOENT" || /ENOENT|spawn.*ffmpeg/i.test(String(msg))) {
+      return { ok: false, error: "ffmpeg_not_found: install ffmpeg on the API host to produce PBX-safe MOH (8 kHz mono WAV)." };
+    }
+    return { ok: false, error: `ffmpeg_failed: ${msg}`.slice(0, 4000) };
+  }
+
+  try {
+    const st = await fs.promises.stat(tmpOut);
+    if (!st.isFile() || st.size < 64) {
+      await fs.promises.rm(tmpOut, { force: true }).catch(() => void 0);
+      return { ok: false, error: "ffmpeg produced empty or invalid WAV output" };
+    }
+  } catch {
+    return { ok: false, error: "ffmpeg output missing after transcode" };
+  }
+
+  await fs.promises.rename(tmpOut, input.destAbsolutePath);
+  return { ok: true };
 }
 
 export async function deleteMohFile(storageKey: string): Promise<void> {

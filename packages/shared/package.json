@@ -20,6 +20,10 @@
     "./voipMsInboundMms": {
       "types": "./src/voipMsInboundMms.ts",
       "default": "./src/voipMsInboundMms.ts"
+    },
+    "./mohRuntimeClass": {
+      "types": "./src/mohRuntimeClass.ts",
+      "default": "./src/mohRuntimeClass.ts"
     }
   },
   "scripts": {

@@ -2591,11 +2591,18 @@ model MohAsset {
   name           String // human label, e.g. "Holiday Jazz Mix"
   mohClassName   String // deterministic, e.g. "connect_acme_holiday_jazz"
   sourceFilename String // original upload filename
-  storageKey     String // object-storage key (S3/R2)
-  contentHash    String // sha256 hex — used by helper to diff
-  sizeBytes      Int
+  /// Legacy single-key field; new rows mirror PBX artifact key when ready.
+  storageKey     String
+  originalStorageKey String? // raw upload bytes (preview / history)
+  pbxStorageKey      String? // 8 kHz mono 16-bit PCM WAV for Asterisk sync only
+  contentHash    String // sha256 hex of PBX artifact when ready (manifest diff)
+  sizeBytes      Int // PBX artifact size when ready; otherwise original upload size
   durationSec    Int? // from ffprobe, null until validated
-  mimeType       String
+  mimeType       String // legacy; prefer originalMimeType for new rows
+  originalMimeType String?
+  pbxFormat          String? // e.g. wav_pcm_s16le_8k_mono
+  conversionStatus   String   @default("pending") // pending | ready | failed
+  conversionError    String?
   status         String   @default("uploading") // "uploading" | "ready" | "failed" | "archived"
   failureReason  String?
   createdAt      DateTime @default(now())
@@ -2605,7 +2612,7 @@ model MohAsset {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, mohClassName])
-  @@unique([contentHash])
+  @@index([contentHash])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([status])

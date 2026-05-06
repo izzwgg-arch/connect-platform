@@ -48,12 +48,20 @@ import { resolveCdrTenant } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx } from "./pbxExtensionSync";
 import {
   buildMohClassName,
+  buildMohPbxWavStorageKey,
   buildSignedDownloadUrl,
   deleteMohFile,
   resolveStoragePath,
+  transcodeMohToPbxWav,
   verifySignedDownload,
   writeMohFile,
 } from "./mohStorage";
+import {
+  isConnectMohRuntimeClass as sharedIsConnectMohRuntimeClass,
+  isNativeMohRuntimeClass,
+  isValidMohRuntimeClass,
+  normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+} from "@connect/shared";
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
@@ -74,7 +82,6 @@ import {
   getPbxVoicemailGreeting,
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
-  requestPbxVoicemailGreetingRecordCall,
   resolvePbxRouteHelperConfig,
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
@@ -84,6 +91,14 @@ import {
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
+import {
+  buildVmRecordJobPublicView,
+  createVmRecordJob,
+  getVmRecordJobForUser,
+  refreshVmRecordJobHelperFields,
+  runVmRecordCallJob,
+  type VmRecordCallDeps,
+} from "./vmRecordCallJobs";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
 const MAX_DAILY_LIMIT = 10000;
@@ -2137,11 +2152,11 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/tenant-users", permission: "can_view_pbx_extensions" },
   { prefix: "/pbx/settings/webrtc", permission: "can_view_pbx_softphone" },
-  // Self-scoped softphone config — accessible to any authenticated user.
-  // These return ONLY the calling user's own data; no permission gate needed beyond JWT auth.
-  // Removing from the rule list lets them fall through to the handler's own checks.
-  // (A stored DB permission snapshot could strip "can_view_workspace_overview" from END_USER,
-  //  so gating on any portal permission here would silently block all regular users.)
+  // Self-scoped softphone config for the logged-in user only — same bar as Overview.
+  // The floating dialer is global; gate with workspace overview, not PBX admin nav.
+  { prefix: "/voice/me/extension", permission: "can_view_workspace_overview" },
+  { prefix: "/me/outbound-routes", permission: "can_view_workspace_overview" },
+  { prefix: "/voice/me/reset-sip-password", permission: "can_view_workspace_overview" },
   { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
@@ -14707,117 +14722,33 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   const pbxTenantId = pbxTenantIdForExtension(extension);
   if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
 
-  // ── Wake any associated mobile devices BEFORE asking the PBX to originate ──
-  // The PBX helper builds the parallel-Dial string from `pjsip show contacts`
-  // at originate time. Mobiles only register after FCM wakes the JS bundle
-  // (see /internal/pbx/wake-extension), so without a pre-wake here the helper
-  // would only see the WebRTC contact and the user's mobile would not ring.
-  // Mirrors the wake-then-Wait()-then-Dial() pattern used for incoming PSTN
-  // calls in [connect-dial-with-wake].
-  const ownerUserId = (extension as any).ownerUserId as string | null;
-  // Wait for a real SIP REGISTERED heartbeat from the mobile before asking
-  // Asterisk to originate. A fixed 2s sleep is not enough on cold Android
-  // wakes: the device can report DEVICE_REGISTER_COMPLETE while its JS state
-  // is still "registering", leaving Asterisk to INVITE a stale contact.
-  const wakeWaitMaxMs = 12_000;
-  const wakePollMs = 500;
-  let wakeMeta: {
-    devicesNotified: number;
-    waitedMs: number;
-    sent: boolean;
-    registered?: boolean;
-    registrationState?: string | null;
-    error?: string;
-  } = {
-    devicesNotified: 0,
-    waitedMs: 0,
-    sent: false,
-  };
-  if (ownerUserId) {
-    try {
-      const devices = await db.mobileDevice.findMany({
-        where: { tenantId: extension.tenantId, userId: ownerUserId, active: true } as any,
-        select: { id: true } as any,
-      });
-      if (devices.length > 0) {
-        const wakePbxCallId = "vm-greeting-record-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const pushed = await sendPushToUserDevices({
-          tenantId: extension.tenantId,
-          userId: ownerUserId,
-          payload: {
-            type: "INCOMING_CALL_WAKE",
-            pbxCallId: wakePbxCallId,
-            fromNumber: "vm-greeting",
-            fromDisplay: "Voicemail Greeting Recording",
-            toExtension: extension.extNumber,
-            tenantId: extension.tenantId,
-            pbxVitalTenantId: pbxTenantId,
-            timestamp: new Date().toISOString(),
-            wakeRequestedAt: new Date().toISOString(),
-          },
-        });
-        const waitStartedAt = new Date();
-        wakeMeta = { devicesNotified: pushed?.queued ?? devices.length, waitedMs: 0, sent: true, registered: false };
-        const deadline = Date.now() + wakeWaitMaxMs;
-        while (Date.now() < deadline) {
-          const session = await db.voiceClientSession.findFirst({
-            where: {
-              tenantId: extension.tenantId,
-              userId: ownerUserId,
-              lastRegState: "REGISTERED",
-              lastSeenAt: { gte: waitStartedAt },
-            } as any,
-            orderBy: { lastSeenAt: "desc" },
-            select: { lastRegState: true } as any,
-          });
-          if (session?.lastRegState === "REGISTERED") {
-            wakeMeta.registered = true;
-            wakeMeta.registrationState = "REGISTERED";
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, wakePollMs));
-        }
-        wakeMeta.waitedMs = Date.now() - waitStartedAt.getTime();
-        if (!wakeMeta.registered) {
-          const latestSession = await db.voiceClientSession.findFirst({
-            where: { tenantId: extension.tenantId, userId: ownerUserId } as any,
-            orderBy: { lastSeenAt: "desc" },
-            select: { lastRegState: true } as any,
-          });
-          wakeMeta.registrationState = latestSession?.lastRegState ?? null;
-        }
-      }
-    } catch (err: any) {
-      wakeMeta.error = String(err?.message || err);
-      app.log.warn(
-        { err: err?.message, tenantId: extension.tenantId, userId: ownerUserId, extension: extension.extNumber },
-        "voicemail-greeting-record-call: wake push failed",
-      );
-    }
-  }
+  const pbxInstanceId =
+    (extension as any)?.tenant?.pbxTenantLink?.pbxInstanceId ??
+    (extension as any)?.tenant?.pbxTenantLink?.pbxInstance?.id ??
+    null;
 
-  try {
-    const res = await requestPbxVoicemailGreetingRecordCall(helperCfg, {
-      tenantId: pbxTenantId,
-      extension: extension.extNumber,
-      greetingType: normalizeGreetingType(input.greetingType),
-      pjsipEndpoint: pjsipEndpointForExtension(extension) || undefined,
-    });
-    return reply.send({ ...res, wake: wakeMeta });
-  } catch (err: any) {
-    const status = Number(err?.httpStatus || 502);
-    const helperError = String(err?.message || "PBX helper request failed");
-    const helperPayloadError = String(err?.payload?.error || "").trim();
-    const routesMissing = status === 404 && helperPayloadError === "not_found";
-    return reply.code(routesMissing ? 503 : Math.min(Math.max(status, 400), 599)).send({
-      error: routesMissing ? "pbx_helper_voicemail_routes_missing" : "pbx_helper_record_call_failed",
-      message: routesMissing
-        ? "The PBX helper is reachable, but it is still running an older version without voicemail greeting endpoints. Re-run the updated PBX helper installer."
-        : helperError,
-      detail: err?.payload || null,
-      wake: wakeMeta,
-    });
-  }
+  const jobId = createVmRecordJob({
+    ownerUserId: user.sub,
+    connectTenantId: extension.tenantId,
+    connectExtensionId: extension.id,
+    extNumber: String(extension.extNumber),
+    pbxTenantId: String(pbxTenantId),
+    greetingType: normalizeGreetingType(input.greetingType),
+    pjsipEndpointHint: pjsipEndpointForExtension(extension),
+    pbxInstanceId: pbxInstanceId == null ? null : String(pbxInstanceId),
+  });
+
+  const deps: VmRecordCallDeps = {
+    log: app.log,
+    sendPush: sendPushToUserDevices as VmRecordCallDeps["sendPush"],
+  };
+  void runVmRecordCallJob(deps, jobId).catch((err: unknown) => {
+    app.log.warn({ err: String((err as any)?.message || err), jobId }, "vm-record-call: runner rejected");
+  });
+
+  const snapshot = getVmRecordJobForUser(jobId, user.sub, extension.tenantId, extension.id);
+  if (!snapshot) return reply.code(500).send({ error: "vm_record_job_missing" });
+  return reply.code(202).send(buildVmRecordJobPublicView(snapshot));
 });
 
 app.get("/voicemail/greeting/record-call/:jobId", async (req, reply) => {
@@ -14826,8 +14757,13 @@ app.get("/voicemail/greeting/record-call/:jobId", async (req, reply) => {
   const extension = await resolveVoicemailGreetingExtension(user);
   if (!extension) return reply.code(404).send({ error: "extension_not_found" });
   const helperCfg = pbxHelperForExtension(extension);
-  if (!helperCfg) return reply.code(503).send({ error: "pbx_helper_not_configured" });
   const { jobId } = req.params as { jobId: string };
+  const apiJob = getVmRecordJobForUser(jobId, user.sub, extension.tenantId, extension.id);
+  if (apiJob) {
+    await refreshVmRecordJobHelperFields(apiJob);
+    return reply.send(buildVmRecordJobPublicView(apiJob));
+  }
+  if (!helperCfg) return reply.code(503).send({ error: "pbx_helper_not_configured" });
   return reply.send(await getPbxVoicemailGreetingRecordCallStatus(helperCfg, jobId));
 });
 
@@ -19381,16 +19317,12 @@ function canListMohAssets(user: JwtUser): boolean {
 }
 
 function normalizeMohRuntimeClass(value: string | null | undefined): string {
-  return String(value ?? "").trim();
-}
-
-function isMohRuntimeClass(value: string): boolean {
-  return /^moh\d+$/i.test(value);
+  return normalizeSharedMohRuntimeClass(value);
 }
 
 /** Connect-managed uploads use `connect_<tenantslug>_<name>` (see mohStorage.buildMohClassName). */
 function isConnectMohRuntimeClass(value: string): boolean {
-  return /^connect_[a-z0-9_]+$/i.test(value);
+  return sharedIsConnectMohRuntimeClass(value);
 }
 
 /** Full shape of a Hold Profile as needed for AstDB key construction. */
@@ -19434,25 +19366,24 @@ async function getMohSlugForTenant(tenantId: string): Promise<string> {
 
 async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
   const runtimeClass = normalizeMohRuntimeClass(value);
-  if (isConnectMohRuntimeClass(runtimeClass)) {
-    const asset = await (db as any).mohAsset.findFirst({
-      where: { tenantId, mohClassName: runtimeClass, status: "ready" },
-      select: { id: true },
-    });
-    if (!asset) {
-      throw Object.assign(new Error("moh_asset_not_found"), {
-        statusCode: 409,
-        detail: `No ready Connect MOH upload matches ${runtimeClass}. Open MOH → Assets, upload the file, wait for PBX media sync, then select it here.`,
-      });
-    }
-    return runtimeClass;
-  }
-
-  if (!isMohRuntimeClass(runtimeClass)) {
+  if (!isValidMohRuntimeClass(runtimeClass)) {
     throw Object.assign(new Error("invalid_moh_runtime_class"), {
       statusCode: 400,
       detail: "MOH profiles must use a VitalPBX class (e.g. moh3) or a Connect upload class (connect_<slug>_<name>).",
     });
+  }
+  if (isConnectMohRuntimeClass(runtimeClass)) {
+    const asset = await (db as any).mohAsset.findFirst({
+      where: { tenantId, mohClassName: runtimeClass, status: "ready", conversionStatus: "ready" },
+      select: { id: true, pbxStorageKey: true },
+    });
+    if (!asset?.pbxStorageKey) {
+      throw Object.assign(new Error("moh_asset_not_found"), {
+        statusCode: 409,
+        detail: `No PBX-ready Connect MOH upload matches ${runtimeClass}. Upload audio and wait for WAV conversion + PBX media sync, then select it here.`,
+      });
+    }
+    return runtimeClass;
   }
 
   const row = await (db as any).pbxMohClass.findFirst({
@@ -19737,7 +19668,8 @@ async function doMohPublish(
 
   await publishMohToAstDb(slug, keys);
   const nativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
-  if (nativeSync.skipped || nativeSync.errors.length) {
+  const connectUploadedMoh = isConnectMohRuntimeClass(profile.vitalPbxMohClassName);
+  if (!connectUploadedMoh && (nativeSync.skipped || nativeSync.errors.length)) {
     const reason = nativeSync.reason || nativeSync.errors[0] || "native_tenant_moh_sync_failed";
     app.log.warn({ tenantId, recordId: record.id, nativeSync }, "moh: native tenant MOH sync failed");
     await (db as any).mohPublishRecord.update({
@@ -19802,7 +19734,7 @@ app.post("/voice/moh/profiles", async (req, reply) => {
     tenantId:                    z.string(),
     name:                        z.string().min(1).max(100),
     type:                        z.enum(["default", "business_hours", "after_hours", "holiday", "campaign", "emergency", "custom"]),
-    vitalPbxMohClassName:        z.string().min(1).max(100),
+    vitalPbxMohClassName:        z.string().min(1).max(100).refine((s) => isValidMohRuntimeClass(s), { message: "invalid_moh_runtime_class" }),
     holdAnnouncementEnabled:     z.boolean().default(false),
     holdAnnouncementRef:         z.string().max(200).nullable().optional(),
     holdAnnouncementIntervalSec: z.number().int().min(10).max(3600).default(30),
@@ -19842,7 +19774,7 @@ app.patch("/voice/moh/profiles/:id", async (req, reply) => {
   const body = z.object({
     name:                        z.string().min(1).max(100).optional(),
     type:                        z.enum(["default", "business_hours", "after_hours", "holiday", "campaign", "emergency", "custom"]).optional(),
-    vitalPbxMohClassName:        z.string().min(1).max(100).optional(),
+    vitalPbxMohClassName:        z.string().min(1).max(100).optional().refine((s) => s === undefined || isValidMohRuntimeClass(s), { message: "invalid_moh_runtime_class" }),
     holdAnnouncementEnabled:     z.boolean().optional(),
     holdAnnouncementRef:         z.string().max(200).nullable().optional(),
     holdAnnouncementIntervalSec: z.number().int().min(10).max(3600).optional(),
@@ -20291,15 +20223,62 @@ app.post("/voice/moh/assets", async (req, reply) => {
   });
   if (existing) return reply.code(409).send({ error: "name_already_exists", detail: mohClassName });
 
-  // Write, hash, catalog.
-  let stored: { storageKey: string; sha256: string; sizeBytes: number };
+  let originalStored: { storageKey: string; sha256: string; sizeBytes: number; absolutePath: string };
   try {
-    stored = await writeMohFile({
+    originalStored = await writeMohFile({
       tenantSlug, mohClassName, originalFilename, buffer: fileBuf,
     });
   } catch (err: any) {
     return reply.code(500).send({ error: "storage_write_failed", detail: err?.message });
   }
+
+  const pbxKey = buildMohPbxWavStorageKey(tenantSlug, mohClassName);
+  const pbxAbs = resolveStoragePath(pbxKey);
+  const transcode = await transcodeMohToPbxWav({
+    sourceAbsolutePath: originalStored.absolutePath,
+    destAbsolutePath: pbxAbs,
+  });
+
+  if (!transcode.ok) {
+    try {
+      await (db as any).mohAsset.create({
+        data: {
+          tenantId: resolvedTenantId,
+          tenantSlug,
+          name: meta.name,
+          mohClassName,
+          sourceFilename: originalFilename,
+          storageKey: originalStored.storageKey,
+          originalStorageKey: originalStored.storageKey,
+          pbxStorageKey: null,
+          contentHash: originalStored.sha256,
+          sizeBytes: originalStored.sizeBytes,
+          mimeType,
+          originalMimeType: mimeType,
+          pbxFormat: null,
+          conversionStatus: "failed",
+          conversionError: transcode.error,
+          status: "failed",
+          failureReason: transcode.error,
+          createdBy: (user as any).id ?? null,
+        },
+      });
+    } catch (dbErr: any) {
+      await deleteMohFile(originalStored.storageKey).catch(() => void 0);
+      if (String(dbErr?.code) === "P2002") {
+        return reply.code(409).send({ error: "duplicate_content", detail: mohClassName });
+      }
+      throw dbErr;
+    }
+    return reply.code(422).send({
+      error: "moh_conversion_failed",
+      detail: transcode.error,
+    });
+  }
+
+  const pbxBuf = await fs.promises.readFile(pbxAbs);
+  const pbxSha = createHash("sha256").update(pbxBuf).digest("hex");
+  const pbxSize = pbxBuf.length;
 
   const asset = await (db as any).mohAsset.create({
     data: {
@@ -20308,17 +20287,25 @@ app.post("/voice/moh/assets", async (req, reply) => {
       name: meta.name,
       mohClassName,
       sourceFilename: originalFilename,
-      storageKey: stored.storageKey,
-      contentHash: stored.sha256,
-      sizeBytes: stored.sizeBytes,
+      storageKey: pbxKey,
+      originalStorageKey: originalStored.storageKey,
+      pbxStorageKey: pbxKey,
+      contentHash: pbxSha,
+      sizeBytes: pbxSize,
       mimeType,
+      originalMimeType: mimeType,
+      pbxFormat: "wav_pcm_s16le_8k_mono",
+      conversionStatus: "ready",
+      conversionError: null,
       status: "ready",
       createdBy: (user as any).id ?? null,
     },
   }).catch(async (err: any) => {
-    // Roll back the file if the DB insert lost the race on contentHash uniqueness.
-    await deleteMohFile(stored.storageKey).catch(() => void 0);
-    if (String(err?.code) === "P2002") throw Object.assign(new Error("duplicate_content"), { statusCode: 409 });
+    await deleteMohFile(originalStored.storageKey).catch(() => void 0);
+    await deleteMohFile(pbxKey).catch(() => void 0);
+    if (String(err?.code) === "P2002") {
+      throw Object.assign(new Error("duplicate_content"), { statusCode: 409 });
+    }
     throw err;
   });
 
@@ -20348,7 +20335,7 @@ app.get("/voice/moh/assets", async (req, reply) => {
     }
   }
   const assets = await (db as any).mohAsset.findMany({
-    where: { ...where, status: { in: ["ready", "uploading"] } },
+    where: { ...where, status: { in: ["ready", "uploading", "failed"] } },
     orderBy: [{ createdAt: "desc" }],
   });
   return reply.send({ assets });
@@ -20369,7 +20356,10 @@ app.delete("/voice/moh/assets/:id", async (req, reply) => {
   // Archive the row so historical publishes still resolve mohClass for audit,
   // but the sync manifest will stop advertising the file.
   await (db as any).mohAsset.update({ where: { id }, data: { status: "archived" } });
-  await deleteMohFile(asset.storageKey).catch(() => void 0);
+  const keys = new Set<string>(
+    [asset.storageKey, asset.originalStorageKey, asset.pbxStorageKey].filter(Boolean),
+  );
+  for (const k of keys) await deleteMohFile(k).catch(() => void 0);
   return reply.send({ ok: true });
 });
 
@@ -20390,7 +20380,7 @@ app.get("/voice/moh/sync-manifest", async (req, reply) => {
   }
 
   const assets = await (db as any).mohAsset.findMany({
-    where: { status: "ready" },
+    where: { status: "ready", conversionStatus: "ready", pbxStorageKey: { not: null } },
     orderBy: [{ tenantSlug: "asc" }, { mohClassName: "asc" }],
   });
 
@@ -20400,25 +20390,163 @@ app.get("/voice/moh/sync-manifest", async (req, reply) => {
   // remaining URLs are still valid.
   const urlExpirySec = 30 * 60;
 
-  const files = assets.map((a: any) => {
-    const ext = (a.sourceFilename || "").split(".").pop() || "";
-    // Target filename on the PBX side. Extension is preserved so Asterisk can
-    // pick up the file format correctly; "asset.<ext>" makes the directory
-    // contents deterministic for diff-sync.
-    const relPath = `${a.mohClassName}/asset${ext ? "." + ext : ""}`;
-    return {
-      relPath,
-      mohClass: a.mohClassName,
-      sha256: a.contentHash,
-      sizeBytes: a.sizeBytes,
-      downloadUrl: buildSignedDownloadUrl(publicBase, a.storageKey, urlExpirySec),
-    };
-  });
+  const files = assets
+    .filter((a: any) => typeof a.pbxStorageKey === "string" && a.pbxStorageKey.toLowerCase().endsWith(".wav"))
+    .map((a: any) => {
+      const relPath = `${a.mohClassName}/asset.wav`;
+      return {
+        relPath,
+        mohClass: a.mohClassName,
+        sha256: a.contentHash,
+        sizeBytes: a.sizeBytes,
+        downloadUrl: buildSignedDownloadUrl(publicBase, a.pbxStorageKey, urlExpirySec),
+      };
+    });
 
   return reply.send({
     generatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + urlExpirySec * 1000).toISOString(),
     files,
+  });
+});
+
+// ── GET /voice/moh/status ────────────────────────────────────────────────────
+// DB + storage truth for MOH diagnostics (PBX "loaded" state is not queried here).
+app.get("/voice/moh/status", async (req, reply) => {
+  const user = await requirePermission(req, reply, canListMohAssets);
+  if (!user) return;
+  const q = z.object({
+    tenantId: z.string().min(1),
+    mohClassName: z.string().min(1).max(120),
+  }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query", issues: q.error.issues });
+
+  const connectTenantId = await resolveMohTenantId(q.data.tenantId);
+  if (!connectTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertMohTenantAccess(user, connectTenantId);
+
+  const rawName = String(q.data.mohClassName || "");
+  const mohClassName = normalizeMohRuntimeClass(rawName);
+  const warnings: string[] = [];
+
+  if (!isValidMohRuntimeClass(mohClassName)) {
+    warnings.push("mohClassName is not a valid VitalPBX (mohN) or Connect-upload (connect_…) runtime class.");
+    return reply.send({
+      tenantId: connectTenantId,
+      mohClassName: rawName,
+      classType: "native",
+      db: {
+        profileExists: false,
+        assetExists: false,
+        assetStatus: null,
+        conversionStatus: null,
+        pbxStorageKey: null,
+        lastPublishedState: null,
+        activeClass: null,
+      },
+      storage: { originalExists: false, pbxArtifactExists: false, pbxArtifactFormat: null, sizeBytes: null as number | null },
+      sync: { manifestAvailable: false, lastSyncAt: null, lastSyncStatus: null },
+      pbxExpected: { mohDirectory: "", configFile: "", expectedConfigBlock: "" },
+      warnings,
+    });
+  }
+
+  const classType: "native" | "connect" = isConnectMohRuntimeClass(mohClassName) ? "connect" : "native";
+  if (classType === "connect") {
+    warnings.push(
+      "Connect-uploaded MOH is intended for tenant/channel default hold (AstDB). Queue-level hold music in VitalPBX still uses native mohN unless a separate queue musicclass mapping is installed on the PBX.",
+    );
+  }
+
+  const [profileCount, asset, lastPub, lastState, manifestRow] = await Promise.all([
+    (db as any).mohProfile.count({
+      where: { tenantId: connectTenantId, isActive: true, vitalPbxMohClassName: mohClassName },
+    }),
+    (db as any).mohAsset.findFirst({
+      where: { tenantId: connectTenantId, mohClassName },
+    }),
+    (db as any).mohPublishRecord.findFirst({
+      where: { tenantId: connectTenantId, newMohClass: mohClassName, status: "success" },
+      orderBy: { publishedAt: "desc" },
+    }),
+    (db as any).mohLastPublishedState.findUnique({ where: { tenantId: connectTenantId } }),
+    classType === "connect"
+      ? (db as any).mohAsset.findFirst({
+          where: {
+            tenantId: connectTenantId,
+            mohClassName,
+            status: "ready",
+            conversionStatus: "ready",
+            pbxStorageKey: { not: null },
+          },
+          select: { id: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  let originalExists = false;
+  let pbxArtifactExists = false;
+  try {
+    const origKey = asset?.originalStorageKey ?? asset?.storageKey;
+    if (origKey) {
+      originalExists = fs.existsSync(resolveStoragePath(origKey));
+    }
+    if (asset?.pbxStorageKey) {
+      pbxArtifactExists = fs.existsSync(resolveStoragePath(asset.pbxStorageKey));
+    }
+  } catch {
+    warnings.push("Could not verify one or more storage paths (invalid key or permission).");
+  }
+
+  const mohDirectory = `/var/lib/asterisk/moh/${mohClassName}`;
+  const configFile = "/etc/asterisk/musiconhold__99_connect_assets.conf";
+  const expectedConfigBlock =
+    classType === "connect"
+      ? `[${mohClassName}]\nmode=files\ndirectory=${mohDirectory}\nsort=random`
+      : "";
+
+  if (classType === "connect" && asset?.conversionStatus === "ready" && !pbxArtifactExists) {
+    warnings.push("PBX WAV artifact missing from Connect storage — PBX sync cannot succeed until the file exists.");
+  }
+  if (classType === "connect" && asset && asset.conversionStatus !== "ready") {
+    warnings.push(`Conversion status is "${asset.conversionStatus}" — asset is not eligible for PBX manifest until ready.`);
+  }
+  if (classType === "connect") {
+    warnings.push(
+      "lastSyncAt/lastSyncStatus are the last successful Connect publish for this class, not proof the PBX finished connect-media-sync.",
+    );
+  }
+
+  return reply.send({
+    tenantId: connectTenantId,
+    mohClassName,
+    classType,
+    db: {
+      profileExists: profileCount > 0,
+      assetExists: !!asset,
+      assetStatus: asset?.status ?? null,
+      conversionStatus: asset?.conversionStatus ?? null,
+      pbxStorageKey: asset?.pbxStorageKey ?? null,
+      lastPublishedState: lastState
+        ? { mohClass: lastState.mohClass, holdMode: lastState.holdMode, publishedAt: lastState.publishedAt }
+        : null,
+      activeClass: lastState?.mohClass ?? null,
+    },
+    storage: {
+      originalExists,
+      pbxArtifactExists,
+      pbxArtifactFormat: asset?.pbxFormat ?? (pbxArtifactExists ? "wav_pcm_s16le_8k_mono" : null),
+      sizeBytes: asset?.sizeBytes ?? null,
+    },
+    sync: {
+      manifestAvailable: !!manifestRow,
+      lastSyncAt: lastPub?.publishedAt?.toISOString?.() ?? null,
+      lastSyncStatus: lastPub?.status ?? null,
+    },
+    pbxExpected: classType === "connect"
+      ? { mohDirectory, configFile, expectedConfigBlock }
+      : { mohDirectory: "", configFile: "", expectedConfigBlock: "" },
+    warnings,
   });
 });
 

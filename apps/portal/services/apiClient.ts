@@ -128,8 +128,8 @@ async function apiRequest<T>(
   }
 }
 
-export async function apiGet<T>(path: string, token?: string): Promise<T> {
-  return apiRequest<T>("GET", path, undefined, token);
+export async function apiGet<T>(path: string, token?: string, options: ApiRequestOptions = {}): Promise<T> {
+  return apiRequest<T>("GET", path, undefined, token, options);
 }
 
 export async function apiPost<T>(path: string, body?: Record<string, unknown>, token?: string, options?: ApiRequestOptions): Promise<T> {

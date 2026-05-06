@@ -43,6 +43,65 @@ const DEFAULT_GREETING: GreetingState = {
   publishDetail: null,
 };
 
+const VM_RECORD_TERMINAL = new Set(["saved", "failed", "timeout", "cancelled"]);
+
+type VmRecordJobStatus = {
+  ok?: boolean;
+  jobId?: string;
+  state?: string;
+  extension?: string;
+  pbxTenantId?: string;
+  greetingType?: string;
+  pjsipEndpointHint?: string | null;
+  wake?: {
+    sent?: boolean;
+    registered?: boolean;
+    registrationState?: string | null;
+    devicesNotified?: number;
+    waitedMs?: number;
+    error?: string;
+  };
+  pjsipContactOk?: boolean | null;
+  matchedEndpoints?: string[];
+  diagAvailable?: boolean;
+  diagBypassWithoutDiag?: boolean;
+  dialplanRecordExitCode?: number | null;
+  dialplanShowSnippet?: string | null;
+  helperJobId?: string | null;
+  helper?: Record<string, unknown> | null;
+  verification?: { saved?: boolean; sha256?: string | null; updatedAt?: string | null; sizeBytes?: number | null } | null;
+  error?: { code?: string; userMessage?: string; message?: string } | null;
+};
+
+function vmRecordStateLabel(state: string): string {
+  switch (state) {
+    case "preparing_call":
+      return "Preparing call…";
+    case "waking_device":
+      return "Waking device…";
+    case "checking_registration":
+      return "Checking registration…";
+    case "checking_endpoint":
+      return "Checking PBX registration…";
+    case "calling_extension":
+      return "Calling your extension…";
+    case "answer_and_follow_prompts":
+      return "Answer the call and follow the prompts";
+    case "waiting_for_saved_greeting":
+      return "Waiting for saved greeting on PBX…";
+    case "saved":
+      return "Saved successfully";
+    case "failed":
+      return "Failed";
+    case "timeout":
+      return "Timed out";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return state ? `${state}` : "…";
+  }
+}
+
 export function ProfileMenu() {
   const [open, setOpen] = useState(false);
   const [dnd, setDnd] = useState(false);
@@ -51,6 +110,7 @@ export function ProfileMenu() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [recordingCall, setRecordingCall] = useState(false);
+  const [vmRecordJob, setVmRecordJob] = useState<VmRecordJobStatus | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelResponse | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -84,6 +144,10 @@ export function ProfileMenu() {
     return () => {
       active = false;
     };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) setVmRecordJob(null);
   }, [open]);
 
   function logout() {
@@ -174,11 +238,42 @@ export function ProfileMenu() {
 
   async function callToRecordGreeting() {
     setRecordingCall(true);
-    setUploadMessage("Calling your extension to record a greeting...");
+    setVmRecordJob(null);
+    setUploadMessage("Starting Call to Record…");
     try {
-      const res = await apiPost<{ ok: boolean; jobId: string; status: string; error?: string }>("/voicemail/greeting/record-call", { greetingType: "unavailable" }, undefined, { timeoutMs: 20000 });
-      setUploadMessage(res.status === "failed" ? (res.error || "Could not start recording call.") : "Answer your extension and follow the voicemail prompts to record your greeting.");
-      setTimeout(() => void refreshPanel().catch(() => undefined), 3500);
+      const res = await apiPost<VmRecordJobStatus>(
+        "/voicemail/greeting/record-call",
+        { greetingType: "unavailable" },
+        undefined,
+        { timeoutMs: 120_000 },
+      );
+      if (!res.jobId) {
+        throw new ApiError("Server did not return a job id.", 500);
+      }
+      setVmRecordJob(res);
+      setUploadMessage(vmRecordStateLabel(String(res.state || "preparing_call")));
+
+      const jobId = res.jobId;
+      while (true) {
+        const st = await apiGet<VmRecordJobStatus>(`/voicemail/greeting/record-call/${encodeURIComponent(jobId)}`, undefined, {
+          timeoutMs: 25_000,
+        });
+        setVmRecordJob(st);
+        const state = String(st.state || "");
+        if (VM_RECORD_TERMINAL.has(state)) {
+          if (state === "saved") {
+            setUploadMessage("Voicemail greeting saved on the PBX.");
+            await refreshPanel().catch(() => undefined);
+          } else if (state === "timeout") {
+            setUploadMessage(st.error?.userMessage || "Timed out waiting for the new greeting file.");
+          } else {
+            setUploadMessage(st.error?.userMessage || st.error?.message || "Call to record did not complete.");
+          }
+          break;
+        }
+        setUploadMessage(vmRecordStateLabel(state));
+        await new Promise((r) => setTimeout(r, 2000));
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not start recording call.";
       setUploadMessage(message);
@@ -267,6 +362,68 @@ export function ProfileMenu() {
 
           {uploading ? <div className="ecp-progress"><span /></div> : null}
           {uploadMessage ? <div className="ecp-muted">{uploadMessage}</div> : null}
+          {vmRecordJob ? (
+            <div className="ecp-muted" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 6 }}>
+              <div>
+                <strong>Job</strong> {vmRecordJob.jobId}{" "}
+                <span style={{ opacity: 0.85 }}>({vmRecordStateLabel(String(vmRecordJob.state || ""))})</span>
+              </div>
+              {vmRecordJob.extension ? (
+                <div>
+                  <strong>Extension</strong> {vmRecordJob.extension}
+                  {vmRecordJob.pbxTenantId ? ` · PBX tenant ${vmRecordJob.pbxTenantId}` : null}
+                  {vmRecordJob.pjsipEndpointHint ? ` · Endpoint ${vmRecordJob.pjsipEndpointHint}` : null}
+                </div>
+              ) : null}
+              {vmRecordJob.wake ? (
+                <div>
+                  <strong>Wake</strong> {vmRecordJob.wake.sent ? "sent" : "not sent"}
+                  {vmRecordJob.wake.devicesNotified != null ? ` · ${vmRecordJob.wake.devicesNotified} device(s)` : null}
+                  {vmRecordJob.wake.waitedMs != null ? ` · waited ${vmRecordJob.wake.waitedMs}ms` : null}
+                  {vmRecordJob.wake.registered != null ? ` · SIP session: ${vmRecordJob.wake.registered ? "REGISTERED" : "not registered yet"}` : null}
+                  {vmRecordJob.wake.registrationState ? ` (${vmRecordJob.wake.registrationState})` : null}
+                  {vmRecordJob.wake.error ? ` · ${vmRecordJob.wake.error}` : null}
+                </div>
+              ) : null}
+              {vmRecordJob.pjsipContactOk != null ? (
+                <div>
+                  <strong>PJSIP contacts</strong> {vmRecordJob.pjsipContactOk ? "reachable" : "none Avail"}
+                  {vmRecordJob.matchedEndpoints?.length ? ` · ${vmRecordJob.matchedEndpoints.join(", ")}` : null}
+                  {vmRecordJob.diagBypassWithoutDiag ? " · diag bypass (legacy)" : null}
+                </div>
+              ) : null}
+              {vmRecordJob.helperJobId ? (
+                <div>
+                  <strong>PBX helper job</strong> {vmRecordJob.helperJobId}
+                </div>
+              ) : null}
+              {typeof vmRecordJob.helper?.asteriskExitCode === "number" ? (
+                <div>
+                  <strong>Originate</strong> exit {String(vmRecordJob.helper.asteriskExitCode)}
+                </div>
+              ) : null}
+              {typeof vmRecordJob.helper?.asteriskOutput === "string" && vmRecordJob.helper.asteriskOutput ? (
+                <div style={{ whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto", opacity: 0.9 }}>
+                  <strong>Last Asterisk output</strong>
+                  {"\n"}
+                  {String(vmRecordJob.helper.asteriskOutput).slice(-800)}
+                </div>
+              ) : null}
+              {vmRecordJob.verification?.saved ? (
+                <div>
+                  <strong>Verified</strong> sha {vmRecordJob.verification.sha256?.slice(0, 12) ?? "—"}… ·{" "}
+                  {vmRecordJob.verification.updatedAt ?? "—"}
+                </div>
+              ) : null}
+              {vmRecordJob.dialplanShowSnippet ? (
+                <div style={{ whiteSpace: "pre-wrap", maxHeight: 80, overflow: "auto", opacity: 0.85 }}>
+                  <strong>Dialplan snippet</strong>
+                  {"\n"}
+                  {vmRecordJob.dialplanShowSnippet.slice(0, 600)}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {greeting.publishDetail ? <div className="ecp-warning">{greeting.publishDetail}</div> : null}
           <div className="ecp-actions-row">
             <button className="ecp-secondary-btn" type="button" disabled={!previewUrl} onClick={() => previewUrl && window.open(previewUrl, "_blank", "noopener,noreferrer")}>Play</button>
