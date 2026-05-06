@@ -1563,6 +1563,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setError("Not registered. Wait for SIP registration before dialling.");
         return;
       }
+      // Guard: callStartedAtRef is set synchronously at the start of this function
+      // before any async work. A second rapid invocation (double-click, Enter+click)
+      // will see it already set and bail out before placing a second SIP INVITE.
+      if (callStartedAtRef.current !== null) {
+        console.warn("[SipPhone] dial() suppressed — call already in progress");
+        return;
+      }
       const domain = uaRef.current._configuration?.uri?.host;
       if (!domain) return;
       const normalised = target.trim();
