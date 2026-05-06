@@ -25,6 +25,16 @@ function extractShortExtension(raw: string): string | null {
   return null;
 }
 
+function digitsOnly(raw: string | null | undefined): string {
+  const digits = String(raw || "").replace(/\D/g, "");
+  return /^1\d{10}$/.test(digits) ? digits.slice(1) : digits;
+}
+
+function isExternalDialTarget(raw: string | null | undefined): boolean {
+  const digits = digitsOnly(raw);
+  return digits.length >= 10 && digits.length <= 15;
+}
+
 export type MobilePushRingPayload = {
   linkedId: string;
   toExtension: string;
@@ -123,15 +133,46 @@ export class MobilePushNotifier {
       ? extractShortExtension(call.from ?? "")
       : null;
 
+    // Self-ring suppression for *outbound* dials only:
+    // when an extension dials a 10–15 digit external target, both the desktop AOR
+    // (T<id>_<ext>) and the mobile AOR (T<id>_<ext>_1) of the same extension can
+    // appear in `extensions`. We must NOT push that extension's mobile, otherwise
+    // the originator's own phone re-rings as if it were an incoming call.
+    //
+    // CRITICAL: this MUST NOT apply to inbound calls. On VitalPBX-native inbound
+    // (DID → IVR-X → T<id>_cos-all → ext) the dialed channel reports
+    // `callerIDNum = <dest-ext>` (e.g. "103"), which Asterisk normalizes into
+    // `source_extension`. Combined with `to` being the 10-digit DID, the old
+    // direction-blind version of this guard incorrectly filtered the destination
+    // extension out of its own push list, leading to "mobile-ring: suppressed …"
+    // and a silent killed-app mobile (linkedId 1778094072.18393, A plus / T2_103,
+    // 2026-05-06). Always gate on direction.
+    const selfOriginatingExt =
+      call.direction !== "inbound" && isExternalDialTarget(call.to)
+        ? (extractShortExtension(call.source_extension ?? "") ?? extractShortExtension(call.from ?? ""))
+        : null;
+
     // Extract short extension numbers (e.g. "103") from the extensions list.
     // Handles both plain "103" and VitalPBX multi-tenant "T8_103" formats.
     // Trunk peer IDs (e.g. "344022_gesheft") and the calling party are filtered out.
     const toExtensions = [...new Set(
       call.extensions
         .map(extractShortExtension)
-        .filter((x): x is string => x !== null && x !== callerExt)
+        .filter((x): x is string => x !== null && x !== callerExt && x !== selfOriginatingExt)
     )];
     if (toExtensions.length === 0) {
+      if (selfOriginatingExt) {
+        log.info(
+          {
+            linkedId: call.linkedId,
+            from: call.from,
+            to: call.to,
+            sourceExtension: call.source_extension,
+            direction: call.direction,
+          },
+          "mobile-ring: suppressed outbound self-ring (extension dialed external from same AOR)",
+        );
+      }
       // Extensions not yet resolved in this event — will retry on next callUpsert.
       return;
     }
