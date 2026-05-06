@@ -155,6 +155,7 @@ async function callHelper<T>(
     | "/voicemail/greeting/reset"
     | "/voicemail/greeting/record-call",
   body: Record<string, unknown>,
+  timeoutMs = 15_000,
 ): Promise<T> {
   const resp = await fetch(`${cfg.baseUrl}${path}`, {
     method: "POST",
@@ -163,7 +164,7 @@ async function callHelper<T>(
       "x-connect-pbx-helper-secret": cfg.secret,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await resp.text();
   let parsed: any = null;
@@ -304,7 +305,8 @@ export function requestPbxVoicemailGreetingRecordCall(
   cfg: PbxRouteHelperConfig,
   body: { tenantId: string; extension: string; greetingType: PbxVoicemailGreetingType; pjsipEndpoint?: string; endpointTenantId?: string },
 ): Promise<PbxVoicemailGreetingRecordCallResponse> {
-  return callHelper<PbxVoicemailGreetingRecordCallResponse>(cfg, "/voicemail/greeting/record-call", body);
+  // 35s timeout: the helper polls for mobile SIP registration (up to ~20s) before originating.
+  return callHelper<PbxVoicemailGreetingRecordCallResponse>(cfg, "/voicemail/greeting/record-call", body, 35_000);
 }
 
 export function getPbxVoicemailGreetingRecordCallStatus(

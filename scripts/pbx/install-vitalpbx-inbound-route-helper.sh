@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.4"
+VERSION = "2026.05.05.5"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -840,6 +840,29 @@ def vm_greeting_reset(body):
     backup = backup_vm_greeting(target)
     return {"ok": True, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "active": False, "pbxPath": str(target), "backupPath": str(backup) if backup else None, "sizeBytes": 0, "sha256": None, "updatedAt": utc_now()}
 
+def poll_pjsip_endpoint_registered(endpoint_name, max_wait_secs=20, interval_secs=2):
+    """Poll 'pjsip show contacts' until endpoint_name appears with Avail status.
+    Returns True if found, False on timeout. Used to wait for mobile SIP
+    re-registration after an FCM wake before originating the dispatch call."""
+    deadline = time.time() + max_wait_secs
+    while time.time() < deadline:
+        try:
+            result = subprocess.run(
+                ["asterisk", "-rx", "pjsip show contacts"],
+                text=True, capture_output=True, timeout=8, check=False,
+            )
+            output = result.stdout + result.stderr
+            for line in output.splitlines():
+                if endpoint_name in line and "Avail" in line:
+                    return True
+        except Exception:
+            pass
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(interval_secs, remaining))
+    return False
+
 def vm_record_call(body):
     tenant_id = require_num("tenant_id", body.get("tenantId"))
     extension = require_ext(body.get("extension"))
@@ -868,10 +891,10 @@ def vm_record_call(body):
     dispatch_endpoints: list = []
     if channel.startswith("Local/") and "connect-vm-greeting-dispatch" in channel:
         # Build the dial string from KNOWN endpoint names rather than querying
-        # pjsip show contacts. The dispatch dialplan context includes Wait(15)
-        # before Dial() so the mobile has time to finish SIP registration after
-        # the FCM wake sent by the API. This avoids the race where the mobile
-        # hasn't yet completed its REGISTER/200-OK cycle at originate time.
+        # pjsip show contacts. The dispatch dialplan context includes Wait(5)
+        # as a small buffer. The real registration wait is done synchronously
+        # in poll_pjsip_endpoint_registered() before the originate command,
+        # so the mobile is confirmed registered before Asterisk's Dial() runs.
         #
         # Build the dial string from BOTH the base endpoint AND the device-specific
         # hint endpoint (if provided). Using both in parallel is more robust than
@@ -906,7 +929,27 @@ def vm_record_call(body):
         except Exception as exc:
             sys.stderr.write("astdb_put_failed: " + str(exc) + "\n")
         channel_source = "dispatch_local:" + ",".join(dispatch_endpoints)
+        # Poll for the hint endpoint (typically the mobile device) to appear in
+        # pjsip show contacts before originating. The API sends an FCM wake ~2s
+        # before calling us; the mobile typically re-registers within 10–20s.
+        # Polling here prevents Dial() from running against an empty contact list.
+        # The dialplan Wait() is reduced to 5s (small buffer only) since the real
+        # wait is now done here in Python before the originate command.
+        poll_registered = False
+        poll_elapsed_secs = 0.0
+        if hint_raw and hint_raw != base_ep:
+            t_poll_start = time.time()
+            poll_registered = poll_pjsip_endpoint_registered(hint_raw, max_wait_secs=20, interval_secs=2)
+            poll_elapsed_secs = round(time.time() - t_poll_start, 1)
+            sys.stderr.write(
+                "poll_pjsip_endpoint: endpoint=%s registered=%s elapsed=%.1fs\n"
+                % (hint_raw, poll_registered, poll_elapsed_secs)
+            )
+        else:
+            poll_registered = True
     else:
+        poll_registered = True
+        poll_elapsed_secs = 0.0
         channel = endpoint_hint_channel(body, extension) or channel
         channel, channel_source = resolve_record_channel(channel, tenant_id, extension)
     if CFG.vm_record_app.lower() == "goto":
@@ -916,7 +959,7 @@ def vm_record_call(body):
         target_descriptor = extension + "@" + tenant_id
         cmd_str = "channel originate " + channel + " application " + CFG.vm_record_app + " " + target_descriptor
     cmd = ["asterisk", "-rx", cmd_str]
-    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source, "asteriskCommand": cmd_str, "targetDescriptor": target_descriptor, "dispatchEndpoints": dispatch_endpoints, "dispatchDialString": dispatch_dial_string}
+    job = {"ok": True, "jobId": job_id, "tenantId": tenant_id, "extension": extension, "greetingType": greeting_type, "targetPath": str(target), "backupPath": str(backup) if backup else None, "status": "ringing", "callId": job_id, "createdAt": utc_now(), "channel": channel, "channelSource": channel_source, "asteriskCommand": cmd_str, "targetDescriptor": target_descriptor, "dispatchEndpoints": dispatch_endpoints, "dispatchDialString": dispatch_dial_string, "pollRegistered": poll_registered, "pollElapsedSecs": poll_elapsed_secs}
     try:
         proc = subprocess.run(cmd, text=True, capture_output=True, timeout=10, check=False)
         job["asteriskExitCode"] = proc.returncode
@@ -1085,7 +1128,7 @@ CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit 
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(15)
+ same => n,Wait(5)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},30)
@@ -1318,7 +1361,7 @@ cat >"${DIALPLAN_TARGET}" <<'EOF'
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(15)
+ same => n,Wait(5)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
  same => n,Dial(${CONNECT_VM_DIAL},30)
