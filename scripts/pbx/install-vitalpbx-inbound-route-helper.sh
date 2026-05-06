@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.5"
+VERSION = "2026.05.05.6"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -947,6 +947,15 @@ def vm_record_call(body):
             )
         else:
             poll_registered = True
+        # When the mobile device is confirmed registered, switch from Local channel
+        # dispatch to a direct PJSIP originate. With a Local channel both legs run
+        # simultaneously, so WaitForBridge() returns immediately (Leg 1 is already
+        # bridged to Leg 2 via the Local channel). Prompts therefore play before the
+        # user's phone even rings. Direct originate eliminates this race:
+        #   phone rings → user answers → channel enters record context → prompts play.
+        if poll_registered and hint_raw and hint_raw != base_ep:
+            channel = "PJSIP/" + hint_raw
+            channel_source = "direct_pjsip:" + hint_raw
     else:
         poll_registered = True
         poll_elapsed_secs = 0.0
@@ -1146,7 +1155,6 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
  same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Answer()
- same => n,WaitForBridge(45)
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
  same => n,Playback(beep)
@@ -1379,7 +1387,6 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
  same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Answer()
- same => n,WaitForBridge(45)
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
  same => n,Playback(beep)
