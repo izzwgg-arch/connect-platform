@@ -868,6 +868,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         ext = await apiGet<VoiceExtension>("/voice/me/extension");
       } catch (e: unknown) {
         if (cancelled) return;
+        // 401 means the auth token wasn't ready yet (race condition on startup).
+        // Retry silently after a short delay instead of surfacing an error.
+        if (e instanceof ApiError && e.status === 401) {
+          setTimeout(() => {
+            if (cancelled) return;
+            try { init(); } catch { /* ignore */ }
+          }, 2_500);
+          return;
+        }
         const fromBody =
           e instanceof ApiError && e.body && typeof e.body === "object"
             ? (e.body as { extensionNumber?: string; message?: string })
