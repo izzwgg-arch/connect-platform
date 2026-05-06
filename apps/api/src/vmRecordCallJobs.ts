@@ -215,6 +215,36 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     const ownerUserId = job.ownerUserId;
     const wakeMeta: VmRecordWakeMeta = { devicesNotified: 0, waitedMs: 0, sent: false };
 
+    // ── Pre-wake PJSIP check ─────────────────────────────────────────────────
+    // If the endpoint is already Avail on the PBX, skip the wake push entirely
+    // and proceed directly to originate. This avoids the failure mode where the
+    // device is already registered but the wake push forces a SIP re-registration
+    // that temporarily removes the Avail contact, causing the 12-second poll to
+    // time out and block originate with "wake_sent_but_not_registered".
+    let preWakeContactOk = false;
+    try {
+      const preDiag = await getPbxVoicemailGreetingDiag(helperCfg);
+      if (preDiag?.ok) {
+        const parsed = parseReachablePjsipContacts(
+          String(preDiag.pjsipContactsOutput || ""),
+          job.pbxTenantId,
+          job.extNumber,
+        );
+        preWakeContactOk = parsed.ok;
+        if (preWakeContactOk) {
+          job.matchedEndpoints = parsed.availEndpoints;
+          job.pjsipContactOk = true;
+          job.diagAvailable = true;
+          deps.log.info(
+            { jobId, endpoint: parsed.availEndpoints[0], extNumber: job.extNumber },
+            "vm-record-call: endpoint already Avail — skipping wake push",
+          );
+        }
+      }
+    } catch {
+      // Pre-check failure is non-fatal — fall through to normal wake flow
+    }
+
     const devices = await db.mobileDevice.findMany({
       where: { tenantId: job.connectTenantId, userId: ownerUserId, active: true } as any,
       select: { id: true } as any,
@@ -222,7 +252,7 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     const deviceIds = (devices as unknown as { id: string }[]).map((d) => d.id);
     const hadMobileDevices = deviceIds.length > 0;
 
-    if (hadMobileDevices) {
+    if (hadMobileDevices && !preWakeContactOk) {
       const wakePbxCallId = "vm-greeting-record-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
       try {
         const pushed = await deps.sendPush({
@@ -292,35 +322,39 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     job.state = "checking_endpoint";
     touch(job);
 
-    let contactOk = false;
+    let contactOk = preWakeContactOk; // already true if pre-wake check found Avail endpoint
     let pjsipOut = "";
     let dialplanSnippet = "";
     let dialplanExit: number | null = null;
     const bypass = String(process.env.VOICEMAIL_RECORD_ALLOW_WITHOUT_DIAG || "").trim() === "1";
 
-    try {
-      const diag = await getPbxVoicemailGreetingDiag(helperCfg);
-      job.diagAvailable = !!diag?.ok;
-      pjsipOut = String(diag?.pjsipContactsOutput || "");
-      dialplanSnippet = String(diag?.dialplanShowOutput || "").slice(0, 4000);
-      dialplanExit = typeof diag?.dialplanShowExitCode === "number" ? diag.dialplanShowExitCode : null;
-      job.dialplanShowSnippet = dialplanSnippet;
-      job.dialplanRecordExitCode = dialplanExit;
-      const parsed = parseReachablePjsipContacts(pjsipOut, job.pbxTenantId, job.extNumber);
-      job.matchedEndpoints = parsed.availEndpoints;
-      contactOk = parsed.ok;
-      job.pjsipContactOk = contactOk;
-    } catch (err: any) {
-      const st = Number(err?.httpStatus || 0);
-      const notFound = st === 404 || String(err?.message || "").toLowerCase().includes("not_found");
-      if (bypass && notFound) {
-        job.diagBypassWithoutDiag = true;
-        job.diagAvailable = false;
-        job.pjsipContactOk = null;
-        contactOk = true;
-      } else {
-        setError(job, "pbx_helper_diag_unavailable", notFound ? "Helper voicemail diag route not found (upgrade helper)." : String(err?.message || err), err?.payload);
-        return;
+    // Skip the post-wake PJSIP check if pre-wake already confirmed Avail.
+    // If the wake WAS sent (re-registration case), always re-check.
+    if (!preWakeContactOk || wakeMeta.sent) {
+      try {
+        const diag = await getPbxVoicemailGreetingDiag(helperCfg);
+        job.diagAvailable = !!diag?.ok;
+        pjsipOut = String(diag?.pjsipContactsOutput || "");
+        dialplanSnippet = String(diag?.dialplanShowOutput || "").slice(0, 4000);
+        dialplanExit = typeof diag?.dialplanShowExitCode === "number" ? diag.dialplanShowExitCode : null;
+        job.dialplanShowSnippet = dialplanSnippet;
+        job.dialplanRecordExitCode = dialplanExit;
+        const parsed = parseReachablePjsipContacts(pjsipOut, job.pbxTenantId, job.extNumber);
+        job.matchedEndpoints = parsed.availEndpoints;
+        contactOk = parsed.ok;
+        job.pjsipContactOk = contactOk;
+      } catch (err: any) {
+        const st = Number(err?.httpStatus || 0);
+        const notFound = st === 404 || String(err?.message || "").toLowerCase().includes("not_found");
+        if (bypass && notFound) {
+          job.diagBypassWithoutDiag = true;
+          job.diagAvailable = false;
+          job.pjsipContactOk = null;
+          contactOk = true;
+        } else {
+          setError(job, "pbx_helper_diag_unavailable", notFound ? "Helper voicemail diag route not found (upgrade helper)." : String(err?.message || err), err?.payload);
+          return;
+        }
       }
     }
 
