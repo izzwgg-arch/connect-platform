@@ -14715,14 +14715,20 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
   // Mirrors the wake-then-Wait()-then-Dial() pattern used for incoming PSTN
   // calls in [connect-dial-with-wake].
   const ownerUserId = (extension as any).ownerUserId as string | null;
-  // The PBX dispatch dialplan context includes Wait(15) before Dial(), so
-  // the mobile has time to finish SIP registration after the FCM wake inside
-  // Asterisk itself. We only do a short 2-second pause here to let the FCM
-  // delivery confirm before we ask the PBX to originate the call.
-  // The mobile app also no longer does forceRestart for vm-greeting wakes when
-  // already registered, so the existing SIP contact stays valid throughout.
-  const wakeWaitMs = 2000;
-  let wakeMeta: { devicesNotified: number; waitedMs: number; sent: boolean; error?: string } = {
+  // Wait for a real SIP REGISTERED heartbeat from the mobile before asking
+  // Asterisk to originate. A fixed 2s sleep is not enough on cold Android
+  // wakes: the device can report DEVICE_REGISTER_COMPLETE while its JS state
+  // is still "registering", leaving Asterisk to INVITE a stale contact.
+  const wakeWaitMaxMs = 12_000;
+  const wakePollMs = 500;
+  let wakeMeta: {
+    devicesNotified: number;
+    waitedMs: number;
+    sent: boolean;
+    registered?: boolean;
+    registrationState?: string | null;
+    error?: string;
+  } = {
     devicesNotified: 0,
     waitedMs: 0,
     sent: false,
@@ -14750,9 +14756,35 @@ app.post("/voicemail/greeting/record-call", async (req, reply) => {
             wakeRequestedAt: new Date().toISOString(),
           },
         });
-        wakeMeta = { devicesNotified: pushed?.queued ?? devices.length, waitedMs: wakeWaitMs, sent: true };
-        if (wakeWaitMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, wakeWaitMs));
+        const waitStartedAt = new Date();
+        wakeMeta = { devicesNotified: pushed?.queued ?? devices.length, waitedMs: 0, sent: true, registered: false };
+        const deadline = Date.now() + wakeWaitMaxMs;
+        while (Date.now() < deadline) {
+          const session = await db.voiceClientSession.findFirst({
+            where: {
+              tenantId: extension.tenantId,
+              userId: ownerUserId,
+              lastRegState: "REGISTERED",
+              lastSeenAt: { gte: waitStartedAt },
+            } as any,
+            orderBy: { lastSeenAt: "desc" },
+            select: { lastRegState: true } as any,
+          });
+          if (session?.lastRegState === "REGISTERED") {
+            wakeMeta.registered = true;
+            wakeMeta.registrationState = "REGISTERED";
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, wakePollMs));
+        }
+        wakeMeta.waitedMs = Date.now() - waitStartedAt.getTime();
+        if (!wakeMeta.registered) {
+          const latestSession = await db.voiceClientSession.findFirst({
+            where: { tenantId: extension.tenantId, userId: ownerUserId } as any,
+            orderBy: { lastSeenAt: "desc" },
+            select: { lastRegState: true } as any,
+          });
+          wakeMeta.registrationState = latestSession?.lastRegState ?? null;
         }
       }
     } catch (err: any) {
