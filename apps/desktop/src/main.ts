@@ -314,8 +314,10 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("phone:command", (_event, command: PhoneEngineCommand) => {
-    const engine = createPhoneEngineWindow();
-    engine.webContents.send("phone:command", command);
+    // The full window now runs LocalSipPhoneProvider directly (like the web app).
+    // Send commands there first; fall back to phone-engine window if full isn't open.
+    const target = (fullWindow && !fullWindow.isDestroyed()) ? fullWindow : createPhoneEngineWindow();
+    target.webContents.send("phone:command", command);
     return true;
   });
 }

@@ -2044,7 +2044,10 @@ const SipPhoneContext = createContext<(SipPhoneState & SipPhoneActions) | null>(
 
 function isDesktopProxyWindow(): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean(window.connectDesktop?.isDesktop && window.connectDesktop.windowKind !== "phone-engine");
+  // Only the mini window is a proxy — it receives state from the full window via IPC.
+  // The full window runs LocalSipPhoneProvider directly (same as the web app),
+  // so it always works even if the hidden phone-engine window has issues.
+  return window.connectDesktop?.windowKind === "mini";
 }
 
 function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneState & Pick<SipPhoneActions, "dialpadInput" | "sessions" | "activeSessionId" | "heldSessionIds" | "ringingSessionIds"> {
@@ -2141,7 +2144,9 @@ function LocalSipPhoneProvider({ children }: { children: ReactNode }) {
   }, [phone]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || window.connectDesktop?.windowKind !== "phone-engine") return;
+    // Handle commands from mini window proxy — both the full window and phone-engine handle them.
+    const kind = typeof window !== "undefined" ? window.connectDesktop?.windowKind : undefined;
+    if (!window.connectDesktop || (kind !== "phone-engine" && kind !== "full")) return;
     return window.connectDesktop.phone.onCommand(({ command, args }) => {
       if (command === "requestStateSnapshot") {
         window.connectDesktop?.phone.sendFromEngine({
@@ -2162,7 +2167,9 @@ function LocalSipPhoneProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || window.connectDesktop?.windowKind !== "phone-engine") return;
+    // Broadcast state to mini window proxy — both full window and phone-engine broadcast.
+    const kind = typeof window !== "undefined" ? window.connectDesktop?.windowKind : undefined;
+    if (!window.connectDesktop || (kind !== "phone-engine" && kind !== "full")) return;
     window.connectDesktop.phone.sendFromEngine({
       type: "state",
       payload: localStateSnapshot(phone),
