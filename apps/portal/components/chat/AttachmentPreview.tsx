@@ -143,12 +143,14 @@ export function AttachmentPreview({ attachment, compact = false }: { attachment:
   const href = attachment.downloadUrl || undefined;
   const mime = attachment.mimeType.toLowerCase();
   const kind = (attachment.mediaKind || "").toLowerCase();
-  const isImage = kind === "image" || mime.startsWith("image/");
-  const isAudio = kind === "audio" || mime.startsWith("audio/");
+  const name = (attachment.fileName || "").toLowerCase();
+  const soundsLikeAudio = /\.(m4a|aac|mp3|wav|ogg|opus|amr|webm)$/i.test(name);
+  const isAudio = kind === "audio" || mime.startsWith("audio/") || soundsLikeAudio;
   const isVideo = kind === "video" || mime.startsWith("video/");
+  const isImage = !soundsLikeAudio && !mime.startsWith("audio/") && (kind === "image" || mime.startsWith("image/"));
 
-  if (href && isImage) return <ImageBubble attachment={attachment} />;
   if (href && isAudio) return <VoiceNotePlayer attachment={attachment} />;
+  if (href && isImage) return <ImageBubble attachment={attachment} />;
   if (href && isVideo) {
     return (
       <div className="cc-attach cc-attach-media">

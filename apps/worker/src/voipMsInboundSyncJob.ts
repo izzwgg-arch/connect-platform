@@ -1,7 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { canonicalSmsPhone } from "@connect/shared";
-import { fetchVoipMsMmsToChatFile } from "../../../packages/shared/src/voipMsInboundMms";
+import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
@@ -316,6 +316,7 @@ async function mirrorInboundMmsToAttachments(input: {
         sizeBytes: written.sizeBytes,
         storageKey: written.storageKey,
         scanStatus: "pending",
+        mediaKind: mediaKindFromMime(written.mimeType),
       },
     });
   }

@@ -158,12 +158,17 @@ function attachmentShowsImageThumb(attachment: ChatAttachment, messageType?: Cha
   return /\.(jpe?g|png|gif|webp|heic)$/i.test(attachment.fileName || '');
 }
 
-function isImageAttachment(attachment: ChatAttachment, _messageType?: ChatMessageType): boolean {
+function isImageAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+  if (messageType === 'VOICE_NOTE') return false;
   const kind = String(attachment.mediaKind || '').toLowerCase();
-  if (kind === 'video' || kind === 'audio' || kind === 'file') return false;
+  if (kind === 'video' || kind === 'audio') return false;
+  const name = String(attachment.fileName || '').toLowerCase();
+  // Carriers sometimes lie with image/* on voice MMS; never reserve an image tile for known-audio names.
+  if (/\.(m4a|aac|mp3|wav|ogg|opus|amr|webm)$/i.test(name)) return false;
   const mime = String(attachment.mimeType || '').toLowerCase();
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return false;
-  const name = String(attachment.fileName || '').toLowerCase();
+  // DB default mediaKind is "file" — still infer images from MIME / extension; only reject explicit non-image kinds.
+  if (kind && kind !== 'image' && kind !== 'file') return false;
   if (kind === 'image' || mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|heic)$/i.test(name)) return true;
   return false;
 }
@@ -1103,10 +1108,15 @@ const MessageBubble = memo(function MessageBubble({
       ? []
       : (message.mmsUrls || []).map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u));
   const mmsDerived = mmsSource.map((url, index) => mmsUrlToAttachment(url, message.id, index));
-  const imageAttachments = [...attachments, ...mmsDerived].filter((attachment) => isImageAttachment(attachment, message.type) && attachment.downloadUrl);
-  const audioAttachments = [...attachments, ...mmsDerived].filter((attachment) => isAudioAttachment(attachment, message.type) && attachment.downloadUrl);
-  const otherAttachments = [...attachments, ...mmsDerived].filter(
-    (attachment) => !imageAttachments.includes(attachment) && !audioAttachments.includes(attachment),
+  const combined = [...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl));
+  const audioAttachments = combined.filter((attachment) => isAudioAttachment(attachment, message.type));
+  const audioIds = new Set(audioAttachments.map((a) => a.id));
+  const imageAttachments = combined.filter(
+    (attachment) => isImageAttachment(attachment, message.type) && !audioIds.has(attachment.id),
+  );
+  const imageIds = new Set(imageAttachments.map((a) => a.id));
+  const otherAttachments = combined.filter(
+    (attachment) => !audioIds.has(attachment.id) && !imageIds.has(attachment.id),
   );
   const renderedImages = imageAttachments;
   const visibleBody = bodyWithoutMediaLinks(message.body || '', renderedImages.length > 0 || audioAttachments.length > 0 || otherAttachments.length > 0);

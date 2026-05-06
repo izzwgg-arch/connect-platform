@@ -27,7 +27,7 @@ import {
   statChatAttachment,
   writeChatAttachmentFile,
 } from "./chatAttachmentStorage";
-import { fetchVoipMsMmsToChatFile } from "../../../packages/shared/src/voipMsInboundMms";
+import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -322,6 +322,7 @@ async function persistMessageAttachments(
         sizeBytes: row.sizeBytes,
         storageKey: row.storageKey,
         scanStatus: "pending",
+        mediaKind: mediaKindFromMime(row.mimeType),
       },
     });
   }
@@ -897,7 +898,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const messages = rows.map((m) => {
       const meta = metadataObject(m.metadata);
       const rawMms = Array.isArray(meta?.mms?.urls) ? meta!.mms!.urls! : [];
-      const mmsUrlsSanitized = rawMms.map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u));
+      const mmsUrlsSanitized = rawMms.map((u: unknown) => String(u || "").trim()).filter((u: string) => /^https?:\/\//i.test(u));
       // Mirrored inbound MMS is stored as normal attachments; omit raw VoIP.ms URLs so UIs do not double-render (empty image slots + voice).
       const mmsUrls = (m.attachments && m.attachments.length > 0) ? [] : mmsUrlsSanitized;
       const deletedForEveryone = Boolean(m.deletedForEveryoneAt);
@@ -935,6 +936,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           sizeBytes: a.sizeBytes,
           scanStatus: a.scanStatus,
           downloadUrl: base ? buildChatSignedDownloadUrl(base, a.storageKey, 900) : null,
+          mediaKind: a.mediaKind ?? null,
+          durationMs: a.durationMs ?? null,
+          width: a.width ?? null,
+          height: a.height ?? null,
         })),
       };
     });

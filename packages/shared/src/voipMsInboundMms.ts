@@ -58,6 +58,15 @@ export function inferMmsFileNameAndMime(url: string, contentTypeHeader: string |
   return { fileName: safeName, mimeType };
 }
 
+/** Maps stored MIME to chat attachment `mediaKind` for consistent UI routing. */
+export function mediaKindFromMime(mimeType: string): "image" | "audio" | "video" | "file" {
+  const m = String(mimeType || "").toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("audio/")) return "audio";
+  if (m.startsWith("video/")) return "video";
+  return "file";
+}
+
 export async function downloadVoipMsMmsBuffer(
   url: string,
   maxBytes: number,
