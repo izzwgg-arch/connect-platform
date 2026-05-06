@@ -625,6 +625,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const staleHangupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Timestamp when the local hangup was initiated (for the stale-report). */
   const hangupAtRef = useRef<string | null>(null);
+  /** Guard: prevents duplicate CALL_QUALITY_REPORT when both user_hangup and the
+   *  subsequent SIP "ended" event fire submitCallQualityReport for the same call. */
+  const finalReportSentRef = useRef<boolean>(false);
 
   function patchDiag(patchOrFn: Partial<SipDiagnostics> | ((prev: SipDiagnostics) => SipDiagnostics)) {
     if (typeof patchOrFn === "function") {
@@ -763,6 +766,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   /** Fire-and-forget: send a call quality report to the backend when a call ends.
    *  Uses lastStatsRef (updated every 2 s via polling) to avoid stale React state. */
   function submitCallQualityReport(endReason: string) {
+    // Guard: user_hangup fires terminate() which triggers the SIP "ended" event,
+    // causing a second call here. Only the first invocation per call should send.
+    if (finalReportSentRef.current) {
+      console.log("[SipPhone] quality_report_suppressed reason=" + endReason);
+      return;
+    }
+    finalReportSentRef.current = true;
+
     const startedAt = callStartedAtRef.current;
     const durationMs = startedAt ? Date.now() - startedAt : 0;
     if (durationMs < 1000) return; // skip sub-second non-calls
@@ -1414,7 +1425,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     });
     session.on("accepted", () => {
       stopAllAudio();
-      if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
+      if (!callStartedAtRef.current) {
+        callStartedAtRef.current = Date.now();
+        finalReportSentRef.current = false;
+      }
       console.log("[SIP] CALL_ACCEPTED");
       setCallState("connected");
       patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
@@ -1422,7 +1436,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     });
     session.on("confirmed", () => {
       stopAllAudio();
-      if (!callStartedAtRef.current) callStartedAtRef.current = Date.now();
+      if (!callStartedAtRef.current) {
+        callStartedAtRef.current = Date.now();
+        finalReportSentRef.current = false;
+      }
       console.log("[SIP] CALL_ACCEPTED (confirmed)");
       setCallState("connected");
       patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
@@ -1566,6 +1583,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       callDirectionRef.current = "outbound";
       setCallDirection("outbound");
       callStartedAtRef.current = Date.now();
+      finalReportSentRef.current = false;
       setCallState("dialing");
       setError(null);
       setOnHold(false);
