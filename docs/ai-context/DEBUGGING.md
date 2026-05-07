@@ -107,6 +107,19 @@
   `scripts/android-live-capture.ps1`,
   `scripts/android-live-debug.ps1`,
   `scripts/android-logcat-clear.ps1`.
+- **Phase A vm-record deploy (2026-05-07, evidence reference).**
+  Successful Phase A API deploy `ad842f0e-721f-45b8-afe2-5976ce710673`
+  to commit `f910e6d`. The deploy queue's clone at `/opt/connectcomms/app`
+  did carry one unrelated dirty file (`apps/telephony/src/.../CallStateStore.ts`)
+  but it did NOT block this deploy because the conflict-bearing
+  `git checkout` only fails when the dirty path overlaps with the
+  target commit's changed paths. Phase A only modified
+  `apps/api/src/vmRecordCall*.ts` + `docs/ai-context/*`, none of which
+  collided with the dirty telephony file, so the checkout succeeded
+  and the post-deploy `grep` inside `app-api-1` confirmed the new
+  strings were present. Use this as the canonical clean-success
+  example when contrasting with the 2026-05-06 telephony stale-code
+  failure already documented in `AGENTS.md`.
 - **Voicemail Call-to-Record (`POST /voicemail/greeting/record-call`):**
   the API now emits three structured log lines per attempt that together
   classify the mobile-wake outcome:

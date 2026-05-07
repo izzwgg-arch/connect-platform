@@ -202,16 +202,20 @@ When you find a new fragile area, add it here.
 - **Voicemail greeting recording flow.** Recently changed:
   `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts`,
   `vmGreetingWakeBridge.ts`, plus API `vmRecordCallJobs.ts`. Treat as fragile.
-  - **Phase A (2026-05-07) — mobile wake gate relaxed.** Call-to-Record
-    used to skip the mobile wake push whenever a PJSIP contact for
-    `T<tenant>_<ext>*` was Avail and only included `MobileDevice` rows
-    with `active=true`. Both gates suppressed mobile fan-out in the
-    common case where a desktop WebRTC session shared the same
-    authUsername (e.g. `T21_101_1`) as the mobile app. The decision now
-    lives in `decideVmRecordWake` (pure helper in `vmRecordCallHelpers.ts`)
-    and sends the wake whenever the user has at least one `MobileDevice`
-    row. The pre-wake AOR-Avail signal is preserved as a diagnostic only.
-    See `vmRecordCallJobs.ts::runVmRecordCallJob` log lines
+  - **Phase A (2026-05-07) — mobile wake gate relaxed. DEPLOYED.**
+    Commit `f910e6d` shipped via deploy queue job
+    `ad842f0e-721f-45b8-afe2-5976ce710673`; running API container
+    confirmed to contain the new wake-decision strings and the
+    `active: true` filter removed. Call-to-Record used to skip the
+    mobile wake push whenever a PJSIP contact for `T<tenant>_<ext>*`
+    was Avail and only included `MobileDevice` rows with `active=true`.
+    Both gates suppressed mobile fan-out in the common case where a
+    desktop WebRTC session shared the same authUsername (e.g. `T21_101_1`)
+    as the mobile app. The decision now lives in `decideVmRecordWake`
+    (pure helper in `vmRecordCallHelpers.ts`) and sends the wake whenever
+    the user has at least one `MobileDevice` row. The pre-wake AOR-Avail
+    signal is preserved as a diagnostic only. See
+    `vmRecordCallJobs.ts::runVmRecordCallJob` log lines
     `vm-record-call: mobile wake decision` / `mobile wake push sent` /
     `mobile wake registration outcome`.
   - **Open: Phase B (PBX originate fan-out).** API path now wakes
