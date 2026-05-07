@@ -297,7 +297,36 @@ When you find a new fragile area, add it here.
     `T21_101 = test-voicemail`; after recording,
     `ls /var/spool/asterisk/voicemail/test-voicemail/101/unavail.wav`
     should exist with a recent mtime.
-  - **Open: Phase D (browser Answer button).** Desktop WebRTC rings
+  - **Phase D (2026-05-07) — Android native phone UI replaced by Connect
+    IncomingCallScreen. DEPLOYED.**
+    Root cause: `TelecomBridge.startIncomingCall()` dispatched a
+    `CAPABILITY_SELF_MANAGED` Android Telecom connection for every
+    non-foregrounded incoming call. Samsung One UI (and other OEMs) rendered
+    this as a full-screen native dialer UI that appeared BEFORE the PBX had
+    dialled and before JsSIP received the SIP INVITE. Users who answered
+    there encountered a silent failure: `handleAcceptInvite()` →
+    `jssip.answerIncoming()` polls for the SIP session up to 8 s — if the
+    WebSocket was stale or SIP registration was slow, no INVITE ever arrived
+    and the call timed out while the OS showed a spurious active-call timer.
+    The Connect `IncomingCallScreen` only renders after `newRTCSession` fires,
+    so its answer tap always finds an existing session.
+    Fix: `TelecomBridge.startIncomingCall()` is bypassed via an
+    `if (false)` guard in `IncomingCallFirebaseService.handleIncomingCallNative()`.
+    All non-foregrounded presentations now use the existing CallStyle
+    notification + full-screen-intent path (`launchIncomingCallUi`), which
+    launches `MainActivity` → Connect `IncomingCallScreen` as the sole answer
+    surface. `ConnectConnectionService` / `ConnectIncomingConnection` /
+    `TelecomBridge` are retained for rollback.
+    Technical debt: if a future Android OS version completely blocks FSI for
+    VoIP apps (currently still allowed via `CATEGORY_CALL` + the
+    `USE_FULL_SCREEN_INTENT` permission), re-evaluate re-enabling Telecom
+    with a fix for the answer-race (e.g., `onShowIncomingCallUi()` launching
+    `MainActivity` so Connect UI overlays the Telecom system card).
+    Verify: install APK → incoming call while locked/home/in another app →
+    only Connect-branded UI appears, no Samsung/dialer-style screen →
+    tap Answer → call connects → `adb logcat | grep CALL_INCOMING` shows
+    `telecom_dispatch skipped (disabled)` and `NATIVE_NOTIFICATION_POSTED`.
+  - **Open: Phase E (browser Answer button).** Desktop WebRTC rings
     but `session.answer()` never emits a SIP `200 OK` — the browser
     sends `480 Temporarily Unavailable` ~22s later. SIP-over-WSS
     capture is on file; root cause is in the portal's `useSipPhone`
@@ -323,6 +352,36 @@ When you find a new fragile area, add it here.
   per-contact `POST /contacts` and treats `409 duplicate_phone` as
   "merged". If a real `/contacts/import` endpoint is added later, swap
   the fallback in `phoneContactsImport.ts::importContacts`.
+  - **Permission request timing fix (2026-05-07).** On Android 12+, calling
+    `requestPermissionsAsync()` from inside a React Native `Modal`'s `useEffect`
+    can silently fail (gesture window has expired). Fix: `ContactTab` now calls
+    `checkContactsPermission()` + `requestContactsPermission()` directly inside
+    the import button's `onPress` handler (active gesture context), then passes
+    the resolved status to `ImportPhoneContactsModal` via the `initialPermission`
+    prop. The modal's `boot()` uses that value instead of re-checking async.
+- **SMS chat back navigation — fixed 2026-05-07.** `ChatTab` is a bottom tab
+  screen. Android hardware back button went to the previous tab (Team) instead
+  of closing the open thread. Fix: `ChatTab` registers a `BackHandler` when
+  `activeThread !== null` that calls `setActiveThread(null)` and returns `true`.
+- **Missed call notifications — fixed 2026-05-07 (native, v2).** The API sends
+  `MISSED_CALL` as a data-only FCM push (so `IncomingCallFirebaseService` can
+  stop the ringtone). Data-only pushes never reach Expo's JS
+  `addNotificationReceivedListener`, so the earlier
+  `NotificationsContext.scheduleNotificationAsync` branch was unreachable. Fix
+  (v2): `IncomingCallFirebaseService.handleCallTerminationNative()` now calls
+  `postMissedCallNotification()` when `type == "MISSED_CALL"`, which posts a
+  native Android notification via `NotificationManagerCompat` on channel
+  `connect-missed-calls` (ID range 52000–61000). Tapping opens `MainActivity`
+  with `notificationType=missed_call`.
+- **vm-record mobile ring — fixed 2026-05-07.** The telephony pipeline sees the
+  vm-record originating channel as `Local/...@connect-vm-greeting-dispatch`
+  (`tenant_UNRESOLVED`) and does not create a `CallInvite` or send an
+  `INCOMING_CALL` push. Fix: `vmRecordCallJobs.ts` now sends a synthetic
+  `INCOMING_CALL` push (inviteId `vmr-<jobId>`, `fromDisplay: "Voicemail
+  Greeting Recording"`) to active mobile devices immediately before
+  `requestPbxVoicemailGreetingRecordCall`. JsSIP's single-session fallback in
+  `findIncoming()` maps the Answer tap to the live SIP session without requiring
+  an `X-Connect-Invite-ID` header.
 
 ## WebRTC / SIP
 

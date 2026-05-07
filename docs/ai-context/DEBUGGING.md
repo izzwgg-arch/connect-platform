@@ -210,6 +210,93 @@
     `endpointAlreadyAvail` for portal-side debugging.
 - **Trace dumps committed at root**: `trace3.txt` … `trace15-gap.txt`,
   `logcat-cancel.txt`. These are historical; recapture when investigating.
+- **Android incoming call UI — Phase D (2026-05-07).**
+  Symptom: user sees a Samsung/T-Mobile-style native phone call screen
+  instead of (or in addition to) the Connect `IncomingCallScreen`, and
+  answering from the native screen does not connect the call.
+  Root cause: `TelecomBridge.startIncomingCall()` dispatched a
+  SELF_MANAGED Telecom call before the SIP INVITE existed; the Telecom
+  answer fired before JsSIP's `answerIncoming()` could find a session.
+  **Fix deployed 2026-05-07**: Telecom dispatch disabled in
+  `IncomingCallFirebaseService.handleIncomingCallNative()`. All calls
+  now go through CallStyle notification + FSI.
+
+  **Logcat filters for this path:**
+  ```
+  adb logcat -s IncomingCallService ConnectCallFlow
+  ```
+  After Phase D, every non-foregrounded call must log:
+  ```
+  [CALL_INCOMING] telecom_dispatch skipped (disabled) inviteId=<id>
+  [CALL_INCOMING] presentation_decision locked=... fullScreen=true
+  [CALL_INCOMING] posted incoming call notification mode=full_screen
+  ConnectCallFlow: {"stage":"NATIVE_NOTIFICATION_POSTED",...}
+  ```
+  If you see `TELECOM_INCOMING_DISPATCH` in the logcat, the dead-code
+  `if (false)` guard has been accidentally re-enabled — revert the
+  `IncomingCallFirebaseService.java` change.
+
+  **If calls still show native phone UI after Phase D:**
+  1. Verify the APK was rebuilt after the Java change (`pnpm mobile:build:android:release`).
+  2. Check whether `react-native-callkeep` is calling
+     `VoiceConnectionService`. Search logcat for
+     `VoiceConnectionService` — if it appears, a JS code path is calling
+     `RNCallKeep.displayIncomingCall()`. The only Android path that does
+     this is the synthetic-invite backgrounded/locked guard at
+     `NotificationsContext.tsx` line ~1422. Verify
+     `Platform.OS !== "android"` guards are intact at lines ~3656, ~3691,
+     ~3727, ~3790.
+  3. To roll back to Telecom: in `IncomingCallFirebaseService.java`,
+     change `if (false)` back to `if (!appInForeground && !inActiveCall)`
+     and remove the `if (false)` guard. Rebuild.
+
+- **Missed call notifications (2026-05-07, updated native fix).**
+  Symptom: user misses a call and no notification appears in the Android
+  notification tray.
+  Root cause: the API sends `MISSED_CALL` as a data-only FCM push (no
+  `notification` field) so the native service can stop the ringtone. Android
+  never shows a system notification for data-only pushes. Data-only pushes also
+  do NOT trigger Expo's JS `addNotificationReceivedListener`, so an earlier fix
+  in `NotificationsContext.tsx` was unreachable.
+  Fix (v2): `IncomingCallFirebaseService.handleCallTerminationNative()` now
+  calls `postMissedCallNotification()` for `type == "MISSED_CALL"` which posts a
+  native `NotificationCompat` banner (title "Missed call", body "Missed call
+  from …") on channel `connect-missed-calls` (notification ID range 52000–61000).
+  Verify: miss a call → logcat shows `missed_call_notif_posted` →
+  notification appears on device → tap opens app.
+  **Logcat filter:**
+  ```
+  adb logcat -s IncomingCallService | grep -i "missed_call"
+  ```
+  Expected log: `[MISSED_CALL] missed_call_notif_posted notifId=52xxx caller=+1...`
+  If no notification appears:
+  1. Confirm `connect-missed-calls` channel exists and is not muted:
+     `adb shell dumpsys notification --noredact | grep connect-missed-calls`
+  2. Confirm POST_NOTIFICATIONS permission granted:
+     `adb shell dumpsys package com.connectcommunications.mobile | grep POST_NOTIFICATIONS`
+  3. Check logcat for `missed_call_notif_failed` to see the exception.
+
+- **Contact import permission not appearing (2026-05-07).**
+  Symptom: user taps Import Contacts, nothing seems to happen (no Android
+  permission dialog, or modal opens but tapping "Continue" does nothing).
+  Root cause: on Android 12+, calling `requestPermissionsAsync()` asynchronously
+  inside a Modal's `useEffect` (after the triggering gesture has already been
+  consumed) silently fails — no system dialog appears.
+  Fix: `ContactTab` now calls `checkContactsPermission()` +
+  `requestContactsPermission()` directly inside the import button's `onPress`
+  handler, then passes the result as `initialPermission` to the modal.
+  Verify: fresh install or permission-revoked device → tap Import Contacts →
+  Android permission dialog appears immediately → grant → modal loads contacts.
+
+- **SMS chat back navigation (2026-05-07).**
+  Symptom: inside an SMS/DM chat, pressing the Android hardware back button
+  navigates to the Team tab instead of returning to the chat list.
+  Root cause: `ChatTab` is a bottom-tab screen with no stack; React Navigation
+  defaulted to the previous tab on back press when `activeThread !== null`.
+  Fix: `ChatTab` registers a `BackHandler` when a thread is open, returning
+  `true` (consumed) and calling `setActiveThread(null)`.
+  Verify: open any SMS thread → press hardware back → returns to thread list,
+  not to Team tab.
 
 ---
 

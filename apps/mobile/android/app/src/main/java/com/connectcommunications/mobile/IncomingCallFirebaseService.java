@@ -88,6 +88,19 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      */
     private static final int WAKE_PLACEHOLDER_NOTIFICATION_ID = NOTIFICATION_ID_BASE - 1;
     /**
+     * Missed-call notification channel — matches the channel registered by
+     * NotificationsContext.tsx so importance / sound settings are consistent.
+     * Created natively in ensureMissedCallChannel() as a safety fallback for
+     * the case where the JS layer has not yet run (e.g. first cold wake).
+     */
+    private static final String MISSED_CALL_CHANNEL_ID = "connect-missed-calls";
+    /**
+     * Base notification id for missed-call banners. Kept well above the
+     * NOTIFICATION_ID_BASE + 10000 incoming-call range to avoid collisions with
+     * dismissIncomingCallUi() which cancels IDs in the incoming-call range only.
+     */
+    private static final int MISSED_CALL_NOTIF_ID_BASE = 52000;
+    /**
      * If no real INCOMING_CALL FCM ever arrives within this window the
      * placeholder self-dismisses so the user is not left staring at a
      * permanent "Incoming call from X" they cannot answer. 30 seconds covers
@@ -719,6 +732,16 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 Log.w(TAG, "[CALL_INCOMING] telecom_terminate failed: " + t.getMessage());
             }
         }
+        // ── Missed-call local notification ───────────────────────────────────
+        // MISSED_CALL is intentionally data-only (no FCM notification envelope)
+        // so onMessageReceived fires and the ringtone can be stopped. Data-only
+        // messages never reach Expo's JS addNotificationReceivedListener, so
+        // the scheduleNotificationAsync call in NotificationsContext.tsx is
+        // unreachable. We post the missed-call banner natively here instead,
+        // after dismissIncomingCallUi() has already cleaned up the ringer UI.
+        if ("MISSED_CALL".equals(type)) {
+            postMissedCallNotification(data, inviteId);
+        }
     }
 
     /**
@@ -849,6 +872,85 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         } catch (Throwable t) {
             Log.w(TAG, "[CALL_WAKE] WAKE_PLACEHOLDER_CANCEL failed: " + t.getMessage());
         }
+    }
+
+    /**
+     * Posts a missed-call notification on the {@code connect-missed-calls}
+     * channel. Called from {@link #handleCallTerminationNative} for
+     * {@code MISSED_CALL} pushes after the incoming-call UI has been dismissed.
+     *
+     * <p>Safe to call even when POST_NOTIFICATIONS is not granted — Android
+     * silently drops the notify() call; the surrounding try/catch logs it.
+     *
+     * <p>The caller label is resolved from MISSED_CALL push data fields in
+     * priority order: callerNameOrNumber → callerNumber → fromDisplay →
+     * fromNumber → from → "Unknown".
+     */
+    private void postMissedCallNotification(Map<String, String> data, String inviteId) {
+        try {
+            ensureMissedCallChannel();
+
+            String callerLabel = data.get("callerNameOrNumber");
+            if (callerLabel == null || callerLabel.isEmpty()) callerLabel = data.get("callerNumber");
+            if (callerLabel == null || callerLabel.isEmpty()) callerLabel = data.get("fromDisplay");
+            if (callerLabel == null || callerLabel.isEmpty()) callerLabel = data.get("fromNumber");
+            if (callerLabel == null || callerLabel.isEmpty()) callerLabel = data.get("from");
+            if (callerLabel == null || callerLabel.isEmpty()) callerLabel = "Unknown";
+
+            int notifId = MISSED_CALL_NOTIF_ID_BASE
+                + (inviteId != null && !inviteId.isEmpty()
+                    ? Math.abs(inviteId.hashCode() % 9000)
+                    : 0);
+
+            Intent tapIntent = new Intent(this, MainActivity.class);
+            tapIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            tapIntent.putExtra("notificationType", "missed_call");
+            tapIntent.putExtra("inviteId", inviteId != null ? inviteId : "");
+            int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                piFlags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent tapPi = PendingIntent.getActivity(this, notifId, tapIntent, piFlags);
+
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(this, MISSED_CALL_CHANNEL_ID)
+                .setSmallIcon(R.drawable.notification_icon)
+                .setContentTitle("Missed call")
+                .setContentText("Missed call from " + callerLabel)
+                .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(tapPi);
+
+            NotificationManagerCompat.from(this).notify(notifId, builder.build());
+            Log.i(TAG, "[MISSED_CALL] missed_call_notif_posted notifId=" + notifId
+                + " caller=" + callerLabel + " inviteId=" + inviteId);
+        } catch (Throwable t) {
+            Log.w(TAG, "[MISSED_CALL] missed_call_notif_failed: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Creates the {@code connect-missed-calls} notification channel if it does
+     * not already exist. The JS layer (NotificationsContext.tsx) registers this
+     * channel at app startup, so on most real devices this is a no-op. It runs
+     * here as a safety net for first cold-wake scenarios where the JS process
+     * has not yet initialised the channel.
+     */
+    private void ensureMissedCallChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (nm.getNotificationChannel(MISSED_CALL_CHANNEL_ID) != null) return;
+        NotificationChannel ch = new NotificationChannel(
+            MISSED_CALL_CHANNEL_ID,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        ch.setDescription("Missed call notifications");
+        ch.enableVibration(true);
+        ch.setVibrationPattern(new long[]{0, 300, 120, 300});
+        nm.createNotificationChannel(ch);
+        Log.i(TAG, "[MISSED_CALL] missed_call_channel_created");
     }
 
     private void launchIncomingCallUi(

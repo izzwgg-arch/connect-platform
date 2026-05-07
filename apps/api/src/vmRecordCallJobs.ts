@@ -38,6 +38,11 @@ type VmRecordWakeMeta = {
   endpointAlreadyAvail?: boolean;
   /** When `attempted=false`, why we skipped (e.g. "skipped_no_devices"). */
   skipReason?: string;
+  /**
+   * The pbxCallId used for the INCOMING_CALL_WAKE push, stored so the
+   * calling_extension step can reference it in the vm-record INCOMING_CALL push.
+   */
+  pbxCallId?: string;
 };
 
 export type VmRecordJobError = {
@@ -337,6 +342,7 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
         );
         const waitStartedAt = new Date();
         wakeMeta.sent = true;
+        wakeMeta.pbxCallId = wakePbxCallId;
         wakeMeta.devicesNotified = (pushed as { queued?: number } | null | undefined)?.queued ?? deviceIds.length;
         wakeMeta.registered = false;
         job.state = "checking_registration";
@@ -470,6 +476,56 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
 
     job.state = "calling_extension";
     touch(job);
+
+    // ── Mobile INCOMING_CALL push for vm-record ───────────────────────────────
+    // The PBX dispatch context dials PJSIP/T<tenant>_<ext>_1 (the mobile SIP
+    // contact) in parallel with the hard-phone endpoint. However, the telephony
+    // pipeline sees the originating channel as
+    // Local/<exten>@connect-vm-greeting-dispatch (tenant_UNRESOLVED) and does
+    // NOT create a CallInvite or send an INCOMING_CALL push. Without it the
+    // mobile receives the SIP INVITE silently, never shows the ringtone UI, and
+    // the Dial() times out unanswered.
+    //
+    // We send the push here, keyed to a synthetic inviteId derived from the
+    // jobId, before the PBX originates (~1–2s later). When the user taps Answer
+    // in the Connect IncomingCallScreen, jssip.ts::findIncoming() uses its
+    // single-session fallback (line 1306) to map the tap to the live SIP session
+    // (no X-Connect-Invite-ID header is present in the vm-record INVITE, so
+    // exact-header matching is skipped, but the fallback fires when exactly one
+    // answerable session is present — which is always the case for vm-record).
+    if (hadMobileDevices) {
+      const vmInviteId = "vmr-" + jobId;
+      try {
+        await deps.sendPush({
+          tenantId: job.connectTenantId,
+          userId: ownerUserId,
+          includeInactiveDevices: false,
+          payload: {
+            type: "INCOMING_CALL",
+            inviteId: vmInviteId,
+            callId: vmInviteId,
+            from: "vm-greeting",
+            fromNumber: "vm-greeting",
+            fromDisplay: "Voicemail Greeting Recording",
+            toExtension: job.extNumber,
+            tenantId: job.connectTenantId,
+            timestamp: new Date().toISOString(),
+            pbxCallId: wakeMeta.pbxCallId ?? vmInviteId,
+            sipCallTarget: "",
+            pbxSipUsername: "",
+          },
+        });
+        deps.log.info(
+          { jobId, extNumber: job.extNumber, vmInviteId },
+          "vm-record-call: sent mobile INCOMING_CALL push",
+        );
+      } catch (err: any) {
+        deps.log.warn(
+          { err: err?.message, jobId, extNumber: job.extNumber },
+          "vm-record-call: mobile INCOMING_CALL push failed (non-fatal)",
+        );
+      }
+    }
 
     let res: Awaited<ReturnType<typeof requestPbxVoicemailGreetingRecordCall>>;
     try {

@@ -134,19 +134,38 @@ Every push attempt updates the `MobileDevice` row's `lastPushSentAt`,
 
 ## Stage 3 — Native delivery (Android / iOS)
 
-### Android — Firebase + CallKeep
+### Android — Firebase + CallStyle notification
 
 - `IncomingCallFirebaseService.onMessageReceived` is the only entry
   point. It reads `data.type` and routes:
-  - `INCOMING_CALL_WAKE` → background task that fires SIP REGISTER via
-    `vmGreetingWakeBridge` / native bridge. **No UI**.
-  - `INCOMING_CALL` → `RNCallKeep.displayIncomingCall(callId, from,
-    from, "number", false)` (see `apps/mobile/src/sip/callkeep.ts`
-    line 85).
+  - `INCOMING_CALL_WAKE` → starts `SipKeepAliveService`, emits
+    `Sip.WakeRegister` to JS for pre-registration. **No UI**.
+  - `INCOMING_CALL` (app **not** foregrounded) →
+    `startIncomingCallRingtone()` + `launchIncomingCallUi()`:
+    posts a `CATEGORY_CALL / PRIORITY_MAX` **CallStyle notification**
+    with Answer / Decline actions and a **full-screen intent** that
+    launches `MainActivity` → Connect `IncomingCallScreen`.
+    `triggerFullScreenIntent()` uses `MODE_BACKGROUND_ACTIVITY_START_ALLOWED`
+    (Android 14+) to bypass Background Activity Launch restrictions.
+  - `INCOMING_CALL` (app **foregrounded**) → emits
+    `IncomingCall.ForegroundInvite` to JS; posts a heads-up-only
+    CallStyle notification as a fallback surface.
   - `INVITE_CANCELED` / `INVITE_CLAIMED` / `MISSED_CALL` →
     `dismissIncomingCallUi` + `stopIncomingCallRingtone`.
-- `react-native-callkeep` provides `answerCall` / `endCall` event
-  listeners (`callkeep.ts` lines 113–116).
+
+**Android Telecom (SELF_MANAGED ConnectionService) — DISABLED
+(2026-05-07, Phase D):**
+`TelecomBridge.startIncomingCall()` is no longer called. The SELF_MANAGED
+Telecom path was removed because it caused the OS-native phone call screen
+(indistinguishable from the Samsung/T-Mobile dialer) to appear before the
+SIP INVITE arrived. Users who answered there encountered a silent timeout
+(JsSIP's `answerIncoming()` polls up to 8 s for a session that may not
+exist yet). The Connect IncomingCallScreen is the sole answer surface because
+it only renders after `newRTCSession` fires — i.e., the SIP session already
+exists. `ConnectConnectionService`, `ConnectIncomingConnection`, and
+`TelecomBridge` remain in the codebase for rollback; the Telecom PhoneAccount
+is still registered at app start but no incoming call is ever dispatched to
+it. See `KNOWN_ISSUES.md` "Phase D" for full context.
 
 ### iOS — PushKit + CallKit
 
@@ -188,9 +207,10 @@ When the JS thread wakes (already running, or just started), in
 
 | User action | Sequence |
 |---|---|
-| **Answer** | CallKeep `answerCall` event → JsSIP `session.answer()` → `CallInvite.status = ACCEPTED` → `CallWakeEvent` stage `DEVICE_ANSWER_TAPPED` → media flows. |
-| **Decline** | CallKeep `endCall` event before answer → JsSIP `session.terminate({ status_code: 486 })` → `CallInvite.status = DECLINED`. |
-| **Caller cancels** | JsSIP delivers `failed`/`canceled` → API broadcasts `INVITE_CANCELED` push to all of the user's devices → native handler dismisses CallKeep UI and stops ringtone. |
+| **Answer (Connect IncomingCallScreen)** | User taps Answer in the branded React UI → `handleAcceptInvite()` → `sip.answerIncomingInvite()` → JsSIP `session.answer()` → SIP 200 OK → `CallInvite.status = ACCEPTED` → `CallWakeEvent` stage `DEVICE_ANSWER_TAPPED` → media flows. Session is guaranteed to exist because `IncomingCallScreen` only renders after `newRTCSession`. |
+| **Answer (notification action button)** | User taps the Answer action on the CallStyle heads-up/lock-screen notification → `PendingIntent` launches `MainActivity` with `action=answer` deep-link → same `handleAcceptInvite()` pipeline as above. |
+| **Decline** | User taps Decline in IncomingCallScreen or notification → `handleDeclineInvite()` → JsSIP `session.terminate({ status_code: 486 })` → `CallInvite.status = DECLINED`. |
+| **Caller cancels** | JsSIP delivers `failed`/`canceled` → API broadcasts `INVITE_CANCELED` push to all of the user's devices → native handler dismisses CallStyle notification and stops ringtone. |
 | **Answered on another device** | API broadcasts `INVITE_CLAIMED` to the other devices for the same user → native handler dismisses UI. |
 
 Worker-side: `runCallInviteExpiryCycle()` in `apps/worker/src/main.ts`
@@ -204,9 +224,16 @@ marks rows that never reach a terminal state and broadcasts a
 - **Cold-kill ring loop.** If `INVITE_CANCELED` is sent as a notification
   (not data-only), the ringtone plays forever. **Tested mitigation:**
   data-only/priority-high, see Stage 2 contract.
-- **JS thread not yet running when push arrives.** Mitigated by
-  CallKeep displaying the UI from native code; JS catches up via
+- **JS thread not yet running when push arrives.** Mitigated by the
+  CallStyle notification (shown from native before JS boots) providing a
+  visible ringing surface; JS catches up via `pending_call_native.json`
   hydration.
+- **FSI blocked on some Android 14+ OEMs.** If the user revokes
+  `USE_FULL_SCREEN_INTENT` permission or the channel importance is
+  downgraded below HIGH, the full-screen intent may not fire. The
+  CallStyle notification still shows in the notification shade and the
+  user can tap Answer there. The diagnostics screen surfaces
+  `canUseFullScreenIntentSafely` to detect this case.
 - **SIP REGISTER half-closed.** `NotificationsContext.tsx` line 1871
   notes "in a half-closed state and the fresh REGISTER may need a
   retry."
@@ -217,6 +244,10 @@ marks rows that never reach a terminal state and broadcasts a
 - **TTL mismatch.** `INCOMING_CALL_WAKE` is TTL=10s by design — if FCM
   can't deliver in 10s the dialplan's `Wait()` is over and the push is
   useless. Don't increase this TTL "to be safe".
+- **[RESOLVED — Phase D] Telecom native call screen answer race.**
+  `TelecomBridge.startIncomingCall()` caused the OS system phone UI to
+  appear before the SIP INVITE existed, leading to silent answer failures.
+  Fixed 2026-05-07 by disabling the Telecom dispatch. See `KNOWN_ISSUES.md`.
 
 ---
 
@@ -243,13 +274,45 @@ Phase A behavior (must hold):
   no longer blocks the push.
 - Job public view exposes new diagnostic fields under `wake`:
   `attempted`, `deviceRowCount`, `activeDeviceCount`,
-  `endpointAlreadyAvail`, `skipReason`. Existing fields
+  `endpointAlreadyAvail`, `skipReason`, `pbxCallId`. Existing fields
   (`devicesNotified`, `waitedMs`, `sent`, `registered`,
   `registrationState`, `error`) are unchanged.
 - API logs the decision once on every job:
   `vm-record-call: mobile wake decision` with all of the above plus
   `decision`. On send: `vm-record-call: mobile wake push sent`. On
   poll completion: `vm-record-call: mobile wake registration outcome`.
+
+## vm-record INCOMING_CALL push (2026-05-07)
+
+After Phase A/A.5 the mobile woke up and the PBX dialed
+`PJSIP/T<tenant>_<ext>_1`, but the mobile never showed an incoming-call
+UI. Root cause: the telephony pipeline sees the originating channel as
+`Local/<ext>@connect-vm-greeting-dispatch` (`tenant_UNRESOLVED`) and
+does NOT create a `CallInvite` or send an `INCOMING_CALL` FCM push.
+Without the push the user cannot answer and `Dial()` times out.
+
+Fix: `runVmRecordCallJob` sends a synthetic `INCOMING_CALL` push (to
+active devices only, `includeInactiveDevices: false`) immediately before
+`requestPbxVoicemailGreetingRecordCall`. Push fields:
+
+| Field | Value |
+|---|---|
+| `type` | `INCOMING_CALL` |
+| `inviteId` | `vmr-<jobId>` (stable per-job synthetic ID) |
+| `fromDisplay` | `Voicemail Greeting Recording` |
+| `fromNumber` | `vm-greeting` |
+| `pbxCallId` | `wake.pbxCallId` if wake was sent, else `vmr-<jobId>` |
+
+The mobile's `IncomingCallFirebaseService` handles this like any
+`INCOMING_CALL` push: shows the `Connect IncomingCallScreen` with
+Answer / Decline. When the user taps Answer, `jssip.ts::findIncoming()`
+cannot match the synthetic inviteId to an SIP header (no
+`X-Connect-Invite-ID` in the vm-record INVITE) but falls back to the
+single answerable incoming session (line 1306 single-session fallback).
+JsSIP sends 200 OK and the recording prompts play.
+
+API log on send: `vm-record-call: sent mobile INCOMING_CALL push`
+with `{jobId, extNumber, vmInviteId}`.
 
 ## Phase A.5 (2026-05-07) — second `active: true` filter
 
