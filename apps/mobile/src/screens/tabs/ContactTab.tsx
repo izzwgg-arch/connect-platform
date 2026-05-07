@@ -34,6 +34,11 @@ import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
 import { ImportPhoneContactsModal } from '../../components/ImportPhoneContactsModal';
+import {
+  checkContactsPermission,
+  requestContactsPermission,
+  type PermissionState,
+} from '../../contacts/phoneContactsImport';
 
 type ContactFilter = 'all' | 'extensions' | 'external' | 'favorites';
 type ContactStatus = {
@@ -77,6 +82,7 @@ export function ContactTab() {
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showImportFromPhone, setShowImportFromPhone] = useState(false);
+  const [resolvedImportPermission, setResolvedImportPermission] = useState<PermissionState | undefined>(undefined);
 
   const contactsQuery = useQuery({
     queryKey: mobileQueryKeys.contacts(''),
@@ -107,6 +113,18 @@ export function ContactTab() {
     if (!token) return undefined;
     return subscribeToBLF(token, setLive);
   }, [token]);
+
+  // Request contacts permission within the button's gesture context so Android
+  // shows the system dialog immediately rather than after async modal boot().
+  const openImportContacts = useCallback(async () => {
+    const current = await checkContactsPermission();
+    let resolved: PermissionState = current;
+    if (current.status === 'undetermined') {
+      resolved = await requestContactsPermission();
+    }
+    setResolvedImportPermission(resolved);
+    setShowImportFromPhone(true);
+  }, []);
 
   const statusFor = useCallback((contact: Contact): ContactStatus | null => {
     if (contact.type !== 'internal_extension' || !contact.extension) return null;
@@ -216,7 +234,7 @@ export function ContactTab() {
         </View>
         <TouchableOpacity
           activeOpacity={0.78}
-          onPress={() => setShowImportFromPhone(true)}
+          onPress={() => { void openImportContacts(); }}
           style={[
             styles.headerIcon,
             { backgroundColor: colors.surfaceElevated, borderColor: colors.border, marginRight: 8 },
@@ -283,7 +301,7 @@ export function ContactTab() {
           action={!query.trim() ? (
             <TouchableOpacity
               activeOpacity={0.84}
-              onPress={() => setShowImportFromPhone(true)}
+              onPress={() => { void openImportContacts(); }}
               style={[styles.emptyImportBtn, { backgroundColor: colors.primary, shadowColor: colors.primary }]}
             >
               <Ionicons name="cloud-download-outline" size={17} color="#fff" />
@@ -343,7 +361,11 @@ export function ContactTab() {
       <ImportPhoneContactsModal
         visible={showImportFromPhone}
         authToken={token}
-        onClose={() => setShowImportFromPhone(false)}
+        initialPermission={resolvedImportPermission}
+        onClose={() => {
+          setShowImportFromPhone(false);
+          setResolvedImportPermission(undefined);
+        }}
         onImported={(result) => {
           if (result.imported > 0 || result.duplicatesMerged > 0) {
             queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);

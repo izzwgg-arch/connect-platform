@@ -3693,6 +3693,37 @@ export function NotificationsProvider({
           return null;
         });
       }
+
+      // ── Missed call local notification ───────────────────────────────────
+      // MISSED_CALL is sent as a data-only FCM push (so the native service
+      // can stop the ringtone). The OS never shows a system notification for
+      // data-only pushes, so we schedule a local one here after the ringtone
+      // has already been dismissed natively.
+      if (data?.type === "MISSED_CALL") {
+        const d = data as any;
+        const callerLabel: string =
+          d.callerNameOrNumber ||
+          d.callerNumber ||
+          d.fromDisplay ||
+          d.fromNumber ||
+          "Unknown";
+        Notifications.scheduleNotificationAsync({
+          content: {
+            title: "Missed call",
+            body: `Missed call from ${callerLabel}`,
+            data: {
+              type: "missed_call",
+              callId: d.callId ?? d.inviteId ?? null,
+              callerNumber: d.callerNumber ?? d.fromNumber ?? null,
+              tenantId: d.tenantId ?? null,
+              extensionId: d.extensionId ?? null,
+            },
+            sound: "default",
+            ...(Platform.OS === "android" && { android: { channelId: "connect-missed-calls" } }),
+          },
+          trigger: null,
+        }).catch(() => undefined);
+      }
     });
 
     // ── Notification response listener (system tray tap) ─────────────────

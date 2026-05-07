@@ -35,6 +35,7 @@ import {
   requestContactsPermission,
   type ImportPreview,
   type ImportResult,
+  type PermissionState,
   type PhoneContactCandidate,
 } from '../contacts/phoneContactsImport';
 
@@ -47,6 +48,16 @@ export type ImportPhoneContactsModalProps = {
   authToken: string | null;
   onClose: () => void;
   onImported?: (result: ImportResult) => void;
+  /**
+   * Optional: permission status already resolved by the caller (e.g. from
+   * the button's onPress handler, where the gesture context guarantees the
+   * system dialog will fire). When supplied, the modal skips its own
+   * checkContactsPermission() call and jumps straight to the appropriate
+   * step — preventing the timing issue where async boot() runs outside the
+   * original user-gesture window on Android 12+ and the system dialog never
+   * appears.
+   */
+  initialPermission?: PermissionState;
 };
 
 export function ImportPhoneContactsModal({
@@ -54,6 +65,7 @@ export function ImportPhoneContactsModal({
   authToken,
   onClose,
   onImported,
+  initialPermission,
 }: ImportPhoneContactsModalProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -81,16 +93,20 @@ export function ImportPhoneContactsModal({
   }, [visible]);
 
   const boot = useCallback(async () => {
-    const current = await checkContactsPermission();
+    // Use the caller-supplied permission if available — avoids re-requesting
+    // inside the Modal where the gesture context may have already expired.
+    const current = initialPermission ?? await checkContactsPermission();
     if (current.status === 'granted') {
       void load();
     } else if (current.status === 'denied') {
       setPermCanAskAgain(current.canAskAgain);
       setStep(current.canAskAgain ? 'permission' : 'permission_denied');
     } else {
+      // undetermined: caller should have requested already; fall back to the
+      // "Continue" screen so the user can retry from within the modal.
       setStep('permission');
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialPermission]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(async () => {
     if (!authToken) {

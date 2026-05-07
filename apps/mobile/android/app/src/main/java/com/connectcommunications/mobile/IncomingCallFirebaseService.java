@@ -517,23 +517,49 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             : (fromNum != null && !fromNum.isEmpty() ? fromNum : "Unknown");
         boolean appInForeground = isAppInForeground();
 
-        // ── Android Telecom (primary path) ─────────────────────────────────
-        // When the app is not foregrounded and we are not already in a call,
-        // hand the incoming-call UI to the OS via Telecom. This works
-        // reliably from a fully killed / swiped-away state because Android
-        // owns the ConnectionService lifecycle — no JS engine, no React
-        // RootView, no Background Activity Launch restrictions. The system
-        // ringer + lock-screen UI behave exactly like WhatsApp / native
-        // dialer, and onAnswer / onReject in ConnectIncomingConnection
-        // forward the user action into JS via TelecomBridge.
+        // ── Android Telecom dispatch — DISABLED (2026-05-07) ──────────────
         //
-        // We deliberately do NOT route foregrounded calls through Telecom:
-        // when the user is already inside our app the React IncomingCallScreen
-        // gives a richer experience (avatar, recent context, in-call notes).
-        // Multi-call (inActiveCall) also stays on the JS path so the
-        // CallWaitingBanner can render the second call inline.
+        // Previously this block called TelecomBridge.startIncomingCall() to
+        // hand the incoming-call UI to the Android Telecom framework as a
+        // SELF_MANAGED ConnectionService. The intent was to bypass Background
+        // Activity Launch restrictions on Android 14+ for killed-app wakes.
+        //
+        // ROOT CAUSE OF REMOVAL:
+        // The SELF_MANAGED Telecom path causes Samsung One UI (and other OEMs)
+        // to display the OS-native phone call screen (indistinguishable from the
+        // standard dialer). This screen appears IMMEDIATELY when the FCM push
+        // fires — before the PBX has dialled and before JsSIP has received the
+        // SIP INVITE and created the RTCSession. When the user taps Answer there,
+        // ConnectIncomingConnection.onAnswer() fires, setActive() is called, and
+        // JS runs handleAcceptInvite(). But answerIncoming() polls for the SIP
+        // session for up to 8 s — if the WebSocket is stale or registration is
+        // slow, the INVITE never arrives, the poll times out, and the call
+        // silently fails while the OS shows an active-call timer.
+        //
+        // The Connect IncomingCallScreen, by contrast, is only rendered AFTER
+        // JsSIP fires newRTCSession (the SIP INVITE has arrived). Answer taps
+        // there always find an existing session and succeed.
+        //
+        // REPLACEMENT:
+        // All non-foregrounded presentations go through the CallStyle notification
+        // + full-screen-intent path below (launchIncomingCallUi). This path uses
+        //   • CATEGORY_CALL + PRIORITY_MAX for lock-screen visibility
+        //   • setFullScreenIntent(true) for the system heads-up / wake
+        //   • triggerFullScreenIntent() with MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+        //     (Android 14+) to bypass BAL restrictions
+        //   • android:showWhenLocked + android:turnScreenOn on MainActivity
+        // which together provide equivalent wake reliability to the Telecom path
+        // while ensuring the Connect-branded IncomingCallScreen is the sole
+        // visible answer surface.
+        //
+        // TO RE-ENABLE: remove this comment block, reinstate the if-block below,
+        // and restore the matching `if (telecomDispatched)` handler. The
+        // ConnectConnectionService / ConnectIncomingConnection / TelecomBridge
+        // classes are intentionally left in place for rollback.
         boolean telecomDispatched = false;
-        if (!appInForeground && !inActiveCall) {
+        // Telecom dispatch intentionally skipped — see comment above.
+        if (false) {
+            // Dead code retained for rollback. Do not delete.
             try {
                 telecomDispatched = TelecomBridge.INSTANCE.startIncomingCall(
                     getApplicationContext(),
@@ -553,22 +579,10 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             } catch (Exception ignored) { }
             Log.i(TAG, "[CALL_INCOMING] telecom_dispatch result=" + telecomDispatched + " inviteId=" + inviteId);
         }
+        Log.i(TAG, "[CALL_INCOMING] telecom_dispatch skipped (disabled) inviteId=" + inviteId);
         if (telecomDispatched) {
-            // Telecom owns the system ringer + lock-screen card, but we ALSO
-            // post our own CallStyle notification as a guaranteed fallback.
-            //
-            // Samsung One UI's SamsungAutoAnswerCallsManagerListener can
-            // auto-reject SELF_MANAGED calls within 1 second when another
-            // managed call (cellular / IMS) is concurrently active — a race
-            // we cannot prevent from inside our ConnectionService. Without
-            // the notification fallback, that silent rejection cascades into
-            // a SIP BYE → voicemail scenario with no UI shown to the user.
-            //
-            // The native ringtone is already playing (startIncomingCallRingtone
-            // was called BEFORE handleIncomingCallNative, so it runs regardless
-            // of the Telecom path). No double-ring: our MediaPlayer uses an
-            // AudioFocus request that yields to the system Telecom ringer
-            // (AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE).
+            // Dead code — telecomDispatched is always false while the block above
+            // is disabled. Retained for rollback only; see comment above.
             writeCacheFile(data, inviteId, fromNum, fromDisp, true, "telecom");
             try {
                 launchIncomingCallUi(data, inviteId, displayName, fromNum, true);
@@ -577,8 +591,6 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             }
             lastIncomingUiDisplayedAtMs = System.currentTimeMillis();
             lastIncomingUiPresentation = "telecom";
-            // Do NOT return — fall through to nothing (we already posted
-            // the cache file and the notification above).
             return;
         }
         if (!appInForeground) {

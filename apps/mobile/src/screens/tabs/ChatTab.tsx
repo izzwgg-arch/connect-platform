@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Dimensions,
   Easing,
   FlatList,
@@ -360,6 +361,18 @@ export function ChatTab() {
   useEffect(() => {
     setActiveThread((current) => current ? threads.find((t) => t.id === current.id) ?? current : null);
   }, [threads]);
+
+  // Intercept Android hardware back when a thread is open so the user returns
+  // to the thread list instead of being sent to the previous tab (Team).
+  useEffect(() => {
+    if (!activeThread) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setMessageSearch('');
+      setActiveThread(null);
+      return true;
+    });
+    return () => sub.remove();
+  }, [activeThread]);
 
   useEffect(() => {
     if (activeThread && messages.length > 0) {
