@@ -10,6 +10,7 @@ import {
 } from "./pbxInboundRouteHelperClient";
 import {
   classifyHelperOriginateFailure,
+  decideVmRecordWake,
   greetingFileChanged,
   mapVmRecordErrorToUserMessage,
   parseReachablePjsipContacts,
@@ -25,6 +26,16 @@ type VmRecordWakeMeta = {
   registered?: boolean;
   registrationState?: string | null;
   error?: string;
+  /** Phase A diagnostics: present whether or not we attempted the push. */
+  attempted?: boolean;
+  /** Number of MobileDevice rows for the user/tenant (any `active` value). */
+  deviceRowCount?: number;
+  /** Subset that have `active=true`. */
+  activeDeviceCount?: number;
+  /** True when a pre-wake `pjsip show contacts` saw an Avail AOR contact for the extension. */
+  endpointAlreadyAvail?: boolean;
+  /** When `attempted=false`, why we skipped (e.g. "skipped_no_devices"). */
+  skipReason?: string;
 };
 
 export type VmRecordJobError = {
@@ -225,12 +236,13 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     const ownerUserId = job.ownerUserId;
     const wakeMeta: VmRecordWakeMeta = { devicesNotified: 0, waitedMs: 0, sent: false };
 
-    // ── Pre-wake PJSIP check ─────────────────────────────────────────────────
-    // If the endpoint is already Avail on the PBX, skip the wake push entirely
-    // and proceed directly to originate. This avoids the failure mode where the
-    // device is already registered but the wake push forces a SIP re-registration
-    // that temporarily removes the Avail contact, causing the 12-second poll to
-    // time out and block originate with "wake_sent_but_not_registered".
+    // ── Pre-wake PJSIP check (diagnostic only, Phase A) ──────────────────────
+    // We still record whether the AOR is currently Avail because it is useful
+    // signal for downstream debugging and for the `shouldAllowOriginate` gate
+    // below, but it NO LONGER blocks the wake push. Desktop WebRTC and the
+    // mobile app share the same SIP authUsername (T<tenant>_<ext>_1), so a
+    // registered desktop makes the AOR appear Avail even when the mobile is
+    // asleep — gating on it suppressed mobile fan-out in the common case.
     let preWakeContactOk = false;
     try {
       const preDiag = await getPbxVoicemailGreetingDiag(helperCfg);
@@ -245,24 +257,53 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
           job.matchedEndpoints = parsed.availEndpoints;
           job.pjsipContactOk = true;
           job.diagAvailable = true;
-          deps.log.info(
-            { jobId, endpoint: parsed.availEndpoints[0], extNumber: job.extNumber },
-            "vm-record-call: endpoint already Avail — skipping wake push",
-          );
         }
       }
     } catch {
-      // Pre-check failure is non-fatal — fall through to normal wake flow
+      // Pre-check failure is non-fatal — fall through to normal wake flow.
     }
 
+    // Phase A: query ALL MobileDevice rows for the user/tenant (no `active`
+    // filter). A stale row may still hold a working push token and is a
+    // legitimate wake target; the post-wake registration poll is the real
+    // authoritative readiness signal.
     const devices = await db.mobileDevice.findMany({
-      where: { tenantId: job.connectTenantId, userId: ownerUserId, active: true } as any,
-      select: { id: true } as any,
+      where: { tenantId: job.connectTenantId, userId: ownerUserId } as any,
+      select: { id: true, active: true } as any,
     });
-    const deviceIds = (devices as unknown as { id: string }[]).map((d) => d.id);
+    const deviceRows = devices as unknown as { id: string; active: boolean }[];
+    const deviceIds = deviceRows.map((d) => d.id);
+    const activeDeviceIds = deviceRows.filter((d) => d.active).map((d) => d.id);
     const hadMobileDevices = deviceIds.length > 0;
 
-    if (hadMobileDevices && !preWakeContactOk) {
+    const wakeDecision = decideVmRecordWake({
+      deviceRowCount: deviceIds.length,
+      activeDeviceCount: activeDeviceIds.length,
+      preWakeContactOk,
+    });
+    wakeMeta.attempted = wakeDecision.attempt;
+    wakeMeta.deviceRowCount = wakeDecision.deviceRowCount;
+    wakeMeta.activeDeviceCount = wakeDecision.activeDeviceCount;
+    wakeMeta.endpointAlreadyAvail = wakeDecision.endpointAlreadyAvail;
+    if (!wakeDecision.attempt) wakeMeta.skipReason = wakeDecision.reason;
+
+    deps.log.info(
+      {
+        jobId,
+        tenantId: job.connectTenantId,
+        userId: ownerUserId,
+        extNumber: job.extNumber,
+        pbxTenantId: job.pbxTenantId,
+        deviceRowCount: wakeDecision.deviceRowCount,
+        activeDeviceCount: wakeDecision.activeDeviceCount,
+        endpointAlreadyAvail: wakeDecision.endpointAlreadyAvail,
+        matchedEndpoints: job.matchedEndpoints,
+        decision: wakeDecision.attempt ? "send_wake" : wakeDecision.reason,
+      },
+      "vm-record-call: mobile wake decision",
+    );
+
+    if (wakeDecision.attempt) {
       const wakePbxCallId = "vm-greeting-record-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
       try {
         const pushed = await deps.sendPush({
@@ -286,6 +327,18 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
         wakeMeta.registered = false;
         job.state = "checking_registration";
         touch(job);
+        deps.log.info(
+          {
+            jobId,
+            tenantId: job.connectTenantId,
+            userId: ownerUserId,
+            extNumber: job.extNumber,
+            pbxCallId: wakePbxCallId,
+            devicesNotified: wakeMeta.devicesNotified,
+            deviceRowCount: wakeMeta.deviceRowCount,
+          },
+          "vm-record-call: mobile wake push sent",
+        );
 
         const deadline = Date.now() + WAKE_WAIT_MAX_MS;
         while (Date.now() < deadline) {
@@ -319,6 +372,17 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
           })) as { lastRegState: string } | null;
           wakeMeta.registrationState = latestSession?.lastRegState != null ? String(latestSession.lastRegState) : null;
         }
+        deps.log.info(
+          {
+            jobId,
+            extNumber: job.extNumber,
+            pbxCallId: wakePbxCallId,
+            registered: wakeMeta.registered,
+            registrationState: wakeMeta.registrationState ?? null,
+            waitedMs: wakeMeta.waitedMs,
+          },
+          "vm-record-call: mobile wake registration outcome",
+        );
       } catch (err: any) {
         wakeMeta.error = String(err?.message || err);
         deps.log.warn(

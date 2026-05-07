@@ -102,6 +102,48 @@ export function shouldAllowOriginate(args: {
   return { allow: false, blockCode: "no_registered_endpoint" };
 }
 
+/**
+ * Decide whether to send the mobile wake push for Call-to-Record.
+ *
+ * Phase A behavior: send the wake push whenever the user has at least one
+ * MobileDevice row, REGARDLESS of:
+ *   - whether the row is `active=true`
+ *   - whether the PJSIP AOR for this extension is currently Avail
+ *
+ * Both of those signals are recorded as diagnostic context so the job's
+ * public view can surface them; they no longer block the push.
+ *
+ * Reasoning: desktop WebRTC and the mobile app share the same SIP
+ * authUsername (`T<tenant>_<ext>_1` in VitalPBX), so a registered desktop
+ * makes the AOR appear Avail even when the mobile is asleep. The previous
+ * gate suppressed the wake in exactly that common case, preventing
+ * fan-out. The `active=true` filter additionally excludes devices that
+ * haven't checked in recently — but a stale row may still hold a valid
+ * Expo/FCM token and is a legitimate wake target.
+ *
+ * Pure function — no I/O, safe for unit tests.
+ */
+export function decideVmRecordWake(args: {
+  deviceRowCount: number;
+  activeDeviceCount: number;
+  preWakeContactOk: boolean;
+}): {
+  attempt: boolean;
+  reason: "send" | "skipped_no_devices";
+  deviceRowCount: number;
+  activeDeviceCount: number;
+  endpointAlreadyAvail: boolean;
+} {
+  const attempt = args.deviceRowCount > 0;
+  return {
+    attempt,
+    reason: attempt ? "send" : "skipped_no_devices",
+    deviceRowCount: args.deviceRowCount,
+    activeDeviceCount: args.activeDeviceCount,
+    endpointAlreadyAvail: args.preWakeContactOk,
+  };
+}
+
 export function mapVmRecordErrorToUserMessage(code: VmRecordErrorCode): string {
   switch (code) {
     case "no_registered_endpoint":

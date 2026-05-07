@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyHelperOriginateFailure,
+  decideVmRecordWake,
   greetingFileChanged,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
@@ -109,6 +110,49 @@ test("shouldAllowOriginate — no mobile, no contact", () => {
     allow: false,
     blockCode: "no_registered_endpoint",
   });
+});
+
+// ── decideVmRecordWake (Phase A) ──────────────────────────────────────────
+
+test("decideVmRecordWake — no devices: skip wake", () => {
+  const r = decideVmRecordWake({ deviceRowCount: 0, activeDeviceCount: 0, preWakeContactOk: false });
+  assert.equal(r.attempt, false);
+  assert.equal(r.reason, "skipped_no_devices");
+  assert.equal(r.deviceRowCount, 0);
+  assert.equal(r.activeDeviceCount, 0);
+  assert.equal(r.endpointAlreadyAvail, false);
+});
+
+test("decideVmRecordWake — devices present and AOR Avail: still send (Phase A relaxed gate)", () => {
+  const r = decideVmRecordWake({ deviceRowCount: 2, activeDeviceCount: 1, preWakeContactOk: true });
+  assert.equal(r.attempt, true);
+  assert.equal(r.reason, "send");
+  assert.equal(r.deviceRowCount, 2);
+  assert.equal(r.activeDeviceCount, 1);
+  assert.equal(r.endpointAlreadyAvail, true);
+});
+
+test("decideVmRecordWake — only stale (active=false) device rows still trigger send", () => {
+  const r = decideVmRecordWake({ deviceRowCount: 6, activeDeviceCount: 0, preWakeContactOk: false });
+  assert.equal(r.attempt, true);
+  assert.equal(r.reason, "send");
+  assert.equal(r.deviceRowCount, 6);
+  assert.equal(r.activeDeviceCount, 0);
+});
+
+test("decideVmRecordWake — all-active devices, AOR not Avail: send", () => {
+  const r = decideVmRecordWake({ deviceRowCount: 3, activeDeviceCount: 3, preWakeContactOk: false });
+  assert.equal(r.attempt, true);
+  assert.equal(r.reason, "send");
+  assert.equal(r.endpointAlreadyAvail, false);
+});
+
+test("decideVmRecordWake — Phase A regression guard: AOR Avail must NOT block when devices exist", () => {
+  // This is the exact Landau Home scenario: shared AOR T<t>_<e>_1 is Avail
+  // because desktop WebRTC is registered, but the mobile app is asleep.
+  // Before Phase A this returned attempt=false; after Phase A it returns true.
+  const r = decideVmRecordWake({ deviceRowCount: 1, activeDeviceCount: 0, preWakeContactOk: true });
+  assert.equal(r.attempt, true, "must attempt wake even when AOR appears Avail");
 });
 
 test("classifyHelperOriginateFailure detects dialplan", () => {
