@@ -286,16 +286,41 @@ What Phase A.5 still does NOT change:
   still re-flipped inactive by the existing per-ticket cleanup at
   `server.ts:2871–2876`. Phase A.5 is self-cleaning.
 
+## Phase B (2026-05-07) — dispatch-only originate + post-answer Gosub
+
+The PBX helper used to override the originate channel to a single
+`PJSIP/<hint>` endpoint after polling confirmed Avail, which made
+`[connect-vm-greeting-dispatch]`'s `Dial(${CONNECT_VM_DIAL},30)`
+fan-out moot — only the hinted device rang. Phase B removes that
+override unconditionally:
+
+- The helper (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`,
+  VERSION `2026.05.07.1`) always originates
+  `Local/<recording_exten>@connect-vm-greeting-dispatch/n` and tags
+  the response `channelSource: "dispatch_local:<base>[,<hint>]"`. The
+  AstDB-driven Dial fan-out rings every registered endpoint at once.
+- The prompt-before-answer race that the override used to dodge is
+  now solved at the dialplan layer:
+  `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${tenant}^${ext}^${file}))`
+  fires the new `[connect-vm-greeting-record-sub]` context as a
+  Gosub on the answered party's channel only AFTER pickup. Prompts
+  never play to an empty bridge.
+- `Set(CALLERID(name)=Voicemail Greeting Recording)` +
+  `Set(CALLERID(num)=${CONNECT_VM_EXT})` are set in dispatch, so the
+  outgoing INVITE shows the user their own extension as the caller
+  with a clear name (instead of `anonymous@anonymous.invalid`).
+- Legacy `[connect-vm-greeting-record]` context is intentionally
+  retained for back-compat.
+- API-side `runVmRecordCallJob` warn-logs
+  `vm-record-call: helper returned direct_pjsip channelSource` if
+  the helper ever returns the old shape — pure regression detector,
+  no control-flow change.
+
 What Phase A explicitly does NOT do (still TODO):
 
-- It does **not** change the SIP originate / PBX helper path. The PBX
-  originate currently still goes direct to the most-specific device
-  endpoint when the helper sees a `pjsipEndpointHint` populated. A
-  separate phase will move that to the dispatch / fan-out path so the
-  PBX itself rings every reachable contact.
 - It does **not** fix the desktop browser Answer-button bug
   (Failure A — browser never sends SIP 200 OK). That is a separate
-  portal-side phase.
+  portal-side phase (Phase C).
 - **Push token rotation on app reinstall.** Old `expoPushToken` rows
   remain on `MobileDevice`; the latest registration overrides via
   `@unique` constraint. Stale tokens get `lastPushError` set on

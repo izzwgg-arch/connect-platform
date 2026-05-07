@@ -234,13 +234,25 @@ When you find a new fragile area, add it here.
     A new `mobile-push: device fan-out` log line records
     `totalRowsFound`, `activeRowsCount`, `rowsMissingToken`,
     `afterExclude`, `includeInactiveDevices` per dispatch.
-  - **Open: Phase B (PBX originate fan-out).** API path now wakes
-    mobile correctly, but the PBX helper still originates direct to
-    the most-specific device when `pjsipEndpointHint` is set, which
-    bypasses `[connect-vm-greeting-dispatch]`'s `Dial(${CONNECT_VM_DIAL},30)`
-    fan-out. Desk phone + mobile + WebRTC do not all ring on a single
-    Call-to-Record click yet. Phase B will move originate to the
-    dispatch path and resolve the prompt-before-answer race.
+  - **Phase B (2026-05-07) — dispatch-only originate + post-answer
+    Gosub.** The `direct_pjsip:` channel-source override in the PBX
+    helper (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`,
+    formerly lines 950–967) was deleted: every vm-record originate
+    now flows through `Local/<recording_exten>@connect-vm-greeting-dispatch/n`,
+    which dials the AstDB-driven fan-out string `PJSIP/T<tenant>_<ext>&PJSIP/T<tenant>_<ext>_<n>`
+    so hardphone + WebRTC + mobile ring in parallel. The
+    prompt-before-answer race is fixed inside the dialplan: dispatch
+    uses `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${tenant}^${ext}^${file}))`,
+    and the new `[connect-vm-greeting-record-sub]` context runs the
+    recording flow as a Gosub on the answered party's channel only
+    AFTER pickup. Legacy `[connect-vm-greeting-record]` context is
+    retained for back-compat. Helper VERSION bumped to
+    `2026.05.07.1`. The API logs a structured warn line
+    `vm-record-call: helper returned direct_pjsip channelSource`
+    if it ever sees the old path again — purely a regression
+    detector. Originating CallerID is now
+    `Voicemail Greeting Recording <${ext}>` instead of
+    `anonymous@anonymous.invalid`.
   - **Open: Phase C (browser Answer button).** Desktop WebRTC rings
     but `session.answer()` never emits a SIP `200 OK` — the browser
     sends `480 Temporarily Unavailable` ~22s later. SIP-over-WSS

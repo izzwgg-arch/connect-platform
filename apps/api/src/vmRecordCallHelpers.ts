@@ -103,6 +103,22 @@ export function shouldAllowOriginate(args: {
 }
 
 /**
+ * Phase B (2026-05-07): the PBX helper now ALWAYS originates through
+ * `Local/<recording_exten>@connect-vm-greeting-dispatch/n` so the
+ * AstDB-driven Dial fan-out rings every registered endpoint at once.
+ * If `helper.channelSource` ever comes back starting with `direct_pjsip:`,
+ * the helper is running an older build (pre-Phase-B) that bypassed
+ * extension fan-out. We use this predicate to surface that as a
+ * structured warn-log without changing control flow.
+ *
+ * Pure function — no I/O, safe for unit tests.
+ */
+export function isDirectPjsipChannelSource(value: string | null | undefined): boolean {
+  if (typeof value !== "string") return false;
+  return value.startsWith("direct_pjsip:");
+}
+
+/**
  * Build the Prisma `where` shape that `sendPushToUserDevices` uses to fan
  * out a mobile push.
  *

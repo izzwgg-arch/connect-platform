@@ -143,6 +143,19 @@
   file but all stale" vs "device excluded". For vm-record specifically
   this is the line that explains a `wake_sent_but_not_registered`
   error code.
+- **`vm-record-call: helper returned direct_pjsip channelSource` (Phase B regression detector).**
+  After Phase B (2026-05-07) the PBX helper always returns
+  `channelSource: dispatch_local:<base>[,hint]`. If the API ever logs
+  this warn line, the helper running on the PBX is older than
+  `2026.05.07.1` and the originate is bypassing the
+  `[connect-vm-greeting-dispatch]` Dial fan-out. Recovery: re-run
+  `bash scripts/pbx/install-vitalpbx-inbound-route-helper.sh` on the
+  PBX host as root, then verify
+  `curl http://127.0.0.1:8757/voicemail/greeting/diag | jq -r .version`
+  reports `2026.05.07.1` or later. The
+  `dispatchShowOutput` field of `/voicemail/greeting/diag` should
+  contain
+  `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^...))`.
 - **Voicemail Call-to-Record (`POST /voicemail/greeting/record-call`):**
   the API now emits three structured log lines per attempt that together
   classify the mobile-wake outcome:

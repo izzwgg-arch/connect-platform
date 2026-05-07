@@ -13,6 +13,7 @@ import {
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
+  isDirectPjsipChannelSource,
   mapVmRecordErrorToUserMessage,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
@@ -494,6 +495,19 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     job.helperJobId = res.jobId;
     job.helper = res as unknown as Record<string, unknown>;
     touch(job);
+
+    if (isDirectPjsipChannelSource((res as { channelSource?: string | null }).channelSource)) {
+      deps.log.warn(
+        {
+          jobId: job.jobId,
+          tenantId: job.connectTenantId,
+          extNumber: job.extNumber,
+          channelSource: (res as { channelSource?: string }).channelSource,
+          helperVersion: (res as { version?: string }).version,
+        },
+        "vm-record-call: helper returned direct_pjsip channelSource — fan-out is bypassed (Phase B regression)",
+      );
+    }
 
     const exitCode = typeof (res as any).asteriskExitCode === "number" ? (res as any).asteriskExitCode : 0;
     const failed = (res as any).status === "failed" || exitCode !== 0;

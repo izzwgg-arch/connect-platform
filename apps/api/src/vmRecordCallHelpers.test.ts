@@ -6,6 +6,7 @@ import {
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
+  isDirectPjsipChannelSource,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
   validateCallerSipEndpoint,
@@ -199,6 +200,22 @@ test("buildVmRecordWakePushInput — vm-record always sets includeInactiveDevice
   assert.equal(r.tenantId, "t1");
   assert.equal(r.userId, "u1");
   assert.deepEqual(r.payload, { type: "INCOMING_CALL_WAKE", pbxCallId: "x" });
+});
+
+// ── isDirectPjsipChannelSource (Phase B) ──────────────────────────────────
+
+test("isDirectPjsipChannelSource — recognizes direct_pjsip:* (pre-Phase-B regression)", () => {
+  assert.equal(isDirectPjsipChannelSource("direct_pjsip:T21_101_1"), true);
+  assert.equal(isDirectPjsipChannelSource("direct_pjsip:"), true);
+});
+
+test("isDirectPjsipChannelSource — does not flag dispatch_local:* (Phase B canonical)", () => {
+  assert.equal(isDirectPjsipChannelSource("dispatch_local:T21_101,T21_101_1"), false);
+  assert.equal(isDirectPjsipChannelSource("dispatch_local:T21_101"), false);
+  assert.equal(isDirectPjsipChannelSource("template"), false);
+  assert.equal(isDirectPjsipChannelSource(undefined), false);
+  assert.equal(isDirectPjsipChannelSource(null), false);
+  assert.equal(isDirectPjsipChannelSource(""), false);
 });
 
 test("buildVmRecordWakePushInput — payload is passed through verbatim (no mutation)", () => {

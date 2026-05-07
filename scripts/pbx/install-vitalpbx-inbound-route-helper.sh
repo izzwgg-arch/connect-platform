@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.05.7"
+VERSION = "2026.05.07.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -947,24 +947,21 @@ def vm_record_call(body):
             )
         else:
             poll_registered = True
-        # When the mobile device is confirmed registered, switch from Local channel
-        # dispatch to a direct PJSIP originate. With a Local channel both legs run
-        # simultaneously, so WaitForBridge() returns immediately (Leg 1 is already
-        # bridged to Leg 2 via the Local channel). Prompts therefore play before the
-        # user's phone even rings. Direct originate eliminates this race:
-        #   phone rings → user answers → channel enters record context → prompts play.
+        # Phase B (2026-05-07): the prompt-before-answer race that the old
+        # direct_pjsip override tried to dodge is now solved correctly inside
+        # the dialplan. [connect-vm-greeting-dispatch] dials the AstDB-driven
+        # fan-out string and uses Dial(...,U(connect-vm-greeting-record-sub^...))
+        # which runs the recording flow as a Gosub on the answered party's
+        # channel only AFTER pickup. We therefore keep the Local/dispatch
+        # originate and never short-circuit to a single PJSIP endpoint.
         #
-        # After poll confirms Avail, wait 5 seconds before sending the INVITE.
-        # The API sends an FCM wake ~2s before calling us. The mobile needs
-        # ~7s total from FCM wake for WebSocket re-initialization + SIP re-registration
-        # to fully settle. The INVITE arriving too early (at t=2s) hits a contact that
-        # may still be mid-transition and gets silently dropped. This sleep bridges the
-        # gap: poll returns at ~t=2s → sleep 5s → INVITE sent at ~t=7s (same timing
-        # as the old Local channel dispatch Wait(5) that made the phone ring).
-        if poll_registered and hint_raw and hint_raw != base_ep:
-            time.sleep(5)
-            channel = "PJSIP/" + hint_raw
-            channel_source = "direct_pjsip:" + hint_raw
+        # We still poll the mobile hint endpoint above purely as a diagnostic
+        # signal (so the API can tell pre-deploy users that mobile re-registered
+        # in time), but the originate channel and channel_source are unchanged.
+        sys.stderr.write(
+            "vm_record_call: dispatch_local fan-out preserved hint=%s base=%s poll_registered=%s\n"
+            % (hint_raw or "", base_ep, poll_registered)
+        )
     else:
         poll_registered = True
         poll_elapsed_secs = 0.0
@@ -1142,18 +1139,61 @@ CONNECT_VM_LEGACY_INLINE_TARGETS = (
 CONNECT_VM_LEGACY_BEGIN = "; >>> CONNECT_VM_GREETING_BLOCK_BEGIN (auto-managed by connect-pbx-helper, do not edit) >>>"
 CONNECT_VM_LEGACY_END = "; <<< CONNECT_VM_GREETING_BLOCK_END <<<"
 CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit manually.
+;
+; Phase B (2026-05-07): the recording flow runs ONLY after the dispatched
+; Dial() answers. We use Dial(...,U(connect-vm-greeting-record-sub^...))
+; so the Gosub fires on the answered party's channel and the original
+; Local channel never starts prompts before the phone rings. AstDB
+; populates the dial string so multiple registered endpoints (hardphone +
+; mobile + WebRTC) all ring in parallel.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(5)
+ same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
+ same => n,Set(CALLERID(name)=Voicemail Greeting Recording)
+ same => n,Set(CALLERID(num)=${CONNECT_VM_EXT})
+ same => n,Wait(2)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},30)
+ same => n,Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_TENANT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
 
+; Post-answer subroutine. Runs on the answered party's channel only AFTER
+; Dial() picks up. Args: ARG1=tenantId, ARG2=extension, ARG3=greetingFile.
+[connect-vm-greeting-record-sub]
+exten => s,1,NoOp(Connect VM record sub tenant=${ARG1} ext=${ARG2} file=${ARG3})
+ same => n,Set(CONNECT_VM_TENANT=${ARG1})
+ same => n,Set(CONNECT_VM_EXT=${ARG2})
+ same => n,Set(CONNECT_VM_FILE=${ARG3})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Wait(1)
+ same => n(start),Playback(custom/connect-vm-record-greeting)
+ same => n,Playback(beep)
+ same => n,Record(${CONNECT_VM_TMP}.wav,0,180,kq)
+ same => n,Playback(custom/connect-vm-review)
+ same => n,Playback(${CONNECT_VM_TMP})
+ same => n(choose),Read(CONNECT_VM_CHOICE,custom/connect-vm-save-redo,1,,3,10)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "1"]?save)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "2"]?redo)
+ same => n,Playback(custom/connect-vm-invalid-choice)
+ same => n,Goto(choose)
+ same => n(redo),System(rm -f ${CONNECT_VM_TMP}.wav)
+ same => n,Goto(start)
+ same => n(save),System(mv -f ${CONNECT_VM_TMP}.wav ${CONNECT_VM_PATH})
+ same => n,System(chown asterisk:asterisk ${CONNECT_VM_PATH})
+ same => n,System(chmod 0644 ${CONNECT_VM_PATH})
+ same => n,Playback(custom/connect-vm-saved)
+ same => n,Hangup()
+
+exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
+
+; Legacy context retained for back-compat. The Phase A dialplan and any
+; older Connect API build that originates `extension X@connect-vm-greeting-record`
+; still works. The new originate path uses dispatch + record-sub above.
 [connect-vm-greeting-record]
 exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
@@ -1184,8 +1224,6 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Hangup()
  same => n(invalid),Verbose(1,Rejecting invalid Connect voicemail greeting record request ${EXTEN})
  same => n,Hangup()
-
-exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 """
 
 def _strip_legacy_inline_blocks():
@@ -1369,23 +1407,62 @@ done
 install -d -o asterisk -g asterisk -m 0755 /etc/asterisk/vitalpbx 2>/dev/null || true
 
 cat >"${DIALPLAN_TARGET}" <<'EOF'
-; Installed by Connect PBX helper. This context is used only after Connect
-; originates a call to a user's extension for voicemail greeting recording.
-; The helper writes the registered PJSIP dial string into Asterisk's built-in
-; database (DB(connect_vm_dial/T<tenantId>_<extension>)) before originate, so
-; this context never has to shell out and never depends on live_dangerously.
+; Installed by Connect PBX helper. This file is auto-managed; do not edit.
+;
+; Phase B (2026-05-07): the recording flow runs ONLY after the dispatched
+; Dial() answers. We use Dial(...,U(connect-vm-greeting-record-sub^...))
+; so the Gosub fires on the answered party's channel and the original
+; Local channel never starts prompts before the phone rings. AstDB
+; populates the dial string so multiple registered endpoints (hardphone +
+; mobile + WebRTC) all ring in parallel.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
- same => n,Wait(5)
+ same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
+ same => n,Set(CALLERID(name)=Voicemail Greeting Recording)
+ same => n,Set(CALLERID(num)=${CONNECT_VM_EXT})
+ same => n,Wait(2)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},30)
+ same => n,Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_TENANT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
 
+; Post-answer subroutine. Runs on the answered party's channel only AFTER
+; Dial() picks up. Args: ARG1=tenantId, ARG2=extension, ARG3=greetingFile.
+[connect-vm-greeting-record-sub]
+exten => s,1,NoOp(Connect VM record sub tenant=${ARG1} ext=${ARG2} file=${ARG3})
+ same => n,Set(CONNECT_VM_TENANT=${ARG1})
+ same => n,Set(CONNECT_VM_EXT=${ARG2})
+ same => n,Set(CONNECT_VM_FILE=${ARG3})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Wait(1)
+ same => n(start),Playback(custom/connect-vm-record-greeting)
+ same => n,Playback(beep)
+ same => n,Record(${CONNECT_VM_TMP}.wav,0,180,kq)
+ same => n,Playback(custom/connect-vm-review)
+ same => n,Playback(${CONNECT_VM_TMP})
+ same => n(choose),Read(CONNECT_VM_CHOICE,custom/connect-vm-save-redo,1,,3,10)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "1"]?save)
+ same => n,GotoIf($["${CONNECT_VM_CHOICE}" = "2"]?redo)
+ same => n,Playback(custom/connect-vm-invalid-choice)
+ same => n,Goto(choose)
+ same => n(redo),System(rm -f ${CONNECT_VM_TMP}.wav)
+ same => n,Goto(start)
+ same => n(save),System(mv -f ${CONNECT_VM_TMP}.wav ${CONNECT_VM_PATH})
+ same => n,System(chown asterisk:asterisk ${CONNECT_VM_PATH})
+ same => n,System(chmod 0644 ${CONNECT_VM_PATH})
+ same => n,Playback(custom/connect-vm-saved)
+ same => n,Hangup()
+
+exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
+
+; Legacy context retained for back-compat. The Phase A dialplan and any
+; older Connect API build that originates `extension X@connect-vm-greeting-record`
+; still works. The new originate path uses dispatch + record-sub above.
 [connect-vm-greeting-record]
 exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Set(CONNECT_VM_PARSE=${REGEX("^([0-9]+)_([0-9]+)_(unavail|busy|temp|greet)$" ${EXTEN})})
@@ -1416,8 +1493,6 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n,Hangup()
  same => n(invalid),Verbose(1,Rejecting invalid Connect voicemail greeting record request ${EXTEN})
  same => n,Hangup()
-
-exten => h,1,System(rm -f ${CONNECT_VM_TMP}.wav)
 EOF
 chown asterisk:asterisk "${DIALPLAN_TARGET}"
 chmod 0644 "${DIALPLAN_TARGET}"
