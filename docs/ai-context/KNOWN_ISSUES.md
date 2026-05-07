@@ -272,7 +272,32 @@ When you find a new fragile area, add it here.
     detector. Originating CallerID is now
     `Voicemail Greeting Recording <${ext}>` instead of
     `anonymous@anonymous.invalid`.
-  - **Open: Phase C (browser Answer button).** Desktop WebRTC rings
+  - **Phase C (2026-05-07) — voicemail context path fix. DEPLOYED via
+    installer re-run.**
+    Root cause: VitalPBX names each tenant's voicemail context after the
+    tenant slug (e.g. `test-voicemail`), not the numeric tenant id (`21`).
+    The helper's `voicemail_mailbox_dir` used to guess `<numeric>/<ext>`
+    first, creating and writing to the wrong directory
+    (`/var/spool/asterisk/voicemail/21/101/`). `VoiceMail()` reads from
+    `/var/spool/asterisk/voicemail/test-voicemail/101/` — so the custom
+    greeting was silently ignored.
+    Fix: new `resolve_voicemail_context_from_conf(tenant_id, extension)`
+    reads `/etc/asterisk/vitalpbx/voicemail__50-<N>-main.conf` at request
+    time to find the real context; `voicemail_mailbox_dir` uses that as
+    `candidates[0]` (falls back to numeric/T-prefix/default for tenants
+    whose conf file cannot be read). `vm_record_call` also stores the
+    resolved context in AstDB key `connect_vm_context/T<tenant>_<ext>`
+    before originating; the dispatch dialplan reads it and passes it as
+    `ARG1` to `connect-vm-greeting-record-sub`; both `CONNECT_VM_PATH`
+    and `CONNECT_VM_TMP` now use `${CONNECT_VM_CONTEXT}/...` instead of
+    `${CONNECT_VM_TENANT}/...`. Legacy `[connect-vm-greeting-record]`
+    context also does the same AstDB lookup + numeric fallback.
+    Helper VERSION bumped to `2026.05.07.2`.
+    Verify: `asterisk -rx "database show connect_vm_context"` → shows
+    `T21_101 = test-voicemail`; after recording,
+    `ls /var/spool/asterisk/voicemail/test-voicemail/101/unavail.wav`
+    should exist with a recent mtime.
+  - **Open: Phase D (browser Answer button).** Desktop WebRTC rings
     but `session.answer()` never emits a SIP `200 OK` — the browser
     sends `480 Temporarily Unavailable` ~22s later. SIP-over-WSS
     capture is on file; root cause is in the portal's `useSipPhone`

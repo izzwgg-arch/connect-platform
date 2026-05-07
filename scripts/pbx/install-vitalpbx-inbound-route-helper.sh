@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.07.1"
+VERSION = "2026.05.07.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -645,6 +645,38 @@ def require_ext(raw):
         raise ValueError("invalid_extension")
     return value
 
+VM_CONTEXT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+
+def resolve_voicemail_context_from_conf(tenant_id, extension):
+    """Resolve the Asterisk voicemail context for <extension> within VitalPBX tenant <tenant_id>.
+
+    VitalPBX stores per-tenant voicemail mailboxes in
+    /etc/asterisk/vitalpbx/voicemail__50-<N>-main.conf under named contexts
+    (e.g. [test-voicemail], [comfort_control-voicemail]).  The spool path that
+    Asterisk's VoiceMail() reads is /var/spool/asterisk/voicemail/<context>/<ext>/.
+
+    Returns the context name string (e.g. "test-voicemail") or None if the
+    config file is absent or the extension is not found.  The return value is
+    validated against VM_CONTEXT_RE before use so it is safe to embed in paths.
+    """
+    conf = Path("/etc/asterisk/vitalpbx/voicemail__50-" + str(tenant_id) + "-main.conf")
+    if not conf.is_file():
+        return None
+    try:
+        content = conf.read_text(errors="replace")
+    except OSError:
+        return None
+    current_context = None
+    ext_prefix = re.compile(r"^" + re.escape(str(extension)) + r"\s*=>")
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current_context = stripped[1:-1]
+        elif current_context is not None and ext_prefix.match(stripped):
+            if VM_CONTEXT_RE.match(current_context):
+                return current_context
+    return None
+
 def require_greeting_type(raw):
     value = str(raw or "unavailable").strip().lower()
     if value not in GREETING_TYPES:
@@ -698,7 +730,16 @@ def voicemail_mailbox_dir(tenant_id, extension):
     tenant = require_num("tenant_id", tenant_id)
     ext = require_ext(extension)
     root = CFG.voicemail_dir.resolve()
-    candidates = [root / tenant / ext, root / ("T" + tenant) / ext, root / "default" / ext]
+    # Prefer the actual VitalPBX voicemail context directory (e.g. test-voicemail/101/)
+    # over the legacy numeric/T-prefix guesses. VitalPBX names contexts after tenant
+    # slugs (voicemail__50-<N>-main.conf  →  [<slug>-voicemail]), so the numeric path
+    # "21/101/" is wrong for most installs. resolve_voicemail_context_from_conf() reads
+    # the tenant's conf file to find the correct context for this extension.
+    candidates = []
+    vm_context = resolve_voicemail_context_from_conf(tenant, ext)
+    if vm_context:
+        candidates.append(root / vm_context / ext)
+    candidates += [root / tenant / ext, root / ("T" + tenant) / ext, root / "default" / ext]
     for p in candidates:
         if p.is_dir():
             apply_vm_dir_owner(p)
@@ -928,6 +969,18 @@ def vm_record_call(body):
             )
         except Exception as exc:
             sys.stderr.write("astdb_put_failed: " + str(exc) + "\n")
+        # Store the resolved VitalPBX voicemail context so the dialplan writes
+        # to the correct spool path (e.g. test-voicemail/101/ not 21/101/).
+        vm_context_for_astdb = resolve_voicemail_context_from_conf(tenant_id, extension)
+        if vm_context_for_astdb:
+            try:
+                subprocess.run(
+                    ["asterisk", "-rx", "database put connect_vm_context " + astdb_key + " " + vm_context_for_astdb],
+                    capture_output=True, timeout=10, check=False,
+                )
+                sys.stderr.write("astdb_vm_context: key=%s context=%s\n" % (astdb_key, vm_context_for_astdb))
+            except Exception as exc:
+                sys.stderr.write("astdb_vm_context_put_failed: " + str(exc) + "\n")
         channel_source = "dispatch_local:" + ",".join(dispatch_endpoints)
         # Poll for the hint endpoint (typically the mobile device) to appear in
         # pjsip show contacts before originating. The API sends an FCM wake ~2s
@@ -1146,6 +1199,12 @@ CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit 
 ; Local channel never starts prompts before the phone rings. AstDB
 ; populates the dial string so multiple registered endpoints (hardphone +
 ; mobile + WebRTC) all ring in parallel.
+;
+; Phase C (2026-05-07): resolve the actual VitalPBX voicemail context from
+; AstDB (connect_vm_context/T<tenant>_<ext>) so recordings are written to
+; the correct spool path (e.g. test-voicemail/101/) instead of the wrong
+; numeric path (21/101/). Falls back to the numeric tenant id if the key
+; is absent (backward compat for tenants not yet re-originated).
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
@@ -1156,20 +1215,23 @@ exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Wait(2)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_TENANT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
+ same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_context)
+ same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
+ same => n(have_context),Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
 
 ; Post-answer subroutine. Runs on the answered party's channel only AFTER
-; Dial() picks up. Args: ARG1=tenantId, ARG2=extension, ARG3=greetingFile.
+; Dial() picks up. Args: ARG1=vmContext, ARG2=extension, ARG3=greetingFile.
 [connect-vm-greeting-record-sub]
-exten => s,1,NoOp(Connect VM record sub tenant=${ARG1} ext=${ARG2} file=${ARG3})
- same => n,Set(CONNECT_VM_TENANT=${ARG1})
+exten => s,1,NoOp(Connect VM record sub context=${ARG1} ext=${ARG2} file=${ARG3})
+ same => n,Set(CONNECT_VM_CONTEXT=${ARG1})
  same => n,Set(CONNECT_VM_EXT=${ARG2})
  same => n,Set(CONNECT_VM_FILE=${ARG3})
- same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
- same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
  same => n,Playback(beep)
@@ -1201,8 +1263,11 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n(valid),Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
- same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
- same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_ctx)
+ same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
+ same => n(have_ctx),Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Answer()
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
@@ -1415,6 +1480,12 @@ cat >"${DIALPLAN_TARGET}" <<'EOF'
 ; Local channel never starts prompts before the phone rings. AstDB
 ; populates the dial string so multiple registered endpoints (hardphone +
 ; mobile + WebRTC) all ring in parallel.
+;
+; Phase C (2026-05-07): resolve the actual VitalPBX voicemail context from
+; AstDB (connect_vm_context/T<tenant>_<ext>) so recordings are written to
+; the correct spool path (e.g. test-voicemail/101/) instead of the wrong
+; numeric path (21/101/). Falls back to the numeric tenant id if the key
+; is absent (backward compat for tenants not yet re-originated).
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
@@ -1425,20 +1496,23 @@ exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Wait(2)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_TENANT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
+ same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_context)
+ same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
+ same => n(have_context),Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
  same => n,Hangup()
  same => n(nodevices),Verbose(1,Connect VM dispatch: no registered devices for T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
  same => n,Hangup()
 
 ; Post-answer subroutine. Runs on the answered party's channel only AFTER
-; Dial() picks up. Args: ARG1=tenantId, ARG2=extension, ARG3=greetingFile.
+; Dial() picks up. Args: ARG1=vmContext, ARG2=extension, ARG3=greetingFile.
 [connect-vm-greeting-record-sub]
-exten => s,1,NoOp(Connect VM record sub tenant=${ARG1} ext=${ARG2} file=${ARG3})
- same => n,Set(CONNECT_VM_TENANT=${ARG1})
+exten => s,1,NoOp(Connect VM record sub context=${ARG1} ext=${ARG2} file=${ARG3})
+ same => n,Set(CONNECT_VM_CONTEXT=${ARG1})
  same => n,Set(CONNECT_VM_EXT=${ARG2})
  same => n,Set(CONNECT_VM_FILE=${ARG3})
- same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
- same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)
  same => n,Playback(beep)
@@ -1470,8 +1544,11 @@ exten => _X!,1,NoOp(Connect voicemail greeting record request ${EXTEN})
  same => n(valid),Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
  same => n,Set(CONNECT_VM_EXT=${CUT(EXTEN,_,2)})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
- same => n,Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
- same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_TENANT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
+ same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_ctx)
+ same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
+ same => n(have_ctx),Set(CONNECT_VM_PATH=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/${CONNECT_VM_FILE}.wav)
+ same => n,Set(CONNECT_VM_TMP=/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${CONNECT_VM_EXT}/.connect-${UNIQUEID}-${CONNECT_VM_FILE})
  same => n,Answer()
  same => n,Wait(1)
  same => n(start),Playback(custom/connect-vm-record-greeting)

@@ -152,10 +152,36 @@
   `bash scripts/pbx/install-vitalpbx-inbound-route-helper.sh` on the
   PBX host as root, then verify
   `curl http://127.0.0.1:8757/voicemail/greeting/diag | jq -r .version`
-  reports `2026.05.07.1` or later. The
+  reports `2026.05.07.2` or later. The
   `dispatchShowOutput` field of `/voicemail/greeting/diag` should
   contain
-  `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^...))`.
+  `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^...))`.
+- **Voicemail greeting written to wrong directory (Phase C fix, 2026-05-07).**
+  Symptom: `POST /voicemail/greeting/record-call` completes (job reaches
+  `state=saved` or `verify_timeout`), but calling in plays the generic
+  VoiceMail prompt instead of the recorded greeting.
+  Root cause: VitalPBX names each tenant's voicemail context after the
+  tenant slug (`test-voicemail`, not `21` or `T21`). The helper used to
+  resolve candidates in the wrong priority order.
+  Diagnostic steps:
+  1. Check which context VitalPBX uses:
+     `asterisk -rx "voicemail show users" | grep 101`
+     → look for `test-voicemail 101 ...` (context is the first column).
+  2. Check the AstDB context key (present after Phase C):
+     `asterisk -rx "database show connect_vm_context"`
+     → should show `T21_101 = test-voicemail`.
+  3. Check the helper's `/voicemail/greeting/get` response:
+     `curl -s -X POST http://127.0.0.1:8757/voicemail/greeting/get \
+       -H 'Content-Type: application/json' \
+       -d '{"tenantId":"21","extension":"101","greetingType":"unavailable"}' | jq`
+     → `pbxPath` should resolve to
+     `/var/spool/asterisk/voicemail/test-voicemail/101/unavail.wav`.
+  4. After recording, verify the file:
+     `ls -la /var/spool/asterisk/voicemail/test-voicemail/101/unavail.wav`
+  Recovery: re-run the installer — `bash scripts/pbx/install-vitalpbx-inbound-route-helper.sh`.
+  Helper version must be `2026.05.07.2` or later. The helper logs
+  `astdb_vm_context: key=T21_101 context=test-voicemail` to stderr on
+  each vm-record originate when the context is resolved successfully.
 - **Voicemail Call-to-Record (`POST /voicemail/greeting/record-call`):**
   the API now emits three structured log lines per attempt that together
   classify the mobile-wake outcome:

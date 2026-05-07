@@ -192,31 +192,41 @@
 - **Greeting recording — PBX call flow (Phase B, 2026-05-07).**
   The Connect API calls the PBX helper at `POST /voicemail/greeting/record-call`
   (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`, version
-  `2026.05.07.1`+). The helper:
-  1. Resolves the user's registered PJSIP contacts and writes the
+  `2026.05.07.2`+). The helper:
+  1. Calls `resolve_voicemail_context_from_conf(tenant_id, extension)`
+     which reads `/etc/asterisk/vitalpbx/voicemail__50-<N>-main.conf`
+     to find the actual Asterisk voicemail context for the extension
+     (e.g. `test-voicemail`). VitalPBX names these contexts after the
+     tenant slug, not the numeric id.
+  2. Resolves the user's registered PJSIP contacts and writes the
      fan-out string `PJSIP/T<tenant>_<ext>&PJSIP/T<tenant>_<ext>_<n>`
      into AstDB key `connect_vm_dial/T<tenant>_<ext>`.
-  2. Polls the device-specific hint endpoint for Avail (max 20 s) as a
+  3. Writes the resolved voicemail context into AstDB key
+     `connect_vm_context/T<tenant>_<ext>` (e.g. `test-voicemail`).
+     The dispatch dialplan reads this before dialing and falls back to
+     the numeric tenant id if the key is absent.
+  4. Polls the device-specific hint endpoint for Avail (max 20 s) as a
      diagnostic signal — but no longer overrides the originate channel.
-  3. Originates `Local/<tenant>_<ext>_<file>@connect-vm-greeting-dispatch/n`
-     into extension `<tenant>_<ext>_<file>@connect-vm-greeting-record`
-     (legacy target kept for back-compat) with
-     `channelSource: "dispatch_local:<base>[,<hint>]"`.
-  4. Asterisk runs `[connect-vm-greeting-dispatch]`:
-     `Wait(2)` → DB lookup → `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${tenant}^${ext}^${file}))`.
+  5. Originates `Local/<tenant>_<ext>_<file>@connect-vm-greeting-dispatch/n`
+     with `channelSource: "dispatch_local:<base>[,<hint>]"`.
+  6. Asterisk runs `[connect-vm-greeting-dispatch]`:
+     `Wait(2)` → dial-string DB lookup → context DB lookup →
+     `Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${ext}^${file}))`.
      Every registered endpoint rings in parallel.
-  5. When a device answers, Asterisk's `U(...)` option fires Gosub on
+  7. When a device answers, Asterisk's `U(...)` option fires Gosub on
      the answered party's channel into `[connect-vm-greeting-record-sub]`,
-     which plays prompts and records — **only after pickup, no
-     prompt-before-answer race**.
-  6. CallerID on the originate is
+     where `ARG1` is now the **voicemail context name** (not the tenant
+     id). The subroutine writes to
+     `/var/spool/asterisk/voicemail/${CONNECT_VM_CONTEXT}/${ext}/${file}.wav`
+     — which is the path VitalPBX's `VoiceMail()` reads from.
+  8. CallerID on the originate is
      `Voicemail Greeting Recording <${ext}>` (set in dispatch via
      `Set(CALLERID(name)=...)` / `Set(CALLERID(num)=...)`).
-  7. Phase A.5 (push fan-out) is upstream of Phase B — vm-record's
+  9. Phase A.5 (push fan-out) is upstream of Phase B — vm-record's
      mobile wake push uses `includeInactiveDevices: true` to include
      heartbeat-deactivated rows. See
      `docs/ai-context/MOBILE_CALL_TIMELINE.md`.
-  Phase C (browser Answer-button bug — desktop WebRTC sometimes does
+  Phase D (browser Answer-button bug — desktop WebRTC sometimes does
   not send SIP 200 OK) is still open and is portal-side, NOT a PBX
   flow concern.
 - Playback URL signing in `apps/api` uses signed download tokens.
