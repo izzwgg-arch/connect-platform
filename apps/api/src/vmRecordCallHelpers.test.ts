@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildMobileDevicePushWhere,
+  buildVmRecordWakePushInput,
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
@@ -153,6 +155,56 @@ test("decideVmRecordWake — Phase A regression guard: AOR Avail must NOT block 
   // Before Phase A this returned attempt=false; after Phase A it returns true.
   const r = decideVmRecordWake({ deviceRowCount: 1, activeDeviceCount: 0, preWakeContactOk: true });
   assert.equal(r.attempt, true, "must attempt wake even when AOR appears Avail");
+});
+
+// ── buildMobileDevicePushWhere (Phase A.5) ────────────────────────────────
+
+test("buildMobileDevicePushWhere — default: preserves active=true filter (current behavior)", () => {
+  const w = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1" });
+  assert.equal(w.tenantId, "t1");
+  assert.equal(w.userId, "u1");
+  assert.equal(w.active, true, "default callers MUST keep the active-only filter");
+});
+
+test("buildMobileDevicePushWhere — flag=false: preserves active=true filter (current behavior)", () => {
+  const w = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1", includeInactiveDevices: false });
+  assert.equal(w.active, true, "explicit false MUST behave identically to default");
+});
+
+test("buildMobileDevicePushWhere — flag=true: drops active filter (vm-record opt-in)", () => {
+  const w = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1", includeInactiveDevices: true });
+  assert.equal(w.tenantId, "t1");
+  assert.equal(w.userId, "u1");
+  assert.equal(w.active, undefined, "active filter MUST be omitted when including inactive devices");
+});
+
+test("buildMobileDevicePushWhere — never relaxes tenant/user scoping", () => {
+  const a = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1", includeInactiveDevices: true });
+  const b = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1", includeInactiveDevices: false });
+  assert.equal(a.tenantId, "t1");
+  assert.equal(a.userId, "u1");
+  assert.equal(b.tenantId, "t1");
+  assert.equal(b.userId, "u1");
+});
+
+// ── buildVmRecordWakePushInput (Phase A.5) ────────────────────────────────
+
+test("buildVmRecordWakePushInput — vm-record always sets includeInactiveDevices=true", () => {
+  const r = buildVmRecordWakePushInput({
+    tenantId: "t1",
+    userId: "u1",
+    payload: { type: "INCOMING_CALL_WAKE", pbxCallId: "x" },
+  });
+  assert.equal(r.includeInactiveDevices, true, "regression guard: vm-record MUST opt into inactive-device fan-out");
+  assert.equal(r.tenantId, "t1");
+  assert.equal(r.userId, "u1");
+  assert.deepEqual(r.payload, { type: "INCOMING_CALL_WAKE", pbxCallId: "x" });
+});
+
+test("buildVmRecordWakePushInput — payload is passed through verbatim (no mutation)", () => {
+  const payload = { type: "INCOMING_CALL_WAKE", pbxCallId: "abc", custom: { nested: 1 } };
+  const r = buildVmRecordWakePushInput({ tenantId: "t1", userId: "u1", payload });
+  assert.strictEqual(r.payload, payload, "payload reference must be preserved");
 });
 
 test("classifyHelperOriginateFailure detects dialplan", () => {

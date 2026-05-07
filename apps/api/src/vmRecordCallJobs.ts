@@ -9,6 +9,7 @@ import {
   type PbxVoicemailGreetingType,
 } from "./pbxInboundRouteHelperClient";
 import {
+  buildVmRecordWakePushInput,
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
@@ -117,7 +118,17 @@ function setError(job: InternalVmRecordJob, code: VmRecordErrorCode, message: st
 
 export type VmRecordCallDeps = {
   log: { warn: (...args: unknown[]) => void; info: (...args: unknown[]) => void };
-  sendPush: (input: { tenantId: string; userId: string; payload: Record<string, unknown> }) => Promise<unknown>;
+  sendPush: (input: {
+    tenantId: string;
+    userId: string;
+    /**
+     * Phase A.5 opt-in: vm-record passes `true` so the push helper
+     * fans out to inactive `MobileDevice` rows. Every other caller
+     * leaves it unset; default behavior is the old active-only filter.
+     */
+    includeInactiveDevices?: boolean;
+    payload: Record<string, unknown>;
+  }) => Promise<unknown>;
 };
 
 export type CreateVmRecordJobInput = {
@@ -306,21 +317,23 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     if (wakeDecision.attempt) {
       const wakePbxCallId = "vm-greeting-record-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
       try {
-        const pushed = await deps.sendPush({
-          tenantId: job.connectTenantId,
-          userId: ownerUserId,
-          payload: {
-            type: "INCOMING_CALL_WAKE",
-            pbxCallId: wakePbxCallId,
-            fromNumber: "vm-greeting",
-            fromDisplay: "Voicemail Greeting Recording",
-            toExtension: job.extNumber,
+        const pushed = await deps.sendPush(
+          buildVmRecordWakePushInput({
             tenantId: job.connectTenantId,
-            pbxVitalTenantId: job.pbxTenantId,
-            timestamp: new Date().toISOString(),
-            wakeRequestedAt: new Date().toISOString(),
-          },
-        });
+            userId: ownerUserId,
+            payload: {
+              type: "INCOMING_CALL_WAKE",
+              pbxCallId: wakePbxCallId,
+              fromNumber: "vm-greeting",
+              fromDisplay: "Voicemail Greeting Recording",
+              toExtension: job.extNumber,
+              tenantId: job.connectTenantId,
+              pbxVitalTenantId: job.pbxTenantId,
+              timestamp: new Date().toISOString(),
+              wakeRequestedAt: new Date().toISOString(),
+            },
+          }),
+        );
         const waitStartedAt = new Date();
         wakeMeta.sent = true;
         wakeMeta.devicesNotified = (pushed as { queued?: number } | null | undefined)?.queued ?? deviceIds.length;

@@ -218,6 +218,22 @@ When you find a new fragile area, add it here.
     `vmRecordCallJobs.ts::runVmRecordCallJob` log lines
     `vm-record-call: mobile wake decision` / `mobile wake push sent` /
     `mobile wake registration outcome`.
+  - **Phase A.5 (2026-05-07) — second `active: true` filter removed
+    via opt-in flag.** Production verification of Phase A surfaced a
+    second `active: true` filter inside `sendPushToUserDevices`
+    (`apps/api/src/server.ts:2544`) that fired AFTER Phase A's
+    decision passed. Job `90b4a38d-aadb-4d51-97ff-6e07f6fdbb0e`
+    logged `decision: "send_wake", deviceRowCount: 7,
+    activeDeviceCount: 0, devicesNotified: 0` — the wake decision
+    was right, but FCM dispatch returned 0. Phase A.5 adds an
+    opt-in `includeInactiveDevices?: boolean` parameter to
+    `sendPushToUserDevices` (default `false`, preserves all 9 other
+    call-sites' active-only semantics) and routes vm-record's wake
+    push through `buildVmRecordWakePushInput` (in
+    `vmRecordCallHelpers.ts`) which always sets the flag to `true`.
+    A new `mobile-push: device fan-out` log line records
+    `totalRowsFound`, `activeRowsCount`, `rowsMissingToken`,
+    `afterExclude`, `includeInactiveDevices` per dispatch.
   - **Open: Phase B (PBX originate fan-out).** API path now wakes
     mobile correctly, but the PBX helper still originates direct to
     the most-specific device when `pjsipEndpointHint` is set, which

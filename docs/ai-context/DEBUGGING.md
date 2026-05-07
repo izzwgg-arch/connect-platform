@@ -120,6 +120,29 @@
   strings were present. Use this as the canonical clean-success
   example when contrasting with the 2026-05-06 telephony stale-code
   failure already documented in `AGENTS.md`.
+- **`mobile-push: device fan-out` (Phase A.5).** Every call to
+  `sendPushToUserDevices` (any payload type) emits this structured
+  Pino info line BEFORE Expo dispatch. Fields:
+  - `payloadType` — `INCOMING_CALL`, `INCOMING_CALL_WAKE`,
+    `INVITE_CANCELED`, `INVITE_CLAIMED`, `MISSED_CALL`, `voicemail`,
+    `missed_call`, `dm_message`, `sms_message`.
+  - `includeInactiveDevices` — `true` only on vm-record's
+    `INCOMING_CALL_WAKE` path; `false` for every other caller.
+  - `totalRowsFound` — `MobileDevice` rows returned by the where query
+    (already scoped to tenant + user).
+  - `activeRowsCount` — subset where `active=true`. When
+    `includeInactiveDevices=false`, this equals `totalRowsFound`.
+  - `rowsMissingToken` — subset where `expoPushToken` is null/empty.
+    Surfaced for diagnostic only — not filtered out (Expo handles
+    invalid tokens per-ticket and the existing
+    `DeviceNotRegistered` → `active=false` flow still applies).
+  - `afterExclude` — final count after `excludeDeviceId` removal;
+    this is the number sent to Expo and the value `queued` returns
+    for non-simulated sends.
+  Use this line to tell apart "no devices on file" vs "devices on
+  file but all stale" vs "device excluded". For vm-record specifically
+  this is the line that explains a `wake_sent_but_not_registered`
+  error code.
 - **Voicemail Call-to-Record (`POST /voicemail/greeting/record-call`):**
   the API now emits three structured log lines per attempt that together
   classify the mobile-wake outcome:

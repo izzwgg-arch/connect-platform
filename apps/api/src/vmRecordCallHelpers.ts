@@ -103,6 +103,66 @@ export function shouldAllowOriginate(args: {
 }
 
 /**
+ * Build the Prisma `where` shape that `sendPushToUserDevices` uses to fan
+ * out a mobile push.
+ *
+ * Default behavior (Phase A.5 PRESERVED): when `includeInactiveDevices` is
+ * `false`/undefined, the where clause includes `active: true` exactly as
+ * before. Normal incoming calls, missed-call, INVITE_CANCELED/CLAIMED,
+ * voicemail, sms_message, dm_message — all continue to filter to active
+ * rows only. This protects logout / device-unregister semantics.
+ *
+ * Opt-in (Phase A.5): when `includeInactiveDevices` is `true`, the
+ * `active` filter is omitted so the caller can wake devices whose rows
+ * were marked inactive (e.g. by the heartbeat-expiry pass) but still
+ * hold a valid Expo push token. ONLY vm-record's Call-to-Record path
+ * sets this flag, via `buildVmRecordWakePushInput` below.
+ *
+ * Tenant + user scoping is preserved unconditionally.
+ *
+ * Pure function — no I/O, safe for unit tests.
+ */
+export function buildMobileDevicePushWhere(args: {
+  tenantId: string;
+  userId: string;
+  includeInactiveDevices?: boolean;
+}): { tenantId: string; userId: string; active?: true } {
+  const where: { tenantId: string; userId: string; active?: true } = {
+    tenantId: args.tenantId,
+    userId: args.userId,
+  };
+  if (!args.includeInactiveDevices) where.active = true;
+  return where;
+}
+
+/**
+ * Build the input passed by `runVmRecordCallJob` to `deps.sendPush`.
+ *
+ * The literal `includeInactiveDevices: true` is a regression guard:
+ * the unit test for this helper asserts the flag is always `true`, so
+ * any future change that drops the flag will fail tests immediately.
+ *
+ * Pure function — no I/O, safe for unit tests.
+ */
+export function buildVmRecordWakePushInput(args: {
+  tenantId: string;
+  userId: string;
+  payload: Record<string, unknown>;
+}): {
+  tenantId: string;
+  userId: string;
+  includeInactiveDevices: true;
+  payload: Record<string, unknown>;
+} {
+  return {
+    tenantId: args.tenantId,
+    userId: args.userId,
+    includeInactiveDevices: true,
+    payload: args.payload,
+  };
+}
+
+/**
  * Decide whether to send the mobile wake push for Call-to-Record.
  *
  * Phase A behavior: send the wake push whenever the user has at least one

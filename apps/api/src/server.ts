@@ -99,7 +99,7 @@ import {
   runVmRecordCallJob,
   type VmRecordCallDeps,
 } from "./vmRecordCallJobs";
-import { validateCallerSipEndpoint } from "./vmRecordCallHelpers";
+import { buildMobileDevicePushWhere, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
 const MAX_DAILY_LIMIT = 10000;
@@ -2546,9 +2546,40 @@ async function sendPushToUserDevices(input: {
   userId: string;
   payload: MobilePushPayload;
   excludeDeviceId?: string | null;
+  /**
+   * Phase A.5 opt-in. When true, skip the `active: true` filter so the
+   * fan-out includes inactive `MobileDevice` rows (rows whose `active`
+   * flag was flipped off by the heartbeat-expiry pass but which may
+   * still hold a valid Expo push token). Only `runVmRecordCallJob`
+   * sets this flag — every other caller defaults to `false` and keeps
+   * the original active-only semantics.
+   */
+  includeInactiveDevices?: boolean;
 }) {
-  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId, active: true } as any });
+  const where = buildMobileDevicePushWhere({
+    tenantId: input.tenantId,
+    userId: input.userId,
+    includeInactiveDevices: input.includeInactiveDevices,
+  });
+  const devices = await db.mobileDevice.findMany({ where: where as any });
   const filtered = input.excludeDeviceId ? devices.filter((d) => d.id !== input.excludeDeviceId) : devices;
+  const totalRowsFound = devices.length;
+  const activeRowsCount = (devices as Array<{ active?: boolean }>).filter((d) => d.active === true).length;
+  const rowsMissingToken = (devices as Array<{ expoPushToken?: string | null }>).filter((d) => !d.expoPushToken).length;
+  app.log.info(
+    {
+      mobilePush: "device-fan-out",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      payloadType: input.payload.type,
+      includeInactiveDevices: !!input.includeInactiveDevices,
+      totalRowsFound,
+      activeRowsCount,
+      rowsMissingToken,
+      afterExclude: filtered.length,
+    },
+    "mobile-push: device fan-out",
+  );
   if (!filtered.length) return { queued: 0, simulated: mobilePushSimulate };
 
   if (mobilePushSimulate) {

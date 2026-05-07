@@ -251,6 +251,41 @@ Phase A behavior (must hold):
   `decision`. On send: `vm-record-call: mobile wake push sent`. On
   poll completion: `vm-record-call: mobile wake registration outcome`.
 
+## Phase A.5 (2026-05-07) — second `active: true` filter
+
+Production verification of Phase A revealed that
+`sendPushToUserDevices` (`apps/api/src/server.ts:2544`) had its OWN
+`active: true` filter at the Prisma query level, AFTER vm-record's
+relaxed wake decision passed. For users whose `MobileDevice` rows had
+all been heartbeat-deactivated, FCM dispatch returned `queued: 0` even
+though Phase A correctly decided `send_wake`.
+
+Phase A.5 adds an opt-in to that helper:
+
+- `sendPushToUserDevices(input)` accepts an optional
+  `includeInactiveDevices?: boolean`. Default `false` preserves the
+  prior `active: true` filter for every existing caller (normal
+  incoming calls, missed-call, INVITE_CANCELED/CLAIMED, voicemail,
+  sms_message, dm_message). When `true`, the `active` filter is
+  dropped; tenant + user scoping is unchanged.
+- Only `runVmRecordCallJob` sets the flag, mediated through
+  `buildVmRecordWakePushInput` in `vmRecordCallHelpers.ts`. The
+  literal `includeInactiveDevices: true` in that helper is unit-tested
+  as a regression guard.
+- Every dispatch (Phase A.5 or not) emits a structured
+  `mobile-push: device fan-out` log line with `totalRowsFound`,
+  `activeRowsCount`, `rowsMissingToken`, `afterExclude`,
+  `includeInactiveDevices` so we can tell "no devices on file" vs
+  "all stale" vs "excluded" apart per call.
+
+What Phase A.5 still does NOT change:
+
+- Normal incoming-call wake semantics (logout, device-unregister)
+  — still active-only, by default-false flag.
+- `active: false` rows with `DeviceNotRegistered` Expo errors are
+  still re-flipped inactive by the existing per-ticket cleanup at
+  `server.ts:2871–2876`. Phase A.5 is self-cleaning.
+
 What Phase A explicitly does NOT do (still TODO):
 
 - It does **not** change the SIP originate / PBX helper path. The PBX
