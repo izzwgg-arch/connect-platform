@@ -433,17 +433,6 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     }, delay);
   }, [runReconnect]);
 
-  const triggerImmediateReconnect = useCallback((reason: string) => {
-    // Used by NetInfo regain — skip the debounce and run now.
-    cancelPendingReconnect();
-    if (reconnectInFlightRef.current) {
-      console.log('[SIP_RECONNECT] immediate_skip_inflight reason=' + reason);
-      return;
-    }
-    console.log('[SIP_RECONNECT] immediate_start reason=' + reason);
-    void runReconnect(reason);
-  }, [cancelPendingReconnect, runReconnect]);
-
   useEffect(() => {
     clientRef.current.setEvents({
       onRegistrationState: setRegistrationState,
@@ -612,84 +601,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     };
   }, [hasProvisioning, scheduleReconnect]);
 
-  // ── Stage 1 NetInfo connectivity-regain trigger ─────────────────────────
-  // When the device regains network connectivity (wifi flip, cellular
-  // handover, airplane-mode off, tunnel exit), immediately attempt a
-  // reconnect. This is the single biggest real-world trigger for
-  // "I walked out of the elevator and missed a call" — today's
-  // stack waits for the next REGISTER refresh cycle (~60 s), Stage 1
-  // heals on the next tick.
-  useEffect(() => {
-    if (!hasProvisioning) return;
-    // NetInfo is an optional dependency. Resolve it defensively — some
-    // Metro/Hermes release bundles resolve `.default` to undefined even
-    // when the module is installed. Fall back to the module namespace
-    // itself, and require `addEventListener` to be a function before
-    // wiring it up so a broken/rebundled build can never crash the
-    // SipProvider mount.
-    let sub: any = null;
-    try {
-      let NI: any = null;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const mod: any = require("@react-native-community/netinfo");
-        NI = (mod && mod.default) ? mod.default : mod;
-      } catch {
-        console.warn('[SIP_RECONNECT] netinfo_require_failed — connectivity-regain trigger disabled');
-        return;
-      }
-      if (!NI || typeof NI.addEventListener !== "function") {
-        console.warn(
-          '[SIP_RECONNECT] netinfo_addEventListener_missing — connectivity-regain trigger disabled',
-          JSON.stringify({ hasNI: !!NI, typeofAEL: NI ? typeof NI.addEventListener : 'n/a' }),
-        );
-        return;
-      }
-      let lastReachable: boolean | null = null;
-      sub = NI.addEventListener((state: any) => {
-        try {
-          const reachable =
-            state?.isInternetReachable === true ||
-            (state?.isInternetReachable == null && state?.isConnected === true);
-          const wasReachable = lastReachable;
-          lastReachable = reachable;
-          if (wasReachable === null) return; // first emission, nothing to compare
-          if (!wasReachable && reachable) {
-            const client = clientRef.current as any;
-            const healthy =
-              typeof client.isConnected === "function" &&
-              typeof client.isRegistered === "function" &&
-              client.isConnected() === true &&
-              client.isRegistered() === true;
-            console.log(
-              '[SIP_RECONNECT] netinfo_regain',
-              JSON.stringify({
-                type: state?.type ?? null,
-                healthy,
-                decision: healthy ? 'skip' : 'reconnect',
-              }),
-            );
-            if (!healthy) triggerImmediateReconnect('netinfo_regain');
-          } else if (wasReachable && !reachable) {
-            console.log(
-              '[SIP_SOCKET] netinfo_lost',
-              JSON.stringify({ type: state?.type ?? null }),
-            );
-          }
-        } catch (e) {
-          console.warn('[SIP_RECONNECT] netinfo_listener_threw:', e);
-        }
-      });
-    } catch (e) {
-      console.warn('[SIP_RECONNECT] netinfo_mount_threw:', e);
-    }
-    return () => {
-      try {
-        if (typeof sub === "function") sub();
-        else if (sub && typeof sub.remove === "function") sub.remove();
-      } catch { /* ignore */ }
-    };
-  }, [hasProvisioning, triggerImmediateReconnect]);
+  // NOTE: A `@react-native-community/netinfo` connectivity-regain trigger
+  // was here (introduced in e070c03). It was removed because netinfo is NOT
+  // installed in this app — Metro baked require(undefined) into the Hermes
+  // bundle, causing a fatal "Requiring unknown module 'undefined'" crash on
+  // every startup. The same pattern was previously fixed in
+  // NotificationsContext.tsx (see comment there). Reconnection on network
+  // regain falls back to the 30-second keep-alive health check and the
+  // backoff orchestrator above. Do NOT re-add require("@react-native-community/netinfo")
+  // here unless the package is first added to apps/mobile/package.json AND
+  // native-linked in a new prebuild.
 
   // ── Stage 1 teardown on logout ──────────────────────────────────────────
   // When the auth token is cleared, the user has logged out. Stop the

@@ -193,6 +193,25 @@ When you find a new fragile area, add it here.
   logcat before touching.
 - **iOS APNs VoIP push** via `react-native-voip-push-notification`. UNKNOWN current
   certificate state and entitlement status. Verify with EAS build configuration.
+- **`require(uninstalled-package)` → `Requiring unknown module "undefined"` fatal crash
+  (FIXED 2026-05-07, commit after `1539cda`).** When a `require("some-pkg")` call
+  references a package not present in `node_modules`, Metro does not error the build
+  — it silently substitutes `undefined` for the module ID. The Hermes runtime then
+  executes `metroRequire(undefined)`, which is a fatal regardless of any `try/catch`
+  wrapper. Expo's error-recovery thread reports it as
+  `FATAL EXCEPTION: expo-updates-error-recovery` /
+  `com.facebook.react.common.JavascriptException: Error: Requiring unknown module "undefined"`.
+  This pattern has now crashed the APK **twice** from two separate files:
+    1. `NotificationsContext.tsx` — `require("@react-native-community/netinfo")` on answer
+       tap (fixed earlier; a comment at ~line 2013 documents the removal).
+    2. `SipContext.tsx` — `require("@react-native-community/netinfo")` inside the Stage 1
+       NetInfo connectivity-regain `useEffect` (introduced in `e070c03`, first shipped in
+       the `1539cda` APK build, fixed by removing the entire useEffect block).
+  **`@react-native-community/netinfo` is NOT installed in `apps/mobile/package.json`.**
+  Do NOT add a `require()` or `import` for it anywhere without first adding it as a
+  dependency AND running a native-linked prebuild (it has a native Android/iOS bridge).
+  The SIP reconnect stack falls back to the 30-second keep-alive health check and the
+  exponential-backoff orchestrator in `SipContext.tsx` — no reconnect capability is lost.
 - **CallKeep + Telecom flicker on remote cancel.** Comment in `NotificationsContext.tsx`
   documents that dynamic `import("../audio/telephonyAudio")` in teardown paths threw
   `Object is not a function` and short-circuited `moveAppToBackground`. Static
