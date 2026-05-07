@@ -112,11 +112,42 @@ curl -s -X POST https://app.connectcomunications.com/api/internal/deploy/auto \
 ## Required preflight before any enqueue
 
 - Run `GET /ops/deploy/status` — confirm `runningCount` is `0` or the
-  currently-running job is expected.
+ currently-running job is expected.
 - Confirm the requested branch/commit exists on `origin` (`git fetch` locally,
-  or let the deploy script do it). A missing ref is rejected with a clear error.
+ or let the deploy script do it). A missing ref is rejected with a clear error.
 - Prefer `"dryRun": true` first. The dry-run prints what the script would do
-  without touching git, docker, prisma, or health checks.
+ without touching git, docker, prisma, or health checks.
+
+## Required POST-deploy verification (do not skip)
+
+A deploy job ending in `status:"success"` is **not** sufficient evidence
+that your commit shipped. The shared queue clone at `/opt/connectcomms/app`
+can have uncommitted hand-edits in files your branch also modifies, in
+which case `deploy_common_git_sync`'s `git checkout` aborts but the rest
+of the deploy script proceeds and silently builds the dirty pre-existing
+working tree (confirmed 2026-05-06 against telephony job
+`36b830d2-b159-4afa-a360-adab40b52db6`; see
+`docs/ai-context/KNOWN_ISSUES.md` "Deploy queue silently ships stale code").
+For **every** deploy that you care about:
+
+1. Read the last line of the deploy log. It must read
+ `[deploy-<service>] done <expected-sha> requested_by=...`. If the SHA does
+ not match what you enqueued, your code did not ship.
+2. Confirm the new code is actually inside the running container by reading
+ the file from inside it:
+ ```pwsh
+ ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>"
+ ```
+3. If either check fails, **do not retry blindly**. SSH to the server,
+ capture the dirty working-tree diff (`cd /opt/connectcomms/app && git diff -- <path>`)
+ to a backup file under `_latency_logs/`, then run
+ `git checkout HEAD -- <path>` to restore only the file blocking the
+ checkout, and re-enqueue. Do not wholesale-reset the clone — other
+ unrelated hand-edits may exist there.
+
+The full recovery workflow (commands + log signatures to look for) lives in
+`docs/ai-context/DEBUGGING.md` under "Deploy queue: confirming a fix
+actually shipped".
 
 ## Forbidden commands on production
 
