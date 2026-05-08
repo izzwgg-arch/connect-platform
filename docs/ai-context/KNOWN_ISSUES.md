@@ -476,8 +476,9 @@ When you find a new fragile area, add it here.
   only on **`127.0.0.1:8757`** (installer default). Connect uses **`PBX_ROUTE_HELPER_BASE_URL`** from
   another host, so TCP never connects. Fix **`CONNECT_PBX_HELPER_BIND`** in **`/etc/connect-pbx-helper.env`**
   to **`0.0.0.0`** or a **NIC IP** (address **only** — do not use **`0.0.0.0:8757`**; port stays in
-  **`CONNECT_PBX_HELPER_PORT`**), restart **`connect-pbx-helper`**, allow **tcp/8757** from the **app host
-  IP only** (`DEPLOYMENT.md` § listen bind). **Not** a Python patch.
+  **`CONNECT_PBX_HELPER_PORT`**), restart **`connect-pbx-helper`**, confirm **`ss -lntp | grep 8757`**
+  shows **`0.0.0.0:8757`**, allow **tcp/8757** from the **app host IP only** (`DEPLOYMENT.md` § listen bind).
+  **Not** a Python patch.
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
