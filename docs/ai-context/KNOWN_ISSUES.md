@@ -502,7 +502,8 @@ When you find a new fragile area, add it here.
   helper **`2026.05.08.2`+** and **api** deploy, the same stream endpoint tries Vital/REST first, then
   **`POST /voicemail/spool/audio`** (validated **`tenantId` / extension / folder / msgNum`** only — no
   client paths). Success → real audio bytes (`TELEPHONY.md`). Helper pre-**`2026.05.08.2`** → audio route **404**,
-  API still **`503` JSON**.
+  API still **`503` JSON**. **Partial rollout:** **api** may run Phase 2 while **`/health`** is still **`2026.05.08.1`**
+  — install helper **`2026.05.08.2`** before expecting spool audio fallback (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
   via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a

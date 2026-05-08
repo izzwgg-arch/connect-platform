@@ -436,6 +436,8 @@ Per-service:
       On-PBX smoke: authenticated **`POST /voicemail/spool/audio`** with JSON
       **`tenantId`**, **`extension`**, **`folder`** (`INBOX` \| `Old` \| `Urgent`), **`msgNum`**
       (`msg[0-9]+`) → **200** raw audio (`TELEPHONY.md`, **`DEPLOYMENT.md`** § Phase 2).
+      If **`/health`** is still **`2026.05.08.1`**, the audio route is absent — upgrade the helper first; **`grep helper_audio_fallback`**
+      inside **`app-api-1`** only proves **api** shipped Phase 2 (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
    10. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via
