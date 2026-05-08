@@ -256,8 +256,10 @@ Run from the **Connect app host** (same network path **api**/**worker** use), **
 | **401** | **`unauthorized`** | **`CONNECT_PBX_HELPER_SECRET`** in **`/etc/connect-pbx-helper.env`** on the PBX ≠ Connect **`PBX_ROUTE_HELPER_SECRET`**. Align (one source of truth), **`systemctl restart connect-pbx-helper.service`**. If Connect **`.env.platform`** changed, enqueue **api** then **worker** via queue. |
 | **404** | e.g. **`not_found`** | Wrong helper version or wrong host — re-check **`/health`** **`version`**. |
 
-**Recorded check (Connect app host):** **`GET http://209.145.60.79:8757/health`** → **`2026.05.08.1`** OK;
-**`POST …/spool/list`** (secret from **api** container) → **401** until PBX env is aligned — **api**/**worker** secrets **match each other** (`sha256sum` identical).
+**Recorded check (Connect app host):** **`GET http://209.145.60.79:8757/health`** → **`2026.05.08.1`** OK.
+**`POST …/spool/list`** → **401** until PBX **`CONNECT_PBX_HELPER_SECRET`** **byte-matches** Connect at
+runtime (see § **Troubleshooting: still 401**). **api**/**worker** **`PBX_ROUTE_HELPER_SECRET`** remain
+internally consistent (`sha256sum` identical in prior checks).
 
 ### Phase 1 — helper secret alignment only (401 `unauthorized`, not a version/bind issue)
 
@@ -302,6 +304,29 @@ via the deploy queue only (`AGENTS.md`) so containers reload env. Re-run the app
 Trigger or wait for **`/internal/voicemail-notify`** / worker **`voicemail-sync-cycle`**; confirm JSON includes
 **`helper_count > 0`**, **`source_used`** reflecting helper, **`upserted > 0`** when REST is empty and spool has
 mail; confirm portal/mobile **lists** show rows (`DEBUGGING.md`). Playback remains separate from Phase 1.
+
+#### Troubleshooting: **`POST …/spool/list` still 401** after editing **`/etc/connect-pbx-helper.env`**
+
+**Verify the running process actually has the new secret** (do **not** paste values into tickets):
+
+- **`systemctl show connect-pbx-helper.service -p EnvironmentFiles` / `-p ExecStart`** — confirm which env file
+  systemd loads; only edit **that** file.
+- **`grep -n '^CONNECT_PBX_HELPER_SECRET=' /etc/connect-pbx-helper.env`** — exactly **one** line; remove duplicate
+  keys or commented duplicates that confuse operators.
+- **No** surrounding **single/double quotes** in the value unless the secret itself contains characters that
+  require them — a quote stored **inside** the secret bytes will break comparison.
+- **CRLF / trailing space:** re-type the line or use **`sed`** to strip `\r` and trailing spaces; the Connect
+  side uses **`PBX_ROUTE_HELPER_SECRET`** without trailing newline in process env.
+- **`systemctl restart connect-pbx-helper.service`** then **`curl -s http://127.0.0.1:8757/health`** (still
+  **`2026.05.08.1`**) then re-test **`POST …/spool/list`** from the **app host** with the header from
+  **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** (trim with **`tr -d '\r\n'`** in shell).
+
+**Recorded verification (Connect app host):** **`GET …/health`** → **HTTP 200**, **`2026.05.08.1`** ✓.
+**`POST …/spool/list`** (secret from **api** container env, not printed) → **still HTTP 401**
+**`{"error":"unauthorized"}`** — runtime secret mismatch not yet resolved. **`app-api-1`** logs show
+**`voicemail-notify: helper fallback failed`** with **`err":"unauthorized"`** and
+**`fallback_reason":"helper_error:unauthorized"`** on the same window — E2E fallback **not** live until
+**401** clears.
 
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 

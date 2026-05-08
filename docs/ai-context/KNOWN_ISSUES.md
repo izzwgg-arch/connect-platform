@@ -485,6 +485,9 @@ When you find a new fragile area, add it here.
   **`PBX_ROUTE_HELPER_SECRET`** on **api**/**worker**. **Preferred:** set PBX line to **byte-match** Connect
   (no trailing spaces), **`systemctl restart connect-pbx-helper`** — **no** api/worker recycle needed.
   **Alternate:** update **`.env.platform`** to PBX value + queue **api**/**worker** (`DEPLOYMENT.md` § **helper secret alignment only**).
+  **Still 401 after “we fixed it”:** duplicate **`CONNECT_PBX_HELPER_SECRET=`** lines, stray quotes, CRLF,
+  or editing the wrong file — see **`DEPLOYMENT.md`** § **Troubleshooting: still 401**; **`voicemail-notify`**
+  **`helper_error:unauthorized`** matches manual app-host **`curl`** **401**.
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
