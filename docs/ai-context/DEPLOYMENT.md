@@ -212,13 +212,30 @@ That is correct for “PBX-local” smoke tests but **breaks** Connect when
 app host’s `curl` / api’s HTTP client will see **`Connection refused`** or time out even
 though **`curl -s http://127.0.0.1:8757/health`** on the PBX shows **`2026.05.08.1`**.
 
-**Fix (operator, not Python):** edit **`/etc/connect-pbx-helper.env`** on the PBX and set
-**`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (or a specific NIC IP), then
-**`systemctl restart connect-pbx-helper.service`**. Re-run **`curl -s http://127.0.0.1:8757/health`**
-→ still **`2026.05.08.1`**, then from the **Connect app host**:
-**`curl -s http://<pbx-ip>:8757/health`**. Open or adjust host firewall / security group
-so **tcp/8757** is allowed **from the app host** only (tighten source IP), not the public
-internet unless policy requires otherwise.
+**Env shape (read carefully):** **`CONNECT_PBX_HELPER_BIND`** must be a **bind address
+only** — e.g. **`0.0.0.0`** (all interfaces) or a **specific private IP** on the path to
+the Connect app host. The port is **separate**: **`CONNECT_PBX_HELPER_PORT=8757`** (already
+written by the installer). **Do not** set **`CONNECT_PBX_HELPER_BIND=0.0.0.0:8757`** (or any
+**`host:port`** in the bind variable); the helper reads host and port as two settings and a
+combined value can break startup or listening.
+
+**Phase 1 — bind + firewall checklist (operator, not Python):**
+
+1. On the **PBX**, confirm loopback: **`curl -s http://127.0.0.1:8757/health`** → **`2026.05.08.1`**.
+2. On the **PBX**, authenticated **`POST http://127.0.0.1:8757/voicemail/spool/list`** → **HTTP 200**,
+   **`ok: true`**, **`messages`** array present (may be empty).
+3. Edit **`/etc/connect-pbx-helper.env`**: set **`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (or the NIC IP
+   the app host routes to), keep **`CONNECT_PBX_HELPER_PORT=8757`**.
+4. **`systemctl restart connect-pbx-helper.service`** — re-check loopback **`/health`**.
+5. **Firewall / UFW / security group:** allow **tcp/8757** **only** from the **Connect app host**
+   source IP (and management nets if required). **Do not** leave **:8757** open to **0.0.0.0/0**
+   unless policy explicitly requires it.
+6. From the **app host**: **`curl -s http://<pbx-ip>:8757/health`** → **`2026.05.08.1`**; then
+   **`POST …/voicemail/spool/list`** with the same secret Connect uses → **200** / **`ok: true`**.
+7. If the helper secret was rotated: align **`PBX_ROUTE_HELPER_SECRET`** on the app host, then
+   enqueue **`api`** then **`worker`** via the deploy queue only (`AGENTS.md`).
+8. Confirm notify / worker logs: **`rest_count: 0`**, **`helper_count > 0`**, **`source_used`**
+   reflects helper, **`upserted > 0`** when spool has new mail and REST is empty (`DEBUGGING.md`).
 
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 

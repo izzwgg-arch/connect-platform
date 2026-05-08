@@ -475,8 +475,9 @@ When you find a new fragile area, add it here.
 - **Helper `2026.05.08.1` on loopback but app host `Connection refused`.** The service may be listening
   only on **`127.0.0.1:8757`** (installer default). Connect uses **`PBX_ROUTE_HELPER_BASE_URL`** from
   another host, so TCP never connects. Fix **`CONNECT_PBX_HELPER_BIND`** in **`/etc/connect-pbx-helper.env`**
-  (**`0.0.0.0`** or NIC IP), restart **`connect-pbx-helper`**, allow **:8757** from the app host
-  (`DEPLOYMENT.md` § listen bind). **Not** a Python patch.
+  to **`0.0.0.0`** or a **NIC IP** (address **only** — do not use **`0.0.0.0:8757`**; port stays in
+  **`CONNECT_PBX_HELPER_PORT`**), restart **`connect-pbx-helper`**, allow **tcp/8757** from the **app host
+  IP only** (`DEPLOYMENT.md` § listen bind). **Not** a Python patch.
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
