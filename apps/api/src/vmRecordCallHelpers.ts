@@ -280,3 +280,15 @@ export function greetingFileChanged(args: {
   if (args.afterUpdatedAt && args.beforeUpdatedAt && args.afterUpdatedAt !== args.beforeUpdatedAt) return true;
   return false;
 }
+
+/**
+ * Returns true for synthetic vm-record invite IDs emitted by vmRecordCallJobs.ts.
+ *
+ * These have the format "vmr-<uuidv4>" (e.g. "vmr-9469fd66-9524-4d17-bf03-08a24bba9c0d").
+ * No CallInvite DB row is created for them by design — the /respond endpoint must
+ * short-circuit for these rather than returning INVITE_ALREADY_HANDLED/UNKNOWN, which
+ * would cause the mobile to call sip.hangup() and disconnect the recording IVR.
+ */
+export function isSyntheticVmrInviteId(id: string): boolean {
+  return typeof id === "string" && id.startsWith("vmr-") && id.length > 4;
+}

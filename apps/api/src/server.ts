@@ -99,7 +99,7 @@ import {
   runVmRecordCallJob,
   type VmRecordCallDeps,
 } from "./vmRecordCallJobs";
-import { buildMobileDevicePushWhere, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
+import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 
 const MAX_DAILY_LIMIT = 10000;
@@ -12328,6 +12328,13 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
 
   const existing = await db.callInvite.findFirst({ where: { id, tenantId: user.tenantId, userId: user.sub } });
   if (!existing) {
+    // Synthetic vm-record invites (prefixed "vmr-") have no DB row by design.
+    // Returning INVITE_CLAIMED_OK lets the mobile answer pipeline proceed
+    // without calling sip.hangup() and disconnecting the recording IVR.
+    // See vmRecordCallJobs.ts comment at the synthetic INCOMING_CALL push block.
+    if (isSyntheticVmrInviteId(id) && action === "ACCEPT") {
+      return { ok: true, code: "INVITE_CLAIMED_OK" };
+    }
     return { ok: false, code: "INVITE_ALREADY_HANDLED", status: "UNKNOWN" };
   }
 

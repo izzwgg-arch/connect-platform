@@ -208,6 +208,24 @@
   - The job's public-view (`GET /voicemail/greeting/record-call/:jobId`)
     `wake` block exposes the same diagnostic fields plus
     `endpointAlreadyAvail` for portal-side debugging.
+  - **vm-record mobile answer disconnect (Phase E, 2026-05-08 fix).**
+    Symptom: user taps Answer on mobile vm-record IncomingCallScreen, call
+    disconnects within 1–2 seconds, no recording prompt is heard. API log
+    shows `POST /mobile/call-invites/vmr-<jobId>/respond` followed by a
+    rapid `sip.hangup()` from the mobile.
+    Root cause: the `/respond` endpoint returned
+    `{ code: "INVITE_ALREADY_HANDLED", status: "UNKNOWN" }` because no
+    `callInvite` DB row exists for `vmr-*` IDs (intentional design).
+    `NotificationsContext.tsx` checked `status === "ACCEPTED"` to bypass
+    the reject branch; got `"UNKNOWN"`; called `sip.hangup()`.
+    Fix: `server.ts` `/respond` now returns `{ ok: true, code: "INVITE_CLAIMED_OK" }`
+    for `vmr-*` ACCEPT requests. See `KNOWN_ISSUES.md` § "Phase E".
+    If this regression reappears, look for the log line:
+    `[ANSWER_PIPELINE] CLAIM_DONE code=INVITE_ALREADY_HANDLED`
+    immediately after `CLAIM_START` on the mobile logcat. That pattern
+    means the short-circuit is not firing — verify the API is on the
+    post-Phase-E deploy and that `isSyntheticVmrInviteId` is exported
+    from `vmRecordCallHelpers.ts`.
 - **Trace dumps committed at root**: `trace3.txt` … `trace15-gap.txt`,
   `logcat-cancel.txt`. These are historical; recapture when investigating.
 - **Android incoming call UI — Phase D (2026-05-07).**

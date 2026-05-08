@@ -226,6 +226,15 @@
      mobile wake push uses `includeInactiveDevices: true` to include
      heartbeat-deactivated rows. See
      `docs/ai-context/MOBILE_CALL_TIMELINE.md`.
+  Phase E (vm-record synthetic invite claim fix, 2026-05-08): when the mobile
+  taps Answer on a vm-record IncomingCallScreen, the answer pipeline calls
+  `POST /mobile/call-invites/:id/respond` with the synthetic `vmr-<jobId>` ID.
+  The `/respond` handler now returns `{ ok: true, code: "INVITE_CLAIMED_OK" }`
+  for `vmr-*` IDs (no DB row required) instead of rejecting with
+  `INVITE_ALREADY_HANDLED / UNKNOWN`. Without this, the mobile called
+  `sip.hangup()` immediately after the user tapped Answer, disconnecting
+  the SIP call before the recording IVR could bridge. See
+  `KNOWN_ISSUES.md` § "Phase E" for full root cause.
   Phase D (browser Answer-button bug — desktop WebRTC sometimes does
   not send SIP 200 OK) is still open and is portal-side, NOT a PBX
   flow concern.

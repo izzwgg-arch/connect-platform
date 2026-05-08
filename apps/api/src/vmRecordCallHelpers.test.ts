@@ -7,6 +7,7 @@ import {
   decideVmRecordWake,
   greetingFileChanged,
   isDirectPjsipChannelSource,
+  isSyntheticVmrInviteId,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
   validateCallerSipEndpoint,
@@ -257,4 +258,31 @@ test("greetingFileChanged inactive to active", () => {
     }),
     true,
   );
+});
+
+// ── isSyntheticVmrInviteId ────────────────────────────────────────────────
+
+test("isSyntheticVmrInviteId accepts canonical vmr- UUID", () => {
+  assert.equal(isSyntheticVmrInviteId("vmr-9469fd66-9524-4d17-bf03-08a24bba9c0d"), true);
+});
+
+test("isSyntheticVmrInviteId accepts any non-empty vmr- string", () => {
+  assert.equal(isSyntheticVmrInviteId("vmr-abc"), true);
+});
+
+test("isSyntheticVmrInviteId rejects bare 'vmr-' prefix with nothing after", () => {
+  assert.equal(isSyntheticVmrInviteId("vmr-"), false);
+});
+
+test("isSyntheticVmrInviteId rejects normal callInvite cuid", () => {
+  assert.equal(isSyntheticVmrInviteId("cmow812ne01ksn94cl3veyuy3"), false);
+});
+
+test("isSyntheticVmrInviteId rejects empty string", () => {
+  assert.equal(isSyntheticVmrInviteId(""), false);
+});
+
+test("isSyntheticVmrInviteId rejects non-vmr- prefix with similar chars", () => {
+  assert.equal(isSyntheticVmrInviteId("vm-record-abc"), false);
+  assert.equal(isSyntheticVmrInviteId("VMR-abc"), false);
 });

@@ -297,35 +297,63 @@ When you find a new fragile area, add it here.
     `T21_101 = test-voicemail`; after recording,
     `ls /var/spool/asterisk/voicemail/test-voicemail/101/unavail.wav`
     should exist with a recent mtime.
-  - **Phase D (2026-05-07) — Android native phone UI replaced by Connect
-    IncomingCallScreen. DEPLOYED.**
-    Root cause: `TelecomBridge.startIncomingCall()` dispatched a
-    `CAPABILITY_SELF_MANAGED` Android Telecom connection for every
-    non-foregrounded incoming call. Samsung One UI (and other OEMs) rendered
-    this as a full-screen native dialer UI that appeared BEFORE the PBX had
-    dialled and before JsSIP received the SIP INVITE. Users who answered
-    there encountered a silent failure: `handleAcceptInvite()` →
-    `jssip.answerIncoming()` polls for the SIP session up to 8 s — if the
-    WebSocket was stale or SIP registration was slow, no INVITE ever arrived
-    and the call timed out while the OS showed a spurious active-call timer.
-    The Connect `IncomingCallScreen` only renders after `newRTCSession` fires,
-    so its answer tap always finds an existing session.
-    Fix: `TelecomBridge.startIncomingCall()` is bypassed via an
-    `if (false)` guard in `IncomingCallFirebaseService.handleIncomingCallNative()`.
-    All non-foregrounded presentations now use the existing CallStyle
-    notification + full-screen-intent path (`launchIncomingCallUi`), which
-    launches `MainActivity` → Connect `IncomingCallScreen` as the sole answer
-    surface. `ConnectConnectionService` / `ConnectIncomingConnection` /
-    `TelecomBridge` are retained for rollback.
-    Technical debt: if a future Android OS version completely blocks FSI for
-    VoIP apps (currently still allowed via `CATEGORY_CALL` + the
-    `USE_FULL_SCREEN_INTENT` permission), re-evaluate re-enabling Telecom
-    with a fix for the answer-race (e.g., `onShowIncomingCallUi()` launching
-    `MainActivity` so Connect UI overlays the Telecom system card).
-    Verify: install APK → incoming call while locked/home/in another app →
-    only Connect-branded UI appears, no Samsung/dialer-style screen →
-    tap Answer → call connects → `adb logcat | grep CALL_INCOMING` shows
-    `telecom_dispatch skipped (disabled)` and `NATIVE_NOTIFICATION_POSTED`.
+  - **Phase D (2026-05-07) — disabled Telecom dispatch. SUPERSEDED by Phase 1.**
+    Phase D disabled `TelecomBridge.startIncomingCall()` via an `if (false)`
+    guard to remove the Samsung native phone UI race condition (see root cause
+    below). This created a regression: the FSI/CallStyle-only path requires
+    `USE_FULL_SCREEN_INTENT` runtime permission and is blocked by Android 14/15+
+    OEM battery/power managers. Incoming calls on Samsung / killed app showed
+    no visual UI on lock or home screen. Phase D was the correct diagnosis of
+    the *answer* race but the wrong fix (removing Telecom entirely).
+  - **Phase E (vm-record synthetic invite claim — 2026-05-08). DEPLOYED.**
+    Root cause: when the mobile taps Answer on a vm-record IncomingCallScreen the
+    answer pipeline calls `POST /mobile/call-invites/:id/respond` with the synthetic
+    `vmr-<jobId>` invite ID. No `callInvite` DB row exists for `vmr-*` by design
+    (see `vmRecordCallJobs.ts` comment at line 485). The `/respond` handler returned
+    `{ ok: false, code: "INVITE_ALREADY_HANDLED", status: "UNKNOWN" }` for any
+    not-found invite. `NotificationsContext.tsx` treats that as a backend rejection
+    and calls `sip.hangup()`, immediately disconnecting the SIP call before the
+    recording IVR could bridge.
+    Fix: in `server.ts` `/respond` handler (after the DB lookup), if `existing` is
+    null AND `isSyntheticVmrInviteId(id)` is true AND `action === "ACCEPT"`, return
+    `{ ok: true, code: "INVITE_CLAIMED_OK" }`. This lets the mobile answer pipeline
+    proceed to bridge the SIP session with the recording IVR.
+    `isSyntheticVmrInviteId` is a pure helper exported from `vmRecordCallHelpers.ts`,
+    covered by 6 unit tests. All other `/respond` behavior (normal callInvite lookup,
+    DECLINE handling, rate-limit, TURN/media gates) is unchanged.
+    Verify: trigger Call-to-Record, tap Answer on mobile — call should stay connected
+    past 2 s; user hears recording prompt or beep; `sizeBytes > 0` after save.
+  - **Phase 1 (2026-05-07) — Telecom re-enabled, answer race fixed. IMPLEMENTED,
+    NOT YET DEPLOYED.**
+    Root cause of the original Phase D answer failure: `ConnectIncomingConnection
+    .onAnswer()` called `setActive()` immediately, before the SIP session
+    existed. This showed an OS in-call timer with no audio on Samsung and timed
+    out when `jssip.answerIncoming()` polled for a session that hadn't arrived.
+    **Fix — three changes:**
+    1. `ConnectIncomingConnection.onAnswer()`: `setActive()` removed entirely.
+       A 15 s safety watchdog is armed instead; it terminates the Connection
+       if JS never confirms the answer result.
+    2. `ConnectIncomingConnection.markActive()`: now the ONLY path to
+       `setActive()`. Called by JS via `NativeModules.IncomingCallUi
+       .telecomMarkActive(inviteId)` after `sip.answerIncomingInvite()` succeeds.
+    3. `NotificationsContext.tsx Telecom.Answer handler`: cold-start invite
+       resolution retry extended from 250 ms (too short) to a 4 s polling loop
+       (200 ms intervals). After `handleAcceptInvite()` resolves successfully,
+       `markTelecomActive(inviteId)` is called to trigger `setActive()`.
+       On failure/exception, `terminateTelecomCall(inviteId, "other")` cleans
+       up the Connection.
+    `IncomingCallFirebaseService.handleIncomingCallNative()` now attempts
+    Telecom dispatch for all non-foregrounded states (`!appInForeground`).
+    Falls back transparently to the FSI/CallStyle path if the PhoneAccount
+    is not enabled or `addNewIncomingCall()` throws.
+    **Known Phase 1 tradeoff:** on Samsung One UI, both the Samsung native phone
+    call UI and the Connect CallStyle notification appear simultaneously. Both
+    surfaces now correctly connect the SIP call. Phase 2 will add
+    Samsung-path awareness to suppress the duplicate.
+    Verify: `adb logcat | grep CALL_INCOMING` shows `telecom_dispatch result=true`
+    → user taps Answer on Samsung native UI → `[TELECOM] onAnswer` in JS →
+    4 s invite poll → `[ANSWER_PIPELINE] SIP_200OK_SENT` → `markTelecomActive`
+    → `[ConnectIncomingConn] markActive` → OS shows in-call timer.
   - **Open: Phase E (browser Answer button).** Desktop WebRTC rings
     but `session.answer()` never emits a SIP `200 OK` — the browser
     sends `480 Temporarily Unavailable` ~22s later. SIP-over-WSS
