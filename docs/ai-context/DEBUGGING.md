@@ -528,6 +528,19 @@ deploy, then re-enqueue the deploy job. Do **not** wholesale-reset the
 clone — other unrelated hand-edits may also exist there
 (`KNOWN_ISSUES.md` lists the known ones).
 
+**Worked example (voicemail ingest incidents, 2026-05-08):** `api` job
+`465e0ebd-3d82-4d41-9021-0cb1093cb4a6` and `worker` job
+`84e4b8d8-2d6d-434b-92d3-3a34d79548ec` targeting `55e9c20`. Each log’s last
+line matched `[deploy-(api|worker)] done 55e9c20 requested_by=…`. The `api`
+log showed `Applying migration 20260508183000_voicemail_ingest_incidents` and
+`All migrations have been successfully applied`; host `curl
+http://127.0.0.1:3001/health` returned `200`. In-container
+`grep /admin/voicemail-ingest/incidents` on `apps/api/src/server.ts` matched
+the new routes. Worker logs showed normal `voicemail-sync-cycle` JSON lines
+after restart; `grep recordWorkerSyncGlobalZero` / `recordHelperIncident` on
+`apps/worker/src/main.ts` confirmed incident hooks. Both jobs’ `git-sync`
+still listed `M apps/telephony/.../CallStateStore.ts` — see `KNOWN_ISSUES.md`.
+
 ---
 
 ## PBX debugging notes (documentation only — do not run mutating commands)

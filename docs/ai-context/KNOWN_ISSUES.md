@@ -129,6 +129,11 @@ When you find a new fragile area, add it here.
   Until then, treat any deploy whose change-set touches
   `CallStateStore.ts` as a tripwire — verify the commit landed by reading
   the file inside `app-telephony-1` after deploy.
+  **2026-05-08:** real `api` + `worker` jobs shipping `55e9c20` still printed
+  `M apps/telephony/src/telephony/state/CallStateStore.ts` in `git-sync` right
+  after `HEAD is now at 55e9c20` — checkout succeeded, but the uncommitted
+  telephony edit in the shared clone is still present; clean it up when it
+  blocks a future checkout (see `AGENTS.md` / `DEBUGGING.md` deploy recovery).
 - **`connect-dial-with-wake` wake-skip OR-bug** (open, latent — confirmed by
   reading the dialplan source on 2026-05-06; **NOT yet proven to have caused
   any specific failed test call**). In
