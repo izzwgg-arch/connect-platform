@@ -104,3 +104,44 @@ export async function listVoicemailSpoolFromHelper(
   }
   return parsed as VoicemailSpoolListResponse;
 }
+
+export type VoicemailSpoolAudioBody = {
+  tenantId: string;
+  extension: string;
+  folder: "INBOX" | "Old" | "Urgent";
+  msgNum: string;
+  voicemailContext?: string;
+};
+
+/** Stream one voicemail message file from Asterisk spool via on-PBX helper (raw audio). */
+export async function fetchVoicemailSpoolAudioFromHelper(
+  cfg: PbxRouteHelperConfig,
+  body: VoicemailSpoolAudioBody,
+  timeoutMs = 90_000,
+): Promise<{ contentType: string; buffer: ArrayBuffer }> {
+  const resp = await fetch(`${cfg.baseUrl}/voicemail/spool/audio`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-connect-pbx-helper-secret": cfg.secret,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const buf = await resp.arrayBuffer();
+  if (!resp.ok) {
+    let parsed: { error?: string; message?: string } | null = null;
+    try {
+      const text = new TextDecoder().decode(buf.slice(0, 8192));
+      parsed = text ? (JSON.parse(text) as { error?: string; message?: string }) : null;
+    } catch {
+      parsed = null;
+    }
+    const detail = parsed?.error || parsed?.message || `HTTP ${resp.status}`;
+    const err: Error & { httpStatus?: number } = new Error(String(detail));
+    err.httpStatus = resp.status;
+    throw err;
+  }
+  const contentType = resp.headers.get("content-type") || "audio/wav";
+  return { contentType, buffer: buf };
+}

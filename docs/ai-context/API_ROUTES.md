@@ -260,6 +260,9 @@ Breakdown by sub-prefix (count / approximate scope):
 **Purpose:** mailbox listing, greeting upload/download, voicemail playback. Distinct from `/voice/voicemail/*` admin endpoints.
 **Auth requirements:** JWT.
 **Risk:** **HIGH** — touches recordings and audio assets per-tenant.
+**Playback:** `GET /voice/voicemail/:id/stream` and `GET /voice/voicemail/:id/download` (`apps/api/src/server.ts`,
+`streamVoicemailAudio`) — VitalPBX **`pbxRecfile`** / REST first; **Phase 2** may call on-PBX **`POST /voicemail/spool/audio`**
+and log **`helper_audio_fallback: true`** (`TELEPHONY.md`).
 
 ---
 
@@ -302,17 +305,25 @@ Breakdown by sub-prefix (count / approximate scope):
 **On-PBX helper (not in `server.ts`):** `POST /voicemail/spool/list` — HMAC header
 `x-connect-pbx-helper-secret` (must match **`CONNECT_PBX_HELPER_SECRET`** on the PBX and
 **`PBX_ROUTE_HELPER_SECRET`** in Connect); JSON body `tenantId`, `extension`, optional `voicemailContext`
-/ `context`. Read-only; lists `msg*.txt` under `INBOX` / `Old` / `Urgent`. Installed by
-`scripts/pbx/install-vitalpbx-inbound-route-helper.sh` (**pinned commit** **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** — run the script; **do not** hand-edit helper Python on the PBX). **404** = helper older than **`2026.05.08.1`**;
+/ `context`. Read-only; lists `msg*.txt` under `INBOX` / `Old` / `Urgent`. **`POST /voicemail/spool/audio`**
+(helper **`2026.05.08.2`+`): same HMAC; JSON **`tenantId`**, **`extension`**, **`folder`** (`INBOX` \| `Old` \| `Urgent`),
+**`msgNum`** (`^msg[0-9]+$`), optional **`voicemailContext`**. Returns **raw audio** (**`audio/wav`**) on **200**;
+**400** / **404** JSON for validation / missing file — **server-to-server only**; never exposed to mobile/portal.
+Connect **api** calls this from **`streamVoicemailAudio`** after VitalPBX **`pbxRecfile`** / REST fails (`TELEPHONY.md`).
+Installed by
+`scripts/pbx/install-vitalpbx-inbound-route-helper.sh` (**pinned commit** **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** — run the script; **do not** hand-edit helper Python on the PBX). **`/spool/list` 404** = helper older than **`2026.05.08.1`**;
+**`/spool/audio` 404** = route missing (helper pre-**`2026.05.08.2`**);
 **401** = wrong secret (**`CONNECT_PBX_HELPER_SECRET`** on PBX ≠ **`PBX_ROUTE_HELPER_SECRET`** on Connect);
 can occur even when **`GET /health`** returns **`2026.05.08.1`** from the app host. **Preferred fix:** PBX env
 follows Connect (**no** queue recycle); **alternate:** update Connect **`.env.platform`** + queue **api**/**worker**
 (`DEPLOYMENT.md` § **helper secret alignment only**). If **401** persists after an edit, see **`DEPLOYMENT.md`**
 § **Troubleshooting: still 401** and § **Secret mismatch fingerprints** — **`/internal/voicemail-notify`** logs
-**`helper_error:unauthorized`** the same way as manual app-host **`curl`**.
+**`helper_error:unauthorized`** the same way as manual app-host **`curl`**. After alignment, manual **`POST`** from
+the app host returns **200** with **`ok: true`** (see **`DEPLOYMENT.md`** recorded verification); **worker** logs
+may show **`source_used":"helper"`** on **`voicemail-sync-cycle`**.
 **Connection refused** from the Connect app host (while PBX loopback `/health` works) = helper bind / firewall — see **`DEPLOYMENT.md`** § **listen bind** (**`CONNECT_PBX_HELPER_BIND`** = address only, **`CONNECT_PBX_HELPER_PORT=8757`**; not Python edits). Restrict **:8757** to the app host.
 End-to-end checklist: **`DEPLOYMENT.md`** § **Phase 1 — production verification (A–G)**.
-Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Proof format:** **`DEPLOYMENT.md`** Phase 1 **operator execution transcript** (HTTP status, `ok`, counts, deploy job IDs, **no** secrets). Helper HTTP contract is unchanged when upgrading **`2026.05.07.x` → `2026.05.08.1`**; only availability of **`POST /voicemail/spool/list`** and aligned **`x-connect-pbx-helper-secret`** matter. IDE agents cannot typically reach PBX SSH or app-host **`:3910`** — **`DEPLOYMENT.md`** § **execution environment**.
+Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Proof format:** **`DEPLOYMENT.md`** Phase 1 **operator execution transcript** (HTTP status, `ok`, counts, deploy job IDs, **no** secrets). Upgrading **`2026.05.07.x` → `2026.05.08.1`** adds **`POST /voicemail/spool/list`**; **`2026.05.08.2`** also adds **`POST /voicemail/spool/audio`** for api playback fallback. Aligned **`x-connect-pbx-helper-secret`** is required for all helper POSTs. IDE agents cannot typically reach PBX SSH or app-host **`:3910`** — **`DEPLOYMENT.md`** § **execution environment**.
 
 ---
 

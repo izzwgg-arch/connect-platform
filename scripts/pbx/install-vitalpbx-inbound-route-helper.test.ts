@@ -232,3 +232,15 @@ test("helper installer registers read-only voicemail spool list endpoint", () =>
   assert.match(SCRIPT, /def vm_spool_list_messages/, "vm_spool_list_messages must be defined");
   assert.match(SCRIPT, /MAX_VM_SPOOL_MESSAGES/, "spool list must cap message count");
 });
+
+test("helper installer defines Phase 2 voicemail spool audio endpoint and validation", () => {
+  assert.match(
+    SCRIPT,
+    /path == "\/voicemail\/spool\/audio"/,
+    "do_POST must branch for POST /voicemail/spool/audio (binary response)",
+  );
+  assert.match(SCRIPT, /def vm_spool_read_audio\(/, "vm_spool_read_audio must be defined");
+  assert.match(SCRIPT, /VM_SPOOL_AUDIO_FOLDERS/, "spool audio must use folder allowlist");
+  assert.match(SCRIPT, /MSG_NUM_STEM_RE/, "spool audio must validate msg stem");
+  assert.match(SCRIPT, /MAX_VM_SPOOL_AUDIO_BYTES/, "spool audio must cap read size");
+});

@@ -149,7 +149,7 @@ Host-side directories also referenced:
 
 - The Python helper under `/opt/connect-pbx-helper/` is installed/updated by
   `scripts/pbx/install-vitalpbx-inbound-route-helper.sh` on the **PBX host** (root).
-  New HTTP routes (e.g. Phase 1 `POST /voicemail/spool/list`, helper `VERSION` `2026.05.08.1`+)
+  New HTTP routes (e.g. Phase 1 `POST /voicemail/spool/list`, Phase 2 `POST /voicemail/spool/audio`, helper `VERSION` `2026.05.08.2`+)
   ship with that script, **not** with the api/worker Docker images. After pulling repo changes
   that touch the installer, an operator must re-run the installer on the PBX to refresh
   `vitalpbx-inbound-route-helper.py` and restart `connect-pbx-route-helper` (systemd unit
@@ -170,6 +170,19 @@ Order of operations:
 7. **End-to-end:** trigger `POST /internal/voicemail-notify` (or leave a test voicemail and wait for AMI `MessageWaiting`). Expect logs with `rest_count = 0`, `helper_count > 0`, `source_used` reflecting helper path, `upserted > 0` when REST is empty but spool has messages.
 8. **UI:** confirm new rows in web/mobile voicemail **lists**. **Do not** claim playback is fixed — Phase 1 is ingestion/list visibility only (`KNOWN_ISSUES.md`).
 
+### Voicemail Phase 2 — spool playback (api + helper `2026.05.08.2`+)
+
+**Goal:** `GET /voice/voicemail/:id/stream` (and `/download`) return real audio for spool-ingested rows when VitalPBX **`pbxRecfile`** / REST is missing or broken — **no** mobile/portal URL change.
+
+**Order:**
+
+1. **PBX:** Re-run pinned **`install-vitalpbx-inbound-route-helper.sh`** from the commit that ships Phase 2 (embeds helper **`VERSION` `2026.05.08.2`**). Restart **`connect-pbx-helper.service`**. **`GET /health`** must report **`2026.05.08.2`** (or newer).
+2. **Smoke (PBX loopback):** authenticated **`POST http://127.0.0.1:8757/voicemail/spool/audio`** with JSON **`tenantId`**, **`extension`**, **`folder`** (`INBOX` \| `Old` \| `Urgent`), **`msgNum`** matching **`msg[0-9]+`** for a message that exists on disk → **200**, **`Content-Type: audio/wav`**, binary body (not JSON). **400/404** = validation or missing file (expected for bad probes).
+3. **Deploy queue:** enqueue **`api`** only (Phase 2 logic lives in **`streamVoicemailAudio`**). Worker/telephony unchanged for this slice.
+4. **Verify:** for a known spool-backed voicemail id, **`GET /voice/voicemail/:id/stream?token=…`** → **200**, audio content-type; **API** logs may show **`voicemail: helper_audio_fallback`** with **`helper_audio_fallback: true`**.
+
+**Rollback:** Re-enqueue **api** to the prior SHA. Helper may stay on **`2026.05.08.2`** (audio route is harmless if unused) or restore prior installer only if ops requires it.
+
 **Rollback (wave 1):** Re-enqueue `api`, `worker`, and `telephony` each pinned to the **previous known-good commit SHA** (same deploy queue, no manual docker). PBX helper: keep `2026.05.08.1` (read-only list) or restore the prior helper script from backup only if the new endpoint causes operational issues — coordinate with ops; do not delete voicemail files.
 
 **Production check-in (2026-05-08):** Deploy queue shipped **`api` → `worker` → `telephony`** for commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** (`feat/voicemail-phase1-spool-ingestion`). Each job log ended with **`[deploy-*] done cf4a1f6`** and health checks passed. **`PBX_ROUTE_HELPER_*`** is present in api/worker containers. A follow-up HTTP check from the app host to **`http://<pbx>:8757/health`** still returned helper **`2026.05.07.1`** until the PBX installer from that commit is re-run — below **`2026.05.08.1`**, `POST /voicemail/spool/list` is absent (404 / `not_found`) and ingestion behaves REST-only. **Operator action:** run `bash install-vitalpbx-inbound-route-helper.sh` on the PBX as root, then re-check `/health` and spool list (`DEBUGGING.md`).
@@ -181,7 +194,7 @@ Do **not** manually edit **`/opt/connect-pbx-helper/vitalpbx-inbound-route-helpe
 installs. The **only** supported upgrade is: download **`install-vitalpbx-inbound-route-helper.sh`**
 from **`origin` at a pinned commit** (Phase 1 pin: **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**),
 then run **`bash …/install-vitalpbx-inbound-route-helper.sh`**, which installs the
-embedded **`VERSION` `2026.05.08.1`** helper and manages **`connect-pbx-helper.service`**.
+embedded helper (**`VERSION` `2026.05.08.2`** as of Phase 2 — includes spool list + spool audio) and manages **`connect-pbx-helper.service`**.
 
 If **`curl -s http://127.0.0.1:8757/health`** still shows **`2026.05.07.x`** after you
 believe the installer ran, the **running** process did not pick up the new tree (bad
@@ -417,11 +430,13 @@ systemctl show connect-pbx-helper.service -p FragmentPath -p DropInPaths -p Envi
 | All three **sha256** match but **HTTP 401** | Rare — capture request headers at helper (redacted) or inspect helper auth code path (`install-vitalpbx-inbound-route-helper.sh` embedded Python). |
 
 **Recorded verification (Connect app host):** **`GET …/health`** → **HTTP 200**, **`2026.05.08.1`** ✓.
-**`POST …/spool/list`** (secret from **api** container env, not printed) → **still HTTP 401**
-**`{"error":"unauthorized"}`** — runtime secret mismatch not yet resolved. **`app-api-1`** logs show
-**`voicemail-notify: helper fallback failed`** with **`err":"unauthorized"`** and
-**`fallback_reason":"helper_error:unauthorized"`** on the same window — E2E fallback **not** live until
-**401** clears.
+**`POST …/spool/list`** (secret from **api** container, **`printf %s`**, not logged) → **HTTP 200**,
+**`ok: true`**, large **`messages`** array (tenant **`8`** / ext **`101`** probe) — helper **auth** and **route**
+reachable from Connect after **`CONNECT_PBX_HELPER_SECRET`** alignment on PBX.
+**`app-worker-1`** **`voicemail-sync-cycle`** then showed **`helper_count` > 0**, **`source_used":"helper"`**,
+**`upserted_count` > 0**, **`fallback_reason":"rest_empty_used_spool_fallback"`** (proof of Phase 1 fallback).
+**`app-api-1`** **`/internal/voicemail-notify`** lines shortly before may still show **`helper_error:unauthorized`**
+from events **prior** to alignment — re-check **`docker logs app-api-1 --since 5m`** after a new AMI/notify.
 
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 

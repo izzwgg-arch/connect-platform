@@ -214,10 +214,21 @@
   (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in
   `DEPLOYMENT.md` under **Voicemail Phase 1 — staged rollout**.
   **Copy/paste operator runbook** (upgrade helper on **`209.145.60.79`**, rotate secret, queue **api**/**worker**): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Post-run evidence:** strict paste-back template **`DEPLOYMENT.md`** Phase 1 **operator execution transcript**. Execution requires PBX + app-host SSH / env access — see **`DEPLOYMENT.md`** § **Phase 1 — execution environment (Cursor / local dev)** for why IDE agents cannot finish this alone.
-- **Helper version gate.** Spool fallback is inactive until the on-PBX helper reports
+- **Phase 2 spool playback (2026-05-08).** Spool-ingested rows often store **`pbxRecfile`**
+  as an on-disk path, not a VitalPBX **`/static/...`** URL — **`GET /voice/voicemail/:id/stream`**
+  and **`/download`** would **`503`** with JSON. **API** (`streamVoicemailAudio` in `apps/api/src/server.ts`)
+  still tries VitalPBX **`pbxRecfile`** + REST refresh first; if that fails and the row has
+  **`pbxMsgNum`** (`msg[0-9]+` pattern) + folder fields, it calls the helper
+  **`POST /voicemail/spool/audio`** (same HMAC as list). The helper returns **raw `audio/wav`**
+  bytes only; clients keep the same URLs (no mobile/portal change). Requires helper
+  **`VERSION` `2026.05.08.2`+** (`DEPLOYMENT.md` § **Phase 2**). Client-facing responses must never
+  echo PBX absolute paths.
+- **Helper version gate.** Spool **ingestion** fallback is inactive until the on-PBX helper reports
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
   leave `helper_calls` at `0` until the installer is upgraded (`DEPLOYMENT.md` production check-in).
+  **Phase 2 playback** needs **`2026.05.08.2`+** ( **`POST /voicemail/spool/audio`** ); older helpers
+  return **404** for that path and the API keeps the prior **`503`** JSON behavior.
   **Never** hand-edit **`vitalpbx-inbound-route-helper.py`** (or other helper Python) on
   the PBX — only re-run **`install-vitalpbx-inbound-route-helper.sh`** from git at the
   release pin (**`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** for Phase 1). If `/health`
@@ -234,8 +245,10 @@
   in **`/etc/connect-pbx-helper.env`** to the **exact** **`PBX_ROUTE_HELPER_SECRET`** (no trailing whitespace),
   restart **`connect-pbx-helper`** (`DEPLOYMENT.md` § **helper secret alignment only**). **Do not** paste secrets into chat.
   If **401** remains, use **`DEPLOYMENT.md`** § **Troubleshooting: still 401** (duplicate keys, quotes, CRLF,
-  wrong env file for systemd). Use **`DEPLOYMENT.md`** § **Secret mismatch fingerprints** to compare **Connect**
+  wrong env file for systemd).   Use **`DEPLOYMENT.md`** § **Secret mismatch fingerprints** to compare **Connect**
   vs **PBX file** vs **PBX runtime** **`sha256`** without printing the secret.
+  After alignment, **app-host** **`POST …/spool/list`** **HTTP 200** confirms auth; **worker**
+  **`voicemail-sync-cycle`** with **`source_used":"helper"`** confirms ingestion fallback (**`DEPLOYMENT.md`** recorded verification).
 - **Helper host = `PBX_ROUTE_HELPER_BASE_URL`.** Production traffic uses whatever base URL is in **api/worker**
   env (and optional **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**). That host must be the same machine where
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a

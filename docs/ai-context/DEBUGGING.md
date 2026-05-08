@@ -402,6 +402,8 @@ Per-service:
       client still sees **401** — same root cause as manual **`curl`** from the app host.
       **Fingerprint without pasting secrets:** app-host **`docker exec`** length + **`sha256sum`**, PBX **`/etc/connect-pbx-helper.env`**
       + **`/proc/<pid>/environ`** same — **`DEPLOYMENT.md`** § **Secret mismatch fingerprints**.
+      When fixed, **`POST …/spool/list`** → **200**; worker JSON may show **`helper_count` > 0** and
+      **`fallback_reason":"rest_empty_used_spool_fallback"`** (**`DEPLOYMENT.md`** recorded verification).
    3. **Super-admin incidents** — open **`VoicemailIngestIncident`** rows (helper errors, notify upsert zero, worker global zero, REST vs spool) appear in **`GET /admin/ops-center`** and **`GET /admin/incidents`**, with detail/ack at **`GET/POST /admin/voicemail-ingest/incidents*`** (`API_ROUTES.md`). Disable emission with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED=false`** on **api** + **worker** if needed for rollback.
    4. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
       IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`
@@ -427,7 +429,13 @@ Per-service:
    9. **Playback** — for `src_unsupported` / cannot play: hit
       `GET /voice/voicemail/:id/stream?token=...` with curl `-I` and inspect status,
       `Content-Type`, and body size. `503` + JSON means upstream audio/recfile failure,
-      not a client codec limitation alone.
+      not a client codec limitation alone. After **Phase 2** (helper **`2026.05.08.2`+**, **api**
+      deployed), successful **spool fallback playback** returns **`200`**, **`Content-Type: audio/*`**
+      (often **`audio/mpeg`** after transcode). **API** logs may include
+      **`voicemail: helper_audio_fallback`** with **`helper_audio_fallback: true`** (no paths).
+      On-PBX smoke: authenticated **`POST /voicemail/spool/audio`** with JSON
+      **`tenantId`**, **`extension`**, **`folder`** (`INBOX` \| `Old` \| `Urgent`), **`msgNum`**
+      (`msg[0-9]+`) → **200** raw audio (`TELEPHONY.md`, **`DEPLOYMENT.md`** § Phase 2).
    10. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via

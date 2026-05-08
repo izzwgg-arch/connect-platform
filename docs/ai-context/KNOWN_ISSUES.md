@@ -489,25 +489,29 @@ When you find a new fragile area, add it here.
   or editing the wrong file — see **`DEPLOYMENT.md`** § **Troubleshooting: still 401**; **`voicemail-notify`**
   **`helper_error:unauthorized`** matches manual app-host **`curl`** **401**. Prove where bytes diverge with
   **`DEPLOYMENT.md`** § **Secret mismatch fingerprints** (Connect **`docker exec`** vs PBX file vs **`/proc/…/environ`**).
+  When aligned, app-host **`POST …/voicemail/spool/list`** → **200** **`ok: true`**; **worker** **`voicemail-sync-cycle`**
+  may show **`source_used":"helper"`** and **`helper_count` > 0** (**`DEPLOYMENT.md`** recorded verification).
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
   (and per-instance helper JSON if used), **`systemctl restart connect-pbx-helper`**, then
   restart **api** and **worker** via approved process (`DEPLOYMENT.md` § compromised secret).
-- **Spool fallback vs playback.** Phase 1 ingestion can create/update rows from disk
-  metadata while `pbxRecfile` stays empty if the helper did not derive a usable file
-  URL; `GET /voice/voicemail/:id/stream` may still 503 until REST returns `recfile` or
-  a later Phase implements streaming from spool. Not a regression of list ingestion, but
-  user-visible playback can remain broken until VitalPBX REST or playback fallback catches up.
+- **Spool fallback vs playback.** Phase 1 ingestion can store **`pbxRecfile`** as a PBX
+  **absolute spool path** (or leave it empty) while list metadata is correct. **`GET /voice/voicemail/:id/stream`**
+  historically joined that path to Vital **`baseUrl`** and failed. **Phase 2 (2026-05-08):** after
+  helper **`2026.05.08.2`+** and **api** deploy, the same stream endpoint tries Vital/REST first, then
+  **`POST /voicemail/spool/audio`** (validated **`tenantId` / extension / folder / msgNum`** only — no
+  client paths). Success → real audio bytes (`TELEPHONY.md`). Helper pre-**`2026.05.08.2`** → audio route **404**,
+  API still **`503` JSON**.
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
-  via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows `pbxRecfile` (often
-  a VitalPBX `/static/...` URL) or refreshes metadata via `getExtensionVoicemailRecords`.
-  If that refresh returns no rows, or the static URL is expired/404, the handler returns
-  **`503` JSON** (`audio_unavailable`, `audio_fetch_failed`) — not audio bytes. Clients
+  via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a
+  VitalPBX **`/static/...`** or **https** URL, or refreshes metadata via `getExtensionVoicemailRecords`.
+  If that path fails and **Phase 2** helper audio is unavailable or identifiers are missing, the handler
+  returns **`503` JSON** (`audio_unavailable`, `audio_fetch_failed`) — not audio bytes. Clients
   using `expo-av` `loadAsync({ uri })` then fail decoding (users may see a generic playback
-  error). Fix ingestion or refresh `pbxRecfile`; do not assume the mobile player is the
-  primary fault.
+  error). After Phase 2 + helper upgrade, spool-backed rows with valid **`pbxMsgNum`** should stream;
+  persistent **`503`** then points at missing disk file, wrong folder, or helper/network issues.
 - **Recording playback path.** Streamed via API. UNKNOWN current expiry of signed
   URLs; verify before changing.
 - **Recording file presence on PBX.** Documented as fragile in

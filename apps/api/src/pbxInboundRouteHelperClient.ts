@@ -1,6 +1,10 @@
 import type { PbxRouteHelperConfig } from "@connect/integrations";
 export type { PbxRouteHelperConfig } from "@connect/integrations";
-export { resolvePbxRouteHelperConfig, listVoicemailSpoolFromHelper } from "@connect/integrations";
+export {
+  resolvePbxRouteHelperConfig,
+  listVoicemailSpoolFromHelper,
+  fetchVoicemailSpoolAudioFromHelper,
+} from "@connect/integrations";
 
 export type PbxRouteHelperRoute = {
   inbound_route_id: number;

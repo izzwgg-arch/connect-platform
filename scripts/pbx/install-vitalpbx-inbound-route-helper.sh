@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.08.1"
+VERSION = "2026.05.08.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -750,6 +750,9 @@ def voicemail_mailbox_dir(tenant_id, extension):
     return target
 
 MAX_VM_SPOOL_MESSAGES = 400
+MAX_VM_SPOOL_AUDIO_BYTES = 25 * 1024 * 1024
+VM_SPOOL_AUDIO_FOLDERS = frozenset({"INBOX", "Old", "Urgent"})
+MSG_NUM_STEM_RE = re.compile(r"^msg[0-9]+$")
 
 
 def _parse_vm_txt(path):
@@ -825,6 +828,44 @@ def vm_spool_list_messages(body):
                 }
             )
     return {"ok": True, "mailboxPath": str(mbox_dir), "resolvedContext": resolved_ctx, "messages": messages}
+
+
+def vm_spool_read_audio(body):
+    """
+    Read-only: return (content_type, bytes) for one voicemail message file under the spool.
+    Validates folder + msg stem; resolves mailbox dir like vm_spool_list_messages.
+    Raises ValueError on bad input, LookupError if file missing.
+    """
+    extension = require_ext(body.get("extension"))
+    folder = str(body.get("folder") or "").strip()
+    if folder not in VM_SPOOL_AUDIO_FOLDERS:
+        raise ValueError("invalid_folder")
+    msg_num = str(body.get("msgNum") or body.get("msg_num") or "").strip()
+    if not MSG_NUM_STEM_RE.match(msg_num):
+        raise ValueError("invalid_msgNum")
+    raw_ctx = str(body.get("voicemailContext") or body.get("context") or "").strip()
+    tenant_raw = str(body.get("tenantId") or "").strip()
+    root = CFG.voicemail_dir.resolve()
+    if raw_ctx and VM_CONTEXT_RE.match(raw_ctx):
+        mbox_dir = (root / raw_ctx / extension).resolve()
+        if root not in mbox_dir.parents and mbox_dir != root:
+            raise ValueError("voicemail_mailbox_outside_root")
+    else:
+        if not tenant_raw:
+            raise ValueError("tenantId_required_without_valid_voicemailContext")
+        tenant_id = require_num("tenant_id", tenant_raw)
+        mbox_dir = voicemail_mailbox_dir(tenant_id, extension).resolve()
+    if root not in mbox_dir.parents and mbox_dir != root:
+        raise ValueError("voicemail_mailbox_outside_root")
+    wav_path = (mbox_dir / folder / (msg_num + ".wav")).resolve()
+    if root not in wav_path.parents:
+        raise ValueError("voicemail_path_outside_root")
+    if not wav_path.is_file():
+        raise LookupError("audio_not_found")
+    size = wav_path.stat().st_size
+    if size > MAX_VM_SPOOL_AUDIO_BYTES:
+        raise ValueError("audio_too_large")
+    return ("audio/wav", wav_path.read_bytes())
 
 
 def safe_vm_path(tenant_id, extension, greeting_type):
@@ -1219,6 +1260,48 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if not self.auth_ok():
             self.send_json(401, {"error": "unauthorized"})
+            return
+        if path == "/voicemail/spool/audio":
+            body = {}
+            try:
+                body = self.read_body()
+                audit_body = {
+                    k: body.get(k)
+                    for k in ("tenantId", "extension", "folder", "msgNum", "voicemailContext", "context")
+                    if k in body
+                }
+                content_type, audio_bytes = vm_spool_read_audio(body)
+                audit(path.strip("/"), True, audit_body, result={"audioBytes": len(audio_bytes)})
+                self.send_response(200)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(audio_bytes)))
+                self.send_header("cache-control", "private, max-age=60")
+                self.end_headers()
+                self.wfile.write(audio_bytes)
+            except LookupError as exc:
+                audit_body = {
+                    k: body.get(k)
+                    for k in ("tenantId", "extension", "folder", "msgNum", "voicemailContext", "context")
+                    if k in body
+                }
+                audit(path.strip("/"), False, audit_body, error=str(exc))
+                self.send_json(404, {"error": str(exc)})
+            except ValueError as exc:
+                audit_body = {
+                    k: body.get(k)
+                    for k in ("tenantId", "extension", "folder", "msgNum", "voicemailContext", "context")
+                    if k in body
+                }
+                audit(path.strip("/"), False, audit_body, error=str(exc))
+                self.send_json(400, {"error": str(exc)})
+            except Exception as exc:
+                audit_body = {
+                    k: body.get(k)
+                    for k in ("tenantId", "extension", "folder", "msgNum", "voicemailContext", "context")
+                    if k in body
+                }
+                audit(path.strip("/"), False, audit_body, error=str(exc))
+                self.send_json(409, {"error": str(exc)})
             return
         actions = {
             "/inspect": inspect_route,

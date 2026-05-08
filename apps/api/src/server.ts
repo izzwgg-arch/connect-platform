@@ -103,6 +103,7 @@ import {
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
   listVoicemailSpoolFromHelper,
+  fetchVoicemailSpoolAudioFromHelper,
   resolvePbxRouteHelperConfig,
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
@@ -14966,6 +14967,80 @@ async function transcodeVoicemailToMp3(input: Buffer, extension: string): Promis
   }
 }
 
+/** VitalPBX /static or absolute https — not raw Asterisk spool paths (they must not be joined to baseUrl). */
+function isConnectVitalVoicemailRecfileRef(recfile: string | null | undefined): boolean {
+  const t = String(recfile ?? "").trim();
+  if (!t) return false;
+  if (/^https?:\/\//i.test(t)) return true;
+  if (t.startsWith("/var/spool/asterisk/voicemail")) return false;
+  return true;
+}
+
+function pbxHelperSpoolFolderFromVoicemail(vm: { pbxFolder: string | null; folder: string }): "INBOX" | "Old" | "Urgent" | null {
+  const raw = (vm.pbxFolder || "").trim();
+  if (raw === "INBOX" || raw === "Old" || raw === "Urgent") return raw;
+  const lower = raw.toLowerCase();
+  if (lower === "inbox") return "INBOX";
+  if (lower === "urgent") return "Urgent";
+  if (lower === "old") return "Old";
+  const f = (vm.folder || "").toLowerCase();
+  if (f === "inbox") return "INBOX";
+  if (f === "urgent") return "Urgent";
+  return "Old";
+}
+
+async function finishVoicemailStreamFromBuffer(
+  vm: { id: string; readAt: Date | null },
+  reply: any,
+  asAttachment: boolean,
+  mailbox: string,
+  sourceBuf: Buffer,
+  fileExtForMime: string,
+): Promise<void> {
+  const ext = (fileExtForMime.match(/^[a-z0-9]+$/i) ? fileExtForMime : "wav").toLowerCase();
+  const mimeByExt: Record<string, string> = {
+    wav:   "audio/wav",
+    wav49: "audio/wav",
+    mp3:   "audio/mpeg",
+    ogg:   "audio/ogg",
+    opus:  "audio/ogg",
+    m4a:   "audio/mp4",
+    aac:   "audio/aac",
+    gsm:   "audio/x-gsm",
+  };
+  const contentType = mimeByExt[ext] ?? "audio/wav";
+  let buf: Buffer<ArrayBufferLike> = sourceBuf;
+  let responseContentType = contentType;
+  let responseExt = contentType.includes("mpeg") ? "mp3"
+    : contentType.includes("ogg") ? "ogg"
+    : contentType.includes("mp4") ? "m4a"
+    : "wav";
+
+  if (!asAttachment) {
+    try {
+      buf = await transcodeVoicemailToMp3(sourceBuf, ext);
+      responseContentType = "audio/mpeg";
+      responseExt = "mp3";
+    } catch (err: any) {
+      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: mp3 transcode failed, streaming original audio");
+    }
+  }
+
+  reply.header("Content-Type", responseContentType);
+  reply.header("Content-Length", String(buf.byteLength));
+  reply.header("Accept-Ranges", "bytes");
+  reply.header("Cache-Control", "private, max-age=3600");
+  if (asAttachment) {
+    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
+  }
+
+  if (!vm.readAt) {
+    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
+  }
+
+  reply.send(buf);
+}
+
 async function streamVoicemailAudio(
   vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null },
   reply: any,
@@ -14982,6 +15057,51 @@ async function streamVoicemailAudio(
   const baseUrl = link.pbxInstance.baseUrl.replace(/\/+$/, "");
   const mailbox = vm.extension;
 
+  const tryStreamFromHelperSpool = async (): Promise<boolean> => {
+    const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+    const tid = String(link.pbxTenantId || "").trim();
+    if (!helperCfg || !tid) return false;
+    const msgNum = String(vm.pbxMsgNum || "").trim();
+    if (!/^msg[0-9]+$/.test(msgNum)) return false;
+    const folder = pbxHelperSpoolFolderFromVoicemail(vm);
+    if (!folder) return false;
+    try {
+      const { contentType, buffer } = await fetchVoicemailSpoolAudioFromHelper(helperCfg, {
+        tenantId: tid,
+        extension: vm.extension,
+        folder,
+        msgNum,
+      });
+      const sourceBuf = Buffer.from(buffer);
+      let ext = "wav";
+      const ct = (contentType || "").toLowerCase();
+      if (ct.includes("mpeg")) ext = "mp3";
+      else if (ct.includes("ogg")) ext = "ogg";
+      else if (ct.includes("mp4")) ext = "m4a";
+      else if (ct.includes("gsm")) ext = "gsm";
+      app.log.info(
+        {
+          vmId: vm.id,
+          ext: vm.extension,
+          folder,
+          msgNum,
+          helper_audio_fallback: true,
+          byteLength: sourceBuf.byteLength,
+          helperContentType: contentType,
+        },
+        "voicemail: helper_audio_fallback",
+      );
+      await finishVoicemailStreamFromBuffer(vm, reply, asAttachment, mailbox, sourceBuf, ext);
+      return true;
+    } catch (err: any) {
+      app.log.warn(
+        { vmId: vm.id, ext: vm.extension, helper_audio_fallback: false, err: err?.message },
+        "voicemail: helper_audio_fallback_failed",
+      );
+      return false;
+    }
+  };
+
   // Preferred path: VitalPBX returns a ready-to-fetch /static/<token>/... URL in
   // voicemail_records. It embeds its own auth token so we can stream it directly
   // without app-key/Tenant headers. `/api/v2/voicemail/:mailbox/:folder/:msg`
@@ -14992,7 +15112,7 @@ async function streamVoicemailAudio(
     if (/^https?:\/\//i.test(value)) return value;
     return value.startsWith("/") ? `${baseUrl}${value}` : `${baseUrl}/${value}`;
   };
-  let audioUrl = audioUrlForRecfile(recfile);
+  let audioUrl = isConnectVitalVoicemailRecfileRef(recfile) ? audioUrlForRecfile(recfile) : null;
 
   const fetchPbxAudio = (url: string) => fetch(url, {
     headers: {
@@ -15025,7 +15145,7 @@ async function streamVoicemailAudio(
         );
       });
       const refreshedRecfile = String((refreshed as any)?.recfile ?? "").trim();
-      const refreshedUrl = audioUrlForRecfile(refreshedRecfile);
+      const refreshedUrl = isConnectVitalVoicemailRecfileRef(refreshedRecfile) ? audioUrlForRecfile(refreshedRecfile) : null;
       if (refreshedUrl) {
         recfile = refreshedRecfile;
         audioUrl = refreshedUrl;
@@ -15037,6 +15157,7 @@ async function streamVoicemailAudio(
   }
 
   if (!audioUrl) {
+    if (await tryStreamFromHelperSpool()) return;
     reply.code(503).send({ error: "audio_unavailable", reason: "no_recfile" });
     return;
   }
@@ -15065,7 +15186,7 @@ async function streamVoicemailAudio(
         );
       });
       const refreshedRecfile = String((refreshed as any)?.recfile ?? "").trim();
-      const refreshedUrl = audioUrlForRecfile(refreshedRecfile);
+      const refreshedUrl = isConnectVitalVoicemailRecfileRef(refreshedRecfile) ? audioUrlForRecfile(refreshedRecfile) : null;
       if (refreshedUrl) {
         recfile = refreshedRecfile;
         audioUrl = refreshedUrl;
@@ -15079,6 +15200,7 @@ async function streamVoicemailAudio(
 
   if (!pbxResp.ok) {
     app.log.warn({ vmId: vm.id, pbxStatus: pbxResp.status, recfile, audioHost: audioUrl ? new URL(audioUrl).host : null }, "voicemail: audio fetch failed");
+    if (await tryStreamFromHelperSpool()) return;
     reply.code(503).send({ error: "audio_fetch_failed", pbxStatus: pbxResp.status });
     return;
   }
@@ -15089,48 +15211,8 @@ async function streamVoicemailAudio(
   // the response as audio.
   const recfileLower = (recfile ?? "").toLowerCase();
   const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
-  const mimeByExt: Record<string, string> = {
-    wav:   "audio/wav",
-    wav49: "audio/wav",
-    mp3:   "audio/mpeg",
-    ogg:   "audio/ogg",
-    opus:  "audio/ogg",
-    m4a:   "audio/mp4",
-    aac:   "audio/aac",
-    gsm:   "audio/x-gsm",
-  };
-  const contentType = mimeByExt[fileExt] ?? "audio/wav";
   const sourceBuf = Buffer.from(await pbxResp.arrayBuffer());
-  let buf: Buffer<ArrayBufferLike> = sourceBuf;
-  let responseContentType = contentType;
-  let responseExt = contentType.includes("mpeg") ? "mp3"
-    : contentType.includes("ogg") ? "ogg"
-    : contentType.includes("mp4") ? "m4a"
-    : "wav";
-
-  if (!asAttachment) {
-    try {
-      buf = await transcodeVoicemailToMp3(sourceBuf, fileExt);
-      responseContentType = "audio/mpeg";
-      responseExt = "mp3";
-    } catch (err: any) {
-      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: mp3 transcode failed, streaming original audio");
-    }
-  }
-
-  reply.header("Content-Type", responseContentType);
-  reply.header("Content-Length", String(buf.byteLength));
-  reply.header("Accept-Ranges", "bytes");
-  reply.header("Cache-Control", "private, max-age=3600");
-  if (asAttachment) {
-    reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
-  }
-
-  if (!vm.readAt) {
-    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
-  }
-
-  reply.send(buf);
+  await finishVoicemailStreamFromBuffer(vm, reply, asAttachment, mailbox, sourceBuf, fileExt);
 }
 
 // ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
