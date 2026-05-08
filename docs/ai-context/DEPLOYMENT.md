@@ -335,44 +335,78 @@ for SVC in app-api-1 app-worker-1; do
 done
 ```
 
-**PBX (root, SSH on the helper host)** — still **no** `echo` of the raw secret; only counts, hashes, structure:
+**PBX (root, SSH on the helper host)** — still **no** printing the raw secret; line numbers redacted, counts,
+**`sha256` prefix**, quote/trailing-space flags, file vs **`/proc/<pid>/environ`**.
+
+Preferred one-shot (copy as a block):
 
 ```bash
-ENV=/etc/connect-pbx-helper.env
+echo "=== file lines ==="
+grep -n '^CONNECT_PBX_HELPER_SECRET=' /etc/connect-pbx-helper.env | sed 's/=.*/=<redacted>/'
 
-echo "=== CONNECT_PBX_HELPER_SECRET line count (expect 1) ==="
-grep -c '^CONNECT_PBX_HELPER_SECRET=' "$ENV" || true
+echo "=== duplicate count ==="
+grep -c '^CONNECT_PBX_HELPER_SECRET=' /etc/connect-pbx-helper.env
 
-echo "=== line numbers (names only — operator eyeballs file for duplicates) ==="
-grep -n '^CONNECT_PBX_HELPER_SECRET=' "$ENV" || true
+echo "=== file fingerprint ==="
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+text = Path("/etc/connect-pbx-helper.env").read_text(encoding="utf-8", errors="replace")
+vals = []
+for line in text.splitlines():
+    if line.startswith("CONNECT_PBX_HELPER_SECRET="):
+        vals.append(line.split("=", 1)[1])
+print("count", len(vals))
+for i, v in enumerate(vals, 1):
+    b = v.encode("utf-8")
+    print(
+        "idx", i,
+        "len", len(b),
+        "sha256_prefix", hashlib.sha256(b).hexdigest()[:16],
+        "quoted", (v.startswith('"') or v.startswith("'")),
+        "trailing_space", (v != v.rstrip()),
+    )
+PY
 
-LINE=$(grep '^CONNECT_PBX_HELPER_SECRET=' "$ENV" | tail -1)
-VAL="${LINE#CONNECT_PBX_HELPER_SECRET=}"
+echo "=== runtime pid (prefer systemd MainPID) ==="
+pid_sys=$(systemctl show connect-pbx-helper.service -p MainPID --value)
+pid_pg=$(pgrep -f vitalpbx-inbound-route-helper.py | head -1)
+echo "MainPID=$pid_sys pgrep_first=$pid_pg"
 
-echo "=== structural checks (no raw secret) ==="
-printf '%s' "$VAL" | wc -c
-printf '%s' "$VAL" | sha256sum
-# CRLF / trailing junk: last bytes as hex
-printf '%s' "$VAL" | tail -c 3 | od -An -tx1
-# If value is quote-wrapped, first/last char codes:
-printf '%s' "$VAL" | od -An -tu1 | head -1
-printf '%s' "$VAL" | tail -c 1 | od -An -tu1
+echo "=== runtime fingerprint (uses MainPID if non-zero) ==="
+python3 - <<'PY'
+import hashlib, subprocess
+main = subprocess.check_output(
+    ["systemctl", "show", "connect-pbx-helper.service", "-p", "MainPID", "--value"],
+    text=True,
+).strip()
+pid = main if main and main != "0" else subprocess.check_output(
+    "pgrep -f vitalpbx-inbound-route-helper.py | head -1", shell=True, text=True
+).strip()
+if not pid:
+    print("no_pid")
+    raise SystemExit(0)
+data = open(f"/proc/{pid}/environ", "rb").read().split(b"\0")
+vals = []
+for item in data:
+    if item.startswith(b"CONNECT_PBX_HELPER_SECRET="):
+        vals.append(item.split(b"=", 1)[1])
+print("pid", pid, "count", len(vals))
+for i, v in enumerate(vals, 1):
+    print("idx", i, "len", len(v), "sha256_prefix", hashlib.sha256(v).hexdigest()[:16])
+PY
 
-echo "=== systemd loads this file? ==="
-systemctl show connect-pbx-helper.service -p EnvironmentFiles --no-pager
-systemctl show connect-pbx-helper.service -p FragmentPath -p DropInPaths --no-pager
-systemctl show connect-pbx-helper.service -p ActiveEnterTimestamp --no-pager
-
-PID=$(systemctl show connect-pbx-helper.service -p MainPID --value)
-echo "main_pid=$PID"
-if [ -n "$PID" ] && [ "$PID" != "0" ]; then
-  echo "=== runtime environ entry (length + sha256 only) ==="
-  RVAL=$(tr '\0' '\n' < "/proc/$PID/environ" | grep '^CONNECT_PBX_HELPER_SECRET=' | tail -1)
-  RVAL="${RVAL#CONNECT_PBX_HELPER_SECRET=}"
-  printf '%s' "$RVAL" | wc -c
-  printf '%s' "$RVAL" | sha256sum
-fi
+echo "=== systemd env files ==="
+systemctl cat connect-pbx-helper.service | sed -n '/Environment/p'
+systemctl show connect-pbx-helper.service -p FragmentPath -p DropInPaths -p EnvironmentFiles -p ActiveEnterTimestamp --no-pager
 ```
+
+**Notes:**
+
+- Compare **Connect** **`docker exec … sha256sum`** (full hex) to **file** / **runtime** **`sha256_prefix`** (extend locally to full hash if needed).
+- **`quoted: True`** usually means the secret bytes include wrapping quotes — helper compares **without** stripping
+  quotes unless the Connect side also stores quotes (it should **not**).
+- Prefer **`MainPID`** over **`pgrep`** if multiple Python helpers could match the pattern.
 
 **Decision tree:**
 
