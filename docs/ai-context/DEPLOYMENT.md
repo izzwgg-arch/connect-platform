@@ -321,6 +321,67 @@ mail; confirm portal/mobile **lists** show rows (`DEBUGGING.md`). Playback remai
   **`2026.05.08.1`**) then re-test **`POST …/spool/list`** from the **app host** with the header from
   **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** (trim with **`tr -d '\r\n'`** in shell).
 
+#### Secret mismatch fingerprints (no secret in tickets)
+
+**Connect app host (reference):** compare **api** vs **worker**, then compare to PBX file/runtime.
+
+```bash
+# Length + sha256 of Connect secret (value never printed)
+for SVC in app-api-1 app-worker-1; do
+  echo "=== $SVC ==="
+  docker exec "$SVC" sh -lc 'test -n "$PBX_ROUTE_HELPER_SECRET" && echo exists=yes || echo exists=no'
+  docker exec "$SVC" sh -lc 'printf %s "$PBX_ROUTE_HELPER_SECRET" | wc -c'
+  docker exec "$SVC" sh -lc 'printf %s "$PBX_ROUTE_HELPER_SECRET" | sha256sum'
+done
+```
+
+**PBX (root, SSH on the helper host)** — still **no** `echo` of the raw secret; only counts, hashes, structure:
+
+```bash
+ENV=/etc/connect-pbx-helper.env
+
+echo "=== CONNECT_PBX_HELPER_SECRET line count (expect 1) ==="
+grep -c '^CONNECT_PBX_HELPER_SECRET=' "$ENV" || true
+
+echo "=== line numbers (names only — operator eyeballs file for duplicates) ==="
+grep -n '^CONNECT_PBX_HELPER_SECRET=' "$ENV" || true
+
+LINE=$(grep '^CONNECT_PBX_HELPER_SECRET=' "$ENV" | tail -1)
+VAL="${LINE#CONNECT_PBX_HELPER_SECRET=}"
+
+echo "=== structural checks (no raw secret) ==="
+printf '%s' "$VAL" | wc -c
+printf '%s' "$VAL" | sha256sum
+# CRLF / trailing junk: last bytes as hex
+printf '%s' "$VAL" | tail -c 3 | od -An -tx1
+# If value is quote-wrapped, first/last char codes:
+printf '%s' "$VAL" | od -An -tu1 | head -1
+printf '%s' "$VAL" | tail -c 1 | od -An -tu1
+
+echo "=== systemd loads this file? ==="
+systemctl show connect-pbx-helper.service -p EnvironmentFiles --no-pager
+systemctl show connect-pbx-helper.service -p FragmentPath -p DropInPaths --no-pager
+systemctl show connect-pbx-helper.service -p ActiveEnterTimestamp --no-pager
+
+PID=$(systemctl show connect-pbx-helper.service -p MainPID --value)
+echo "main_pid=$PID"
+if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+  echo "=== runtime environ entry (length + sha256 only) ==="
+  RVAL=$(tr '\0' '\n' < "/proc/$PID/environ" | grep '^CONNECT_PBX_HELPER_SECRET=' | tail -1)
+  RVAL="${RVAL#CONNECT_PBX_HELPER_SECRET=}"
+  printf '%s' "$RVAL" | wc -c
+  printf '%s' "$RVAL" | sha256sum
+fi
+```
+
+**Decision tree:**
+
+| Compare | Meaning |
+|---------|---------|
+| Connect **sha256** ≠ PBX **file** **sha256** | Fix **`/etc/connect-pbx-helper.env`** (bytes, quotes, CRLF, duplicate lines). |
+| PBX **file** **sha256** = Connect but ≠ PBX **runtime** **sha256** | **systemd** not loading that file, wrong unit, or restart didn’t happen — fix **EnvironmentFiles** / **`daemon-reload`** / restart. |
+| All three **sha256** match but **HTTP 401** | Rare — capture request headers at helper (redacted) or inspect helper auth code path (`install-vitalpbx-inbound-route-helper.sh` embedded Python). |
+
 **Recorded verification (Connect app host):** **`GET …/health`** → **HTTP 200**, **`2026.05.08.1`** ✓.
 **`POST …/spool/list`** (secret from **api** container env, not printed) → **still HTTP 401**
 **`{"error":"unauthorized"}`** — runtime secret mismatch not yet resolved. **`app-api-1`** logs show

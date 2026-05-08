@@ -234,7 +234,8 @@
   in **`/etc/connect-pbx-helper.env`** to the **exact** **`PBX_ROUTE_HELPER_SECRET`** (no trailing whitespace),
   restart **`connect-pbx-helper`** (`DEPLOYMENT.md` § **helper secret alignment only**). **Do not** paste secrets into chat.
   If **401** remains, use **`DEPLOYMENT.md`** § **Troubleshooting: still 401** (duplicate keys, quotes, CRLF,
-  wrong env file for systemd).
+  wrong env file for systemd). Use **`DEPLOYMENT.md`** § **Secret mismatch fingerprints** to compare **Connect**
+  vs **PBX file** vs **PBX runtime** **`sha256`** without printing the secret.
 - **Helper host = `PBX_ROUTE_HELPER_BASE_URL`.** Production traffic uses whatever base URL is in **api/worker**
   env (and optional **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**). That host must be the same machine where
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a

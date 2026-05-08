@@ -308,7 +308,8 @@ Breakdown by sub-prefix (count / approximate scope):
 can occur even when **`GET /health`** returns **`2026.05.08.1`** from the app host. **Preferred fix:** PBX env
 follows Connect (**no** queue recycle); **alternate:** update Connect **`.env.platform`** + queue **api**/**worker**
 (`DEPLOYMENT.md` § **helper secret alignment only**). If **401** persists after an edit, see **`DEPLOYMENT.md`**
-§ **Troubleshooting: still 401** — **`/internal/voicemail-notify`** will log **`helper_error:unauthorized`** the same way.
+§ **Troubleshooting: still 401** and § **Secret mismatch fingerprints** — **`/internal/voicemail-notify`** logs
+**`helper_error:unauthorized`** the same way as manual app-host **`curl`**.
 **Connection refused** from the Connect app host (while PBX loopback `/health` works) = helper bind / firewall — see **`DEPLOYMENT.md`** § **listen bind** (**`CONNECT_PBX_HELPER_BIND`** = address only, **`CONNECT_PBX_HELPER_PORT=8757`**; not Python edits). Restrict **:8757** to the app host.
 End-to-end checklist: **`DEPLOYMENT.md`** § **Phase 1 — production verification (A–G)**.
 Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Proof format:** **`DEPLOYMENT.md`** Phase 1 **operator execution transcript** (HTTP status, `ok`, counts, deploy job IDs, **no** secrets). Helper HTTP contract is unchanged when upgrading **`2026.05.07.x` → `2026.05.08.1`**; only availability of **`POST /voicemail/spool/list`** and aligned **`x-connect-pbx-helper-secret`** matter. IDE agents cannot typically reach PBX SSH or app-host **`:3910`** — **`DEPLOYMENT.md`** § **execution environment**.

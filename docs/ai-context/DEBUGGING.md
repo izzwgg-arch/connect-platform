@@ -400,6 +400,8 @@ Per-service:
       **CRLF/trailing spaces**, and that **systemd** loads the file you edited (`DEPLOYMENT.md` § **Troubleshooting: still 401**).
       Live **`/internal/voicemail-notify`** lines with **`helper_error:unauthorized`** confirm the API’s helper
       client still sees **401** — same root cause as manual **`curl`** from the app host.
+      **Fingerprint without pasting secrets:** app-host **`docker exec`** length + **`sha256sum`**, PBX **`/etc/connect-pbx-helper.env`**
+      + **`/proc/<pid>/environ`** same — **`DEPLOYMENT.md`** § **Secret mismatch fingerprints**.
    3. **Super-admin incidents** — open **`VoicemailIngestIncident`** rows (helper errors, notify upsert zero, worker global zero, REST vs spool) appear in **`GET /admin/ops-center`** and **`GET /admin/incidents`**, with detail/ack at **`GET/POST /admin/voicemail-ingest/incidents*`** (`API_ROUTES.md`). Disable emission with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED=false`** on **api** + **worker** if needed for rollback.
    4. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
       IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`
