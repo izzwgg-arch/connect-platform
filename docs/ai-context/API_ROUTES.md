@@ -303,6 +303,7 @@ Breakdown by sub-prefix (count / approximate scope):
 / `context`. Read-only; lists `msg*.txt` under `INBOX` / `Old` / `Urgent`. Installed by
 `scripts/pbx/install-vitalpbx-inbound-route-helper.sh`. **404** = helper older than **`2026.05.08.1`**;
 **401** = wrong secret after rotation (fix env + restart api/worker + PBX helper).
+End-to-end checklist: **`DEPLOYMENT.md`** § **Phase 1 — production verification (A–G)**.
 
 ---
 

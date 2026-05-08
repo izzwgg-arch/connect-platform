@@ -457,6 +457,11 @@ When you find a new fragile area, add it here.
   `helper_error:not_found` on `/internal/voicemail-notify`, worker `helper_calls:0`.
   Re-run `install-vitalpbx-inbound-route-helper.sh` from the deployed commit; confirm
   `GET …:8757/health` → **`2026.05.08.1`**+ (`DEPLOYMENT.md` production check-in).
+- **`PBX_ROUTE_HELPER_BASE_URL` points at the wrong host.** Connect will happily call
+  **`http://<ip>:8757`** on a machine that still runs **`2026.05.07.x`** while operators upgrade a
+  **different** VitalPBX (MOTD / SSH IP mismatch). Symptom: persistent **`helper_error:not_found`** after
+  “we upgraded the helper.” Fix: `curl /health` from the **app** host to the URL in env; upgrade **that**
+  host; or change **BASE_URL** to the upgraded host and redeploy **api** + **worker** (`DEPLOYMENT.md` A′).
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**

@@ -222,6 +222,11 @@
   After rotation, restart **`connect-pbx-helper.service`** on the PBX and **redeploy or restart** api/worker
   so env is re-read (`DEPLOYMENT.md` § compromised secret). Mismatch → **401** from helper, or stale
   `helper_error` in logs.
+- **Helper host = `PBX_ROUTE_HELPER_BASE_URL`.** Production traffic uses whatever base URL is in **api/worker**
+  env (and optional **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**). That host must be the same machine where
+  **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a
+  VitalPBX screenshot shows a different public IP, resolve the mismatch before blaming “empty REST”
+  (`DEPLOYMENT.md` § Phase 1 verification A′).
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.
   Mobile flow lives in `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts` +

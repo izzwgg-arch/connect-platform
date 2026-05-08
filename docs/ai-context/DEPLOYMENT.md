@@ -205,6 +205,23 @@ If the helper secret was **exposed** (screenshot, chat, ticket), treat it as **c
 
 **Re-test:** `POST /voicemail/spool/list` from an app host with the new secret; `POST /internal/voicemail-notify` and worker voicemail JSON should **not** show `helper_error:not_found` when REST is empty and spool has messages (`DEBUGGING.md`).
 
+### Phase 1 — production verification checklist (A–G)
+
+Use this after Connect images ship and before claiming fallback is live.
+
+| Step | Action | Pass criteria |
+|------|--------|----------------|
+| **A** | On app host: `docker exec app-api-1 printenv PBX_ROUTE_HELPER_BASE_URL` (repeat for **worker**). If set, `printenv PBX_ROUTE_HELPER_BY_INSTANCE_JSON` (length > 0 means per-instance URLs/secrets). | Exact list of **active helper base URL(s)** (no trailing slash) recorded. |
+| **B** | From app host: `curl -s http://<host>:8757/health` for **each** URL from A. Record UTC time. | Every host returns **`"version":"2026.05.08.1"`** or newer. Any **`2026.05.07.x`** → upgrade installer on **that** host (§ Phase 1 install pin). |
+| **A′ IP mismatch** | If VitalPBX SSH MOTD shows a **different** public IP than `PBX_ROUTE_HELPER_BASE_URL`, `curl` **`:8757/health`** on both from the app host. | Traffic must hit the machine where the helper **actually** runs; update **`PBX_ROUTE_HELPER_BASE_URL`** (and JSON map) if wrong, then redeploy **api** + **worker** via queue. |
+| **C** | On the **correct** PBX (root): run installer from commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**, restart **`connect-pbx-helper.service`**. | **`/health`** → **`2026.05.08.1`**. |
+| **D** | Rotate compromised secret (§ compromised secret); queue **api** then **worker**. | PBX env, Connect env, and JSON secrets identical; services restarted. |
+| **E** | `POST …/voicemail/spool/list` with valid `tenantId`, `extension`, `x-connect-pbx-helper-secret`. | **200**, `ok: true`, `messages` array; **not** 404 / 401. |
+| **F** | AMI `MessageWaiting` or manual `/internal/voicemail-notify` (with `newCount > 0` when REST empty). | Logs: `rest_count: 0`, `helper_count > 0`, `source_used` helper path, `upserted > 0` when spool has mail. |
+| **G** | Portal + mobile voicemail list | New rows, **current** `receivedAt` (not a stale date). Playback still separate (`KNOWN_ISSUES.md`). |
+
+**Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs.
+
 ---
 
 ## Exposed ports (publicly via nginx)

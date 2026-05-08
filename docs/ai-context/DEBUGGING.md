@@ -380,27 +380,32 @@ Per-service:
       After **secret rotation**, if the helper returns **401**, re-check `x-connect-pbx-helper-secret`
       matches **`CONNECT_PBX_HELPER_SECRET`** / **`PBX_ROUTE_HELPER_SECRET`** and that **api** and **worker**
       were restarted with the new env.
-   3. **Helper smoke** (on PBX host, read-only): `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list \
+   3. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
+      IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`
+      for each suspect IP. If MOTD shows **`209.145.62.x`** but Connect points at **`209.145.60.x`**, you may
+      be hitting the wrong machine — fix **BASE_URL** (and redeploy api/worker via queue), or install the
+      helper on the host Connect actually calls (`DEPLOYMENT.md` § Phase 1 verification A′).
+   4. **Helper smoke** (on PBX host, read-only): `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list \
       -H 'content-type: application/json' -H 'x-connect-pbx-helper-secret: <secret>' \
       -d '{"tenantId":"<vitalpbx_tenant_id>","extension":"<ext>"}' | jq .`
       Expect `ok`, `mailboxPath`, `messages[]`. Requires installer `VERSION` `2026.05.08.1`+.
-   4. **Do not diagnose VitalPBX with query-only `?tenant=`** — production uses the
+   5. **Do not diagnose VitalPBX with query-only `?tenant=`** — production uses the
       **`tenant` header** (`VitalPbxClient` default). Mismatched probes falsely implied
       missing extensions in past incidents.
-   5. **Confirm ID** — for a mailbox from AMI (`mailbox` + `context` in `MessageWaiting`),
+   6. **Confirm ID** — for a mailbox from AMI (`mailbox` + `context` in `MessageWaiting`),
       ensure `Extension` / `PbxExtensionLink.pbxExtensionId` matches
       `GET /api/v2/extensions` **with the correct tenant header** (see `TELEPHONY.md`).
-   6. If IDs match but `voicemail_records` is still empty while AMI shows new mail,
+   7. If IDs match but `voicemail_records` is still empty while AMI shows new mail,
       Connect **Phase 1** falls back to spool via `POST /voicemail/spool/list` when
       `PBX_ROUTE_HELPER_*` is set (notify only when AMI `newCount > 0`; worker when REST
       is empty). If `helper_count` stays `0`, check helper version, secret, and that
       `tenantId` / mailbox path exist on disk (`mailboxPath` in helper JSON). Still
       treat persistent REST emptiness as a VitalPBX-side issue for long-term health.
-   7. **Playback** — for `src_unsupported` / cannot play: hit
+   8. **Playback** — for `src_unsupported` / cannot play: hit
       `GET /voice/voicemail/:id/stream?token=...` with curl `-I` and inspect status,
       `Content-Type`, and body size. `503` + JSON means upstream audio/recfile failure,
       not a client codec limitation alone.
-   8. Optional sanity: `GET /pbx/live/combined` where available; correlate with
+   9. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via
    `redis-cli LLEN bull:sms-send:wait`. Worker logs show
