@@ -137,6 +137,7 @@ Host-side directories also referenced:
   `PBX_ROUTE_HELPER_CONNECT_DESTINATION_ID`, `PBX_ROUTE_HELPER_BY_INSTANCE_JSON`
   — HTTP + HMAC secret for the on-PBX Connect helper (`packages/integrations/src/pbxRouteHelperEnv.ts`).
   api/worker call read-only voicemail spool list at `POST …/voicemail/spool/list` when configured.
+- `VOICEMAIL_INGEST_INCIDENTS_ENABLED` — when **`false`**, **`VoicemailIngestIncident`** emission from **`/internal/voicemail-notify`** and the worker voicemail sync cycle is disabled (default **true**). Set on **api** and **worker** containers for rollback without code revert.
 
 ### Worker-only (voicemail helper throttling)
 
@@ -204,6 +205,235 @@ If the helper secret was **exposed** (screenshot, chat, ticket), treat it as **c
 2. **Restart api and worker** so containers load the new env. Per **`AGENTS.md`**, use the **deploy queue** (`POST /ops/deploy/enqueue`) with the **current production `commitHash`** and `dryRun: false` for **`api`** then **`worker`** — do not ad-hoc `docker compose` / `pm2` unless break-glass and human-approved.
 
 **Re-test:** `POST /voicemail/spool/list` from an app host with the new secret; `POST /internal/voicemail-notify` and worker voicemail JSON should **not** show `helper_error:not_found` when REST is empty and spool has messages (`DEBUGGING.md`).
+
+### Phase 1 — operator handoff (fix helper on `209.145.60.79`)
+
+**Context:** Connect **api/worker** use **`http://209.145.60.79:8757`**. **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** is unset. **`/health`** reports **`2026.05.07.1`** → **`POST /voicemail/spool/list`** is missing (**404**). Do **not** point Connect at **`209.145.62.75`** unless you deliberately change env and redeploy — that IP did not answer `:8757` from the app host in checks.
+
+#### B. Safety checks (before any change)
+
+1. **`GET /ops/deploy/status`** on the app host (`127.0.0.1:3910`) — prefer **`runningCount: 0`** before enqueueing reload deploys.
+2. Record baseline: `curl -s http://209.145.60.79:8757/health` (expect **`2026.05.07.1`** today).
+3. On the PBX (**`209.145.60.79`**), backup helper artifacts:
+   ```bash
+   sudo cp -a /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py "/root/vitalpbx-inbound-route-helper.py.bak.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+   sudo cp -a /etc/connect-pbx-helper.env "/root/connect-pbx-helper.env.bak.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+   ```
+4. Schedule during a **low-traffic** window if possible (brief helper restart; brief api/worker recycle after secret rotation).
+
+#### A. Copy-paste operator commands
+
+**1–2. SSH to the helper host and confirm local health**
+
+```bash
+# From your workstation (replace user if you use non-root sudo)
+ssh root@209.145.60.79
+
+# On the PBX:
+curl -s http://127.0.0.1:8757/health
+```
+
+**3. Download and run the pinned installer** (commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**)
+
+```bash
+# Still on 209.145.60.79 as root:
+curl -fsSL -o /root/install-vitalpbx-inbound-route-helper.sh \
+  'https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh'
+chmod +x /root/install-vitalpbx-inbound-route-helper.sh
+bash /root/install-vitalpbx-inbound-route-helper.sh
+```
+
+(Re-running the installer refreshes `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` and **`connect-pbx-helper.service`** per script. It rewrites **`/etc/connect-pbx-helper.env`** but **preserves** the existing **`CONNECT_PBX_HELPER_SECRET`** when the file already exists — Connect’s **`PBX_ROUTE_HELPER_SECRET`** usually stays valid through the upgrade. Use step **5** to rotate a **compromised** secret or to align after a fresh install.)
+
+**4. Verify local and remote `/health`**
+
+```bash
+# On PBX:
+curl -s http://127.0.0.1:8757/health
+
+# On Connect app host (SSH to app server):
+curl -s http://209.145.60.79:8757/health
+```
+
+**5–6. Rotate compromised secret (PBX), restart helper**
+
+```bash
+# On PBX — generate a new ≥32-char secret (example: 32 bytes hex)
+NEW_SECRET="$(openssl rand -hex 32)"
+echo "New secret (store in password manager; paste into Connect env next): $NEW_SECRET"
+
+# Update ONLY the CONNECT_PBX_HELPER_SECRET line in /etc/connect-pbx-helper.env
+# Use nano/vi, or sed if you are careful:
+sudo sed -i.bak "s/^CONNECT_PBX_HELPER_SECRET=.*/CONNECT_PBX_HELPER_SECRET=${NEW_SECRET}/" /etc/connect-pbx-helper.env
+sudo chmod 0600 /etc/connect-pbx-helper.env
+
+sudo systemctl restart connect-pbx-helper.service
+sudo systemctl status connect-pbx-helper.service --no-pager
+curl -s http://127.0.0.1:8757/health
+```
+
+**7. Update Connect env and redeploy api + worker (deploy queue only)**
+
+On the **app** host, edit the platform env file that docker-compose loads (commonly **`/opt/connectcomms/env/.env.platform`** — **human operator only**; not agent-edited):
+
+- Set **`PBX_ROUTE_HELPER_SECRET=`** to the **same** `NEW_SECRET` string.
+- Leave **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`** unless you intentionally move the helper.
+- **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**: unchanged if unset; if you add it later, keep **`secret`** in sync.
+
+Then enqueue **api** then **worker** (replace **`COMMIT_SHA`** with current production pin, e.g. **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**):
+
+```bash
+# On Connect app host:
+curl -s http://127.0.0.1:3910/ops/deploy/status
+
+cat >/tmp/enq_api.json <<EOF
+{"service":"api","branch":"main","commitHash":"COMMIT_SHA","requestedBy":"human:ops-vm-helper","reason":"pickup PBX_ROUTE_HELPER_SECRET after rotation","dryRun":false,"source":"manual"}
+EOF
+curl -s -X POST http://127.0.0.1:3910/ops/deploy/enqueue -H 'Content-Type: application/json' -d @/tmp/enq_api.json
+
+# Wait until job success, then:
+cat >/tmp/enq_worker.json <<EOF
+{"service":"worker","branch":"main","commitHash":"COMMIT_SHA","requestedBy":"human:ops-vm-helper","reason":"pickup PBX_ROUTE_HELPER_SECRET after rotation","dryRun":false,"source":"manual"}
+EOF
+curl -s -X POST http://127.0.0.1:3910/ops/deploy/enqueue -H 'Content-Type: application/json' -d @/tmp/enq_worker.json
+```
+
+Poll: `GET http://127.0.0.1:3910/ops/deploy/jobs/<id>` until **`success`**. Confirm log line **`[deploy-*] done <short-sha>`** matches **`COMMIT_SHA`** (`AGENTS.md`).
+
+**8. Authenticated `POST /voicemail/spool/list`**
+
+```bash
+# On app host — use the SAME secret as PBX + Connect env
+export PBX_ROUTE_HELPER_SECRET='paste-secret-here'
+curl -s -X POST 'http://209.145.60.79:8757/voicemail/spool/list' \
+  -H 'Content-Type: application/json' \
+  -H "x-connect-pbx-helper-secret: ${PBX_ROUTE_HELPER_SECRET}" \
+  -d '{"tenantId":"<VITALPBX_TENANT_ID>","extension":"<EXT>"}'
+```
+
+**9. Notify / worker fallback** — leave a test voicemail or POST `/internal/voicemail-notify` (with **`newCount > 0`** when REST empty). Inspect **`docker logs app-api-1`** / **`app-worker-1`** for structured fields (**`rest_count`**, **`helper_count`**, **`source_used`**, **`upserted`**).
+
+#### C. Expected output (after each step)
+
+| Step | Expected |
+|------|----------|
+| Local `/health` before upgrade | `"version":"2026.05.07.1"` (or older) |
+| After installer + restart | `"version":"2026.05.08.1"` locally and from app host |
+| After secret rotation + helper restart | `/health` still **`2026.05.08.1`**; wrong secret → **401** on POST |
+| Authenticated POST spool list | **HTTP 200**, JSON with **`"ok":true`**, **`"messages":[...]`** (may be empty array if mailbox has no `msg*.txt`) |
+| If route still missing | **404** body like **`not_found`** → wrong Python file still running; re-check installer commit and `systemctl status` |
+
+#### D. Rollback plan
+
+1. **PBX:** Restore **`vitalpbx-inbound-route-helper.py`** and **`/etc/connect-pbx-helper.env`** from **`/root/*.bak.*`**, then **`systemctl restart connect-pbx-helper.service`**. Verify `/health` returns previous version.
+2. **Connect:** Restore previous **`PBX_ROUTE_HELPER_SECRET`** in **`.env.platform`**, enqueue **api** then **worker** again with same **`commitHash`**.
+3. **Do not** delete voicemail spool files; **do not** run manual **`docker compose`** except break-glass per **`AGENTS.md`**.
+
+#### E. Final verification checklist
+
+- [ ] `curl -s http://209.145.60.79:8757/health` → **`2026.05.08.1`**
+- [ ] Authenticated **`POST /voicemail/spool/list`** → **200**, not 404/401
+- [ ] **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** matches PBX **`CONNECT_PBX_HELPER_SECRET`** (compare securely, do not paste into tickets)
+- [ ] **`voicemail-notify`** / worker logs: no **`helper_error:not_found`** when REST empty and spool has messages; **`helper_count > 0`**, **`source_used`** reflects helper, **`upserted > 0`** when applicable
+- [ ] Portal/mobile voicemail **list** shows current rows (playback is **not** Phase 1 scope)
+
+#### F. Execution environment (Cursor / local dev)
+
+The steps in **§ A–E** are **operator-executed** on the PBX and Connect **app** host. A Cursor agent on a typical developer machine **cannot** complete them alone:
+
+- **SSH** to `root@209.145.60.79` (or your sudo user) requires keys or VPN-approved access; without them, OpenSSH returns **`Permission denied (publickey,password)`**.
+- **`http://209.145.60.79:8757`** may be **unreachable** from the public internet (UFW, bind to internal only, or routing) — `curl` can **time out** even when the helper is healthy on-loopback on the PBX.
+- **Deploy queue** `http://127.0.0.1:3910/...` is only valid **on the app server** (loopback), not from a laptop.
+- **`.env.platform`** is **human-managed**; agents must not edit it per **`AGENTS.md`**.
+
+**After a human runs the runbook**, use the **operator execution transcript** below (strict paste-back; not the same as checklist table row **G**). Minimum ticket payload: `/health` JSON (version **`2026.05.08.1`**), **deploy job IDs**, **`[deploy-*] done <sha>`** lines, redacted **`POST /voicemail/spool/list`** proof, and voicemail-notify / worker log lines (**`helper_count`**, **`source_used`**, **`upserted`**). **Never paste secrets** — use booleans, lengths, or “matched offline”.
+
+#### Operator execution transcript template (strict paste-back)
+
+Copy the block into your ticket or internal doc. Replace `<…>` with values; leave secrets out (use **yes/no**, **redacted**, or **verified offline**).
+
+```markdown
+## Phase 1 voicemail helper — execution transcript
+
+### Metadata
+- **Operator:** <name>
+- **UTC start / end:** <ISO8601> – <ISO8601>
+- **Ticket / incident:** <link or id>
+
+---
+
+### 1. PBX helper host confirmation
+- **`PBX_ROUTE_HELPER_BASE_URL`** (api): `<from docker exec app-api-1 printenv PBX_ROUTE_HELPER_BASE_URL>`
+- **Same env (worker):** `<match yes/no + note if different>`
+- **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`:** `<unset | set, length N chars — do not paste JSON secrets>`
+- **SSH host used (actual login):** `<user@host or hostname>`
+- **PBX loopback:** `curl -s http://127.0.0.1:8757/health` → `<paste JSON body>`
+- **From Connect app host:** `curl -s http://<host-from-BASE_URL>:8757/health` → `<paste JSON body>`
+
+---
+
+### 2. Helper upgrade
+- **Installer source commit:** `cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067` (confirm same) **yes/no**
+- **Command run (summary):** `<e.g. bash /root/install-vitalpbx-inbound-route-helper.sh from raw GitHub URL>` — **no** env file contents
+- **`/health` `version` after upgrade:** `<string>`
+- **Expected `2026.05.08.1`:** **yes/no**
+
+---
+
+### 3. Secret rotation
+- **Old `CONNECT_PBX_HELPER_SECRET` replaced on PBX:** **yes/no** (do **not** paste old or new value)
+- **`connect-pbx-helper.service` restarted after change:** **yes/no**
+- **`PBX_ROUTE_HELPER_SECRET` updated in Connect platform env** (e.g. `.env.platform`): **yes/no**
+- **API + worker recycled via deploy queue only** (not ad-hoc docker): **yes/no**
+- **PBX secret == Connect secret** (verified how?): `<e.g. compared hashes offline / Vault reference — no raw secret>`
+
+---
+
+### 4. Deploy queue evidence
+- **Preflight** `GET /ops/deploy/status`: `<runningCount, note>`
+- **API job ID:** `<uuid>`
+- **Worker job ID:** `<uuid>`
+- **Deployed SHA** (must match enqueue `commitHash`): `<full or short sha>`
+- **API final log line** (`GET …/jobs/<id>/log`): `<paste [deploy-api] done … line>`
+- **Worker final log line:** `<paste [deploy-worker] done … line>`
+
+---
+
+### 5. Helper route verification (`POST /voicemail/spool/list`)
+- **Host:** `<same as BASE_URL>`
+- **Auth:** header present **yes/no** (do **not** paste `x-connect-pbx-helper-secret`)
+- **Body:** `tenantId`, `extension`, optional `voicemailContext` / `context` → `<values only>`
+- **HTTP status:** `<e.g. 200>`
+- **Response `ok`:** **true/false**
+- **`messages` array length:** `<N>`
+- **Mailbox/context exercised:** `<e.g. extension 101, context …>`
+
+---
+
+### 6. Voicemail fallback verification (structured logs)
+- **`voicemail-notify` log line** (api): `<paste one JSON or grep line>`
+- **Worker voicemail sync line:** `<paste one line>`
+- **`rest_count`:** `<number>`
+- **`helper_count`:** `<number>`
+- **`source_used`:** `<string>`
+- **`upserted` (or upserted_count):** `<number>`
+
+---
+
+### 7. Product verification
+- **Web app voicemail list** shows new message: **yes/no** `<note>`
+- **Mobile app voicemail list** shows new message: **yes/no** `<note>`
+- **Playback tested:** **not part of Phase 1** | **tested separately** `<if applicable, note>`
+
+---
+
+### 8. Failure checklist (tick any that applied; else “none”)
+- [ ] **404** on spool list → old helper / route missing (`/health` still `2026.05.07.x`)
+- [ ] **401** on spool list → secret mismatch (PBX vs api/worker env)
+- [ ] **`helper_count` 0** → wrong mailbox/extension/context, helper can’t see spool, or **no `msg*.txt` files**
+- [ ] **`upserted` 0** with **`helper_count` > 0** → dedupe / row already exists (not always failure)
+- [ ] **No notify/worker log lines** → api/worker not restarted, wrong **`PBX_ROUTE_HELPER_*`**, or no triggering AMI/notify
+```
 
 ### Phase 1 — production verification checklist (A–G)
 

@@ -377,35 +377,37 @@ Per-service:
       `curl -s http://127.0.0.1:8757/health` on the **PBX** — version must be **`2026.05.08.1`+**
       or the spool route does not exist yet (re-run installer from pinned commit; `DEPLOYMENT.md`).
       **`404`** on `POST /voicemail/spool/list` against the PBX means the same (old helper binary).
+      For production when **BASE_URL** is **`http://209.145.60.79:8757`** and **`/health`** is still **`2026.05.07.x`**, follow **`DEPLOYMENT.md`** § **Phase 1 — operator handoff** (commands, rollback, checklist). Diagnosis from a dev laptop may hit **SSH denied** or **curl timeout** to **`:8757`**; use the **app host** or **PBX loopback** as in the runbook (**`DEPLOYMENT.md`** § **execution environment**). After a rollout, require the operator **paste-back transcript** (**`DEPLOYMENT.md`** Phase 1 **operator execution transcript**) before closing “Phase 1 live” — no raw secrets.
       After **secret rotation**, if the helper returns **401**, re-check `x-connect-pbx-helper-secret`
       matches **`CONNECT_PBX_HELPER_SECRET`** / **`PBX_ROUTE_HELPER_SECRET`** and that **api** and **worker**
       were restarted with the new env.
-   3. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
+   3. **Super-admin incidents** — open **`VoicemailIngestIncident`** rows (helper errors, notify upsert zero, worker global zero, REST vs spool) appear in **`GET /admin/ops-center`** and **`GET /admin/incidents`**, with detail/ack at **`GET/POST /admin/voicemail-ingest/incidents*`** (`API_ROUTES.md`). Disable emission with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED=false`** on **api** + **worker** if needed for rollback.
+   4. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
       IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`
       for each suspect IP. If MOTD shows **`209.145.62.x`** but Connect points at **`209.145.60.x`**, you may
       be hitting the wrong machine — fix **BASE_URL** (and redeploy api/worker via queue), or install the
       helper on the host Connect actually calls (`DEPLOYMENT.md` § Phase 1 verification A′).
-   4. **Helper smoke** (on PBX host, read-only): `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list \
+   5. **Helper smoke** (on PBX host, read-only): `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list \
       -H 'content-type: application/json' -H 'x-connect-pbx-helper-secret: <secret>' \
       -d '{"tenantId":"<vitalpbx_tenant_id>","extension":"<ext>"}' | jq .`
       Expect `ok`, `mailboxPath`, `messages[]`. Requires installer `VERSION` `2026.05.08.1`+.
-   5. **Do not diagnose VitalPBX with query-only `?tenant=`** — production uses the
+   6. **Do not diagnose VitalPBX with query-only `?tenant=`** — production uses the
       **`tenant` header** (`VitalPbxClient` default). Mismatched probes falsely implied
       missing extensions in past incidents.
-   6. **Confirm ID** — for a mailbox from AMI (`mailbox` + `context` in `MessageWaiting`),
+   7. **Confirm ID** — for a mailbox from AMI (`mailbox` + `context` in `MessageWaiting`),
       ensure `Extension` / `PbxExtensionLink.pbxExtensionId` matches
       `GET /api/v2/extensions` **with the correct tenant header** (see `TELEPHONY.md`).
-   7. If IDs match but `voicemail_records` is still empty while AMI shows new mail,
+   8. If IDs match but `voicemail_records` is still empty while AMI shows new mail,
       Connect **Phase 1** falls back to spool via `POST /voicemail/spool/list` when
       `PBX_ROUTE_HELPER_*` is set (notify only when AMI `newCount > 0`; worker when REST
       is empty). If `helper_count` stays `0`, check helper version, secret, and that
       `tenantId` / mailbox path exist on disk (`mailboxPath` in helper JSON). Still
       treat persistent REST emptiness as a VitalPBX-side issue for long-term health.
-   8. **Playback** — for `src_unsupported` / cannot play: hit
+   9. **Playback** — for `src_unsupported` / cannot play: hit
       `GET /voice/voicemail/:id/stream?token=...` with curl `-I` and inspect status,
       `Content-Type`, and body size. `503` + JSON means upstream audio/recfile failure,
       not a client codec limitation alone.
-   9. Optional sanity: `GET /pbx/live/combined` where available; correlate with
+   10. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via
    `redis-cli LLEN bull:sms-send:wait`. Worker logs show

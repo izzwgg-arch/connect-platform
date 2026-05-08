@@ -1,7 +1,17 @@
 ﻿import { randomUUID } from "crypto";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
-import { db } from "@connect/db";
+import {
+  classifyHelperFailure,
+  db,
+  helperBaseHostFromUrl,
+  recordHelperIncident,
+  recordRestVsSpoolDiverge,
+  recordWorkerSyncGlobalZero,
+  resolveHelperIncidentsForPbx,
+  resolveRestVsSpoolDiverge,
+  resolveWorkerSyncGlobalZero,
+} from "@connect/db";
 import { decryptJson } from "@connect/security";
 import {
   normalizeProviderError,
@@ -1202,6 +1212,7 @@ function getVitalPbxClientForWorker(input: { baseUrl: string; token: string; sec
 }
 
 let _voicemailSyncRunning = false;
+let _vmWorkerSyncZeroStreak = 0;
 
 async function runVoicemailSyncCycle(): Promise<void> {
   if (_voicemailSyncRunning) return;
@@ -1232,6 +1243,7 @@ async function runVoicemailSyncCycle(): Promise<void> {
     const helperMinIntervalMs = Math.max(0, Number(process.env.VOICEMAIL_HELPER_MIN_INTERVAL_MS || 200) || 0);
     let helperCallsBudget = maxHelperFallback;
     let lastHelperCallAt = 0;
+    const helperResolvedPbxIds = new Set<string>();
 
     for (const link of links) {
       if (!link?.pbxInstance) continue;
@@ -1251,6 +1263,7 @@ async function runVoicemailSyncCycle(): Promise<void> {
           try {
             let records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
             cycleRestRecords += records.length;
+            let usedHelperForExt = false;
             if (records.length === 0 && helperCallsBudget > 0) {
               const tid = String(link.pbxTenantId || "").trim();
               const helperCfg = tid ? resolvePbxRouteHelperConfig(link.pbxInstanceId) : null;
@@ -1272,13 +1285,43 @@ async function runVoicemailSyncCycle(): Promise<void> {
                   cycleHelperMessages += mapped.length;
                   if (mapped.length > 0) {
                     records = mapped;
+                    usedHelperForExt = true;
                   }
-                } catch {
-                  // Per-extension failure should not abort the whole cycle.
+                  if (!helperResolvedPbxIds.has(link.pbxInstanceId)) {
+                    helperResolvedPbxIds.add(link.pbxInstanceId);
+                    try {
+                      await resolveHelperIncidentsForPbx(db, link.pbxInstanceId);
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                } catch (helperErr: any) {
+                  const kind = classifyHelperFailure(helperErr);
+                  if (
+                    kind === "HELPER_ROUTE_MISSING" ||
+                    kind === "HELPER_SECRET_MISMATCH" ||
+                    kind === "HELPER_UNREACHABLE"
+                  ) {
+                    try {
+                      await recordHelperIncident(db, {
+                        scenario: kind,
+                        pbxInstanceId: link.pbxInstanceId,
+                        tenantId: link.tenantId,
+                        metadata: {
+                          mailbox: ext.extNumber,
+                          httpStatus: helperErr?.httpStatus,
+                          helperBaseHost: helperBaseHostFromUrl(helperCfg.baseUrl),
+                        },
+                      });
+                    } catch {
+                      /* ignore */
+                    }
+                  }
                 }
               }
             }
             totalRecords += records.length;
+            const upsertsBeforeExt = totalUpserts;
             for (const rec of records) {
               // VitalPBX payload uses { date, clid, recfile, filename, msg_id }.
               // Older Asterisk-voicemail dumps used { origtime, callerid, msg_num }.
@@ -1343,6 +1386,27 @@ async function runVoicemailSyncCycle(): Promise<void> {
                 },
               });
             }
+            if (usedHelperForExt && records.length > 0 && totalUpserts === upsertsBeforeExt) {
+              try {
+                await recordRestVsSpoolDiverge(db, {
+                  tenantId: link.tenantId,
+                  mailbox: ext.extNumber,
+                  source: "worker_sync",
+                });
+              } catch {
+                /* ignore */
+              }
+            } else if (usedHelperForExt && totalUpserts > upsertsBeforeExt) {
+              try {
+                await resolveRestVsSpoolDiverge(db, {
+                  tenantId: link.tenantId,
+                  mailbox: ext.extNumber,
+                  source: "worker_sync",
+                });
+              } catch {
+                /* ignore */
+              }
+            }
           } catch (extErr: any) {
             totalErrors++;
             console.warn(`voicemail sync ext ${ext.extNumber} (tenant ${link.tenantId}): ${extErr?.message}`);
@@ -1358,6 +1422,27 @@ async function runVoicemailSyncCycle(): Promise<void> {
       cycleHelperCalls > 0 ? (cycleRestRecords > 0 ? "rest+helper" : "helper") : "rest";
     const fallback_reason =
       cycleHelperCalls > 0 ? "rest_empty_used_spool_fallback" : null;
+
+    if (links.length > 0 && totalExts > 0 && totalRecords === 0 && totalErrors === 0) {
+      _vmWorkerSyncZeroStreak += 1;
+    } else {
+      _vmWorkerSyncZeroStreak = 0;
+    }
+    if (links.length === 0 || totalExts === 0 || totalRecords > 0) {
+      try {
+        await resolveWorkerSyncGlobalZero(db);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (_vmWorkerSyncZeroStreak >= 3) {
+      try {
+        await recordWorkerSyncGlobalZero(db);
+      } catch {
+        /* ignore */
+      }
+    }
+
     console.log(
       JSON.stringify({
         msg: "voicemail-sync-cycle",
@@ -1372,6 +1457,7 @@ async function runVoicemailSyncCycle(): Promise<void> {
         source_used,
         upserted_count: totalUpserts,
         fallback_reason,
+        worker_sync_zero_streak: _vmWorkerSyncZeroStreak,
       }),
     );
   } finally {

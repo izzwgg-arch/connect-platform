@@ -457,6 +457,9 @@ When you find a new fragile area, add it here.
   `helper_error:not_found` on `/internal/voicemail-notify`, worker `helper_calls:0`.
   Re-run `install-vitalpbx-inbound-route-helper.sh` from the deployed commit; confirm
   `GET …:8757/health` → **`2026.05.08.1`**+ (`DEPLOYMENT.md` production check-in).
+  Step-by-step fix for the **`209.145.60.79`** mismatch: **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. Automated “agent execution” from Cursor without PBX/app-host access will not apply the fix; after a human runs it, use the strict **paste-back transcript** (**`DEPLOYMENT.md`** Phase 1 **operator execution transcript**) so evidence (job IDs, `done` SHAs, log fields) is reviewable without leaking secrets.
+- **Voicemail ingest incidents (super-admin v1).** `VoicemailIngestIncident` rows summarize thresholded stalls (notify **upsert=0**, worker **global zero** sync, helper **404/401** immediate, unreachable debounced, REST vs spool divergence). They are **not** a substitute for log forensics — multi-instance api could theoretically skew rare counters until a v2 event table exists. Tenant admins are **not** notified in v1.
+- **Incomplete Phase 1 evidence.** Claiming “helper fallback works” without the **operator execution transcript** (or equivalent) risks hidden **BASE_URL** skew, unstaged **api/worker** env, or **deploy log SHA** mismatch (`AGENTS.md`). Treat missing queue **`done <sha>`** lines as **not verified**.
 - **`PBX_ROUTE_HELPER_BASE_URL` points at the wrong host.** Connect will happily call
   **`http://<ip>:8757`** on a machine that still runs **`2026.05.07.x`** while operators upgrade a
   **different** VitalPBX (MOTD / SSH IP mismatch). Symptom: persistent **`helper_error:not_found`** after

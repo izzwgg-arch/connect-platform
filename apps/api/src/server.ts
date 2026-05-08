@@ -17,7 +17,20 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
-import { db } from "@connect/db";
+import {
+  acknowledgeVoicemailIngestIncident,
+  classifyHelperFailure,
+  db,
+  getVoicemailIngestIncident,
+  helperBaseHostFromUrl,
+  listVoicemailIngestIncidents,
+  recordHelperIncident,
+  recordNotifyUpsertZero,
+  recordRestVsSpoolDiverge,
+  resolveHelperIncidentsForPbx,
+  resolveNotifyUpsertZeroIfRecovered,
+  resolveRestVsSpoolDiverge,
+} from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import {
   canonicalSmsPhone,
@@ -628,6 +641,35 @@ function sanitizeEventPayload(input: unknown): Record<string, any> {
     else out[k] = v;
   }
   return out;
+}
+
+async function loadOpenVoicemailIngestIncidentsForOps(take = 25) {
+  return db.voicemailIngestIncident
+    .findMany({
+      where: {
+        status: { in: ["OPEN", "ACKNOWLEDGED"] },
+        AND: [
+          { NOT: { AND: [{ scenario: "NOTIFY_UPSERT_ZERO" }, { severity: "INFO" }] } },
+          { NOT: { AND: [{ scenario: "HELPER_UNREACHABLE" }, { severity: "INFO" }] } },
+        ],
+      },
+      include: { tenant: { select: { name: true } } },
+      orderBy: [{ lastEventAt: "desc" }, { createdAt: "desc" }],
+      take,
+    })
+    .catch(() => [] as Array<{ id: string; tenantId: string | null; scenario: string; severity: string; title: string; actionText: string; firstSeenAt: Date; lastSeenAt: Date; lastEventAt: Date | null; occurrenceCount: number; metadata: unknown; tenant: { name: string } | null }>);
+}
+
+function voicemailIngestMetadataMailbox(meta: unknown): string | null {
+  const m = meta as Record<string, unknown> | null;
+  return typeof m?.mailbox === "string" ? m.mailbox : null;
+}
+
+function mapVoicemailIngestSeverityToOps(sev: string): "critical" | "warning" | "info" {
+  const u = sev.toUpperCase();
+  if (u === "HIGH" || u === "CRITICAL") return "critical";
+  if (u === "WARNING") return "warning";
+  return "info";
 }
 
 async function logInvoiceEvent(params: { tenantId: string; invoiceId: string; type: string; payload?: Record<string, any> }) {
@@ -11267,6 +11309,28 @@ app.get("/admin/ops-center", async (req, reply) => {
     });
   }
 
+  const vmIngestRows = await loadOpenVoicemailIngestIncidentsForOps(20);
+  for (const v of vmIngestRows) {
+    const last = v.lastEventAt ?? v.lastSeenAt;
+    incidents.push({
+      id: `vm-ingest-${v.id}`,
+      title: v.title,
+      severity: mapVoicemailIngestSeverityToOps(v.severity),
+      tenantId: v.tenantId,
+      tenantName: v.tenant?.name ?? (v.tenantId ? v.tenantId : "Platform"),
+      affectedExtension: voicemailIngestMetadataMailbox(v.metadata),
+      affectedUser: null,
+      firstSeen: v.firstSeenAt.toISOString(),
+      lastSeen: last.toISOString(),
+      status: "active",
+      healingStatus: "none",
+      likelyCause: `Scenario ${v.scenario} (severity ${v.severity}) · occurrences ${v.occurrenceCount}`,
+      suggestedAction: v.actionText,
+      callCount: v.occurrenceCount,
+      category: "voicemail",
+    });
+  }
+
   // Add healing actions as "resolved" incidents
   if (healingLog) {
     for (const action of (healingLog as any[]).filter((a: any) => a.status === "succeeded").slice(0, 3)) {
@@ -11711,6 +11775,25 @@ app.get("/admin/incidents", async (req, reply) => {
     });
   }
 
+  const vmIngestAdminRows = await loadOpenVoicemailIngestIncidentsForOps(25);
+  for (const v of vmIngestAdminRows) {
+    const last = v.lastEventAt ?? v.lastSeenAt;
+    incidents.push({
+      id: `vm-ingest-${v.id}`,
+      severity: mapVoicemailIngestSeverityToOps(v.severity),
+      category: "system",
+      title: v.title,
+      description: `Voicemail ingest: ${v.scenario}. Occurrences ${v.occurrenceCount}. Last event ${last.toISOString()}.`,
+      affectedTenant: v.tenant?.name ?? v.tenantId ?? "Platform",
+      affectedUsers: 0,
+      likelyCause: `Scenario ${v.scenario} (severity ${v.severity}).`,
+      suggestedAction: v.actionText,
+      startedAt: v.firstSeenAt.toISOString(),
+      callCount: v.occurrenceCount,
+      drillDownPath: `/admin/voicemail-ingest/incidents/${v.id}`,
+    });
+  }
+
   // Sort: critical first, then by call count
   incidents.sort((a, b) => {
     const sev = { critical: 0, warning: 1, info: 2 };
@@ -11742,6 +11825,56 @@ app.get("/admin/incidents", async (req, reply) => {
       totalCalls24h: await db.connectCdr.count({ where: { createdAt: { gte: since24h } } }).catch(() => 0),
     },
   };
+});
+
+// ── Voicemail ingest incidents (super-admin, durable monitoring) ───────────
+app.get("/admin/voicemail-ingest/incidents", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const q = z
+    .object({
+      status: z.string().optional(),
+      scenario: z.string().optional(),
+      tenantId: z.string().optional(),
+      since: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(200).optional().default(50),
+      cursor: z.string().optional(),
+    })
+    .parse(req.query || {});
+  const since = q.since ? new Date(q.since) : undefined;
+  if (since && Number.isNaN(since.getTime())) return reply.status(400).send({ error: "invalid_since" });
+  const rows = await listVoicemailIngestIncidents(db, {
+    status: q.status,
+    scenario: q.scenario,
+    tenantId: q.tenantId,
+    since,
+    limit: q.limit,
+    cursor: q.cursor ?? null,
+  });
+  const hasMore = rows.length > q.limit;
+  const items = hasMore ? rows.slice(0, q.limit) : rows;
+  return reply.send({
+    items,
+    nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null,
+  });
+});
+
+app.get("/admin/voicemail-ingest/incidents/:id", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const id = z.string().min(1).parse((req.params as any)?.id);
+  const row = await getVoicemailIngestIncident(db, id);
+  if (!row) return reply.status(404).send({ error: "not_found" });
+  return reply.send(row);
+});
+
+app.post("/admin/voicemail-ingest/incidents/:id/ack", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const id = z.string().min(1).parse((req.params as any)?.id);
+  const r = await acknowledgeVoicemailIngestIncident(db, id, admin.sub);
+  if (!r.ok) return reply.status(404).send({ error: "not_found" });
+  return reply.send({ ok: true });
 });
 
 // ── Tenant health endpoint (tenant-scoped, accessible to ADMIN+) ──────────────
@@ -20785,6 +20918,7 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
     let helper_count = 0;
     let source_used: "rest" | "helper" | "rest+helper" = "rest";
     let fallback_reason: string | null = null;
+    let helperRequestSucceeded = false;
 
     if (records.length === 0 && newCount > 0) {
       const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
@@ -20801,6 +20935,7 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
               extension: mailbox,
               voicemailContext: context,
             });
+            helperRequestSucceeded = true;
             helper_count = spool.messages?.length ?? 0;
             records = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
             if (records.length > 0) {
@@ -20812,8 +20947,38 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           } catch (helperErr: any) {
             fallback_reason = `helper_error:${String(helperErr?.message || helperErr)}`;
             app.log.warn({ mailbox, err: helperErr?.message }, "voicemail-notify: helper fallback failed");
+            const kind = classifyHelperFailure(helperErr);
+            if (
+              kind === "HELPER_ROUTE_MISSING" ||
+              kind === "HELPER_SECRET_MISMATCH" ||
+              kind === "HELPER_UNREACHABLE"
+            ) {
+              try {
+                await recordHelperIncident(db, {
+                  scenario: kind,
+                  pbxInstanceId: link.pbxInstanceId,
+                  tenantId: link.tenantId,
+                  metadata: {
+                    mailbox,
+                    context,
+                    httpStatus: helperErr?.httpStatus,
+                    helperBaseHost: helperBaseHostFromUrl(helperCfg.baseUrl),
+                  },
+                });
+              } catch (incErr: any) {
+                app.log.warn({ incErr: incErr?.message }, "voicemail-notify: ingest incident record failed");
+              }
+            }
           }
         }
+      }
+    }
+
+    if (helperRequestSucceeded) {
+      try {
+        await resolveHelperIncidentsForPbx(db, link.pbxInstanceId);
+      } catch (incErr: any) {
+        app.log.warn({ incErr: incErr?.message }, "voicemail-notify: ingest incident resolve failed");
       }
     }
 
@@ -20885,6 +21050,26 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
         }).catch((err: any) => app.log.warn({ err: err?.message, voicemailId: voicemail.id, mailbox }, "voicemail-push: failed"));
       }
       upserted++;
+    }
+
+    try {
+      if (rest_count === 0 && helper_count > 0 && upserted === 0) {
+        await recordRestVsSpoolDiverge(db, {
+          tenantId: link.tenantId,
+          mailbox,
+          source: "voicemail_notify",
+        });
+      }
+      if (upserted > 0) {
+        await resolveRestVsSpoolDiverge(db, { tenantId: link.tenantId, mailbox, source: "voicemail_notify" });
+      }
+      if (newCount > 0 && upserted === 0) {
+        await recordNotifyUpsertZero(db, { tenantId: link.tenantId, mailbox, context });
+      } else if (upserted > 0) {
+        await resolveNotifyUpsertZeroIfRecovered(db, { tenantId: link.tenantId, mailbox, context });
+      }
+    } catch (incErr: any) {
+      app.log.warn({ incErr: incErr?.message }, "voicemail-notify: ingest incident update failed");
     }
 
     app.log.info(

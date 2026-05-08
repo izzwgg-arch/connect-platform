@@ -297,6 +297,8 @@ Breakdown by sub-prefix (count / approximate scope):
   **pre-`2026.05.08.1`**, expect `fallback_reason` such as `helper_error:not_found` (no
   spool route) until the PBX installer is upgraded (`TELEPHONY.md`, `DEPLOYMENT.md`).
 
+**Super-admin voicemail ingest incidents (in `server.ts`):** `GET /admin/voicemail-ingest/incidents` (list + cursor), `GET /admin/voicemail-ingest/incidents/:id` (detail), `POST /admin/voicemail-ingest/incidents/:id/ack` (acknowledge). **Super-admin JWT only.** Open rows are also merged into **`GET /admin/ops-center`** and **`GET /admin/incidents`** for ops visibility. Feature flag: **`VOICEMAIL_INGEST_INCIDENTS_ENABLED`** (default true on **api** + **worker**).
+
 **On-PBX helper (not in `server.ts`):** `POST /voicemail/spool/list` — HMAC header
 `x-connect-pbx-helper-secret` (must match **`CONNECT_PBX_HELPER_SECRET`** on the PBX and
 **`PBX_ROUTE_HELPER_SECRET`** in Connect); JSON body `tenantId`, `extension`, optional `voicemailContext`
@@ -304,6 +306,7 @@ Breakdown by sub-prefix (count / approximate scope):
 `scripts/pbx/install-vitalpbx-inbound-route-helper.sh`. **404** = helper older than **`2026.05.08.1`**;
 **401** = wrong secret after rotation (fix env + restart api/worker + PBX helper).
 End-to-end checklist: **`DEPLOYMENT.md`** § **Phase 1 — production verification (A–G)**.
+Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Proof format:** **`DEPLOYMENT.md`** Phase 1 **operator execution transcript** (HTTP status, `ok`, counts, deploy job IDs, **no** secrets). Helper HTTP contract is unchanged when upgrading **`2026.05.07.x` → `2026.05.08.1`**; only availability of **`POST /voicemail/spool/list`** and aligned **`x-connect-pbx-helper-secret`** matter. IDE agents cannot typically reach PBX SSH or app-host **`:3910`** — **`DEPLOYMENT.md`** § **execution environment**.
 
 ---
 

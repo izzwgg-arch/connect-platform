@@ -213,6 +213,7 @@
   `apps/api/src/pbxInboundRouteHelperClient.ts`). **Staged production rollout**
   (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in
   `DEPLOYMENT.md` under **Voicemail Phase 1 — staged rollout**.
+  **Copy/paste operator runbook** (upgrade helper on **`209.145.60.79`**, rotate secret, queue **api**/**worker**): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Post-run evidence:** strict paste-back template **`DEPLOYMENT.md`** Phase 1 **operator execution transcript**. Execution requires PBX + app-host SSH / env access — see **`DEPLOYMENT.md`** § **Phase 1 — execution environment (Cursor / local dev)** for why IDE agents cannot finish this alone.
 - **Helper version gate.** Spool fallback is inactive until the on-PBX helper reports
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
@@ -227,6 +228,7 @@
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a
   VitalPBX screenshot shows a different public IP, resolve the mismatch before blaming “empty REST”
   (`DEPLOYMENT.md` § Phase 1 verification A′).
+- **Ingest monitoring (v1, super-admin).** Thresholded **`VoicemailIngestIncident`** rows record helper **404/401**, unreachable (debounced), notify **upsert=0** (3×/15m), worker **global zero records** (3 consecutive cycles), and **REST vs spool** divergence. Toggle with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED`** (default **true**). See **`API_ROUTES.md`** (`/admin/voicemail-ingest/incidents*`) and **`GET /admin/ops-center`** / **`GET /admin/incidents`** summaries. No tenant-admin or email alerts in v1.
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.
   Mobile flow lives in `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts` +

@@ -402,6 +402,7 @@ model Tenant {
   tenantSmsNumbers                TenantSmsNumber[]
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
+  voicemailIngestIncidents        VoicemailIngestIncident[]
 }
 
 model User {
@@ -1486,6 +1487,34 @@ model Alert {
 
   @@index([tenantId, createdAt])
   @@index([severity, createdAt])
+}
+
+/// Super-admin visibility for voicemail ingestion stalls (REST vs spool, helper errors, notify/worker paths).
+model VoicemailIngestIncident {
+  id                   String    @id @default(cuid())
+  fingerprint          String
+  tenantId             String?
+  scenario             String
+  severity             String
+  status               String
+  firstSeenAt          DateTime  @default(now())
+  lastSeenAt           DateTime  @updatedAt
+  lastEventAt          DateTime?
+  occurrenceCount      Int       @default(0)
+  title                String
+  actionText           String
+  metadata             Json?
+  resolvedAt           DateTime?
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  createdAt            DateTime  @default(now())
+  tenant               Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([fingerprint, status])
+  @@index([status, severity])
+  @@index([tenantId])
+  @@index([scenario, status])
+  @@index([createdAt])
 }
 
 model Extension {
