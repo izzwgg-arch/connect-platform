@@ -224,7 +224,7 @@
   **`VERSION` `2026.05.08.2`+** (`DEPLOYMENT.md` § **Phase 2**). Client-facing responses must never
   echo PBX absolute paths. **Production note:** **api** may ship Phase 2 before the PBX shows **`2026.05.08.2`**
   on **`/health`** — until then, stream fallback hits a missing route (**404**) and Vital-only playback still applies
-  (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
+  (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**). **PBX upgrade:** copy-paste installer for **`209.145.60.79`** → **`DEPLOYMENT.md`** § **Phase 2 — operator handoff**.
 - **Helper version gate.** Spool **ingestion** fallback is inactive until the on-PBX helper reports
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and

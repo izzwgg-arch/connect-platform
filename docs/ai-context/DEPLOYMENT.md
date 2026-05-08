@@ -181,6 +181,28 @@ Order of operations:
 3. **Deploy queue:** enqueue **`api`** only (Phase 2 logic lives in **`streamVoicemailAudio`**). Worker/telephony unchanged for this slice.
 4. **Verify:** for a known spool-backed voicemail id, **`GET /voice/voicemail/:id/stream?token=…`** → **200**, audio content-type; **API** logs may show **`voicemail: helper_audio_fallback`** with **`helper_audio_fallback: true`**.
 
+#### Phase 2 — operator handoff (PBX `209.145.60.79`, pin **`303399d1651ec686b17c68d0007ed10710b4833e`**)
+
+Run **as root on the PBX** (IDE agents typically have no **`root@209.145.60.79`** SSH key — human or jump host only):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/izzwgg-arch/connect-platform/303399d1651ec686b17c68d0007ed10710b4833e/scripts/pbx/install-vitalpbx-inbound-route-helper.sh -o /root/install-vitalpbx-inbound-route-helper.sh
+bash /root/install-vitalpbx-inbound-route-helper.sh
+curl -s http://127.0.0.1:8757/health
+```
+
+Expect **`"version":"2026.05.08.2"`** on loopback, then from **Connect app host**:
+
+```bash
+curl -s http://209.145.60.79:8757/health
+```
+
+**Smoke `POST /voicemail/spool/audio`:** use **`x-connect-pbx-helper-secret`** matching **`CONNECT_PBX_HELPER_SECRET`** on the PBX (same value as **`PBX_ROUTE_HELPER_SECRET`** in **api** — pull from **`docker exec app-api-1`** env, **do not** paste into tickets). Valid body → **200**, **`Content-Type: audio/wav`**. Bad **`msgNum`** (e.g. **`msg99999`** with no file) → **400** or **404** JSON, **not** arbitrary filesystem paths in the response.
+
+**Playback:** after helper **`.2`**, open a spool-backed row in portal/mobile or **`curl -I`** **`GET /voice/voicemail/<id>/stream?token=<JWT>`** — **200**, **`Content-Type: audio/*`**, **`docker logs app-api-1`** shows **`helper_audio_fallback: true`**.
+
+**Automated re-check (Connect `ssh connect`, no PBX SSH):** **`GET http://209.145.60.79:8757/health`** still showed **`2026.05.08.1`** until the operator runs the block above — update this paragraph after install.
+
 **Recorded Phase 2 — api shipped (2026-05-09):** Queue job **`c19f5796-b4f9-4619-96a2-d5a703231f7c`** (**`api`** only, **`dryRun: false`**) ended with **`[deploy-api] done 303399d requested_by=human:phase2-rollout`**. Log showed **`prisma: no schema/migrations changes -> skipping migrate deploy`**. Post-restart loopback **`GET http://127.0.0.1:3001/health`** → **200**. **`docker exec app-api-1 grep -n helper_audio_fallback /app/apps/api/src/server.ts`** confirms Phase 2 code in the running tree. **Dirty clone fingerprint:** after **`git checkout`** the log still listed **`M apps/telephony/src/telephony/state/CallStateStore.ts`** on the queue working copy — treat per **`AGENTS.md`** / **`KNOWN_ISSUES.md`** (“Deploy queue silently ships stale code”); **`apps/api`** Dockerfile **`COPY . .`** still picked up **`303399d`** tree for this build, but ops should **`git checkout HEAD --`** that file (or resolve the diff) on **`/opt/connectcomms/app`** before the next telephony deploy. **Compose noise:** **`Found orphan containers ([sbc-rtpengine sbc-kamailio])`** during **`docker up api`** — unrelated to voicemail. **Helper gap at check time:** app-host **`GET http://209.145.60.79:8757/health`** still returned **`2026.05.08.1`** — operator must install **`2026.05.08.2`** before **`POST /voicemail/spool/audio`** and helper-based playback work end-to-end.
 
 **Rollback:** Re-enqueue **api** to the prior SHA. Helper may stay on **`2026.05.08.2`** (audio route is harmless if unused) or restore prior installer only if ops requires it.
