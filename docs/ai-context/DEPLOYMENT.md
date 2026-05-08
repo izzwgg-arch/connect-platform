@@ -257,7 +257,51 @@ Run from the **Connect app host** (same network path **api**/**worker** use), **
 | **404** | e.g. **`not_found`** | Wrong helper version or wrong host — re-check **`/health`** **`version`**. |
 
 **Recorded check (Connect app host):** **`GET http://209.145.60.79:8757/health`** → **`2026.05.08.1`** OK;
-**`POST …/spool/list`** (secret from **api** container) → **401** — PBX secret still misaligned; **api** and **worker** container secrets **match each other** (`sha256sum` identical).
+**`POST …/spool/list`** (secret from **api** container) → **401** until PBX env is aligned — **api**/**worker** secrets **match each other** (`sha256sum` identical).
+
+### Phase 1 — helper secret alignment only (401 `unauthorized`, not a version/bind issue)
+
+**When:** App-host **`GET …:8757/health`** shows **`2026.05.08.1`**, but **`POST …/voicemail/spool/list`**
+returns **401** with body like **`{"error":"unauthorized"}`**. **api** and **worker** **`PBX_ROUTE_HELPER_SECRET`**
+already match each other — only **PBX** **`CONNECT_PBX_HELPER_SECRET`** differs.
+
+Pick **one** source of truth. **Do not** “rotate both sides blindly” to a new random value without a
+controlled copy into your secret store.
+
+#### Preferred: PBX follows Connect (no Connect redeploy)
+
+Use the **existing** Connect **`PBX_ROUTE_HELPER_SECRET`** (same bytes **api**/**worker** already load).
+Copy it **securely** from the app host (e.g. **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`**
+into the operator’s password manager / PBX root session only) — **never** paste into tickets or chat.
+
+**On the PBX (root):**
+
+1. Edit **`/etc/connect-pbx-helper.env`**.
+2. Set **`CONNECT_PBX_HELPER_SECRET=<exact same value as Connect PBX_ROUTE_HELPER_SECRET>`** on a single line.
+   **Do not** add wrapping quotes unless your env format already requires them. **No** trailing spaces or
+   newline characters inside the secret value.
+3. **`chmod 0600 /etc/connect-pbx-helper.env`** if needed.
+4. **`systemctl restart connect-pbx-helper.service`**
+5. **`curl -s http://127.0.0.1:8757/health`** → still **`2026.05.08.1`**.
+
+**On the Connect app host (verify):**
+
+1. **`curl -s http://<pbx-ip>:8757/health`** → **`2026.05.08.1`**
+2. **`POST http://<pbx-ip>:8757/voicemail/spool/list`** with **`x-connect-pbx-helper-secret`** from
+   **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** (trim CR/LF) → expect **HTTP 200**,
+   **`ok: true`**, **`messages`** array present (may be empty).
+
+#### Alternate: Connect follows PBX (requires queue recycle)
+
+If policy says the PBX file is canonical: set **`PBX_ROUTE_HELPER_SECRET=`** in **`/opt/connectcomms/env/.env.platform`**
+(or your secret store) to the PBX **`CONNECT_PBX_HELPER_SECRET`** value, then enqueue **`api`** then **`worker`**
+via the deploy queue only (`AGENTS.md`) so containers reload env. Re-run the app-host **`POST …/spool/list`** probe.
+
+#### After HTTP 200
+
+Trigger or wait for **`/internal/voicemail-notify`** / worker **`voicemail-sync-cycle`**; confirm JSON includes
+**`helper_count > 0`**, **`source_used`** reflecting helper, **`upserted > 0`** when REST is empty and spool has
+mail; confirm portal/mobile **lists** show rows (`DEBUGGING.md`). Playback remains separate from Phase 1.
 
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 

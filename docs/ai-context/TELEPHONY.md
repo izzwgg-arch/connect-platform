@@ -230,6 +230,9 @@
   `helper_error` in logs.
   **Symptom:** app host **`GET …:8757/health`** shows **`2026.05.08.1`** but **`POST …/voicemail/spool/list`**
   returns **401** — secrets differ; **api**/**worker** often still match each other (`DEPLOYMENT.md` § **app-host smoke**).
+  **Fix (no compromise):** preferred path is **PBX follows Connect** — set **`CONNECT_PBX_HELPER_SECRET`**
+  in **`/etc/connect-pbx-helper.env`** to the **exact** **`PBX_ROUTE_HELPER_SECRET`** (no trailing whitespace),
+  restart **`connect-pbx-helper`** (`DEPLOYMENT.md` § **helper secret alignment only**). **Do not** paste secrets into chat.
 - **Helper host = `PBX_ROUTE_HELPER_BASE_URL`.** Production traffic uses whatever base URL is in **api/worker**
   env (and optional **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**). That host must be the same machine where
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a

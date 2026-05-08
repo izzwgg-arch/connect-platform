@@ -482,8 +482,9 @@ When you find a new fragile area, add it here.
 - **PBX vs Connect helper secret skew (401 after bind fix).** App host **`GET …:8757/health`** can show
   **`2026.05.08.1`** while **`POST …/voicemail/spool/list`** returns **401** **`unauthorized`**: PBX
   **`/etc/connect-pbx-helper.env`** still has a different **`CONNECT_PBX_HELPER_SECRET`** than
-  **`PBX_ROUTE_HELPER_SECRET`** on **api**/**worker**. Align, restart **`connect-pbx-helper`**, queue
-  **api**/**worker** if Connect env changed (`DEPLOYMENT.md` § **app-host smoke**).
+  **`PBX_ROUTE_HELPER_SECRET`** on **api**/**worker**. **Preferred:** set PBX line to **byte-match** Connect
+  (no trailing spaces), **`systemctl restart connect-pbx-helper`** — **no** api/worker recycle needed.
+  **Alternate:** update **`.env.platform`** to PBX value + queue **api**/**worker** (`DEPLOYMENT.md` § **helper secret alignment only**).
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
