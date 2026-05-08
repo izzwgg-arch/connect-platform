@@ -228,6 +228,8 @@
   After rotation, restart **`connect-pbx-helper.service`** on the PBX and **redeploy or restart** api/worker
   so env is re-read (`DEPLOYMENT.md` § compromised secret). Mismatch → **401** from helper, or stale
   `helper_error` in logs.
+  **Symptom:** app host **`GET …:8757/health`** shows **`2026.05.08.1`** but **`POST …/voicemail/spool/list`**
+  returns **401** — secrets differ; **api**/**worker** often still match each other (`DEPLOYMENT.md` § **app-host smoke**).
 - **Helper host = `PBX_ROUTE_HELPER_BASE_URL`.** Production traffic uses whatever base URL is in **api/worker**
   env (and optional **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`**). That host must be the same machine where
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a

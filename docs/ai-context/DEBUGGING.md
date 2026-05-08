@@ -390,6 +390,10 @@ Per-service:
       After **secret rotation**, if the helper returns **401**, re-check `x-connect-pbx-helper-secret`
       matches **`CONNECT_PBX_HELPER_SECRET`** / **`PBX_ROUTE_HELPER_SECRET`** and that **api** and **worker**
       were restarted with the new env.
+      If **`/health`** from the **app host** is **`2026.05.08.1`** but **`POST …/spool/list`** is still **401**,
+      the PBX **`CONNECT_PBX_HELPER_SECRET`** does not match Connect — not a routing/version problem
+      (`DEPLOYMENT.md` § **app-host smoke**). Compare **`sha256sum`** of **api** vs **worker** env to confirm
+      Connect-side consistency (do **not** paste raw secrets).
    3. **Super-admin incidents** — open **`VoicemailIngestIncident`** rows (helper errors, notify upsert zero, worker global zero, REST vs spool) appear in **`GET /admin/ops-center`** and **`GET /admin/incidents`**, with detail/ack at **`GET/POST /admin/voicemail-ingest/incidents*`** (`API_ROUTES.md`). Disable emission with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED=false`** on **api** + **worker** if needed for rollback.
    4. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
       IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`

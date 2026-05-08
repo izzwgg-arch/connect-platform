@@ -240,6 +240,25 @@ combined value can break startup or listening.
 10. **Logs:** notify / worker JSON — **`rest_count: 0`**, **`helper_count > 0`**, **`source_used`**
     reflects helper, **`upserted > 0`** when spool has new mail and REST is empty (`DEBUGGING.md`).
 
+### Phase 1 — app-host smoke (after bind + firewall)
+
+Run from the **Connect app host** (same network path **api**/**worker** use), **not** the PBX loopback:
+
+1. **`curl -s http://<pbx-ip>:8757/health`** → **`"version":"2026.05.08.1"`** (JSON may space fields differently).
+2. **`POST http://<pbx-ip>:8757/voicemail/spool/list`** with **`Content-Type: application/json`**, body
+   **`{"tenantId":"…","extension":"…"}`**, header **`x-connect-pbx-helper-secret`** equal to
+   **`PBX_ROUTE_HELPER_SECRET`** from **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`**
+   (**never** paste the value into tickets).
+
+| HTTP | Body hint | Action |
+|------|-----------|--------|
+| **200** | **`ok: true`**, **`messages`** array | Secret + route OK — proceed to **`/internal/voicemail-notify`** / worker log checks (`DEBUGGING.md`). |
+| **401** | **`unauthorized`** | **`CONNECT_PBX_HELPER_SECRET`** in **`/etc/connect-pbx-helper.env`** on the PBX ≠ Connect **`PBX_ROUTE_HELPER_SECRET`**. Align (one source of truth), **`systemctl restart connect-pbx-helper.service`**. If Connect **`.env.platform`** changed, enqueue **api** then **worker** via queue. |
+| **404** | e.g. **`not_found`** | Wrong helper version or wrong host — re-check **`/health`** **`version`**. |
+
+**Recorded check (Connect app host):** **`GET http://209.145.60.79:8757/health`** → **`2026.05.08.1`** OK;
+**`POST …/spool/list`** (secret from **api** container) → **401** — PBX secret still misaligned; **api** and **worker** container secrets **match each other** (`sha256sum` identical).
+
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 
 If the helper secret was **exposed** (screenshot, chat, ticket), treat it as **compromised** and rotate end-to-end.
@@ -501,6 +520,7 @@ Use this after Connect images ship and before claiming fallback is live.
 | **G** | Portal + mobile voicemail list | New rows, **current** `receivedAt` (not a stale date). Playback still separate (`KNOWN_ISSUES.md`). |
 
 **Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs. **Upgrade path:** pinned **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** installer from git only (§ **upgrades: pinned installer only**); re-probe **`/health`** until **`2026.05.08.1`** — if it stays **`2026.05.07.x`**, the install did not take; do not patch Python by hand. **Post-upgrade note:** operators may see **`2026.05.08.1`** on **PBX loopback** while the app host still gets **`Connection refused`** on **`<pbx-ip>:8757`** — default **loopback bind**; see § **listen bind**.
+**Post-bind note:** once the app host reaches **`/health` `2026.05.08.1`**, a **`POST /voicemail/spool/list`** that returns **401** **`unauthorized`** indicates **secret skew** (PBX **`CONNECT_PBX_HELPER_SECRET`** vs Connect **`PBX_ROUTE_HELPER_SECRET`**), not a missing route — see § **app-host smoke**.
 
 ---
 

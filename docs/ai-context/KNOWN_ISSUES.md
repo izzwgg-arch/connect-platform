@@ -479,6 +479,11 @@ When you find a new fragile area, add it here.
   **`CONNECT_PBX_HELPER_PORT`**), restart **`connect-pbx-helper`**, confirm **`ss -lntp | grep 8757`**
   shows **`0.0.0.0:8757`**, allow **tcp/8757** from the **app host IP only** (`DEPLOYMENT.md` § listen bind).
   **Not** a Python patch.
+- **PBX vs Connect helper secret skew (401 after bind fix).** App host **`GET …:8757/health`** can show
+  **`2026.05.08.1`** while **`POST …/voicemail/spool/list`** returns **401** **`unauthorized`**: PBX
+  **`/etc/connect-pbx-helper.env`** still has a different **`CONNECT_PBX_HELPER_SECRET`** than
+  **`PBX_ROUTE_HELPER_SECRET`** on **api**/**worker**. Align, restart **`connect-pbx-helper`**, queue
+  **api**/**worker** if Connect env changed (`DEPLOYMENT.md` § **app-host smoke**).
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
