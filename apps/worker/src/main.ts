@@ -15,7 +15,7 @@ import {
   VitalPbxClient,
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
-import { runVoipMsInboundSyncCycle } from "./voipMsInboundSyncJob";
+import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
@@ -1529,11 +1529,64 @@ setInterval(() => {
   runPbxJobCycle().catch((err) => console.error("pbx job cycle failed", err?.message || err));
 }, 60 * 1000);
 
+// SMS push notification for VoIP.ms poll path.
+// Unlike call-control pushes (data-only), SMS pushes include title/body/channelId so
+// Android FCM SDK can display them directly even when the app is swiped away, without
+// needing to wake onMessageReceived on a killed app.
+async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
+  const allDevices = await db.mobileDevice.findMany({
+    where: { tenantId: input.tenantId, userId: input.userId, active: true },
+    select: { expoPushToken: true },
+  });
+  const devices = allDevices.filter((d): d is { expoPushToken: string } => d.expoPushToken != null);
+  if (!devices.length) return;
+
+  const messages = devices.map((d) => ({
+    to: d.expoPushToken,
+    priority: "high" as const,
+    title: "New message",
+    body: input.preview,
+    ttl: 3600,
+    data: {
+      type: "sms_message",
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      phoneNumber: input.phoneNumber,
+      tenantId: input.tenantId,
+      preview: input.preview,
+      timestamp: input.timestamp,
+    },
+    android: { channelId: "connect-messages" },
+  }));
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (expoPushAccessToken) headers.authorization = `Bearer ${expoPushAccessToken}`;
+
+  const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(messages),
+  });
+  const expoBody = await expoRes.json().catch(() => null);
+  console.info(
+    JSON.stringify({
+      event: "sms_push_expo_result",
+      userId: input.userId,
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      httpStatus: expoRes.status,
+      deviceCount: messages.length,
+      expoResult: expoBody,
+    }),
+  );
+}
+
 setInterval(() => {
-  runVoipMsInboundSyncCycle().catch((err) => console.error("voipms inbound sms sync failed", err?.message || err));
+  runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("voipms inbound sms sync failed", err?.message || err));
 }, Number(process.env.VOIPMS_INBOUND_SYNC_INTERVAL_MS || 60_000));
 
-runVoipMsInboundSyncCycle().catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
+runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
 
 setInterval(() => {
   runPbxCdrSyncCycle().catch((err) => console.error("pbx cdr sync failed", err?.message || err));

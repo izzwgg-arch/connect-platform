@@ -3,6 +3,19 @@ import { decryptJson } from "@connect/security";
 import { canonicalSmsPhone } from "@connect/shared";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 
+export type SmsPushInput = {
+  tenantId: string;
+  userId: string;
+  conversationId: string;
+  messageId: string;
+  phoneNumber: string;
+  preview: string;
+  timestamp: string;
+};
+
+/** Called once per non-muted participant after a new inbound SMS is stored. */
+export type SmsPushFn = (input: SmsPushInput) => Promise<void>;
+
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
 type InboundRow = {
@@ -322,12 +335,19 @@ async function mirrorInboundMmsToAttachments(input: {
   }
 }
 
+function smsPushPreview(body: string, hasMedia: boolean): string {
+  if (hasMedia && !body.trim()) return "Sent an attachment";
+  const text = (body || "New SMS message").trim();
+  return text.length > 100 ? `${text.slice(0, 97)}…` : text;
+}
+
 async function importInboundMessage(input: {
   tenantId: string;
   tenantDidE164: string;
   assignedUserId?: string | null;
   assignedExtensionId?: string | null;
   row: InboundRow;
+  sendSmsPush?: SmsPushFn;
 }) {
   const existingMsg = await db.connectChatMessage.findFirst({
     where: { smsProviderMessageId: input.row.providerMessageId, direction: "INBOUND" },
@@ -455,11 +475,56 @@ async function importInboundMessage(input: {
       payload: { providerMessageId: input.row.providerMessageId, mediaUrls: input.row.mediaUrls },
     },
   });
+
+  // Push notification fan-out — must not roll back the message save on failure.
+  if (input.sendSmsPush) {
+    const preview = smsPushPreview(input.row.body, input.row.mediaUrls.length > 0);
+    const timestamp = new Date().toISOString();
+    const recipients = await db.connectChatParticipant.findMany({
+      where: { threadId: thread.id, leftAt: null, muted: false, userId: { not: null } },
+      select: { userId: true },
+    });
+    let attempted = 0;
+    await Promise.all(
+      recipients.map(async (r) => {
+        if (!r.userId) return;
+        attempted++;
+        await input.sendSmsPush!({
+          tenantId: input.tenantId,
+          userId: r.userId,
+          conversationId: thread.id,
+          messageId: msg.id,
+          phoneNumber: input.row.from,
+          preview,
+          timestamp,
+        }).catch((err: any) => {
+          console.warn(
+            JSON.stringify({
+              event: "voipms_inbound_sms_push_error",
+              threadId: thread.id,
+              messageId: msg.id,
+              userId: r.userId,
+              err: err?.message || String(err),
+            }),
+          );
+        });
+      }),
+    );
+    console.info(
+      JSON.stringify({
+        event: "voipms_inbound_sms_push_sent",
+        threadId: thread.id,
+        messageId: msg.id,
+        recipientCount: recipients.length,
+        attempted,
+      }),
+    );
+  }
 }
 
 let running = false;
 
-export async function runVoipMsInboundSyncCycle(): Promise<void> {
+export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn }): Promise<void> {
   if (running) return;
   running = true;
   try {
@@ -496,6 +561,7 @@ export async function runVoipMsInboundSyncCycle(): Promise<void> {
             assignedUserId: n.assignedUserId,
             assignedExtensionId: n.assignedExtensionId,
             row,
+            sendSmsPush: opts?.sendSmsPush,
           });
         }
         console.log(`[voipms-inbound] ${n.phoneE164}: fetched=${rows.length}`);

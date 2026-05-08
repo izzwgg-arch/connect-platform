@@ -521,6 +521,50 @@ clone — other unrelated hand-edits may also exist there
   `apps/worker/src/main.ts::sendPushToUserDevices` — keep FCM `data` only, all
   values stringified.
 
+### Debugging inbound SMS push notifications
+
+Real inbound SMS is delivered by the **worker** via `voipMsInboundSyncJob.ts`,
+NOT the VoIP.ms webhook. To debug SMS push failures:
+
+1. **Check `SmsRoutingLog`** in Postgres for recent inbound rows:
+   ```sql
+   SELECT direction, status, "resolvedUserId", "normalizedFrom", "createdAt"
+   FROM "SmsRoutingLog" WHERE direction = 'inbound'
+   ORDER BY "createdAt" DESC LIMIT 5;
+   ```
+   - `status = "routed_poll"` → worker handled it (expected for real SMS).
+   - `status = "invalid_to"` → placeholder ping from VoIP.ms webhook (normal, ignore).
+
+2. **Check worker logs** for the push fan-out event:
+   ```bash
+   docker logs app-worker-1 --since 10m 2>&1 | grep '"event":"voipms_inbound_sms_push'
+   ```
+   Expected: `voipms_inbound_sms_push_sent` with `attempted >= 1`.
+   Missing → push not reaching the worker's `importInboundMessage`, re-check
+   the `sendSmsPush` wiring in `main.ts`.
+
+3. **Check worker logs** for the Expo result:
+   ```bash
+   docker logs app-worker-1 --since 10m 2>&1 | grep '"event":"sms_push_expo_result'
+   ```
+   Expected: `httpStatus: 200`, `expoResult.data[0].status: "ok"`.
+
+4. **Check `MobileDevice.active` column** for the target user:
+   ```sql
+   SELECT id, active, platform, "expoPushToken" FROM "MobileDevice"
+   WHERE "userId" = '<id>' ORDER BY "updatedAt" DESC;
+   ```
+   Only `active = true` devices receive the SMS push. If all are `false`, the
+   user must re-open the app to re-register (sets `active = true`).
+
+5. **Logcat for notification delivery** (device connected via ADB):
+   ```powershell
+   adb logcat -v time IncomingCallFirebaseService:V NotificationService:V *:S 2>&1
+   ```
+   SMS push is a **FCM notification message** (has title/body), so Android FCM
+   SDK shows it directly — `onMessageReceived` is NOT called for it. Look for
+   `PostNotification` or `vibrateLinearmotor` lines in `NotificationService`.
+
 ---
 
 ## WebSocket debugging notes

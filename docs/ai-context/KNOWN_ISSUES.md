@@ -496,6 +496,24 @@ When you find a new fragile area, add it here.
 - **WS keepalive** comes from nginx `proxy_read_timeout 86400s` (`docs/TELEPHONY_NGINX.md`).
   Do not lower without testing 24-hour persistence.
 
+## Mobile — SMS / messaging push notifications
+
+- **VoIP.ms inbound SMS arrives via worker poll, not webhook.**
+  The VoIP.ms webhook (`POST /webhooks/voipms/sms`) receives only template
+  placeholder pings (`{FROM}`, `{TO}` etc.) — not real messages. Real inbound
+  SMS is delivered by the worker's `voipMsInboundSyncJob.ts` polling cycle
+  (`status: "routed_poll"` in `SmsRoutingLog`).
+- **Fixed 2026-05-08**: The worker poll path never called `sendPushToUserDevices`.
+  Push fan-out is now in `importInboundMessage()` via a `sendSmsPush` callback
+  injected from `main.ts`. Look for `event: "voipms_inbound_sms_push_sent"` in
+  worker logs to confirm.
+- **SMS push uses FCM notification message** (includes `title`/`body`/`channelId`),
+  not data-only. This ensures Android displays the notification directly even when
+  the app is swiped away, without relying on `onMessageReceived` being woken.
+- **Webhook `sms_message` fan-out in API** (`connectChatRoutes.ts`) remains as-is
+  for the unlikely case VoIP.ms ever switches to real webhook delivery. The two
+  paths produce the same push payload shape.
+
 ## Build / repo hygiene
 
 - **Many leftover `_check-*` / `_diag-*` / `pbx-*.txt` files at repo root.** They
