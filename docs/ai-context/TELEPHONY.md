@@ -233,6 +233,10 @@
   **`connect-pbx-helper`** listens on **`:8757`** and reports **`2026.05.08.1`** on **`/health`**. If a
   VitalPBX screenshot shows a different public IP, resolve the mismatch before blaming “empty REST”
   (`DEPLOYMENT.md` § Phase 1 verification A′).
+- **Helper bind vs remote callers.** The installer defaults to **loopback-only** bind
+  (**`CONNECT_PBX_HELPER_BIND=127.0.0.1`**). If **`/health`** is good on the PBX but the **Connect app host**
+  cannot open **`http://<pbx-ip>:8757`**, set **`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (env + service restart)
+  and allow **tcp/8757** from the app host — see **`DEPLOYMENT.md`** § **listen bind** (not a Python change).
 - **Ingest monitoring (v1, super-admin).** Thresholded **`VoicemailIngestIncident`** rows record helper **404/401**, unreachable (debounced), notify **upsert=0** (3×/15m), worker **global zero records** (3 consecutive cycles), and **REST vs spool** divergence. Toggle with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED`** (default **true**). See **`API_ROUTES.md`** (`/admin/voicemail-ingest/incidents*`) and **`GET /admin/ops-center`** / **`GET /admin/incidents`** summaries. No tenant-admin or email alerts in v1.
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.

@@ -204,6 +204,22 @@ reprovision extensions for this step.
 3. **Verify:** `POST http://127.0.0.1:8757/voicemail/spool/list` with JSON `tenantId`, `extension`, header `x-connect-pbx-helper-secret` → **200**, `ok: true`, `messages` (array, may be empty). Example on PBX loopback (replace `<SECRET>`):  
    `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list -H "Content-Type: application/json" -H "x-connect-pbx-helper-secret: <SECRET>" -d '{"tenantId":"8","extension":"101"}'`
 
+### PBX helper — listen bind (`Connection refused` from Connect app host)
+
+The pinned installer **defaults** to **`CONNECT_PBX_HELPER_BIND=127.0.0.1`** (loopback only).
+That is correct for “PBX-local” smoke tests but **breaks** Connect when
+**`PBX_ROUTE_HELPER_BASE_URL`** is something like **`http://209.145.60.79:8757`**: the
+app host’s `curl` / api’s HTTP client will see **`Connection refused`** or time out even
+though **`curl -s http://127.0.0.1:8757/health`** on the PBX shows **`2026.05.08.1`**.
+
+**Fix (operator, not Python):** edit **`/etc/connect-pbx-helper.env`** on the PBX and set
+**`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (or a specific NIC IP), then
+**`systemctl restart connect-pbx-helper.service`**. Re-run **`curl -s http://127.0.0.1:8757/health`**
+→ still **`2026.05.08.1`**, then from the **Connect app host**:
+**`curl -s http://<pbx-ip>:8757/health`**. Open or adjust host firewall / security group
+so **tcp/8757** is allowed **from the app host** only (tighten source IP), not the public
+internet unless policy requires otherwise.
+
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 
 If the helper secret was **exposed** (screenshot, chat, ticket), treat it as **compromised** and rotate end-to-end.
@@ -464,7 +480,7 @@ Use this after Connect images ship and before claiming fallback is live.
 | **F** | AMI `MessageWaiting` or manual `/internal/voicemail-notify` (with `newCount > 0` when REST empty). | Logs: `rest_count: 0`, `helper_count > 0`, `source_used` helper path, `upserted > 0` when spool has mail. |
 | **G** | Portal + mobile voicemail list | New rows, **current** `receivedAt` (not a stale date). Playback still separate (`KNOWN_ISSUES.md`). |
 
-**Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs. **Upgrade path:** pinned **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** installer from git only (§ **upgrades: pinned installer only**); re-probe **`/health`** until **`2026.05.08.1`** — if it stays **`2026.05.07.x`**, the install did not take; do not patch Python by hand.
+**Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs. **Upgrade path:** pinned **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** installer from git only (§ **upgrades: pinned installer only**); re-probe **`/health`** until **`2026.05.08.1`** — if it stays **`2026.05.07.x`**, the install did not take; do not patch Python by hand. **Post-upgrade note:** operators may see **`2026.05.08.1`** on **PBX loopback** while the app host still gets **`Connection refused`** on **`<pbx-ip>:8757`** — default **loopback bind**; see § **listen bind**.
 
 ---
 

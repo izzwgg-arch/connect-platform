@@ -472,6 +472,11 @@ When you find a new fragile area, add it here.
   **different** VitalPBX (MOTD / SSH IP mismatch). Symptom: persistent **`helper_error:not_found`** after
   “we upgraded the helper.” Fix: `curl /health` from the **app** host to the URL in env; upgrade **that**
   host; or change **BASE_URL** to the upgraded host and redeploy **api** + **worker** (`DEPLOYMENT.md` A′).
+- **Helper `2026.05.08.1` on loopback but app host `Connection refused`.** The service may be listening
+  only on **`127.0.0.1:8757`** (installer default). Connect uses **`PBX_ROUTE_HELPER_BASE_URL`** from
+  another host, so TCP never connects. Fix **`CONNECT_PBX_HELPER_BIND`** in **`/etc/connect-pbx-helper.env`**
+  (**`0.0.0.0`** or NIC IP), restart **`connect-pbx-helper`**, allow **:8757** from the app host
+  (`DEPLOYMENT.md` § listen bind). **Not** a Python patch.
 - **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
   ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
   **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
