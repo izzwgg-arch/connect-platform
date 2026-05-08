@@ -236,9 +236,9 @@
 - **Helper bind vs remote callers.** The installer defaults to **loopback-only** bind
   (**`CONNECT_PBX_HELPER_BIND=127.0.0.1`**). If **`/health`** is good on the PBX but the **Connect app host**
   cannot open **`http://<pbx-ip>:8757`**, set **`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (or a specific NIC IP)
-  and keep **`CONNECT_PBX_HELPER_PORT=8757`** — **never** put **`host:port`** into the bind variable.
-  Restart **`connect-pbx-helper`**, restrict **tcp/8757** to the app host — see **`DEPLOYMENT.md`**
-  § **listen bind** (not a Python change).
+  and **`CONNECT_PBX_HELPER_PORT=8757`** separately. **Do not** use **`CONNECT_PBX_HELPER_BIND=0.0.0.0:8757`**
+  (no **`host:port`** in the bind variable). Restart **`connect-pbx-helper`**, restrict **tcp/8757** to the
+  app host — see **`DEPLOYMENT.md`** § **listen bind** (not a Python change).
 - **Ingest monitoring (v1, super-admin).** Thresholded **`VoicemailIngestIncident`** rows record helper **404/401**, unreachable (debounced), notify **upsert=0** (3×/15m), worker **global zero records** (3 consecutive cycles), and **REST vs spool** divergence. Toggle with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED`** (default **true**). See **`API_ROUTES.md`** (`/admin/voicemail-ingest/incidents*`) and **`GET /admin/ops-center`** / **`GET /admin/incidents`** summaries. No tenant-admin or email alerts in v1.
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.

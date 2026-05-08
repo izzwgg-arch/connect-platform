@@ -383,7 +383,9 @@ Per-service:
       **`Connection refused`** / **HTTP 000** from the **app host** to **`<pbx-ip>:8757`** while
       loopback **`127.0.0.1:8757/health`** on the PBX shows **`2026.05.08.1`** → helper is likely bound
       to **loopback only**; set **`CONNECT_PBX_HELPER_BIND=0.0.0.0`** (address only, not **`0.0.0.0:8757`**)
-      + **`CONNECT_PBX_HELPER_PORT=8757`**, firewall from app host only (`DEPLOYMENT.md` § listen bind).
+      + **`CONNECT_PBX_HELPER_PORT=8757`**, **`systemctl restart connect-pbx-helper`**, then on PBX
+      **`ss -lntp | grep 8757`** — expect **`0.0.0.0:8757`** before blaming “Connect is wrong.”
+      If listen is correct but app host still refused → **firewall / path** (`DEPLOYMENT.md` § listen bind).
       For production when **BASE_URL** is **`http://209.145.60.79:8757`** and **`/health`** is still **`2026.05.07.x`**, follow **`DEPLOYMENT.md`** § **Phase 1 — operator handoff** (commands, rollback, checklist). Diagnosis from a dev laptop may hit **SSH denied** or **curl timeout** to **`:8757`**; use the **app host** or **PBX loopback** as in the runbook (**`DEPLOYMENT.md`** § **execution environment**). After a rollout, require the operator **paste-back transcript** (**`DEPLOYMENT.md`** Phase 1 **operator execution transcript**) before closing “Phase 1 live” — no raw secrets.
       After **secret rotation**, if the helper returns **401**, re-check `x-connect-pbx-helper-secret`
       matches **`CONNECT_PBX_HELPER_SECRET`** / **`PBX_ROUTE_HELPER_SECRET`** and that **api** and **worker**
