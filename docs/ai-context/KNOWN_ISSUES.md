@@ -460,7 +460,9 @@ When you find a new fragile area, add it here.
   `POST /voicemail/spool/list` while the PBX helper is still on **`2026.05.07.x`**
   yields HTTP **404** / `not_found` from the helper. Symptoms: `fallback_reason` like
   `helper_error:not_found` on `/internal/voicemail-notify`, worker `helper_calls:0`.
-  Re-run `install-vitalpbx-inbound-route-helper.sh` from the deployed commit; confirm
+  Re-run **`install-vitalpbx-inbound-route-helper.sh`** from the **pinned git commit**
+  (**`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**) only — **never** hand-edit
+  `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py`; confirm
   `GET …:8757/health` → **`2026.05.08.1`**+ (`DEPLOYMENT.md` production check-in).
   Step-by-step fix for the **`209.145.60.79`** mismatch: **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. Automated “agent execution” from Cursor without PBX/app-host access will not apply the fix; after a human runs it, use the strict **paste-back transcript** (**`DEPLOYMENT.md`** Phase 1 **operator execution transcript**) so evidence (job IDs, `done` SHAs, log fields) is reviewable without leaking secrets.
 - **Voicemail ingest incidents (super-admin v1).** `VoicemailIngestIncident` rows summarize thresholded stalls (notify **upsert=0**, worker **global zero** sync, helper **404/401** immediate, unreachable debounced, REST vs spool divergence). They are **not** a substitute for log forensics — multi-instance api could theoretically skew rare counters until a v2 event table exists. Tenant admins are **not** notified in v1.

@@ -303,7 +303,7 @@ Breakdown by sub-prefix (count / approximate scope):
 `x-connect-pbx-helper-secret` (must match **`CONNECT_PBX_HELPER_SECRET`** on the PBX and
 **`PBX_ROUTE_HELPER_SECRET`** in Connect); JSON body `tenantId`, `extension`, optional `voicemailContext`
 / `context`. Read-only; lists `msg*.txt` under `INBOX` / `Old` / `Urgent`. Installed by
-`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`. **404** = helper older than **`2026.05.08.1`**;
+`scripts/pbx/install-vitalpbx-inbound-route-helper.sh` (**pinned commit** **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** — run the script; **do not** hand-edit helper Python on the PBX). **404** = helper older than **`2026.05.08.1`**;
 **401** = wrong secret after rotation (fix env + restart api/worker + PBX helper).
 End-to-end checklist: **`DEPLOYMENT.md`** § **Phase 1 — production verification (A–G)**.
 Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Proof format:** **`DEPLOYMENT.md`** Phase 1 **operator execution transcript** (HTTP status, `ok`, counts, deploy job IDs, **no** secrets). Helper HTTP contract is unchanged when upgrading **`2026.05.07.x` → `2026.05.08.1`**; only availability of **`POST /voicemail/spool/list`** and aligned **`x-connect-pbx-helper-secret`** matter. IDE agents cannot typically reach PBX SSH or app-host **`:3910`** — **`DEPLOYMENT.md`** § **execution environment**.

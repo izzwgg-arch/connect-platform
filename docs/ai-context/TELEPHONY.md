@@ -218,6 +218,11 @@
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
   leave `helper_calls` at `0` until the installer is upgraded (`DEPLOYMENT.md` production check-in).
+  **Never** hand-edit **`vitalpbx-inbound-route-helper.py`** (or other helper Python) on
+  the PBX — only re-run **`install-vitalpbx-inbound-route-helper.sh`** from git at the
+  release pin (**`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** for Phase 1). If `/health`
+  stays **`2026.05.07.x`** after a run, the service did not pick up the installer output;
+  troubleshoot the install/restart path, not one-off Python patches.
 - **Helper HMAC secret alignment.** `CONNECT_PBX_HELPER_SECRET` on the PBX (`/etc/connect-pbx-helper.env`)
   must equal **`PBX_ROUTE_HELPER_SECRET`** (and any per-instance JSON `secret`) on **api** and **worker**.
   After rotation, restart **`connect-pbx-helper.service`** on the PBX and **redeploy or restart** api/worker

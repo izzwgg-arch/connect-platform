@@ -174,19 +174,35 @@ Order of operations:
 
 **Production check-in (2026-05-08):** Deploy queue shipped **`api` → `worker` → `telephony`** for commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** (`feat/voicemail-phase1-spool-ingestion`). Each job log ended with **`[deploy-*] done cf4a1f6`** and health checks passed. **`PBX_ROUTE_HELPER_*`** is present in api/worker containers. A follow-up HTTP check from the app host to **`http://<pbx>:8757/health`** still returned helper **`2026.05.07.1`** until the PBX installer from that commit is re-run — below **`2026.05.08.1`**, `POST /voicemail/spool/list` is absent (404 / `not_found`) and ingestion behaves REST-only. **Operator action:** run `bash install-vitalpbx-inbound-route-helper.sh` on the PBX as root, then re-check `/health` and spool list (`DEBUGGING.md`).
 
+### PBX helper — upgrades: pinned installer only (no manual Python)
+
+Do **not** manually edit **`/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py`**
+(or any on-PBX helper Python), apply `vim`/SCP patches, or run ad-hoc package
+installs. The **only** supported upgrade is: download **`install-vitalpbx-inbound-route-helper.sh`**
+from **`origin` at a pinned commit** (Phase 1 pin: **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**),
+then run **`bash …/install-vitalpbx-inbound-route-helper.sh`**, which installs the
+embedded **`VERSION` `2026.05.08.1`** helper and manages **`connect-pbx-helper.service`**.
+
+If **`curl -s http://127.0.0.1:8757/health`** still shows **`2026.05.07.x`** after you
+believe the installer ran, the **running** process did not pick up the new tree (bad
+download, wrong host, service not restarted, or script error). **Do not** “fix” by
+editing Python — re-run the **same** pinned installer from git, confirm **`systemctl status
+connect-pbx-helper`**, then re-check `/health`. Do **not** change Asterisk dialplan or
+reprovision extensions for this step.
+
 ### PBX helper — Phase 1 install pin + `404` on `/voicemail/spool/list`
 
 **Symptom:** `GET /health` returns 200 but `POST /voicemail/spool/list` returns **404**. The process is running an **old** `vitalpbx-inbound-route-helper.py` (pre-**`2026.05.08.1`**) that does not register the spool route.
 
 **Fix (PBX host, root):**
 
-1. Fetch the installer **exactly** from the shipped commit (example Phase 1 pin):  
-   `https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh`  
-   Save as `install-vitalpbx-inbound-route-helper.sh`, `chmod +x`, then:  
-   `bash install-vitalpbx-inbound-route-helper.sh`  
+1. Fetch the installer **exactly** from the pinned commit (**`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**):  
+   `curl -fsSL https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh -o /root/install-vitalpbx-inbound-route-helper.sh`  
+   then **`bash /root/install-vitalpbx-inbound-route-helper.sh`** (optional: `chmod +x` first).  
    (Script installs to `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` and systemd unit **`connect-pbx-helper.service`**, env file **`/etc/connect-pbx-helper.env`** — see installer in-repo.)
-2. **Verify:** `curl -s http://127.0.0.1:8757/health` → `"version":"2026.05.08.1"` (or newer). **`/health` alone is insufficient** if version is still `.07.x`.
-3. **Verify:** `POST http://127.0.0.1:8757/voicemail/spool/list` with JSON `tenantId`, `extension`, header `x-connect-pbx-helper-secret` → **200**, `ok: true`, `messages` (array, may be empty).
+2. **Verify:** `curl -s http://127.0.0.1:8757/health` → **`"version":"2026.05.08.1"`** (or newer). If you still see **`2026.05.07.1`**, the helper binary in use was **not** updated — repeat step 1; do not patch Python by hand.
+3. **Verify:** `POST http://127.0.0.1:8757/voicemail/spool/list` with JSON `tenantId`, `extension`, header `x-connect-pbx-helper-secret` → **200**, `ok: true`, `messages` (array, may be empty). Example on PBX loopback (replace `<SECRET>`):  
+   `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list -H "Content-Type: application/json" -H "x-connect-pbx-helper-secret: <SECRET>" -d '{"tenantId":"8","extension":"101"}'`
 
 ### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
 
@@ -233,13 +249,11 @@ ssh root@209.145.60.79
 curl -s http://127.0.0.1:8757/health
 ```
 
-**3. Download and run the pinned installer** (commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`**)
+**3. Download and run the pinned installer** (commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** — required helper **`2026.05.08.1`**)
 
 ```bash
-# Still on 209.145.60.79 as root:
-curl -fsSL -o /root/install-vitalpbx-inbound-route-helper.sh \
-  'https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh'
-chmod +x /root/install-vitalpbx-inbound-route-helper.sh
+# Still on 209.145.60.79 as root (installer only — never edit helper .py by hand):
+curl -fsSL https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh -o /root/install-vitalpbx-inbound-route-helper.sh
 bash /root/install-vitalpbx-inbound-route-helper.sh
 ```
 
@@ -450,7 +464,7 @@ Use this after Connect images ship and before claiming fallback is live.
 | **F** | AMI `MessageWaiting` or manual `/internal/voicemail-notify` (with `newCount > 0` when REST empty). | Logs: `rest_count: 0`, `helper_count > 0`, `source_used` helper path, `upserted > 0` when spool has mail. |
 | **G** | Portal + mobile voicemail list | New rows, **current** `receivedAt` (not a stale date). Playback still separate (`KNOWN_ISSUES.md`). |
 
-**Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs.
+**Read-only snapshot (2026-05-08 UTC, app host → helper):** production **api/worker** had **`PBX_ROUTE_HELPER_BASE_URL=http://209.145.60.79:8757`**; **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** unset (length 0). **`GET http://209.145.60.79:8757/health`** returned **`2026.05.07.1`** (Phase 1 route not present → **`helper_error:not_found`** until upgrade). **`GET http://209.145.62.75:8757/health`** returned no body from the app host (helper not listening there, blocked, or wrong target). **Operator:** confirm which VitalPBX owns **`209.145.60.79`** vs MOTD IP on the server you SSH into; align **BASE_URL** with the host where **`connect-pbx-helper`** runs. **Upgrade path:** pinned **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** installer from git only (§ **upgrades: pinned installer only**); re-probe **`/health`** until **`2026.05.08.1`** — if it stays **`2026.05.07.x`**, the install did not take; do not patch Python by hand.
 
 ---
 
