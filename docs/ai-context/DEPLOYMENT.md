@@ -173,6 +173,38 @@ Order of operations:
 
 **Production check-in (2026-05-08):** Deploy queue shipped **`api` → `worker` → `telephony`** for commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** (`feat/voicemail-phase1-spool-ingestion`). Each job log ended with **`[deploy-*] done cf4a1f6`** and health checks passed. **`PBX_ROUTE_HELPER_*`** is present in api/worker containers. A follow-up HTTP check from the app host to **`http://<pbx>:8757/health`** still returned helper **`2026.05.07.1`** until the PBX installer from that commit is re-run — below **`2026.05.08.1`**, `POST /voicemail/spool/list` is absent (404 / `not_found`) and ingestion behaves REST-only. **Operator action:** run `bash install-vitalpbx-inbound-route-helper.sh` on the PBX as root, then re-check `/health` and spool list (`DEBUGGING.md`).
 
+### PBX helper — Phase 1 install pin + `404` on `/voicemail/spool/list`
+
+**Symptom:** `GET /health` returns 200 but `POST /voicemail/spool/list` returns **404**. The process is running an **old** `vitalpbx-inbound-route-helper.py` (pre-**`2026.05.08.1`**) that does not register the spool route.
+
+**Fix (PBX host, root):**
+
+1. Fetch the installer **exactly** from the shipped commit (example Phase 1 pin):  
+   `https://raw.githubusercontent.com/izzwgg-arch/connect-platform/cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067/scripts/pbx/install-vitalpbx-inbound-route-helper.sh`  
+   Save as `install-vitalpbx-inbound-route-helper.sh`, `chmod +x`, then:  
+   `bash install-vitalpbx-inbound-route-helper.sh`  
+   (Script installs to `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` and systemd unit **`connect-pbx-helper.service`**, env file **`/etc/connect-pbx-helper.env`** — see installer in-repo.)
+2. **Verify:** `curl -s http://127.0.0.1:8757/health` → `"version":"2026.05.08.1"` (or newer). **`/health` alone is insufficient** if version is still `.07.x`.
+3. **Verify:** `POST http://127.0.0.1:8757/voicemail/spool/list` with JSON `tenantId`, `extension`, header `x-connect-pbx-helper-secret` → **200**, `ok: true`, `messages` (array, may be empty).
+
+### PBX helper — compromised `CONNECT_PBX_HELPER_SECRET` (rotation)
+
+If the helper secret was **exposed** (screenshot, chat, ticket), treat it as **compromised** and rotate end-to-end.
+
+**PBX (root):**
+
+1. Generate a new secret (≥32 chars), e.g. `openssl rand -hex 32`.
+2. Set **`CONNECT_PBX_HELPER_SECRET`** in **`/etc/connect-pbx-helper.env`** (installer-owned; mode `0600`). Do not commit this file.
+3. `systemctl restart connect-pbx-helper.service`
+4. `curl -s http://127.0.0.1:8757/health` — still **`2026.05.08.1`+**.
+
+**Connect app host (human operator — not agent-edited in repo):**
+
+1. Set **`PBX_ROUTE_HELPER_SECRET`** to the **same** new value in the platform env consumed by **api** and **worker** (e.g. `/opt/connectcomms/env/.env.platform` or your secret store). Update **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** (or equivalent) if any per-instance entry carries its own `secret`.
+2. **Restart api and worker** so containers load the new env. Per **`AGENTS.md`**, use the **deploy queue** (`POST /ops/deploy/enqueue`) with the **current production `commitHash`** and `dryRun: false` for **`api`** then **`worker`** — do not ad-hoc `docker compose` / `pm2` unless break-glass and human-approved.
+
+**Re-test:** `POST /voicemail/spool/list` from an app host with the new secret; `POST /internal/voicemail-notify` and worker voicemail JSON should **not** show `helper_error:not_found` when REST is empty and spool has messages (`DEBUGGING.md`).
+
 ---
 
 ## Exposed ports (publicly via nginx)

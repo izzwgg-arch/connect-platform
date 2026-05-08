@@ -217,6 +217,11 @@
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
   leave `helper_calls` at `0` until the installer is upgraded (`DEPLOYMENT.md` production check-in).
+- **Helper HMAC secret alignment.** `CONNECT_PBX_HELPER_SECRET` on the PBX (`/etc/connect-pbx-helper.env`)
+  must equal **`PBX_ROUTE_HELPER_SECRET`** (and any per-instance JSON `secret`) on **api** and **worker**.
+  After rotation, restart **`connect-pbx-helper.service`** on the PBX and **redeploy or restart** api/worker
+  so env is re-read (`DEPLOYMENT.md` § compromised secret). Mismatch → **401** from helper, or stale
+  `helper_error` in logs.
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.
   Mobile flow lives in `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts` +

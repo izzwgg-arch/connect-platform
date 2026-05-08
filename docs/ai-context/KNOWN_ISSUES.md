@@ -457,6 +457,11 @@ When you find a new fragile area, add it here.
   `helper_error:not_found` on `/internal/voicemail-notify`, worker `helper_calls:0`.
   Re-run `install-vitalpbx-inbound-route-helper.sh` from the deployed commit; confirm
   `GET …:8757/health` → **`2026.05.08.1`**+ (`DEPLOYMENT.md` production check-in).
+- **Exposed `CONNECT_PBX_HELPER_SECRET`.** If the PBX helper secret appears in a screenshot,
+  ticket, or chat, assume compromise. Rotate **`CONNECT_PBX_HELPER_SECRET`** in
+  **`/etc/connect-pbx-helper.env`**, set the same value in Connect **`PBX_ROUTE_HELPER_SECRET`**
+  (and per-instance helper JSON if used), **`systemctl restart connect-pbx-helper`**, then
+  restart **api** and **worker** via approved process (`DEPLOYMENT.md` § compromised secret).
 - **Spool fallback vs playback.** Phase 1 ingestion can create/update rows from disk
   metadata while `pbxRecfile` stays empty if the helper did not derive a usable file
   URL; `GET /voice/voicemail/:id/stream` may still 503 until REST returns `recfile` or

@@ -298,9 +298,11 @@ Breakdown by sub-prefix (count / approximate scope):
   spool route) until the PBX installer is upgraded (`TELEPHONY.md`, `DEPLOYMENT.md`).
 
 **On-PBX helper (not in `server.ts`):** `POST /voicemail/spool/list` — HMAC header
-`x-connect-pbx-helper-secret`; JSON body `tenantId`, `extension`, optional `voicemailContext`
+`x-connect-pbx-helper-secret` (must match **`CONNECT_PBX_HELPER_SECRET`** on the PBX and
+**`PBX_ROUTE_HELPER_SECRET`** in Connect); JSON body `tenantId`, `extension`, optional `voicemailContext`
 / `context`. Read-only; lists `msg*.txt` under `INBOX` / `Old` / `Urgent`. Installed by
-`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`.
+`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`. **404** = helper older than **`2026.05.08.1`**;
+**401** = wrong secret after rotation (fix env + restart api/worker + PBX helper).
 
 ---
 
