@@ -293,7 +293,9 @@ Breakdown by sub-prefix (count / approximate scope):
   `context` (AMI voicemail context), `newCount` (AMI “new” count). Tries VitalPBX REST
   first; if **no rows** and `newCount > 0`, calls PBX helper `POST /voicemail/spool/list`
   when `PBX_ROUTE_HELPER_*` is configured. Response may include `rest_count`,
-  `helper_count`, `source_used`, `fallback_reason`.
+  `helper_count`, `source_used`, `fallback_reason`. If the helper binary is still
+  **pre-`2026.05.08.1`**, expect `fallback_reason` such as `helper_error:not_found` (no
+  spool route) until the PBX installer is upgraded (`TELEPHONY.md`, `DEPLOYMENT.md`).
 
 **On-PBX helper (not in `server.ts`):** `POST /voicemail/spool/list` — HMAC header
 `x-connect-pbx-helper-secret`; JSON body `tenantId`, `extension`, optional `voicemailContext`

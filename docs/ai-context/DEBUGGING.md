@@ -373,6 +373,9 @@ Per-service:
       `docker logs app-api-1 ... | grep voicemail-notify`. Notify logs include
       `rest_count`, `helper_count`, `source_used`, `upserted_count`, `fallback_reason`.
       `upserted:0` with `rest_count:0` and no helper success means nothing was ingested.
+      If the JSON body includes `fallback_reason` like `helper_error:not_found`, first
+      `curl -s http://127.0.0.1:8757/health` on the **PBX** — version must be **`2026.05.08.1`+**
+      or the spool route does not exist yet (re-run installer).
    3. **Helper smoke** (on PBX host, read-only): `curl -s -X POST http://127.0.0.1:8757/voicemail/spool/list \
       -H 'content-type: application/json' -H 'x-connect-pbx-helper-secret: <secret>' \
       -d '{"tenantId":"<vitalpbx_tenant_id>","extension":"<ext>"}' | jq .`

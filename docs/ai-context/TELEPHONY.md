@@ -213,6 +213,10 @@
   `apps/api/src/pbxInboundRouteHelperClient.ts`). **Staged production rollout**
   (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in
   `DEPLOYMENT.md` under **Voicemail Phase 1 — staged rollout**.
+- **Helper version gate.** Spool fallback is inactive until the on-PBX helper reports
+  **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
+  do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
+  leave `helper_calls` at `0` until the installer is upgraded (`DEPLOYMENT.md` production check-in).
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.
   Mobile flow lives in `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts` +

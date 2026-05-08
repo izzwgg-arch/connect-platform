@@ -171,6 +171,8 @@ Order of operations:
 
 **Rollback (wave 1):** Re-enqueue `api`, `worker`, and `telephony` each pinned to the **previous known-good commit SHA** (same deploy queue, no manual docker). PBX helper: keep `2026.05.08.1` (read-only list) or restore the prior helper script from backup only if the new endpoint causes operational issues — coordinate with ops; do not delete voicemail files.
 
+**Production check-in (2026-05-08):** Deploy queue shipped **`api` → `worker` → `telephony`** for commit **`cf4a1f61c9064144c6d9c54b8ac2570ba6cf3067`** (`feat/voicemail-phase1-spool-ingestion`). Each job log ended with **`[deploy-*] done cf4a1f6`** and health checks passed. **`PBX_ROUTE_HELPER_*`** is present in api/worker containers. A follow-up HTTP check from the app host to **`http://<pbx>:8757/health`** still returned helper **`2026.05.07.1`** until the PBX installer from that commit is re-run — below **`2026.05.08.1`**, `POST /voicemail/spool/list` is absent (404 / `not_found`) and ingestion behaves REST-only. **Operator action:** run `bash install-vitalpbx-inbound-route-helper.sh` on the PBX as root, then re-check `/health` and spool list (`DEBUGGING.md`).
+
 ---
 
 ## Exposed ports (publicly via nginx)

@@ -451,6 +451,12 @@ When you find a new fragile area, add it here.
   (`TELEPHONY.md` § Voicemail), and helper `VERSION` / `mailboxPath` JSON. Root causes for
   REST divergence often live in VitalPBX; spool fallback is a **safety net**, not a
   guarantee of playback (`pbxRecfile` may still be empty until REST recovers).
+- **Connect vs PBX helper version skew.** Shipping api/worker that call
+  `POST /voicemail/spool/list` while the PBX helper is still on **`2026.05.07.x`**
+  yields HTTP **404** / `not_found` from the helper. Symptoms: `fallback_reason` like
+  `helper_error:not_found` on `/internal/voicemail-notify`, worker `helper_calls:0`.
+  Re-run `install-vitalpbx-inbound-route-helper.sh` from the deployed commit; confirm
+  `GET …:8757/health` → **`2026.05.08.1`**+ (`DEPLOYMENT.md` production check-in).
 - **Spool fallback vs playback.** Phase 1 ingestion can create/update rows from disk
   metadata while `pbxRecfile` stays empty if the helper did not derive a usable file
   URL; `GET /voice/voicemail/:id/stream` may still 503 until REST returns `recfile` or
