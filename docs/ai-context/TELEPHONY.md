@@ -182,9 +182,37 @@
 - **Live event path**: AMI `MessageWaiting` → telephony →
   `POST /internal/voicemail-notify` to api → DB upsert.
 - **Fallback poll**: `apps/worker/src/main.ts::runVoicemailSyncCycle` every 60 s.
-  Reads VitalPBX `/api/v2/voicemail/{ext}/...` records and upserts `voicemail` rows.
-  Handles legacy and new payload shapes (`date`, `clid`, `recfile`, `filename`,
-  `msg_id` vs `origtime`, `callerid`, `msg_num`).
+  Calls VitalPBX `GET /api/v2/extensions/:extensionId/voicemail_records` via
+  `VitalPbxClient.getExtensionVoicemailRecords` (`packages/integrations/src/vitalpbx/client.ts`)
+  and upserts `voicemail` rows. Handles legacy and new payload shapes (`date`, `clid`,
+  `recfile`, `filename`, `msg_id` vs `origtime`, `callerid`, `msg_num`).
+- **Tenant scoping on REST (critical for diagnostics).** `VitalPbxClient` defaults to
+  `tenantTransport: "header"` — the VitalPBX tenant id is sent as the **`tenant` HTTP
+  header**, not only as `?tenant=` on the URL. Raw `curl` or scripts that omit that
+  header can show **too few extensions** or **empty `voicemail_records`** even when AMI
+  and live calls are healthy. Always match production: same header as `callEndpoint`
+  injects (`packages/integrations/src/vitalpbx/client.ts::maybeInjectTenant`).
+- **AMI state ≠ REST index.** Asterisk can emit `MessageWaiting` and store messages on
+  disk under the slug-named mailbox context (e.g. `101@gesheft-voicemail`) while
+  VitalPBX REST still returns `200 {"data":[]}` for `voicemail_records`. That
+  desynchronisation breaks Connect ingestion (worker sums **zero** records; notify
+  handler logs `upserted:0`) without affecting SIP registration or call routing. See
+  `KNOWN_ISSUES.md` (Voicemail / recordings).
+- **Phase 1 spool fallback (2026-05-08).** When REST returns no rows, Connect can
+  read the Asterisk voicemail spool **read-only** via the on-PBX helper
+  `POST /voicemail/spool/list` (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`,
+  helper `VERSION` `2026.05.08.1`+). **API** `/internal/voicemail-notify` tries REST
+  first; if empty **and** AMI passed `newCount > 0`, it calls the helper with
+  `tenantId`, `extension` (= mailbox), and `voicemailContext` (= AMI context).
+  **Worker** `runVoicemailSyncCycle` tries REST per extension, then the helper when
+  REST is empty, with throttling (`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`,
+  `VOICEMAIL_HELPER_MIN_INTERVAL_MS`). Rows still dedupe on `pbxMessageId` (same
+  composite as when REST omits `msg_id`). Shared normalization:
+  `packages/shared/src/voicemailIngest.ts`. Helper client env resolution:
+  `packages/integrations/src/pbxRouteHelperEnv.ts` (also re-exported from
+  `apps/api/src/pbxInboundRouteHelperClient.ts`). **Staged production rollout**
+  (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in
+  `DEPLOYMENT.md` under **Voicemail Phase 1 — staged rollout**.
 - **Greeting recording**: `apps/api/src/vmRecordCallJobs.ts` +
   `apps/api/src/pbxInboundRouteHelperClient.ts::uploadPbxVoicemailGreeting/getPbxVoicemailGreeting/...`.
   Mobile flow lives in `apps/mobile/src/voicemail/vmGreetingInviteUtils.ts` +
@@ -192,7 +220,7 @@
 - **Greeting recording — PBX call flow (Phase B, 2026-05-07).**
   The Connect API calls the PBX helper at `POST /voicemail/greeting/record-call`
   (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`, version
-  `2026.05.07.2`+). The helper:
+  `2026.05.08.1`+). The helper:
   1. Calls `resolve_voicemail_context_from_conf(tenant_id, extension)`
      which reads `/etc/asterisk/vitalpbx/voicemail__50-<N>-main.conf`
      to find the actual Asterisk voicemail context for the extension

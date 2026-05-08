@@ -182,7 +182,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.07.2"
+VERSION = "2026.05.08.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -749,6 +749,84 @@ def voicemail_mailbox_dir(tenant_id, extension):
     apply_vm_dir_owner(target)
     return target
 
+MAX_VM_SPOOL_MESSAGES = 400
+
+
+def _parse_vm_txt(path):
+    out = {}
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip('"')
+    return out
+
+
+def vm_spool_list_messages(body):
+    """Read-only: list msg*.txt under INBOX/Old/Urgent for one mailbox (no file moves)."""
+    extension = require_ext(body.get("extension"))
+    raw_ctx = str(body.get("voicemailContext") or body.get("context") or "").strip()
+    tenant_raw = str(body.get("tenantId") or "").strip()
+    root = CFG.voicemail_dir.resolve()
+    resolved_ctx = None
+    if raw_ctx and VM_CONTEXT_RE.match(raw_ctx):
+        mbox_dir = (root / raw_ctx / extension).resolve()
+        if root not in mbox_dir.parents and mbox_dir != root:
+            raise ValueError("voicemail_mailbox_outside_root")
+        resolved_ctx = raw_ctx
+    else:
+        if not tenant_raw:
+            raise ValueError("tenantId_required_without_valid_voicemailContext")
+        tenant_id = require_num("tenant_id", tenant_raw)
+        mbox_dir = voicemail_mailbox_dir(tenant_id, extension).resolve()
+        resolved_ctx = resolve_voicemail_context_from_conf(tenant_id, extension)
+    messages = []
+    if not mbox_dir.is_dir():
+        return {"ok": True, "mailboxPath": str(mbox_dir), "resolvedContext": resolved_ctx, "messages": messages}
+    for sub in ("INBOX", "Old", "Urgent"):
+        if len(messages) >= MAX_VM_SPOOL_MESSAGES:
+            break
+        d = mbox_dir / sub
+        if not d.is_dir():
+            continue
+        try:
+            entries = sorted(d.glob("msg*.txt"))
+        except OSError:
+            continue
+        for txt_path in entries:
+            if len(messages) >= MAX_VM_SPOOL_MESSAGES:
+                break
+            stem = txt_path.stem
+            if not re.match(r"^msg[0-9]+$", stem):
+                continue
+            kv = _parse_vm_txt(txt_path)
+            ot = str(kv.get("origtime") or "").strip()
+            if not ot or ot == "0":
+                continue
+            cid = str(kv.get("callerid") or kv.get("caller_id") or "")
+            dur = str(kv.get("duration") or "0")
+            wav = txt_path.with_suffix(".wav")
+            recfile = str(wav) if wav.is_file() else ""
+            messages.append(
+                {
+                    "folder": sub,
+                    "origtime": ot,
+                    "callerid": cid,
+                    "duration": dur,
+                    "filename": txt_path.name,
+                    "msg_num": stem,
+                    "recfile": recfile,
+                }
+            )
+    return {"ok": True, "mailboxPath": str(mbox_dir), "resolvedContext": resolved_ctx, "messages": messages}
+
+
 def safe_vm_path(tenant_id, extension, greeting_type):
     mbox = voicemail_mailbox_dir(tenant_id, extension).resolve()
     root = CFG.voicemail_dir.resolve()
@@ -1148,6 +1226,7 @@ class Handler(BaseHTTPRequestHandler):
             "/restore": restore_route,
             "/sync-tenant-moh": sync_tenant_moh,
             "/upload-prompt": upload_prompt,
+            "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,
             "/voicemail/greeting/reset": vm_greeting_reset,

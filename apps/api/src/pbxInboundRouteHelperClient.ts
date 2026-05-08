@@ -1,8 +1,6 @@
-export type PbxRouteHelperConfig = {
-  baseUrl: string;
-  secret: string;
-  connectDestinationId?: string | null;
-};
+import type { PbxRouteHelperConfig } from "@connect/integrations";
+export type { PbxRouteHelperConfig } from "@connect/integrations";
+export { resolvePbxRouteHelperConfig, listVoicemailSpoolFromHelper } from "@connect/integrations";
 
 export type PbxRouteHelperRoute = {
   inbound_route_id: number;
@@ -99,48 +97,6 @@ export type PbxTenantMohSyncResponse = {
     stderr?: string;
   };
 };
-
-type HelperMapEntry = {
-  baseUrl?: string;
-  url?: string;
-  secret?: string;
-  connectDestinationId?: string | number;
-};
-
-function trimSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
-export function resolvePbxRouteHelperConfig(pbxInstanceId?: string | null): PbxRouteHelperConfig | null {
-  const byInstanceRaw = String(process.env.PBX_ROUTE_HELPER_BY_INSTANCE_JSON || "").trim();
-  if (byInstanceRaw && pbxInstanceId) {
-    try {
-      const parsed = JSON.parse(byInstanceRaw) as Record<string, HelperMapEntry>;
-      const entry = parsed[pbxInstanceId];
-      const baseUrl = String(entry?.baseUrl || entry?.url || "").trim();
-      const secret = String(entry?.secret || "").trim();
-      if (baseUrl && secret) {
-        return {
-          baseUrl: trimSlash(baseUrl),
-          secret,
-          connectDestinationId: entry?.connectDestinationId == null ? null : String(entry.connectDestinationId),
-        };
-      }
-    } catch {
-      // Fall through to global env; callers surface helper-not-configured when
-      // neither source is usable.
-    }
-  }
-
-  const baseUrl = String(process.env.PBX_ROUTE_HELPER_BASE_URL || "").trim();
-  const secret = String(process.env.PBX_ROUTE_HELPER_SECRET || "").trim();
-  if (!baseUrl || !secret) return null;
-  return {
-    baseUrl: trimSlash(baseUrl),
-    secret,
-    connectDestinationId: String(process.env.PBX_ROUTE_HELPER_CONNECT_DESTINATION_ID || "").trim() || null,
-  };
-}
 
 async function callHelper<T>(
   cfg: PbxRouteHelperConfig,

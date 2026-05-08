@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./phoneE164";
+export * from "./voicemailIngest";
 export * from "./portalPermissions";
 export * from "./voipMsWebhook";
 export * from "./mohRuntimeClass";

@@ -19,7 +19,14 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { canonicalSmsPhone, type PortalPermissionKey } from "@connect/shared";
+import {
+  canonicalSmsPhone,
+  mapHelperVoicemailSpoolToRecordShape,
+  type PortalPermissionKey,
+  vmExtractCallerName,
+  vmExtractCallerNumber,
+  vmNormalizeFolder,
+} from "@connect/shared";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -82,6 +89,7 @@ import {
   getPbxVoicemailGreeting,
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
+  listVoicemailSpoolFromHelper,
   resolvePbxRouteHelperConfig,
   restorePbxInboundRoute,
   retargetPbxInboundRoute,
@@ -13980,32 +13988,6 @@ function pickRangExtension(direction: string, fromNumber: string | null | undefi
 // VOICEMAIL — read from Connect DB only, never query PBX per request
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Parse "Name" <number> or plain number from Asterisk callerid string */
-function vmExtractCallerNumber(callerid: string): string {
-  const m = callerid.match(/<([^>]+)>/);
-  const raw = m ? m[1]! : callerid.replace(/"/g, "").trim();
-  return raw.replace(/\D/g, "");
-}
-function vmExtractCallerName(callerid: string): string {
-  // VitalPBX sends clid in several shapes:
-  //   '"LANDAU TOBY" <8457828230>' — quoted RFC-3261 style
-  //   '"LANDAU TOBY"<8457828230>'  — quoted, no space
-  //   'LANDAU TOBY<8457828230>'    — unquoted (current VitalPBX)
-  //   '<8457828230>' or '8457828230' — no CNAM
-  // Everything before the first '<' that isn't just digits is the name.
-  const idx = callerid.indexOf("<");
-  if (idx <= 0) return "";
-  const name = callerid.slice(0, idx).replace(/^\s*"?/, "").replace(/"?\s*$/, "").trim();
-  if (!name || /^[\d\s+\-().]+$/.test(name)) return "";
-  return name;
-}
-function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
-  const f = folder.toLowerCase();
-  if (f === "inbox" || f === "in") return "inbox";
-  if (f === "urgent") return "urgent";
-  return "old";
-}
-
 /** Verify CDR ingest shared secret — reused by voicemail notify endpoint */
 function verifyCdrSecret(req: any): boolean {
   const secret = process.env.CDR_INGEST_SECRET?.trim();
@@ -20772,10 +20754,12 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
   const body = z.object({
     mailbox: z.string().min(1),
     context: z.string().optional().default("default"),
+    /** AMI MessageWaiting "new" count — helper fallback only when >0 and REST is empty. */
+    newCount: z.coerce.number().int().min(0).optional().default(0),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
 
-  const { mailbox } = body.data;
+  const { mailbox, context, newCount } = body.data;
 
   // Resolve extension + tenant
   const ext = await db.extension.findFirst({
@@ -20796,7 +20780,42 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
 
     const auth    = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
     const pbx     = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
-    const records = await pbx.getExtensionVoicemailRecords(ext.pbxLink.pbxExtensionId, link.pbxTenantId ?? undefined);
+    let records: any[] = await pbx.getExtensionVoicemailRecords(ext.pbxLink.pbxExtensionId, link.pbxTenantId ?? undefined);
+    const rest_count = records.length;
+    let helper_count = 0;
+    let source_used: "rest" | "helper" | "rest+helper" = "rest";
+    let fallback_reason: string | null = null;
+
+    if (records.length === 0 && newCount > 0) {
+      const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+      if (!helperCfg) {
+        fallback_reason = "helper_not_configured";
+      } else {
+        const tid = String(link.pbxTenantId || "").trim();
+        if (!tid) {
+          fallback_reason = "missing_pbx_tenant_id";
+        } else {
+          try {
+            const spool = await listVoicemailSpoolFromHelper(helperCfg, {
+              tenantId: tid,
+              extension: mailbox,
+              voicemailContext: context,
+            });
+            helper_count = spool.messages?.length ?? 0;
+            records = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
+            if (records.length > 0) {
+              source_used = "helper";
+              fallback_reason = "rest_empty_mwi_new_positive";
+            } else {
+              fallback_reason = "rest_empty_helper_empty";
+            }
+          } catch (helperErr: any) {
+            fallback_reason = `helper_error:${String(helperErr?.message || helperErr)}`;
+            app.log.warn({ mailbox, err: helperErr?.message }, "voicemail-notify: helper fallback failed");
+          }
+        }
+      }
+    }
 
     let upserted = 0;
     for (const rec of records) {
@@ -20868,8 +20887,18 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
       upserted++;
     }
 
-    app.log.info({ mailbox, upserted }, "voicemail-notify: sync complete");
-    return reply.send({ ok: true, synced: true, upserted });
+    app.log.info(
+      {
+        mailbox,
+        rest_count,
+        helper_count,
+        source_used,
+        upserted_count: upserted,
+        fallback_reason,
+      },
+      "voicemail-notify: sync complete",
+    );
+    return reply.send({ ok: true, synced: true, upserted, rest_count, helper_count, source_used, fallback_reason });
   } catch (err: any) {
     app.log.warn({ mailbox, err: err?.message }, "voicemail-notify: sync failed");
     return reply.code(500).send({ error: "sync_failed" });

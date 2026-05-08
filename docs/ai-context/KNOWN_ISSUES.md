@@ -436,6 +436,35 @@ When you find a new fragile area, add it here.
 - **Voicemail upsert key drift risk.** Worker uses `pbxMessageId` (preferring
   VitalPBX `msg_id`); a future API shape change could break dedupe. The
   `runVoicemailSyncCycle` function defensively reads multiple aliases — keep that.
+- **Silent ingestion stall: AMI `MessageWaiting` vs empty `voicemail_records`.**
+  Primary ingestion still uses VitalPBX REST `GET /api/v2/extensions/:extensionId/voicemail_records`
+  (same in `/internal/voicemail-notify`). Asterisk can still fire AMI `MessageWaiting`
+  and maintain mailbox audio on the PBX host while this endpoint returns **`200` with an
+  empty `data` payload**. **Mitigation (Phase 1, 2026-05-08):** when REST returns no rows,
+  api/worker call the on-PBX helper `POST /voicemail/spool/list` (read-only directory scan)
+  if `PBX_ROUTE_HELPER_BASE_URL` + secret are configured; notify path also requires AMI
+  `newCount > 0`. Dedupe remains `pbxMessageId`. Symptom if **unmitigated** or helper
+  offline: worker JSON logs `rest_count` high / `helper_calls:0`; API `voicemail-notify`
+  with `upserted:0`; no new `Voicemail` rows. **Do not infer** from an empty REST response
+  that extensions were deleted — verify AMI mailbox/context, disk under
+  `/var/spool/asterisk/voicemail/<context>/<ext>/`, REST with **`tenant` header**
+  (`TELEPHONY.md` § Voicemail), and helper `VERSION` / `mailboxPath` JSON. Root causes for
+  REST divergence often live in VitalPBX; spool fallback is a **safety net**, not a
+  guarantee of playback (`pbxRecfile` may still be empty until REST recovers).
+- **Spool fallback vs playback.** Phase 1 ingestion can create/update rows from disk
+  metadata while `pbxRecfile` stays empty if the helper did not derive a usable file
+  URL; `GET /voice/voicemail/:id/stream` may still 503 until REST returns `recfile` or
+  a later Phase implements streaming from spool. Not a regression of list ingestion, but
+  user-visible playback can remain broken until VitalPBX REST or playback fallback catches up.
+- **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
+  show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
+  via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows `pbxRecfile` (often
+  a VitalPBX `/static/...` URL) or refreshes metadata via `getExtensionVoicemailRecords`.
+  If that refresh returns no rows, or the static URL is expired/404, the handler returns
+  **`503` JSON** (`audio_unavailable`, `audio_fetch_failed`) — not audio bytes. Clients
+  using `expo-av` `loadAsync({ uri })` then fail decoding (users may see a generic playback
+  error). Fix ingestion or refresh `pbxRecfile`; do not assume the mobile player is the
+  primary fault.
 - **Recording playback path.** Streamed via API. UNKNOWN current expiry of signed
   URLs; verify before changing.
 - **Recording file presence on PBX.** Documented as fragile in

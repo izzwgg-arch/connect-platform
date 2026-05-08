@@ -470,7 +470,7 @@ export class TelephonyService {
           const context = atIdx >= 0 ? typed.mailbox.slice(atIdx + 1) : "default";
           if (mailbox) {
             log.info({ mailbox, context, new: typed.new }, "MessageWaiting: triggering voicemail sync");
-            this.notifyVoicemail(mailbox, context).catch((err: Error) => {
+            this.notifyVoicemail(mailbox, context, newCount).catch((err: Error) => {
               log.warn({ err: err?.message, mailbox }, "voicemail notify failed (non-fatal)");
             });
           }
@@ -483,7 +483,7 @@ export class TelephonyService {
   /** POST to the API voicemail-notify endpoint so the API can immediately ingest
    *  new voicemail records for the given mailbox without waiting for the next
    *  worker poll cycle (~5 min). Uses the same CDR ingest URL + secret. */
-  private async notifyVoicemail(mailbox: string, context: string): Promise<void> {
+  private async notifyVoicemail(mailbox: string, context: string, newCount: number): Promise<void> {
     const baseUrl = env.CDR_INGEST_URL?.replace(/\/internal\/cdr-ingest$/, "");
     if (!baseUrl) return; // CDR_INGEST_URL not configured — skip silently
     const url = `${baseUrl}/internal/voicemail-notify`;
@@ -493,8 +493,8 @@ export class TelephonyService {
         "content-type": "application/json",
         ...(env.CDR_INGEST_SECRET ? { "x-cdr-secret": env.CDR_INGEST_SECRET } : {}),
       },
-      body: JSON.stringify({ mailbox, context }),
-      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ mailbox, context, newCount }),
+      signal: AbortSignal.timeout(12_000),
     });
   }
 

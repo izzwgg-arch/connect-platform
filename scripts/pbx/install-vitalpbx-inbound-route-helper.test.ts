@@ -222,3 +222,13 @@ test("helper installer VERSION reflects Phase C build (2026.05.07.2 or later)", 
     "VERSION must be at or after Phase C cut (2026.05.07.2), got " + v,
   );
 });
+
+test("helper installer registers read-only voicemail spool list endpoint", () => {
+  assert.match(
+    SCRIPT,
+    /"\/voicemail\/spool\/list"\s*:\s*vm_spool_list_messages/,
+    "POST actions must include /voicemail/spool/list → vm_spool_list_messages",
+  );
+  assert.match(SCRIPT, /def vm_spool_list_messages/, "vm_spool_list_messages must be defined");
+  assert.match(SCRIPT, /MAX_VM_SPOOL_MESSAGES/, "spool list must cap message count");
+});

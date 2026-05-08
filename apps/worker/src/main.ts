@@ -13,6 +13,8 @@ import {
   SolaCardknoxAdapter,
   WirePbxClient,
   VitalPbxClient,
+  listVoicemailSpoolFromHelper,
+  resolvePbxRouteHelperConfig,
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
@@ -20,7 +22,11 @@ import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
   isValidMohRuntimeClass,
+  mapHelperVoicemailSpoolToRecordShape,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+  vmExtractCallerName,
+  vmExtractCallerNumber,
+  vmNormalizeFolder,
 } from "@connect/shared";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -1195,30 +1201,6 @@ function getVitalPbxClientForWorker(input: { baseUrl: string; token: string; sec
   });
 }
 
-function vmExtractCallerNumber(callerid: string): string {
-  const match = callerid.match(/<([^>]+)>/);
-  const raw = match ? match[1]! : callerid.replace(/"/g, "").trim();
-  return raw.replace(/\D/g, "");
-}
-
-function vmExtractCallerName(callerid: string): string {
-  // VitalPBX sends clid like 'LANDAU TOBY<8457828230>' (no quotes), or
-  // '"LANDAU TOBY" <8457828230>' (RFC-3261 style). Grab everything before the
-  // first '<' as the CNAM, unless it's just a phone number.
-  const idx = callerid.indexOf("<");
-  if (idx <= 0) return "";
-  const name = callerid.slice(0, idx).replace(/^\s*"?/, "").replace(/"?\s*$/, "").trim();
-  if (!name || /^[\d\s+\-().]+$/.test(name)) return "";
-  return name;
-}
-
-function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
-  const f = folder.toLowerCase();
-  if (f === "inbox" || f === "in") return "inbox";
-  if (f === "urgent") return "urgent";
-  return "old";
-}
-
 let _voicemailSyncRunning = false;
 
 async function runVoicemailSyncCycle(): Promise<void> {
@@ -1243,6 +1225,13 @@ async function runVoicemailSyncCycle(): Promise<void> {
     let totalRecords = 0;
     let totalUpserts = 0;
     let totalErrors = 0;
+    let cycleRestRecords = 0;
+    let cycleHelperMessages = 0;
+    let cycleHelperCalls = 0;
+    const maxHelperFallback = Math.max(0, Number(process.env.VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE || 32) || 0);
+    const helperMinIntervalMs = Math.max(0, Number(process.env.VOICEMAIL_HELPER_MIN_INTERVAL_MS || 200) || 0);
+    let helperCallsBudget = maxHelperFallback;
+    let lastHelperCallAt = 0;
 
     for (const link of links) {
       if (!link?.pbxInstance) continue;
@@ -1260,7 +1249,35 @@ async function runVoicemailSyncCycle(): Promise<void> {
           if (!pbxExtId) continue;
           totalExts++;
           try {
-            const records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
+            let records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
+            cycleRestRecords += records.length;
+            if (records.length === 0 && helperCallsBudget > 0) {
+              const tid = String(link.pbxTenantId || "").trim();
+              const helperCfg = tid ? resolvePbxRouteHelperConfig(link.pbxInstanceId) : null;
+              if (helperCfg && tid) {
+                const now = Date.now();
+                if (helperMinIntervalMs > 0 && lastHelperCallAt > 0) {
+                  const wait = helperMinIntervalMs - (now - lastHelperCallAt);
+                  if (wait > 0) await sleep(wait);
+                }
+                try {
+                  const spool = await listVoicemailSpoolFromHelper(helperCfg, {
+                    tenantId: tid,
+                    extension: ext.extNumber,
+                  });
+                  helperCallsBudget -= 1;
+                  cycleHelperCalls += 1;
+                  lastHelperCallAt = Date.now();
+                  const mapped = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
+                  cycleHelperMessages += mapped.length;
+                  if (mapped.length > 0) {
+                    records = mapped;
+                  }
+                } catch {
+                  // Per-extension failure should not abort the whole cycle.
+                }
+              }
+            }
             totalRecords += records.length;
             for (const rec of records) {
               // VitalPBX payload uses { date, clid, recfile, filename, msg_id }.
@@ -1337,8 +1354,25 @@ async function runVoicemailSyncCycle(): Promise<void> {
       }
     }
 
+    const source_used =
+      cycleHelperCalls > 0 ? (cycleRestRecords > 0 ? "rest+helper" : "helper") : "rest";
+    const fallback_reason =
+      cycleHelperCalls > 0 ? "rest_empty_used_spool_fallback" : null;
     console.log(
-      `[voicemail-sync] links=${links.length} extsChecked=${totalExts} records=${totalRecords} upserts=${totalUpserts} errors=${totalErrors}`,
+      JSON.stringify({
+        msg: "voicemail-sync-cycle",
+        links: links.length,
+        extsChecked: totalExts,
+        records: totalRecords,
+        upserts: totalUpserts,
+        errors: totalErrors,
+        rest_count: cycleRestRecords,
+        helper_count: cycleHelperMessages,
+        helper_calls: cycleHelperCalls,
+        source_used,
+        upserted_count: totalUpserts,
+        fallback_reason,
+      }),
     );
   } finally {
     _voicemailSyncRunning = false;
