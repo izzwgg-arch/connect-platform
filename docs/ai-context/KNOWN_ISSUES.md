@@ -124,6 +124,24 @@ When you find a new fragile area, add it here.
   dialplan/pjsip). See `TELEPHONY.md` "Tenant MOH enforcement layer" and
   `DEBUGGING.md` "MOH on outbound / internal / bridge / hold legs plays
   the wrong class".
+- **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
+  alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
+  convenience alias for `module reload res_pjsip.so` on newer Asterisk
+  builds, but the alias is missing on the canary PBX (and silently
+  returns `No such command 'pjsip reload'` while leaving PJSIP at its
+  previous config — the CLI's `-rx` exit code is still 0). This caused
+  the tenant MOH enforcement installer to write
+  `pjsip__65_connect_tenant_moh.conf` correctly but then fail the
+  sample-endpoint verification (because the file was never read into
+  Asterisk's runtime), triggering a clean rollback of just the PJSIP
+  layer. Fix: the installer now reloads PJSIP through a
+  `pjsip_reload()` helper that prefers `module reload res_pjsip.so`
+  (supported on every Asterisk ≥ 12 build) and falls back to
+  `core reload` only if the module form is also unknown. The
+  break-glass manual rollback in `TELEPHONY.md` and `DEPLOYMENT.md` was
+  updated to match. Do **not** ever shell out to `asterisk -rx "pjsip
+  reload"` from automation that needs to work on this fleet — use the
+  module-reload form directly.
 - **Tenant MOH enforcement requires re-running the installer after every
   new tenant's first MOH publish (open, operational).** The per-tenant
   `T<id>_before-connecting-call-hook` dialplan stanzas and the per-tenant
@@ -620,6 +638,18 @@ When you find a new fragile area, add it here.
   **`POST /voicemail/spool/audio`** (validated **`tenantId` / extension / folder / msgNum`** only — no
   client paths). Success → real audio bytes (`TELEPHONY.md`). Helper pre-**`2026.05.08.2`** → audio route **404**,
   API still **`503` JSON**.   **Rollout state:** Helper **`2026.05.08.2`** is live on **`209.145.60.79`**; app-host **`/health`**, **`spool/audio`** smoke, and **`helper_audio_fallback`** logs are recorded in **`DEPLOYMENT.md`** (**Recorded Phase 2 — helper `2026.05.08.2` live**). If **`/health`** ever regresses to **`.1`**, playback fallback **`POST /voicemail/spool/audio`** is absent (**404**) until the installer is re-run.
+- **Voicemail ingest — REST-non-empty skips spool reconcile (current code).** Phase 1 only
+  calls `POST /voicemail/spool/list` when VitalPBX `voicemail_records` is **empty** for that
+  extension. If the REST API returns a **non-empty but wrong** list (stale, partial index, or
+  tenant/header mismatch that still yields some rows), Connect **never** compares to disk for that
+  poll/notify — new files on the PBX may be invisible in Connect until REST catches up (if ever).
+  **Correlated risk:** worker **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`** (default **32**) is a
+  **global** cap per sync cycle; high extension counts with empty REST can **starve** later
+  mailboxes. **`/internal/voicemail-notify`** resolves `Extension` by **`extNumber` only**
+  (`findFirst` without tenant) — duplicate active extension numbers across Connect tenants can
+  mis-route or skip notify. Evidence checklist: **`DEBUGGING.md`** § voicemail items **8–10**;
+  durable fix requires code changes (reconcile/merge, fair per-tenant scheduling, tenant-scoped
+  notify lookup) — track in product backlog until shipped.
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
   via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a

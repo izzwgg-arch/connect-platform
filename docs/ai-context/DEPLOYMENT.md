@@ -145,6 +145,13 @@ Host-side directories also referenced:
   `runVoicemailSyncCycle` (each empty-REST extension can consume one call).
 - `VOICEMAIL_HELPER_MIN_INTERVAL_MS` (default `200`) — minimum spacing between helper calls.
 
+**Reliability triage (ops):** “Zero voicemails in Connect for 24h” is **not** verified until PBX
+`msg*.txt` counts (or `spool/list`) for the tenant’s mailboxes are compared to Postgres `Voicemail`
+rows in the same window, plus worker/api log JSON (`voicemail-sync-cycle`, `voicemail-notify`).
+See **`DEBUGGING.md`** § voicemail items **8–10** and **`KNOWN_ISSUES.md`** (REST-non-empty /
+global budget / notify `findFirst`). Raising **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`** may reduce
+starvation but does not fix REST-vs-spool divergence when REST returns a non-empty partial list.
+
 ### VitalPBX host: Connect route helper script
 
 - The Python helper under `/opt/connect-pbx-helper/` is installed/updated by
@@ -240,12 +247,16 @@ Host-side directories also referenced:
   Removes only Connect-owned files + the sentinel `#include` line, then
   reloads dialplan and pjsip. Idempotent — running again on an
   already-uninstalled host is safe.
-- **Rollback (manual equivalent, break-glass only)**:
+- **Rollback (manual equivalent, break-glass only)**. Do **not** use
+  `asterisk -rx "pjsip reload"` — that CLI alias is missing on some
+  VitalPBX/Asterisk builds (verified 2026-05-10) and silently no-ops.
+  Use the canonical `module reload res_pjsip.so` form, which is
+  supported on every Asterisk ≥ 12 build:
   ```bash
   ssh <pbx> "sed -i '/^#include extensions__65_connect_tenant_moh\\.conf$/d' /etc/asterisk/extensions__60_custom.conf \\
     && rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf /etc/asterisk/pjsip__65_connect_tenant_moh.conf \\
     && asterisk -rx 'dialplan reload' \\
-    && asterisk -rx 'pjsip reload'"
+    && asterisk -rx 'module reload res_pjsip.so'"
   ```
   PBX behavior reverts to byte-identical pre-install for the MOH
   enforcement layer. Reverse-map AstDB keys are inert if the includes

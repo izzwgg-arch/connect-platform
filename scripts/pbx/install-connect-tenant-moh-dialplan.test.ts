@@ -226,7 +226,11 @@ test("installer prints rollback instructions", () => {
   // Rollback block must appear in TWO forms in the operator-facing summary:
   // the preferred subcommand (`sudo $0 --rollback`) and the manual sed/rm
   // equivalent for break-glass scenarios. Both must reference the exact
-  // include paths and reload BOTH dialplan and pjsip.
+  // include paths and reload BOTH dialplan and PJSIP. The PJSIP reload
+  // command must be `module reload res_pjsip.so` (the canonical form),
+  // NOT `pjsip reload` — the latter alias is missing on some VitalPBX /
+  // Asterisk builds (verified 2026-05-10) and silently no-ops, leaving
+  // PJSIP at its previous config.
   assert.match(SCRIPT, /Rollback \(preferred/);
   assert.match(SCRIPT, /sudo \$0 --rollback/);
   assert.match(SCRIPT, /Rollback \(manual equivalent, instant\):/);
@@ -234,7 +238,7 @@ test("installer prints rollback instructions", () => {
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/extensions__65_connect_tenant_moh\.conf/);
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/pjsip__65_connect_tenant_moh\.conf/);
   assert.match(SCRIPT, /asterisk -rx "dialplan reload"/);
-  assert.match(SCRIPT, /asterisk -rx "pjsip reload"/);
+  assert.match(SCRIPT, /asterisk -rx "module reload res_pjsip\.so"/);
 });
 
 test("installer is idempotent: backs up existing include before overwriting", () => {
@@ -332,10 +336,15 @@ test("installer emits [endpoint](+) append blocks with set_var = CHANNEL(musiccl
   assert.match(SCRIPT, /set_var = CHANNEL\(musicclass\)=\$\{CLASS\}/);
 });
 
-test("installer reloads PJSIP after writing the include and verifies a sample endpoint", () => {
-  // pjsip reload is the only way Asterisk picks up new set_var lines on
-  // existing endpoints without a full restart.
-  assert.match(SCRIPT, /asterisk -rx 'pjsip reload'/);
+test("installer reloads PJSIP via pjsip_reload() helper, not the missing 'pjsip reload' alias", () => {
+  // `pjsip reload` is missing on some VitalPBX / Asterisk builds
+  // (verified 2026-05-10: the CLI returns "No such command 'pjsip
+  // reload'" and silently leaves PJSIP at its previous config). The
+  // installer must call pjsip_reload() — a tiny helper that prefers
+  // `module reload res_pjsip.so` (the canonical form available since
+  // Asterisk 12) and falls back to `core reload` only if that
+  // alternative is also unknown.
+  assert.match(SCRIPT, /PJSIP_RELOAD_OUT="\$\(pjsip_reload\)"/);
   // Verification reads the sample endpoint back and looks for either the
   // explicit set_var line or the resolved musicclass attribute (Asterisk
   // builds differ in how `pjsip show endpoint` renders set_var).
@@ -343,6 +352,39 @@ test("installer reloads PJSIP after writing the include and verifies a sample en
   assert.match(
     SCRIPT,
     /set_var\[\[:space:\]\]\*\[:=\]\.\*CHANNEL\\\(musicclass\\\)=\$\{PJSIP_SAMPLE_CLASS\}/,
+  );
+});
+
+test("pjsip_reload helper prefers module reload res_pjsip.so over the missing 'pjsip reload' alias", () => {
+  // The helper exists, has a body, and uses the right form. We assert on
+  // the function declaration plus the two key commands. Detection of
+  // "command not found" is required so the helper falls back gracefully
+  // instead of believing the reload happened.
+  assert.match(SCRIPT, /\npjsip_reload\s*\(\)\s*\{/);
+  const body = extractBashFunctionBody(SCRIPT, "pjsip_reload");
+  assert.match(body, /asterisk -rx 'module reload res_pjsip\.so'/);
+  assert.match(body, /no such command\|command not found/i);
+  // Must NOT use the broken alias anywhere in the helper body.
+  assert.equal(
+    /asterisk -rx ['"]pjsip reload['"]/.test(body),
+    false,
+    "pjsip_reload must not call the missing 'pjsip reload' alias",
+  );
+});
+
+test("installer never invokes the missing 'pjsip reload' CLI alias as an active reload command", () => {
+  // The literal string `asterisk -rx "pjsip reload"` (or with single
+  // quotes) must not appear as an executable line anywhere in the
+  // script. It MAY still appear inside comments documenting the prior
+  // form for readers who land here from old runbooks; we look only at
+  // non-comment lines.
+  const nonCommentLines = SCRIPT.split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+  assert.equal(
+    /asterisk\s+-rx\s+["']pjsip reload["']/.test(nonCommentLines),
+    false,
+    "non-comment lines must not run `asterisk -rx \"pjsip reload\"`",
   );
 });
 
@@ -357,11 +399,18 @@ test("installer rolls back the PJSIP include if sample endpoint verification fai
     /rollback_pjsip_and_warn\s+"PJSIP caller-leg musicclass verification failed for \$\{PJSIP_SAMPLE_ENDPOINT\}\."/,
   );
   // Rollback must restore the prior PJSIP include if there was one and
-  // remove the new one if there wasn't, then reload pjsip so Asterisk
-  // drops the failed config.
-  assert.match(SCRIPT, /cp -a "\$PJSIP_BACKUP_FILE" "\$PJSIP_FILE"/);
-  assert.match(SCRIPT, /rm -f "\$PJSIP_FILE"/);
-  assert.match(SCRIPT, /asterisk -rx "pjsip reload" >\/dev\/null 2>&1 \|\| true/);
+  // remove the new one if there wasn't, then reload PJSIP through the
+  // pjsip_reload() helper (module-reload form) so Asterisk drops the
+  // failed config even on builds where `pjsip reload` is missing.
+  const rollbackBody = extractBashFunctionBody(SCRIPT, "rollback_pjsip_and_warn");
+  assert.match(rollbackBody, /cp -a "\$PJSIP_BACKUP_FILE" "\$PJSIP_FILE"/);
+  assert.match(rollbackBody, /rm -f "\$PJSIP_FILE"/);
+  assert.match(rollbackBody, /pjsip_reload\s+>\/dev\/null 2>&1 \|\| true/);
+  assert.equal(
+    /asterisk -rx "pjsip reload"/.test(rollbackBody),
+    false,
+    "rollback_pjsip_and_warn must not call the missing 'pjsip reload' alias",
+  );
 });
 
 test("installer skips PJSIP install entirely when AstDB has no Connect-known tenants", () => {
@@ -652,10 +701,18 @@ test("do_rollback removes ONLY Connect-owned files + sentinel include line", () 
   }
 });
 
-test("do_rollback reloads BOTH dialplan and pjsip", () => {
+test("do_rollback reloads BOTH dialplan and pjsip via pjsip_reload helper", () => {
   const body = extractBashFunctionBody(SCRIPT, "do_rollback");
   assert.match(body, /asterisk -rx "dialplan reload"/);
-  assert.match(body, /asterisk -rx "pjsip reload"/);
+  // PJSIP reload goes through the helper (which uses
+  // `module reload res_pjsip.so`), NOT the broken `pjsip reload` alias.
+  assert.match(body, /pjsip_reload\s+>\/dev\/null/);
+  // Negative: rollback must not call the broken alias directly.
+  assert.equal(
+    /asterisk -rx "pjsip reload"/.test(body),
+    false,
+    "do_rollback must not call the missing 'pjsip reload' alias",
+  );
 });
 
 test("do_rollback verifies the resolver is no longer loaded after reload", () => {

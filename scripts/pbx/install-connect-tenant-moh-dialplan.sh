@@ -149,7 +149,7 @@
 #   rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf
 #   rm -f /etc/asterisk/pjsip__65_connect_tenant_moh.conf
 #   asterisk -rx "dialplan reload"
-#   asterisk -rx "pjsip reload"
+#   asterisk -rx "module reload res_pjsip.so"   # NOT `pjsip reload` — see pjsip_reload() below
 #
 # After rollback the PBX behavior is byte-identical to pre-install: the
 # generated [sub-before-bridging-call] still calls the (no-op) FreePBX/
@@ -177,6 +177,33 @@ set -euo pipefail
 step() { printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 warn() { printf '\nWARN: %s\n' "$*" >&2; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+# Reload PJSIP using a CLI variant that exists on this Asterisk build.
+# `pjsip reload` is the convenient one-liner introduced in newer
+# Asterisk, but is NOT shipped on every VitalPBX/Asterisk build — on
+# affected builds `asterisk -rx "pjsip reload"` returns
+# "No such command 'pjsip reload'" and silently leaves PJSIP at its
+# previous config (verified 2026-05-10 against the canary PBX).
+#
+# Try the canonical module-reload form first since `module reload
+# res_pjsip.so` has been part of Asterisk since 12 and is what `pjsip
+# reload` is aliased to internally on builds that do ship it. Fall
+# back to `core reload` only as a last resort because it reloads every
+# reloadable module on the box.
+#
+# Returns 0 if either command was accepted by the CLI; emits the
+# Asterisk CLI's own output on stdout for the caller to log. Detect
+# rejection by grepping the output for "No such command" /
+# "command not found" rather than relying on exit codes — Asterisk's
+# `-rx` returns 0 even when the inner command was unknown.
+pjsip_reload() {
+  local out
+  out="$(asterisk -rx 'module reload res_pjsip.so' 2>&1 || true)"
+  if echo "$out" | grep -qiE 'no such command|command not found'; then
+    out="$(asterisk -rx 'core reload' 2>&1 || true)"
+  fi
+  printf '%s' "$out"
+}
 
 # ── 0. Mode parsing ─────────────────────────────────────────────────────────
 # Default mode is "install" (preserves original behavior). --check and
@@ -297,7 +324,7 @@ rollback_pjsip_and_warn() {
     warn "Removing failed PJSIP include: $PJSIP_FILE"
     rm -f "$PJSIP_FILE"
   fi
-  asterisk -rx "pjsip reload" >/dev/null 2>&1 || true
+  pjsip_reload >/dev/null 2>&1 || true
   warn "PJSIP caller-leg MOH layer rolled back. Trunk/called-leg dialplan layer remains active."
 }
 
@@ -516,8 +543,8 @@ do_rollback() {
 
   asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
   printf '[RELOAD] asterisk -rx "dialplan reload"\n'
-  asterisk -rx "pjsip reload" >/dev/null 2>&1 || true
-  printf '[RELOAD] asterisk -rx "pjsip reload"\n'
+  pjsip_reload >/dev/null 2>&1 || true
+  printf '[RELOAD] asterisk -rx "module reload res_pjsip.so" (via pjsip_reload)\n'
 
   # Best-effort verification: contexts should no longer be loaded. Asterisk
   # may keep a context cached in memory until the affected source file is
@@ -868,7 +895,11 @@ else
     chmod 0644 "$PJSIP_FILE"
     echo "  ↳ wrote $PJSIP_FILE ($(wc -l < "$PJSIP_FILE" | tr -d ' ') lines, ${PJSIP_PER_TENANT_COUNT} tenant(s), ${PJSIP_TOTAL_ENDPOINT_COUNT} endpoint append(s))"
 
-    PJSIP_RELOAD_OUT="$(asterisk -rx 'pjsip reload' 2>&1 || true)"
+    # Use pjsip_reload(): some builds ship `pjsip reload` and some only
+    # `module reload res_pjsip.so`. The helper picks the working one and
+    # returns the asterisk CLI output verbatim so the operator log shows
+    # exactly which form succeeded.
+    PJSIP_RELOAD_OUT="$(pjsip_reload)"
     echo "  ↳ pjsip reload: $PJSIP_RELOAD_OUT"
 
     SAMPLE_ENDPOINT_OUT="$(asterisk -rx "pjsip show endpoint ${PJSIP_SAMPLE_ENDPOINT}" 2>&1 || true)"
@@ -981,7 +1012,10 @@ Rollback (manual equivalent, instant):
   rm -f $DIALPLAN_FILE
   rm -f $PJSIP_FILE
   asterisk -rx "dialplan reload"
-  asterisk -rx "pjsip reload"
+  asterisk -rx "module reload res_pjsip.so"   # NOT 'pjsip reload' — that
+                                              # alias is missing on some
+                                              # VitalPBX/Asterisk builds
+                                              # (verified 2026-05-10).
 
 ============================================================================
 DONE

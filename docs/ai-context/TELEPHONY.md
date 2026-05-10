@@ -198,7 +198,7 @@
   desynchronisation breaks Connect ingestion (worker sums **zero** records; notify
   handler logs `upserted:0`) without affecting SIP registration or call routing. See
   `KNOWN_ISSUES.md` (Voicemail / recordings).
-- **Phase 1 spool fallback (2026-05-08).** When REST returns no rows, Connect can
+- **Phase 1 spool fallback (2026-05-08).** When REST returns **no** rows, Connect can
   read the Asterisk voicemail spool **read-only** via the on-PBX helper
   `POST /voicemail/spool/list` (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`,
   helper `VERSION` `2026.05.08.1`+). **API** `/internal/voicemail-notify` tries REST
@@ -206,7 +206,13 @@
   `tenantId`, `extension` (= mailbox), and `voicemailContext` (= AMI context).
   **Worker** `runVoicemailSyncCycle` tries REST per extension, then the helper when
   REST is empty, with throttling (`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`,
-  `VOICEMAIL_HELPER_MIN_INTERVAL_MS`). Rows still dedupe on `pbxMessageId` (same
+  `VOICEMAIL_HELPER_MIN_INTERVAL_MS`). **Structural note:** if REST returns **one or more**
+  rows but disk has **additional** messages (or REST is stale), the helper is **not** consulted
+  for that mailbox in the current implementation — ingestion can look “stuck” for that tenant
+  even when spool/list would show the full set. **Worker** also shares a **global** helper call
+  budget per cycle (`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`, default **32**); many extensions
+  with empty REST in the same cycle can exhaust the budget before later mailboxes are processed.
+  Rows still dedupe on `pbxMessageId` (same
   composite as when REST omits `msg_id`). Shared normalization:
   `packages/shared/src/voicemailIngest.ts`. Helper client env resolution:
   `packages/integrations/src/pbxRouteHelperEnv.ts` (also re-exported from
@@ -564,13 +570,18 @@ Preferred (Connect-owned only, idempotent):
 ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
 ```
 
-Manual equivalent (break-glass only):
+Manual equivalent (break-glass only). Note: do **not** use
+`asterisk -rx "pjsip reload"` — that CLI alias is missing on some
+VitalPBX/Asterisk builds (verified 2026-05-10) and silently no-ops,
+leaving PJSIP at its previous config. Always use the canonical
+`module reload res_pjsip.so` form, which is supported on every
+Asterisk ≥ 12 build:
 
 ```bash
 ssh <pbx> "sed -i '/^#include extensions__65_connect_tenant_moh\\.conf$/d' /etc/asterisk/extensions__60_custom.conf \
   && rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf /etc/asterisk/pjsip__65_connect_tenant_moh.conf \
   && asterisk -rx 'dialplan reload' \
-  && asterisk -rx 'pjsip reload'"
+  && asterisk -rx 'module reload res_pjsip.so'"
 ```
 
 Reverse-map AstDB keys are inert without the resolver and can be cleared
