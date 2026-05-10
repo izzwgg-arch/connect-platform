@@ -10,8 +10,11 @@
 //     back to active_moh_class.
 //   * The resolver Sets CHANNEL(musicclass) and the inheritable __CONNECT_MOH.
 //   * No tenant or MOH class is hardcoded.
-//   * The installer prints rollback instructions and never edits VitalPBX-
-//     generated files.
+//   * The installer prints rollback instructions.
+//   * If `extensions__65_*.conf` is not wildcard-included by this PBX, the
+//     installer may add one sentinel include to the Connect-owned
+//     `extensions__60_custom.conf`; it must still never edit VitalPBX-generated
+//     baseplan / tenant / trunk files.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -95,10 +98,14 @@ test("installer never hardcodes a tenant or a specific moh class in the dialplan
   }
 });
 
-test("installer never edits VitalPBX-generated extensions__*.conf files", () => {
-  // We only ever write extensions__65_connect_tenant_moh.conf. We must not
-  // mutate baseplan or any other generated file.
+test("installer only writes Connect-owned dialplan files, never VitalPBX-generated files", () => {
+  // We write the new Connect-owned `__65` file and may add a sentinel #include
+  // to Connect's already-loaded `__60_custom` file when this PBX does not
+  // wildcard-load arbitrary `extensions__*.conf` files. We must not mutate
+  // baseplan, tenant, trunk, musiconhold, queue, or parking generated files.
   assert.match(SCRIPT, /\/etc\/asterisk\/extensions__65_connect_tenant_moh\.conf/);
+  assert.match(SCRIPT, /\/etc\/asterisk\/extensions__60_custom\.conf/);
+  assert.match(SCRIPT, /#include extensions__65_connect_tenant_moh\.conf/);
   for (const banned of [
     "extensions__20-baseplan.conf",
     "extensions__40_",
@@ -116,6 +123,7 @@ test("installer never edits VitalPBX-generated extensions__*.conf files", () => 
 test("installer prints rollback instructions", () => {
   // Rollback block must appear and must use the exact include path + reload.
   assert.match(SCRIPT, /Rollback \(instant\):/);
+  assert.match(SCRIPT, /sed -i '\/\^#include extensions__65_connect_tenant_moh\\\.conf\$\/d'/);
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/extensions__65_connect_tenant_moh\.conf/);
   assert.match(SCRIPT, /asterisk -rx "dialplan reload"/);
 });
@@ -125,10 +133,14 @@ test("installer is idempotent: backs up existing include before overwriting", ()
   assert.match(SCRIPT, /cp -a "\$DIALPLAN_FILE" "\$BACKUP_FILE"/);
 });
 
-test("installer verifies BOTH contexts loaded after dialplan reload, otherwise restores backup", () => {
+test("installer verifies BOTH contexts loaded after dialplan reload, bridges through __60_custom if needed", () => {
   assert.match(SCRIPT, /dialplan show sub-connect-tenant-moh/);
   assert.match(SCRIPT, /dialplan show global-before-bridging-call-hook/);
-  // Restore-backup-on-failure block must exist.
-  assert.match(SCRIPT, /Restoring backup/);
+  assert.match(SCRIPT, /This VitalPBX install likely does not wildcard-include extensions__\*\.conf/);
+  assert.match(SCRIPT, /sentinel include already present/);
+  assert.match(SCRIPT, /added sentinel include to \$CUSTOM_FILE/);
+  // Restore-backup-on-failure block must exist for both files.
+  assert.match(SCRIPT, /Restoring include backup/);
+  assert.match(SCRIPT, /Restoring custom dialplan backup/);
   assert.match(SCRIPT, /cp -a "\$BACKUP_FILE" "\$DIALPLAN_FILE"/);
 });

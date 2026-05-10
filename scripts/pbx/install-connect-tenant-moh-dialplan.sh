@@ -15,9 +15,22 @@
 # internal contexts. Result: a tenant who selects e.g. moh8 in Connect still
 # hears moh3 (or whatever the historical default was) on outbound hold.
 #
-# This installer drops a single Connect-owned include file:
+# This installer drops a Connect-owned include file:
 #
 #   /etc/asterisk/extensions__65_connect_tenant_moh.conf
+#
+# Some VitalPBX installs explicitly include only selected `extensions__*.conf`
+# files instead of using a wildcard. If Asterisk does not load the new `__65`
+# file after `dialplan reload`, the installer bridges it through the already
+# loaded Connect-owned custom include:
+#
+#   /etc/asterisk/extensions__60_custom.conf
+#
+# by adding one sentinel line:
+#
+#   #include extensions__65_connect_tenant_moh.conf
+#
+# It still NEVER edits VitalPBX-generated baseplan / tenant / trunk files.
 #
 # It defines two contexts:
 #
@@ -41,6 +54,8 @@
 #   * NEVER touches musiconhold__*.conf, queues, or parking config.
 #   * Idempotent. Safe to re-run.
 #   * Backs up any existing same-named include before writing.
+#   * Backs up `extensions__60_custom.conf` before adding the sentinel include,
+#     if this host needs the bridge.
 #   * Reloads dialplan and verifies BOTH contexts are present afterwards.
 #   * On verification failure, restores the backup and aborts.
 #
@@ -51,6 +66,7 @@
 #
 # Rollback (run on PBX as root)
 # -----------------------------
+#   sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' /etc/asterisk/extensions__60_custom.conf
 #   rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf
 #   asterisk -rx "dialplan reload"
 #
@@ -72,9 +88,59 @@ asterisk -rx "core show channels count" >/dev/null 2>&1 \
   || die "asterisk -rx not responsive — is Asterisk running?"
 
 DIALPLAN_FILE="/etc/asterisk/extensions__65_connect_tenant_moh.conf"
+CUSTOM_FILE="/etc/asterisk/extensions__60_custom.conf"
 BACKUP_FILE="${DIALPLAN_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+CUSTOM_BACKUP_FILE="${CUSTOM_FILE}.bak.connect-tenant-moh.$(date +%Y%m%d-%H%M%S)"
 TMP_NEW="/tmp/connect-tenant-moh-new.$$.conf"
+INCLUDE_LINE="#include extensions__65_connect_tenant_moh.conf"
 trap 'rm -f "$TMP_NEW"' EXIT
+
+restore_backups_and_die() {
+  local msg="$1"
+  warn "$msg"
+  warn "Restoring include backup: $BACKUP_FILE"
+  if [[ -s "$BACKUP_FILE" ]]; then
+    cp -a "$BACKUP_FILE" "$DIALPLAN_FILE"
+  else
+    rm -f "$DIALPLAN_FILE"
+  fi
+  if [[ -f "$CUSTOM_BACKUP_FILE" ]]; then
+    warn "Restoring custom dialplan backup: $CUSTOM_BACKUP_FILE"
+    cp -a "$CUSTOM_BACKUP_FILE" "$CUSTOM_FILE"
+  fi
+  asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
+  die "Dialplan reload did not load both Connect tenant MOH contexts. Backups restored."
+}
+
+verify_contexts_loaded() {
+  RESOLVER_OUT="$(asterisk -rx 'dialplan show sub-connect-tenant-moh' 2>&1 || true)"
+  HOOK_OUT="$(asterisk -rx 'dialplan show global-before-bridging-call-hook' 2>&1 || true)"
+
+  resolver_ok=0
+  hook_ok=0
+  if echo "$RESOLVER_OUT" | grep -q "Connect tenant MOH resolver"; then
+    resolver_ok=1
+  fi
+  if echo "$HOOK_OUT" | grep -q "Connect global before-bridging hook"; then
+    hook_ok=1
+  fi
+  [[ $resolver_ok -eq 1 && $hook_ok -eq 1 ]]
+}
+
+print_context_verification() {
+  if [[ ${resolver_ok:-0} -eq 1 ]]; then
+    echo "  ↳ OK — [sub-connect-tenant-moh] loaded"
+  else
+    warn "[sub-connect-tenant-moh] not found after reload. Output was:"
+    echo "$RESOLVER_OUT" | head -20
+  fi
+  if [[ ${hook_ok:-0} -eq 1 ]]; then
+    echo "  ↳ OK — [global-before-bridging-call-hook] loaded"
+  else
+    warn "[global-before-bridging-call-hook] not found after reload. Output was:"
+    echo "$HOOK_OUT" | head -20
+  fi
+}
 
 # ── 2. Snapshot existing include (if any) ───────────────────────────────────
 step "[1/6] Snapshot any existing include"
@@ -160,37 +226,37 @@ step "[4/6] Reload Asterisk dialplan"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
-# ── 6. Verify both contexts loaded ──────────────────────────────────────────
+# ── 6. Verify both contexts loaded; bridge through __60_custom if needed ────
 step "[5/6] Verify [sub-connect-tenant-moh] + [global-before-bridging-call-hook] are loaded"
-RESOLVER_OUT="$(asterisk -rx 'dialplan show sub-connect-tenant-moh' 2>&1 || true)"
-HOOK_OUT="$(asterisk -rx 'dialplan show global-before-bridging-call-hook' 2>&1 || true)"
-
-resolver_ok=0
-hook_ok=0
-if echo "$RESOLVER_OUT" | grep -q "Connect tenant MOH resolver"; then
-  resolver_ok=1
-  echo "  ↳ OK — [sub-connect-tenant-moh] loaded"
+if verify_contexts_loaded; then
+  print_context_verification
 else
-  warn "[sub-connect-tenant-moh] not found after reload. Output was:"
-  echo "$RESOLVER_OUT" | head -20
-fi
-if echo "$HOOK_OUT" | grep -q "Connect global before-bridging hook"; then
-  hook_ok=1
-  echo "  ↳ OK — [global-before-bridging-call-hook] loaded"
-else
-  warn "[global-before-bridging-call-hook] not found after reload. Output was:"
-  echo "$HOOK_OUT" | head -20
-fi
+  print_context_verification
+  warn "The new include file was written, but Asterisk did not load it directly."
+  warn "This VitalPBX install likely does not wildcard-include extensions__*.conf."
+  [[ -f "$CUSTOM_FILE" ]] || restore_backups_and_die "$CUSTOM_FILE is missing; cannot bridge include safely."
 
-if [[ $resolver_ok -ne 1 || $hook_ok -ne 1 ]]; then
-  warn "Verification failed. Restoring backup: $BACKUP_FILE"
-  if [[ -s "$BACKUP_FILE" ]]; then
-    cp -a "$BACKUP_FILE" "$DIALPLAN_FILE"
+  step "[5b/6] Bridge new include through already-loaded Connect custom dialplan"
+  if ! grep -Fxq "$INCLUDE_LINE" "$CUSTOM_FILE"; then
+    cp -a "$CUSTOM_FILE" "$CUSTOM_BACKUP_FILE"
+    printf '\n; Connect tenant MOH enforcement include (auto-added by install-connect-tenant-moh-dialplan.sh)\n%s\n' "$INCLUDE_LINE" >> "$CUSTOM_FILE"
+    chown asterisk:asterisk "$CUSTOM_FILE"
+    chmod 0644 "$CUSTOM_FILE"
+    echo "  ↳ added sentinel include to $CUSTOM_FILE"
+    echo "  ↳ backed up custom dialplan to $CUSTOM_BACKUP_FILE"
   else
-    rm -f "$DIALPLAN_FILE"
+    echo "  ↳ sentinel include already present in $CUSTOM_FILE"
   fi
-  asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
-  die "Dialplan reload did not load both Connect tenant MOH contexts. Backup restored."
+
+  RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
+  echo "  ↳ $RELOAD_OUT"
+  if verify_contexts_loaded; then
+    print_context_verification
+    echo "  ↳ OK — contexts loaded through $CUSTOM_FILE"
+  else
+    print_context_verification
+    restore_backups_and_die "Verification failed even after bridging through $CUSTOM_FILE."
+  fi
 fi
 
 # ── 7. AstDB smoke output ───────────────────────────────────────────────────
@@ -205,6 +271,7 @@ cat <<DONE
 INSTALL COMPLETE.
 
 Backup of previous include: $BACKUP_FILE
+Backup of Connect custom dialplan (only if bridged): ${CUSTOM_BACKUP_FILE:-not-created}
 
 Wired in via VitalPBX-generated [sub-before-bridging-call] (extensions__20-baseplan.conf),
 which Gosubs [global-before-bridging-call-hook] — defined by THIS include.
@@ -226,6 +293,7 @@ If MusicClass is still wrong:
     contains a Gosub line that lands in [global-before-bridging-call-hook].
 
 Rollback (instant):
+  sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' $CUSTOM_FILE
   rm -f $DIALPLAN_FILE
   asterisk -rx "dialplan reload"
 
