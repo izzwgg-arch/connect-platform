@@ -91,16 +91,41 @@
 # hold regardless of which side initiates, both legs need their
 # musicclass set.
 #
+# Caller-leg coverage on outbound trunk dials
+# -------------------------------------------
+# On VitalPBX builds where [sub-before-connecting-call] is NOT invoked
+# from the per-trunk caller dial path (verified on 2026-05-10 against
+# trk-33-dial — that context only contains a Dial(... U(...)) line and
+# never Gosubs into sub-before-connecting-call), the dialplan-side
+# connect-leg shim is unreachable for outbound calls. To cover the
+# caller leg without editing a single VitalPBX-generated file, this
+# installer also writes a Connect-owned PJSIP include:
+#
+#   /etc/asterisk/pjsip__65_connect_tenant_moh.conf
+#
+# The PJSIP include uses Asterisk's `[name](+)` append syntax to add a
+# `set_var = CHANNEL(musicclass)=<class>` line to each Connect-known
+# tenant's `T<id>_*` extension endpoints. PJSIP applies set_var via
+# pbx_builtin_setvar_helper on every channel created from the endpoint,
+# which honors function-call syntax in the variable name — so the
+# CHANNEL function fires at channel-creation time, BEFORE any dialplan
+# runs, and the caller leg has the right musicclass from the moment
+# the INVITE hits Asterisk. Trunk endpoints are NOT touched here; the
+# trunk leg is still covered by the existing called-leg U-flag hook.
+#
 # Hard rules
 # ----------
-#   * NEVER edits VitalPBX-generated extensions__*.conf files.
+#   * NEVER edits VitalPBX-generated extensions__*.conf or pjsip__*.conf files.
 #   * NEVER touches musiconhold__*.conf, queues, or parking config.
+#   * NEVER touches PJSIP transports, AORs, registrations, or templates —
+#     only `[<existing-endpoint>](+)` append blocks, never new endpoints.
 #   * Idempotent. Safe to re-run.
-#   * Backs up any existing same-named include before writing.
+#   * Backs up any existing same-named includes before writing.
 #   * Backs up `extensions__60_custom.conf` before adding the sentinel include,
 #     if this host needs the bridge.
-#   * Reloads dialplan and verifies BOTH contexts are present afterwards.
-#   * On verification failure, restores the backup and aborts.
+#   * Reloads dialplan AND pjsip, and verifies all required contexts and a
+#     sample PJSIP set_var are present afterwards.
+#   * On verification failure, restores the backups and aborts.
 #
 # Usage
 # -----
@@ -111,14 +136,18 @@
 # -----------------------------
 #   sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' /etc/asterisk/extensions__60_custom.conf
 #   rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf
+#   rm -f /etc/asterisk/pjsip__65_connect_tenant_moh.conf
 #   asterisk -rx "dialplan reload"
+#   asterisk -rx "pjsip reload"
 #
 # After rollback the PBX behavior is byte-identical to pre-install: the
 # generated [sub-before-bridging-call] still calls the (no-op) FreePBX/
 # VitalPBX baseplan hooks, the generated [sub-before-connecting-call]
 # still does its DIALPLAN_EXISTS GosubIf which then no-ops because the
 # T<id>_before-connecting-call-hook contexts only existed inside our
-# (now-removed) include, but our resolver is no longer wired in.
+# (now-removed) include, the PJSIP endpoints lose only the Connect-added
+# set_var lines (their original VitalPBX-generated config is intact),
+# and our resolver is no longer wired in.
 #
 # Operational note: re-run after publishing MOH for new tenants
 # -------------------------------------------------------------
@@ -150,7 +179,11 @@ BACKUP_FILE="${DIALPLAN_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
 CUSTOM_BACKUP_FILE="${CUSTOM_FILE}.bak.connect-tenant-moh.$(date +%Y%m%d-%H%M%S)"
 TMP_NEW="/tmp/connect-tenant-moh-new.$$.conf"
 INCLUDE_LINE="#include extensions__65_connect_tenant_moh.conf"
-trap 'rm -f "$TMP_NEW"' EXIT
+
+PJSIP_FILE="/etc/asterisk/pjsip__65_connect_tenant_moh.conf"
+PJSIP_BACKUP_FILE="${PJSIP_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+PJSIP_TMP_NEW="/tmp/connect-tenant-moh-pjsip-new.$$.conf"
+trap 'rm -f "$TMP_NEW" "$PJSIP_TMP_NEW"' EXIT
 
 restore_backups_and_die() {
   local msg="$1"
@@ -167,6 +200,27 @@ restore_backups_and_die() {
   fi
   asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
   die "Dialplan reload did not load both Connect tenant MOH contexts. Backups restored."
+}
+
+# Roll back ONLY the PJSIP include — the dialplan layer above is already
+# verified loaded and covers the trunk/called-leg path on its own. Restore
+# any prior PJSIP include from $PJSIP_BACKUP_FILE if it existed before this
+# run, otherwise remove the new include outright. Reload pjsip after the
+# restore so Asterisk drops the failed config from its working set.
+rollback_pjsip_and_warn() {
+  local msg="$1"
+  warn "$msg"
+  if [[ -s "$PJSIP_BACKUP_FILE" ]]; then
+    warn "Restoring PJSIP include backup: $PJSIP_BACKUP_FILE"
+    cp -a "$PJSIP_BACKUP_FILE" "$PJSIP_FILE"
+    chown asterisk:asterisk "$PJSIP_FILE" 2>/dev/null || true
+    chmod 0644 "$PJSIP_FILE" 2>/dev/null || true
+  else
+    warn "Removing failed PJSIP include: $PJSIP_FILE"
+    rm -f "$PJSIP_FILE"
+  fi
+  asterisk -rx "pjsip reload" >/dev/null 2>&1 || true
+  warn "PJSIP caller-leg MOH layer rolled back. Trunk/called-leg dialplan layer remains active."
 }
 
 verify_contexts_loaded() {
@@ -221,7 +275,7 @@ print_context_verification() {
 }
 
 # ── 2. Snapshot existing include (if any) ───────────────────────────────────
-step "[1/6] Snapshot any existing include"
+step "[1/8] Snapshot any existing include"
 if [[ -f "$DIALPLAN_FILE" ]]; then
   cp -a "$DIALPLAN_FILE" "$BACKUP_FILE"
   echo "  ↳ backed up to $BACKUP_FILE"
@@ -232,7 +286,7 @@ fi
 
 # ── 3. Write new include ────────────────────────────────────────────────────
 # Heredoc literal — no shell interpolation, no per-tenant data baked in.
-step "[2/6] Write Connect tenant MOH dialplan include"
+step "[2/8] Write Connect tenant MOH dialplan include"
 cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ; ============================================================================
 ; Connect tenant MOH enforcement layer
@@ -340,7 +394,7 @@ CONNECT_TENANT_MOH_EOF
 # publish/rollback, and emit one `include =>` shim stanza per id. Numeric
 # ids only — anything else is rejected so no unexpected family-key shape
 # can sneak a context name in.
-step "[3b/6] Discover Connect-known tenants from AstDB and generate per-tenant connect-leg hooks"
+step "[3/8] Discover Connect-known tenants from AstDB and generate per-tenant connect-leg hooks"
 TENANT_MAP_RAW="$(asterisk -rx 'database show connect/pbx_tenant_map' 2>/dev/null || true)"
 TENANT_IDS="$(printf '%s\n' "$TENANT_MAP_RAW" \
   | awk -F'/' '/^\/connect\/pbx_tenant_map\//{print $4}' \
@@ -379,19 +433,19 @@ else
 fi
 
 # ── 4. Install + permissions ────────────────────────────────────────────────
-step "[3/6] Install include + set permissions"
+step "[4/8] Install include + set permissions"
 mv "$TMP_NEW" "$DIALPLAN_FILE"
 chown asterisk:asterisk "$DIALPLAN_FILE"
 chmod 0644 "$DIALPLAN_FILE"
 echo "  ↳ wrote $DIALPLAN_FILE ($(wc -l < "$DIALPLAN_FILE" | tr -d ' ') lines, $PER_TENANT_COUNT per-tenant connect-leg stanzas)"
 
 # ── 5. Reload Asterisk dialplan ────────────────────────────────────────────
-step "[4/6] Reload Asterisk dialplan"
+step "[5/8] Reload Asterisk dialplan"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
 # ── 6. Verify all required contexts loaded; bridge through __60_custom if needed ────
-step "[5/6] Verify [sub-connect-tenant-moh] + [global-before-bridging-call-hook] + [connect-tenant-moh-connect-shim] are loaded"
+step "[6/8] Verify [sub-connect-tenant-moh] + [global-before-bridging-call-hook] + [connect-tenant-moh-connect-shim] are loaded"
 if verify_contexts_loaded; then
   print_context_verification
 else
@@ -400,7 +454,7 @@ else
   warn "This VitalPBX install likely does not wildcard-include extensions__*.conf."
   [[ -f "$CUSTOM_FILE" ]] || restore_backups_and_die "$CUSTOM_FILE is missing; cannot bridge include safely."
 
-  step "[5b/6] Bridge new include through already-loaded Connect custom dialplan"
+  step "[6b/8] Bridge new include through already-loaded Connect custom dialplan"
   if ! grep -Fxq "$INCLUDE_LINE" "$CUSTOM_FILE"; then
     cp -a "$CUSTOM_FILE" "$CUSTOM_BACKUP_FILE"
     printf '\n; Connect tenant MOH enforcement include (auto-added by install-connect-tenant-moh-dialplan.sh)\n%s\n' "$INCLUDE_LINE" >> "$CUSTOM_FILE"
@@ -423,8 +477,139 @@ else
   fi
 fi
 
-# ── 7. AstDB smoke output ───────────────────────────────────────────────────
-step "[6/6] AstDB reverse-tenant-map smoke output"
+# ── 7. PJSIP caller-leg musicclass append ──────────────────────────────────
+# Why this exists: on this VitalPBX build, [sub-before-connecting-call] is
+# NOT invoked from the per-trunk caller dial path (verified 2026-05-10 —
+# trk-33-dial only contains a Dial(... U(...)) line that fires the
+# called-leg hook), so the dialplan-side connect-leg shim is unreachable
+# for outbound calls. Cover the caller leg by setting
+# CHANNEL(musicclass) at PJSIP channel-creation time via `set_var` on
+# each Connect-known tenant's `T<id>_*` extension endpoint, using the
+# `[name](+)` append syntax so we never re-declare the endpoint and never
+# touch any VitalPBX-generated pjsip__*.conf file.
+#
+# Trunk endpoints are intentionally NOT touched here. The trunk leg is
+# already covered by the dialplan-side called-leg U-flag hook above.
+step "[7/8] Build + install PJSIP caller-leg musicclass append, reload PJSIP, verify"
+
+PJSIP_PER_TENANT_COUNT=0
+PJSIP_TOTAL_ENDPOINT_COUNT=0
+PJSIP_SAMPLE_ENDPOINT=""
+PJSIP_SAMPLE_CLASS=""
+
+if [[ -z "$TENANT_IDS" ]]; then
+  warn "No tenants in connect/pbx_tenant_map AstDB family — skipping PJSIP caller-leg append."
+  warn "Caller-leg MOH coverage will be missing for outbound holds until Connect publishes"
+  warn "MOH at least once and this installer is re-run."
+else
+  if [[ -f "$PJSIP_FILE" ]]; then
+    cp -a "$PJSIP_FILE" "$PJSIP_BACKUP_FILE"
+    echo "  ↳ backed up existing $PJSIP_FILE to $PJSIP_BACKUP_FILE"
+  else
+    : > "$PJSIP_BACKUP_FILE"
+  fi
+
+  {
+    echo "; ============================================================================"
+    echo "; Connect tenant MOH — PJSIP caller-leg musicclass append"
+    echo "; (Auto-installed by scripts/pbx/install-connect-tenant-moh-dialplan.sh —"
+    echo ";  DO NOT HAND-EDIT THIS FILE. Re-run the installer to refresh.)"
+    echo ";"
+    echo "; Each section below uses Asterisk's [name](+) append syntax to add a single"
+    echo "; set_var line to a VitalPBX-generated PJSIP extension endpoint. set_var fires"
+    echo "; via pbx_builtin_setvar_helper at channel-creation time and accepts the"
+    echo "; CHANNEL(musicclass) function-call syntax, so the caller leg has the right"
+    echo "; musicclass before any dialplan runs."
+    echo ";"
+    echo "; Tenant scope: only T<id>_* extension endpoints for tenants present in the"
+    echo "; connect/pbx_tenant_map AstDB family at install time. Trunk endpoints are"
+    echo "; never touched — the trunk leg is covered by the dialplan-side U-flag hook."
+    echo "; ============================================================================"
+    echo ""
+  } > "$PJSIP_TMP_NEW"
+
+  for tid in $TENANT_IDS; do
+    SLUG="$(asterisk -rx "database get connect/pbx_tenant_map/${tid} slug" 2>/dev/null \
+      | awk -F': ' '/^Value:/{print $2}' | tr -d '[:space:]' || true)"
+    CLASS="$(asterisk -rx "database get connect/pbx_tenant_map/${tid} moh_class" 2>/dev/null \
+      | awk -F': ' '/^Value:/{print $2}' | tr -d '[:space:]' || true)"
+
+    if [[ -z "$CLASS" ]] || [[ "$CLASS" != "${CLASS//[^A-Za-z0-9_-]/}" ]]; then
+      warn "Tenant T${tid}: missing or non-printable connect/pbx_tenant_map/${tid}/moh_class — skipping."
+      continue
+    fi
+
+    # `pjsip show endpoints` lines start with leading whitespace, e.g.
+    #   "  Endpoint:  T3_302/T3_302                       Not in use    0 of inf"
+    # Some builds emit "<endpoint>/<auth>" in field 2 — strip everything from
+    # the first slash onward to get the bare endpoint name.
+    ENDPOINTS_RAW="$(asterisk -rx 'pjsip show endpoints' 2>/dev/null || true)"
+    ENDPOINTS="$(printf '%s\n' "$ENDPOINTS_RAW" \
+      | awk '/^[[:space:]]*Endpoint:[[:space:]]/ {n=$2; sub("/.*", "", n); print n}' \
+      | grep -E "^T${tid}_[A-Za-z0-9._-]+$" \
+      | sort -u \
+      || true)"
+
+    if [[ -z "$ENDPOINTS" ]]; then
+      warn "Tenant T${tid}: no PJSIP endpoints matched ^T${tid}_ — skipping (slug=${SLUG} class=${CLASS})."
+      continue
+    fi
+
+    EP_COUNT="$(printf '%s\n' "$ENDPOINTS" | wc -l | tr -d ' ')"
+    PJSIP_PER_TENANT_COUNT=$((PJSIP_PER_TENANT_COUNT + 1))
+    PJSIP_TOTAL_ENDPOINT_COUNT=$((PJSIP_TOTAL_ENDPOINT_COUNT + EP_COUNT))
+    echo "  ↳ T${tid} (slug=${SLUG} class=${CLASS}): appending set_var to ${EP_COUNT} endpoint(s)"
+
+    {
+      echo "; --- T${tid} (slug=${SLUG}, class=${CLASS}) -------------------------------"
+      while IFS= read -r ep; do
+        [[ -z "$ep" ]] && continue
+        echo "[${ep}](+)"
+        echo "set_var = CHANNEL(musicclass)=${CLASS}"
+        echo ""
+      done <<< "$ENDPOINTS"
+    } >> "$PJSIP_TMP_NEW"
+
+    if [[ -z "$PJSIP_SAMPLE_ENDPOINT" ]]; then
+      PJSIP_SAMPLE_ENDPOINT="$(printf '%s\n' "$ENDPOINTS" | head -n1)"
+      PJSIP_SAMPLE_CLASS="$CLASS"
+    fi
+  done
+
+  if [[ $PJSIP_TOTAL_ENDPOINT_COUNT -eq 0 ]]; then
+    warn "No PJSIP T<id>_* extension endpoints matched any Connect-known tenant — skipping PJSIP install."
+    rm -f "$PJSIP_TMP_NEW"
+  else
+    mv "$PJSIP_TMP_NEW" "$PJSIP_FILE"
+    chown asterisk:asterisk "$PJSIP_FILE"
+    chmod 0644 "$PJSIP_FILE"
+    echo "  ↳ wrote $PJSIP_FILE ($(wc -l < "$PJSIP_FILE" | tr -d ' ') lines, ${PJSIP_PER_TENANT_COUNT} tenant(s), ${PJSIP_TOTAL_ENDPOINT_COUNT} endpoint append(s))"
+
+    PJSIP_RELOAD_OUT="$(asterisk -rx 'pjsip reload' 2>&1 || true)"
+    echo "  ↳ pjsip reload: $PJSIP_RELOAD_OUT"
+
+    SAMPLE_ENDPOINT_OUT="$(asterisk -rx "pjsip show endpoint ${PJSIP_SAMPLE_ENDPOINT}" 2>&1 || true)"
+    SAMPLE_HAS_MUSICCLASS=0
+    if echo "$SAMPLE_ENDPOINT_OUT" | grep -Eiq "set_var[[:space:]]*[:=].*CHANNEL\(musicclass\)=${PJSIP_SAMPLE_CLASS}"; then
+      SAMPLE_HAS_MUSICCLASS=1
+    elif echo "$SAMPLE_ENDPOINT_OUT" | grep -Eiq "musicclass[[:space:]]*[:=].*${PJSIP_SAMPLE_CLASS}"; then
+      SAMPLE_HAS_MUSICCLASS=1
+    fi
+
+    if [[ $SAMPLE_HAS_MUSICCLASS -eq 1 ]]; then
+      echo "  ↳ OK — PJSIP endpoint ${PJSIP_SAMPLE_ENDPOINT} carries CHANNEL(musicclass)=${PJSIP_SAMPLE_CLASS}"
+    else
+      warn "Sample endpoint ${PJSIP_SAMPLE_ENDPOINT} did not show set_var/musicclass=${PJSIP_SAMPLE_CLASS} after pjsip reload."
+      echo "$SAMPLE_ENDPOINT_OUT" | head -40
+      rollback_pjsip_and_warn "PJSIP caller-leg musicclass verification failed for ${PJSIP_SAMPLE_ENDPOINT}."
+      PJSIP_PER_TENANT_COUNT=0
+      PJSIP_TOTAL_ENDPOINT_COUNT=0
+    fi
+  fi
+fi
+
+# ── 8. AstDB smoke output ───────────────────────────────────────────────────
+step "[8/8] AstDB reverse-tenant-map smoke output"
 echo "  ↳ connect/pbx_tenant_map family (populated by Connect MOH publish + rollback):"
 asterisk -rx 'database show connect/pbx_tenant_map' 2>&1 | sed 's/^/      /' \
   || echo "      (no reverse-tenant-map keys yet — run a MOH publish from Connect to populate)"
@@ -434,23 +619,31 @@ cat <<DONE
 ============================================================================
 INSTALL COMPLETE.
 
-Backup of previous include: $BACKUP_FILE
+Backup of previous dialplan include: $BACKUP_FILE
 Backup of Connect custom dialplan (only if bridged): ${CUSTOM_BACKUP_FILE:-not-created}
-Per-tenant connect-leg hooks generated this run: ${PER_TENANT_COUNT:-0}
+Backup of previous PJSIP include: ${PJSIP_BACKUP_FILE:-not-created}
+Per-tenant connect-leg dialplan hooks generated this run: ${PER_TENANT_COUNT:-0}
+PJSIP caller-leg appends installed this run: ${PJSIP_TOTAL_ENDPOINT_COUNT:-0} endpoint(s) across ${PJSIP_PER_TENANT_COUNT:-0} tenant(s)
 
-Wired in via two VitalPBX-generated baseplan subroutines (extensions__20-baseplan.conf):
+Wired in via:
 
   • [sub-before-bridging-call]   — Gosubs [global-before-bridging-call-hook]
                                    on the **called/trunk leg** (Dial U-flag).
   • [sub-before-connecting-call] — GosubIfs into
                                    [T<id>_before-connecting-call-hook]
-                                   on the **caller/originating leg** before
-                                   the outbound INVITE goes out.
+                                   on the **caller/originating leg** when
+                                   the build invokes it (some VitalPBX
+                                   builds skip this for outbound trunk dials).
+  • PJSIP set_var on T<id>_*     — sets CHANNEL(musicclass) at channel-
+    extension endpoints           creation time on the **caller/originating
+                                   leg** even when the connect-leg dialplan
+                                   hook is unreachable.
 
-Both wrappers Gosub into the shared [sub-connect-tenant-moh] resolver so
-both legs of the bridge end up with CHANNEL(musicclass) set to the
-tenant-selected class — covering MOH-on-hold regardless of which side
-initiates the hold.
+The dialplan wrappers Gosub into the shared [sub-connect-tenant-moh] resolver
+to set CHANNEL(musicclass) on the called/trunk leg. The PJSIP append covers
+the caller leg. Both layers must end up agreeing on the same class for the
+tenant — this is enforced because both read from the same Connect-published
+AstDB / reverse-map values.
 
 Verify on a live call:
   • From a Connect-managed extension (e.g. T<N>_<ext>), dial out and answer.
@@ -483,7 +676,9 @@ If MusicClass is wrong on either leg:
 Rollback (instant):
   sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' $CUSTOM_FILE
   rm -f $DIALPLAN_FILE
+  rm -f $PJSIP_FILE
   asterisk -rx "dialplan reload"
+  asterisk -rx "pjsip reload"
 
 ============================================================================
 DONE

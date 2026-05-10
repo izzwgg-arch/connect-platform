@@ -223,11 +223,14 @@ test("installer only writes Connect-owned dialplan files, never VitalPBX-generat
 });
 
 test("installer prints rollback instructions", () => {
-  // Rollback block must appear and must use the exact include path + reload.
+  // Rollback block must appear and must use the exact include path + reload
+  // for BOTH the dialplan include and the PJSIP caller-leg include.
   assert.match(SCRIPT, /Rollback \(instant\):/);
   assert.match(SCRIPT, /sed -i '\/\^#include extensions__65_connect_tenant_moh\\\.conf\$\/d'/);
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/extensions__65_connect_tenant_moh\.conf/);
+  assert.match(SCRIPT, /rm -f \/etc\/asterisk\/pjsip__65_connect_tenant_moh\.conf/);
   assert.match(SCRIPT, /asterisk -rx "dialplan reload"/);
+  assert.match(SCRIPT, /asterisk -rx "pjsip reload"/);
 });
 
 test("installer is idempotent: backs up existing include before overwriting", () => {
@@ -260,4 +263,177 @@ test("installer verifies a sample per-tenant connect-leg context loaded when at 
   assert.match(SCRIPT, /PER_TENANT_COUNT:?-?0?\}\s*-gt\s*0/);
   assert.match(SCRIPT, /dialplan show T\$\{SAMPLE_TID\}_before-connecting-call-hook/);
   assert.match(SCRIPT, /Include =>\.\*connect-tenant-moh-connect-shim/);
+});
+
+// ============================================================================
+// PJSIP caller-leg musicclass append tests
+// ============================================================================
+//
+// The dialplan layer above only covers the called/trunk leg on this VitalPBX
+// build (because [sub-before-connecting-call] is not invoked from the per-
+// trunk caller dial path on outbound calls — verified 2026-05-10). The
+// installer also writes a Connect-owned PJSIP include that uses Asterisk's
+// `[name](+)` append syntax to add `set_var = CHANNEL(musicclass)=<class>`
+// to each Connect-known tenant's T<id>_* extension endpoint, so the caller
+// leg has the right musicclass at channel-creation time. Trunk endpoints
+// are NEVER touched. Verification samples one endpoint after `pjsip reload`,
+// rolling back the PJSIP include only (not the dialplan layer) on failure.
+
+test("installer targets the Connect-owned PJSIP include path", () => {
+  assert.match(SCRIPT, /PJSIP_FILE="\/etc\/asterisk\/pjsip__65_connect_tenant_moh\.conf"/);
+  assert.match(SCRIPT, /PJSIP_BACKUP_FILE=/);
+  assert.match(SCRIPT, /PJSIP_TMP_NEW=/);
+});
+
+test("installer enumerates only T<id>_* extension endpoints, never trunk endpoints", () => {
+  // The endpoint list must come from `pjsip show endpoints` filtered to
+  // names starting with "T<id>_". Trunk-style names (e.g. 344022_secro2)
+  // must not match the post-grep anchor. The awk filter uses
+  // `^[[:space:]]*Endpoint:[[:space:]]` because Asterisk's table output
+  // indents every Endpoint: row with leading whitespace, and strips the
+  // "/<auth>" suffix some builds emit before the grep filter runs.
+  assert.match(SCRIPT, /asterisk -rx 'pjsip show endpoints'/);
+  assert.match(
+    SCRIPT,
+    /awk '\/\^\[\[:space:\]\]\*Endpoint:\[\[:space:\]\]\/ \{n=\$2; sub\("\/\.\*", "", n\); print n\}'/,
+  );
+  assert.match(
+    SCRIPT,
+    /grep -E "\^T\$\{tid\}_\[A-Za-z0-9\._-\]\+\$"/,
+  );
+});
+
+test("installer reads moh_class for each tenant from connect/pbx_tenant_map AstDB before generating set_var", () => {
+  // The published moh_class is the source of truth for what to set on the
+  // caller leg. Reading from AstDB (rather than re-deriving from slug)
+  // keeps the PJSIP layer in lock-step with the dialplan resolver and the
+  // Connect API publish.
+  assert.match(SCRIPT, /database get connect\/pbx_tenant_map\/\$\{tid\} moh_class/);
+  assert.match(SCRIPT, /database get connect\/pbx_tenant_map\/\$\{tid\} slug/);
+  // Class must be a printable identifier (alnum, underscore, or dash) — anything
+  // else gets skipped to keep arbitrary AstDB content from landing in pjsip.conf.
+  assert.match(
+    SCRIPT,
+    /\$\{CLASS\/\/\[\^A-Za-z0-9_-\]\/\}/,
+  );
+});
+
+test("installer emits [endpoint](+) append blocks with set_var = CHANNEL(musicclass)=$CLASS", () => {
+  // Asterisk's `(+)` append syntax is what makes this safe — it adds a line
+  // to the existing endpoint section without re-declaring it, so the
+  // VitalPBX-generated endpoint config is preserved. The set_var line must
+  // bind CHANNEL(musicclass) to the exact published class, NOT to a static
+  // string and NOT to a slug.
+  assert.match(SCRIPT, /\[\$\{ep\}\]\(\+\)/);
+  assert.match(SCRIPT, /set_var = CHANNEL\(musicclass\)=\$\{CLASS\}/);
+});
+
+test("installer reloads PJSIP after writing the include and verifies a sample endpoint", () => {
+  // pjsip reload is the only way Asterisk picks up new set_var lines on
+  // existing endpoints without a full restart.
+  assert.match(SCRIPT, /asterisk -rx 'pjsip reload'/);
+  // Verification reads the sample endpoint back and looks for either the
+  // explicit set_var line or the resolved musicclass attribute (Asterisk
+  // builds differ in how `pjsip show endpoint` renders set_var).
+  assert.match(SCRIPT, /asterisk -rx "pjsip show endpoint \$\{PJSIP_SAMPLE_ENDPOINT\}"/);
+  assert.match(
+    SCRIPT,
+    /set_var\[\[:space:\]\]\*\[:=\]\.\*CHANNEL\\\(musicclass\\\)=\$\{PJSIP_SAMPLE_CLASS\}/,
+  );
+});
+
+test("installer rolls back the PJSIP include if sample endpoint verification fails", () => {
+  // Rollback is PJSIP-only: the dialplan layer above is independently
+  // verified loaded and continues to cover the trunk/called leg even if
+  // the PJSIP append fails. Keep that scope tight in the rollback fn name
+  // so future edits don't accidentally tear down the dialplan layer.
+  assert.match(SCRIPT, /rollback_pjsip_and_warn\s*\(\)\s*\{/);
+  assert.match(
+    SCRIPT,
+    /rollback_pjsip_and_warn\s+"PJSIP caller-leg musicclass verification failed for \$\{PJSIP_SAMPLE_ENDPOINT\}\."/,
+  );
+  // Rollback must restore the prior PJSIP include if there was one and
+  // remove the new one if there wasn't, then reload pjsip so Asterisk
+  // drops the failed config.
+  assert.match(SCRIPT, /cp -a "\$PJSIP_BACKUP_FILE" "\$PJSIP_FILE"/);
+  assert.match(SCRIPT, /rm -f "\$PJSIP_FILE"/);
+  assert.match(SCRIPT, /asterisk -rx "pjsip reload" >\/dev\/null 2>&1 \|\| true/);
+});
+
+test("installer skips PJSIP install entirely when AstDB has no Connect-known tenants", () => {
+  // Same fail-safe shape as the dialplan per-tenant loop: don't write an
+  // empty `pjsip__65_*.conf`, and warn loudly so the operator knows the
+  // caller-leg layer is missing for this run.
+  assert.match(
+    SCRIPT,
+    /No tenants in connect\/pbx_tenant_map AstDB family — skipping PJSIP caller-leg append/,
+  );
+  // Also fail-safe when tenants exist but no T<id>_* endpoints matched
+  // (e.g. the build does not use that endpoint naming scheme).
+  assert.match(
+    SCRIPT,
+    /No PJSIP T<id>_\* extension endpoints matched any Connect-known tenant — skipping PJSIP install/,
+  );
+});
+
+test("installer never hardcodes a tenant id, slug, or moh class in the PJSIP heredoc body", () => {
+  // The PJSIP append is generated entirely from AstDB at install time. The
+  // static heredoc header that documents the file must not bake in any
+  // tenant-specific value — same hard rule as the dialplan body.
+  const m = SCRIPT.match(
+    /\{[\r\n][^}]*?Connect tenant MOH — PJSIP caller-leg musicclass append[\s\S]*?\}\s*>\s*"\$PJSIP_TMP_NEW"/,
+  );
+  assert.ok(m, "could not locate PJSIP heredoc header generator block");
+  const header = m[0].toLowerCase();
+  for (const banned of [
+    "secro",
+    "landau",
+    "fleetease",
+    " moh3",
+    " moh8",
+    "t3_",
+    "t21_",
+    "344022_",
+  ]) {
+    assert.equal(
+      header.indexOf(banned),
+      -1,
+      `PJSIP heredoc header must not hardcode ${JSON.stringify(banned)}`,
+    );
+  }
+});
+
+test("installer never writes to or mutates VitalPBX-generated PJSIP files", () => {
+  // Same hard rule as the dialplan side: only Connect-owned `pjsip__65_*` is
+  // written. We must not touch transports, AORs, registrations, templates,
+  // or any other generated `pjsip__*.conf`.
+  for (const banned of [
+    "pjsip__40_",
+    "pjsip__50_",
+    "pjsip__60_",
+    "pjsip__70_",
+    "pjsip__90_",
+    "pjsip_aors.conf",
+    "pjsip_registrations.conf",
+    "pjsip_endpoints.conf",
+    "pjsip_transports.conf",
+  ]) {
+    const re = new RegExp(
+      `(?:>|>>|\\bmv\\b|\\bcp\\b|\\bsed\\b|\\btee\\b|\\bchown\\b|\\bchmod\\b)[^\\n]*${banned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      "i",
+    );
+    assert.equal(
+      re.test(SCRIPT),
+      false,
+      `installer must not write/mutate ${banned}`,
+    );
+  }
+});
+
+test("installer step numbering is consistent (8 numbered steps end-to-end)", () => {
+  // Sanity check: the renumbered step labels run [1/8] through [8/8]. This
+  // catches accidental drift if a future edit forgets to renumber a label.
+  for (const n of ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]) {
+    assert.match(SCRIPT, new RegExp(`step "\\[${n.replace("/", "\\/")}\\]`));
+  }
 });
