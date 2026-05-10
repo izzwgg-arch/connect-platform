@@ -91,6 +91,44 @@ When you find a new fragile area, add it here.
   also cleans up the temp file when the final atomic `rename` fails
   (e.g. EXDEV on bind mounts) instead of leaving it on disk. Tests live
   in `apps/api/src/mohStorage.test.ts` (skip if ffmpeg is not on PATH).
+- **MOH on outbound / internal / bridge / hold legs played the wrong class
+  even with native columns updated (fixed 2026-05).** VitalPBX's generated
+  `[trk-<id>-dial]` / `[sub-local-dialing]` contexts pre-set
+  `CHANNEL(musicclass)` to the **tenant default music group**, which is a
+  different column from `ombu_inbound_routes.music_group_id` /
+  `ombu_extensions.music_group_id` / `ombu_queues.music_group_id` that
+  Connect's helper updates. So a tenant who selected `moh8` in Connect would
+  see all three columns at 8 and Asterisk loaded `moh8` with a valid file,
+  yet outbound/internal/bridge holds still played `moh3`. Confirmed canary
+  2026-05 on Secro / T3. Fix: a Connect-owned dialplan include
+  (`/etc/asterisk/extensions__65_connect_tenant_moh.conf`, installed by
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh`) hooks the proven
+  generated extension point `[global-before-bridging-call-hook]` Gosub'd by
+  VitalPBX-generated `[sub-before-bridging-call]` and Sets
+  `CHANNEL(musicclass)` from AstDB just before the bridge starts. API
+  publishes a reverse map `connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class}`
+  so the resolver can recover the canonical slug from a PJSIP endpoint
+  prefix `T<N>_<ext>` (best-effort; missing keys → bare `Return()`, fail-safe
+  to existing PBX behavior). See `TELEPHONY.md` "Tenant MOH enforcement
+  layer" and `DEBUGGING.md` "MOH on outbound / internal / bridge / hold legs
+  plays the wrong class".
+- **Tenant MOH enforcement layer does NOT cover queue wait or parking
+  (open).** `app_queue` plays MoH from `queues.conf` per-queue `musicclass`
+  (driven by `ombu_queues.music_group_id`, which Connect's helper already
+  updates) and `res_parking` plays from the parkinglot's static
+  `musicclass` setting in `res_parking.conf`. Neither path consults
+  `CHANNEL(musicclass)` at hold time, so the new `[sub-connect-tenant-moh]`
+  resolver does not reach them. Queues should already use the right class
+  via the helper-updated column; parking is unverified. A separate proof
+  pass is required before any extension to those paths — explicitly out of
+  scope for the 2026-05 enforcement layer ship.
+- **Stale per-tenant AstDB family from pre-2026-05 slug drift (open,
+  cosmetic).** Tenants whose Connect `Tenant.name` slug differed from the
+  PBX directory slug have a residual `connect/t_<old-slug>/...` family in
+  AstDB from before the slug-drift fix. The new canonical writer uses the
+  PBX directory slug correctly; the old family is inert (no dialplan reads
+  it) but shows up in `database show connect`. Cleanup: `database deltree
+  connect/t_<old-slug>` per tenant once verified. Not blocking.
 
 ## Mobile calling
 

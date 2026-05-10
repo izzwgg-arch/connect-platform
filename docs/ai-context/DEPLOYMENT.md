@@ -155,6 +155,50 @@ Host-side directories also referenced:
   `vitalpbx-inbound-route-helper.py` and restart `connect-pbx-route-helper` (systemd unit
   name may vary — verify on host).
 
+### VitalPBX host: Connect tenant MOH enforcement dialplan (added 2026-05)
+
+- Connect ships a small Connect-owned Asterisk include at
+  `/etc/asterisk/extensions__65_connect_tenant_moh.conf` that hooks
+  VitalPBX's generated `[sub-before-bridging-call]` (in
+  `extensions__20-baseplan.conf`) via the
+  `[global-before-bridging-call-hook]` Gosub already invoked by the
+  baseplan, and Sets `CHANNEL(musicclass)` from AstDB on every leg about
+  to be bridged. This closes the outbound/internal/bridge/hold MOH gap
+  documented in `KNOWN_ISSUES.md` ("MOH on outbound / internal / bridge /
+  hold legs played the wrong class").
+- Installer is `scripts/pbx/install-connect-tenant-moh-dialplan.sh`,
+  separate from the route-helper installer above. It is **idempotent**,
+  backs up any existing same-named include before writing, runs `dialplan
+  reload`, and verifies BOTH `[sub-connect-tenant-moh]` and
+  `[global-before-bridging-call-hook]` are loaded (restoring the backup
+  and aborting if either is missing).
+- The installer **never** edits VitalPBX-generated `extensions__*.conf`
+  files, never touches `musiconhold__*.conf`, and never modifies queue or
+  parking configuration. It only writes its own include file.
+- After deploying API code that includes the reverse-map publish
+  (`apps/api/src/mohReverseMapPublish.ts`), a single MOH publish per
+  tenant populates the AstDB keys the resolver reads
+  (`connect/pbx_tenant_map/<pbxTenantId>/slug` and `.../moh_class`).
+  Until those keys are present for a tenant the resolver returns
+  unchanged for that tenant — fail-safe to existing PBX behavior.
+- **Order of operations**: deploy API first (so subsequent MOH publishes
+  populate the reverse map), then have an operator run the installer on
+  the PBX. Either order is safe — neither component throws before the
+  other ships. Real test on canary tenant after both:
+    1. `POST /voice/moh/publish` for a tenant.
+    2. On PBX: `asterisk -rx "database show connect/pbx_tenant_map"` →
+       expect `connect/pbx_tenant_map/<pbxTenantId>/slug` and `.../moh_class`.
+    3. Place an outbound call from a Connect-managed extension, put the
+       call on hold; `core show channel <chan>` should show `MusicClass`
+       matching the published class.
+- **Rollback (instant, PBX-local)**:
+  ```bash
+  ssh <pbx> 'rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf && asterisk -rx "dialplan reload"'
+  ```
+  PBX behavior reverts to byte-identical pre-install. Reverse-map AstDB
+  keys are inert if the include is removed; clear with
+  `database deltree connect/pbx_tenant_map` if desired.
+
 ### Voicemail Phase 1 — staged rollout (do not deploy everything at once)
 
 Order of operations:

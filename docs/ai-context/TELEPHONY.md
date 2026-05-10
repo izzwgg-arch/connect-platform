@@ -421,6 +421,71 @@ re-deriving the answer from raw fields:
 - `coverage.connectManagedInbound` — Connect router/IVR DIDs (always true on success).
 - `coverage.nativePbxInboundExtensionsQueues` — native VitalPBX rows
   (always **false** for `connect_*`; true for `mohN` when helper succeeded).
+- `tenantMohEnforcement` — reverse tenant-map publish evidence for the
+  Connect tenant MOH enforcement layer (see next section). Schema:
+  `{ reverseMapPublished, pbxTenantId, canonicalSlug, mohClass, reason? }`.
+  Best-effort; failure here does **not** fail the MOH publish.
+
+### Tenant MOH enforcement layer (`extensions__65_connect_tenant_moh.conf`)
+
+Updating per-route / per-extension / per-queue `music_group_id` columns and
+writing `connect/t_<slug>/moh_class` is **not enough** to control outbound /
+internal / bridge / hold music on this VitalPBX install. The generated
+dialplan paths (`trk-<id>-dial`, `sub-local-dialing`, etc.) bake the tenant
+default music group into `CHANNEL(musicclass)` early, so per-route and
+per-extension columns alone do not change what plays when an extension puts
+the far side on hold. (Confirmed canary 2026-05 on Secro / T3: native rows
+at `music_group_id=8` and `connect/t_secro_selution/moh_class=moh8`, yet
+outbound holds still played `moh3`.)
+
+To bridge that gap, Connect ships a small Connect-owned dialplan include
+installed on the PBX by `scripts/pbx/install-connect-tenant-moh-dialplan.sh`.
+It hooks the only proven generated extension point on this install — the
+`global-before-bridging-call-hook` Gosub'd by VitalPBX-generated
+`[sub-before-bridging-call]` (in `extensions__20-baseplan.conf`) — and Sets
+`CHANNEL(musicclass)` on the about-to-be-bridged leg from AstDB.
+
+Two contexts in `/etc/asterisk/extensions__65_connect_tenant_moh.conf`:
+
+- `[sub-connect-tenant-moh]` — resolver. Reads
+  `connect/pbx_tenant_map/<numeric-vital-tenant-id>/slug` to recover the
+  canonical Connect slug, then `connect/t_<slug>/moh_class` (fallback
+  `active_moh_class`), and Sets `CHANNEL(musicclass)` plus inheritable
+  `__CONNECT_MOH`. Bare `Return()` on any missing key — fail-safe to
+  existing PBX behavior.
+- `[global-before-bridging-call-hook]` — argument-mode-agnostic wrapper.
+  Forwards `(TENANT, CALLER, CALLEE)` to the resolver as
+  `${ARG1}/${ARG2}/${ARG3}` when VitalPBX's baseplan calls the hook
+  positionally, falling back to `${TENANT}/${CALLER}/${CALLEE}` channel
+  variables when it does not. Both contracts are observed across VitalPBX
+  builds.
+
+Connect API populates the reverse tenant map via the existing MOH publish
+path (`apps/api/src/server.ts` → `mohReverseMapPublish.ts`):
+
+- On every successful `doMohPublish`, two AstDB keys are written
+  best-effort using the same `publishMohToAstDb` channel:
+  `connect/pbx_tenant_map/<pbxTenantId>/slug` and
+  `connect/pbx_tenant_map/<pbxTenantId>/moh_class`.
+- The MOH rollback handler mirrors the **restored** class into the same
+  reverse map so a rollback is reflected on outbound/bridge/hold legs.
+- Both writes log structured evidence and never fail the publish — the
+  resolver is a pure additive read source and the dialplan returns
+  unchanged when keys are missing.
+
+Coverage matrix (post-install):
+
+| Path | Pre-Phase-3 | Phase 3 |
+|---|---|---|
+| Inbound DID via `[connect-tenant-router]` / `[connect-tenant-ivr]` | OK (Connect's own router) | OK (unchanged) |
+| Inbound DID via native VitalPBX inbound route | helper updates `music_group_id` | unchanged |
+| Outbound trunk leg (extension dials PSTN) | wrong class | resolver Sets `musicclass` before bridge |
+| Internal extension-to-extension | wrong class | resolver Sets `musicclass` before bridge |
+| Bridge / transfer / hold (any leg) | held leg used early-set `musicclass` | resolver re-asserts immediately before bridge |
+| Queue wait | `app_queue` reads `queues.conf` per-queue `musicclass` | **out of scope** — separate proof needed |
+| Parking | `res_parking.conf` parkinglot `musicclass` | **out of scope** — separate proof needed |
+
+Rollback for the dialplan layer is `rm /etc/asterisk/extensions__65_connect_tenant_moh.conf && asterisk -rx "dialplan reload"`. Reverse-map AstDB keys are harmless if the include is removed and can be cleared with `database deltree connect/pbx_tenant_map`.
 
 ---
 

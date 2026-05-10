@@ -125,6 +125,10 @@ import {
 } from "./vmRecordCallJobs";
 import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
+import {
+  publishTenantMohReverseMap,
+  type TenantMohEnforcementEvidence,
+} from "./mohReverseMapPublish";
 
 const MAX_DAILY_LIMIT = 10000;
 const MAX_HOURLY_LIMIT = 2000;
@@ -19957,6 +19961,10 @@ type NativeInboundMohSyncResult = {
      *  Always false for `connect_*` classes — those have no `music_group_id`. */
     nativePbxInboundExtensionsQueues: boolean;
   };
+  /** Reverse tenant-map publish evidence for the Connect tenant MOH enforcement
+   *  layer (PBX-side `extensions__65_connect_tenant_moh.conf`). Best-effort:
+   *  publish failure is captured here, never bubbled up to fail the MOH publish. */
+  tenantMohEnforcement?: TenantMohEnforcementEvidence;
 };
 
 async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string): Promise<NativeInboundMohSyncResult> {
@@ -20096,6 +20104,34 @@ async function doMohPublish(
   await publishMohToAstDb(slug, keys);
   const rawNativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
   const connectUploadedMoh = isConnectMohRuntimeClass(profile.vitalPbxMohClassName);
+
+  // Reverse tenant-map publish for the Connect tenant MOH enforcement layer
+  // (extensions__65_connect_tenant_moh.conf). Writes connect/pbx_tenant_map/
+  // <pbxTenantId>/{slug,moh_class} so the dialplan resolver in
+  // [sub-connect-tenant-moh] can recover the canonical slug from a PJSIP
+  // endpoint prefix (T<N>_<ext>) on outbound/internal/bridge legs. Best-effort:
+  // a failure here does NOT fail the MOH publish — the primary AstDB write
+  // already succeeded above and the dialplan resolver fails safely back to
+  // existing PBX behavior on missing reverse-map keys.
+  const reverseMapLink = (await db.tenantPbxLink.findFirst({
+    where: { tenantId },
+    select: { pbxTenantId: true } as any,
+  })) as any;
+  const tenantMohEnforcement = await publishTenantMohReverseMap(
+    {
+      pbxTenantId: reverseMapLink?.pbxTenantId ?? null,
+      canonicalSlug: slug,
+      mohClass: profile.vitalPbxMohClassName,
+    },
+    async (revKeys) => publishMohToAstDb(slug, revKeys),
+  );
+  if (!tenantMohEnforcement.reverseMapPublished) {
+    app.log.warn(
+      { tenantId, recordId: record.id, tenantMohEnforcement },
+      "moh: tenant MOH reverse-map publish skipped or failed (non-fatal)",
+    );
+  }
+
   // Honest coverage: connect_* publishes only update Connect-managed call paths
   // (inbound DIDs hitting [connect-tenant-router]/[connect-tenant-ivr]). They do
   // NOT touch native VitalPBX inbound/extension/queue rows because connect_*
@@ -20111,6 +20147,7 @@ async function doMohPublish(
       connectManagedInbound: true,
       nativePbxInboundExtensionsQueues: !connectUploadedMoh && !rawNativeSync.skipped && rawNativeSync.errors.length === 0,
     },
+    tenantMohEnforcement,
   };
   if (!connectUploadedMoh && (rawNativeSync.skipped || rawNativeSync.errors.length)) {
     const reason = rawNativeSync.reason || rawNativeSync.errors[0] || "native_tenant_moh_sync_failed";
@@ -20588,13 +20625,43 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
 
   try {
     await publishMohToAstDb(slug, restoreKeys);
-    await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    // Mirror the restored class into the Connect tenant MOH enforcement
+    // layer's reverse map (connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class})
+    // so the dialplan resolver in [sub-connect-tenant-moh] picks up the
+    // rolled-back class on outbound/internal/bridge legs. Best-effort: a
+    // failure here does NOT fail the rollback — the primary AstDB restore
+    // above already succeeded.
+    const rollbackLink = (await db.tenantPbxLink.findFirst({
+      where: { tenantId: target.tenantId },
+      select: { pbxTenantId: true } as any,
+    })) as any;
+    const rollbackEnforcement = await publishTenantMohReverseMap(
+      {
+        pbxTenantId: rollbackLink?.pbxTenantId ?? null,
+        canonicalSlug: slug,
+        mohClass: restoredClass,
+      },
+      async (revKeys) => publishMohToAstDb(slug, revKeys),
+    );
+    if (!rollbackEnforcement.reverseMapPublished) {
+      app.log.warn(
+        { tenantId: target.tenantId, recordId: record.id, tenantMohEnforcement: rollbackEnforcement },
+        "moh: rollback reverse-map publish skipped or failed (non-fatal)",
+      );
+    }
+    await (db as any).mohPublishRecord.update({
+      where: { id: record.id },
+      data: {
+        status: "success",
+        nativeSync: { tenantMohEnforcement: rollbackEnforcement } as any,
+      },
+    });
     await (db as any).mohLastPublishedState.upsert({
       where: { tenantId: target.tenantId },
       create: { tenantId: target.tenantId, mohClass: restoredClass, holdMode: "rollback" },
       update: { mohClass: restoredClass, holdMode: "rollback", publishedAt: new Date() },
     });
-    return reply.send({ ok: true, restoredMohClass: restoredClass, recordId: record.id });
+    return reply.send({ ok: true, restoredMohClass: restoredClass, recordId: record.id, tenantMohEnforcement: rollbackEnforcement });
   } catch (err: any) {
     await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
     return reply.code(503).send({ error: "rollback_failed", detail: err?.message });

@@ -670,6 +670,87 @@ If `connect/t_<slug>/moh_class` is correct but the file the helper mirrored
 does not match what Connect intends, see the "Deploy queue silently ships
 stale code" note above — the helper sometimes survives a partial deploy with
 stale config.
+
+### MOH on outbound / internal / bridge / hold legs plays the wrong class
+
+Symptom (canary 2026-05 on Secro / T3): Connect-published class (e.g.
+`moh8`) plays correctly on inbound DIDs that flow through Connect's own
+router, but outbound trunk legs, internal extension-to-extension calls,
+and any leg put on hold during a bridge play the previous class (e.g.
+`moh3`). All native VitalPBX `music_group_id` columns are at the right
+value and Asterisk has the new class loaded with a valid file.
+
+Root cause: VitalPBX's generated `[trk-<id>-dial]` / `[sub-local-dialing]`
+contexts pre-set `CHANNEL(musicclass)` to the **tenant default music
+group**, not from the per-route / per-extension column. Updating the
+columns alone does not change what the channel inherits at bridge time.
+
+Fix that is now in place: a Connect-owned dialplan include hooks the
+proven generated extension point `[global-before-bridging-call-hook]`
+(Gosub'd by VitalPBX-generated `[sub-before-bridging-call]` in
+`extensions__20-baseplan.conf`) and Sets `CHANNEL(musicclass)` from
+AstDB before the bridge starts. See the **Tenant MOH enforcement layer**
+section in `TELEPHONY.md`.
+
+Verification checklist (read-only):
+
+1. Confirm Connect has published the reverse tenant map for this tenant:
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'database show connect/pbx_tenant_map'"
+   ```
+
+   Expect both keys present:
+   `connect/pbx_tenant_map/<pbxTenantId>/slug`      = `<canonical-slug>`
+   `connect/pbx_tenant_map/<pbxTenantId>/moh_class` = `<effective-class>`
+
+   Missing? Trigger a Connect MOH publish (`POST /voice/moh/publish`) for
+   the tenant. The reverse map is written best-effort on every successful
+   publish and on every successful rollback. Inspect the
+   `MohPublishRecord.nativeSync.tenantMohEnforcement` row to see whether
+   the publish reported `reverseMapPublished:true` or supplied a `reason`.
+
+2. Confirm the resolver dialplan is loaded:
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'dialplan show sub-connect-tenant-moh'"
+   ssh connect-pbx "asterisk -rx 'dialplan show global-before-bridging-call-hook'"
+   ```
+
+   Both contexts must be present. If either is missing, the operator has
+   not yet run `scripts/pbx/install-connect-tenant-moh-dialplan.sh` on
+   the PBX (or it failed verification and rolled itself back — backup is
+   in `/etc/asterisk/extensions__65_connect_tenant_moh.conf.bak.*`).
+
+3. Confirm VitalPBX still calls the hook:
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'dialplan show sub-before-bridging-call' | grep -i hook"
+   ```
+
+   Expect a Gosub line that lands in `global-before-bridging-call-hook`.
+   If a future VitalPBX upgrade renames or drops this hook the resolver
+   will silently stop applying — symptom is identical to "uninstalled".
+
+4. Live call inspection:
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'core show channels concise'"      # find channel
+   ssh connect-pbx "asterisk -rx 'core show channel <chan>' | grep -i MusicClass"
+   ```
+
+   Expect `MusicClass` to match `connect/pbx_tenant_map/<pbxTenantId>/moh_class`.
+
+5. Rollback (if the layer itself is the problem):
+
+   ```bash
+   ssh connect-pbx "rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf"
+   ssh connect-pbx "asterisk -rx 'dialplan reload'"
+   ```
+
+   PBX behavior reverts to pre-Phase-3. Reverse-map AstDB keys are inert
+   on their own; clear with `database deltree connect/pbx_tenant_map` if
+   desired.
 - **IVR runbook**: `docs/pbx/IVR_VITALPBX_PARITY_RUNBOOK.md`,
   `docs/pbx/option-a-setup.md`, `docs/pbx/option-a-runtime-keys.md`.
 - **Live snapshot scripts** (PowerShell): `scripts/capture-forensic.ps1` (mentioned
