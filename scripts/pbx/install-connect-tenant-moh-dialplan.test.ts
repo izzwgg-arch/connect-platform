@@ -4,7 +4,14 @@
 // VitalPBX host). Instead we assert the installer file embeds the contracts
 // the design depends on:
 //
-//   * Both required Asterisk contexts are defined.
+//   * All four required Asterisk contexts are defined or generated:
+//       - [sub-connect-tenant-moh]                (resolver, static)
+//       - [global-before-bridging-call-hook]      (called-leg wrapper, static)
+//       - [connect-tenant-moh-connect-shim]       (caller-leg shim, static)
+//       - [T<id>_before-connecting-call-hook]     (caller-leg per-tenant
+//                                                  dispatch, dynamic — one
+//                                                  per tenant id discovered
+//                                                  in connect/pbx_tenant_map).
 //   * The hook calls our resolver with the agnostic IF()-Set wrapper.
 //   * The resolver derives the numeric tenant id from VitalPBX's per-tenant
 //     channel context vars FIRST (TRANSFER_CONTEXT, HINTS_CONTEXT,
@@ -17,8 +24,11 @@
 //     never becomes a bogus reverse-map lookup.
 //   * The resolver reads the reverse map and falls back to active_moh_class.
 //   * The resolver Sets CHANNEL(musicclass) and the inheritable __CONNECT_MOH.
-//   * No tenant or MOH class is hardcoded.
-//   * The installer prints rollback instructions.
+//   * No tenant or MOH class is hardcoded in the static heredoc body.
+//   * Per-tenant stanzas are generated dynamically from the connect/pbx_tenant_map
+//     AstDB family with a numeric-id-only allowlist.
+//   * The installer prints rollback instructions and the operational note
+//     that adding a new tenant requires a re-run.
 //   * If `extensions__65_*.conf` is not wildcard-included by this PBX, the
 //     installer may add one sentinel include to the Connect-owned
 //     `extensions__60_custom.conf`; it must still never edit VitalPBX-generated
@@ -35,9 +45,50 @@ const __dirname = dirname(__filename);
 const SCRIPT_PATH = join(__dirname, "install-connect-tenant-moh-dialplan.sh");
 const SCRIPT = readFileSync(SCRIPT_PATH, "utf8");
 
-test("installer defines both required Asterisk contexts", () => {
+test("installer defines all three required static Asterisk contexts", () => {
   assert.match(SCRIPT, /\[sub-connect-tenant-moh\]/, "missing [sub-connect-tenant-moh] context header");
   assert.match(SCRIPT, /\[global-before-bridging-call-hook\]/, "missing [global-before-bridging-call-hook] context header");
+  assert.match(SCRIPT, /\[connect-tenant-moh-connect-shim\]/, "missing [connect-tenant-moh-connect-shim] context header");
+});
+
+test("connect-leg shim gosubs into the resolver using channel vars", () => {
+  // The shim runs on the caller leg and uses TENANT/CALLER/CALLEE channel
+  // vars set by [sub-before-connecting-call] priorities 2..4 — it does NOT
+  // depend on positional args from the per-tenant dispatch context.
+  assert.match(
+    SCRIPT,
+    /\[connect-tenant-moh-connect-shim\][\s\S]*?Gosub\(sub-connect-tenant-moh,s,1\(\$\{TENANT\},\$\{CALLER\},\$\{CALLEE\}\)\)/,
+  );
+});
+
+test("installer enumerates per-tenant ids from connect/pbx_tenant_map AstDB", () => {
+  // Must read the AstDB family Connect's API populates on every MOH
+  // publish/rollback, parse only the numeric id segment, and dedupe.
+  assert.match(SCRIPT, /asterisk -rx 'database show connect\/pbx_tenant_map'/);
+  // Field 4 of "/connect/pbx_tenant_map/<id>/<key>" is the id.
+  assert.match(SCRIPT, /awk -F'\/'[^\n]*'\/\^\\\/connect\\\/pbx_tenant_map\\\/\/\{print \$4\}'/);
+  // Numeric-only allowlist.
+  assert.match(SCRIPT, /grep -E '\^\[0-9\]\+\$'/);
+  // Sort + unique.
+  assert.match(SCRIPT, /sort -un/);
+});
+
+test("installer generates one [T<id>_before-connecting-call-hook] include-shim stanza per tenant id", () => {
+  // The dynamic loop must use the shell variable name $tid (sourced from
+  // $TENANT_IDS) and write exactly the include-shim form. We do not test
+  // the final file content (which depends on AstDB at install time), only
+  // the generator code shape.
+  assert.match(
+    SCRIPT,
+    /for\s+tid\s+in\s+\$TENANT_IDS;\s*do[\s\S]*?T\$\{tid\}_before-connecting-call-hook[\s\S]*?include\s*=>\s*connect-tenant-moh-connect-shim[\s\S]*?done/,
+  );
+});
+
+test("installer warns when AstDB has no Connect-known tenants", () => {
+  // Empty TENANT_IDS path must NOT silently skip — operator needs to know
+  // outbound caller-leg MOH won't change for any tenant this run.
+  assert.match(SCRIPT, /No tenants found in connect\/pbx_tenant_map AstDB family/);
+  assert.match(SCRIPT, /re-run this installer/i);
 });
 
 test("global-before-bridging-call-hook uses argument-mode-agnostic IF() wrapper", () => {
@@ -184,9 +235,15 @@ test("installer is idempotent: backs up existing include before overwriting", ()
   assert.match(SCRIPT, /cp -a "\$DIALPLAN_FILE" "\$BACKUP_FILE"/);
 });
 
-test("installer verifies BOTH contexts loaded after dialplan reload, bridges through __60_custom if needed", () => {
+test("installer verifies ALL static contexts loaded after dialplan reload, bridges through __60_custom if needed", () => {
   assert.match(SCRIPT, /dialplan show sub-connect-tenant-moh/);
   assert.match(SCRIPT, /dialplan show global-before-bridging-call-hook/);
+  assert.match(SCRIPT, /dialplan show connect-tenant-moh-connect-shim/);
+  // Verify result must require ALL THREE static contexts, not just two.
+  assert.match(
+    SCRIPT,
+    /\[\[\s*\$resolver_ok\s*-eq\s*1\s*&&\s*\$hook_ok\s*-eq\s*1\s*&&\s*\$shim_ok\s*-eq\s*1\s*\]\]/,
+  );
   assert.match(SCRIPT, /This VitalPBX install likely does not wildcard-include extensions__\*\.conf/);
   assert.match(SCRIPT, /sentinel include already present/);
   assert.match(SCRIPT, /added sentinel include to \$CUSTOM_FILE/);
@@ -194,4 +251,13 @@ test("installer verifies BOTH contexts loaded after dialplan reload, bridges thr
   assert.match(SCRIPT, /Restoring include backup/);
   assert.match(SCRIPT, /Restoring custom dialplan backup/);
   assert.match(SCRIPT, /cp -a "\$BACKUP_FILE" "\$DIALPLAN_FILE"/);
+});
+
+test("installer verifies a sample per-tenant connect-leg context loaded when at least one was generated", () => {
+  // After the static-context check, if PER_TENANT_COUNT > 0 the verifier
+  // also samples the first generated T<id>_before-connecting-call-hook
+  // and asserts it shows the expected include line.
+  assert.match(SCRIPT, /PER_TENANT_COUNT:?-?0?\}\s*-gt\s*0/);
+  assert.match(SCRIPT, /dialplan show T\$\{SAMPLE_TID\}_before-connecting-call-hook/);
+  assert.match(SCRIPT, /Include =>\.\*connect-tenant-moh-connect-shim/);
 });
