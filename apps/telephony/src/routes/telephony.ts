@@ -347,6 +347,17 @@ export function registerTelephonyRoutes(
   //                                         when didE164 is supplied). Both
   //                                         +E.164 and raw-digits aliases are
   //                                         allowed for PBX dialplan lookups.
+  //   • connect/pbx_tenant_map/<id>      — reverse lookup used by the tenant
+  //                                         MOH enforcement dialplan
+  //                                         (`extensions__65_connect_tenant_moh.conf`).
+  //                                         <id> must be a 1–10 digit numeric
+  //                                         VitalPBX tenant id. The values
+  //                                         themselves (slug, moh_class) are
+  //                                         already tenant-derived; the family
+  //                                         scope is global because the
+  //                                         dialplan resolver does not know
+  //                                         the canonical Connect slug at the
+  //                                         time it reads the key.
   router.post("/telephony/internal/ivr-publish", (req: Request, res: Response) => {
     if (!isInternalRouteAuthorized(req)) {
       res.status(401).json({ error: "Unauthorized" });
@@ -398,10 +409,18 @@ export function registerTelephonyRoutes(
       //                              configuration that every tenant publish needs
       //                              available before the dialplan can run a
       //                              push-wake. No per-tenant data goes here.
+      //  - connect/pbx_tenant_map/<id> — reverse lookup published by the MOH
+      //                              publish path so the tenant MOH enforcement
+      //                              dialplan can recover the canonical Connect
+      //                              slug from a numeric VitalPBX tenant id on
+      //                              outbound/internal/bridge legs. Strictly
+      //                              numeric <id>; the slug + moh_class values
+      //                              are tenant-derived.
       const tenantScoped = family.startsWith(`connect/t_${tenantSlug}`);
       const didScoped = didFamilyPrefixes !== null && didFamilyPrefixes.has(family);
       const systemScoped = family === "connect/system";
-      if (!tenantScoped && !didScoped && !systemScoped) {
+      const tenantMapScoped = /^connect\/pbx_tenant_map\/\d{1,10}$/.test(family);
+      if (!tenantScoped && !didScoped && !systemScoped && !tenantMapScoped) {
         res.status(400).json({ error: "family_scope_mismatch", family });
         return;
       }
