@@ -113,7 +113,13 @@ export async function transcodeMohToPbxWav(input: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const dir = path.dirname(input.destAbsolutePath);
   await fs.promises.mkdir(dir, { recursive: true });
-  const tmpOut = `${input.destAbsolutePath}.tmp.${process.pid}`;
+  // Keep a `.wav` suffix on the temp path so ffmpeg's filename-based muxer
+  // detection still works if the explicit `-f wav` flag is ever dropped, and
+  // so ops can `file(1)` the temp artifact during a problem. Investigated
+  // 2026-05-09: previously the suffix was `.tmp.<pid>`, which made ffmpeg
+  // emit `Unable to find a suitable output format for '...asset.wav.tmp.<pid>'`
+  // and silently produce no PBX-ready WAV. See KNOWN_ISSUES.md.
+  const tmpOut = `${input.destAbsolutePath}.tmp.${process.pid}.wav`;
   try {
     await execFileAsync(
       "ffmpeg",
@@ -130,6 +136,11 @@ export async function transcodeMohToPbxWav(input: {
         "1",
         "-c:a",
         "pcm_s16le",
+        // Force the WAV muxer explicitly so muxer choice does not depend on
+        // the filename of `tmpOut`. Defense in depth on top of the `.wav`
+        // suffix above.
+        "-f",
+        "wav",
         tmpOut,
       ],
       { timeout: 180_000, maxBuffer: 4 * 1024 * 1024 },
@@ -154,7 +165,16 @@ export async function transcodeMohToPbxWav(input: {
     return { ok: false, error: "ffmpeg output missing after transcode" };
   }
 
-  await fs.promises.rename(tmpOut, input.destAbsolutePath);
+  try {
+    await fs.promises.rename(tmpOut, input.destAbsolutePath);
+  } catch (renameErr: any) {
+    // Don't leave an orphan `.tmp.<pid>.wav` behind if the rename fails (e.g.
+    // EXDEV across a bind mount, EBUSY on Windows dev). Best-effort cleanup;
+    // ignore any rm error so the original rename failure is what surfaces.
+    await fs.promises.rm(tmpOut, { force: true }).catch(() => void 0);
+    const msg = renameErr?.message || String(renameErr);
+    return { ok: false, error: `ffmpeg_rename_failed: ${msg}`.slice(0, 4000) };
+  }
   return { ok: true };
 }
 

@@ -74,6 +74,23 @@ When you find a new fragile area, add it here.
   `packages/shared/src/canonicalTenantSlug.ts`. Any new caller that writes
   to `connect/t_<slug>/...` must use this helper — do NOT re-derive the
   slug locally.
+- **MOH transcoder rejected valid uploads because temp file lacked `.wav`
+  extension (fixed 2026-05).** `apps/api/src/mohStorage.ts::transcodeMohToPbxWav`
+  used to invoke ffmpeg with output path `${dest}.tmp.${process.pid}` (e.g.
+  `asset.wav.tmp.156`). ffmpeg picks the output muxer from the filename's
+  extension; `.156` is not a registered format, so every Connect-uploaded
+  audio file failed transcoding with `ffmpeg_failed: Unable to find a
+  suitable output format for '...asset.wav.tmp.<pid>'` and the API stored
+  a `MohAsset` with `conversionStatus=failed` / `pbxStorageKey=null`. The
+  publish-readiness gate then (correctly) refused the publish with
+  `connect_asset_not_pbx_ready`, leaving tenants unable to land a working
+  `connect_*` asset through the portal. Reproduced 2026-05-09 against
+  canary tenant Secro Selutions. Fix: pass `-f wav` to ffmpeg explicitly
+  AND keep a `.wav` suffix on the temp output (`...asset.wav.tmp.<pid>.wav`)
+  so muxer selection no longer depends on the temp filename. Same change
+  also cleans up the temp file when the final atomic `rename` fails
+  (e.g. EXDEV on bind mounts) instead of leaving it on disk. Tests live
+  in `apps/api/src/mohStorage.test.ts` (skip if ffmpeg is not on PATH).
 
 ## Mobile calling
 
