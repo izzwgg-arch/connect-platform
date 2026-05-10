@@ -155,49 +155,102 @@ Host-side directories also referenced:
   `vitalpbx-inbound-route-helper.py` and restart `connect-pbx-route-helper` (systemd unit
   name may vary — verify on host).
 
-### VitalPBX host: Connect tenant MOH enforcement dialplan (added 2026-05)
+### VitalPBX host: Connect tenant MOH enforcement layer (added 2026-05)
 
-- Connect ships a small Connect-owned Asterisk include at
-  `/etc/asterisk/extensions__65_connect_tenant_moh.conf` that hooks
-  VitalPBX's generated `[sub-before-bridging-call]` (in
-  `extensions__20-baseplan.conf`) via the
-  `[global-before-bridging-call-hook]` Gosub already invoked by the
-  baseplan, and Sets `CHANNEL(musicclass)` from AstDB on every leg about
-  to be bridged. This closes the outbound/internal/bridge/hold MOH gap
+- Connect ships **two** Connect-owned Asterisk includes that work
+  together to enforce the tenant-selected MOH class on every call leg
+  for every Connect-known tenant. Both are installed by
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh`.
+    1. **Dialplan layer** at `/etc/asterisk/extensions__65_connect_tenant_moh.conf`
+       hooks VitalPBX's generated `[sub-before-bridging-call]` (in
+       `extensions__20-baseplan.conf`) via the
+       `[global-before-bridging-call-hook]` Gosub already invoked by the
+       baseplan, and Sets `CHANNEL(musicclass)` from AstDB on the
+       **trunk/called leg** before bridge. Per-tenant
+       `[T<id>_before-connecting-call-hook]` stanzas + the shared
+       `[connect-tenant-moh-connect-shim]` cover the dialplan-side
+       caller-leg path (used on builds that invoke
+       `[sub-before-connecting-call]` from `trk-<id>-dial`).
+    2. **PJSIP layer** at `/etc/asterisk/pjsip__65_connect_tenant_moh.conf`
+       uses `[<endpoint>](+)` append syntax to add
+       `set_var = CHANNEL(musicclass)=<class>` to each Connect-known
+       tenant's `T<id>_*` extension endpoints. `set_var` fires at
+       channel-creation time and covers the **caller leg** even on
+       VitalPBX builds where `[sub-before-connecting-call]` is not
+       invoked from the trunk dial path.
+  Together these close the outbound/internal/bridge/hold MOH gap
   documented in `KNOWN_ISSUES.md` ("MOH on outbound / internal / bridge /
   hold legs played the wrong class").
-- Installer is `scripts/pbx/install-connect-tenant-moh-dialplan.sh`,
-  separate from the route-helper installer above. It is **idempotent**,
-  backs up any existing same-named include before writing, runs `dialplan
-  reload`, and verifies BOTH `[sub-connect-tenant-moh]` and
-  `[global-before-bridging-call-hook]` are loaded (restoring the backup
-  and aborting if either is missing).
+- The installer is **idempotent** and offers four operator modes:
+
+  | Mode | Purpose | Writes? | Reloads? |
+  |---|---|---|---|
+  | (default) `install` | Write both includes, reload dialplan + pjsip, verify all required contexts and a sample PJSIP `set_var`; restore backup and abort on verification failure. | yes | yes |
+  | `--check` | Read-only on-call health probe. PASS/FAIL across five hardening checks (dialplan include, contexts loaded, PJSIP include, sample endpoint carries `CHANNEL(musicclass)`, AstDB reverse-map has ≥1 tenant). Exits 0 on healthy, non-zero otherwise. Prints a structured `RESULT: PASS/FAIL` line for monitoring. | no | no |
+  | `--rollback` | Remove only Connect-owned files (`extensions__65_*.conf`, `pjsip__65_*.conf`) and the sentinel `#include` line in `extensions__60_custom.conf` (with backup); reload dialplan + pjsip. Idempotent. | only Connect-owned | yes |
+  | `--help` | Usage + mode summary. Works without root. | no | no |
+
 - The installer **never** edits VitalPBX-generated `extensions__*.conf`
-  files, never touches `musiconhold__*.conf`, and never modifies queue or
-  parking configuration. It only writes its own include file.
+  or `pjsip__*.conf` files, never touches `musiconhold__*.conf`, never
+  modifies queue / parking / transport / AOR / registration / template
+  config, and on the PJSIP side only emits `[<existing-endpoint>](+)`
+  append blocks (never new endpoints).
 - After deploying API code that includes the reverse-map publish
   (`apps/api/src/mohReverseMapPublish.ts`), a single MOH publish per
-  tenant populates the AstDB keys the resolver reads
+  tenant populates the AstDB keys both layers read
   (`connect/pbx_tenant_map/<pbxTenantId>/slug` and `.../moh_class`).
   Until those keys are present for a tenant the resolver returns
-  unchanged for that tenant — fail-safe to existing PBX behavior.
+  unchanged for that tenant — fail-safe to existing PBX behavior — and
+  the per-tenant PJSIP append for that tenant simply isn't generated
+  (the global trunk-leg hook still works).
+- **Operational rule**: **re-run the installer after every new tenant's
+  first Connect MOH publish.** The per-tenant `T<id>_*` stanzas and PJSIP
+  appends are generated from AstDB *at install time*. Existing tenants
+  do not need a re-install on every publish — only the first publish
+  for each new tenant requires it. The end-of-run "Skipped tenants this
+  run" summary block tells operators exactly which tenants couldn't be
+  covered (and why).
 - **Order of operations**: deploy API first (so subsequent MOH publishes
   populate the reverse map), then have an operator run the installer on
   the PBX. Either order is safe — neither component throws before the
-  other ships. Real test on canary tenant after both:
-    1. `POST /voice/moh/publish` for a tenant.
+  other ships.
+- **Pre-deploy preflight**:
+  ```bash
+  ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+  ```
+  If `RESULT: PASS`, no install needed for already-known tenants. If
+  `RESULT: FAIL`, the failure line tells you which check broke; fix the
+  underlying issue (usually "Connect MOH publish has not run for this
+  tenant") and proceed.
+- **Real test on canary tenant after install**:
+    1. `POST /voice/moh/publish` for a tenant in Connect.
     2. On PBX: `asterisk -rx "database show connect/pbx_tenant_map"` →
        expect `connect/pbx_tenant_map/<pbxTenantId>/slug` and `.../moh_class`.
-    3. Place an outbound call from a Connect-managed extension, put the
-       call on hold; `core show channel <chan>` should show `MusicClass`
-       matching the published class.
-- **Rollback (instant, PBX-local)**:
+    3. Run `--check` and confirm `RESULT: PASS (5/5 checks healthy)`.
+    4. Place an outbound call from a Connect-managed extension; while
+       up, on PBX: `core show channel <caller-chan> | grep -i MusicClass`
+       AND `core show channel <trunk-chan> | grep -i MusicClass`. **Both**
+       must show `MusicClass: <published-class>`. Then put the call on
+       hold from each side and verify the held party audibly hears the
+       Connect-published MOH class.
+- **Rollback (preferred)**:
   ```bash
-  ssh <pbx> 'rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf && asterisk -rx "dialplan reload"'
+  ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
   ```
-  PBX behavior reverts to byte-identical pre-install. Reverse-map AstDB
-  keys are inert if the include is removed; clear with
-  `database deltree connect/pbx_tenant_map` if desired.
+  Removes only Connect-owned files + the sentinel `#include` line, then
+  reloads dialplan and pjsip. Idempotent — running again on an
+  already-uninstalled host is safe.
+- **Rollback (manual equivalent, break-glass only)**:
+  ```bash
+  ssh <pbx> "sed -i '/^#include extensions__65_connect_tenant_moh\\.conf$/d' /etc/asterisk/extensions__60_custom.conf \\
+    && rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf /etc/asterisk/pjsip__65_connect_tenant_moh.conf \\
+    && asterisk -rx 'dialplan reload' \\
+    && asterisk -rx 'pjsip reload'"
+  ```
+  PBX behavior reverts to byte-identical pre-install for the MOH
+  enforcement layer. Reverse-map AstDB keys are inert if the includes
+  are removed; clear with `database deltree connect/pbx_tenant_map` if
+  desired.
 
 ### Voicemail Phase 1 — staged rollout (do not deploy everything at once)
 

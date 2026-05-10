@@ -684,17 +684,36 @@ Root cause: VitalPBX's generated `[trk-<id>-dial]` / `[sub-local-dialing]`
 contexts pre-set `CHANNEL(musicclass)` to the **tenant default music
 group**, not from the per-route / per-extension column. Updating the
 columns alone does not change what the channel inherits at bridge time.
+Compounding factor: on builds where `[sub-before-connecting-call]` is
+not invoked from `trk-<id>-dial` (verified 2026-05-10), the dialplan-side
+caller-leg shim is unreachable for outbound trunk dials.
 
-Fix that is now in place: a Connect-owned dialplan include hooks the
-proven generated extension point `[global-before-bridging-call-hook]`
-(Gosub'd by VitalPBX-generated `[sub-before-bridging-call]` in
-`extensions__20-baseplan.conf`) and Sets `CHANNEL(musicclass)` from
-AstDB before the bridge starts. See the **Tenant MOH enforcement layer**
-section in `TELEPHONY.md`.
+Fix that is now in place: a Connect-owned dialplan include hooks
+`[global-before-bridging-call-hook]` (Gosub'd by VitalPBX-generated
+`[sub-before-bridging-call]`) for the **trunk/called leg**, AND a
+Connect-owned PJSIP include uses `[<endpoint>](+)` append syntax to set
+`CHANNEL(musicclass)` via `set_var` at channel-creation time on each
+tenant's `T<id>_*` extension endpoints, covering the **caller leg**.
+See the **Tenant MOH enforcement layer** section in `TELEPHONY.md`.
 
 Verification checklist (read-only):
 
-1. Confirm Connect has published the reverse tenant map for this tenant:
+1. **Single-command health probe (recommended first step).** The installer
+   ships a read-only `--check` mode that runs all five hardening checks
+   in one go and exits non-zero on any failure. Use this before manual
+   inspection — it answers "is enforcement healthy right now?" without
+   touching files or reloading asterisk:
+
+   ```bash
+   ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+   ```
+
+   Expected: `RESULT: PASS (5/5 checks healthy)` with `[PASS]` per line.
+   Any `[FAIL]` line tells you exactly which condition broke. If the
+   final line is `RESULT: FAIL`, jump to the matching numbered step
+   below for that specific failure.
+
+2. Confirm Connect has published the reverse tenant map for this tenant:
 
    ```bash
    ssh connect-pbx "asterisk -rx 'database show connect/pbx_tenant_map'"
@@ -710,19 +729,34 @@ Verification checklist (read-only):
    `MohPublishRecord.nativeSync.tenantMohEnforcement` row to see whether
    the publish reported `reverseMapPublished:true` or supplied a `reason`.
 
-2. Confirm the resolver dialplan is loaded:
+3. Confirm the resolver dialplan + connect-leg shim are loaded:
 
    ```bash
    ssh connect-pbx "asterisk -rx 'dialplan show sub-connect-tenant-moh'"
    ssh connect-pbx "asterisk -rx 'dialplan show global-before-bridging-call-hook'"
+   ssh connect-pbx "asterisk -rx 'dialplan show connect-tenant-moh-connect-shim'"
    ```
 
-   Both contexts must be present. If either is missing, the operator has
-   not yet run `scripts/pbx/install-connect-tenant-moh-dialplan.sh` on
-   the PBX (or it failed verification and rolled itself back — backup is
-   in `/etc/asterisk/extensions__65_connect_tenant_moh.conf.bak.*`).
+   All three contexts must be present. If any is missing, the operator
+   has not yet run `scripts/pbx/install-connect-tenant-moh-dialplan.sh`
+   on the PBX (or it failed verification and rolled itself back — backup
+   is in `/etc/asterisk/extensions__65_connect_tenant_moh.conf.bak.*`).
 
-3. Confirm VitalPBX still calls the hook:
+4. Confirm the per-tenant connect-leg hook + PJSIP append exist for THIS
+   tenant (caller-leg coverage). The installer enumerates these from
+   AstDB at install time, so a tenant whose first publish happened after
+   the most recent installer run will be missing here:
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'dialplan show T<id>_before-connecting-call-hook'"
+   ssh connect-pbx "asterisk -rx 'pjsip show endpoint T<id>_<ext>' | grep -iE 'set_var|musicclass'"
+   ```
+
+   Both must show the Connect-installed line. If the dialplan context
+   exists but the PJSIP `set_var` is missing (or vice-versa), re-run
+   the installer in default mode to re-sync both layers.
+
+5. Confirm VitalPBX still calls the bridging hook:
 
    ```bash
    ssh connect-pbx "asterisk -rx 'dialplan show sub-before-bridging-call' | grep -i hook"
@@ -732,25 +766,32 @@ Verification checklist (read-only):
    If a future VitalPBX upgrade renames or drops this hook the resolver
    will silently stop applying — symptom is identical to "uninstalled".
 
-4. Live call inspection:
+6. Live call inspection — both legs must carry the right MusicClass:
 
    ```bash
-   ssh connect-pbx "asterisk -rx 'core show channels concise'"      # find channel
-   ssh connect-pbx "asterisk -rx 'core show channel <chan>' | grep -i MusicClass"
+   ssh connect-pbx "asterisk -rx 'core show channels concise'"      # find both legs
+   # caller leg (PJSIP/T<id>_<ext>-...)
+   ssh connect-pbx "asterisk -rx 'core show channel <caller-chan>' | grep -i MusicClass"
+   # trunk leg (PJSIP/<trunk-name>-...)
+   ssh connect-pbx "asterisk -rx 'core show channel <trunk-chan>' | grep -i MusicClass"
    ```
 
-   Expect `MusicClass` to match `connect/pbx_tenant_map/<pbxTenantId>/moh_class`.
+   Both must report `MusicClass: <published-class>`. If only one leg has
+   it, the failed leg's coverage layer is broken: caller leg → PJSIP
+   append; trunk leg → dialplan U-flag hook.
 
-5. Rollback (if the layer itself is the problem):
+7. Rollback (if the layer itself is the problem):
 
    ```bash
-   ssh connect-pbx "rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf"
-   ssh connect-pbx "asterisk -rx 'dialplan reload'"
+   ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
    ```
 
-   PBX behavior reverts to pre-Phase-3. Reverse-map AstDB keys are inert
-   on their own; clear with `database deltree connect/pbx_tenant_map` if
-   desired.
+   This removes only Connect-owned files (the dialplan include, the
+   PJSIP include, and the sentinel `#include` line in
+   `extensions__60_custom.conf`) and reloads both dialplan and pjsip.
+   PBX behavior reverts to pre-enforcement. Reverse-map AstDB keys are
+   inert on their own; clear with `database deltree connect/pbx_tenant_map`
+   if desired.
 - **IVR runbook**: `docs/pbx/IVR_VITALPBX_PARITY_RUNBOOK.md`,
   `docs/pbx/option-a-setup.md`, `docs/pbx/option-a-runtime-keys.md`.
 - **Live snapshot scripts** (PowerShell): `scripts/capture-forensic.ps1` (mentioned

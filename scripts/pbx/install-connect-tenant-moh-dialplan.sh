@@ -130,10 +130,21 @@
 # Usage
 # -----
 #   chmod +x install-connect-tenant-moh-dialplan.sh
-#   sudo ./install-connect-tenant-moh-dialplan.sh
+#   sudo ./install-connect-tenant-moh-dialplan.sh                # install (default)
+#   sudo ./install-connect-tenant-moh-dialplan.sh --check        # read-only health check
+#   sudo ./install-connect-tenant-moh-dialplan.sh --rollback     # uninstall (Connect-owned only)
+#   ./install-connect-tenant-moh-dialplan.sh --help              # usage + mode summary
 #
-# Rollback (run on PBX as root)
-# -----------------------------
+# --check is the on-call probe: it never writes, never reloads, and exits
+# non-zero (with a structured RESULT line) if any of the five hardening
+# checks fail (dialplan include present, global hook loaded, PJSIP include
+# present, sample endpoint carries CHANNEL(musicclass), AstDB reverse-map
+# has at least one tenant). --rollback removes only Connect-owned files
+# and the sentinel `#include` line, then reloads dialplan + pjsip; it never
+# touches VitalPBX-generated config.
+#
+# Rollback (run on PBX as root) — equivalent to `--rollback`:
+# ----------------------------------------------------------
 #   sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' /etc/asterisk/extensions__60_custom.conf
 #   rm -f /etc/asterisk/extensions__65_connect_tenant_moh.conf
 #   rm -f /etc/asterisk/pjsip__65_connect_tenant_moh.conf
@@ -167,6 +178,69 @@ step() { printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 warn() { printf '\nWARN: %s\n' "$*" >&2; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
+# ── 0. Mode parsing ─────────────────────────────────────────────────────────
+# Default mode is "install" (preserves original behavior). --check and
+# --rollback are explicit operator subcommands; --help prints usage and
+# exits. Unknown modes exit 64 (EX_USAGE) before any preflight or write.
+MODE="install"
+case "${1:-}" in
+  ""|install)
+    MODE="install"
+    ;;
+  -h|--help|help)
+    MODE="help"
+    ;;
+  --check|-n|--dry-run|check)
+    MODE="check"
+    ;;
+  --rollback|--uninstall|rollback|uninstall)
+    MODE="rollback"
+    ;;
+  *)
+    printf 'ERROR: unknown mode %q (try --help)\n' "$1" >&2
+    exit 64
+    ;;
+esac
+
+if [[ "$MODE" = "help" ]]; then
+  cat <<'HELP'
+install-connect-tenant-moh-dialplan.sh — Connect tenant MOH enforcement layer
+=============================================================================
+
+Modes:
+  install        (default) Write Connect-owned dialplan + PJSIP includes,
+                 reload dialplan and pjsip, verify all required contexts
+                 and a sample endpoint carry CHANNEL(musicclass). Backs
+                 up any prior same-named includes; rolls back on failure.
+
+  --check        Read-only. Probes the live PBX state and prints PASS/FAIL
+                 for each of the five hardening checks:
+                   1. dialplan include file present
+                   2. dialplan resolver + global hook + shim contexts loaded
+                   3. PJSIP include file present
+                   4. sample T<id>_* endpoint carries CHANNEL(musicclass)
+                   5. AstDB reverse-map has at least one tenant
+                 Exits 0 when all checks pass, non-zero otherwise. Never
+                 writes files, never reloads asterisk.
+
+  --rollback     Removes only Connect-owned files:
+                   - /etc/asterisk/extensions__65_connect_tenant_moh.conf
+                   - /etc/asterisk/pjsip__65_connect_tenant_moh.conf
+                   - sentinel "#include extensions__65_connect_tenant_moh.conf"
+                     line in /etc/asterisk/extensions__60_custom.conf (only
+                     that one line — backs up first)
+                 Reloads dialplan and pjsip. Verifies the contexts are no
+                 longer loaded. Never touches VitalPBX-generated config.
+
+  --help         Print this message and exit 0.
+
+All modes require root. The script is idempotent in every mode and safe
+to re-run after every Connect MOH publish (which writes the AstDB
+reverse-map keys the install path enumerates).
+HELP
+  exit 0
+fi
+
 # ── 1. Preflight ────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
 command -v asterisk >/dev/null 2>&1 || die "asterisk binary not found in PATH"
@@ -184,6 +258,10 @@ PJSIP_FILE="/etc/asterisk/pjsip__65_connect_tenant_moh.conf"
 PJSIP_BACKUP_FILE="${PJSIP_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
 PJSIP_TMP_NEW="/tmp/connect-tenant-moh-pjsip-new.$$.conf"
 trap 'rm -f "$TMP_NEW" "$PJSIP_TMP_NEW"' EXIT
+
+# Skipped-tenant rollup (install mode only). Each entry is "T<id>: <reason>".
+# Initialized to the empty list so `set -u` is happy when nothing was skipped.
+SKIPPED_TENANTS=()
 
 restore_backups_and_die() {
   local msg="$1"
@@ -273,6 +351,209 @@ print_context_verification() {
     fi
   fi
 }
+
+# ── Health-check mode (read-only) ──────────────────────────────────────────
+# Probes the running PBX and prints PASS/FAIL for each of the five hardening
+# checks the requirements call out:
+#   1. dialplan include file present at the expected path
+#   2. resolver + global hook + shim contexts loaded
+#   3. PJSIP include file present
+#   4. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>
+#   5. AstDB reverse-map has at least one tenant
+# Exits 0 when all relevant checks pass, non-zero otherwise. Hard rule:
+# never writes a file, never reloads asterisk. The only allowed asterisk
+# CLI verbs in here are read-only "show"/"get" queries.
+do_health_check() {
+  local fail=0
+  local checks=0
+  local sample_tid="" sample_class="" sample_ep=""
+  local out tenant_map_raw tenant_ids_list ep_count
+
+  printf '\n[CHECK] Connect tenant MOH enforcement health check\n'
+  printf '====================================================\n'
+
+  # 1. dialplan include file present
+  checks=$((checks + 1))
+  if [[ -f "$DIALPLAN_FILE" ]]; then
+    printf '[PASS] dialplan include present: %s\n' "$DIALPLAN_FILE"
+  else
+    printf '[FAIL] dialplan include missing: %s\n' "$DIALPLAN_FILE"
+    fail=$((fail + 1))
+  fi
+
+  # 2. resolver + global hook + shim contexts loaded
+  for pair in \
+    "sub-connect-tenant-moh|Connect tenant MOH resolver" \
+    "global-before-bridging-call-hook|Connect global before-bridging hook" \
+    "connect-tenant-moh-connect-shim|Connect tenant MOH connect-leg shim"; do
+    local ctx="${pair%%|*}"
+    local sentinel="${pair#*|}"
+    checks=$((checks + 1))
+    out="$(asterisk -rx "dialplan show $ctx" 2>&1 || true)"
+    if echo "$out" | grep -q "$sentinel"; then
+      printf '[PASS] dialplan context [%s] loaded\n' "$ctx"
+    else
+      printf '[FAIL] dialplan context [%s] not loaded\n' "$ctx"
+      fail=$((fail + 1))
+    fi
+  done
+
+  # 3. PJSIP include file present
+  checks=$((checks + 1))
+  if [[ -f "$PJSIP_FILE" ]]; then
+    printf '[PASS] PJSIP include present: %s\n' "$PJSIP_FILE"
+  else
+    printf '[FAIL] PJSIP include missing: %s\n' "$PJSIP_FILE"
+    fail=$((fail + 1))
+  fi
+
+  # 4. AstDB reverse-map has at least one tenant
+  checks=$((checks + 1))
+  tenant_map_raw="$(asterisk -rx 'database show connect/pbx_tenant_map' 2>/dev/null || true)"
+  tenant_ids_list="$(printf '%s\n' "$tenant_map_raw" \
+    | awk -F'/' '/^\/connect\/pbx_tenant_map\//{print $4}' \
+    | grep -E '^[0-9]+$' \
+    | sort -un \
+    || true)"
+  if [[ -n "$tenant_ids_list" ]]; then
+    local tenant_count
+    tenant_count="$(printf '%s\n' "$tenant_ids_list" | wc -l | tr -d ' ')"
+    printf '[PASS] AstDB reverse-map has %s tenant(s): %s\n' \
+      "$tenant_count" "$(printf '%s ' $tenant_ids_list)"
+    sample_tid="$(printf '%s\n' "$tenant_ids_list" | head -n1)"
+  else
+    printf '[FAIL] AstDB reverse-map has no tenants — Connect MOH publish has not run yet\n'
+    fail=$((fail + 1))
+  fi
+
+  # 5. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>
+  checks=$((checks + 1))
+  if [[ -n "$sample_tid" ]]; then
+    sample_class="$(asterisk -rx "database get connect/pbx_tenant_map/${sample_tid} moh_class" 2>/dev/null \
+      | awk -F': ' '/^Value:/{print $2}' | tr -d '[:space:]' || true)"
+    local endpoints_raw
+    endpoints_raw="$(asterisk -rx 'pjsip show endpoints' 2>/dev/null || true)"
+    sample_ep="$(printf '%s\n' "$endpoints_raw" \
+      | awk '/^[[:space:]]*Endpoint:[[:space:]]/ {n=$2; sub("/.*", "", n); print n}' \
+      | grep -E "^T${sample_tid}_[A-Za-z0-9._-]+$" \
+      | sort -u \
+      | head -n1 \
+      || true)"
+    if [[ -n "$sample_ep" && -n "$sample_class" ]]; then
+      local ep_show
+      ep_show="$(asterisk -rx "pjsip show endpoint $sample_ep" 2>&1 || true)"
+      if echo "$ep_show" | grep -Eiq "set_var[[:space:]]*[:=].*CHANNEL\(musicclass\)=${sample_class}|musicclass[[:space:]]*[:=].*${sample_class}"; then
+        printf '[PASS] sample endpoint %s carries CHANNEL(musicclass)=%s\n' "$sample_ep" "$sample_class"
+      else
+        printf '[FAIL] sample endpoint %s missing CHANNEL(musicclass)=%s\n' "$sample_ep" "$sample_class"
+        fail=$((fail + 1))
+      fi
+    else
+      printf '[FAIL] could not pick a sample endpoint to probe (tid=%s class=%s ep=%s)\n' \
+        "$sample_tid" "$sample_class" "$sample_ep"
+      fail=$((fail + 1))
+    fi
+  else
+    printf '[SKIP] sample endpoint check (no tenants in reverse-map)\n'
+  fi
+
+  printf '\n====================================================\n'
+  if [[ $fail -eq 0 ]]; then
+    printf 'RESULT: PASS (%s/%s checks healthy)\n' "$checks" "$checks"
+    return 0
+  else
+    printf 'RESULT: FAIL (%s/%s checks failed)\n' "$fail" "$checks"
+    printf 'Hint: re-run Connect MOH publish then "%s" (no flag) to reinstall.\n' "$0"
+    return 1
+  fi
+}
+
+# ── Rollback mode (Connect-owned only) ──────────────────────────────────────
+# Removes ONLY Connect-authored MOH enforcement files and the sentinel
+# #include line in extensions__60_custom.conf, then reloads dialplan +
+# pjsip. Never edits any VitalPBX-generated file. Idempotent — running it
+# twice is safe; running it on a host where enforcement was never installed
+# is also safe.
+do_rollback() {
+  local removed=0 skipped=0
+  local custom_rollback_backup=""
+
+  printf '\n[ROLLBACK] Connect tenant MOH enforcement uninstall\n'
+  printf '====================================================\n'
+
+  if [[ -f "$DIALPLAN_FILE" ]]; then
+    rm -f "$DIALPLAN_FILE"
+    printf '[REMOVE] %s\n' "$DIALPLAN_FILE"
+    removed=$((removed + 1))
+  else
+    printf '[SKIP]   %s already absent\n' "$DIALPLAN_FILE"
+    skipped=$((skipped + 1))
+  fi
+
+  if [[ -f "$PJSIP_FILE" ]]; then
+    rm -f "$PJSIP_FILE"
+    printf '[REMOVE] %s\n' "$PJSIP_FILE"
+    removed=$((removed + 1))
+  else
+    printf '[SKIP]   %s already absent\n' "$PJSIP_FILE"
+    skipped=$((skipped + 1))
+  fi
+
+  # Sentinel #include line in extensions__60_custom.conf — Connect-owned, but
+  # the file as a whole is shared with other Connect customizations, so we
+  # only strip our exact line. Always back up before mutating.
+  if [[ -f "$CUSTOM_FILE" ]] && grep -Fxq "$INCLUDE_LINE" "$CUSTOM_FILE"; then
+    custom_rollback_backup="${CUSTOM_FILE}.bak.connect-rollback.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$CUSTOM_FILE" "$custom_rollback_backup"
+    sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' "$CUSTOM_FILE"
+    printf '[REMOVE] sentinel include from %s (backup: %s)\n' \
+      "$CUSTOM_FILE" "$custom_rollback_backup"
+    removed=$((removed + 1))
+  else
+    printf '[SKIP]   no sentinel include in %s\n' "$CUSTOM_FILE"
+    skipped=$((skipped + 1))
+  fi
+
+  asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
+  printf '[RELOAD] asterisk -rx "dialplan reload"\n'
+  asterisk -rx "pjsip reload" >/dev/null 2>&1 || true
+  printf '[RELOAD] asterisk -rx "pjsip reload"\n'
+
+  # Best-effort verification: contexts should no longer be loaded. Asterisk
+  # may keep a context cached in memory until the affected source file is
+  # actually unread (rare on `dialplan reload`); warn rather than fail so
+  # the operator knows to investigate without the script appearing to fail.
+  local resolver_after
+  resolver_after="$(asterisk -rx 'dialplan show sub-connect-tenant-moh' 2>&1 || true)"
+  if echo "$resolver_after" | grep -q "Connect tenant MOH resolver"; then
+    printf '[WARN]   [sub-connect-tenant-moh] still loaded after reload — investigate manually.\n'
+  else
+    printf '[OK]     [sub-connect-tenant-moh] no longer loaded\n'
+  fi
+
+  printf '\n====================================================\n'
+  printf 'RESULT: rollback complete (%s removed, %s already absent)\n' "$removed" "$skipped"
+  printf 'PBX behavior is now byte-identical to pre-install for the MOH enforcement layer.\n'
+  printf 'Reverse-map AstDB keys (connect/pbx_tenant_map/*) are inert without the resolver;\n'
+  printf 'clear with `asterisk -rx "database deltree connect/pbx_tenant_map"` if desired.\n'
+  return 0
+}
+
+# ── Mode dispatch ──────────────────────────────────────────────────────────
+# install mode falls through to the existing step-by-step body below.
+case "$MODE" in
+  check)
+    do_health_check
+    exit $?
+    ;;
+  rollback)
+    do_rollback
+    exit $?
+    ;;
+  install)
+    : # fall through
+    ;;
+esac
 
 # ── 2. Snapshot existing include (if any) ───────────────────────────────────
 step "[1/8] Snapshot any existing include"
@@ -536,6 +817,7 @@ else
 
     if [[ -z "$CLASS" ]] || [[ "$CLASS" != "${CLASS//[^A-Za-z0-9_-]/}" ]]; then
       warn "Tenant T${tid}: missing or non-printable connect/pbx_tenant_map/${tid}/moh_class — skipping."
+      SKIPPED_TENANTS+=("T${tid}: missing or non-printable moh_class in connect/pbx_tenant_map/${tid}")
       continue
     fi
 
@@ -552,6 +834,7 @@ else
 
     if [[ -z "$ENDPOINTS" ]]; then
       warn "Tenant T${tid}: no PJSIP endpoints matched ^T${tid}_ — skipping (slug=${SLUG} class=${CLASS})."
+      SKIPPED_TENANTS+=("T${tid}: no PJSIP endpoints matched ^T${tid}_ (slug=${SLUG} class=${CLASS})")
       continue
     fi
 
@@ -614,6 +897,19 @@ echo "  ↳ connect/pbx_tenant_map family (populated by Connect MOH publish + ro
 asterisk -rx 'database show connect/pbx_tenant_map' 2>&1 | sed 's/^/      /' \
   || echo "      (no reverse-tenant-map keys yet — run a MOH publish from Connect to populate)"
 
+# Skipped-tenant rollup. Each loop above appends a single line per tenant it
+# could not cover with full reasoning (missing/non-printable moh_class,
+# no T<id>_* PJSIP endpoints, etc.). Reporting in one place at the end is
+# easier to scan than digging back through the per-loop WARN: lines.
+SKIPPED_COUNT="${#SKIPPED_TENANTS[@]}"
+if [[ $SKIPPED_COUNT -gt 0 ]]; then
+  printf '\n[%s] Skipped tenants this run (%s):\n' "$(date +%H:%M:%S)" "$SKIPPED_COUNT"
+  for s in "${SKIPPED_TENANTS[@]}"; do
+    printf '  - %s\n' "$s"
+  done
+  printf '  Hint: re-run Connect MOH publish for these tenants, then re-run this installer.\n'
+fi
+
 cat <<DONE
 
 ============================================================================
@@ -624,6 +920,7 @@ Backup of Connect custom dialplan (only if bridged): ${CUSTOM_BACKUP_FILE:-not-c
 Backup of previous PJSIP include: ${PJSIP_BACKUP_FILE:-not-created}
 Per-tenant connect-leg dialplan hooks generated this run: ${PER_TENANT_COUNT:-0}
 PJSIP caller-leg appends installed this run: ${PJSIP_TOTAL_ENDPOINT_COUNT:-0} endpoint(s) across ${PJSIP_PER_TENANT_COUNT:-0} tenant(s)
+Tenants skipped (and why): ${SKIPPED_COUNT} (see "Skipped tenants this run" block above)
 
 Wired in via:
 
@@ -673,7 +970,13 @@ If MusicClass is wrong on either leg:
     when this installer last ran. Re-publish MOH in Connect (which writes
     the AstDB keys) and re-run this installer.
 
-Rollback (instant):
+Health check (read-only, no writes, no reloads):
+  sudo $0 --check
+
+Rollback (preferred — Connect-owned files only, idempotent):
+  sudo $0 --rollback
+
+Rollback (manual equivalent, instant):
   sed -i '/^#include extensions__65_connect_tenant_moh\.conf$/d' $CUSTOM_FILE
   rm -f $DIALPLAN_FILE
   rm -f $PJSIP_FILE

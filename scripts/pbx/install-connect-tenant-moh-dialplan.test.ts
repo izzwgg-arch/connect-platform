@@ -223,9 +223,13 @@ test("installer only writes Connect-owned dialplan files, never VitalPBX-generat
 });
 
 test("installer prints rollback instructions", () => {
-  // Rollback block must appear and must use the exact include path + reload
-  // for BOTH the dialplan include and the PJSIP caller-leg include.
-  assert.match(SCRIPT, /Rollback \(instant\):/);
+  // Rollback block must appear in TWO forms in the operator-facing summary:
+  // the preferred subcommand (`sudo $0 --rollback`) and the manual sed/rm
+  // equivalent for break-glass scenarios. Both must reference the exact
+  // include paths and reload BOTH dialplan and pjsip.
+  assert.match(SCRIPT, /Rollback \(preferred/);
+  assert.match(SCRIPT, /sudo \$0 --rollback/);
+  assert.match(SCRIPT, /Rollback \(manual equivalent, instant\):/);
   assert.match(SCRIPT, /sed -i '\/\^#include extensions__65_connect_tenant_moh\\\.conf\$\/d'/);
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/extensions__65_connect_tenant_moh\.conf/);
   assert.match(SCRIPT, /rm -f \/etc\/asterisk\/pjsip__65_connect_tenant_moh\.conf/);
@@ -436,4 +440,281 @@ test("installer step numbering is consistent (8 numbered steps end-to-end)", () 
   for (const n of ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]) {
     assert.match(SCRIPT, new RegExp(`step "\\[${n.replace("/", "\\/")}\\]`));
   }
+});
+
+// ============================================================================
+// Hardening: CLI mode dispatch (install / --check / --rollback / --help)
+// ============================================================================
+//
+// The installer is the single operator entry point for the tenant MOH
+// enforcement layer. Production hardening (2026-05) added three subcommands:
+//
+//   * default / install — original behavior, unchanged
+//   * --check          — read-only health probe with PASS/FAIL per check
+//   * --rollback       — Connect-owned-files-only uninstall + reload
+//   * --help           — usage text + mode summary
+//
+// These tests assert the dispatch logic, the per-mode exit-behavior contract,
+// and that --check is genuinely read-only (no file writes, no asterisk
+// reloads, no AMI mutating commands). The shape of these subcommands is what
+// on-call docs (DEBUGGING.md / DEPLOYMENT.md) point operators at, so any
+// drift here is a doc-and-tooling bug.
+
+// Helper: extract the body of a named bash function (between `name() {` and
+// the matching closing `}` at column 0). Used to scope assertions to one
+// function instead of the whole script — important for "--check is
+// read-only" because the installer body absolutely does write files and
+// reload asterisk; we just need to prove the health-check path doesn't.
+function extractBashFunctionBody(script: string, name: string): string {
+  const openRe = new RegExp(`(^|\\n)${name}\\s*\\(\\)\\s*\\{`);
+  const openMatch = script.match(openRe);
+  assert.ok(openMatch, `function ${name}() not found`);
+  const start = openMatch.index! + openMatch[0].length;
+  // Find the next line beginning with "}" — the closing brace of the function.
+  const after = script.slice(start);
+  const closeRe = /\n\}\s*(\n|$)/;
+  const closeMatch = after.match(closeRe);
+  assert.ok(closeMatch, `closing brace for ${name}() not found`);
+  return after.slice(0, closeMatch.index!);
+}
+
+test("installer parses --help / --check / --rollback / unknown modes before any preflight", () => {
+  // Mode dispatch must happen BEFORE the [[ $EUID -eq 0 ]] preflight or any
+  // file path init so --help works as a non-root user and unknown modes
+  // exit with EX_USAGE (64) rather than crashing inside an asterisk call.
+  const modeBlockMatch = SCRIPT.match(/MODE="install"\s*\ncase "\$\{1:-\}"[\s\S]*?esac/);
+  assert.ok(modeBlockMatch, "MODE dispatch case-block not found near top of script");
+  const modeBlock = modeBlockMatch[0];
+  // All four canonical mode aliases must be present.
+  assert.match(modeBlock, /""\|install\)/);
+  assert.match(modeBlock, /-h\|--help\|help\)/);
+  assert.match(modeBlock, /--check\|-n\|--dry-run\|check\)/);
+  assert.match(modeBlock, /--rollback\|--uninstall\|rollback\|uninstall\)/);
+  // Unknown mode must exit 64 (EX_USAGE).
+  assert.match(modeBlock, /exit 64/);
+});
+
+test("--help prints usage covering all four modes and exits 0 before preflight", () => {
+  // Help text must list every mode by name so on-call operators have a
+  // single self-documenting source of truth.
+  const helpMatch = SCRIPT.match(/if \[\[\s*"\$MODE"\s*=\s*"help"\s*\]\];\s*then[\s\S]*?exit 0\s*\nfi/);
+  assert.ok(helpMatch, "help block not found");
+  const helpBody = helpMatch[0];
+  assert.match(helpBody, /\binstall\b/i);
+  assert.match(helpBody, /--check/);
+  assert.match(helpBody, /--rollback/);
+  assert.match(helpBody, /--help/);
+  // Help must mention all five hardening checks so on-call has the shape of
+  // what --check covers without reading the source.
+  assert.match(helpBody, /dialplan include/i);
+  assert.match(helpBody, /resolver \+ global hook \+ shim/i);
+  assert.match(helpBody, /PJSIP include/i);
+  assert.match(helpBody, /sample[\s\S]*?endpoint[\s\S]*?CHANNEL\(musicclass\)/i);
+  assert.match(helpBody, /reverse-map.*tenant/i);
+});
+
+test("mode dispatch routes check -> do_health_check, rollback -> do_rollback, install falls through", () => {
+  // The dispatch case at the bottom of the helper-functions block decides
+  // which subcommand body to enter. install MUST be the only mode that
+  // falls through to the existing step-by-step body below it.
+  const dispatchMatch = SCRIPT.match(/case "\$MODE" in\s*\n\s*check\)[\s\S]*?install\)[\s\S]*?esac/);
+  assert.ok(dispatchMatch, "mode dispatch block not found");
+  const dispatch = dispatchMatch[0];
+  assert.match(dispatch, /check\)\s*\n\s*do_health_check\s*\n\s*exit \$\?/);
+  assert.match(dispatch, /rollback\)\s*\n\s*do_rollback\s*\n\s*exit \$\?/);
+  assert.match(dispatch, /install\)\s*\n\s*:\s*#\s*fall through/);
+});
+
+// ============================================================================
+// --check (health-check) — read-only contract + 5-check coverage
+// ============================================================================
+
+test("do_health_check is defined", () => {
+  assert.match(SCRIPT, /\ndo_health_check\s*\(\)\s*\{/);
+});
+
+// Strip bash-style comment lines before scanning a function body for write
+// operations. Comments may legitimately use characters like `>` or `rm` in
+// English prose (e.g. "remove file") which we don't want to false-positive.
+function stripBashComments(body: string): string {
+  return body
+    .split("\n")
+    .map((line) => (/^\s*#/.test(line) ? "" : line))
+    .join("\n");
+}
+
+test("do_health_check is genuinely read-only — no file writes, no asterisk reloads", () => {
+  const body = stripBashComments(extractBashFunctionBody(SCRIPT, "do_health_check"));
+  // No file mutation. We forbid common write verbs anywhere in the function.
+  // This catches accidental "while I'm here" additions like writing a
+  // status file or mutating extensions__60_custom.conf during the probe.
+  const forbidden: { pattern: RegExp; description: string }[] = [
+    { pattern: /\brm\s+-/, description: "rm" },
+    { pattern: /\bmv\s+/, description: "mv" },
+    { pattern: /\bcp\s+/, description: "cp" },
+    { pattern: /\bsed\s+-i\b/, description: "sed -i (in-place edit)" },
+    { pattern: /\btee\s+/, description: "tee" },
+    { pattern: /\bchown\s+/, description: "chown" },
+    { pattern: /\bchmod\s+/, description: "chmod" },
+    // Output redirection that writes to a file (not /dev/null, not stderr).
+    { pattern: /(?<![&\d])>(?!\s*[&|]|\s*\/dev\/null|\s*\/dev\/stderr|\s*&[12])/, description: "redirect to file" },
+    { pattern: />>\s+/, description: "append redirect" },
+    // Asterisk mutating verbs. Allowed: "show", "get". Disallowed: anything
+    // that changes runtime state.
+    { pattern: /asterisk\s+-rx[^\n]*\b(reload|restart|stop|database\s+(put|del|deltree))\b/i, description: "asterisk mutating CLI verb" },
+    // AMI DBPut should never appear in --check.
+    { pattern: /\bDBPut\b/, description: "AMI DBPut" },
+  ];
+  for (const f of forbidden) {
+    assert.equal(
+      f.pattern.test(body),
+      false,
+      `do_health_check must not contain ${f.description} (matched: ${(body.match(f.pattern) || [""])[0]})`,
+    );
+  }
+});
+
+test("do_health_check probes all five hardening conditions", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_health_check");
+  // 1. dialplan include file present
+  assert.match(body, /\[\[\s+-f\s+"\$DIALPLAN_FILE"\s+\]\]/);
+  // 2. resolver + global hook + shim contexts loaded — uses the same three
+  //    sentinel strings as the install verifier.
+  assert.match(body, /sub-connect-tenant-moh\|Connect tenant MOH resolver/);
+  assert.match(body, /global-before-bridging-call-hook\|Connect global before-bridging hook/);
+  assert.match(body, /connect-tenant-moh-connect-shim\|Connect tenant MOH connect-leg shim/);
+  // 3. PJSIP include file present
+  assert.match(body, /\[\[\s+-f\s+"\$PJSIP_FILE"\s+\]\]/);
+  // 4. AstDB reverse-map has at least one tenant — same parser as install.
+  assert.match(body, /database show connect\/pbx_tenant_map/);
+  assert.match(body, /awk -F'\/'[^\n]*'\/\^\\\/connect\\\/pbx_tenant_map\\\/\/\{print \$4\}'/);
+  // 5. sample endpoint carries CHANNEL(musicclass)
+  assert.match(body, /pjsip show endpoint /);
+  assert.match(body, /CHANNEL\\\(musicclass\\\)=\$\{sample_class\}/);
+});
+
+test("do_health_check prints PASS/FAIL per check and a structured RESULT line", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_health_check");
+  // Per-check status uses `[PASS]` / `[FAIL]` prefixes so output is grep-able.
+  assert.match(body, /\[PASS\]/);
+  assert.match(body, /\[FAIL\]/);
+  // Final summary uses a single `RESULT:` line so monitoring can grep it.
+  assert.match(body, /RESULT: PASS \(%s\/%s checks healthy\)/);
+  assert.match(body, /RESULT: FAIL \(%s\/%s checks failed\)/);
+  // PASS path returns 0, FAIL path returns non-zero.
+  assert.match(body, /return 0/);
+  assert.match(body, /return 1/);
+});
+
+// ============================================================================
+// --rollback — Connect-owned-files-only uninstall
+// ============================================================================
+
+test("do_rollback is defined", () => {
+  assert.match(SCRIPT, /\ndo_rollback\s*\(\)\s*\{/);
+});
+
+test("do_rollback removes ONLY Connect-owned files + sentinel include line", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_rollback");
+  // The three (and only three) Connect-authored files / line that may be removed.
+  assert.match(body, /rm -f "\$DIALPLAN_FILE"/);
+  assert.match(body, /rm -f "\$PJSIP_FILE"/);
+  assert.match(
+    body,
+    /sed -i '\/\^#include extensions__65_connect_tenant_moh\\\.conf\$\/d' "\$CUSTOM_FILE"/,
+  );
+  // Must back up the custom file before mutating its sentinel line.
+  // Backup path is built into a local var first, so two-line shape:
+  //   custom_rollback_backup="${CUSTOM_FILE}.bak.connect-rollback.<ts>"
+  //   cp -a "$CUSTOM_FILE" "$custom_rollback_backup"
+  assert.match(body, /custom_rollback_backup="\$\{CUSTOM_FILE\}\.bak\.connect-rollback\./);
+  assert.match(body, /cp -a "\$CUSTOM_FILE" "\$custom_rollback_backup"/);
+  // Hard rule: no other VitalPBX-generated file may be touched here. We
+  // forbid the same path families the install-side hard rule forbids.
+  for (const banned of [
+    "extensions__20-baseplan.conf",
+    "extensions__40_",
+    "extensions__50_",
+    "musiconhold__",
+    "pjsip__40_",
+    "pjsip__50_",
+    "pjsip__60_",
+    "pjsip__70_",
+    "pjsip__90_",
+    "pjsip_endpoints.conf",
+    "pjsip_aors.conf",
+  ]) {
+    const re = new RegExp(
+      `(?:>|>>|\\bmv\\b|\\bcp\\b|\\bsed\\b|\\btee\\b|\\bchown\\b|\\bchmod\\b|\\brm\\b)[^\\n]*${banned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      "i",
+    );
+    assert.equal(re.test(body), false, `rollback must not touch ${banned}`);
+  }
+});
+
+test("do_rollback reloads BOTH dialplan and pjsip", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_rollback");
+  assert.match(body, /asterisk -rx "dialplan reload"/);
+  assert.match(body, /asterisk -rx "pjsip reload"/);
+});
+
+test("do_rollback verifies the resolver is no longer loaded after reload", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_rollback");
+  // The post-reload check uses the same sentinel string the install-time
+  // verifier looks for (`Connect tenant MOH resolver`). If still present
+  // after dialplan reload, the script must WARN (not fail) so operators
+  // can investigate without the rollback appearing to error out.
+  assert.match(body, /dialplan show sub-connect-tenant-moh/);
+  assert.match(body, /Connect tenant MOH resolver/);
+  assert.match(body, /\[WARN\]/);
+});
+
+test("do_rollback prints a structured RESULT line and is idempotent on already-uninstalled hosts", () => {
+  const body = extractBashFunctionBody(SCRIPT, "do_rollback");
+  assert.match(body, /RESULT: rollback complete/);
+  // Idempotency: the script tracks `[REMOVE]` vs `[SKIP]` per file so a
+  // double-run prints all three as `[SKIP]` and still succeeds.
+  assert.match(body, /\[REMOVE\]/);
+  assert.match(body, /\[SKIP\]/);
+});
+
+// ============================================================================
+// Install summary — skipped-tenant rollup
+// ============================================================================
+
+test("install loop appends to SKIPPED_TENANTS when a tenant cannot be covered", () => {
+  // Two reasons the PJSIP loop currently skips a tenant. Both must produce
+  // an entry in SKIPPED_TENANTS so the end-of-run rollup tells the operator
+  // exactly what to fix (rather than silently shipping partial coverage).
+  assert.match(
+    SCRIPT,
+    /SKIPPED_TENANTS\+=\("T\$\{tid\}: missing or non-printable moh_class[^"]*"\)/,
+  );
+  assert.match(
+    SCRIPT,
+    /SKIPPED_TENANTS\+=\("T\$\{tid\}: no PJSIP endpoints matched \^T\$\{tid\}_[^"]*"\)/,
+  );
+});
+
+test("install summary block prints the skipped-tenants rollup before INSTALL COMPLETE", () => {
+  // The rollup sits between the AstDB smoke output and the heredoc summary
+  // so it appears in operator scrollback right next to the `INSTALL
+  // COMPLETE` banner.
+  assert.match(SCRIPT, /Skipped tenants this run \(%s\):/);
+  assert.match(
+    SCRIPT,
+    /for s in "\$\{SKIPPED_TENANTS\[@\]\}"; do\s*\n\s+printf\s+'\s*-\s+%s\\n'\s+"\$s"/,
+  );
+  // The DONE heredoc must reference the skipped count so the final block
+  // is self-contained for log-capture / paste-into-incident-ticket.
+  assert.match(SCRIPT, /Tenants skipped \(and why\): \$\{SKIPPED_COUNT\}/);
+});
+
+test("install summary points operators at --check and --rollback as the supported modes", () => {
+  // The DONE heredoc must surface the supported subcommands so the operator
+  // running the install in production sees them in the same scrollback.
+  assert.match(SCRIPT, /Health check \(read-only/);
+  assert.match(SCRIPT, /sudo \$0 --check/);
+  assert.match(SCRIPT, /Rollback \(preferred/);
+  assert.match(SCRIPT, /sudo \$0 --rollback/);
 });

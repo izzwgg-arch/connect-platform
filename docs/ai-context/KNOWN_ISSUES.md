@@ -100,18 +100,48 @@ When you find a new fragile area, add it here.
   Connect's helper updates. So a tenant who selected `moh8` in Connect would
   see all three columns at 8 and Asterisk loaded `moh8` with a valid file,
   yet outbound/internal/bridge holds still played `moh3`. Confirmed canary
-  2026-05 on Secro / T3. Fix: a Connect-owned dialplan include
-  (`/etc/asterisk/extensions__65_connect_tenant_moh.conf`, installed by
-  `scripts/pbx/install-connect-tenant-moh-dialplan.sh`) hooks the proven
-  generated extension point `[global-before-bridging-call-hook]` Gosub'd by
-  VitalPBX-generated `[sub-before-bridging-call]` and Sets
-  `CHANNEL(musicclass)` from AstDB just before the bridge starts. API
-  publishes a reverse map `connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class}`
-  so the resolver can recover the canonical slug from a PJSIP endpoint
-  prefix `T<N>_<ext>` (best-effort; missing keys → bare `Return()`, fail-safe
-  to existing PBX behavior). See `TELEPHONY.md` "Tenant MOH enforcement
-  layer" and `DEBUGGING.md` "MOH on outbound / internal / bridge / hold legs
-  plays the wrong class".
+  2026-05 on Secro / T3. Fix is a two-layer Connect-owned PBX include
+  installed by `scripts/pbx/install-connect-tenant-moh-dialplan.sh`:
+    1. Dialplan layer at `/etc/asterisk/extensions__65_connect_tenant_moh.conf`
+       hooks `[global-before-bridging-call-hook]` (Gosub'd by VitalPBX-generated
+       `[sub-before-bridging-call]`) and Sets `CHANNEL(musicclass)` on the
+       **trunk/called leg** before bridge.
+    2. PJSIP layer at `/etc/asterisk/pjsip__65_connect_tenant_moh.conf`
+       uses `[<endpoint>](+)` append syntax to add
+       `set_var = CHANNEL(musicclass)=<class>` to each Connect-known tenant's
+       `T<id>_*` extension endpoints. `set_var` fires at channel-creation time,
+       covering the **caller leg** — required because some VitalPBX builds
+       (verified 2026-05-10 against `trk-33-dial`) skip
+       `[sub-before-connecting-call]` for outbound trunk dials, leaving the
+       dialplan-side connect-leg shim unreachable.
+  API publishes a reverse map `connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class}`
+  on every MOH publish/rollback, which both layers read at install time
+  (best-effort; missing keys → bare `Return()`, fail-safe to existing PBX
+  behavior). The installer is **idempotent** and ships three operator
+  modes: default `install` (writes + reloads + verifies), `--check`
+  (read-only health probe with exit code), and `--rollback` (removes
+  only Connect-owned files + sentinel include, reloads both
+  dialplan/pjsip). See `TELEPHONY.md` "Tenant MOH enforcement layer" and
+  `DEBUGGING.md` "MOH on outbound / internal / bridge / hold legs plays
+  the wrong class".
+- **Tenant MOH enforcement requires re-running the installer after every
+  new tenant's first MOH publish (open, operational).** The per-tenant
+  `T<id>_before-connecting-call-hook` dialplan stanzas and the per-tenant
+  PJSIP `[T<id>_<ext>](+)` set_var appends are both generated from
+  `connect/pbx_tenant_map` AstDB **at install time**. A tenant who
+  publishes for the first time after the most recent installer run will
+  have AstDB keys present (so the global trunk-leg hook works) but no
+  per-tenant caller-leg coverage until the installer runs again. The
+  trunk-leg hook is global and works for every tenant unconditionally,
+  so calls already on the platform still play the right class on hold
+  *from the trunk side*; only the caller-leg-initiated hold direction is
+  affected for newly-published tenants. Mitigation: run
+  `install-connect-tenant-moh-dialplan.sh --check` after every publish
+  for a new tenant to confirm coverage; if `--check` reports `[FAIL]
+  sample endpoint ... missing CHANNEL(musicclass)`, re-run the installer
+  in default mode. The end-of-run install summary now includes a
+  "Skipped tenants this run" rollup so operators can see exactly which
+  tenants couldn't be covered (and why).
 - **Tenant MOH enforcement layer does NOT cover queue wait or parking
   (open).** `app_queue` plays MoH from `queues.conf` per-queue `musicclass`
   (driven by `ombu_queues.music_group_id`, which Connect's helper already
