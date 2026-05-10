@@ -6,8 +6,16 @@
 //
 //   * Both required Asterisk contexts are defined.
 //   * The hook calls our resolver with the agnostic IF()-Set wrapper.
-//   * The resolver normalizes "T3" → "3", reads the reverse map, and falls
-//     back to active_moh_class.
+//   * The resolver derives the numeric tenant id from VitalPBX's per-tenant
+//     channel context vars FIRST (TRANSFER_CONTEXT, HINTS_CONTEXT,
+//     FOLLOWME_CONTEXT, QUEUE_AGENTS_CONTEXT — all "T<id>_..." on tenant
+//     calls) and only falls back to ARG1 when no channel-context prefix
+//     parses. This is the only way outbound legs work because VitalPBX's
+//     [sub-before-bridging-call] in some builds passes the opaque tenant
+//     **hash** as ARG1, not a numeric id.
+//   * The resolver only accepts ARG1 when it is purely numeric, so a hash
+//     never becomes a bogus reverse-map lookup.
+//   * The resolver reads the reverse map and falls back to active_moh_class.
 //   * The resolver Sets CHANNEL(musicclass) and the inheritable __CONNECT_MOH.
 //   * No tenant or MOH class is hardcoded.
 //   * The installer prints rollback instructions.
@@ -40,10 +48,51 @@ test("global-before-bridging-call-hook uses argument-mode-agnostic IF() wrapper"
   assert.match(SCRIPT, /Gosub\(sub-connect-tenant-moh,s,1\(\$\{T\},\$\{FROM\},\$\{TO\}\)\)/);
 });
 
-test("resolver normalizes T<N> tenant prefix to numeric id", () => {
+test("resolver derives numeric tenant id from existing T<N>_ channel context vars (preferred path)", () => {
+  // VitalPBX's per-tenant generated dialplan populates these *_CONTEXT vars
+  // on every channel routed through a tenant context. Ordering matters:
+  // TRANSFER_CONTEXT is the most stable on outbound trunk dial paths.
+  assert.match(SCRIPT, /Set\(TENANT_CTX_RAW=\$\{TRANSFER_CONTEXT\}\)/);
   assert.match(
     SCRIPT,
-    /Set\(TENANT_ID=\$\{IF\(\$\["\$\{TENANT_RAW:0:1\}" = "T"\]\?\$\{TENANT_RAW:1\}:\$\{TENANT_RAW\}\)\}\)/,
+    /ExecIf\(\$\["\$\{TENANT_CTX_RAW\}" = ""\]\?Set\(TENANT_CTX_RAW=\$\{HINTS_CONTEXT\}\)\)/,
+  );
+  assert.match(
+    SCRIPT,
+    /ExecIf\(\$\["\$\{TENANT_CTX_RAW\}" = ""\]\?Set\(TENANT_CTX_RAW=\$\{FOLLOWME_CONTEXT\}\)\)/,
+  );
+  assert.match(
+    SCRIPT,
+    /ExecIf\(\$\["\$\{TENANT_CTX_RAW\}" = ""\]\?Set\(TENANT_CTX_RAW=\$\{QUEUE_AGENTS_CONTEXT\}\)\)/,
+  );
+  // First underscore-delimited segment, accept only "T<digits>".
+  assert.match(SCRIPT, /Set\(TENANT_CTX_PREFIX=\$\{CUT\(TENANT_CTX_RAW,_,1\)\}\)/);
+  assert.match(SCRIPT, /Set\(TENANT_FROM_CTX=\)/);
+  assert.match(
+    SCRIPT,
+    /ExecIf\(\$\["\$\{TENANT_CTX_PREFIX:0:1\}" = "T"\]\?Set\(TENANT_FROM_CTX=\$\{FILTER\(0-9,\$\{TENANT_CTX_PREFIX:1\}\)\}\)\)/,
+  );
+});
+
+test("resolver normalizes ARG1 'T<N>' fallback and rejects opaque hashes", () => {
+  // ARG1 still strips the "T" prefix when present.
+  assert.match(
+    SCRIPT,
+    /Set\(TENANT_FROM_ARG=\$\{IF\(\$\["\$\{TENANT_RAW:0:1\}" = "T"\]\?\$\{TENANT_RAW:1\}:\$\{TENANT_RAW\}\)\}\)/,
+  );
+  // ARG1-derived id must be purely numeric — a non-digit anywhere clears it.
+  // This is the guard that prevents VitalPBX tenant hashes (e.g.
+  // 56a4d7cbd1c39e31) being treated as tenant ids on outbound legs.
+  assert.match(
+    SCRIPT,
+    /ExecIf\(\$\["\$\{TENANT_FROM_ARG\}" != "\$\{FILTER\(0-9,\$\{TENANT_FROM_ARG\}\)\}"\]\?Set\(TENANT_FROM_ARG=\)\)/,
+  );
+});
+
+test("resolver final TENANT_ID prefers context-derived id over ARG1", () => {
+  assert.match(
+    SCRIPT,
+    /Set\(TENANT_ID=\$\{IF\(\$\["\$\{TENANT_FROM_CTX\}" != ""\]\?\$\{TENANT_FROM_CTX\}:\$\{TENANT_FROM_ARG\}\)\}\)/,
   );
 });
 
@@ -62,8 +111,10 @@ test("resolver Sets CHANNEL(musicclass) and inheritable __CONNECT_MOH", () => {
 });
 
 test("resolver fail-safes return without changing the channel on missing data", () => {
-  // Three guards: empty TENANT_RAW, empty resolved slug, empty resolved class.
-  assert.match(SCRIPT, /GotoIf\(\$\["\$\{TENANT_RAW\}" = ""\]\?done\)/);
+  // Three guards: empty resolved TENANT_ID (covers the case where neither the
+  // channel context vars nor ARG1 yielded a numeric tenant id), empty resolved
+  // slug, empty resolved class.
+  assert.match(SCRIPT, /GotoIf\(\$\["\$\{TENANT_ID\}" = ""\]\?done\)/);
   assert.match(SCRIPT, /GotoIf\(\$\["\$\{TENANT_SLUG_LOCAL\}" = ""\]\?done\)/);
   assert.match(SCRIPT, /GotoIf\(\$\["\$\{MOH_CLASS_LOCAL\}" = ""\]\?done\)/);
   // The "done" label must be a bare Return().

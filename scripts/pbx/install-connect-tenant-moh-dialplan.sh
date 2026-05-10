@@ -35,11 +35,20 @@
 # It defines two contexts:
 #
 #   [sub-connect-tenant-moh]
-#       AstDB-driven resolver. Reads connect/pbx_tenant_map/<id>/slug to
-#       recover the canonical Connect tenant slug from a numeric VitalPBX
-#       tenant id, then reads connect/t_<slug>/{moh_class,active_moh_class}
-#       and Sets CHANNEL(musicclass) on the current leg. Returns unchanged
-#       if anything is missing -> fail-safe to existing PBX behavior.
+#       AstDB-driven resolver. Recovers the numeric VitalPBX tenant id by
+#       parsing "T<id>" from the existing channel context vars VitalPBX
+#       sets on every per-tenant call (TRANSFER_CONTEXT, HINTS_CONTEXT,
+#       FOLLOWME_CONTEXT, QUEUE_AGENTS_CONTEXT — all of the form
+#       "T<id>_..."). Falls back to the ARG1 the bridging hook passed in
+#       only when no channel-context prefix is parseable, and only when
+#       ARG1 is purely numeric — VitalPBX builds vary in whether ARG1 to
+#       [sub-before-bridging-call] is a numeric tenant id or an opaque
+#       tenant hash, so accepting non-numeric ARG1 would publish bogus
+#       AstDB lookups. Once a numeric tenant id is in hand, reads
+#       connect/pbx_tenant_map/<id>/slug, then
+#       connect/t_<slug>/{moh_class,active_moh_class}, and Sets
+#       CHANNEL(musicclass) on the current leg. Returns unchanged if
+#       anything is missing -> fail-safe to existing PBX behavior.
 #
 #   [global-before-bridging-call-hook]
 #       Argument-mode-agnostic wrapper invoked by VitalPBX's generated
@@ -182,10 +191,28 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 
 [sub-connect-tenant-moh]
 exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} callee=${ARG3} preset=${CHANNEL(musicclass)})
+ ; Channel-context tenant identity (preferred). VitalPBX's per-tenant
+ ; generated dialplan populates these *_CONTEXT vars on every channel
+ ; routed through a tenant context (e.g. TRANSFER_CONTEXT=T<id>_cos-all
+ ; on outbound trunk dial). ARG1 from [sub-before-bridging-call] in some
+ ; VitalPBX builds is the tenant **hash** rather than a numeric tenant id,
+ ; so the channel-context vars are the reliable source.
+ same => n,Set(TENANT_CTX_RAW=${TRANSFER_CONTEXT})
+ same => n,ExecIf($["${TENANT_CTX_RAW}" = ""]?Set(TENANT_CTX_RAW=${HINTS_CONTEXT}))
+ same => n,ExecIf($["${TENANT_CTX_RAW}" = ""]?Set(TENANT_CTX_RAW=${FOLLOWME_CONTEXT}))
+ same => n,ExecIf($["${TENANT_CTX_RAW}" = ""]?Set(TENANT_CTX_RAW=${QUEUE_AGENTS_CONTEXT}))
+ ; First underscore-delimited segment, e.g. "T<id>" out of "T<id>_cos-all".
+ same => n,Set(TENANT_CTX_PREFIX=${CUT(TENANT_CTX_RAW,_,1)})
+ ; Accept the channel-context prefix only when it is "T<digits>".
+ same => n,Set(TENANT_FROM_CTX=)
+ same => n,ExecIf($["${TENANT_CTX_PREFIX:0:1}" = "T"]?Set(TENANT_FROM_CTX=${FILTER(0-9,${TENANT_CTX_PREFIX:1})}))
+ ; ARG1-derived id (fallback). Accept only when purely numeric so opaque
+ ; VitalPBX tenant hashes do not become bogus reverse-map lookups.
  same => n,Set(TENANT_RAW=${ARG1})
- same => n,GotoIf($["${TENANT_RAW}" = ""]?done)
- ; Normalize "T3" → "3"; leave bare numerics (or unknown shapes) alone.
- same => n,Set(TENANT_ID=${IF($["${TENANT_RAW:0:1}" = "T"]?${TENANT_RAW:1}:${TENANT_RAW})})
+ same => n,Set(TENANT_FROM_ARG=${IF($["${TENANT_RAW:0:1}" = "T"]?${TENANT_RAW:1}:${TENANT_RAW})})
+ same => n,ExecIf($["${TENANT_FROM_ARG}" != "${FILTER(0-9,${TENANT_FROM_ARG})}"]?Set(TENANT_FROM_ARG=))
+ ; Prefer context-derived id; fall back to ARG1.
+ same => n,Set(TENANT_ID=${IF($["${TENANT_FROM_CTX}" != ""]?${TENANT_FROM_CTX}:${TENANT_FROM_ARG})})
  same => n,GotoIf($["${TENANT_ID}" = ""]?done)
  same => n,Set(TENANT_SLUG_LOCAL=${DB(connect/pbx_tenant_map/${TENANT_ID}/slug)})
  same => n,GotoIf($["${TENANT_SLUG_LOCAL}" = ""]?done)
