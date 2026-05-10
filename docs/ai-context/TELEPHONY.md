@@ -596,6 +596,89 @@ ssh <pbx> "sed -i '/^#include extensions__65_connect_tenant_moh\\.conf$/d' /etc/
 Reverse-map AstDB keys are inert without the resolver and can be cleared
 with `asterisk -rx "database deltree connect/pbx_tenant_map"` if desired.
 
+#### Caller-leg MOH on outbound trunk calls — FROZEN as of 2026-05-10
+
+Status: **partial coverage, frozen pending separately-approved high-risk
+work.** Do not attempt further patches without re-opening the architecture
+review.
+
+What works today:
+
+- Connect MOH publish writes the resolved tenant class to the AstDB
+  reverse map (`connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class}`).
+- The dialplan trunk/called-leg hook (`[sub-before-bridging-call]` →
+  `[global-before-bridging-call-hook]` → `[sub-connect-tenant-moh]`) sets
+  `CHANNEL(musicclass)` on the trunk leg of outbound calls. When the
+  external party places the call on hold, our internal extension hears
+  the tenant's MOH because the trunk leg drives that audio.
+- The dialplan layer (`extensions__65_connect_tenant_moh.conf` bridged
+  through `extensions__60_custom.conf`) and its `--check` / `--rollback`
+  modes are stable and documented above.
+
+What is unresolved:
+
+- The **caller/originating leg** of an outbound trunk call may still
+  carry `CHANNEL(musicclass)=default` because VitalPBX-generated
+  `trk-NN-dial` priority 21 emits
+  `ExecIf($["${TRUNK_MOH_SET}"!="yes"]?Set(CHANNEL(musicclass)=default):)`
+  and there is no dialplan-side hook reachable upstream of priority 21
+  on this build. When the **internal** extension places the call on
+  hold, the external party may hear `default` instead of the tenant
+  class.
+
+Why every safe option was rejected:
+
+- **PJSIP `[endpoint](+)` flat-file append (`pjsip__65_*.conf`,
+  `pjsip_custom*.conf`, `pjsip_endpoint_custom*.conf`).** Diagnostic
+  `scripts/pbx/diag-connect-pjsip-append.sh` proved on 2026-05-10 that
+  none of five candidate include paths propagate `set_var` to the
+  runtime endpoint. VitalPBX 4.5.3-1 / Asterisk 20.18.2 only includes
+  `vitalpbx/pjsip__*.conf` (subdirectory glob), and endpoints are
+  sorcery-wizard-locked so flat-file appends cannot mutate them.
+- **Pre-trunk dialplan hook.** Diagnostic
+  `scripts/pbx/diag-connect-trunk-dial-hooks.sh` proved no
+  `start/before/pre-trunk-dialing-hook`, no `${TENANT_PREFIX}*trunk*`
+  hook, and no `DIALPLAN_EXISTS` gosub upstream of `trk-NN-dial:21`
+  exists in generated VitalPBX dialplan. `(+)` extension append on
+  `T<id>_cos-all` lands after the route's `Goto`/`Dial` and is
+  unreachable.
+- **`${TENANT_PREFIX}before-connecting-call-hook`.** The context loads
+  but is not invoked from the outbound trunk path on this build.
+- **VitalPBX source-of-truth (DB) update.** Diagnostic
+  `scripts/pbx/diag-connect-vitalpbx-source.sh` returned `[A] FAIL`
+  (no per-trunk MOH/music column) and `[B] FAIL` (no per-extension
+  `set_var`/var table) on 2026-05-10. `[C] PASS` (regenerate command
+  exists) is irrelevant without a writable source-of-truth field.
+- **Wrapper / shadow of `trk-33-dial`.** Documented in the recovery
+  plan as the only remaining mechanism; rejected as the default path
+  because it is trunk-context-wide (not tenant-scoped), depends on
+  Asterisk duplicate-priority semantics that are not guaranteed across
+  versions, and may drift when VitalPBX regenerates the trunk
+  context. Requires a separate written approval before any code lands.
+
+Operator policy while frozen:
+
+- Do **not** patch PJSIP again.
+- Do **not** rely on `T<id>_before-connecting-call-hook` for outbound
+  trunk MOH.
+- Do **not** edit any file under `/etc/asterisk/vitalpbx/`.
+- Do **not** implement the wrapper/shadow approach without a separate,
+  written architecture-review approval.
+- The trunk/called-leg hook continues to provide tenant MOH for the
+  hold direction where the trunk leg drives the audio. This is the
+  current accepted state.
+
+When to re-open this:
+
+- Only if a real customer-facing audio failure on outbound holds is
+  reproduced and the customer or product owner explicitly accepts the
+  risk of the wrapper/shadow approach. Until then, MOH changes on this
+  surface are frozen.
+
+The full audit trail (what was tried, what was proven impossible, what
+diagnostics were run) lives in the recovery plan markdown alongside the
+three diagnostic scripts under [scripts/pbx/](scripts/pbx/).
+
 ---
 
 ## Tenant filtering

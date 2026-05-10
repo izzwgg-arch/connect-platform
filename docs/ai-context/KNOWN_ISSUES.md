@@ -124,6 +124,28 @@ When you find a new fragile area, add it here.
   dialplan/pjsip). See `TELEPHONY.md` "Tenant MOH enforcement layer" and
   `DEBUGGING.md` "MOH on outbound / internal / bridge / hold legs plays
   the wrong class".
+- **Caller-leg MOH on outbound trunk calls is FROZEN at partial
+  coverage (open, accepted limitation, 2026-05-10).** The trunk/called-
+  leg dialplan hook reliably sets `CHANNEL(musicclass)` on the trunk
+  leg, so when the **external** party places an outbound call on hold
+  the internal extension hears the correct tenant MOH. The remaining
+  gap is the **caller/originating leg**: when the **internal**
+  extension places the call on hold, the external party may hear
+  `default` MOH instead of the tenant class because VitalPBX-generated
+  `trk-NN-dial` priority 21 emits
+  `Set(CHANNEL(musicclass)=default)` and we have proven there is no
+  safe way to land a value upstream of that priority on this build.
+  Three diagnostic scripts under `scripts/pbx/` (`diag-connect-pjsip-
+  append.sh`, `diag-connect-trunk-dial-hooks.sh`, `diag-connect-
+  vitalpbx-source.sh`) ruled out PJSIP `[endpoint](+)` append,
+  pre-trunk dialplan hooks, `${TENANT_PREFIX}before-connecting-call-
+  hook`, and VitalPBX source-of-truth DB updates. The only mechanism
+  that remains is a wrapper/shadow of the trunk dial context, which
+  is documented as high-risk and requires a separate written
+  architecture-review approval before any patch. Until that approval
+  is granted, MOH changes on this surface are frozen. Full audit
+  trail and operator policy in `docs/ai-context/TELEPHONY.md` →
+  "Caller-leg MOH on outbound trunk calls — FROZEN as of 2026-05-10".
 - **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
   alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
   convenience alias for `module reload res_pjsip.so` on newer Asterisk
