@@ -439,7 +439,7 @@ Per-service:
       If **`/health`** is still **`2026.05.08.1`**, the audio route is absent — upgrade the helper first; **`grep helper_audio_fallback`**
       inside **`app-api-1`** only proves **api** shipped Phase 2 (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
       **Operator install:** exact **`curl` + `bash`** for **`209.145.60.79`** is in **`DEPLOYMENT.md`** § **Phase 2 — operator handoff**.
-      **App-host smoke (secret not printed):** from **`ssh connect`**, build JSON and header from **`docker exec app-api-1`** (see Phase 1 probes); **`POST http://209.145.60.79:8757/voicemail/spool/audio`** with **`{"tenantId":"<vital>","extension":"<ext>","folder":"INBOX","msgNum":"msg0000"}`** — adjust **`msgNum`** to a real stem from **`spool/list`**; expect **200** + **`audio/wav`** when helper is **`2026.05.08.2`**. Probe **`msgNum":"bogus"`** → **400** **`invalid_msgNum`** (no path disclosure).
+      **App-host smoke (secret not printed):** from **`ssh connect`**, use **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** only inside a remote script (do not **`echo`**). Call **`spool/list`** to pick a real **`msgNum`**, then **`POST …/voicemail/spool/audio`** — **200**, **`audio/wav`**, non-empty body (**`DEPLOYMENT.md`** recorded verification). Invalid stem **`not-a-msg`** → **400** **`invalid_msgNum`**. **`docker logs app-api-1`** for **`helper_audio_fallback: true`** after playing a spool-backed row.
    10. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via

@@ -502,9 +502,7 @@ When you find a new fragile area, add it here.
   helper **`2026.05.08.2`+** and **api** deploy, the same stream endpoint tries Vital/REST first, then
   **`POST /voicemail/spool/audio`** (validated **`tenantId` / extension / folder / msgNum`** only — no
   client paths). Success → real audio bytes (`TELEPHONY.md`). Helper pre-**`2026.05.08.2`** → audio route **404**,
-  API still **`503` JSON**.   **Partial rollout:** **api** may run Phase 2 while **`/health`** is still **`2026.05.08.1`**
-  — install helper **`2026.05.08.2`** before expecting spool audio fallback (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
-  **Operator:** pinned **`curl` + `bash`** on **`209.145.60.79`** is **`DEPLOYMENT.md`** § **Phase 2 — operator handoff** (commit **`303399d1651ec686b17c68d0007ed10710b4833e`**).
+  API still **`503` JSON**.   **Rollout state:** Helper **`2026.05.08.2`** is live on **`209.145.60.79`**; app-host **`/health`**, **`spool/audio`** smoke, and **`helper_audio_fallback`** logs are recorded in **`DEPLOYMENT.md`** (**Recorded Phase 2 — helper `2026.05.08.2` live**). If **`/health`** ever regresses to **`.1`**, playback fallback **`POST /voicemail/spool/audio`** is absent (**404**) until the installer is re-run.
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
   via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a
