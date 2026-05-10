@@ -2,10 +2,17 @@
  * Idempotent PBX spool → Connect Voicemail upsert (read-only on PBX).
  *
  * Run inside the worker container (same env as worker):
- *   cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=<connectTenantCuid> [--extension=<extNumber>]
+ *   cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts <mode> [--extension=<extNumber>]
  *
- * Logs JSON per extension: inserted, already_present, skipped_invalid_origtime, errors.
+ * Mode (exactly one):
+ *   --tenant=<connectTenantCuid>
+ *   --all-tenants
+ *   --tenant-ids-file=/path/to/ids.txt   (one Connect tenant CUID per line)
+ *
+ * Per extension JSON line: inserted, already_present, skipped_invalid_origtime, upsert_errors (errors).
  */
+import { readFileSync } from "node:fs";
+
 import { db } from "@connect/db";
 import { listVoicemailSpoolFromHelper, resolvePbxRouteHelperConfig } from "@connect/integrations";
 import {
@@ -16,24 +23,55 @@ import {
   vmStablePbxMessageId,
 } from "@connect/shared";
 
-function parseArgs(): { tenantId: string | null; extension: string | null } {
-  let tenantId: string | null = null;
+type BackfillMode =
+  | { kind: "single"; tenantId: string }
+  | { kind: "all" }
+  | { kind: "file"; path: string };
+
+function parseArgs(): { mode: BackfillMode | null; extension: string | null } {
   let extension: string | null = null;
+  let singleTenant: string | null = null;
+  let allTenants = false;
+  let tenantIdsFile: string | null = null;
   for (const a of process.argv.slice(2)) {
-    if (a.startsWith("--tenant=")) tenantId = a.slice("--tenant=".length).trim() || null;
+    if (a.startsWith("--tenant=")) singleTenant = a.slice("--tenant=".length).trim() || null;
+    if (a === "--all-tenants") allTenants = true;
+    if (a.startsWith("--tenant-ids-file=")) tenantIdsFile = a.slice("--tenant-ids-file=".length).trim() || null;
     if (a.startsWith("--extension=")) extension = a.slice("--extension=".length).trim() || null;
   }
-  return { tenantId, extension };
+
+  const modes = [singleTenant, allTenants, tenantIdsFile].filter(Boolean).length;
+  if (modes !== 1) {
+    return { mode: null, extension };
+  }
+  if (singleTenant) return { mode: { kind: "single", tenantId: singleTenant }, extension };
+  if (allTenants) return { mode: { kind: "all" }, extension };
+  return { mode: { kind: "file", path: tenantIdsFile! }, extension };
 }
 
-async function main(): Promise<void> {
-  const { tenantId, extension } = parseArgs();
-  if (!tenantId) {
-    console.error(
-      "Usage: pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=<connectTenantCuid> [--extension=<extNumber>]",
-    );
-    process.exit(2);
+async function resolveTenantIds(mode: BackfillMode): Promise<string[]> {
+  if (mode.kind === "single") return [mode.tenantId];
+  if (mode.kind === "all") {
+    const links = await db.tenantPbxLink.findMany({
+      where: { pbxInstance: { isEnabled: true } },
+      select: { tenantId: true },
+    });
+    return [...new Set(links.map((l) => l.tenantId))];
   }
+  const raw = readFileSync(mode.path, "utf8");
+  return [...new Set(raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+}
+
+async function backfillOneTenant(tenantId: string, extension: string | null): Promise<{
+  totalInserted: number;
+  totalPresent: number;
+  totalSkippedOrig: number;
+  totalErrors: number;
+}> {
+  let totalInserted = 0;
+  let totalPresent = 0;
+  let totalSkippedOrig = 0;
+  let totalErrors = 0;
 
   const link = await db.tenantPbxLink.findUnique({
     where: { tenantId },
@@ -41,14 +79,14 @@ async function main(): Promise<void> {
   });
   if (!link?.pbxInstance) {
     console.log(JSON.stringify({ ok: false, error: "no_tenant_pbx_link", tenantId }));
-    process.exit(1);
+    return { totalInserted: 0, totalPresent: 0, totalSkippedOrig: 0, totalErrors: 0 };
   }
 
   const vitalTid = String(link.pbxTenantId || "").trim();
   const helperCfg = vitalTid ? resolvePbxRouteHelperConfig(link.pbxInstanceId) : null;
   if (!helperCfg || !vitalTid) {
     console.log(JSON.stringify({ ok: false, error: "missing_pbx_tenant_id_or_helper", tenantId, vitalTid }));
-    process.exit(1);
+    return { totalInserted: 0, totalPresent: 0, totalSkippedOrig: 0, totalErrors: 0 };
   }
 
   const extensions = await db.extension.findMany({
@@ -59,10 +97,6 @@ async function main(): Promise<void> {
     },
     include: { pbxLink: true },
   });
-
-  let totalInserted = 0;
-  let totalPresent = 0;
-  let totalSkippedOrig = 0;
 
   for (const ext of extensions) {
     const pbxExtId = ext.pbxLink?.pbxExtensionId;
@@ -157,6 +191,7 @@ async function main(): Promise<void> {
     totalInserted += inserted;
     totalPresent += alreadyPresent;
     totalSkippedOrig += skippedInvalidOrigtime;
+    totalErrors += upsertErrors;
 
     console.log(
       JSON.stringify({
@@ -169,18 +204,62 @@ async function main(): Promise<void> {
         inserted,
         already_present: alreadyPresent,
         skipped_invalid_origtime: skippedInvalidOrigtime,
-        upsert_errors: upsertErrors,
+        errors: upsertErrors,
       }),
     );
   }
 
   console.log(
     JSON.stringify({
-      msg: "voicemail-spool-backfill-done",
+      msg: "voicemail-spool-backfill-tenant-done",
       tenantId,
       total_inserted: totalInserted,
       total_already_present: totalPresent,
       total_skipped_invalid_origtime: totalSkippedOrig,
+      total_errors: totalErrors,
+    }),
+  );
+
+  return {
+    totalInserted,
+    totalPresent,
+    totalSkippedOrig,
+    totalErrors,
+  };
+}
+
+async function main(): Promise<void> {
+  const { mode, extension } = parseArgs();
+  if (!mode) {
+    console.error(
+      "Usage: pnpm exec tsx src/scripts/voicemail-spool-backfill.ts (--tenant=<cuid> | --all-tenants | --tenant-ids-file=/path) [--extension=<ext>]",
+    );
+    process.exit(2);
+  }
+
+  const tenantIds = await resolveTenantIds(mode);
+
+  let grandInserted = 0;
+  let grandPresent = 0;
+  let grandSkippedOrig = 0;
+  let grandErrors = 0;
+
+  for (const tenantId of tenantIds) {
+    const t = await backfillOneTenant(tenantId, extension);
+    grandInserted += t.totalInserted;
+    grandPresent += t.totalPresent;
+    grandSkippedOrig += t.totalSkippedOrig;
+    grandErrors += t.totalErrors;
+  }
+
+  console.log(
+    JSON.stringify({
+      msg: "voicemail-spool-backfill-done",
+      tenants_processed: tenantIds.length,
+      total_inserted: grandInserted,
+      total_already_present: grandPresent,
+      total_skipped_invalid_origtime: grandSkippedOrig,
+      total_errors: grandErrors,
     }),
   );
 
