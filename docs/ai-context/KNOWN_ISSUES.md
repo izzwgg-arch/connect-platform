@@ -650,6 +650,16 @@ When you find a new fragile area, add it here.
   (`findFirst` without tenant) — duplicate active extension numbers across Connect tenants can
   mis-route or skip notify. Evidence checklist: **`DEBUGGING.md`** § voicemail items **8–10**;
   merge-based REST+spool reconcile and tenant-scoped notify remain backlog if needed.
+- **Fair scheduler ≠ automatic historic backfill.** After deploy, operators may still need a **one-time**
+  **`voicemail-spool-audit.ts`** → **`voicemail-spool-backfill.ts`** (`--all-tenants` or targeted) →
+  **re-audit** sequence on the **app worker** container to close gaps accumulated while mailboxes were
+  starved or offline. Procedure: **`DEPLOYMENT.md`** § **Voicemail — operational recovery (audit + backfill)**;
+  **`DEBUGGING.md`** item **9a**.
+- **Spool “missing in 7d” audit can be green while the tenant is still broken.** The helper may return
+  **no** or **stale** files (path/slug drift), REST may suppress helper fallback while wrong, and the
+  default **`GET /voice/voicemail`** list is **inbox-only** — so “healthy audit” ≠ healthy UX. Use
+  **`voicemail-fleet-stale-report.ts`** + **`VOICEMAIL_FLEET_STALE_RISK.md`** for fleet stale-risk and
+  evidence-backed failure classes (`DEBUGGING.md` item **9b**).
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
   via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a

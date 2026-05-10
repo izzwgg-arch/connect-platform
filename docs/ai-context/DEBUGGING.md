@@ -451,6 +451,23 @@ Per-service:
         `VOICEMAIL_SYNC_EXT_JSON_LOGS`); api `voicemail-notify` — `extension_not_found`,
         `helper_error:*`, `upserted_count`. **Cap:** at most **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`**
         (default **32**) **distinct** helper calls per cycle, **fairly** distributed across tenants.
+   9a. **Fleet mismatch audit + idempotent backfill (worker container on app host).** Fair scheduling
+      prevents **ongoing** helper starvation across cycles; it does **not** guarantee every historic
+      spool message appeared in Connect during a past incident window. For a **production-wide**,
+      evidence-based recovery: run **`voicemail-spool-audit.ts`** (read-only SELECTs + helper list), then
+      **`voicemail-spool-backfill.ts`** (idempotent upsert), then **re-audit**. All commands:
+      **`docker exec app-worker-1 …`** on the Connect app host — **not** on the PBX. Exact CLI,
+      summary fields (`mailboxes_scanned`, `mailboxes_with_missing_7d`, `total_missing_7d`,
+      `helper_errors`), `--all-tenants` / `--tenant-ids-file`, acceptance, and “not fixed by backfill”
+      cases are in **`DEPLOYMENT.md`** § **Voicemail — operational recovery (audit + backfill)**.
+      If mismatches remain after backfill, use per-row `audit_error` plus items **8–10** here
+      (REST-non-empty, mapping, duplicate `extNumber`, `deletedAt`, invalid `origtime`) — cite log/row
+      JSON, not guesses.
+   9b. **Fleet stale-risk (not only 7d “missing” rows).** `voicemail-spool-audit.ts` can be **green**
+      while a tenant is still stale (helper path drift, stale list subset, REST-non-empty skipping helper,
+      default **inbox-only** API hiding **Old/Urgent** rows). Run **`voicemail-fleet-stale-report.ts`**
+      inside **`app-worker-1`** for a ranked, fleet-wide view (`newest_pbx` vs `newest_db` vs inbox-scoped
+      DB, baseline volume). Failure-class write-up and hardening backlog: **`VOICEMAIL_FLEET_STALE_RISK.md`**.
    10. **`/internal/voicemail-notify` extension resolution.** The handler resolves the mailbox with
       `Extension.findFirst({ extNumber: mailbox, status: ACTIVE })` **without** scoping by tenant.
       If two Connect tenants share the same active `extNumber`, the **first** row wins — wrong

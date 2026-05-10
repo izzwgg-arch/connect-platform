@@ -149,8 +149,10 @@ Host-side directories also referenced:
 - `VOICEMAIL_SYNC_EXT_JSON_LOGS` (default `true`) — emit one JSON line per mailbox per cycle
   (`voicemail-sync-ext`). Set **`false`** to keep only the aggregate `voicemail-sync-cycle` line.
 
-**Backfill (ops):** idempotent spool → DB for one Connect tenant (optional single extension), run
-**inside** `app-worker-1` with worker env:
+**Backfill + fleet audit (ops):** Full runbook (audit → backfill → re-audit, acceptance, fair-scheduler
+log checks) is in **§ Voicemail — operational recovery (audit + backfill)** below.
+
+Quick reference — **single-tenant** idempotent backfill (inside `app-worker-1`):
 
 `cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=<connectTenantCuid> [--extension=<extNumber>]`
 
@@ -164,6 +166,87 @@ throughput but does not fix REST-vs-spool divergence when REST returns a non-emp
 
 **Worker log note:** aggregate `fallback_reason` for helper cycles is
 `rest_empty_used_spool_fallback_fair_schedule` (replacing the legacy `rest_empty_used_spool_fallback` string).
+
+### Voicemail — operational recovery (audit + backfill)
+
+**Where to run:** Connect **app host** only — `docker exec app-worker-1 bash -lc '…'`. These scripts use
+the worker’s Postgres + `PBX_ROUTE_HELPER_*` to call the on-PBX helper over HTTP. **Do not** run them
+on the VitalPBX host or inside a PBX container.
+
+**Prerequisite:** The running **`worker`** image must include
+`apps/worker/src/scripts/voicemail-spool-audit.ts` and `voicemail-spool-backfill.ts` (ship via deploy
+queue — `AGENTS.md`).
+
+**1) Read-only audit (mismatches in the last 7 days, by spool `origtime` vs `Voicemail.pbxMessageId`):**
+
+```bash
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-audit.ts --min-missing-7d=1'
+```
+
+- Omit `--min-missing-7d=1` (or use `--min-missing-7d=0`) to print **every** scanned mailbox (large output).
+- Optional: `--tenant=<connectCuid>`, `--extension=<ext>` (requires `--tenant`), `--helper-delay-ms=<N>` to
+  space helper calls.
+
+**Interpretation:** Each output line with `"msg":"voicemail-spool-audit-row"` is one mailbox; the **last**
+line is `"msg":"voicemail-spool-audit-summary"` with:
+
+- `mailboxes_scanned`
+- `mailboxes_with_missing_7d`
+- `total_missing_7d`
+- `helper_errors`
+
+Row fields include `tenantName`, `tenantId`, `pbxTenantId`, `pbxTenantCode`, `extension`, spool vs DB
+counts (`spool_count_24h`, `spool_count_7d`, `db_count_24h`, `db_count_7d`), `missing_count_24h`,
+`missing_count_7d`, `oldest_missing_iso`, and `audit_error` when the helper or config failed.
+
+**2) Idempotent backfill (upsert only — no manual SQL inserts):**
+
+- **All tenants** (every `TenantPbxLink` with enabled `PbxInstance`):
+
+```bash
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --all-tenants'
+```
+
+- **Subset:** `--tenant-ids-file=/path/in/container.txt` (one Connect tenant `id` per line), or
+  `--tenant=<cuid> [--extension=<ext>]`.
+
+Per-extension lines use `inserted`, `already_present`, `skipped_invalid_origtime`, `errors`. The final
+`voicemail-spool-backfill-done` line aggregates totals. **Dedup** is `Voicemail.pbxMessageId` — safe to
+re-run.
+
+**3) Prove recovery:** Re-run step **1**. Target: `mailboxes_with_missing_7d === 0` and
+`total_missing_7d === 0` (new traffic during the run can reintroduce small counts — compare timestamps).
+
+**3b) Fleet stale-risk report (beyond 7d missing rows):** After worker ships
+`apps/worker/src/scripts/voicemail-fleet-stale-report.ts`, run:
+
+```bash
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-fleet-stale-report.ts'
+```
+
+See **`VOICEMAIL_FLEET_STALE_RISK.md`** for why the spool audit alone is insufficient and how to read
+`stale_risk_level` / `likely_failure_mode`.
+
+**4) Fair scheduler health (ongoing — not replaced by one-off backfill):**
+
+```bash
+docker logs app-worker-1 --timestamps --since 30m 2>&1 | grep voicemail-sync-cycle
+```
+
+Expect over successive cycles: `fair_cursor` / `fair_cursor_next` **advance**, `fair_helper_picks` **≤**
+`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE` (default **32**), `fair_needy_mailboxes` reflects mailboxes
+that still need helper fallback. Per-mailbox `voicemail-sync-ext` may show
+`skipped_reason` / `helper_not_scheduled_this_cycle` when the mailbox was not in this cycle’s fair
+batch — that should **rotate**, not persist on the **same** mailbox forever.
+
+**What backfill does *not* fix (needs separate RCA — see `DEBUGGING.md` § voicemail, `KNOWN_ISSUES.md`):**
+
+- VitalPBX REST returns a **non-empty but incomplete** list (spool reconcile never runs for that poll).
+- **`audit_error`** on an audit row (helper auth, network, missing `pbxTenantId`, wrong helper base URL).
+- **`skipped_invalid_origtime`** / spool messages Connect cannot key (same as worker).
+- **No `pbxExtensionId`** — extension line `skipped: no_pbx_extension_link`.
+- **`Extension.findFirst` by `extNumber` only** in notify — duplicate active extension numbers across tenants.
+- Rows **soft-deleted** (`deletedAt` set) — excluded from audit DB counts but may still exist on PBX.
 
 ### VitalPBX host: Connect route helper script
 

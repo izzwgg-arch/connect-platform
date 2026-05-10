@@ -221,9 +221,13 @@
   `packages/shared/src/voicemailIngest.ts`, fair interleave:
   `packages/shared/src/voicemailSyncFair.ts`. Helper client env resolution:
   `packages/integrations/src/pbxRouteHelperEnv.ts` (also re-exported from
-  `apps/api/src/pbxInboundRouteHelperClient.ts`). **Staged production rollout**
+  `apps/api/src/pbxInboundRouteHelperClient.ts`).   **Staged production rollout**
   (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in
   `DEPLOYMENT.md` under **Voicemail Phase 1 — staged rollout**.
+  **Fleet operational recovery** (read-only spool-vs-DB audit, optional `--all-tenants` backfill,
+  re-audit, fair-scheduler log checks) lives in **`DEPLOYMENT.md`** § **Voicemail — operational recovery (audit + backfill)** (`DEBUGGING.md` § voicemail item **9a**).
+  **Fleet stale-risk** (newest PBX-visible vs DB vs default inbox UI, baseline volume — not only 7d “missing”):
+  **`VOICEMAIL_FLEET_STALE_RISK.md`**, worker script **`voicemail-fleet-stale-report.ts`** (`DEBUGGING.md` item **9b**).
   **Copy/paste operator runbook** (upgrade helper on **`209.145.60.79`**, rotate secret, queue **api**/**worker**): **`DEPLOYMENT.md`** § **Phase 1 — operator handoff**. **Post-run evidence:** strict paste-back template **`DEPLOYMENT.md`** Phase 1 **operator execution transcript**. Execution requires PBX + app-host SSH / env access — see **`DEPLOYMENT.md`** § **Phase 1 — execution environment (Cursor / local dev)** for why IDE agents cannot finish this alone.
 - **Phase 2 spool playback (2026-05-08).** Spool-ingested rows often store **`pbxRecfile`**
   as an on-disk path, not a VitalPBX **`/static/...`** URL — **`GET /voice/voicemail/:id/stream`**
