@@ -12,7 +12,7 @@ import {
 import { decryptJson } from "@connect/security";
 import {
   VitalPbxClient,
-  listVoicemailSpoolFromHelper,
+  fetchAllVoicemailSpoolMessages,
   resolvePbxRouteHelperConfig,
 } from "@connect/integrations";
 import {
@@ -55,6 +55,8 @@ type VmExtWork = VoicemailHelperFairSlot & {
   helperCalled: boolean;
   helperError: string | null;
   helperMessageCount: number;
+  /** True when fetchAllVoicemailSpoolMessages hit maxPages before helper cleared truncated */
+  spoolPaginationIncomplete: boolean;
   scheduledFairHelper: boolean;
 };
 
@@ -125,6 +127,7 @@ export async function runVoicemailSyncCycle(): Promise<void> {
             helperCalled: false,
             helperError: null,
             helperMessageCount: 0,
+            spoolPaginationIncomplete: false,
             scheduledFairHelper: false,
           });
         }
@@ -178,13 +181,22 @@ export async function runVoicemailSyncCycle(): Promise<void> {
       }
 
       try {
-        const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-          tenantId: tid,
-          extension: slot.ext.extNumber,
-        });
+        const spoolPageSize = Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000);
+        const spoolTimeoutMs = Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000);
+        const spool = await fetchAllVoicemailSpoolMessages(
+          helperCfg,
+          {
+            tenantId: tid,
+            extension: slot.ext.extNumber,
+          },
+          { pageSize: spoolPageSize, timeoutMs: spoolTimeoutMs },
+        );
         cycleHelperCalls += 1;
         lastHelperCallAt = Date.now();
         slot.helperCalled = true;
+        if (!spool.paginationComplete) {
+          slot.helperError = (slot.helperError ? slot.helperError + "; " : "") + "helper_spool_pagination_incomplete";
+        }
         const mapped = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
         slot.helperMessageCount = mapped.length;
         cycleHelperMessages += mapped.length;
@@ -370,6 +382,7 @@ export async function runVoicemailSyncCycle(): Promise<void> {
           helper_scheduled: slot.scheduledFairHelper,
           helper_called: slot.helperCalled,
           helper_message_count: slot.helperMessageCount,
+          spool_pagination_incomplete: slot.spoolPaginationIncomplete,
           merged_record_count: records.length,
           upsert_attempts: upsertsThisExt,
           skipped_invalid_origtime: skippedOrigThisSlot,

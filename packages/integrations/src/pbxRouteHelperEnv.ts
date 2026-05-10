@@ -54,6 +54,11 @@ export type VoicemailSpoolListBody = {
   voicemailContext?: string;
   /** Alias for voicemailContext */
   context?: string;
+  /** Helper schema 2: page size (capped server-side). */
+  limit?: number;
+  offset?: number;
+  /** Helper schema 2: only messages with origtime >= this unix second. */
+  sinceOrigtime?: number;
 };
 
 export type VoicemailSpoolListMessage = {
@@ -71,9 +76,25 @@ export type VoicemailSpoolListResponse = {
   mailboxPath: string;
   resolvedContext?: string | null;
   messages: VoicemailSpoolListMessage[];
+  /** 2 = newest-first sort, pagination + maxOrigtimeAll over full mailbox scan */
+  spoolListSchema?: number;
+  totalCount?: number;
+  returnedCount?: number;
+  offset?: number;
+  limit?: number;
+  truncated?: boolean;
+  /** Unix seconds as string; max origtime across all matching msgs in mailbox (all pages). */
+  maxOrigtimeAll?: string;
+  sort?: string;
+  folderMsgCounts?: Record<string, number>;
 };
 
-/** Read-only: list Asterisk voicemail spool messages via on-PBX helper. */
+export type VoicemailSpoolListMergedResponse = VoicemailSpoolListResponse & {
+  paginationComplete: boolean;
+  pagesFetched: number;
+};
+
+/** Read-only: single POST page to on-PBX helper /voicemail/spool/list. */
 export async function listVoicemailSpoolFromHelper(
   cfg: PbxRouteHelperConfig,
   body: VoicemailSpoolListBody,
@@ -103,6 +124,117 @@ export async function listVoicemailSpoolFromHelper(
     throw err;
   }
   return parsed as VoicemailSpoolListResponse;
+}
+
+/**
+ * Fetches all spool messages by following helper pagination (schema 2).
+ * Legacy helpers (no spoolListSchema) return one page as-is.
+ */
+export async function fetchAllVoicemailSpoolMessages(
+  cfg: PbxRouteHelperConfig,
+  body: VoicemailSpoolListBody,
+  options?: { pageSize?: number; timeoutMs?: number; maxPages?: number },
+): Promise<VoicemailSpoolListMergedResponse> {
+  const pageSize = Math.min(Math.max(options?.pageSize ?? 2000, 1), 20000);
+  const timeoutMs = options?.timeoutMs ?? 12_000;
+  const maxPagesEnv = Number(process.env.VOICEMAIL_HELPER_SPOOL_MAX_PAGES || "");
+  const maxPages = Math.max(
+    1,
+    options?.maxPages ?? (Number.isFinite(maxPagesEnv) && maxPagesEnv > 0 ? maxPagesEnv : 250),
+  );
+
+  const base: VoicemailSpoolListBody = {
+    tenantId: body.tenantId,
+    extension: body.extension,
+    ...(body.voicemailContext != null ? { voicemailContext: body.voicemailContext } : {}),
+    ...(body.context != null ? { context: body.context } : {}),
+    ...(body.sinceOrigtime != null ? { sinceOrigtime: body.sinceOrigtime } : {}),
+  };
+
+  let offset = 0;
+  const all: VoicemailSpoolListMessage[] = [];
+  let mailboxPath = "";
+  let resolvedContext: string | null | undefined;
+  let totalCount = 0;
+  let maxOrigtimeAll = "";
+  let folderMsgCounts: Record<string, number> | undefined;
+  let pagesFetched = 0;
+
+  for (;;) {
+    const page = await listVoicemailSpoolFromHelper(
+      cfg,
+      { ...base, limit: pageSize, offset },
+      timeoutMs,
+    );
+    pagesFetched += 1;
+    mailboxPath = page.mailboxPath;
+    resolvedContext = page.resolvedContext ?? null;
+    const batch = page.messages || [];
+    if (page.totalCount != null) totalCount = page.totalCount;
+    if (page.maxOrigtimeAll != null && String(page.maxOrigtimeAll) !== "") {
+      maxOrigtimeAll = String(page.maxOrigtimeAll);
+    }
+    if (page.folderMsgCounts && typeof page.folderMsgCounts === "object") {
+      folderMsgCounts = page.folderMsgCounts;
+    }
+    all.push(...batch);
+
+    if (page.spoolListSchema !== 2) {
+      return {
+        ok: true,
+        mailboxPath,
+        resolvedContext: resolvedContext ?? null,
+        messages: all,
+        paginationComplete: true,
+        pagesFetched,
+        totalCount: page.totalCount ?? all.length,
+        returnedCount: all.length,
+        truncated: false,
+        maxOrigtimeAll: maxOrigtimeAll || undefined,
+        folderMsgCounts,
+      };
+    }
+
+    const truncated = page.truncated === true;
+    const returned = page.returnedCount ?? batch.length;
+    offset += returned;
+
+    if (!truncated) {
+      return {
+        ok: true,
+        mailboxPath,
+        resolvedContext: resolvedContext ?? null,
+        messages: all,
+        spoolListSchema: 2,
+        totalCount,
+        returnedCount: all.length,
+        truncated: false,
+        maxOrigtimeAll: maxOrigtimeAll || undefined,
+        sort: page.sort,
+        folderMsgCounts,
+        paginationComplete: true,
+        pagesFetched,
+      };
+    }
+
+    if (returned === 0 || pagesFetched >= maxPages) {
+      return {
+        ok: true,
+        mailboxPath,
+        resolvedContext: resolvedContext ?? null,
+        messages: all,
+        spoolListSchema: 2,
+        totalCount,
+        returnedCount: all.length,
+        truncated: true,
+        maxOrigtimeAll: maxOrigtimeAll || undefined,
+        sort: page.sort,
+        folderMsgCounts,
+        paginationComplete: false,
+        pagesFetched,
+      };
+    }
+  }
 }
 
 export type VoicemailSpoolAudioBody = {

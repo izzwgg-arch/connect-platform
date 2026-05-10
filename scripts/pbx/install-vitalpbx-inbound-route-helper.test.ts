@@ -230,7 +230,9 @@ test("helper installer registers read-only voicemail spool list endpoint", () =>
     "POST actions must include /voicemail/spool/list → vm_spool_list_messages",
   );
   assert.match(SCRIPT, /def vm_spool_list_messages/, "vm_spool_list_messages must be defined");
-  assert.match(SCRIPT, /MAX_VM_SPOOL_MESSAGES/, "spool list must cap message count");
+  assert.match(SCRIPT, /spoolListSchema/, "spool list must expose schema + pagination metadata");
+  assert.match(SCRIPT, /maxOrigtimeAll/, "spool list must report max origtime across full scan");
+  assert.match(SCRIPT, /origtime_desc/, "spool list must sort newest-first by origtime");
 });
 
 test("helper installer defines Phase 2 voicemail spool audio endpoint and validation", () => {

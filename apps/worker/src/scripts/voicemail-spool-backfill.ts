@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 
 import { db } from "@connect/db";
-import { listVoicemailSpoolFromHelper, resolvePbxRouteHelperConfig } from "@connect/integrations";
+import { fetchAllVoicemailSpoolMessages, resolvePbxRouteHelperConfig } from "@connect/integrations";
 import {
   mapHelperVoicemailSpoolToRecordShape,
   vmExtractCallerName,
@@ -112,11 +112,24 @@ async function backfillOneTenant(tenantId: string, extension: string | null): Pr
 
     let spoolMessageCount = 0;
     try {
-      const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-        tenantId: vitalTid,
-        extension: ext.extNumber,
-      });
+      const spoolPageSize = Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000);
+      const spoolTimeoutMs = Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000);
+      const spool = await fetchAllVoicemailSpoolMessages(
+        helperCfg,
+        { tenantId: vitalTid, extension: ext.extNumber },
+        { pageSize: spoolPageSize, timeoutMs: spoolTimeoutMs },
+      );
       spoolMessageCount = (spool.messages || []).length;
+      if (!spool.paginationComplete) {
+        console.log(
+          JSON.stringify({
+            extension: ext.extNumber,
+            warn: "helper_spool_pagination_incomplete",
+            pagesFetched: spool.pagesFetched,
+            totalCount: spool.totalCount,
+          }),
+        );
+      }
       const mapped = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
 
       for (const rec of mapped) {

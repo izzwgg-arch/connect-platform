@@ -14,7 +14,7 @@
  *   --min-risk=low|medium|high|critical   Only print rows at or above threshold
  */
 import { db, type Prisma } from "@connect/db";
-import { listVoicemailSpoolFromHelper, resolvePbxRouteHelperConfig } from "@connect/integrations";
+import { fetchAllVoicemailSpoolMessages, resolvePbxRouteHelperConfig } from "@connect/integrations";
 import { mapHelperVoicemailSpoolToRecordShape } from "@connect/shared";
 
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | "UNKNOWN";
@@ -84,6 +84,7 @@ function daysSince(ms: number | null): number | null {
 
 function classifyStaleRisk(input: {
   auditError: string | null;
+  paginationComplete: boolean;
   newestPbxSec: number | null;
   spoolCount: number;
   mailboxPath: string | null;
@@ -96,6 +97,14 @@ function classifyStaleRisk(input: {
 }): { level: RiskLevel; failureMode: string } {
   if (input.auditError) {
     return { level: "UNKNOWN", failureMode: `helper_or_config_error:${input.auditError.slice(0, 120)}` };
+  }
+
+  if (input.paginationComplete === false) {
+    return {
+      level: "HIGH",
+      failureMode:
+        "helper_spool_pagination_incomplete;raise_VOICEMAIL_HELPER_SPOOL_MAX_PAGES_or_pageSize",
+    };
   }
 
   const expected7d = input.avgPerDay30 * 7;
@@ -236,6 +245,7 @@ async function main(): Promise<void> {
     mailboxes_scanned: 0,
     by_risk: { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 } as Record<RiskLevel, number>,
     helper_errors: 0,
+    helper_pagination_incomplete_mailboxes: 0,
   };
 
   type OutRow = {
@@ -260,6 +270,8 @@ async function main(): Promise<void> {
     pbx_folder_max_origtime_sec: Record<string, number>;
     stale_risk_level: RiskLevel;
     likely_failure_mode: string;
+    helper_pagination_complete: boolean | null;
+    helper_spool_list_schema: number | null;
   };
 
   const outRows: OutRow[] = [];
@@ -297,6 +309,8 @@ async function main(): Promise<void> {
       let newestPbxSec: number | null = null;
       let mailboxPath: string | null = null;
       let resolvedContext: string | null = null;
+      let paginationComplete = true;
+      let spoolListSchema: number | null = null;
       const pbxFolderMax: Record<string, number> = {};
 
       if (!helperCfg || !vitalTid) {
@@ -305,15 +319,26 @@ async function main(): Promise<void> {
       } else {
         try {
           if (helperCalls > 0 && helperDelayMs > 0) await sleep(helperDelayMs);
-          const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-            tenantId: vitalTid,
-            extension: ext.extNumber,
-          });
+          const spoolPageSize = Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000);
+          const spoolTimeoutMs = Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000);
+          const spool = await fetchAllVoicemailSpoolMessages(
+            helperCfg,
+            { tenantId: vitalTid, extension: ext.extNumber },
+            { pageSize: spoolPageSize, timeoutMs: spoolTimeoutMs },
+          );
           helperCalls++;
           mailboxPath = spool.mailboxPath ?? null;
           resolvedContext = spool.resolvedContext ?? null;
           const messages = spool.messages || [];
           spoolCount = messages.length;
+          if (spool.maxOrigtimeAll != null && String(spool.maxOrigtimeAll) !== "") {
+            const mall = parseInt(String(spool.maxOrigtimeAll), 10);
+            if (mall > 0) newestPbxSec = mall;
+          }
+          paginationComplete = spool.paginationComplete;
+          spoolListSchema = spool.spoolListSchema ?? null;
+          if (!paginationComplete) summary.helper_pagination_incomplete_mailboxes++;
+
           const mapped = messages.map(mapHelperVoicemailSpoolToRecordShape);
           for (const rec of mapped) {
             const ot = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
@@ -331,6 +356,7 @@ async function main(): Promise<void> {
 
       const { level, failureMode } = classifyStaleRisk({
         auditError,
+        paginationComplete: auditError ? true : paginationComplete,
         newestPbxSec,
         spoolCount,
         mailboxPath,
@@ -368,6 +394,8 @@ async function main(): Promise<void> {
         pbx_folder_max_origtime_sec: pbxFolderMax,
         stale_risk_level: level,
         likely_failure_mode: failureMode,
+        helper_pagination_complete: auditError ? null : paginationComplete,
+        helper_spool_list_schema: auditError ? null : spoolListSchema,
       };
 
       if (RISK_RANK[level] >= minRank) {

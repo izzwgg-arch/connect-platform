@@ -10,6 +10,8 @@ set -euo pipefail
 #   CONNECT_DESTINATION_ID=607
 #   CONNECT_PBX_HELPER_BIND=127.0.0.1
 #   CONNECT_PBX_HELPER_PORT=8757
+#   CONNECT_PBX_HELPER_VM_SPOOL_LIST_DEFAULT_LIMIT=2000   # per-request page default
+#   CONNECT_PBX_HELPER_VM_SPOOL_LIST_MAX_LIMIT=20000       # hard cap for ?limit in JSON body
 #   MYSQL_ROOT_ARGS="-uroot -p"
 #   TEST_DID=8455577768       # optional smoke test after install
 #   TEST_TENANT_ID=21         # required only when TEST_DID is set
@@ -182,7 +184,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.08.2"
+VERSION = "2026.05.10.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -749,9 +751,9 @@ def voicemail_mailbox_dir(tenant_id, extension):
     apply_vm_dir_owner(target)
     return target
 
-MAX_VM_SPOOL_MESSAGES = 400
 MAX_VM_SPOOL_AUDIO_BYTES = 25 * 1024 * 1024
 VM_SPOOL_AUDIO_FOLDERS = frozenset({"INBOX", "Old", "Urgent"})
+VM_SPOOL_LIST_FOLDERS = ("INBOX", "Old", "Urgent")
 MSG_NUM_STEM_RE = re.compile(r"^msg[0-9]+$")
 
 
@@ -771,8 +773,23 @@ def _parse_vm_txt(path):
     return out
 
 
+def _vm_spool_int(val, default):
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def vm_spool_list_messages(body):
-    """Read-only: list msg*.txt under INBOX/Old/Urgent for one mailbox (no file moves)."""
+    """
+    Read-only: list msg*.txt under INBOX/Old/Urgent for one mailbox (no file moves).
+
+    Semantics (schema 2):
+    - Scans all three folders, parses origtime from each msg*.txt.
+    - Sorts by origtime unix seconds descending (newest first). Filename order is NOT used.
+    - Paginates with limit/offset (defaults from env). Never silently drops newest messages
+      when returning a partial page: maxOrigtimeAll and totalCount describe the full mailbox.
+    """
     extension = require_ext(body.get("extension"))
     raw_ctx = str(body.get("voicemailContext") or body.get("context") or "").strip()
     tenant_raw = str(body.get("tenantId") or "").strip()
@@ -789,22 +806,56 @@ def vm_spool_list_messages(body):
         tenant_id = require_num("tenant_id", tenant_raw)
         mbox_dir = voicemail_mailbox_dir(tenant_id, extension).resolve()
         resolved_ctx = resolve_voicemail_context_from_conf(tenant_id, extension)
-    messages = []
+
+    default_limit = _vm_spool_int(os.environ.get("CONNECT_PBX_HELPER_VM_SPOOL_LIST_DEFAULT_LIMIT"), 2000)
+    max_limit_cap = _vm_spool_int(os.environ.get("CONNECT_PBX_HELPER_VM_SPOOL_LIST_MAX_LIMIT"), 20000)
+    if default_limit < 1:
+        default_limit = 2000
+    if max_limit_cap < 1:
+        max_limit_cap = 20000
+
+    limit = _vm_spool_int(body.get("limit"), default_limit)
+    offset = _vm_spool_int(body.get("offset"), 0)
+    if limit < 1:
+        limit = default_limit
+    limit = min(limit, max_limit_cap)
+    if offset < 0:
+        offset = 0
+
+    since_raw = body.get("sinceOrigtime") if body.get("sinceOrigtime") is not None else body.get("since_origtime")
+    since_ot = _vm_spool_int(since_raw, 0)
+
     if not mbox_dir.is_dir():
-        return {"ok": True, "mailboxPath": str(mbox_dir), "resolvedContext": resolved_ctx, "messages": messages}
-    for sub in ("INBOX", "Old", "Urgent"):
-        if len(messages) >= MAX_VM_SPOOL_MESSAGES:
-            break
+        return {
+            "ok": True,
+            "mailboxPath": str(mbox_dir),
+            "resolvedContext": resolved_ctx,
+            "messages": [],
+            "spoolListSchema": 2,
+            "totalCount": 0,
+            "returnedCount": 0,
+            "offset": offset,
+            "limit": limit,
+            "truncated": False,
+            "maxOrigtimeAll": "",
+            "sort": "origtime_desc",
+            "folderMsgCounts": {},
+        }
+
+    records = []
+    folder_msg_counts = {}
+    for sub in VM_SPOOL_LIST_FOLDERS:
         d = mbox_dir / sub
         if not d.is_dir():
+            folder_msg_counts[sub] = 0
             continue
+        n_here = 0
         try:
-            entries = sorted(d.glob("msg*.txt"))
+            entries = list(d.glob("msg*.txt"))
         except OSError:
+            folder_msg_counts[sub] = 0
             continue
         for txt_path in entries:
-            if len(messages) >= MAX_VM_SPOOL_MESSAGES:
-                break
             stem = txt_path.stem
             if not re.match(r"^msg[0-9]+$", stem):
                 continue
@@ -812,11 +863,17 @@ def vm_spool_list_messages(body):
             ot = str(kv.get("origtime") or "").strip()
             if not ot or ot == "0":
                 continue
+            try:
+                oti = int(ot)
+            except ValueError:
+                continue
+            if since_ot and oti < since_ot:
+                continue
             cid = str(kv.get("callerid") or kv.get("caller_id") or "")
             dur = str(kv.get("duration") or "0")
             wav = txt_path.with_suffix(".wav")
             recfile = str(wav) if wav.is_file() else ""
-            messages.append(
+            records.append(
                 {
                     "folder": sub,
                     "origtime": ot,
@@ -825,9 +882,39 @@ def vm_spool_list_messages(body):
                     "filename": txt_path.name,
                     "msg_num": stem,
                     "recfile": recfile,
+                    "_oti": oti,
                 }
             )
-    return {"ok": True, "mailboxPath": str(mbox_dir), "resolvedContext": resolved_ctx, "messages": messages}
+            n_here += 1
+        folder_msg_counts[sub] = n_here
+
+    records.sort(key=lambda r: r["_oti"], reverse=True)
+    total_matching = len(records)
+    max_ot = max((r["_oti"] for r in records), default=None)
+
+    page = records[offset : offset + limit]
+    truncated = offset + len(page) < total_matching
+
+    messages = []
+    for r in page:
+        r_out = {k: v for k, v in r.items() if k != "_oti"}
+        messages.append(r_out)
+
+    return {
+        "ok": True,
+        "mailboxPath": str(mbox_dir),
+        "resolvedContext": resolved_ctx,
+        "messages": messages,
+        "spoolListSchema": 2,
+        "totalCount": total_matching,
+        "returnedCount": len(messages),
+        "offset": offset,
+        "limit": limit,
+        "truncated": truncated,
+        "maxOrigtimeAll": str(max_ot) if max_ot is not None else "",
+        "sort": "origtime_desc",
+        "folderMsgCounts": folder_msg_counts,
+    }
 
 
 def vm_spool_read_audio(body):

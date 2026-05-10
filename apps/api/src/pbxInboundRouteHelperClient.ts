@@ -3,6 +3,7 @@ export type { PbxRouteHelperConfig } from "@connect/integrations";
 export {
   resolvePbxRouteHelperConfig,
   listVoicemailSpoolFromHelper,
+  fetchAllVoicemailSpoolMessages,
   fetchVoicemailSpoolAudioFromHelper,
 } from "@connect/integrations";
 

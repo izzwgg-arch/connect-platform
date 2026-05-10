@@ -148,6 +148,11 @@ Host-side directories also referenced:
 - `VOICEMAIL_HELPER_MIN_INTERVAL_MS` (default `200`) — minimum spacing between helper calls.
 - `VOICEMAIL_SYNC_EXT_JSON_LOGS` (default `true`) — emit one JSON line per mailbox per cycle
   (`voicemail-sync-ext`). Set **`false`** to keep only the aggregate `voicemail-sync-cycle` line.
+- `VOICEMAIL_HELPER_SPOOL_PAGE_SIZE` (default **`2000`**) — `limit` per `POST …/voicemail/spool/list` page
+  when **api** / **worker** merge via **`fetchAllVoicemailSpoolMessages`** (`packages/integrations`).
+- `VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS` (default **`20000`**) — per-page HTTP timeout for spool list.
+- `VOICEMAIL_HELPER_SPOOL_MAX_PAGES` (default **`250`**) — stop after this many pages; incomplete merge sets
+  **`paginationComplete: false`** (logged in **`voicemail-sync-ext`** as **`spool_pagination_incomplete`**).
 
 **Backfill + fleet audit (ops):** Full runbook (audit → backfill → re-audit, acceptance, fair-scheduler
 log checks) is in **§ Voicemail — operational recovery (audit + backfill)** below.
@@ -257,6 +262,14 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   that touch the installer, an operator must re-run the installer on the PBX to refresh
   `vitalpbx-inbound-route-helper.py` and restart `connect-pbx-route-helper` (systemd unit
   name may vary — verify on host).
+
+- **Spool list semantics (`VERSION` `2026.05.10.1`+):** `POST /voicemail/spool/list` may return
+  **`spoolListSchema: 2`** with messages sorted by **`origtime` descending** (newest first), optional
+  pagination (`limit`, `offset`, `sinceOrigtime`), and metadata **`totalCount`**, **`truncated`**,
+  **`maxOrigtimeAll`**, **`folderMsgCounts`**. Helpers before **`2026.05.10.1`** applied a **400-message
+  cap** and filename iteration order, which could **omit the newest** voicemails on busy mailboxes.
+  Re-run the pinned installer on the PBX after upgrading. Tune **`CONNECT_PBX_HELPER_VM_SPOOL_LIST_DEFAULT_LIMIT`**
+  and **`CONNECT_PBX_HELPER_VM_SPOOL_LIST_MAX_LIMIT`** in **`/etc/connect-pbx-helper.env`** if needed.
 
 ### VitalPBX host: Connect tenant MOH enforcement layer (added 2026-05)
 

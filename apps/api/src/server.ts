@@ -104,7 +104,7 @@ import {
   getPbxVoicemailGreeting,
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
-  listVoicemailSpoolFromHelper,
+  fetchAllVoicemailSpoolMessages,
   fetchVoicemailSpoolAudioFromHelper,
   resolvePbxRouteHelperConfig,
   restorePbxInboundRoute,
@@ -21248,12 +21248,25 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           fallback_reason = "missing_pbx_tenant_id";
         } else {
           try {
-            const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-              tenantId: tid,
-              extension: mailbox,
-              voicemailContext: context,
-            });
+            const spool = await fetchAllVoicemailSpoolMessages(
+              helperCfg,
+              {
+                tenantId: tid,
+                extension: mailbox,
+                voicemailContext: context,
+              },
+              {
+                pageSize: Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000),
+                timeoutMs: Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000),
+              },
+            );
             helperRequestSucceeded = true;
+            if (!spool.paginationComplete) {
+              app.log.warn(
+                { mailbox, pagesFetched: spool.pagesFetched, totalCount: spool.totalCount },
+                "voicemail-notify: helper spool pagination incomplete",
+              );
+            }
             helper_count = spool.messages?.length ?? 0;
             records = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
             if (records.length > 0) {

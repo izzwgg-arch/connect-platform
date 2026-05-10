@@ -12,7 +12,7 @@
  *   --helper-delay-ms=M  Pause M ms between helper calls (default 100)
  */
 import { db, type Prisma } from "@connect/db";
-import { listVoicemailSpoolFromHelper, resolvePbxRouteHelperConfig } from "@connect/integrations";
+import { fetchAllVoicemailSpoolMessages, resolvePbxRouteHelperConfig } from "@connect/integrations";
 import { mapHelperVoicemailSpoolToRecordShape, vmExtractCallerNumber, vmStablePbxMessageId } from "@connect/shared";
 
 function parseArgs(): {
@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     mailboxes_with_missing_7d: 0,
     total_missing_7d: 0,
     helper_errors: 0,
+    helper_pagination_incomplete_mailboxes: 0,
   };
 
   let helperCalls = 0;
@@ -123,14 +124,24 @@ async function main(): Promise<void> {
 
       let spoolMessages: any[] = [];
       let auditError: string | null = null;
+      let helperPaginationComplete = true;
+      let helperTotalCount: number | null = null;
+      let helperMaxOrigtimeAll: string | null = null;
       try {
         if (helperCalls > 0 && helperDelayMs > 0) await sleep(helperDelayMs);
-        const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-          tenantId: vitalTid,
-          extension: ext.extNumber,
-        });
+        const spoolPageSize = Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000);
+        const spoolTimeoutMs = Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000);
+        const spool = await fetchAllVoicemailSpoolMessages(
+          helperCfg,
+          { tenantId: vitalTid, extension: ext.extNumber },
+          { pageSize: spoolPageSize, timeoutMs: spoolTimeoutMs },
+        );
         helperCalls++;
         spoolMessages = spool.messages || [];
+        helperPaginationComplete = spool.paginationComplete;
+        helperTotalCount = spool.totalCount ?? spoolMessages.length;
+        helperMaxOrigtimeAll = spool.maxOrigtimeAll != null && String(spool.maxOrigtimeAll) !== "" ? String(spool.maxOrigtimeAll) : null;
+        if (!helperPaginationComplete) summary.helper_pagination_incomplete_mailboxes++;
       } catch (e: unknown) {
         auditError = e instanceof Error ? e.message : String(e);
         summary.helper_errors++;
@@ -150,6 +161,9 @@ async function main(): Promise<void> {
             missing_7d: null,
             oldest_missing_iso: null,
             audit_error: auditError,
+            helper_pagination_complete: null,
+            helper_total_count: null,
+            helper_max_origtime_all: null,
           }),
         );
         continue;
@@ -234,6 +248,9 @@ async function main(): Promise<void> {
           oldest_missing_iso:
             oldestMissingSec != null ? new Date(oldestMissingSec * 1000).toISOString() : null,
           audit_error: null,
+          helper_pagination_complete: helperPaginationComplete,
+          helper_total_count: helperTotalCount,
+          helper_max_origtime_all: helperMaxOrigtimeAll,
         }),
       );
     }

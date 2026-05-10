@@ -242,6 +242,9 @@
   **`2026.05.08.1`** (or later) from `GET /health`. Older helpers (e.g. `2026.05.07.x`)
   do not expose `POST /voicemail/spool/list`; Connect will log `helper_error:…` and
   leave `helper_calls` at `0` until the installer is upgraded (`DEPLOYMENT.md` production check-in).
+  **Accurate spool listing for large mailboxes** needs helper **`2026.05.10.1`+** (`spoolListSchema: 2`,
+  newest-first, pagination + **`maxOrigtimeAll`**) — older **`2026.05.08.x`** list could cap at **400**
+  messages in filename order and miss the newest files (`DEPLOYMENT.md`, **`VOICEMAIL_FLEET_STALE_RISK.md`**).
   **Phase 2 playback** needs **`2026.05.08.2`+** ( **`POST /voicemail/spool/audio`** ); older helpers
   return **404** for that path and the API keeps the prior **`503`** JSON behavior.
   **Never** hand-edit **`vitalpbx-inbound-route-helper.py`** (or other helper Python) on
