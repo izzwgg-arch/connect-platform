@@ -359,6 +359,69 @@
 - PBX-host helper to pull files via signed HTTPS: `connect-media-sync.sh`
   (see `docs/pbx/connect-media-sync-install.md`).
 
+### Two runtime class kinds (`connect_*` vs `mohN`) — coverage scope
+
+VitalPBX has two parallel ways a hold class can be wired up. The publish path
+treats them differently, and the portal warning text reflects this:
+
+| Class kind | Where it covers | What `doMohPublish` does |
+|---|---|---|
+| `connect_*` (Connect-uploaded asset) | Connect-managed inbound DIDs only — those that flow through `[connect-tenant-router]` / `[connect-tenant-ivr]` in the custom dialplan and read `connect/t_<slug>/moh_class` from AstDB. | Verifies `MohAsset.status=ready`, `conversionStatus=ready`, `pbxStorageKey` set, and `pbxFormat` is Asterisk-safe (`wav_*`); verifies the asset would appear in `/voice/moh/sync-manifest`; writes AstDB keys; **does not touch native VitalPBX `music_group_id` columns** (helper returns `noop`). |
+| `mohN` (native VitalPBX music group) | Both Connect-managed inbound paths AND native VitalPBX inbound routes/extensions/queues whose `music_group_id` column points at this group. | Writes AstDB keys AND calls the PBX route helper to set `ombu_inbound_routes.music_group_id`, `ombu_extensions.music_group_id`, and `ombu_queues.music_group_id`. Helper failure → publish fails (502). |
+
+For tenants that need full coverage (extensions/queues/transfers/parking) of a
+custom uploaded WAV, the only sustainable path today is to upload the WAV into
+VitalPBX as a native music group and select the resulting `mohN`. There is no
+shortcut that makes a `connect_*` class cover native paths automatically — that
+would require a new helper-side feature and is intentionally out of scope.
+
+### Publish-time readiness gates (added 2026-05)
+
+`apps/api/src/server.ts` `evaluateMohRuntimeReadiness` is the single source
+of truth used by both profile save (`POST/PATCH /voice/moh/profiles`) and
+publish (`POST /voice/moh/publish`):
+
+- `connect_*` requires the matching `MohAsset` to satisfy
+  `isMohAssetPbxReady` (shared helper) **and** to count ≥1 file under the
+  same filter `/voice/moh/sync-manifest` uses (`endsWith(".wav")`). Publish
+  fails fast with `connect_asset_not_pbx_ready` or
+  `connect_asset_not_in_sync_manifest` instead of writing AstDB keys for
+  a class the helper would never mirror.
+- Native `mohN` requires a row in `PbxMohClass` with `isActive=true` for
+  this tenant or the system catalog. Failure code is unchanged
+  (`moh_runtime_class_not_synced`).
+
+### Canonical AstDB slug (API + worker must agree)
+
+The AstDB family is `connect/t_<slug>/...`. The slug derivation MUST be
+identical in:
+- API: `getIvrSlugForTenant` (apps/api/src/server.ts)
+- Worker: `workerCanonicalTenantSlug` (apps/worker/src/main.ts)
+
+Both delegate to `pickCanonicalTenantSlug` in
+`packages/shared/src/canonicalTenantSlug.ts`: prefer
+`PbxTenantDirectory.tenantSlug` (the slug VitalPBX inbound routes / DID maps
+reference at call time), fall back to the Connect `Tenant.name` slug. Slug
+drift between API and worker writes was the root cause of dual-family
+AstDB writes for tenants whose Connect display name differs from the PBX
+directory slug (canary 2026-05: PBX `secro_selution` vs Connect
+`secro_selutions`).
+
+### `MohPublishRecord.nativeSync` payload
+
+On both success and failure the JSON column carries the raw helper result
+plus publish-time breadcrumbs that let the portal and forensic queries
+answer "what runtime paths did this publish actually cover?" without
+re-deriving the answer from raw fields:
+
+- `selectedClass` — final runtime class string written to AstDB.
+- `assetReady` — whether `connect_*` asset gates passed (always true for `mohN`).
+- `manifestFileCount` — `/voice/moh/sync-manifest` file count for this class.
+- `canonicalSlug` — the AstDB family slug actually used.
+- `coverage.connectManagedInbound` — Connect router/IVR DIDs (always true on success).
+- `coverage.nativePbxInboundExtensionsQueues` — native VitalPBX rows
+  (always **false** for `connect_*`; true for `mohN` when helper succeeded).
+
 ---
 
 ## Tenant filtering

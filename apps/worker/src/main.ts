@@ -34,6 +34,7 @@ import {
   isValidMohRuntimeClass,
   mapHelperVoicemailSpoolToRecordShape,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+  pickCanonicalTenantSlug,
   vmExtractCallerName,
   vmExtractCallerNumber,
   vmNormalizeFolder,
@@ -1476,6 +1477,39 @@ function ivrToIvrSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+/** Canonical AstDB slug for IVR/MOH writes. MUST match the API's
+ *  `getIvrSlugForTenant` (apps/api/src/server.ts) — if the API and worker
+ *  derive different slugs, both write to different `connect/t_<slug>/...`
+ *  AstDB families and inbound calls read whichever the dialplan happens to
+ *  match (slug drift bug investigated 2026-05). Prefers the synced VitalPBX
+ *  directory tenantSlug, falls back to the Connect Tenant.name slug.
+ *  See docs/pbx/option-a-runtime-keys.md and docs/ai-context/ASTDB_KEYS.md. */
+async function workerCanonicalTenantSlug(tenantId: string, tenantName: string | null | undefined): Promise<string> {
+  let directorySlug: string | null = null;
+  try {
+    const link = await (db as any).tenantPbxLink.findFirst({
+      where: { tenantId },
+      select: { pbxInstanceId: true, pbxTenantId: true, pbxTenantCode: true },
+    });
+    if (link?.pbxInstanceId && (link.pbxTenantId || link.pbxTenantCode)) {
+      const directory = await (db as any).pbxTenantDirectory.findFirst({
+        where: {
+          pbxInstanceId: link.pbxInstanceId,
+          OR: [
+            ...(link.pbxTenantId ? [{ vitalTenantId: link.pbxTenantId }] : []),
+            ...(link.pbxTenantCode ? [{ tenantCode: link.pbxTenantCode }] : []),
+          ],
+        },
+        select: { tenantSlug: true },
+      });
+      directorySlug = directory?.tenantSlug ?? null;
+    }
+  } catch {
+    // Directory lookup is best-effort; fall through to Tenant.name slug.
+  }
+  return pickCanonicalTenantSlug(directorySlug, tenantName, tenantId);
+}
+
 // Fixed set of digit slots written on every publish. Must match the list in
 // apps/api/src/server.ts — if they drift, an API publish and a worker publish
 // would write different key sets and snapshot/rollback would lose fidelity.
@@ -1535,7 +1569,10 @@ async function runIvrScheduleCycle(): Promise<void> {
     for (const sched of schedules) {
       try {
         const tenantId: string = sched.tenantId;
-        const slug = ivrToIvrSlug(sched.tenant?.name ?? tenantId);
+        // Prefer PbxTenantDirectory.tenantSlug over Tenant.name slug — must
+        // match apps/api/src/server.ts getIvrSlugForTenant() to avoid slug
+        // drift between API and worker AstDB writes.
+        const slug = await workerCanonicalTenantSlug(tenantId, sched.tenant?.name);
         const fam = `connect/t_${slug}`;
 
         const [override, profiles, lastPublish] = await Promise.all([
@@ -1895,7 +1932,11 @@ async function runMohScheduleCycle(): Promise<void> {
     for (const sched of schedules) {
       try {
         const tenantId: string = sched.tenantId;
-        const slug = (sched.tenant?.name ?? tenantId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        // Prefer PbxTenantDirectory.tenantSlug over Tenant.name slug — must
+        // match apps/api/src/server.ts getIvrSlugForTenant() to avoid slug
+        // drift between API and worker AstDB writes (root cause of dual-family
+        // writes for tenants whose Connect name differs from PBX directory slug).
+        const slug = await workerCanonicalTenantSlug(tenantId, sched.tenant?.name);
         const fam = `connect/t_${slug}`;
 
         const [rules, override, profilesRaw, lastState] = await Promise.all([

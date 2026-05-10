@@ -77,7 +77,9 @@ import {
   writeMohFile,
 } from "./mohStorage";
 import {
+  isAsteriskSafePbxFormat,
   isConnectMohRuntimeClass as sharedIsConnectMohRuntimeClass,
+  isMohAssetPbxReady,
   isNativeMohRuntimeClass,
   isValidMohRuntimeClass,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
@@ -19644,26 +19646,102 @@ async function getMohSlugForTenant(tenantId: string): Promise<string> {
   return getIvrSlugForTenant(tenantId);
 }
 
-async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
+/** Reasons evaluateMohRuntimeReadiness can refuse a runtime class. Stable
+ *  string codes used by the publish path (`MohPublishRecord.error`) and
+ *  surfaced verbatim to API clients so the portal can show a precise reason. */
+type MohRuntimeReadinessReason =
+  | "invalid_moh_runtime_class"
+  | "connect_asset_not_pbx_ready"
+  | "connect_asset_not_in_sync_manifest"
+  | "moh_runtime_class_not_synced";
+
+type MohRuntimeReadiness = {
+  selectedClass: string;
+  classKind: "connect" | "native";
+  assetReady: boolean;
+  pbxStorageKey: string | null;
+  pbxFormat: string | null;
+  manifestFileCount: number;
+  pbxGroupId: number | null;
+  reason?: MohRuntimeReadinessReason;
+};
+
+/** Read-only readiness check used by both save-time validation (profile create/update)
+ *  and the publish path. For `connect_*` classes this enforces that the matching
+ *  MohAsset is fully PBX-ready AND that it would appear in /voice/moh/sync-manifest
+ *  with at least one .wav file — the same predicate the PBX media-sync helper uses
+ *  to mirror files into /var/lib/asterisk/moh/<class>/. */
+async function evaluateMohRuntimeReadiness(tenantId: string, value: string): Promise<MohRuntimeReadiness> {
   const runtimeClass = normalizeMohRuntimeClass(value);
   if (!isValidMohRuntimeClass(runtimeClass)) {
-    throw Object.assign(new Error("invalid_moh_runtime_class"), {
-      statusCode: 400,
-      detail: "MOH profiles must use a VitalPBX class (e.g. moh3) or a Connect upload class (connect_<slug>_<name>).",
-    });
+    return {
+      selectedClass: runtimeClass,
+      classKind: isConnectMohRuntimeClass(runtimeClass) ? "connect" : "native",
+      assetReady: false,
+      pbxStorageKey: null,
+      pbxFormat: null,
+      manifestFileCount: 0,
+      pbxGroupId: null,
+      reason: "invalid_moh_runtime_class",
+    };
   }
+
   if (isConnectMohRuntimeClass(runtimeClass)) {
     const asset = await (db as any).mohAsset.findFirst({
-      where: { tenantId, mohClassName: runtimeClass, status: "ready", conversionStatus: "ready" },
-      select: { id: true, pbxStorageKey: true },
+      where: { tenantId, mohClassName: runtimeClass },
+      select: { status: true, conversionStatus: true, pbxStorageKey: true, pbxFormat: true },
     });
-    if (!asset?.pbxStorageKey) {
-      throw Object.assign(new Error("moh_asset_not_found"), {
-        statusCode: 409,
-        detail: `No PBX-ready Connect MOH upload matches ${runtimeClass}. Upload audio and wait for WAV conversion + PBX media sync, then select it here.`,
-      });
+    const pbxStorageKey = asset?.pbxStorageKey ?? null;
+    const pbxFormat = asset?.pbxFormat ?? null;
+    const assetReady = isMohAssetPbxReady(asset);
+    if (!assetReady) {
+      return {
+        selectedClass: runtimeClass,
+        classKind: "connect",
+        assetReady: false,
+        pbxStorageKey,
+        pbxFormat,
+        manifestFileCount: 0,
+        pbxGroupId: null,
+        reason: "connect_asset_not_pbx_ready",
+      };
     }
-    return runtimeClass;
+    // Mirror the /voice/moh/sync-manifest filter exactly so this counts the
+    // files the PBX helper would actually mirror into /var/lib/asterisk/moh.
+    const manifestCandidates = await (db as any).mohAsset.findMany({
+      where: {
+        tenantId,
+        mohClassName: runtimeClass,
+        status: "ready",
+        conversionStatus: "ready",
+        pbxStorageKey: { not: null },
+      },
+      select: { pbxStorageKey: true },
+    });
+    const manifestFileCount = manifestCandidates.filter(
+      (a: any) => typeof a.pbxStorageKey === "string" && a.pbxStorageKey.toLowerCase().endsWith(".wav"),
+    ).length;
+    if (manifestFileCount < 1) {
+      return {
+        selectedClass: runtimeClass,
+        classKind: "connect",
+        assetReady: true,
+        pbxStorageKey,
+        pbxFormat,
+        manifestFileCount,
+        pbxGroupId: null,
+        reason: "connect_asset_not_in_sync_manifest",
+      };
+    }
+    return {
+      selectedClass: runtimeClass,
+      classKind: "connect",
+      assetReady: true,
+      pbxStorageKey,
+      pbxFormat,
+      manifestFileCount,
+      pbxGroupId: null,
+    };
   }
 
   const row = await (db as any).pbxMohClass.findFirst({
@@ -19676,15 +19754,63 @@ async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Pro
         { pbxTenantId: "1" },
       ],
     },
-    select: { id: true, name: true, mohClassName: true, pbxGroupId: true, tenantId: true, tenantSlug: true },
+    select: { id: true, pbxGroupId: true },
   });
   if (!row) {
-    throw Object.assign(new Error("moh_runtime_class_not_synced"), {
-      statusCode: 409,
-      detail: `Runtime MOH class ${runtimeClass} is not present in the synced VitalPBX MOH catalog for this tenant.`,
-    });
+    return {
+      selectedClass: runtimeClass,
+      classKind: "native",
+      assetReady: false,
+      pbxStorageKey: null,
+      pbxFormat: null,
+      manifestFileCount: 0,
+      pbxGroupId: null,
+      reason: "moh_runtime_class_not_synced",
+    };
   }
-  return runtimeClass;
+  const pbxGroupId = Number(row.pbxGroupId);
+  return {
+    selectedClass: runtimeClass,
+    classKind: "native",
+    assetReady: true,
+    pbxStorageKey: null,
+    pbxFormat: null,
+    manifestFileCount: 0,
+    pbxGroupId: Number.isFinite(pbxGroupId) && pbxGroupId > 0 ? pbxGroupId : null,
+  };
+}
+
+/** Wrapper that throws with a precise statusCode/detail/readiness payload.
+ *  Returns the readiness object on success so the publish path can record it. */
+async function assertMohRuntimeReadiness(tenantId: string, value: string): Promise<MohRuntimeReadiness> {
+  const result = await evaluateMohRuntimeReadiness(tenantId, value);
+  if (!result.reason) return result;
+  let statusCode = 409;
+  let detail: string;
+  switch (result.reason) {
+    case "invalid_moh_runtime_class":
+      statusCode = 400;
+      detail = "MOH profiles must use a VitalPBX class (e.g. moh3) or a Connect upload class (connect_<slug>_<name>).";
+      break;
+    case "connect_asset_not_pbx_ready":
+      detail =
+        `Connect MOH upload ${result.selectedClass} is not PBX-ready. Required: status=ready, conversionStatus=ready, `
+        + `pbxStorageKey set, pbxFormat Asterisk-safe (wav_*). Re-upload the audio (a .wav source is recommended) and wait for conversion to finish, then publish again.`;
+      break;
+    case "connect_asset_not_in_sync_manifest":
+      detail =
+        `Connect MOH upload ${result.selectedClass} would not be advertised in /voice/moh/sync-manifest. The PBX media-sync helper would not mirror any file for this class.`;
+      break;
+    case "moh_runtime_class_not_synced":
+      detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog for this tenant.`;
+      break;
+  }
+  throw Object.assign(new Error(result.reason), { statusCode, detail, readiness: result });
+}
+
+async function assertSyncedMohRuntimeClass(tenantId: string, value: string): Promise<string> {
+  const r = await assertMohRuntimeReadiness(tenantId, value);
+  return r.selectedClass;
 }
 
 /** Build the AstDB key-value pairs for a Hold Profile publish. */
@@ -19815,6 +19941,22 @@ type NativeInboundMohSyncResult = {
   pbxGroupId?: number;
   errors: string[];
   helperResponse?: Record<string, unknown>;
+  // Publish-time readiness/coverage breadcrumbs (added 2026-05) — let the
+  // portal and forensic queries answer "what runtime paths did this publish
+  // actually cover?" without re-deriving the answer from raw fields.
+  selectedClass?: string;
+  assetReady?: boolean;
+  manifestFileCount?: number;
+  canonicalSlug?: string;
+  coverage?: {
+    /** Connect-managed inbound DIDs (routed via [connect-tenant-router]/[connect-tenant-ivr]
+     *  in the custom dialplan). True whenever AstDB write succeeded. */
+    connectManagedInbound: boolean;
+    /** Native VitalPBX inbound routes / extensions / queues. True only when the
+     *  PBX route helper actually wrote `music_group_id` rows for the tenant.
+     *  Always false for `connect_*` classes — those have no `music_group_id`. */
+    nativePbxInboundExtensionsQueues: boolean;
+  };
 };
 
 async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string): Promise<NativeInboundMohSyncResult> {
@@ -19935,7 +20077,12 @@ async function doMohPublish(
   const { profile, mode } = computeCurrentMohProfile(config, rulesRaw, overrideRaw, profileMap);
   if (!profile) throw Object.assign(new Error("no_hold_profile_resolved"), { statusCode: 409 });
 
-  profile.vitalPbxMohClassName = await assertSyncedMohRuntimeClass(tenantId, profile.vitalPbxMohClassName);
+  // Asserts the runtime class is publishable (native synced or connect_* asset
+  // PBX-ready AND advertised in the sync manifest). Throws with statusCode +
+  // detail + readiness on failure; on success, returns the readiness breadcrumbs
+  // we want to persist on the MohPublishRecord.nativeSync payload.
+  const readiness = await assertMohRuntimeReadiness(tenantId, profile.vitalPbxMohClassName);
+  profile.vitalPbxMohClassName = readiness.selectedClass;
   const slug = await getMohSlugForTenant(tenantId);
   const keys = buildMohKeys(slug, profile, mode);
   const previousMohClass = lastPublish?.newMohClass ?? null;
@@ -19947,16 +20094,32 @@ async function doMohPublish(
   });
 
   await publishMohToAstDb(slug, keys);
-  const nativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
+  const rawNativeSync = await syncNativeInboundRoutesMoh(tenantId, profile.vitalPbxMohClassName);
   const connectUploadedMoh = isConnectMohRuntimeClass(profile.vitalPbxMohClassName);
-  if (!connectUploadedMoh && (nativeSync.skipped || nativeSync.errors.length)) {
-    const reason = nativeSync.reason || nativeSync.errors[0] || "native_tenant_moh_sync_failed";
+  // Honest coverage: connect_* publishes only update Connect-managed call paths
+  // (inbound DIDs hitting [connect-tenant-router]/[connect-tenant-ivr]). They do
+  // NOT touch native VitalPBX inbound/extension/queue rows because connect_*
+  // classes have no music_group_id. mohN classes are covered both ways when the
+  // helper runs to completion (skipped=false, no errors).
+  const nativeSync: NativeInboundMohSyncResult = {
+    ...rawNativeSync,
+    selectedClass: profile.vitalPbxMohClassName,
+    assetReady: readiness.assetReady,
+    manifestFileCount: readiness.manifestFileCount,
+    canonicalSlug: slug,
+    coverage: {
+      connectManagedInbound: true,
+      nativePbxInboundExtensionsQueues: !connectUploadedMoh && !rawNativeSync.skipped && rawNativeSync.errors.length === 0,
+    },
+  };
+  if (!connectUploadedMoh && (rawNativeSync.skipped || rawNativeSync.errors.length)) {
+    const reason = rawNativeSync.reason || rawNativeSync.errors[0] || "native_tenant_moh_sync_failed";
     app.log.warn({ tenantId, recordId: record.id, nativeSync }, "moh: native tenant MOH sync failed");
     await (db as any).mohPublishRecord.update({
       where: { id: record.id },
       data: {
         status: "failed",
-        error: `native_tenant_moh_sync_failed: ${reason}${nativeSync.errors.length ? `: ${nativeSync.errors.slice(0, 2).join("; ")}` : ""}`,
+        error: `native_tenant_moh_sync_failed: ${reason}${rawNativeSync.errors.length ? `: ${rawNativeSync.errors.slice(0, 2).join("; ")}` : ""}`,
         nativeSync: nativeSync as any,
       },
     });
@@ -20344,7 +20507,13 @@ app.post("/voice/moh/publish", async (req, reply) => {
     return reply.send({ ok: true, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode, slug: r.slug, recordId: r.recordId, profile: r.profile, nativeSync: r.nativeSync });
   } catch (err: any) {
     const code = (err as any).statusCode;
-    if (code === 409) return reply.code(409).send({ error: err.message });
+    if (code === 400 || code === 409) {
+      return reply.code(code).send({
+        error: err.message,
+        detail: err?.detail,
+        readiness: err?.readiness ?? null,
+      });
+    }
     if (code === 502) {
       return reply.code(502).send({
         error: err.message || "publish_failed",

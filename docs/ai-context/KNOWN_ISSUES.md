@@ -42,6 +42,38 @@ When you find a new fragile area, add it here.
   `cdrDirection.ts` rely on call type / context heuristics. Wrong direction =
   wrong KPI bucket. Tests exist (`cdrDirection.test.ts`,
   `pbx-live.test.ts`) — keep them green.
+- **MOH `connect_*` upload classes do NOT cover native PBX paths.** A
+  Connect-uploaded MOH (`connect_<tenantSlug>_<name>`) only applies to inbound
+  DIDs that flow through Connect's `[connect-tenant-router]` /
+  `[connect-tenant-ivr]` dialplan and read `connect/t_<slug>/moh_class` from
+  AstDB. Native VitalPBX inbound routes / extensions / queues / parking /
+  transfer hold music continue to play `mohN` until a native music group is
+  mapped on the PBX side. The publish helper deliberately returns
+  `noop` with reason `connect_uploaded_moh_no_vitalpbx_music_group` for these
+  classes; this is **not** a bug to "fix" by silently overwriting native
+  rows. The portal MOH picker now warns about this scope; the publish record
+  records `coverage.nativePbxInboundExtensionsQueues=false` so it cannot be
+  mistaken for full coverage. To get tenant-wide coverage of a custom file,
+  upload it as a native music group in VitalPBX and pick the resulting
+  `mohN` instead. (Investigated 2026-05; canary tenant Secro Selutions.)
+- **MOH publish silently shipped non-PBX-ready assets (fixed 2026-05).**
+  Before the readiness gate, `doMohPublish` would write `connect/t_<slug>/moh_class`
+  pointing at a class whose backing `MohAsset` had `conversionStatus=failed`
+  / `pbxStorageKey=null`. The PBX media-sync helper then had no `.wav` to
+  mirror, but the API still reported `status=success`. The current code
+  fails publish with `connect_asset_not_pbx_ready` or
+  `connect_asset_not_in_sync_manifest` BEFORE writing AstDB keys.
+  See `evaluateMohRuntimeReadiness` and `isMohAssetPbxReady`.
+- **MOH AstDB slug drift between API and worker (fixed 2026-05).** Historic
+  bug: API used `getIvrSlugForTenant` (preferring `PbxTenantDirectory.tenantSlug`)
+  while the worker reconciliation cycle slugified `Tenant.name` directly. For
+  tenants whose Connect display name differed from the PBX directory slug,
+  both writers wrote to different `connect/t_<slug>/...` AstDB families
+  and live calls read whichever the dialplan happened to match. Both are
+  now centralised through `pickCanonicalTenantSlug` in
+  `packages/shared/src/canonicalTenantSlug.ts`. Any new caller that writes
+  to `connect/t_<slug>/...` must use this helper — do NOT re-derive the
+  slug locally.
 
 ## Mobile calling
 

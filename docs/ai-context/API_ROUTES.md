@@ -252,6 +252,60 @@ Breakdown by sub-prefix (count / approximate scope):
 > the AstDB key family `connect/t_<slug>` and any change must preserve key
 > shape and the snapshot-then-write contract.
 
+### `POST /voice/moh/publish` — error codes (added 2026-05)
+
+Successful response is unchanged: `{ ok, mohClass, mode, slug, recordId, profile, nativeSync }`.
+Failure responses now distinguish readiness vs runtime failures and always include `detail`:
+
+| HTTP | `error` | When | Body fields |
+|---|---|---|---|
+| 400 | `invalid_moh_runtime_class` | Class is not `mohN` or `connect_<slug>_<name>` (path traversal / bad chars). | `error`, `detail`, `readiness` |
+| 409 | `connect_asset_not_pbx_ready` | Selected `connect_*` class but the matching `MohAsset` is missing or has `status!=ready` / `conversionStatus!=ready` / no `pbxStorageKey` / unsafe `pbxFormat`. | `error`, `detail`, `readiness` |
+| 409 | `connect_asset_not_in_sync_manifest` | Asset is "PBX-ready" but no row matches the `/voice/moh/sync-manifest` filter (`endsWith(".wav")`, `pbxStorageKey` set). | `error`, `detail`, `readiness` |
+| 409 | `moh_runtime_class_not_synced` | Selected `mohN` is not in the synced `PbxMohClass` catalog. | `error`, `detail` |
+| 409 | `no_schedule_configured` / `no_hold_profile_resolved` | Tenant has no schedule config / no profile resolves at this time. | `error`, `detail` |
+| 502 | `native_tenant_moh_sync_failed` | AstDB write succeeded but the PBX route helper failed (`mohN` only). | `error`, `detail`, `nativeSync` |
+| 503 | `publish_failed` | Telephony service unreachable or other unexpected error. | `error`, `detail` |
+
+`readiness` (when present) is the same `MohRuntimeReadiness` shape stored on
+`MohPublishRecord.nativeSync`:
+
+```json
+{
+  "selectedClass": "connect_acme_jazz",
+  "classKind": "connect",
+  "assetReady": false,
+  "pbxStorageKey": null,
+  "pbxFormat": null,
+  "manifestFileCount": 0,
+  "pbxGroupId": null,
+  "reason": "connect_asset_not_pbx_ready"
+}
+```
+
+On **success**, `MohPublishRecord.nativeSync` (returned in the publish
+response and persisted) carries publish-time breadcrumbs:
+
+```json
+{
+  "skipped": false,
+  "selectedClass": "connect_acme_jazz",
+  "assetReady": true,
+  "manifestFileCount": 1,
+  "canonicalSlug": "acme",
+  "coverage": {
+    "connectManagedInbound": true,
+    "nativePbxInboundExtensionsQueues": false
+  },
+  "...": "raw helper response fields preserved"
+}
+```
+
+`coverage.nativePbxInboundExtensionsQueues` is **always false** for
+`connect_*` classes — they do not write `music_group_id` columns. UI clients
+should surface this so operators know native VitalPBX extensions/queues
+will keep playing `mohN`.
+
 ---
 
 ## Voicemail (top-level)

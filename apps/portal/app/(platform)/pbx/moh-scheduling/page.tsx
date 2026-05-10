@@ -497,7 +497,9 @@ function MohClassPicker({
       />
       {value.trim().toLowerCase().startsWith("connect_") && (
         <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 8, lineHeight: 1.45, padding: "8px 10px", borderRadius: 6, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)" }}>
-          <strong>Queues / inbound routes:</strong> Connect-uploaded MOH applies to tenant default/channel hold (AstDB). VitalPBX queue hold music still follows native <code style={{ color: "#fde68a" }}>mohN</code> unless you add a separate PBX-side queue musicclass mapping.
+          <strong>Coverage scope:</strong> Connect-uploaded MOH (<code style={{ color: "#fde68a" }}>connect_*</code>) only applies to <em>Connect-managed routes</em> &mdash; inbound DIDs that flow through Connect&apos;s tenant router/IVR (AstDB <code style={{ color: "#fde68a" }}>connect/t_&lt;slug&gt;/moh_class</code>).
+          <br />
+          Native VitalPBX inbound routes, extension hold, transfer hold, parking, and queue hold music continue to use <code style={{ color: "#fde68a" }}>mohN</code> unless you map a native music group separately on the PBX. To cover those paths, pick a <code style={{ color: "#fde68a" }}>mohN</code> class instead (or contact ops to map this Connect upload as a native music group).
         </div>
       )}
       {controls}
@@ -1082,7 +1084,9 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
             VitalPBX reads these at hold/queue time — Connect never handles media.
           </p>
           <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 12px", lineHeight: 1.5 }}>
-            <strong style={{ color: "#94a3b8" }}>Scope:</strong> this publish targets the tenant&apos;s default/channel hold profile (AstDB). Inbound-route MOH on DIDs is configured under DID routing. Queue hold music in VitalPBX remains native <code style={{ color: "#cbd5e1" }}>mohN</code> unless mapped separately on the PBX.
+            <strong style={{ color: "#94a3b8" }}>Scope:</strong> this publish targets the tenant&apos;s default/channel hold profile (AstDB). Inbound-route MOH on DIDs is configured under DID routing.
+            <br />
+            For <code style={{ color: "#cbd5e1" }}>connect_*</code> classes the publish only covers Connect-managed inbound routes (DIDs flowing through Connect&apos;s tenant router/IVR). Native VitalPBX inbound routes, extensions, transfers, parking, and queue hold music continue using <code style={{ color: "#cbd5e1" }}>mohN</code> unless a native music group is mapped on the PBX. Pick a <code style={{ color: "#cbd5e1" }}>mohN</code> class to cover those native paths.
           </p>
 
           {/* Current runtime state table */}

@@ -5,6 +5,7 @@ export * from "./voicemailIngest";
 export * from "./portalPermissions";
 export * from "./voipMsWebhook";
 export * from "./mohRuntimeClass";
+export * from "./canonicalTenantSlug";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 
 export const UserSchema = z.object({

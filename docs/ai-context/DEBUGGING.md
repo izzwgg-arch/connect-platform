@@ -592,6 +592,84 @@ still listed `M apps/telephony/.../CallStateStore.ts` — see `KNOWN_ISSUES.md`.
     - `[from-internal]` — used as the `context` for `Originate`.
 - **Prompt sync** workflow documented at `docs/pbx/connect-prompt-sync-install.md`.
 - **MOH sync** workflow at `docs/pbx/connect-media-sync-install.md`.
+
+### MOH publish: "I picked a file but Asterisk plays the wrong music"
+
+The MOH publish path is multi-stage (UI selection → Connect API → AstDB write
+→ `connect-media-sync.sh` → Asterisk `moh reload`). Use this order to localise
+the failing stage:
+
+1. **DB readiness — is the publish even accepting the class?**
+
+   ```sql
+   SELECT id, status, error,
+          "nativeSync"->>'selectedClass'           AS selected_class,
+          "nativeSync"->>'assetReady'              AS asset_ready,
+          "nativeSync"->>'manifestFileCount'       AS manifest_files,
+          "nativeSync"->>'canonicalSlug'           AS canonical_slug,
+          "nativeSync"->'coverage'                 AS coverage
+     FROM "MohPublishRecord"
+    WHERE "tenantId" = '<tid>'
+    ORDER BY "publishedAt" DESC
+    LIMIT 5;
+   ```
+
+   - `status="failed"` with `error LIKE 'connect_asset_not_pbx_ready%'` →
+     re-upload the audio (legacy non-WAV upload; transcoder produced no
+     `pbxStorageKey`/`pbxFormat`). Re-publish after `conversionStatus=ready`.
+   - `status="failed"` with `error LIKE 'connect_asset_not_in_sync_manifest%'`
+     → asset exists but does not match the manifest filter (must be `.wav`
+     and pass `isMohAssetPbxReady`). Almost always paired with the prior code.
+   - `status="success"` with `coverage.nativePbxInboundExtensionsQueues=false`
+     and a `connect_*` selectedClass → **expected**: native VitalPBX
+     extensions/queues still play `mohN`. Pick a `mohN` class instead, or
+     map the upload as a native music group on the PBX. Not a Connect bug.
+
+2. **Slug — did API and worker write to the same AstDB family?**
+
+   ```bash
+   ssh connect "docker exec app-api-1 sh -c \
+     'asterisk -rx \"database show connect/t_$SLUG\"'"
+   ```
+
+   Compare the family that has `moh_class` set vs `MohPublishRecord.nativeSync.canonicalSlug`.
+   If two families exist for the same tenant (one with the PBX directory slug,
+   one with the Connect `Tenant.name` slug), this is a regression of the slug
+   drift fix from 2026-05 — `pickCanonicalTenantSlug` in
+   `packages/shared/src/canonicalTenantSlug.ts` must be used by every writer.
+
+3. **PBX file mirror — did `connect-media-sync.sh` actually copy the file?**
+
+   ```bash
+   ssh connect-pbx "ls -la /var/lib/asterisk/moh/$CLASS/"
+   ssh connect-pbx "tail -n 50 /var/log/connect-media-sync.log"
+   ```
+
+   No `asset.wav` for a successful publish → the helper rejected the
+   manifest entry. Check the manifest endpoint output directly:
+
+   ```bash
+   curl -s -H "x-connect-secret: $SECRET" \
+     https://app.connectcomunications.com/api/voice/moh/sync-manifest \
+     | jq '.files[] | select(.mohClass=="'$CLASS'")'
+   ```
+
+4. **Asterisk runtime — is the class actually loaded?**
+
+   ```bash
+   ssh connect-pbx "asterisk -rx 'moh show classes' | grep -i $CLASS"
+   ssh connect-pbx "asterisk -rx 'moh show files'"
+   ```
+
+5. **Live call** — while a call is on hold, `core show channel <chan>` shows
+   `MusicClass`. Compare to the published `connect/t_<slug>/moh_class`. If they
+   differ, the dialplan path that owns this leg does not consult AstDB — that
+   call is on a native-only path (queue, extension transfer, parking).
+
+If `connect/t_<slug>/moh_class` is correct but the file the helper mirrored
+does not match what Connect intends, see the "Deploy queue silently ships
+stale code" note above — the helper sometimes survives a partial deploy with
+stale config.
 - **IVR runbook**: `docs/pbx/IVR_VITALPBX_PARITY_RUNBOOK.md`,
   `docs/pbx/option-a-setup.md`, `docs/pbx/option-a-runtime-keys.md`.
 - **Live snapshot scripts** (PowerShell): `scripts/capture-forensic.ps1` (mentioned
