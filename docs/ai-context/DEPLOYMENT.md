@@ -141,16 +141,29 @@ Host-side directories also referenced:
 
 ### Worker-only (voicemail helper throttling)
 
-- `VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE` (default `32`) — max PBX-helper calls per
-  `runVoicemailSyncCycle` (each empty-REST extension can consume one call).
+- `VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE` (default `32`) — max **distinct** PBX-helper
+  `spool/list` calls per `runVoicemailSyncCycle`. Needy mailboxes (empty REST + helper configured)
+  are **fair-scheduled** across tenants with a rotating cursor (`packages/shared/src/voicemailSyncFair.ts`);
+  this is a **safety cap** on PBX load, not “first N extensions in DB order win.”
 - `VOICEMAIL_HELPER_MIN_INTERVAL_MS` (default `200`) — minimum spacing between helper calls.
+- `VOICEMAIL_SYNC_EXT_JSON_LOGS` (default `true`) — emit one JSON line per mailbox per cycle
+  (`voicemail-sync-ext`). Set **`false`** to keep only the aggregate `voicemail-sync-cycle` line.
+
+**Backfill (ops):** idempotent spool → DB for one Connect tenant (optional single extension), run
+**inside** `app-worker-1` with worker env:
+
+`cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=<connectTenantCuid> [--extension=<extNumber>]`
 
 **Reliability triage (ops):** “Zero voicemails in Connect for 24h” is **not** verified until PBX
 `msg*.txt` counts (or `spool/list`) for the tenant’s mailboxes are compared to Postgres `Voicemail`
-rows in the same window, plus worker/api log JSON (`voicemail-sync-cycle`, `voicemail-notify`).
+rows in the same window, plus worker/api log JSON (`voicemail-sync-cycle`, `voicemail-sync-ext`,
+`voicemail-notify`).
 See **`DEBUGGING.md`** § voicemail items **8–10** and **`KNOWN_ISSUES.md`** (REST-non-empty /
-global budget / notify `findFirst`). Raising **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`** may reduce
-starvation but does not fix REST-vs-spool divergence when REST returns a non-empty partial list.
+notify `findFirst`). Raising **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`** increases PBX helper
+throughput but does not fix REST-vs-spool divergence when REST returns a non-empty partial list.
+
+**Worker log note:** aggregate `fallback_reason` for helper cycles is
+`rest_empty_used_spool_fallback_fair_schedule` (replacing the legacy `rest_empty_used_spool_fallback` string).
 
 ### VitalPBX host: Connect route helper script
 
@@ -566,7 +579,8 @@ systemctl show connect-pbx-helper.service -p FragmentPath -p DropInPaths -p Envi
 **`ok: true`**, large **`messages`** array (tenant **`8`** / ext **`101`** probe) — helper **auth** and **route**
 reachable from Connect after **`CONNECT_PBX_HELPER_SECRET`** alignment on PBX.
 **`app-worker-1`** **`voicemail-sync-cycle`** then showed **`helper_count` > 0**, **`source_used":"helper"`**,
-**`upserted_count` > 0**, **`fallback_reason":"rest_empty_used_spool_fallback"`** (proof of Phase 1 fallback).
+**`upserted_count` > 0**, **`fallback_reason":"rest_empty_used_spool_fallback_fair_schedule"`** (or legacy
+**`rest_empty_used_spool_fallback`**) (proof of Phase 1 fallback).
 **`app-api-1`** **`/internal/voicemail-notify`** lines shortly before may still show **`helper_error:unauthorized`**
 from events **prior** to alignment — re-check **`docker logs app-api-1 --since 5m`** after a new AMI/notify.
 

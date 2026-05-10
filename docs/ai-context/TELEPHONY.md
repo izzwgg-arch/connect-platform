@@ -204,17 +204,22 @@
   helper `VERSION` `2026.05.08.1`+). **API** `/internal/voicemail-notify` tries REST
   first; if empty **and** AMI passed `newCount > 0`, it calls the helper with
   `tenantId`, `extension` (= mailbox), and `voicemailContext` (= AMI context).
-  **Worker** `runVoicemailSyncCycle` tries REST per extension, then the helper when
-  REST is empty, with throttling (`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`,
-  `VOICEMAIL_HELPER_MIN_INTERVAL_MS`). **Structural note:** if REST returns **one or more**
+  **Worker** `runVoicemailSyncCycle` (`apps/worker/src/voicemailSyncCycle.ts`) tries REST per
+  extension, then the PBX helper when REST is empty. Helper calls are **fair-scheduled**:
+  mailboxes that need spool are **interleaved across tenants** (round-robin by tenant, then by
+  extension) and only **distinct** mailboxes are chosen each cycle, up to
+  `VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE` (default **32**), with a **rotating cursor** so every
+  needy mailbox is reached within **ceil(N / budget)** cycles (production fix for global budget
+  starvation, 2026-05). Throttle spacing: `VOICEMAIL_HELPER_MIN_INTERVAL_MS`. Per-extension JSON
+  logs (`voicemail-sync-ext`) include `helper_scheduled`, `skipped_reason`, and fair-scheduler
+  fields; disable with `VOICEMAIL_SYNC_EXT_JSON_LOGS=false` if volume is too high. **Structural note:** if REST returns **one or more**
   rows but disk has **additional** messages (or REST is stale), the helper is **not** consulted
   for that mailbox in the current implementation — ingestion can look “stuck” for that tenant
-  even when spool/list would show the full set. **Worker** also shares a **global** helper call
-  budget per cycle (`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`, default **32**); many extensions
-  with empty REST in the same cycle can exhaust the budget before later mailboxes are processed.
+  even when spool/list would show the full set.
   Rows still dedupe on `pbxMessageId` (same
   composite as when REST omits `msg_id`). Shared normalization:
-  `packages/shared/src/voicemailIngest.ts`. Helper client env resolution:
+  `packages/shared/src/voicemailIngest.ts`, fair interleave:
+  `packages/shared/src/voicemailSyncFair.ts`. Helper client env resolution:
   `packages/integrations/src/pbxRouteHelperEnv.ts` (also re-exported from
   `apps/api/src/pbxInboundRouteHelperClient.ts`). **Staged production rollout**
   (commit → dry-run → api/worker/telephony → PBX installer → verify) is documented in

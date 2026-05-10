@@ -1,17 +1,7 @@
 ﻿import { randomUUID } from "crypto";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
-import {
-  classifyHelperFailure,
-  db,
-  helperBaseHostFromUrl,
-  recordHelperIncident,
-  recordRestVsSpoolDiverge,
-  recordWorkerSyncGlobalZero,
-  resolveHelperIncidentsForPbx,
-  resolveRestVsSpoolDiverge,
-  resolveWorkerSyncGlobalZero,
-} from "@connect/db";
+import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import {
   normalizeProviderError,
@@ -22,22 +12,16 @@ import {
   VoipMsSmsProvider,
   SolaCardknoxAdapter,
   WirePbxClient,
-  VitalPbxClient,
-  listVoicemailSpoolFromHelper,
-  resolvePbxRouteHelperConfig,
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
+import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
   isValidMohRuntimeClass,
-  mapHelperVoicemailSpoolToRecordShape,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
   pickCanonicalTenantSlug,
-  vmExtractCallerName,
-  vmExtractCallerNumber,
-  vmNormalizeFolder,
 } from "@connect/shared";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -1201,270 +1185,7 @@ worker.on("failed", (job, err) => console.error(`sms job failed: ${job?.id} -> $
 
 console.log("SMS worker started");
 
-// â”€â”€ Voicemail sync helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function getVitalPbxClientForWorker(input: { baseUrl: string; token: string; secret?: string | null }) {
-  return new VitalPbxClient({
-    baseUrl: input.baseUrl,
-    apiToken: input.token,
-    apiSecret: input.secret || undefined,
-    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 10000),
-  });
-}
-
-let _voicemailSyncRunning = false;
-let _vmWorkerSyncZeroStreak = 0;
-
-async function runVoicemailSyncCycle(): Promise<void> {
-  if (_voicemailSyncRunning) return;
-  _voicemailSyncRunning = true;
-  try {
-    // We intentionally do NOT filter by status="LINKED" here. The admin tenant
-    // refresh cron sets status=ERROR when the /tenants.list sync fails (e.g.
-    // one bad endpoint), which should NOT stop voicemail polling. The underlying
-    // pbxInstance may still be perfectly usable. We trust isEnabled on the
-    // PbxInstance and let the per-request try/catch absorb individual failures.
-    // Matches the fallback strategy used by resolvePbxInstanceForCdr for
-    // recording playback in the API.
-    const links: any[] = await db.tenantPbxLink.findMany({
-      where: { pbxInstance: { isEnabled: true } } as any,
-      include: { pbxInstance: true } as any,
-    } as any);
-
-    if (links.length === 0) return; // nothing wired up yet — silent no-op
-
-    let totalExts = 0;
-    let totalRecords = 0;
-    let totalUpserts = 0;
-    let totalErrors = 0;
-    let cycleRestRecords = 0;
-    let cycleHelperMessages = 0;
-    let cycleHelperCalls = 0;
-    const maxHelperFallback = Math.max(0, Number(process.env.VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE || 32) || 0);
-    const helperMinIntervalMs = Math.max(0, Number(process.env.VOICEMAIL_HELPER_MIN_INTERVAL_MS || 200) || 0);
-    let helperCallsBudget = maxHelperFallback;
-    let lastHelperCallAt = 0;
-    const helperResolvedPbxIds = new Set<string>();
-
-    for (const link of links) {
-      if (!link?.pbxInstance) continue;
-      try {
-        const auth = decryptJson<{ token: string; secret?: string | null }>(link.pbxInstance.apiAuthEncrypted);
-        const pbx = getVitalPbxClientForWorker({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret || null });
-
-        const extensions: any[] = await db.extension.findMany({
-          where: { tenantId: link.tenantId, status: "ACTIVE" } as any,
-          include: { pbxLink: true } as any,
-        } as any);
-
-        for (const ext of extensions) {
-          const pbxExtId: string | undefined = ext.pbxLink?.pbxExtensionId;
-          if (!pbxExtId) continue;
-          totalExts++;
-          try {
-            let records: any[] = await pbx.getExtensionVoicemailRecords(pbxExtId, link.pbxTenantId || undefined);
-            cycleRestRecords += records.length;
-            let usedHelperForExt = false;
-            if (records.length === 0 && helperCallsBudget > 0) {
-              const tid = String(link.pbxTenantId || "").trim();
-              const helperCfg = tid ? resolvePbxRouteHelperConfig(link.pbxInstanceId) : null;
-              if (helperCfg && tid) {
-                const now = Date.now();
-                if (helperMinIntervalMs > 0 && lastHelperCallAt > 0) {
-                  const wait = helperMinIntervalMs - (now - lastHelperCallAt);
-                  if (wait > 0) await sleep(wait);
-                }
-                try {
-                  const spool = await listVoicemailSpoolFromHelper(helperCfg, {
-                    tenantId: tid,
-                    extension: ext.extNumber,
-                  });
-                  helperCallsBudget -= 1;
-                  cycleHelperCalls += 1;
-                  lastHelperCallAt = Date.now();
-                  const mapped = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
-                  cycleHelperMessages += mapped.length;
-                  if (mapped.length > 0) {
-                    records = mapped;
-                    usedHelperForExt = true;
-                  }
-                  if (!helperResolvedPbxIds.has(link.pbxInstanceId)) {
-                    helperResolvedPbxIds.add(link.pbxInstanceId);
-                    try {
-                      await resolveHelperIncidentsForPbx(db, link.pbxInstanceId);
-                    } catch {
-                      /* ignore */
-                    }
-                  }
-                } catch (helperErr: any) {
-                  const kind = classifyHelperFailure(helperErr);
-                  if (
-                    kind === "HELPER_ROUTE_MISSING" ||
-                    kind === "HELPER_SECRET_MISMATCH" ||
-                    kind === "HELPER_UNREACHABLE"
-                  ) {
-                    try {
-                      await recordHelperIncident(db, {
-                        scenario: kind,
-                        pbxInstanceId: link.pbxInstanceId,
-                        tenantId: link.tenantId,
-                        metadata: {
-                          mailbox: ext.extNumber,
-                          httpStatus: helperErr?.httpStatus,
-                          helperBaseHost: helperBaseHostFromUrl(helperCfg.baseUrl),
-                        },
-                      });
-                    } catch {
-                      /* ignore */
-                    }
-                  }
-                }
-              }
-            }
-            totalRecords += records.length;
-            const upsertsBeforeExt = totalUpserts;
-            for (const rec of records) {
-              // VitalPBX payload uses { date, clid, recfile, filename, msg_id }.
-              // Older Asterisk-voicemail dumps used { origtime, callerid, msg_num }.
-              // Accept both so future API changes don't silently drop records.
-              const origtime = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
-              if (!origtime || origtime === "0") continue;
-              const rawCallerid = String(rec.clid ?? rec.callerid ?? rec.caller_id ?? "");
-              const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
-              const callerName = vmExtractCallerName(rawCallerid) || null;
-              const callerDigits = (callerNumber ?? "").slice(-10);
-              const rawFolder = String(rec.folder ?? "INBOX");
-              const folder = vmNormalizeFolder(rawFolder);
-              const listened = folder !== "inbox";
-              // Prefer VitalPBX's own stable msg_id (e.g. "1761219702-000000b2") when
-              // present; fall back to a deterministic composite so legacy responses
-              // still dedupe reliably.
-              const msgId = String(
-                rec.msg_id
-                  ?? `${link.pbxTenantId || link.tenantId}|${ext.extNumber}|${origtime}|${callerDigits}`,
-              );
-              // pbxMsgNum is the bare message name ("msg0000") used by the
-              // /api/v2/voicemail/:mailbox/:folder/:messageName playback endpoint.
-              // Derive from `filename` (msg0000.txt) or `recfile` (.../msg0000.wav).
-              const filename = String(rec.filename ?? "");
-              const recfile = String(rec.recfile ?? "");
-              const fromFilename = filename.replace(/\.[^.]+$/, "");
-              const fromRecfile = recfile ? (recfile.split("/").pop() ?? "").replace(/\.[^.]+$/, "") : "";
-              const pbxMsgNum = String(
-                rec.msg_num ?? rec.msgnum ?? rec.id ?? fromFilename ?? fromRecfile ?? "",
-              );
-
-              totalUpserts++;
-              await (db as any).voicemail.upsert({
-                where: { pbxMessageId: msgId },
-                create: {
-                  pbxMessageId: msgId,
-                  tenantId: link.tenantId,
-                  extension: ext.extNumber,
-                  pbxExtensionId: pbxExtId,
-                  callerNumber,
-                  callerName,
-                  durationSec: parseInt(String(rec.duration ?? "0"), 10) || 0,
-                  folder,
-                  pbxFolder: rawFolder,
-                  pbxMsgNum,
-                  pbxRecfile: recfile || null,
-                  listened,
-                  receivedAt: new Date(parseInt(origtime, 10) * 1000),
-                },
-                update: {
-                  folder,
-                  pbxFolder: rawFolder,
-                  pbxMsgNum,
-                  // Only overwrite recfile when PBX actually returned one — avoids
-                  // nulling out a good value if a future response trims the field.
-                  ...(recfile ? { pbxRecfile: recfile } : {}),
-                  // Re-apply caller fields every cycle so any CNAM-extraction fix
-                  // (e.g. unquoted clid support) backfills existing rows automatically.
-                  callerNumber,
-                  callerName,
-                  listened,
-                },
-              });
-            }
-            if (usedHelperForExt && records.length > 0 && totalUpserts === upsertsBeforeExt) {
-              try {
-                await recordRestVsSpoolDiverge(db, {
-                  tenantId: link.tenantId,
-                  mailbox: ext.extNumber,
-                  source: "worker_sync",
-                });
-              } catch {
-                /* ignore */
-              }
-            } else if (usedHelperForExt && totalUpserts > upsertsBeforeExt) {
-              try {
-                await resolveRestVsSpoolDiverge(db, {
-                  tenantId: link.tenantId,
-                  mailbox: ext.extNumber,
-                  source: "worker_sync",
-                });
-              } catch {
-                /* ignore */
-              }
-            }
-          } catch (extErr: any) {
-            totalErrors++;
-            console.warn(`voicemail sync ext ${ext.extNumber} (tenant ${link.tenantId}): ${extErr?.message}`);
-          }
-        }
-      } catch (tenantErr: any) {
-        totalErrors++;
-        console.error(`voicemail sync tenant ${link.tenantId}: ${tenantErr?.message}`);
-      }
-    }
-
-    const source_used =
-      cycleHelperCalls > 0 ? (cycleRestRecords > 0 ? "rest+helper" : "helper") : "rest";
-    const fallback_reason =
-      cycleHelperCalls > 0 ? "rest_empty_used_spool_fallback" : null;
-
-    if (links.length > 0 && totalExts > 0 && totalRecords === 0 && totalErrors === 0) {
-      _vmWorkerSyncZeroStreak += 1;
-    } else {
-      _vmWorkerSyncZeroStreak = 0;
-    }
-    if (links.length === 0 || totalExts === 0 || totalRecords > 0) {
-      try {
-        await resolveWorkerSyncGlobalZero(db);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (_vmWorkerSyncZeroStreak >= 3) {
-      try {
-        await recordWorkerSyncGlobalZero(db);
-      } catch {
-        /* ignore */
-      }
-    }
-
-    console.log(
-      JSON.stringify({
-        msg: "voicemail-sync-cycle",
-        links: links.length,
-        extsChecked: totalExts,
-        records: totalRecords,
-        upserts: totalUpserts,
-        errors: totalErrors,
-        rest_count: cycleRestRecords,
-        helper_count: cycleHelperMessages,
-        helper_calls: cycleHelperCalls,
-        source_used,
-        upserted_count: totalUpserts,
-        fallback_reason,
-        worker_sync_zero_streak: _vmWorkerSyncZeroStreak,
-      }),
-    );
-  } finally {
-    _voicemailSyncRunning = false;
-  }
-}
+// Voicemail sync: `runVoicemailSyncCycle` in `./voicemailSyncCycle.ts` (fair helper scheduling).
 
 // â”€â”€â”€ IVR Routing â€” Option A: schedule-based auto-publish â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Runs every 5 minutes.  For every tenant with an active IvrScheduleConfig,

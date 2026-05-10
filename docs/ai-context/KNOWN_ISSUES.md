@@ -643,13 +643,13 @@ When you find a new fragile area, add it here.
   extension. If the REST API returns a **non-empty but wrong** list (stale, partial index, or
   tenant/header mismatch that still yields some rows), Connect **never** compares to disk for that
   poll/notify — new files on the PBX may be invisible in Connect until REST catches up (if ever).
-  **Correlated risk:** worker **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`** (default **32**) is a
-  **global** cap per sync cycle; high extension counts with empty REST can **starve** later
-  mailboxes. **`/internal/voicemail-notify`** resolves `Extension` by **`extNumber` only**
+  **Worker helper starvation (fixed 2026-05):** previously a **global** “first N extensions” cap could
+  skip mailboxes every cycle; the worker now **fair-schedules** helper calls across tenants with a
+  rotating cursor (`packages/shared/src/voicemailSyncFair.ts`, `apps/worker/src/voicemailSyncCycle.ts`).
+  **`/internal/voicemail-notify`** still resolves `Extension` by **`extNumber` only**
   (`findFirst` without tenant) — duplicate active extension numbers across Connect tenants can
   mis-route or skip notify. Evidence checklist: **`DEBUGGING.md`** § voicemail items **8–10**;
-  durable fix requires code changes (reconcile/merge, fair per-tenant scheduling, tenant-scoped
-  notify lookup) — track in product backlog until shipped.
+  merge-based REST+spool reconcile and tenant-scoped notify remain backlog if needed.
 - **Playback / `src_unsupported` (mobile) and 503 (API).** List/stale rows still
   show in UI if created before the stall. `GET /voice/voicemail/:id/stream` loads audio
   via `streamVoicemailAudio` (`apps/api/src/server.ts`): it follows **`pbxRecfile`** when it is a

@@ -403,7 +403,8 @@ Per-service:
       **Fingerprint without pasting secrets:** app-host **`docker exec`** length + **`sha256sum`**, PBX **`/etc/connect-pbx-helper.env`**
       + **`/proc/<pid>/environ`** same — **`DEPLOYMENT.md`** § **Secret mismatch fingerprints**.
       When fixed, **`POST …/spool/list`** → **200**; worker JSON may show **`helper_count` > 0** and
-      **`fallback_reason":"rest_empty_used_spool_fallback"`** (**`DEPLOYMENT.md`** recorded verification).
+      **`fallback_reason":"rest_empty_used_spool_fallback_fair_schedule"`** (worker; legacy
+      **`rest_empty_used_spool_fallback`** on older builds) (**`DEPLOYMENT.md`** recorded verification).
    3. **Super-admin incidents** — open **`VoicemailIngestIncident`** rows (helper errors, notify upsert zero, worker global zero, REST vs spool) appear in **`GET /admin/ops-center`** and **`GET /admin/incidents`**, with detail/ack at **`GET/POST /admin/voicemail-ingest/incidents*`** (`API_ROUTES.md`). Disable emission with **`VOICEMAIL_INGEST_INCIDENTS_ENABLED=false`** on **api** + **worker** if needed for rollback.
    4. **Which PBX runs the helper?** Compare **`PBX_ROUTE_HELPER_BASE_URL`** (api/worker env) to the
       IP/hostname on the VitalPBX you SSH into. From the **app** host, `curl -s http://<candidate>:8757/health`
@@ -420,13 +421,42 @@ Per-service:
    7. **Confirm ID** — for a mailbox from AMI (`mailbox` + `context` in `MessageWaiting`),
       ensure `Extension` / `PbxExtensionLink.pbxExtensionId` matches
       `GET /api/v2/extensions` **with the correct tenant header** (see `TELEPHONY.md`).
-   8. If IDs match but `voicemail_records` is still empty while AMI shows new mail,
-      Connect **Phase 1** falls back to spool via `POST /voicemail/spool/list` when
-      `PBX_ROUTE_HELPER_*` is set (notify only when AMI `newCount > 0`; worker when REST
-      is empty). If `helper_count` stays `0`, check helper version, secret, and that
-      `tenantId` / mailbox path exist on disk (`mailboxPath` in helper JSON). Still
-      treat persistent REST emptiness as a VitalPBX-side issue for long-term health.
-   9. **Playback** — for `src_unsupported` / cannot play: hit
+   8. **When spool fallback runs (and when it does not).** `runVoicemailSyncCycle` and
+      `/internal/voicemail-notify` call `POST /voicemail/spool/list` only after VitalPBX REST
+      `voicemail_records` returns **zero rows** for that mailbox. The worker **fair-schedules**
+      helper calls across tenants (interleave + rotating cursor, cap
+      `VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`); see `voicemail-sync-ext` JSON for
+      `helper_scheduled`, `skipped_reason` (e.g. `helper_not_scheduled_this_cycle`), and
+      `fair_cursor_next`. If REST returns **any** rows — even a **stale or incomplete**
+      subset vs disk — Connect **does not** reconcile against spool in the current code path.
+      Symptom pattern: PBX has many `msg*.txt` under the tenant’s voicemail context, Connect
+      shows **some** or **zero** rows, worker logs show `rest_count > 0` and `helper_count: 0`
+      for that extension. **Validate** with item **9** (counts) before treating as a UI-only bug.
+      When REST is genuinely empty and helper still never fires, check helper version/secret/bind
+      (items **2** / **5**), missing `TenantPbxLink.pbxTenantId`, and `mailboxPath` in helper JSON.
+   9. **PBX files vs Connect DB (evidence, last 24h).** Do **not** close “ingestion broken”
+      without both sides:
+      - **Postgres** (read-only): `SELECT "tenantId", extension, COUNT(*) FROM "Voicemail" WHERE "deletedAt" IS NULL AND "receivedAt" >= NOW() - INTERVAL '24 hours' GROUP BY 1, 2 ORDER BY 1, 2;`
+        Compare to a **working** tenant and a **reported-broken** tenant (same window).
+      - **Mapping:** `SELECT id, "tenantId", "pbxTenantId", status FROM "TenantPbxLink";` and
+        `Extension` + `PbxExtensionLink` for affected mailboxes — wrong `pbxExtensionId` or null
+        `pbxTenantId` skips helper paths or REST scope.
+      - **PBX disk** (on VitalPBX, read-only): under `/var/spool/asterisk/voicemail/`, locate the
+        tenant’s Asterisk context (e.g. `voicemail show users` / greeting diag — `TELEPHONY.md`),
+        then `find <context>/<ext> -name 'msg*.txt' -mtime -1` (or `-newermt`) for **24h** message
+        sidecars. Count should **correlate** with Connect rows after sync lag (60s worker + notify).
+      - **Logs:** worker JSON `voicemail-sync-cycle` — `exts_checked`, `rest_count`, `helper_calls`,
+        `helper_count`, `upserted_count`, `errors`, `fallback_reason`, `fair_needy_mailboxes`,
+        `fair_helper_picks`, `fair_cursor`; per-mailbox **`voicemail-sync-ext`** (toggle with
+        `VOICEMAIL_SYNC_EXT_JSON_LOGS`); api `voicemail-notify` — `extension_not_found`,
+        `helper_error:*`, `upserted_count`. **Cap:** at most **`VOICEMAIL_HELPER_FALLBACK_MAX_PER_CYCLE`**
+        (default **32**) **distinct** helper calls per cycle, **fairly** distributed across tenants.
+   10. **`/internal/voicemail-notify` extension resolution.** The handler resolves the mailbox with
+      `Extension.findFirst({ extNumber: mailbox, status: ACTIVE })` **without** scoping by tenant.
+      If two Connect tenants share the same active `extNumber`, the **first** row wins — wrong
+      `pbxLink`, `extension_not_found`, or mis-attributed `tenantId`. Confirm uniqueness or disambiguate
+      with AMI `context` + mapping when debugging notify-only failures.
+   11. **Playback** — for `src_unsupported` / cannot play: hit
       `GET /voice/voicemail/:id/stream?token=...` with curl `-I` and inspect status,
       `Content-Type`, and body size. `503` + JSON means upstream audio/recfile failure,
       not a client codec limitation alone. After **Phase 2** (helper **`2026.05.08.2`+**, **api**
@@ -440,7 +470,7 @@ Per-service:
       inside **`app-api-1`** only proves **api** shipped Phase 2 (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
       **Operator install:** exact **`curl` + `bash`** for **`209.145.60.79`** is in **`DEPLOYMENT.md`** § **Phase 2 — operator handoff**.
       **App-host smoke (secret not printed):** from **`ssh connect`**, use **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** only inside a remote script (do not **`echo`**). Call **`spool/list`** to pick a real **`msgNum`**, then **`POST …/voicemail/spool/audio`** — **200**, **`audio/wav`**, non-empty body (**`DEPLOYMENT.md`** recorded verification). Invalid stem **`not-a-msg`** → **400** **`invalid_msgNum`**. **`docker logs app-api-1`** for **`helper_audio_fallback: true`** after playing a spool-backed row.
-   10. Optional sanity: `GET /pbx/live/combined` where available; correlate with
+   12. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via
    `redis-cli LLEN bull:sms-send:wait`. Worker logs show

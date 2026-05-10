@@ -29,6 +29,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts",
     "lint": "echo lint-shared"
   },
   "dependencies": {
@@ -36,6 +37,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2"
+    "@types/node": "^22.10.2",
+    "tsx": "^4.20.5"
   }
 }

@@ -20,6 +20,19 @@ export function vmNormalizeFolder(folder: string): "inbox" | "old" | "urgent" {
   return "old";
 }
 
+/** Stable `pbxMessageId` for voicemail dedupe (matches worker + API upsert logic). */
+export function vmStablePbxMessageId(input: {
+  msgId?: unknown;
+  pbxTenantIdOrTenantCuid: string;
+  extNumber: string;
+  origtime: string;
+  callerDigits: string;
+}): string {
+  const mid = input.msgId != null ? String(input.msgId).trim() : "";
+  if (mid) return mid;
+  return `${input.pbxTenantIdOrTenantCuid}|${input.extNumber}|${input.origtime}|${input.callerDigits}`;
+}
+
 /** Map PBX helper spool rows into the loose shape consumed by REST-style ingestion loops. */
 export function mapHelperVoicemailSpoolToRecordShape(m: {
   folder: string;
