@@ -260,4 +260,6 @@ docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scri
 
 **Duplicates:** `COUNT(*)` vs `COUNT(DISTINCT "pbxMessageId")` on non-deleted **`Voicemail`** → **27732 / 27732** (no duplicates).
 
-**Follow-up:** Commit/deploy the expanded backfill script so **`app-worker-1`** does not rely on a **`docker cp`** copy; re-run **`--dry-run`** after any major helper or worker ingest change to see predicted **`total_inserted`** before live inserts.
+**Worker image (script in-tree, no `docker cp`):** Deploy queue job **`d85c946f-4642-4b62-9411-275260fb151c`** (**`worker`**, commit **`756fb1ce5d3ba107dccc91d0e9fbb80e307f61ac`** — includes **`9f616ac`** backfill flags). Log tail: **`[deploy-worker] done 756fb1c`**. Post-deploy: **`grep voicemail-spool-backfill-fleet-summary`** in **`/app/apps/worker/src/scripts/voicemail-spool-backfill.ts`** inside **`app-worker-1`** confirms the improved script. Canary: **`--tenant=<Gesheft cuid>` `--extension=101` `--dry-run` `--insert-only`** → **`voicemail-spool-backfill-fleet-summary`** with **`dry_run: true`** and no writes.
+
+Re-run **`--dry-run`** after any major helper or worker ingest change to see predicted **`total_inserted`** before a live fleet pass.
