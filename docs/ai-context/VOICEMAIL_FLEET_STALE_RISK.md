@@ -225,8 +225,39 @@ docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scri
 
 Expect Gesheft **101**/**102** **`helper_spool_list_schema`: 2** and **no** stale **`HIGH`** driven solely by the old **400**-row cap / missing **`maxOrigtimeAll`**. Confirm **inserted > 0** when DB was missing rows the helper can now see; confirm portal/mobile lists.
 
-### 8.9 Pre-upgrade evidence (Connect worker, legacy helper)
+### 8.9 Post-PBX-upgrade verification (Connect app host, 2026-05-11)
 
-With helper still **`2026.05.08.2`**, **`voicemail-spool-audit.ts`** for Gesheft **101**/**102** showed **`spool_total`: 400**, **`helper_max_origtime_all`: null**, **`helper_pagination_complete`: true** (single legacy page). **`voicemail-spool-backfill.ts`** reported **400** messages and **0 inserts** (already ingested for that subset). **`voicemail-fleet-stale-report.ts`** (`--min-risk=medium`) left **Gesheft 101**/**102** at **`stale_risk_level`: HIGH** with **`spool_message_count`: 400** and **`helper_spool_list_schema`: null**.
+**PBX helper (app-host `curl`):** `GET http://209.145.60.79:8757/health` → **`"version":"2026.05.10.1"`**, **`"ok":true`**.
 
-**Post-PBX-upgrade transcript:** operator should paste **before/after** `/health`, sample redacted **`spool/list`** metadata for **101**/**102**, backfill **`inserted`** counts, and fleet summary **after** §8.8 into the ticket (replace §8.9 numbers).
+**Schema 2 + pagination (worker env, `voicemail-spool-audit.ts`):** Uses the same **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** path as production. Gesheft **`tenantId`** `cmnlgnumu0001p9g6xyl1pbdd`, Vital **`pbxTenantId`** **8**.
+
+| Ext | DB count pre-backfill (`Voicemail`, `deletedAt` null) | `helper_total_count` / `spool_total` | `helper_max_origtime_all` (unix) | `helper_pagination_complete` | Backfill `inserted` / `already_present` / `errors` | DB count post-backfill |
+|-----|--------------------------------------------------------|--------------------------------------|-----------------------------------|------------------------------|-----------------------------------------------------|-------------------------|
+| **101** | **12574** | **6379** | **1778474950** | **true** | **0** / **6379** / **0** | **12574** (unchanged) |
+| **102** | **2841** | **1434** | **1778444469** | **true** | **0** / **1434** / **0** | **2841** (unchanged) |
+
+**Interpretation:** `totalCount` is **not** capped at **400** (101 → **6379**, 102 → **1434** on-disk spool rows). **`helper_max_origtime_all`** populated; pagination completed (**`helper_pagination_complete`: true**). Fleet script reports **`helper_spool_list_schema`: 2** for these mailboxes. Raw JSON field **`spoolListSchema`** is on the helper HTTP response; audit surfaces the merged page via counts / `maxOrigtimeAll`.
+
+**Backfill:** **No new rows** — every spool message already had a matching **`pbxMessageId`** in **`Voicemail`** (ingest had populated DB beyond the old helper window, or sync caught up earlier). The production gap was **helper list truth** (stale subset / wrong “newest”) for fleet + UI ordering, not empty DB for those files.
+
+**Fleet (`voicemail-fleet-stale-report.ts --min-risk=medium`, full fleet):** `voicemail-fleet-stale-summary` → **`mailboxes_scanned`: 97**, **`by_risk`**: **`HIGH` 6**, **`MEDIUM` 21**, **`LOW` 70**, **`CRITICAL` 0**, **`helper_errors` 0**, **`helper_pagination_incomplete_mailboxes` 0**. **Gesheft 101** and **102** are **`stale_risk_level`: MEDIUM** (folder-spread heuristic), **not** HIGH — **`delta_hours_pbx_minus_db`: 0**, **`spool_message_count`** matches full helper counts above, **`helper_spool_list_schema`: 2**.
+
+**UI/API:** Portal/mobile not logged in from automation. **Indirect:** **`newest_pbx_vm_iso`** matches **`newest_db_vm_iso`** / inbox for **101**/**102**; audit **`missing_count_7d`: 0**. Operator should still spot-check Gesheft **101**/**102** in the voicemail UI (newest at top, no “stuck old” head of list).
+
+### 8.10 Fleet-wide spool backfill (Connect app host, post schema-2)
+
+**Commands (`app-worker-1`):** `voicemail-spool-backfill.ts` supports **`--dry-run`**, **`--insert-only`** (create missing rows only; no metadata overwrite on existing), and **`--mailbox-delay-ms`** (helper rate limit). Example:
+
+```bash
+# Preflight: PBX /health 2026.05.10.1+; spot-check helper_spool_list_schema 2 (e.g. fleet row for Gesheft 101)
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --all-tenants --dry-run --insert-only --mailbox-delay-ms=200'
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --all-tenants --insert-only --mailbox-delay-ms=200'
+```
+
+**2026-05-11 run (production):** Helper **`2026.05.10.1`**. Gesheft **101** canary: **`helper_spool_list_schema`: 2**, **`helper_pagination_complete`: true**. **Dry-run** then **live** (`--insert-only`, **200 ms** inter-mailbox): **`tenants_scanned`: 22** (enabled **`tenantPbxLink` → pbxInstance**), **`mailboxes_scanned`: 97**, **`total_spool_messages`: 9974**, **`total_inserted`: 0**, **`total_already_present`: 9974**, **`total_errors`: 0**, **`tenants_skipped`: []**, **no** pagination-incomplete mailboxes**, **no** per-mailbox helper errors. Runtime ≈ **91 s** (dry) + **89 s** (live) on this fleet.
+
+**Fleet stale (`--min-risk=medium`) before vs after:** unchanged **`HIGH` 6**, **`MEDIUM` 21**, **`LOW` 70**, **`helper_errors` 0**, **`helper_pagination_incomplete_mailboxes` 0** — expected with **zero** inserts (DB already aligned with current spool **`pbxMessageId`** set).
+
+**Duplicates:** `COUNT(*)` vs `COUNT(DISTINCT "pbxMessageId")` on non-deleted **`Voicemail`** → **27732 / 27732** (no duplicates).
+
+**Follow-up:** Commit/deploy the expanded backfill script so **`app-worker-1`** does not rely on a **`docker cp`** copy; re-run **`--dry-run`** after any major helper or worker ingest change to see predicted **`total_inserted`** before live inserts.
