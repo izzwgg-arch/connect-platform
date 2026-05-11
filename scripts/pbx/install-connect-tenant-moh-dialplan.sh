@@ -136,12 +136,28 @@
 #   ./install-connect-tenant-moh-dialplan.sh --help              # usage + mode summary
 #
 # --check is the on-call probe: it never writes, never reloads, and exits
-# non-zero (with a structured RESULT line) if any of the five hardening
-# checks fail (dialplan include present, global hook loaded, PJSIP include
-# present, sample endpoint carries CHANNEL(musicclass), AstDB reverse-map
-# has at least one tenant). --rollback removes only Connect-owned files
-# and the sentinel `#include` line, then reloads dialplan + pjsip; it never
-# touches VitalPBX-generated config.
+# non-zero only when a HARD probe fails. The hard probes are: dialplan
+# include present, resolver/global-hook/connect-shim contexts loaded,
+# AstDB reverse-map has at least one tenant, and (when the canary
+# wrapper is present) the trk-33-dial invariants + wrapper sentinel.
+#
+# The two PJSIP-dependent probes (PJSIP include file present, sample
+# T<id>_* endpoint carries CHANNEL(musicclass)) are now SOFT/WARN-only
+# because PJSIP `[endpoint](+)` append does NOT reliably propagate
+# set_var = CHANNEL(musicclass) on this VitalPBX/Asterisk build
+# (verified 2026-05-10 against canary PBX 209.145.60.79). The supported
+# caller-leg coverage on this build is the canary outbound trunk
+# wrapper (`--enable-trk-wrapper=33`), not PJSIP append. The installer
+# still ATTEMPTS the PJSIP append in install mode for forwards-
+# compatibility with future builds where it might work, and on
+# verification failure rolls back ONLY the PJSIP layer; the dialplan
+# layer survives. --check therefore emits `[WARN]` for the two PJSIP
+# probes and prints a `(W deprecated-PJSIP warning(s))` suffix on the
+# RESULT line; exit code stays 0 unless a HARD probe fails.
+#
+# --rollback removes only Connect-owned files and the sentinel
+# `#include` line, then reloads dialplan + pjsip; it never touches
+# VitalPBX-generated config.
 #
 # Rollback (run on PBX as root) — equivalent to `--rollback`:
 # ----------------------------------------------------------
@@ -257,14 +273,20 @@ Modes:
                  and a sample endpoint carry CHANNEL(musicclass). Backs
                  up any prior same-named includes; rolls back on failure.
 
-  --check        Read-only. Probes the live PBX state and prints PASS/FAIL
-                 for each of the five hardening checks:
-                   1. dialplan include file present
-                   2. dialplan resolver + global hook + shim contexts loaded
-                   3. PJSIP include file present
-                   4. sample T<id>_* endpoint carries CHANNEL(musicclass)
-                   5. AstDB reverse-map has at least one tenant
-                 Exits 0 when all checks pass, non-zero otherwise. Never
+  --check        Read-only. Probes the live PBX state and prints PASS / WARN
+                 / FAIL per probe:
+                   1. dialplan include file present                  [HARD]
+                   2. resolver + global hook + shim contexts loaded  [HARD]
+                   3. PJSIP include file present                     [SOFT]
+                   4. AstDB reverse-map has at least one tenant      [HARD]
+                   5. sample T<id>_* endpoint carries CHANNEL(musicclass)
+                                                                    [SOFT]
+                   6. canary trk-33 wrapper invariants (when present) [HARD]
+                 Exits 0 only when all HARD probes pass. SOFT probes (3, 5)
+                 are emitted as `[WARN]` because PJSIP `[endpoint](+)` append
+                 does not reliably set CHANNEL(musicclass) on this VitalPBX
+                 build (caller-leg coverage is supplied by the canary trunk
+                 wrapper instead — see `--enable-trk-wrapper=33`). Never
                  writes files, never reloads asterisk.
 
   --rollback     Removes only Connect-owned files:
@@ -429,16 +451,20 @@ print_context_verification() {
 # ── Health-check mode (read-only) ──────────────────────────────────────────
 # Probes the running PBX and prints PASS/FAIL for each of the five hardening
 # checks the requirements call out:
-#   1. dialplan include file present at the expected path
-#   2. resolver + global hook + shim contexts loaded
-#   3. PJSIP include file present
-#   4. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>
-#   5. AstDB reverse-map has at least one tenant
-# Exits 0 when all relevant checks pass, non-zero otherwise. Hard rule:
-# never writes a file, never reloads asterisk. The only allowed asterisk
-# CLI verbs in here are read-only "show"/"get" queries.
+#   1. dialplan include file present at the expected path           [HARD]
+#   2. resolver + global hook + shim contexts loaded                [HARD]
+#   3. PJSIP include file present                                   [SOFT]
+#   4. AstDB reverse-map has at least one tenant                    [HARD]
+#   5. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>  [SOFT]
+# Exits 0 when all HARD probes pass. SOFT probes (3, 5) emit `[WARN]`
+# instead of `[FAIL]` because PJSIP `[endpoint](+)` append is
+# unreliable on this VitalPBX build; caller-leg MOH coverage is the
+# canary outbound trunk wrapper (`--enable-trk-wrapper=33`), not PJSIP
+# append. Hard rule: never writes a file, never reloads asterisk. The
+# only allowed asterisk CLI verbs in here are read-only "show"/"get".
 do_health_check() {
   local fail=0
+  local warns=0
   local checks=0
   local sample_tid="" sample_class="" sample_ep=""
   local out tenant_map_raw tenant_ids_list ep_count
@@ -472,13 +498,19 @@ do_health_check() {
     fi
   done
 
-  # 3. PJSIP include file present
+  # 3. PJSIP include file present (SOFT — deprecated on this build).
+  # PJSIP `[endpoint](+)` append does not reliably set CHANNEL(musicclass)
+  # on this VitalPBX build, so the installer's install-mode rolls back
+  # this file on verification failure. A missing PJSIP include is therefore
+  # treated as an informational warning, NOT a failure: caller-leg coverage
+  # for the canary tenant/trunk is supplied by the trunk wrapper.
   checks=$((checks + 1))
   if [[ -f "$PJSIP_FILE" ]]; then
     printf '[PASS] PJSIP include present: %s\n' "$PJSIP_FILE"
   else
-    printf '[FAIL] PJSIP include missing: %s\n' "$PJSIP_FILE"
-    fail=$((fail + 1))
+    printf '[WARN] PJSIP caller-leg append not installed; deprecated/unsupported on this build: %s\n' "$PJSIP_FILE"
+    printf '       Caller-leg MOH on this build is delivered by the canary trunk wrapper (--enable-trk-wrapper=33).\n'
+    warns=$((warns + 1))
   fi
 
   # 4. AstDB reverse-map has at least one tenant
@@ -519,13 +551,16 @@ do_health_check() {
       if echo "$ep_show" | grep -Eiq "set_var[[:space:]]*[:=].*CHANNEL\(musicclass\)=${sample_class}|musicclass[[:space:]]*[:=].*${sample_class}"; then
         printf '[PASS] sample endpoint %s carries CHANNEL(musicclass)=%s\n' "$sample_ep" "$sample_class"
       else
-        printf '[FAIL] sample endpoint %s missing CHANNEL(musicclass)=%s\n' "$sample_ep" "$sample_class"
-        fail=$((fail + 1))
+        # SOFT — see note on probe 3. PJSIP append is unreliable on this build.
+        printf '[WARN] sample endpoint %s missing CHANNEL(musicclass)=%s — PJSIP append unreliable on this build\n' \
+          "$sample_ep" "$sample_class"
+        printf '       Caller-leg MOH for trunk 33 / tenant T3 is delivered by the canary trunk wrapper (--enable-trk-wrapper=33).\n'
+        warns=$((warns + 1))
       fi
     else
-      printf '[FAIL] could not pick a sample endpoint to probe (tid=%s class=%s ep=%s)\n' \
+      printf '[WARN] could not pick a sample endpoint to probe (tid=%s class=%s ep=%s) — PJSIP append unreliable on this build\n' \
         "$sample_tid" "$sample_class" "$sample_ep"
-      fail=$((fail + 1))
+      warns=$((warns + 1))
     fi
   else
     printf '[SKIP] sample endpoint check (no tenants in reverse-map)\n'
@@ -543,10 +578,18 @@ do_health_check() {
 
   printf '\n====================================================\n'
   if [[ $fail -eq 0 ]]; then
-    printf 'RESULT: PASS (%s/%s checks healthy)\n' "$checks" "$checks"
+    if [[ $warns -gt 0 ]]; then
+      printf 'RESULT: PASS (%s checks healthy; %s deprecated-PJSIP warning(s))\n' "$checks" "$warns"
+      printf 'Note: PJSIP `[endpoint](+)` append is unreliable on this VitalPBX build.\n'
+      printf '      Caller-leg MOH coverage for trunk 33 / tenant T3 is provided by the canary\n'
+      printf '      trunk wrapper (--enable-trk-wrapper=33). The dialplan + AstDB layers above\n'
+      printf '      are healthy and trunk/called-leg MOH on hold is unaffected.\n'
+    else
+      printf 'RESULT: PASS (%s/%s checks healthy)\n' "$checks" "$checks"
+    fi
     return 0
   else
-    printf 'RESULT: FAIL (%s/%s checks failed)\n' "$fail" "$checks"
+    printf 'RESULT: FAIL (%s/%s checks failed; %s warning(s))\n' "$fail" "$checks" "$warns"
     printf 'Hint: re-run Connect MOH publish then "%s" (no flag) to reinstall.\n' "$0"
     return 1
   fi

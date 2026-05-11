@@ -659,6 +659,20 @@ Why every safe option was rejected:
   versions, and may drift when VitalPBX regenerates the trunk
   context. Requires a separate written approval before any code lands.
 
+**Update 2026-05-10 — PJSIP caller-leg append demoted to deprecated/SOFT
+on this VitalPBX build.** Diagnostics on canary PBX `209.145.60.79`
+confirmed that PJSIP `[<endpoint>](+)` append at
+`/etc/asterisk/pjsip__65_connect_tenant_moh.conf` does NOT propagate
+`set_var = CHANNEL(musicclass)=<class>` to `T<N>_*` extension endpoints.
+The installer still attempts the append in `install` mode for
+forwards-compat, but on verification failure rolls back **only** the
+PJSIP layer and leaves the dialplan layer healthy. `--check` now emits
+`[WARN]` (not `[FAIL]`) when the PJSIP include is absent or when the
+sample endpoint is missing `CHANNEL(musicclass)`, with exit code `0`
+as long as all HARD probes pass. Caller-leg MOH coverage on this
+build is delivered by the canary outbound trunk wrapper
+(`--enable-trk-wrapper=33`), documented immediately below.
+
 **Update 2026-05-10 — canary wrapper APPROVED (code only, not yet
 installed on PBX):** the same-context same-pattern shadow approach
 ("F2") has been approved at the architecture level for **trunk 33 /

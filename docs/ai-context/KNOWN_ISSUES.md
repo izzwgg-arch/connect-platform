@@ -158,6 +158,22 @@ When you find a new fragile area, add it here.
   "Canary outbound caller-leg MOH wrapper (trunk 33 / tenant T3)"
   and `DEPLOYMENT.md` → canary wrapper runbook for full operational
   detail.
+  **Update 2026-05-10b — PJSIP append demoted to deprecated/SOFT.**
+  Verified on canary PBX `209.145.60.79` that `install` mode writes
+  `pjsip__65_connect_tenant_moh.conf` correctly but the PJSIP
+  `[<endpoint>](+)` append does NOT propagate
+  `set_var = CHANNEL(musicclass)` to `T<N>_*` endpoints; sample-endpoint
+  verification fails and the installer rolls back ONLY the PJSIP
+  layer, leaving the dialplan layer healthy. `--check` no longer
+  fails when the PJSIP include is absent or the sample endpoint is
+  missing `CHANNEL(musicclass)`: probes 3 and 5 emit `[WARN]` (not
+  `[FAIL]`) and the RESULT line surfaces the warning count. Exit
+  code is `0` as long as the HARD probes (dialplan include,
+  resolver/global-hook/connect-shim contexts, AstDB reverse-map,
+  and — when present — trk-33 wrapper invariants) all pass.
+  Caller-leg coverage on this build is delivered by the canary
+  trunk wrapper, not PJSIP append. See `TELEPHONY.md` PJSIP demote
+  block and `DEBUGGING.md` "PJSIP probes are SOFT/WARN" note.
 - **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
   alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
   convenience alias for `module reload res_pjsip.so` on newer Asterisk

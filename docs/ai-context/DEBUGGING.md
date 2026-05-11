@@ -867,6 +867,23 @@ Probe order (all read-only):
    wrapper is not installed (expected default), or `[PASS] ... loaded`
    plus `[PASS] generated [trk-33-dial] invariants present` when it is.
 
+   **PJSIP probes are SOFT/WARN as of 2026-05-10.** A `--check` run on
+   this VitalPBX build with the dialplan layer installed but the PJSIP
+   layer absent (the expected steady state on canary) is **PASS** with
+   warnings, not FAIL. Expected lines:
+
+   - `[WARN] PJSIP caller-leg append not installed; deprecated/unsupported on this build: /etc/asterisk/pjsip__65_connect_tenant_moh.conf`
+   - `[WARN] sample endpoint T<id>_<ext> missing CHANNEL(musicclass)=...` (or `could not pick a sample endpoint`)
+   - `RESULT: PASS (N checks healthy; W deprecated-PJSIP warning(s))`
+
+   Treat `RESULT: FAIL` as a real regression (one of the HARD probes —
+   dialplan include, contexts loaded, AstDB reverse-map, or wrapper
+   invariants — broke). Do **not** re-run `install` purely to "fix" a
+   PJSIP WARN — the install will retry the append, fail verification,
+   roll back the PJSIP layer, and you'll be back to the same WARN.
+   The supported caller-leg fix on this build is the canary trunk
+   wrapper (`--enable-trk-wrapper=33`).
+
 3. Inspect the merged context — wrapper sentinel + generated tail:
    ```bash
    ssh connect-pbx "asterisk -rx 'dialplan show trk-33-dial'"

@@ -358,6 +358,19 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   (`/etc/asterisk/extensions__65_connect_trk33_wrapper.conf`) if
   present. Idempotent — running again on an
   already-uninstalled host is safe.
+- **`--check` semantics (updated 2026-05-10):** the two PJSIP-dependent
+  probes (PJSIP include present, sample endpoint carries
+  `CHANNEL(musicclass)`) are now SOFT and emit `[WARN]` rather than
+  `[FAIL]`, because PJSIP `[<endpoint>](+)` append does not reliably
+  propagate `set_var` on this VitalPBX build. The RESULT line is
+  `RESULT: PASS (N checks healthy; W deprecated-PJSIP warning(s))`
+  when only PJSIP probes warn and all HARD probes pass; exit code is
+  `0`. The HARD probes that DO block PASS are: dialplan include
+  present, resolver/global-hook/connect-shim contexts loaded, AstDB
+  reverse-map has at least one tenant, and (when the canary wrapper
+  file is present) the trk-33 wrapper invariants. Treat `RESULT: FAIL`
+  as a real regression. Caller-leg MOH coverage on this build is the
+  canary trunk wrapper (`--enable-trk-wrapper=33`), NOT PJSIP append.
 - **Rollback (manual equivalent, break-glass only)**. Do **not** use
   `asterisk -rx "pjsip reload"` — that CLI alias is missing on some
   VitalPBX/Asterisk builds (verified 2026-05-10) and silently no-ops.
