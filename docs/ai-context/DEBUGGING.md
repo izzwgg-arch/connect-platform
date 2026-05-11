@@ -527,8 +527,11 @@ Per-service:
       → **206** + **`Content-Range`**; wrong user's token → **403** JSON (no audio body).
       **Notify:** **`docker logs app-api-1`** — **`voicemail-notify: extension not resolved`**
       must include **`notifyResolveReason`**; push should only hit **`ownerUserId`** for the
-      resolved extension (or disable push with **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=false`**
-      until proven — **`KNOWN_ISSUES.md`**). **Call history parity:** super-admin **`GET /calls/history`**
+      resolved extension. Push is **opt-in:** set **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=true`**
+      on **api** to enable; when unset, push stays **off**. **List forensics:** grep **`[VOICEMAIL_LIST_SCOPE]`**
+      — confirms **`sub`**, **`scopedMailboxesForUser`**, **`returnedPageRows`**, **`totalMatching`** per request.
+      **Mobile still wrong after API deploy:** confirm a **fresh mobile build** — old apps could show
+      **cached voicemails** from another login (see **`KNOWN_ISSUES.md`** React Query leak). **Call history parity:** super-admin **`GET /calls/history`**
       without **`tenantId`** is still fleet-wide by design — see **`KNOWN_ISSUES.md`** chat/history audit bullet.
    12. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.

@@ -14252,6 +14252,8 @@ app.get("/voice/voicemail", async (req, reply) => {
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  /** Logged after query — mailboxes this JWT user may list (standard users only). */
+  let scopedMailboxesForLog: string[] | undefined;
 
   const where: Record<string, any> = { deletedAt: null, folder: q.folder };
 
@@ -14285,22 +14287,12 @@ app.get("/voice/voicemail", async (req, reply) => {
     }
     where.tenantId = user.tenantId;
     const owned = await getUserExtensionNumbers(user);
+    scopedMailboxesForLog = owned;
     if (!owned.length) {
       return reply.send({ voicemails: [], total: 0, page: q.page });
     }
     where.extension = owned.length === 1 ? owned[0] : { in: owned };
   }
-
-  app.log.info(
-    {
-      requestedTenantId: q.tenantId ?? null,
-      effectiveTenantId: where.tenantId ?? null,
-      extension: where.extension ?? null,
-      folder: q.folder,
-      role: user.role,
-    },
-    "[VOICEMAIL_FILTER] resolved scope",
-  );
 
   const take = 100;
   const skip = (q.page - 1) * take;
@@ -14309,6 +14301,24 @@ app.get("/voice/voicemail", async (req, reply) => {
     db.voicemail.findMany({ where, orderBy: { receivedAt: "desc" }, take, skip }),
     db.voicemail.count({ where }),
   ]);
+
+  app.log.info(
+    {
+      sub: user.sub,
+      role: user.role,
+      jwtTenantId: user.tenantId ?? null,
+      requestedQueryTenantId: q.tenantId ?? null,
+      clientTenantParamIgnored: !isSuperAdmin,
+      effectiveWhereTenant: where.tenantId ?? null,
+      effectiveWhereExtension: where.extension ?? null,
+      scopedMailboxesForUser: scopedMailboxesForLog,
+      folder: q.folder,
+      page: q.page,
+      returnedPageRows: voicemails.length,
+      totalMatching: total,
+    },
+    "[VOICEMAIL_LIST_SCOPE]",
+  );
 
   // Resolve tenant display names in one batched lookup. Voicemail.tenantId may
   // be either a Connect cuid or a 'vpbx:<slug>' placeholder for unresolved PBX
@@ -21376,7 +21386,8 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           listened: folder !== "inbox",
         },
       });
-      const pushEnabled = (process.env.VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED || "true").toLowerCase() !== "false";
+      // Opt-in only: unset or false disables push (SEV-1 containment default).
+      const pushEnabled = (process.env.VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED || "").toLowerCase() === "true";
       if (
         pushEnabled &&
         !existingVoicemail &&

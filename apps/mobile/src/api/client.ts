@@ -20,6 +20,7 @@ import {
   VOICEMAIL_API_PAGE_SIZE,
   VOICEMAIL_MAX_PAGES_PER_FOLDER,
 } from "./voicemailPagination";
+import { decodeJwtPayloadLoose } from "../voicemail/vmGreetingInviteUtils";
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
 
@@ -95,9 +96,25 @@ export async function getCallHistory(token: string): Promise<CallRecord[]> {
   return Array.isArray(json) ? (json as CallRecord[]) : [];
 }
 
+/**
+ * Partition React Query cache per JWT identity — never reuse voicemail rows across
+ * logins (same queryKey as another user would show stale cached voicemails).
+ */
+export function voicemailQueryUserScope(token: string | null | undefined): string {
+  if (!token) return "_";
+  const p = decodeJwtPayloadLoose(token);
+  if (!p) return `opaque:${String(token.length)}`;
+  const sub = String(p.sub ?? "");
+  const tid = String(p.tenantId ?? p["tid"] ?? "");
+  if (sub && tid) return `${sub}:${tid}`;
+  if (sub) return sub;
+  return `opaque:${String(token.length)}`;
+}
+
 export const mobileQueryKeys = {
   callHistory: ["mobile", "callHistory"] as const,
-  voicemails: (folder: VoicemailFolder | "all" = "all") => ["mobile", "voicemails", folder] as const,
+  voicemails: (folder: VoicemailFolder | "all" = "all", token: string | null | undefined = null) =>
+    ["mobile", "voicemails", folder, voicemailQueryUserScope(token)] as const,
   teamDirectory: (scope: string) => ["mobile", "teamDirectory", scope] as const,
   contacts: (query = "") => ["mobile", "contacts", query] as const,
   chatThreads: ["mobile", "chatThreads"] as const,

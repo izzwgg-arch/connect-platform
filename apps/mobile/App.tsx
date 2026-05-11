@@ -68,7 +68,10 @@ function MobileDataPrefetcher() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      queryClient.removeQueries({ queryKey: ['mobile', 'voicemails'] });
+      return;
+    }
     queryClient.prefetchQuery({
       queryKey: mobileQueryKeys.contacts(''),
       queryFn: () => getContacts(token, ''),
@@ -78,7 +81,7 @@ function MobileDataPrefetcher() {
       queryFn: () => getCallHistory(token),
     }).catch(() => undefined);
     queryClient.prefetchQuery({
-      queryKey: mobileQueryKeys.voicemails('all'),
+      queryKey: mobileQueryKeys.voicemails('all', token),
       queryFn: () => getVoicemails(token),
     }).catch(() => undefined);
     queryClient.prefetchQuery({

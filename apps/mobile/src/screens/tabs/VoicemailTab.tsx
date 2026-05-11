@@ -17,7 +17,9 @@ import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useRoute } from '@react-navigation/native';
+import type { RouteProp } from '@react-navigation/native';
+import type { TabParamList } from '../../navigation/types';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import { Avatar } from '../../components/ui/Avatar';
@@ -94,6 +96,7 @@ function dateMatches(vm: Voicemail, filter: DateFilter): boolean {
 }
 
 export function VoicemailTab() {
+  const route = useRoute<RouteProp<TabParamList, 'Voicemail'>>();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
@@ -113,7 +116,7 @@ export function VoicemailTab() {
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const voicemailQuery = useQuery({
-    queryKey: mobileQueryKeys.voicemails('all'),
+    queryKey: mobileQueryKeys.voicemails('all', token),
     enabled: Boolean(token),
     queryFn: () => getVoicemails(token!),
     staleTime: 3 * 60 * 1000,
@@ -126,6 +129,18 @@ export function VoicemailTab() {
     const nextRows = voicemailQuery.data?.voicemails;
     if (nextRows) setRows(nextRows);
   }, [voicemailQuery.data]);
+
+  // When opened from a voicemail push notification, expand and highlight
+  // the specific voicemail. Reset the primary filter to 'all' so the
+  // entry is always visible regardless of the current filter state.
+  const notifVoicemailId = (route.params as { voicemailId?: string } | undefined)?.voicemailId;
+  useEffect(() => {
+    if (!notifVoicemailId || rows.length === 0) return;
+    const exists = rows.some((vm) => vm.id === notifVoicemailId);
+    if (!exists) return;
+    setPrimaryFilter('all');
+    setExpandedId(notifVoicemailId);
+  }, [notifVoicemailId, rows]);
 
   const loading = voicemailQuery.isLoading && rows.length === 0;
   const refreshing = voicemailQuery.isRefetching;
@@ -220,7 +235,7 @@ export function VoicemailTab() {
       setProgress({ position: 0, duration: vm.durationSec });
       if (!vm.listened) {
         markVoicemailListened(token, vm.id, true)
-          .then(() => queryClient.invalidateQueries({ queryKey: mobileQueryKeys.voicemails('all') }).catch(() => undefined))
+          .then(() => queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined))
           .catch(() => undefined);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
       }
@@ -234,7 +249,7 @@ export function VoicemailTab() {
     if (!token) return;
     const next = !vm.listened;
     markVoicemailListened(token, vm.id, next)
-      .then(() => queryClient.invalidateQueries({ queryKey: mobileQueryKeys.voicemails('all') }).catch(() => undefined))
+      .then(() => queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined))
       .catch(() => undefined);
     setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: next } : row));
   }, [queryClient, token]);
@@ -245,7 +260,7 @@ export function VoicemailTab() {
     setRows((current) => current.map((row) => selectedIds.includes(row.id) ? { ...row, listened: true } : row));
     setSelectedIds([]);
     await Promise.all(selected.map((vm) => markVoicemailListened(token, vm.id, true).catch(() => undefined)));
-    queryClient.invalidateQueries({ queryKey: mobileQueryKeys.voicemails('all') }).catch(() => undefined);
+    queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined);
   }, [queryClient, rows, selectedIds, token]);
 
   const callBack = useCallback((vm: Voicemail) => {

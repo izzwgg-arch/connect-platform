@@ -678,6 +678,19 @@ When you find a new fragile area, add it here.
   enqueued (clone dirty-tree caveat in `AGENTS.md`). **Push:** note whether
   **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED`** stayed **true** or was set **false**
   on **api** for containment until notify targeting is proven.
+- **Mobile React Query leaked voicemails across logins (2026-05).** The mobile
+  client used **`queryKey: ["mobile","voicemails","all"]`** with **no JWT/user
+  segment**, so **TanStack Query** could serve **cached rows from a previous
+  account** after login switch (stale for up to **`gcTime`**). Symptom: “other
+  people’s” messages on a **new** user; playback fails (**403**) when IDs belong
+  to the prior user. **Fix:** include **`voicemailQueryUserScope(token)`**
+  (`sub`+`tenantId` from a **non-verifying** JWT payload decode) in the key; on
+  logout **`removeQueries({ queryKey: ["mobile","voicemails"] })`**. Shipped in
+  **`apps/mobile`** — requires a **new mobile build**; API isolation alone does
+  not clear the device cache. **API logs:** each list emits **`[VOICEMAIL_LIST_SCOPE]`**
+  with **`sub`**, **`scopedMailboxesForUser`**, **`returnedPageRows`**, **`totalMatching`**
+  (no audio, no secrets). **Voicemail push** is **opt-in:** **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=true`**
+  only — default **off** when unset (`apps/api/src/server.ts`).
 - **Call history + chat (privacy audit, 2026-05).** **`GET /calls/history`**
   (`apps/api/src/server.ts`): non–super-admin callers always get a **JWT-derived
   `tenantIdFilter`** (plus **extension-scoped** filtering for roles that are not
