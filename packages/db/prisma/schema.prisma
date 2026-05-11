@@ -390,6 +390,7 @@ model Tenant {
   mohOverrideState                MohOverrideState?
   mohPublishRecords               MohPublishRecord[]
   mohLastPublishedState           MohLastPublishedState?
+  mohExtensionOverrides           MohExtensionOverride[]
   didRouteMappings                DidRouteMapping[]
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
@@ -1815,28 +1816,28 @@ model PbxJob {
 }
 
 model MobileDevice {
-  id                  String               @id @default(cuid())
-  tenantId            String
-  userId              String
-  extensionId         String?
-  platform            MobilePlatform
-  expoPushToken       String               @unique
-  voipPushToken       String?
-  deviceId            String?
-  appVersion          String?
-  deviceName          String?
+  id                    String               @id @default(cuid())
+  tenantId              String
+  userId                String
+  extensionId           String?
+  platform              MobilePlatform
+  expoPushToken         String               @unique
+  voipPushToken         String?
+  deviceId              String?
+  appVersion            String?
+  deviceName            String?
   // Call-wake diagnostics — populated by /mobile/devices/register on every
   // app start so backend can correlate S24 vs S25 vs OnePlus vs Pixel etc.
-  manufacturer        String?
-  model               String?
-  osVersion           String?
+  manufacturer          String?
+  model                 String?
+  osVersion             String?
   // Updated by sendPushToUserDevices on every push. Lets the admin /mobile
   // diagnostics surface confirm "yes the push was sent at <ts> and Expo
   // accepted it" or "Expo rejected it with reason X".
-  lastPushSentAt      DateTime?
-  lastPushType        String?
-  lastPushStatus      String?
-  lastPushError       String?
+  lastPushSentAt        DateTime?
+  lastPushType          String?
+  lastPushStatus        String?
+  lastPushError         String?
   // Runtime-permission snapshot reported by the mobile app on every
   // /mobile/devices/register call. Used by /admin/call-wake-diagnostics
   // to flag devices that are missing RECORD_AUDIO (answer-then-disconnect)
@@ -1853,17 +1854,17 @@ model MobileDevice {
   // backgrounded S25 / Android 15" (PHONE_CALL FGS rejected by One UI 7).
   keepAliveSnapshot     Json?
   keepAliveReportedAt   DateTime?
-  active              Boolean              @default(true)
-  deactivatedAt       DateTime?
-  lastSeenAt          DateTime             @default(now())
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  extension           Extension?           @relation(fields: [extensionId], references: [id], onDelete: SetNull)
-  acceptedInvites     CallInvite[]         @relation("CallInviteAcceptedByDevice")
-  voiceClientSessions VoiceClientSession[]
-  callWakeEvents      CallWakeEvent[]      @relation("CallWakeEventByDevice")
+  active                Boolean              @default(true)
+  deactivatedAt         DateTime?
+  lastSeenAt            DateTime             @default(now())
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extension             Extension?           @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  acceptedInvites       CallInvite[]         @relation("CallInviteAcceptedByDevice")
+  voiceClientSessions   VoiceClientSession[]
+  callWakeEvents        CallWakeEvent[]      @relation("CallWakeEventByDevice")
 
   @@index([tenantId, userId])
   @@index([tenantId, platform])
@@ -2357,13 +2358,14 @@ model MohProfile {
   createdBy                   String?
   updatedBy                   String?
 
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  scheduleDefault    MohScheduleConfig[] @relation("MohScheduleDefault")
-  scheduleAfterHours MohScheduleConfig[] @relation("MohScheduleAfterHours")
-  scheduleHoliday    MohScheduleConfig[] @relation("MohScheduleHoliday")
+  tenant             Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleDefault    MohScheduleConfig[]    @relation("MohScheduleDefault")
+  scheduleAfterHours MohScheduleConfig[]    @relation("MohScheduleAfterHours")
+  scheduleHoliday    MohScheduleConfig[]    @relation("MohScheduleHoliday")
   scheduleRules      MohScheduleRule[]
   overrideStates     MohOverrideState[]
   didRouteMappings   DidRouteMapping[]
+  extensionOverrides MohExtensionOverride[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -2439,25 +2441,87 @@ model MohOverrideState {
 /// keysWritten stores the full set of AstDB writes (all 6 keys) for this publish.
 /// previousKeysSnapshot stores the full AstDB state before this publish — used for rollback.
 model MohPublishRecord {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  publishedBy          String // userId or "system"
-  publishedAt          DateTime @default(now())
-  source               String // "schedule" | "manual" | "override" | "rollback" | "reconciliation"
-  previousMohClass     String? // display only — class name before this publish
-  newMohClass          String // VitalPBX MOH class name written
-  keysWritten          Json // [{family,key,value}] — all keys written this publish
-  previousKeysSnapshot Json     @default("[]") // full AstDB key snapshot before this publish (for rollback)
-  nativeSync           Json? // PBX helper result for native inbound-route/extension MOH sync
-  status               String   @default("pending") // "pending" | "success" | "failed"
-  error                String?
-  isRollback           Boolean  @default(false)
+  id                         String   @id @default(cuid())
+  tenantId                   String
+  publishedBy                String // userId or "system"
+  publishedAt                DateTime @default(now())
+  source                     String // "schedule" | "manual" | "override" | "rollback" | "reconciliation"
+  previousMohClass           String? // display only — class name before this publish
+  newMohClass                String // VitalPBX MOH class name written
+  keysWritten                Json // [{family,key,value}] — all keys written this publish
+  previousKeysSnapshot       Json     @default("[]") // full AstDB key snapshot before this publish (for rollback)
+  // Per-extension override snapshot at publish time (Phase 1: column only, populated in a later phase
+  // once the publish path writes per-extension keys). Always a JSON array; empty `[]` for legacy rows.
+  extensionOverridesSnapshot Json     @default("[]")
+  nativeSync                 Json? // PBX helper result for native inbound-route/extension MOH sync
+  status                     String   @default("pending") // "pending" | "success" | "failed"
+  error                      String?
+  isRollback                 Boolean  @default(false)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([tenantId, publishedAt])
   @@index([status])
+}
+
+/// Per-extension MOH override (Phase 1 — schema + helpers only; no runtime path yet).
+///
+/// One row per (tenantId, extension). When `enabled = true`, this row should be
+/// the source of truth for the AstDB keys
+///   connect/t_<slug>/extensions/<extension>/moh_class
+///   connect/t_<slug>/extensions/<extension>/active_moh_class
+/// in a future publish phase. Phase 1 does NOT write these keys; the table is
+/// inert until the publish helper is wired up.
+///
+/// `extension` is a normalized string token from CHANNEL(name) (`PJSIP/T<id>_<ext>-...`),
+/// not an FK to `Extension` — the canonical channel-name token is what AstDB will
+/// key on, and the API layer (Phase 2) is responsible for validating against
+/// `Extension` at write time.
+model MohExtensionOverride {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  extension            String
+  vitalPbxMohClassName String
+  mohProfileId         String?
+  enabled              Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdBy            String?
+  updatedBy            String?
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile MohProfile? @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, extension])
+  @@index([tenantId])
+  @@index([enabled])
+}
+
+/// Bulk MOH assignment job (Phase 1 — schema only; no worker consumer yet).
+///
+/// Persists requests like "set tenant default for selected tenants" or
+/// "set per-extension overrides for selected extensions in one tenant".
+/// Deliberately has no FK to Tenant — `targetTenantIds` is opaque so a
+/// later cleanup of a deleted tenant does not cascade-delete history.
+model MohAssignmentJob {
+  id                   String    @id @default(cuid())
+  scope                String // "selected_tenants" | "all_tenants" | "selected_extensions"
+  targetTenantIds      String[]  @default([])
+  targetExtensions     String[]  @default([])
+  vitalPbxMohClassName String
+  mohProfileId         String?
+  mode                 String // "set_tenant_default" | "set_extension_overrides"
+  requestedBy          String?
+  status               String    @default("pending") // "pending" | "applied" | "failed" | "partial"
+  appliedAt            DateTime?
+  error                String?
+  summary              Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
 }
 
 /// Per-tenant last-known publish state — cached to avoid repeated DB queries from the worker.
@@ -2614,29 +2678,29 @@ model PbxMohClass {
 }
 
 model MohAsset {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenantSlug     String // denormalised for helper lookups
-  name           String // human label, e.g. "Holiday Jazz Mix"
-  mohClassName   String // deterministic, e.g. "connect_acme_holiday_jazz"
-  sourceFilename String // original upload filename
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenantSlug         String // denormalised for helper lookups
+  name               String // human label, e.g. "Holiday Jazz Mix"
+  mohClassName       String // deterministic, e.g. "connect_acme_holiday_jazz"
+  sourceFilename     String // original upload filename
   /// Legacy single-key field; new rows mirror PBX artifact key when ready.
-  storageKey     String
+  storageKey         String
   originalStorageKey String? // raw upload bytes (preview / history)
   pbxStorageKey      String? // 8 kHz mono 16-bit PCM WAV for Asterisk sync only
-  contentHash    String // sha256 hex of PBX artifact when ready (manifest diff)
-  sizeBytes      Int // PBX artifact size when ready; otherwise original upload size
-  durationSec    Int? // from ffprobe, null until validated
-  mimeType       String // legacy; prefer originalMimeType for new rows
-  originalMimeType String?
+  contentHash        String // sha256 hex of PBX artifact when ready (manifest diff)
+  sizeBytes          Int // PBX artifact size when ready; otherwise original upload size
+  durationSec        Int? // from ffprobe, null until validated
+  mimeType           String // legacy; prefer originalMimeType for new rows
+  originalMimeType   String?
   pbxFormat          String? // e.g. wav_pcm_s16le_8k_mono
   conversionStatus   String   @default("pending") // pending | ready | failed
   conversionError    String?
-  status         String   @default("uploading") // "uploading" | "ready" | "failed" | "archived"
-  failureReason  String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  createdBy      String?
+  status             String   @default("uploading") // "uploading" | "ready" | "failed" | "archived"
+  failureReason      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdBy          String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

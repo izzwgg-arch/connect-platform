@@ -1,0 +1,170 @@
+// Per-extension MOH override helpers (Phase 1 — schema + helpers only).
+//
+// This module is INERT at runtime: nothing here is wired into the existing
+// `publishMohToAstDb` path, no route exposes it, and no worker consumes it.
+// It exists so the DB foundation (schema + migration) ships with a tested,
+// pure-function helper layer that future phases can wire up.
+//
+// Design rationale (from the Phase 0 design returned 2026-05-11):
+//   - The runtime tenant identity comes from `CHANNEL(name)` (`PJSIP/T<id>_<ext>-...`).
+//   - The per-extension AstDB key family is `connect/t_<slug>/extensions/<ext>/...`.
+//   - `extension` is treated as an opaque string token (no FK to `Extension`)
+//     because the channel-name token is the AstDB key segment and must round-trip
+//     verbatim. Validation happens at this layer.
+//
+// IMPORTANT: nothing here writes to AstDB or AMI. The publish wiring lands in
+// a later phase, gated by the live-call diagnostic + drift-compare harness.
+
+/** A row read from `MohExtensionOverride` for snapshot/key-building purposes. */
+export interface MohExtensionOverrideRow {
+  extension: string;
+  vitalPbxMohClassName: string;
+  enabled: boolean;
+}
+
+/** A snapshot entry persisted on `MohPublishRecord.extensionOverridesSnapshot`. */
+export interface MohExtensionOverrideSnapshotEntry {
+  extension: string;
+  vitalPbxMohClassName: string;
+}
+
+/** Minimal Prisma-like client surface used by `readEnabledExtensionOverridesForTenant`. */
+export interface MohExtensionOverridePrismaClient {
+  mohExtensionOverride: {
+    findMany(args: {
+      where: { tenantId: string; enabled: true };
+      orderBy: { extension: "asc" };
+      select: { extension: true; vitalPbxMohClassName: true; enabled: true };
+    }): Promise<MohExtensionOverrideRow[]>;
+  };
+}
+
+/**
+ * Maximum extension length. Asterisk dialplan allows long EXTEN values, but
+ * channel-name tokens used as AstDB key segments are bounded by VitalPBX's
+ * extension naming convention. 32 chars is a safe ceiling for the canary
+ * deployment; if a tenant ever needs longer, this can be raised — the
+ * runtime resolver does not depend on this constant.
+ */
+export const MOH_EXTENSION_MAX_LENGTH = 32;
+
+/**
+ * Regex for an extension token that is safe to embed in an AstDB key path:
+ * digits, ASCII letters, underscore, hyphen. No whitespace, no `/`, no `.`.
+ * Length 1..MOH_EXTENSION_MAX_LENGTH.
+ */
+const EXTENSION_RE = new RegExp(`^[0-9A-Za-z_-]{1,${MOH_EXTENSION_MAX_LENGTH}}$`);
+
+/**
+ * Trim and validate an extension token. Returns the normalized token or `null`
+ * if the input is unusable. Phase-1 validation only — the API layer (Phase 2)
+ * will additionally cross-check against `Extension` rows for the tenant.
+ */
+export function normalizeExtension(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return null;
+  if (!EXTENSION_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** Strict boolean predicate form of `normalizeExtension`. */
+export function isValidExtension(input: unknown): boolean {
+  return normalizeExtension(input) !== null;
+}
+
+/**
+ * Slug validation mirrors the existing tenant-slug convention used by
+ * `connect/t_<slug>/...` keys: ASCII letters, digits, underscore, hyphen.
+ * Empty / whitespace / path-separator-bearing slugs are rejected so we
+ * never produce a corrupt AstDB key path.
+ */
+const SLUG_RE = /^[0-9A-Za-z_-]{1,64}$/;
+
+function assertSlug(slug: string): string {
+  if (typeof slug !== "string" || !SLUG_RE.test(slug)) {
+    throw new Error(`mohExtensionOverride: invalid tenant slug ${JSON.stringify(slug)}`);
+  }
+  return slug;
+}
+
+function assertExtension(extension: string): string {
+  const normalized = normalizeExtension(extension);
+  if (normalized === null) {
+    throw new Error(`mohExtensionOverride: invalid extension ${JSON.stringify(extension)}`);
+  }
+  return normalized;
+}
+
+/**
+ * Build the AstDB *family* path for the per-extension override under a tenant
+ * slug. AstDB lookups in dialplan use `${DB(family/key)}`, so we expose family
+ * and key separately to mirror `mohReverseMapPublish` style.
+ */
+export function extensionMohClassFamily(slug: string, extension: string): string {
+  return `connect/t_${assertSlug(slug)}/extensions/${assertExtension(extension)}`;
+}
+
+/**
+ * Full AstDB path for the primary per-extension class key:
+ * `connect/t_<slug>/extensions/<extension>/moh_class`.
+ */
+export function extensionMohClassKey(slug: string, extension: string): string {
+  return `${extensionMohClassFamily(slug, extension)}/moh_class`;
+}
+
+/**
+ * Full AstDB path for the fallback per-extension class key:
+ * `connect/t_<slug>/extensions/<extension>/active_moh_class`.
+ *
+ * Mirrors the tenant-level fallback convention so the resolver code can read
+ * primary-then-fallback uniformly.
+ */
+export function extensionActiveMohClassKey(slug: string, extension: string): string {
+  return `${extensionMohClassFamily(slug, extension)}/active_moh_class`;
+}
+
+/**
+ * Project a list of override rows into the snapshot shape persisted on
+ * `MohPublishRecord.extensionOverridesSnapshot` for rollback. Only enabled
+ * rows are included; the result is sorted by extension ASC for deterministic
+ * audit output and stable diffs.
+ *
+ * Rows whose `extension` fails normalization are dropped (defense-in-depth —
+ * a future phase that lets users free-form an extension must validate at
+ * write time, but this guard prevents corrupt rows from reaching AstDB).
+ */
+export function buildExtensionOverrideSnapshot(
+  rows: ReadonlyArray<MohExtensionOverrideRow>,
+): MohExtensionOverrideSnapshotEntry[] {
+  const out: MohExtensionOverrideSnapshotEntry[] = [];
+  for (const row of rows) {
+    if (!row.enabled) continue;
+    const ext = normalizeExtension(row.extension);
+    if (ext === null) continue;
+    if (typeof row.vitalPbxMohClassName !== "string" || row.vitalPbxMohClassName.length === 0) {
+      continue;
+    }
+    out.push({ extension: ext, vitalPbxMohClassName: row.vitalPbxMohClassName });
+  }
+  out.sort((a, b) => (a.extension < b.extension ? -1 : a.extension > b.extension ? 1 : 0));
+  return out;
+}
+
+/**
+ * Read every enabled per-extension override for a tenant, in deterministic
+ * `extension ASC` order. Pure read — no AstDB / AMI / network side effect.
+ */
+export async function readEnabledExtensionOverridesForTenant(
+  prisma: MohExtensionOverridePrismaClient,
+  tenantId: string,
+): Promise<MohExtensionOverrideRow[]> {
+  if (typeof tenantId !== "string" || tenantId.length === 0) {
+    return [];
+  }
+  return prisma.mohExtensionOverride.findMany({
+    where: { tenantId, enabled: true },
+    orderBy: { extension: "asc" },
+    select: { extension: true, vitalPbxMohClassName: true, enabled: true },
+  });
+}

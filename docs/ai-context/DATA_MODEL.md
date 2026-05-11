@@ -248,6 +248,35 @@
 - **Modified by:** `apps/api` `/voice/moh/*`, `apps/worker`
   `runMohScheduleCycle()`.
 
+## MohExtensionOverride / MohAssignmentJob (Phase 1, 2026-05-11 — schema only)
+- **Schema:** `MohExtensionOverride` and `MohAssignmentJob` in
+  `packages/db/prisma/schema.prisma`; migration
+  `packages/db/prisma/migrations/20260521090000_moh_extension_override_phase1/`.
+- **Purpose:** Data foundation for per-extension MOH overrides. Phase 1 is
+  **inert**: no API route, no portal UI, no worker consumer, no AstDB write.
+  `MohExtensionOverride` will (in a later phase) drive the AstDB family
+  `connect/t_<slug>/extensions/<extension>/moh_class` and the fallback
+  `…/active_moh_class`. `MohAssignmentJob` will (in a later phase) persist
+  bulk "selected tenants" / "all tenants" / "selected extensions in a tenant"
+  assignment requests with status + per-target audit.
+- **Tenant-scoped?** `MohExtensionOverride` is tenant-scoped via
+  `tenantId` (FK → `Tenant`, `onDelete: Cascade`); unique
+  `(tenantId, extension)`. `MohAssignmentJob` has **no FK to `Tenant`** —
+  `targetTenantIds` is opaque so a tenant deletion never cascade-deletes
+  history.
+- **`extension` field:** opaque normalized string (digits / ASCII letters /
+  underscore / hyphen, max 32 chars) — the canonical channel-name token
+  parsed from `CHANNEL(name)` (`PJSIP/T<id>_<extension>-…`). NOT an FK to
+  `Extension`; cross-validation is the API write layer's responsibility
+  (Phase 2). Helpers: `apps/api/src/mohExtensionOverride.ts`.
+- **`MohPublishRecord.extensionOverridesSnapshot`:** new nullable JSON
+  column, default `'[]'`. Populated in a later phase when the publish
+  helper writes per-extension keys; legacy rows read as empty array.
+- **High-risk?** Currently **no** (no runtime path). Becomes high-risk in
+  later phases when AstDB writes go live.
+- **Modified by:** **nothing in Phase 1.** Future: `apps/api` per-extension
+  override routes (Phase 2), bulk-job worker (Phase 4).
+
 ## DidRouteMapping / DidRouteSwitchLog
 - **Schema:** lines 2465 / 2520
 - **Purpose:** Per-DID routing config: which IVR profile + MOH profile +
