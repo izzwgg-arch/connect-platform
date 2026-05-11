@@ -75,6 +75,9 @@ export type VoicemailResponse = {
   voicemails: Voicemail[];
   total: number;
   page: number;
+  /** API list scope (when present) — used client-side to filter stale/cached rows. */
+  voicemailScopeVersion?: string;
+  scopedMailboxesForUser?: string[] | null;
 };
 
 export type TeamPresence = "available" | "ringing" | "on_call" | "offline";

@@ -68,8 +68,8 @@ function MobileDataPrefetcher() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
+    queryClient.removeQueries({ queryKey: ['mobile', 'voicemails'] });
     if (!token) {
-      queryClient.removeQueries({ queryKey: ['mobile', 'voicemails'] });
       return;
     }
     queryClient.prefetchQuery({

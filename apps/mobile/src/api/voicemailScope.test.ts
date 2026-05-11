@@ -21,6 +21,13 @@ test("voicemailQueryUserScope: same payload => same key", () => {
   assert.equal(voicemailQueryUserScope(tok), voicemailQueryUserScope(tok));
 });
 
+test("voicemailQueryUserScope: token rotation same sub/tenant => different key", () => {
+  const payload = { sub: "u1", tenantId: "t1" };
+  const t1 = jwtToken(payload).replace(/^x\./, "a.");
+  const t2 = jwtToken(payload).replace(/^x\./, "b.");
+  assert.notEqual(voicemailQueryUserScope(t1), voicemailQueryUserScope(t2));
+});
+
 test("voicemailQueryUserScope: null => stable anon bucket", () => {
   assert.equal(voicemailQueryUserScope(null), "_");
 });

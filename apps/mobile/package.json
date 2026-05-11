@@ -22,7 +22,8 @@
     "lint": "echo lint-mobile",
     "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts",
     "test:voicemail-pagination": "tsx src/api/voicemailPagination.test.ts",
-    "test:voicemail-scope": "tsx src/api/voicemailScope.test.ts"
+    "test:voicemail-scope": "tsx src/api/voicemailScope.test.ts",
+    "test:voicemail-client-scope": "tsx src/api/voicemailClientScope.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.26.0",

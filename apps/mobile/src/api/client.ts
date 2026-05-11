@@ -21,6 +21,14 @@ import {
   VOICEMAIL_MAX_PAGES_PER_FOLDER,
 } from "./voicemailPagination";
 import { decodeJwtPayloadLoose } from "../voicemail/vmGreetingInviteUtils";
+import {
+  distinctExtensionsFromVoicemails,
+  filterVoicemailsToScopedMailboxes,
+  mergeVoicemailScopeMeta,
+  voicemailIdsSample,
+  voicemailTokenSessionKey,
+  type VoicemailApiScopeMeta,
+} from "./voicemailClientScope";
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
 
@@ -102,13 +110,14 @@ export async function getCallHistory(token: string): Promise<CallRecord[]> {
  */
 export function voicemailQueryUserScope(token: string | null | undefined): string {
   if (!token) return "_";
+  const sess = voicemailTokenSessionKey(token);
   const p = decodeJwtPayloadLoose(token);
-  if (!p) return `opaque:${String(token.length)}`;
+  if (!p) return `opaque:${sess}`;
   const sub = String(p.sub ?? "");
   const tid = String(p.tenantId ?? p["tid"] ?? "");
-  if (sub && tid) return `${sub}:${tid}`;
-  if (sub) return sub;
-  return `opaque:${String(token.length)}`;
+  if (sub && tid) return `${sub}:${tid}:${sess}`;
+  if (sub) return `${sub}::${sess}`;
+  return `opaque:${sess}`;
 }
 
 export const mobileQueryKeys = {
@@ -121,24 +130,56 @@ export const mobileQueryKeys = {
   chatMessages: (threadId: string) => ["mobile", "chatMessages", threadId] as const,
 };
 
+/** Fresh stream URL for current token — never reuse a cached `streamUrl` from an older session. */
+export function buildVoicemailStreamUri(token: string, vmId: string): string {
+  return `${API_BASE}/voice/voicemail/${encodeURIComponent(vmId)}/stream?token=${encodeURIComponent(token)}`;
+}
+
+/** Lightweight probe to distinguish 403 (forbidden) from transport/audio errors. */
+export async function probeVoicemailStreamStatus(token: string, vmId: string): Promise<number> {
+  const url = buildVoicemailStreamUri(token, vmId);
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Range: "bytes=0-0" },
+  });
+  return res.status;
+}
+
 /** Fetches every API page per folder (100 rows/page, capped) so mobile lists match portal for large mailboxes. */
 export async function getVoicemails(
   token: string,
   input: { folders?: VoicemailFolder[]; page?: number } = {},
-): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number> }> {
+): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number>; scopeMeta?: VoicemailApiScopeMeta }> {
   const folders = input.folders ?? ["inbox", "urgent", "old"];
+  let mergedScopeMeta: VoicemailApiScopeMeta | undefined;
   const responses = await Promise.all(
     folders.map(async (folder) => {
       const merged: Voicemail[] = [];
       let total = 0;
       for (let page = 1; page <= VOICEMAIL_MAX_PAGES_PER_FOLDER; page++) {
         const params = new URLSearchParams({ folder, page: String(page) });
-        const res = await fetch(`${API_BASE}/voice/voicemail?${params.toString()}`, {
+        const url = `${API_BASE}/voice/voicemail?${params.toString()}`;
+        const res = await fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const json = await parseJson(res);
         if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
-        const data = json as VoicemailResponse;
+        const headerV = res.headers.get("X-Voicemail-Scope-Version");
+        const headerM = res.headers.get("X-Scoped-Mailboxes");
+        const data = json as VoicemailResponse & VoicemailApiScopeMeta;
+        const pageMeta = mergeVoicemailScopeMeta(data, headerV, headerM);
+        if (pageMeta.voicemailScopeVersion != null || pageMeta.scopedMailboxesForUser != null) {
+          mergedScopeMeta = pageMeta;
+        }
+        if (typeof __DEV__ !== "undefined" && __DEV__) {
+          const batchPrev = data.voicemails ?? [];
+          console.log("[VM_LIST]", url, {
+            scopeVersion: pageMeta.voicemailScopeVersion ?? headerV,
+            scopedMailboxes: pageMeta.scopedMailboxesForUser ?? headerM,
+            distinctExt: distinctExtensionsFromVoicemails(batchPrev),
+            idsSample: voicemailIdsSample(batchPrev, 5),
+          });
+        }
         total = data.total ?? total;
         const batch = data.voicemails ?? [];
         merged.push(...batch);
@@ -167,12 +208,21 @@ export async function getVoicemails(
       seen.add(vm.id);
       voicemails.push({
         ...vm,
-        streamUrl: vm.streamUrl ?? `${API_BASE}/voice/voicemail/${encodeURIComponent(vm.id)}/stream?token=${encodeURIComponent(token)}`,
+        streamUrl: undefined,
       });
     }
   }
   voicemails.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
-  return { voicemails, totals };
+  const before = voicemails.length;
+  const filtered = filterVoicemailsToScopedMailboxes(voicemails, mergedScopeMeta);
+  if (typeof __DEV__ !== "undefined" && __DEV__ && filtered.length < before) {
+    console.warn("[VM_SCOPE_FILTER]", {
+      stripped: before - filtered.length,
+      distinctExtBefore: distinctExtensionsFromVoicemails(voicemails),
+      allow: mergedScopeMeta?.scopedMailboxesForUser,
+    });
+  }
+  return { voicemails: filtered, totals, scopeMeta: mergedScopeMeta };
 }
 
 export async function markVoicemailListened(token: string, id: string, listened: boolean) {

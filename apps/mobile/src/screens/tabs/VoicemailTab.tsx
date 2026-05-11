@@ -23,7 +23,16 @@ import type { TabParamList } from '../../navigation/types';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import { Avatar } from '../../components/ui/Avatar';
-import { API_BASE, getVoicemails, markVoicemailListened, mobileQueryKeys } from '../../api/client';
+import {
+  API_BASE,
+  buildVoicemailStreamUri,
+  getVoicemails,
+  markVoicemailListened,
+  mobileQueryKeys,
+  probeVoicemailStreamStatus,
+  voicemailQueryUserScope,
+} from '../../api/client';
+import { consumeVoicemailScopeKeyChange } from '../../api/voicemailClientScope';
 import { subscribeToVoicemail } from '../../api/realtime';
 import type { Voicemail } from '../../types';
 import { spacing } from '../../theme/spacing';
@@ -115,6 +124,20 @@ export function VoicemailTab() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
+  const removeVoicemailRowEverywhere = useCallback(
+    (id: string) => {
+      setRows((r) => r.filter((x) => x.id !== id));
+      if (!token) return;
+      queryClient.setQueryData(mobileQueryKeys.voicemails("all", token), (prev: unknown) => {
+        if (!prev || typeof prev !== "object") return prev;
+        const p = prev as { voicemails?: Voicemail[]; totals?: Record<string, number> };
+        if (!Array.isArray(p.voicemails)) return prev;
+        return { ...p, voicemails: p.voicemails.filter((v) => v.id !== id) };
+      });
+    },
+    [queryClient, token],
+  );
+
   const voicemailQuery = useQuery({
     queryKey: mobileQueryKeys.voicemails('all', token),
     enabled: Boolean(token),
@@ -126,8 +149,20 @@ export function VoicemailTab() {
   });
 
   useEffect(() => {
+    if (!token) {
+      consumeVoicemailScopeKeyChange("_");
+      setRows([]);
+      return;
+    }
+    const sk = voicemailQueryUserScope(token);
+    if (consumeVoicemailScopeKeyChange(sk)) {
+      setRows([]);
+    }
+  }, [token]);
+
+  useEffect(() => {
     const nextRows = voicemailQuery.data?.voicemails;
-    if (nextRows) setRows(nextRows);
+    if (nextRows !== undefined) setRows(nextRows);
   }, [voicemailQuery.data]);
 
   // When opened from a voicemail push notification, expand and highlight
@@ -215,10 +250,11 @@ export function VoicemailTab() {
   }, []);
 
   const play = useCallback(async (vm: Voicemail) => {
-    if (!token || !vm.streamUrl) {
+    if (!token) {
       setPlaybackError('This voicemail cannot be played yet.');
       return;
     }
+    const streamUri = buildVoicemailStreamUri(token, vm.id);
     try {
       if (activeId === vm.id && sound) {
         await sound.pauseAsync();
@@ -227,9 +263,11 @@ export function VoicemailTab() {
       }
       if (sound) await sound.unloadAsync().catch(() => undefined);
       const next = new Audio.Sound();
-      await next.loadAsync({ uri: vm.streamUrl });
+      await next.loadAsync(
+        { uri: streamUri, headers: { Authorization: `Bearer ${token}` } },
+        { shouldPlay: true },
+      );
       next.setOnPlaybackStatusUpdate(updatePlayback);
-      await next.playAsync();
       setSound(next);
       setActiveId(vm.id);
       setProgress({ position: 0, duration: vm.durationSec });
@@ -240,10 +278,17 @@ export function VoicemailTab() {
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
       }
     } catch {
+      const st = await probeVoicemailStreamStatus(token, vm.id);
+      if (st === 403) {
+        setPlaybackError('This voicemail is not available for your account.');
+        removeVoicemailRowEverywhere(vm.id);
+        setActiveId(null);
+        return;
+      }
       setPlaybackError('Could not play voicemail audio.');
       setActiveId(null);
     }
-  }, [activeId, queryClient, sound, token, updatePlayback]);
+  }, [activeId, queryClient, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
