@@ -94,6 +94,14 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
+import {
+  assertExtensionExistsForTenant as assertExtensionExistsForTenantHelper,
+  canManageExtensionOverrideFor,
+  deleteExtensionOverrideForTenant,
+  listExtensionOverridesForTenant,
+  normalizeExtension as normalizeMohExtension,
+  upsertExtensionOverride,
+} from "./mohExtensionOverride";
 import { passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
@@ -20425,6 +20433,161 @@ app.get("/voice/moh/schedule", async (req, reply) => {
     include: { rules: { where: { isActive: true }, orderBy: [{ ruleType: "asc" }, { priority: "desc" }] } },
   });
   return reply.send({ schedule: schedule ?? null });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-extension MOH overrides (Phase 2 — DB-only; no AstDB / publish path).
+//
+// These routes manage `MohExtensionOverride` rows. They DO NOT call
+// `publishMohToAstDb`, do not write per-extension AstDB keys, and do not
+// reach the telephony service. The PBX dialplan resolver is gated by the
+// live-call diagnostic + drift-compare harness in a later phase.
+// Helpers live in `./mohExtensionOverride`; tenant scope + MOH-class
+// readiness re-use the same gates as `/voice/moh/profiles`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── GET /voice/moh/extension-overrides ───────────────────────────────────────
+app.get("/voice/moh/extension-overrides", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ overrides: [] });
+  // Read tenants the requester can actually see. Non-super-admins are
+  // already pinned to their own JWT tenant by the line above; this is a
+  // belt-and-braces check to mirror `/voice/moh/profiles` semantics.
+  try {
+    assertMohTenantAccess(user, tid);
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" });
+  }
+  const overrides = await listExtensionOverridesForTenant(db as any, tid);
+  return reply.send({ overrides });
+});
+
+// ── PUT /voice/moh/extension-overrides ───────────────────────────────────────
+// Idempotent upsert keyed on (tenantId, extension). Returns 201 on create,
+// 200 on update. Body validates the requested MOH class via the same
+// readiness pipeline as `POST /voice/moh/profiles`.
+app.put("/voice/moh/extension-overrides", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:             z.string(),
+    extension:            z.string().min(1).max(64),
+    vitalPbxMohClassName: z.string().min(1).max(100),
+    mohProfileId:         z.string().min(1).nullable().optional(),
+    enabled:              z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+
+  // Defense-in-depth: reject obvious bad-shape extension before tenant resolve.
+  if (normalizeMohExtension(body.data.extension) === null) {
+    return reply.code(400).send({ error: "invalid_payload", detail: "extension contains characters not allowed in an AstDB key segment (allowed: A-Z a-z 0-9 _ -)" });
+  }
+
+  const tid = await resolveMohTenantId(body.data.tenantId);
+  if (!tid) {
+    return reply.code(400).send({
+      error: "tenant_not_linked",
+      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving an extension override.",
+    });
+  }
+
+  // Belt-and-braces: pure permission predicate exists for unit tests; the
+  // throwing version mirrors sibling MOH routes for consistent 403 shape.
+  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  try {
+    assertMohTenantAccess(user, tid);
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" });
+  }
+
+  // Validate the extension exists for this tenant. 404 on miss / DELETED.
+  try {
+    await assertExtensionExistsForTenantHelper(db as any, tid, body.data.extension);
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" });
+  }
+
+  // Validate MOH class via the same readiness pipeline as `/voice/moh/profiles`.
+  // Throws with statusCode + detail + readiness on failure.
+  let runtimeClass: string;
+  try {
+    const readiness = await assertMohRuntimeReadiness(tid, body.data.vitalPbxMohClassName);
+    runtimeClass = readiness.selectedClass;
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 400).send({
+      error: err?.message ?? "invalid_moh_runtime_class",
+      detail: err?.detail,
+      readiness: err?.readiness,
+    });
+  }
+
+  // Optional MOH profile must belong to this tenant.
+  if (body.data.mohProfileId) {
+    const profile = await (db as any).mohProfile.findUnique({ where: { id: body.data.mohProfileId } });
+    if (!profile || profile.tenantId !== tid) {
+      return reply.code(400).send({ error: "profile_not_in_tenant" });
+    }
+  }
+
+  let result;
+  try {
+    result = await upsertExtensionOverride(db as any, {
+      tenantId: tid,
+      extension: body.data.extension,
+      vitalPbxMohClassName: runtimeClass,
+      mohProfileId: body.data.mohProfileId ?? null,
+      enabled: body.data.enabled,
+      actorUserId: (user as any).id ?? (user as any).sub ?? null,
+    });
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 500).send({ error: err?.message ?? "upsert_failed" });
+  }
+
+  return reply.code(result.created ? 201 : 200).send({
+    override: result.override,
+    enabled: result.override.enabled,
+    created: result.created,
+  });
+});
+
+// ── DELETE /voice/moh/extension-overrides ────────────────────────────────────
+// Body: { tenantId, extension }. Returns 200 with deleted=0 if no row matched
+// (idempotent), 200 with deleted=1 on a real removal.
+app.delete("/voice/moh/extension-overrides", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:  z.string(),
+    extension: z.string().min(1).max(64),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  if (normalizeMohExtension(body.data.extension) === null) {
+    return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected" });
+  }
+  const tid = await resolveMohTenantId(body.data.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  try {
+    assertMohTenantAccess(user, tid);
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" });
+  }
+  try {
+    const r = await deleteExtensionOverrideForTenant(db as any, tid, body.data.extension);
+    return reply.send({ ok: true, deleted: r.deleted });
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 500).send({ error: err?.message ?? "delete_failed" });
+  }
 });
 
 // ── PUT /voice/moh/schedule ───────────────────────────────────────────────────

@@ -1,9 +1,20 @@
-// Per-extension MOH override helpers (Phase 1 — schema + helpers only).
+// Per-extension MOH override helpers.
 //
-// This module is INERT at runtime: nothing here is wired into the existing
-// `publishMohToAstDb` path, no route exposes it, and no worker consumes it.
-// It exists so the DB foundation (schema + migration) ships with a tested,
-// pure-function helper layer that future phases can wire up.
+// Phase 1 (2026-05-11) — schema + pure helpers only. Inert at runtime.
+// Phase 2 (2026-05-11) — adds API-layer helpers (list / upsert / delete /
+//   tenant-scoped extension lookup / permission predicate) consumed by the
+//   `/voice/moh/extension-overrides` routes registered in `server.ts`.
+//
+// What is STILL inert at runtime after Phase 2:
+//   - No AstDB / AMI / network write happens in any helper here.
+//   - `publishMohToAstDb` is not changed; it neither reads nor writes
+//     per-extension keys.
+//   - The PBX dialplan resolver does not yet consume
+//     `connect/t_<slug>/extensions/<ext>/moh_class`.
+//
+// Phase 2 is therefore "DB-only": the API can persist override intent, but
+// nothing surfaces it to a live call until the resolver lands in a later
+// phase, gated by the live-call diagnostic + drift-compare harness.
 //
 // Design rationale (from the Phase 0 design returned 2026-05-11):
 //   - The runtime tenant identity comes from `CHANNEL(name)` (`PJSIP/T<id>_<ext>-...`).
@@ -167,4 +178,256 @@ export async function readEnabledExtensionOverridesForTenant(
     orderBy: { extension: "asc" },
     select: { extension: true, vitalPbxMohClassName: true, enabled: true },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: API-layer helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Full row shape returned to API clients (the GET payload). */
+export interface MohExtensionOverrideApiRow {
+  id: string;
+  tenantId: string;
+  extension: string;
+  vitalPbxMohClassName: string;
+  mohProfileId: string | null;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+/** Prisma surface needed for `listExtensionOverridesForTenant`. */
+export interface ListOverridesPrisma {
+  mohExtensionOverride: {
+    findMany(args: {
+      where: { tenantId: string };
+      orderBy: { extension: "asc" };
+    }): Promise<MohExtensionOverrideApiRow[]>;
+  };
+}
+
+/**
+ * List ALL overrides for a tenant (enabled and disabled), sorted by extension
+ * ASC. The API layer returns disabled rows so the portal can render a toggle;
+ * the publish path uses `readEnabledExtensionOverridesForTenant` instead and
+ * therefore disabled rows never leak into AstDB.
+ */
+export async function listExtensionOverridesForTenant(
+  prisma: ListOverridesPrisma,
+  tenantId: string,
+): Promise<MohExtensionOverrideApiRow[]> {
+  if (typeof tenantId !== "string" || tenantId.length === 0) return [];
+  return prisma.mohExtensionOverride.findMany({
+    where: { tenantId },
+    orderBy: { extension: "asc" },
+  });
+}
+
+/** Inputs accepted by `upsertExtensionOverride`. */
+export interface UpsertExtensionOverrideInput {
+  tenantId: string;
+  extension: string;
+  vitalPbxMohClassName: string;
+  mohProfileId?: string | null;
+  enabled?: boolean;
+  actorUserId?: string | null;
+}
+
+/** Result returned by `upsertExtensionOverride`. */
+export interface UpsertExtensionOverrideResult {
+  override: MohExtensionOverrideApiRow;
+  /** `true` when no row existed before, `false` when an existing row was updated. */
+  created: boolean;
+}
+
+/** Prisma surface needed for `upsertExtensionOverride`. */
+export interface UpsertOverridePrisma {
+  mohExtensionOverride: {
+    findUnique(args: {
+      where: { tenantId_extension: { tenantId: string; extension: string } };
+    }): Promise<MohExtensionOverrideApiRow | null>;
+    upsert(args: {
+      where: { tenantId_extension: { tenantId: string; extension: string } };
+      create: {
+        tenantId: string;
+        extension: string;
+        vitalPbxMohClassName: string;
+        mohProfileId: string | null;
+        enabled: boolean;
+        createdBy: string | null;
+        updatedBy: string | null;
+      };
+      update: {
+        vitalPbxMohClassName: string;
+        mohProfileId: string | null;
+        enabled: boolean;
+        updatedBy: string | null;
+      };
+    }): Promise<MohExtensionOverrideApiRow>;
+  };
+}
+
+/**
+ * Upsert a single per-extension override. The caller is responsible for:
+ *   - permission gating (`canManageExtensionOverrideFor`),
+ *   - tenant-scope verification (`assertExtensionExistsForTenant`),
+ *   - MOH-class readiness validation (`assertSyncedMohRuntimeClass` from
+ *     `server.ts` — re-uses the same readiness pipeline as `/voice/moh/profiles`).
+ *
+ * `extension` is normalized via `normalizeExtension`. The function throws
+ * `invalid_extension` if normalization fails — defense-in-depth, since the
+ * route also validates earlier.
+ *
+ * No AstDB / AMI side effect. DB-only.
+ */
+export async function upsertExtensionOverride(
+  prisma: UpsertOverridePrisma,
+  input: UpsertExtensionOverrideInput,
+): Promise<UpsertExtensionOverrideResult> {
+  const tenantId = String(input.tenantId || "").trim();
+  if (!tenantId) {
+    throw Object.assign(new Error("invalid_tenant"), { statusCode: 400 });
+  }
+  const extension = normalizeExtension(input.extension);
+  if (extension === null) {
+    throw Object.assign(new Error("invalid_extension"), { statusCode: 400 });
+  }
+  const vitalPbxMohClassName = String(input.vitalPbxMohClassName || "").trim();
+  if (!vitalPbxMohClassName) {
+    throw Object.assign(new Error("invalid_moh_runtime_class"), { statusCode: 400 });
+  }
+  const mohProfileId = input.mohProfileId ?? null;
+  const enabled = input.enabled === false ? false : true;
+  const actor = input.actorUserId ?? null;
+
+  const existing = await prisma.mohExtensionOverride.findUnique({
+    where: { tenantId_extension: { tenantId, extension } },
+  });
+
+  const override = await prisma.mohExtensionOverride.upsert({
+    where: { tenantId_extension: { tenantId, extension } },
+    create: {
+      tenantId,
+      extension,
+      vitalPbxMohClassName,
+      mohProfileId,
+      enabled,
+      createdBy: actor,
+      updatedBy: actor,
+    },
+    update: {
+      vitalPbxMohClassName,
+      mohProfileId,
+      enabled,
+      updatedBy: actor,
+    },
+  });
+
+  return { override, created: existing === null };
+}
+
+/** Prisma surface needed for `deleteExtensionOverrideForTenant`. */
+export interface DeleteOverridePrisma {
+  mohExtensionOverride: {
+    deleteMany(args: {
+      where: { tenantId: string; extension: string };
+    }): Promise<{ count: number }>;
+  };
+}
+
+/**
+ * Delete the override for `(tenantId, extension)`. Uses `deleteMany` so a
+ * miss returns `{ count: 0 }` rather than a P2025 throw — the API layer
+ * surfaces this as `200 { ok: true, deleted: 0 }`.
+ *
+ * The `where` clause includes BOTH `tenantId` AND `extension`, so a
+ * compromised JWT for tenant A can never delete tenant B's row even if it
+ * guesses the extension token.
+ */
+export async function deleteExtensionOverrideForTenant(
+  prisma: DeleteOverridePrisma,
+  tenantId: string,
+  extension: string,
+): Promise<{ deleted: number }> {
+  if (typeof tenantId !== "string" || tenantId.length === 0) {
+    throw Object.assign(new Error("invalid_tenant"), { statusCode: 400 });
+  }
+  const normalized = normalizeExtension(extension);
+  if (normalized === null) {
+    throw Object.assign(new Error("invalid_extension"), { statusCode: 400 });
+  }
+  const r = await prisma.mohExtensionOverride.deleteMany({
+    where: { tenantId, extension: normalized },
+  });
+  return { deleted: r.count };
+}
+
+/** Prisma surface needed for `assertExtensionExistsForTenant`. */
+export interface ExtensionLookupPrisma {
+  extension: {
+    findFirst(args: {
+      where: { tenantId: string; extNumber: string };
+      select: { id: true; tenantId: true; extNumber: true; status: true };
+    }): Promise<{ id: string; tenantId: string; extNumber: string; status: string } | null>;
+  };
+}
+
+/**
+ * Verify that an extension exists for the given tenant and is not soft-deleted.
+ * Throws `extension_not_found` (statusCode 404) on miss or `status === "DELETED"`.
+ *
+ * Suspended extensions ARE allowed — admins can pre-stage MOH for an
+ * extension that is currently suspended; the publish path only fires when the
+ * extension is reachable via PJSIP, so a suspended extension override is a
+ * safe no-op until the extension is restored.
+ */
+export async function assertExtensionExistsForTenant(
+  prisma: ExtensionLookupPrisma,
+  tenantId: string,
+  extension: string,
+): Promise<void> {
+  const normalized = normalizeExtension(extension);
+  if (normalized === null) {
+    throw Object.assign(new Error("invalid_extension"), { statusCode: 400 });
+  }
+  const row = await prisma.extension.findFirst({
+    where: { tenantId, extNumber: normalized },
+    select: { id: true, tenantId: true, extNumber: true, status: true },
+  });
+  if (!row) {
+    throw Object.assign(new Error("extension_not_found"), { statusCode: 404 });
+  }
+  if (String(row.status || "").toUpperCase() === "DELETED") {
+    throw Object.assign(new Error("extension_not_found"), { statusCode: 404 });
+  }
+}
+
+/** Minimal user shape used by the permission predicate. */
+export interface ExtensionOverrideUser {
+  role: string | null | undefined;
+  tenantId: string | null | undefined;
+}
+
+/**
+ * Pure permission predicate: can `user` create/update/delete an
+ * `MohExtensionOverride` for `tenantId`?
+ *
+ * Mirrors the pair `requirePermission(canManageMoh)` + `assertMohTenantAccess`
+ * already used by `/voice/moh/profiles`:
+ *   - role must be `SUPER_ADMIN` or `ADMIN`,
+ *   - non-super-admins can only act on their own tenant.
+ *
+ * Returning a boolean (rather than throwing) keeps this testable without
+ * Fastify; the route layer maps `false` → `403 forbidden`.
+ */
+export function canManageExtensionOverrideFor(
+  user: ExtensionOverrideUser,
+  tenantId: string,
+): boolean {
+  const role = String(user?.role || "").toUpperCase();
+  if (role !== "SUPER_ADMIN" && role !== "ADMIN") return false;
+  if (role === "SUPER_ADMIN") return true;
+  return typeof user.tenantId === "string" && user.tenantId === tenantId;
 }

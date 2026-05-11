@@ -228,7 +228,7 @@ Breakdown by sub-prefix (count / approximate scope):
 | Sub-prefix | Count | What it does |
 |---|---:|---|
 | `/voice/ivr/*` | 32 | IVR profile CRUD, schedule config, override state, publish, rollback. **EXTREME** — writes AstDB via telephony. |
-| `/voice/moh/*` | 23 | MOH profile/schedule/override + publish + rollback + assets. **EXTREME** — same path as IVR. |
+| `/voice/moh/*` | 26 | MOH profile/schedule/override + publish + rollback + assets + per-extension overrides (Phase 2, DB-only). **EXTREME** — same path as IVR (the per-extension routes are MEDIUM until the resolver lands). |
 | `/voice/did/*` | 11 | DID → route mapping + switch log. **HIGH** — wrong write reroutes inbound calls. |
 | `/voice/diag/*` | 9 | Read-only diagnostics. **LOW**. |
 | `/voice/voicemail/*` | 5 | VM mailbox config + greetings. **HIGH**. |
@@ -251,6 +251,37 @@ Breakdown by sub-prefix (count / approximate scope):
 > `docs/ai-context/ASTDB_KEYS.md` first. Those endpoints are writers into
 > the AstDB key family `connect/t_<slug>` and any change must preserve key
 > shape and the snapshot-then-write contract.
+
+### `/voice/moh/extension-overrides/*` — per-extension MOH overrides (Phase 2, 2026-05-11)
+
+**Approx lines:** ~20449–20591 in `apps/api/src/server.ts` (between `DELETE /voice/moh/profiles/:id` and `PUT /voice/moh/schedule`).
+**Purpose:** CRUD for `MohExtensionOverride` rows that will (in a later phase) drive the AstDB key family `connect/t_<slug>/extensions/<ext>/moh_class`. **Phase 2 is DB-only** — these routes do **NOT** call `publishMohToAstDb`, do **NOT** write any AstDB key, and do **NOT** reach the telephony service.
+**Auth requirements:**
+- `GET` — `canViewCustomers` (any tenant-staff JWT).
+- `PUT` / `DELETE` — `canManageMoh` (`SUPER_ADMIN` | `ADMIN`); non-super-admin can only target own tenant (mirrors `/voice/moh/profiles`).
+**Risk:** **MEDIUM** while DB-only. Becomes **HIGH** when a future phase wires the resolver to consume these rows.
+
+**Endpoints:**
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/voice/moh/extension-overrides?tenantId=…` | Returns `{ overrides: [...] }` ordered by `extension` ASC. Includes both enabled and disabled rows so the portal can render the toggle. Disabled rows do **not** leak into the publish path (`readEnabledExtensionOverridesForTenant` filters them). |
+| `PUT` | `/voice/moh/extension-overrides` | Body: `{ tenantId, extension, vitalPbxMohClassName, mohProfileId?, enabled? }`. Idempotent upsert keyed on `(tenantId, extension)`. **`201`** on create, **`200`** on update. Body returns `{ override, enabled, created }`. |
+| `DELETE` | `/voice/moh/extension-overrides` | Body: `{ tenantId, extension }`. Idempotent — returns `{ ok: true, deleted: 0 \| 1 }`. |
+
+**Error codes:**
+
+| HTTP | `error` | When |
+|---|---|---|
+| 400 | `invalid_payload` | Zod validation fail or extension contains chars not allowed in an AstDB key segment (allowed: `A-Z a-z 0-9 _ -`, max 32). |
+| 400 | `tenant_not_linked` | `vpbx:<slug>` could not be resolved to a Connect tenant. |
+| 400 | `tenantId required` | Super-admin `GET` with no `tenantId` query and no JWT tenant. |
+| 400 | `profile_not_in_tenant` | `mohProfileId` was supplied but the profile belongs to a different tenant. |
+| 403 | `forbidden` | Non-super-admin tried to manage another tenant. |
+| 404 | `extension_not_found` | No `Extension` row matches `(tenantId, extNumber)`, or the matched row has `status === "DELETED"`. ACTIVE and SUSPENDED both pass. |
+| 400 / 409 | `invalid_moh_runtime_class` / `connect_asset_not_pbx_ready` / `connect_asset_not_in_sync_manifest` / `moh_runtime_class_not_synced` | Same readiness pipeline as `POST /voice/moh/profiles` (`assertMohRuntimeReadiness`). Failure body includes `detail` and `readiness`. |
+
+**Helpers (testable in isolation):** `apps/api/src/mohExtensionOverride.ts` exports `listExtensionOverridesForTenant`, `upsertExtensionOverride`, `deleteExtensionOverrideForTenant`, `assertExtensionExistsForTenant`, `canManageExtensionOverrideFor`, plus the Phase-1 key builders. Test coverage: `apps/api/src/mohExtensionOverride.test.ts` (29 tests including cross-tenant isolation, missing extension, soft-delete behaviour, role gating, and disabled-row leak guard).
 
 ### `POST /voice/moh/publish` — error codes (added 2026-05)
 

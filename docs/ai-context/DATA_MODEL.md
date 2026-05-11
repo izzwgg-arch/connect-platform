@@ -248,7 +248,7 @@
 - **Modified by:** `apps/api` `/voice/moh/*`, `apps/worker`
   `runMohScheduleCycle()`.
 
-## MohExtensionOverride / MohAssignmentJob (Phase 1, 2026-05-11 — schema only)
+## MohExtensionOverride / MohAssignmentJob (Phase 1, 2026-05-11 — schema only; Phase 2, 2026-05-11 — API routes live, DB-only)
 - **Schema:** `MohExtensionOverride` and `MohAssignmentJob` in
   `packages/db/prisma/schema.prisma`; migration
   `packages/db/prisma/migrations/20260521090000_moh_extension_override_phase1/`.
@@ -274,8 +274,10 @@
   helper writes per-extension keys; legacy rows read as empty array.
 - **High-risk?** Currently **no** (no runtime path). Becomes high-risk in
   later phases when AstDB writes go live.
-- **Modified by:** **nothing in Phase 1.** Future: `apps/api` per-extension
-  override routes (Phase 2), bulk-job worker (Phase 4).
+- **Modified by (Phase 2, 2026-05-11):** `apps/api` `/voice/moh/extension-overrides`
+  (`GET` / `PUT` / `DELETE`) — see `API_ROUTES.md`. Routes are **DB-only**:
+  no AstDB write, no telephony call, no `publishMohToAstDb` change. Future:
+  bulk-job worker (Phase 4) consumes `MohAssignmentJob`.
 
 ## DidRouteMapping / DidRouteSwitchLog
 - **Schema:** lines 2465 / 2520
