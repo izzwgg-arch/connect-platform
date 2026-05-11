@@ -19,14 +19,8 @@
 import { readFileSync } from "node:fs";
 
 import { db } from "@connect/db";
-import { fetchAllVoicemailSpoolMessages, resolvePbxRouteHelperConfig } from "@connect/integrations";
-import {
-  mapHelperVoicemailSpoolToRecordShape,
-  vmExtractCallerName,
-  vmExtractCallerNumber,
-  vmNormalizeFolder,
-  vmStablePbxMessageId,
-} from "@connect/shared";
+import { resolvePbxRouteHelperConfig } from "@connect/integrations";
+import { fetchSpoolAndApplyVoicemails } from "../voicemailSpoolMailbox";
 
 type BackfillMode =
   | { kind: "single"; tenantId: string }
@@ -174,15 +168,24 @@ async function backfillOneTenant(
 
     let spoolMessageCount = 0;
     try {
-      const spoolPageSize = Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000);
-      const spoolTimeoutMs = Math.max(5000, Number(process.env.VOICEMAIL_HELPER_SPOOL_FETCH_TIMEOUT_MS || 20000) || 20000);
-      const spool = await fetchAllVoicemailSpoolMessages(
+      const applied = await fetchSpoolAndApplyVoicemails(
+        { tenantId: link.tenantId, pbxTenantId: link.pbxTenantId },
+        ext.extNumber,
+        pbxExtId,
         helperCfg,
-        { tenantId: vitalTid, extension: ext.extNumber },
-        { pageSize: spoolPageSize, timeoutMs: spoolTimeoutMs },
+        vitalTid,
+        {
+          dryRun: opts.dryRun,
+          mode: opts.insertOnly ? "insert_only" : "upsert",
+        },
       );
-      spoolMessageCount = (spool.messages || []).length;
+      inserted = applied.inserted;
+      alreadyPresent = applied.alreadyPresent;
+      skippedInvalidOrigtime = applied.skippedInvalidOrigtime;
+      upsertErrors = applied.errors;
+      spoolMessageCount = applied.spoolMessageCount;
       spoolMessagesSum += spoolMessageCount;
+      const spool = applied.spool;
       if (!spool.paginationComplete) {
         paginationIncompleteExts.push(ext.extNumber);
         console.log(
@@ -193,99 +196,6 @@ async function backfillOneTenant(
             totalCount: spool.totalCount,
           }),
         );
-      }
-      const mapped = (spool.messages || []).map(mapHelperVoicemailSpoolToRecordShape);
-
-      for (const rec of mapped) {
-        const origtime = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
-        if (!origtime || origtime === "0") {
-          skippedInvalidOrigtime++;
-          continue;
-        }
-        const rawCallerid = String(rec.clid ?? rec.callerid ?? rec.caller_id ?? "");
-        const callerNumber = vmExtractCallerNumber(rawCallerid) || null;
-        const callerName = vmExtractCallerName(rawCallerid) || null;
-        const callerDigits = (callerNumber ?? "").slice(-10);
-        const rawFolder = String(rec.folder ?? "INBOX");
-        const folder = vmNormalizeFolder(rawFolder);
-        const listened = folder !== "inbox";
-        const msgId = vmStablePbxMessageId({
-          msgId: rec.msg_id,
-          pbxTenantIdOrTenantCuid: String(link.pbxTenantId || link.tenantId),
-          extNumber: ext.extNumber,
-          origtime,
-          callerDigits,
-        });
-
-        const existing = await db.voicemail.findUnique({ where: { pbxMessageId: msgId } });
-        const filename = String(rec.filename ?? "");
-        const recfile = String(rec.recfile ?? "");
-        const fromFilename = filename.replace(/\.[^.]+$/, "");
-        const fromRecfile = recfile ? (recfile.split("/").pop() ?? "").replace(/\.[^.]+$/, "") : "";
-        const pbxMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? fromFilename ?? fromRecfile ?? "");
-
-        if (opts.dryRun) {
-          if (existing) alreadyPresent++;
-          else inserted++;
-          continue;
-        }
-
-        if (opts.insertOnly) {
-          if (existing) {
-            alreadyPresent++;
-            continue;
-          }
-          await db.voicemail.create({
-            data: {
-              pbxMessageId: msgId,
-              tenantId: link.tenantId,
-              extension: ext.extNumber,
-              pbxExtensionId: pbxExtId,
-              callerNumber,
-              callerName,
-              durationSec: parseInt(String(rec.duration ?? "0"), 10) || 0,
-              folder,
-              pbxFolder: rawFolder,
-              pbxMsgNum,
-              pbxRecfile: recfile || null,
-              listened,
-              receivedAt: new Date(parseInt(origtime, 10) * 1000),
-            },
-          });
-          inserted++;
-          continue;
-        }
-
-        await db.voicemail.upsert({
-          where: { pbxMessageId: msgId },
-          create: {
-            pbxMessageId: msgId,
-            tenantId: link.tenantId,
-            extension: ext.extNumber,
-            pbxExtensionId: pbxExtId,
-            callerNumber,
-            callerName,
-            durationSec: parseInt(String(rec.duration ?? "0"), 10) || 0,
-            folder,
-            pbxFolder: rawFolder,
-            pbxMsgNum,
-            pbxRecfile: recfile || null,
-            listened,
-            receivedAt: new Date(parseInt(origtime, 10) * 1000),
-          },
-          update: {
-            folder,
-            pbxFolder: rawFolder,
-            pbxMsgNum,
-            ...(recfile ? { pbxRecfile: recfile } : {}),
-            callerNumber,
-            callerName,
-            listened,
-          },
-        });
-
-        if (existing) alreadyPresent++;
-        else inserted++;
       }
     } catch (e: unknown) {
       upsertErrors++;

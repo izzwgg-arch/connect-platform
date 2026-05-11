@@ -468,6 +468,16 @@ Per-service:
       default **inbox-only** API hiding **Old/Urgent** rows). Run **`voicemail-fleet-stale-report.ts`**
       inside **`app-worker-1`** for a ranked, fleet-wide view (`newest_pbx` vs `newest_db` vs inbox-scoped
       DB, baseline volume). Failure-class write-up and hardening backlog: **`VOICEMAIL_FLEET_STALE_RISK.md`**.
+   9b′. **Scheduled spool reconcile (insert-only, durable pipeline).** Complements the **60s**
+      `voicemail-sync-cycle` (REST-first, capped helper fallback). Worker logs one JSON line per run:
+      **`docker logs app-worker-1 --since 2h | grep voicemail-spool-reconcile-summary`**. Fields include
+      **`unhealthy`**, **`total_inserted`** (missing rows repaired), **`pagination_incomplete_mailboxes`**,
+      **`schema2_violation_mailboxes`** (helper not listing with **`spoolListSchema: 2`**),
+      **`helper_version_ok_global`**, **`stale_high_risk_increased`**, **`top_risky_mailboxes`**. Last run
+      snapshot: **`docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm run vm-reconcile-last'`**
+      (reads Redis key **`connect:worker:vmSpoolReconcile:lastSummary`**). Env: **`VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS`**
+      (default **900000**; **`0`** disables), **`VOICEMAIL_SPOOL_RECONCILE_MAILBOX_DELAY_MS`**, **`VOICEMAIL_SPOOL_RECONCILE_MIN_HELPER_VERSION`**
+      (default **`2026.05.10.1`**), **`VOICEMAIL_HELPER_HEALTH_TIMEOUT_MS`**. Details: **`VOICEMAIL_FLEET_STALE_RISK.md`** §5.
    9c. **Voicemail list visibility (row exists in Postgres; portal/mobile does not show).** After
       ingestion/backfill are ruled out, compare **one** `Voicemail.id` (or `pbxMessageId`) end-to-end:
       - **DB:** `folder`, `deletedAt` (must be **null** for list), `tenantId`, `extension`, `listened`, `receivedAt`.

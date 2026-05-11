@@ -9,8 +9,9 @@
     "build": "tsc -p tsconfig.json",
     "lint": "echo lint-worker",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/voicemailSyncCycle.import.test.ts",
-    "vm-backfill": "tsx src/scripts/voicemail-spool-backfill.ts"
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "vm-backfill": "tsx src/scripts/voicemail-spool-backfill.ts",
+    "vm-reconcile-last": "tsx src/scripts/voicemail-reconcile-last.ts"
   },
   "dependencies": {
     "@connect/db": "workspace:*",

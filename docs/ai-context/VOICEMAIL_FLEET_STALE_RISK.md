@@ -78,12 +78,29 @@ docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scri
 
 ---
 
-## 5. Durable hardening plan (backlog)
+## 5. Durable hardening — scheduled spool reconcile (worker)
+
+**Implemented:** `runVoicemailSpoolReconcileCycle` in `apps/worker/src/voicemailSpoolReconcileCycle.ts` runs on an interval (default **15 minutes**, env **`VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS`**; set to **`0`** to disable). It walks every **active PBX-linked** tenant and **ACTIVE** extension with a **`PbxExtensionLink`**, calls **`fetchAllVoicemailSpoolMessages`** (schema-2 pagination when the helper supports it), and **creates only missing** `Voicemail` rows (**`pbxMessageId`** idempotent; **`insert_only`** — no upsert updates). Mailboxes are processed **sequentially** with **`VOICEMAIL_SPOOL_RECONCILE_MAILBOX_DELAY_MS`** (default **150**) between calls to avoid hammering the helper.
+
+**Health / version gate:** Before scanning, the worker probes **`GET {helperBaseUrl}/health`** once per distinct **`pbxInstanceId`** (no secret). Summary flags **`helper_version_ok_global`** false when any instance is unreachable, returns no version, or version is **&lt; `VOICEMAIL_SPOOL_RECONCILE_MIN_HELPER_VERSION`** (default **`2026.05.10.1`**).
+
+**Structured log:** One JSON line per run: **`msg: voicemail-spool-reconcile-summary`**. Key fields: **`unhealthy`**, **`unhealthy_reasons`**, **`total_inserted`**, **`pagination_incomplete_mailboxes`**, **`schema2_violation_mailboxes`**, **`helper_errors`**, **`high_or_critical_stale_risk_mailboxes`**, **`stale_high_risk_increased`** (vs previous run’s count, requires prior Redis snapshot), **`top_risky_mailboxes`**, **`helper_health_by_pbx_instance`**.
+
+**Redis (7d TTL):** Same payload is stored at **`connect:worker:vmSpoolReconcile:lastSummary`**. Read from **`app-worker-1`**:  
+`pnpm run vm-reconcile-last` → `tsx src/scripts/voicemail-reconcile-last.ts`.
+
+**Rollback:** Set **`VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS=0`** on **worker** and redeploy via queue; no PBX or DB migration. Optional: revert the worker commit.
+
+**Tests (worker):** `pnpm test` under **`apps/worker`** — helper version compare, health evaluation, schema-2 pagination **450+** messages (mocked fetch), legacy helper without **`spoolListSchema: 2`**, tenant-scoped composite **`pbxMessageId`**.
+
+---
+
+## 5b. Durable hardening plan (remaining backlog)
 
 **Alarms / SLA**
 
 - Alert when **high-volume** tenant (e.g. `historical_avg_per_day_30d` ≥ threshold) has **zero** `Voicemail` inserts in **N** hours while PBX still signals VM (AMI / CDR / optional PBX metric).
-- Alert when **`max(helper_origtime) - max(db.receivedAt)`** exceeds threshold **continuously** (requires storing last helper scan per mailbox in worker or metrics cache).
+- Alert when **`max(helper_origtime) - max(db.receivedAt)`** exceeds threshold **continuously** (partially covered by per-run stale-risk counts in **`voicemail-spool-reconcile-summary`**; full Prometheus gauges still open).
 
 **Metrics (worker)**
 

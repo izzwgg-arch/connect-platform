@@ -15,6 +15,7 @@ import {
 } from "@connect/integrations";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
+import { runVoicemailSpoolReconcileCycle } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
 import {
   isConnectMohRuntimeClass,
@@ -1508,6 +1509,19 @@ runPbxJobCycle().catch((err) => console.error("initial pbx job cycle failed", er
 runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed", err?.message || err));
 runVoicemailSyncCycle().catch((err) => console.error("initial voicemail sync failed", err?.message || err));
 
+// Insert-only spool reconcile (schema-2 pagination): durable catch-up for all PBX-linked mailboxes.
+// VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS=0 disables. Default 15 minutes.
+const vmSpoolReconcileMs = Number(process.env.VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS || 15 * 60 * 1000);
+if (Number.isFinite(vmSpoolReconcileMs) && vmSpoolReconcileMs > 0) {
+  setInterval(() => {
+    runVoicemailSpoolReconcileCycle().catch((err) =>
+      console.error("voicemail spool reconcile failed", err?.message || err),
+    );
+  }, vmSpoolReconcileMs);
+  runVoicemailSpoolReconcileCycle().catch((err) =>
+    console.error("initial voicemail spool reconcile failed", err?.message || err),
+  );
+}
 
 setInterval(() => {
   runIvrScheduleCycle().catch((err) => console.error("ivr schedule cycle failed", err?.message || err));

@@ -277,3 +277,70 @@ export async function fetchVoicemailSpoolAudioFromHelper(
   const contentType = resp.headers.get("content-type") || "audio/wav";
   return { contentType, buffer: buf };
 }
+
+/** GET /health on the on-PBX helper (no auth). */
+export type PbxRouteHelperHealth = {
+  ok: boolean;
+  version?: string;
+  httpStatus?: number;
+  error?: string;
+};
+
+/**
+ * Compare dotted helper versions (e.g. 2026.05.10.1). Numeric segments sort numerically;
+ * non-numeric segments fall back to localeCompare.
+ */
+export function comparePbxHelperDottedVersion(a: string, b: string): number {
+  const pa = String(a || "")
+    .trim()
+    .split(".");
+  const pb = String(b || "")
+    .trim()
+    .split(".");
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const sa = pa[i] ?? "0";
+    const sb = pb[i] ?? "0";
+    const na = parseInt(sa, 10);
+    const nb = parseInt(sb, 10);
+    const aNum = String(na) === sa && Number.isFinite(na);
+    const bNum = String(nb) === sb && Number.isFinite(nb);
+    if (aNum && bNum) {
+      if (na !== nb) return na < nb ? -1 : 1;
+    } else {
+      const c = sa.localeCompare(sb);
+      if (c !== 0) return c < 0 ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+export function pbxHelperVersionMeetsMin(version: string | undefined | null, minVersion: string): boolean {
+  const v = String(version ?? "").trim();
+  if (!v) return false;
+  return comparePbxHelperDottedVersion(v, minVersion) >= 0;
+}
+
+export async function fetchPbxRouteHelperHealth(baseUrl: string, timeoutMs = 5000): Promise<PbxRouteHelperHealth> {
+  const url = `${trimSlash(String(baseUrl).trim())}/health`;
+  try {
+    const resp = await fetch(url, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+    const text = await resp.text();
+    let parsed: { ok?: boolean; version?: string } | null = null;
+    try {
+      parsed = text ? (JSON.parse(text) as { ok?: boolean; version?: string }) : null;
+    } catch {
+      parsed = null;
+    }
+    if (!resp.ok) {
+      return {
+        ok: false,
+        httpStatus: resp.status,
+        error: (parsed ? JSON.stringify(parsed) : text).slice(0, 400),
+      };
+    }
+    return { ok: true, version: parsed?.version != null ? String(parsed.version) : undefined };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
