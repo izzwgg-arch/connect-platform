@@ -673,6 +673,24 @@ as long as all HARD probes pass. Caller-leg MOH coverage on this
 build is delivered by the canary outbound trunk wrapper
 (`--enable-trk-wrapper=33`), documented immediately below.
 
+**Update 2026-05-11 — canary wrapper remains NO-GO; safety harness landed.**
+A `--enable-trk-wrapper=33` attempt was correctly refused at the
+installer's baseline-SHA gate, and the read-only drift-compare
+diagnostic resolved `REBASE_SAFE=no` with reason `${TENANT} cannot be
+proven bound on the caller channel when wrapper would run`. The
+wrapper file is NOT on disk and the dialplan `[trk-33-dial]` context
+is unchanged. A three-script PBX safety harness now exists under
+`scripts/pbx/`: `diag-connect-moh-preflight-snapshot.sh` (forensic
+snapshot), `diag-connect-live-call-tenant-vars.sh` (live-call
+introspection that decides `SAFE_TENANT_SOURCE ∈ {endpoint, channel,
+CALL_SOURCE, none}` from `CHANNEL(endpoint)` / channel-name prefix /
+explicit chanvar — `${TENANT}` is explicitly NOT a safe source), and
+`rollback-connect-moh-canary.sh` (Connect-canary-only rollback with
+on-disk + sentinel + first-80-lines SHA verification). Any future
+re-attempt at `--enable-trk-wrapper=33` is gated on the live-call
+diagnostic returning a non-`none` SAFE_TENANT_SOURCE. See
+`DEBUGGING.md` "Outbound caller-leg MOH safety harness (2026-05-11)".
+
 **Update 2026-05-10 — canary wrapper APPROVED (code only, not yet
 installed on PBX):** the same-context same-pattern shadow approach
 ("F2") has been approved at the architecture level for **trunk 33 /

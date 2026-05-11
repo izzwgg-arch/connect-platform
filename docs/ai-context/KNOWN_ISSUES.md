@@ -174,6 +174,22 @@ When you find a new fragile area, add it here.
   Caller-leg coverage on this build is delivered by the canary
   trunk wrapper, not PJSIP append. See `TELEPHONY.md` PJSIP demote
   block and `DEBUGGING.md` "PJSIP probes are SOFT/WARN" note.
+  **Update 2026-05-11 — canary wrapper still NOT installed; blocked
+  on `${TENANT}` provenance.** `--enable-trk-wrapper=33` was attempted
+  and correctly refused to install due to baseline drift; the read-only
+  `scripts/pbx/diag-connect-trk33-drift-compare.sh` confirmed
+  `REBASE_SAFE=no` with reason `${TENANT} cannot be proven bound on
+  the caller channel when wrapper would run`. A three-script safety
+  harness has landed under `scripts/pbx/` to gate any future attempt:
+  `diag-connect-moh-preflight-snapshot.sh` (read-only forensic
+  snapshot), `diag-connect-live-call-tenant-vars.sh` (read-only
+  live-call channel-variable introspection that resolves
+  `SAFE_TENANT_SOURCE` to `endpoint` / `channel` / `CALL_SOURCE` /
+  `none`), and `rollback-connect-moh-canary.sh` (Connect-canary-only
+  rollback with on-disk + sentinel + SHA verification). The wrapper
+  remains NO-GO until live-call diag returns a safe non-`${TENANT}`
+  identity source. See `DEBUGGING.md` "Outbound caller-leg MOH safety
+  harness (2026-05-11)".
 - **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
   alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
   convenience alias for `module reload res_pjsip.so` on newer Asterisk

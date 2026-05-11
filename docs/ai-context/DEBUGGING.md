@@ -931,6 +931,64 @@ Attach the full script output (sections A–G) to the recovery plan
 markdown when re-opening architecture review. Do **not** edit the
 installer's baseline SHA constant without that review.
 
+### Outbound caller-leg MOH safety harness (2026-05-11)
+
+Before any future re-attempt at `--enable-trk-wrapper=33`, the wrapper
+is blocked on the `${TENANT}` provenance problem (drift-compare last
+reported `REBASE_SAFE=no, reason="${TENANT} cannot be proven bound on
+the caller channel when wrapper would run"`). A three-script safety
+harness lives under `scripts/pbx/` to gate any future attempt. Run in
+this strict order:
+
+1. **Preflight snapshot** (no call required):
+   ```bash
+   ssh connect-pbx "sudo bash /root/diag-connect-moh-preflight-snapshot.sh --tag preflight"
+   ```
+   Writes `/root/connect-moh-safety/<ts>-preflight/` with the full
+   dialplan + AstDB + MOH-class state + sha256 of every generated
+   `extensions__*.conf` / `pjsip__*.conf`. PROOF must show
+   `WRAPPER_FILE_ON_DISK = no` and `WRAPPER_SENTINEL_LOADED = no`.
+   Save the `TRK33_HEAD80_SHA256` value — needed for rollback verify.
+
+2. **Place a T3 outbound test call** from a known T3 endpoint
+   (e.g. `T3_103`) to an external number; keep it on the line.
+
+3. **Live-call diagnostic** (with the call still up):
+   ```bash
+   ssh connect-pbx "sudo bash /root/diag-connect-live-call-tenant-vars.sh --tenant-id 3"
+   ```
+   Reads `CHANNEL(endpoint)`, `CHANNEL(name)`, `CHANNEL(musicclass)`,
+   plus the wrapper-relevant chanvars (`TENANT`, `TENANT_PREFIX`,
+   `CALL_SOURCE`, `ORIGINATOR`, `__TRUNK_MOH_SET`, `CONNECT_MOH`) on
+   every T3 candidate channel. PROOF resolves `SAFE_TENANT_SOURCE` to
+   one of `endpoint` / `channel` / `CALL_SOURCE` / `none`. The wrapper
+   may only proceed when SAFE_TENANT_SOURCE is one of the first three
+   AND `${TENANT}` is explicitly NOT relied on by the gate.
+
+4. **Rollback drill** (wrapper not yet installed — proves the rollback
+   script is idempotent when there's nothing to remove):
+   ```bash
+   ssh connect-pbx "sudo bash /root/rollback-connect-moh-canary.sh --trunk 33 \
+       --expected-sha <TRK33_HEAD80_SHA256 from step 1>"
+   ```
+   Expected output:
+   `PROOF.RESULT = nothing_to_rollback`,
+   `WRAPPER_FILE_PRESENT_POST = no`,
+   `WRAPPER_SENTINEL_POST = no`. Exit 0.
+
+If step 3 reports `SAFE_TENANT_SOURCE = none`, the wrapper remains
+**NO-GO** — do not edit the installer's baseline SHA constant, do
+not pass `--force`, do not bypass. Re-open architecture review with
+the live-call PROOF block attached.
+
+`rollback-connect-moh-canary.sh` is the canonical break-glass: it
+deletes only `/etc/asterisk/extensions__65_connect_trk<N>_wrapper.conf`
+(defense-in-depth refuses to touch any other path), backs up to
+`/root/connect-moh-safety/rollback-<ts>/`, reloads dialplan, and
+verifies wrapper file + sentinel are gone AND (if `--expected-sha`
+was passed) the post-rollback first-80-lines SHA matches the
+preflight baseline. Exit 1 on any verification failure → escalate.
+
 Rollback (instant, Connect-owned only):
 ```bash
 ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
