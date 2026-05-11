@@ -468,6 +468,20 @@ Per-service:
       default **inbox-only** API hiding **Old/Urgent** rows). Run **`voicemail-fleet-stale-report.ts`**
       inside **`app-worker-1`** for a ranked, fleet-wide view (`newest_pbx` vs `newest_db` vs inbox-scoped
       DB, baseline volume). Failure-class write-up and hardening backlog: **`VOICEMAIL_FLEET_STALE_RISK.md`**.
+   9c. **Voicemail list visibility (row exists in Postgres; portal/mobile does not show).** After
+      ingestion/backfill are ruled out, compare **one** `Voicemail.id` (or `pbxMessageId`) end-to-end:
+      - **DB:** `folder`, `deletedAt` (must be **null** for list), `tenantId`, `extension`, `listened`, `receivedAt`.
+      - **API:** `GET /voice/voicemail` in **`apps/api/src/server.ts`** — default **`folder=inbox`** (only
+        **`inbox` \| `old` \| `urgent`**); **`take=100`**, **`page`**, **`orderBy: receivedAt desc`**; non-admin users
+        are scoped to the **`Extension`** whose **`ownerUserId`** matches the JWT (`API_ROUTES.md`).
+        Reproduce with the **same JWT** and query string the client uses.
+      - **Portal** (`apps/portal/.../voicemail/page.tsx`): fetches all three folders with the same **`page`**;
+        **“New”** tab hides **`listened`**; **“Old”** includes **`folder=old` OR age heuristic**; search/date filters
+        can exclude rows. Use **pagination** when **`total > 100`** for a folder.
+      - **Mobile** (`apps/mobile/src/api/client.ts` **`getVoicemails`**): must load **all pages per folder** (API
+        page size **100**); historically **page 1 only** hid messages past the first **100** in a folder — fixed
+        by client-side paging up to **`VOICEMAIL_MAX_PAGES_PER_FOLDER`** (**`voicemailPagination.ts`**). Filters
+        on **`VoicemailTab`** (**new** / **urgent** / **old**) mirror portal semantics.
    10. **`/internal/voicemail-notify` extension resolution.** The handler resolves the mailbox with
       `Extension.findFirst({ extNumber: mailbox, status: ACTIVE })` **without** scoping by tenant.
       If two Connect tenants share the same active `extNumber`, the **first** row wins — wrong

@@ -15,6 +15,11 @@ import type {
   VoicemailFolder,
   VoicemailResponse,
 } from "../types";
+import {
+  shouldFetchAnotherVoicemailPage,
+  VOICEMAIL_API_PAGE_SIZE,
+  VOICEMAIL_MAX_PAGES_PER_FOLDER,
+} from "./voicemailPagination";
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
 
@@ -99,21 +104,40 @@ export const mobileQueryKeys = {
   chatMessages: (threadId: string) => ["mobile", "chatMessages", threadId] as const,
 };
 
+/** Fetches every API page per folder (100 rows/page, capped) so mobile lists match portal for large mailboxes. */
 export async function getVoicemails(
   token: string,
   input: { folders?: VoicemailFolder[]; page?: number } = {},
 ): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number> }> {
   const folders = input.folders ?? ["inbox", "urgent", "old"];
-  const page = input.page ?? 1;
   const responses = await Promise.all(
     folders.map(async (folder) => {
-      const params = new URLSearchParams({ folder, page: String(page) });
-      const res = await fetch(`${API_BASE}/voice/voicemail?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const json = await parseJson(res);
-      if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
-      return { folder, data: json as VoicemailResponse };
+      const merged: Voicemail[] = [];
+      let total = 0;
+      for (let page = 1; page <= VOICEMAIL_MAX_PAGES_PER_FOLDER; page++) {
+        const params = new URLSearchParams({ folder, page: String(page) });
+        const res = await fetch(`${API_BASE}/voice/voicemail?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const json = await parseJson(res);
+        if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
+        const data = json as VoicemailResponse;
+        total = data.total ?? total;
+        const batch = data.voicemails ?? [];
+        merged.push(...batch);
+        if (
+          !shouldFetchAnotherVoicemailPage(
+            batch.length,
+            page,
+            total,
+            VOICEMAIL_MAX_PAGES_PER_FOLDER,
+            VOICEMAIL_API_PAGE_SIZE,
+          )
+        ) {
+          break;
+        }
+      }
+      return { folder, data: { voicemails: merged, total } as VoicemailResponse };
     }),
   );
   const totals = { inbox: 0, urgent: 0, old: 0 } as Record<VoicemailFolder, number>;

@@ -20,7 +20,8 @@
     "update:production": "eas update --channel production",
     "typecheck": "tsc --noEmit",
     "lint": "echo lint-mobile",
-    "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts"
+    "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts",
+    "test:voicemail-pagination": "tsx src/api/voicemailPagination.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.26.0",
