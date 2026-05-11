@@ -117,7 +117,7 @@ if ($CommitSha -and $CommitSha.Trim().Length -gt 0) {
   if ($sha -match '^[0-9a-fA-F]{7,40}$') {
     $manifestObj.commitSha = $sha.ToLowerInvariant()
   } else {
-    Write-Err ("Ignoring -CommitSha (expected 7–40 hex chars): {0}" -f $sha)
+    Write-Err ("Ignoring -CommitSha (expected 7-40 hex chars): {0}" -f $sha)
   }
 }
 $manifestJson = $manifestObj | ConvertTo-Json -Compress
@@ -150,7 +150,7 @@ chmod 755 "$REMOTE_DIR"
 mv -f "$REMOTE_DIR/$VERSIONED_NAME.tmp" "$REMOTE_DIR/$VERSIONED_NAME"
 chmod 644 "$REMOTE_DIR/$VERSIONED_NAME"
 
-# Preserve previous "latest" on disk for rollback (not served — filename not in allow-list).
+# Preserve previous "latest" on disk for rollback (not served - filename not in allow-list).
 if [ -f "$REMOTE_DIR/$LATEST_NAME" ]; then
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   cp -f "$REMOTE_DIR/$LATEST_NAME" "$REMOTE_DIR/connectcomms-latest.backup-$ts.apk" || true
