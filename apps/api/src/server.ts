@@ -14353,6 +14353,21 @@ app.get("/voice/voicemail", async (req, reply) => {
     db.voicemail.count({ where }),
   ]);
 
+  /** SEV-1 temporary row-level proof — remove after incident. No tokens/audio/full numbers. */
+  const returnedDistinctTenantIds = [
+    ...new Set(voicemails.map((v) => v.tenantId).filter((t): t is string => Boolean(t))),
+  ];
+  const returnedDistinctExtensions = [
+    ...new Set(voicemails.map((v) => String(v.extension || "").trim()).filter(Boolean)),
+  ];
+  const forensicSampleVoicemailIds = voicemails.slice(0, 5).map((v) => v.id);
+  const forensicSampleReceivedAt = voicemails.slice(0, 5).map((v) => v.receivedAt.toISOString());
+  const forensicSampleCallerTail4 = voicemails.slice(0, 5).map((v) => {
+    const d = String(v.callerNumber || "").replace(/\D/g, "");
+    if (!d.length) return null;
+    return d.length <= 4 ? "****" : `…${d.slice(-4)}`;
+  });
+
   const listScopeVersion = isSuperAdmin
     ? "super-admin"
     : legacyTenantWideAdmin
@@ -14382,6 +14397,11 @@ app.get("/voice/voicemail", async (req, reply) => {
       page: q.page,
       returnedPageRows: voicemails.length,
       totalMatching: total,
+      returnedDistinctTenantIds,
+      returnedDistinctExtensions,
+      forensicSampleVoicemailIds,
+      forensicSampleReceivedAt,
+      forensicSampleCallerTail4,
     },
     "[VOICEMAIL_LIST_SCOPE]",
   );
