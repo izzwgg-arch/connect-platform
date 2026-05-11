@@ -205,29 +205,46 @@ pjsip_reload() {
   printf '%s' "$out"
 }
 
-# ── 0. Mode parsing ─────────────────────────────────────────────────────────
+# ── 0. Mode + flag parsing ──────────────────────────────────────────────────
 # Default mode is "install" (preserves original behavior). --check and
 # --rollback are explicit operator subcommands; --help prints usage and
-# exits. Unknown modes exit 64 (EX_USAGE) before any preflight or write.
-MODE="install"
-case "${1:-}" in
-  ""|install)
-    MODE="install"
-    ;;
-  -h|--help|help)
-    MODE="help"
-    ;;
-  --check|-n|--dry-run|check)
-    MODE="check"
-    ;;
-  --rollback|--uninstall|rollback|uninstall)
-    MODE="rollback"
-    ;;
-  *)
-    printf 'ERROR: unknown mode %q (try --help)\n' "$1" >&2
-    exit 64
-    ;;
-esac
+# exits. Unknown args exit 64 (EX_USAGE) before any preflight or write.
+#
+# --enable-trk-wrapper=<id> is an additive flag, NOT a mode. Currently the
+# only accepted value is 33 (canary scope: trunk 33 only, tenant T3 only).
+# Anything else is rejected. Default off — the existing install/check/rollback
+# paths behave byte-identically when the flag is absent.
+MODE=""
+ENABLE_TRK_WRAPPER=""
+for arg in "$@"; do
+  case "$arg" in
+    ""|install)
+      MODE="${MODE:-install}"
+      ;;
+    -h|--help|help)
+      MODE="help"
+      ;;
+    --check|-n|--dry-run|check)
+      MODE="check"
+      ;;
+    --rollback|--uninstall|rollback|uninstall)
+      MODE="rollback"
+      ;;
+    --enable-trk-wrapper=*)
+      val="${arg#*=}"
+      if [[ "$val" != "33" ]]; then
+        printf 'ERROR: --enable-trk-wrapper only accepts value 33 (canary scope); got %q\n' "$val" >&2
+        exit 64
+      fi
+      ENABLE_TRK_WRAPPER="$val"
+      ;;
+    *)
+      printf 'ERROR: unknown arg %q (try --help)\n' "$arg" >&2
+      exit 64
+      ;;
+  esac
+done
+MODE="${MODE:-install}"
 
 if [[ "$MODE" = "help" ]]; then
   cat <<'HELP'
@@ -256,8 +273,19 @@ Modes:
                    - sentinel "#include extensions__65_connect_tenant_moh.conf"
                      line in /etc/asterisk/extensions__60_custom.conf (only
                      that one line — backs up first)
+                   - /etc/asterisk/extensions__65_connect_trk33_wrapper.conf
+                     (canary outbound caller-leg MOH wrapper, when present)
                  Reloads dialplan and pjsip. Verifies the contexts are no
                  longer loaded. Never touches VitalPBX-generated config.
+
+  --enable-trk-wrapper=33
+                 Additive install flag (canary scope, OFF by default). When
+                 set during `install`, also writes the Connect-owned canary
+                 outbound caller-leg MOH wrapper for trunk 33 / tenant T3:
+                   - /etc/asterisk/extensions__65_connect_trk33_wrapper.conf
+                 Refuses to install if any generated [trk-33-dial] invariant
+                 differs (baseline SHA, pattern shape, priorities 21/22/44).
+                 Only the value `33` is accepted in this canary release.
 
   --help         Print this message and exit 0.
 
@@ -284,7 +312,26 @@ INCLUDE_LINE="#include extensions__65_connect_tenant_moh.conf"
 PJSIP_FILE="/etc/asterisk/pjsip__65_connect_tenant_moh.conf"
 PJSIP_BACKUP_FILE="${PJSIP_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
 PJSIP_TMP_NEW="/tmp/connect-tenant-moh-pjsip-new.$$.conf"
-trap 'rm -f "$TMP_NEW" "$PJSIP_TMP_NEW"' EXIT
+
+# ── Canary outbound caller-leg MOH wrapper (trunk 33 / tenant T3) ──────────
+# Connect-owned include that shadows priority 1 of [trk-33-dial] using the
+# EXACT generated pattern '_[-+*#0-9a-zA-Z].'. Default OFF — only written when
+# the operator passes --enable-trk-wrapper=33 to install mode. Lives next to
+# the other Connect-owned __65_* includes so VitalPBX-generated files are
+# never touched.
+TRK_WRAPPER_TARGET_TRUNK="33"
+TRK_WRAPPER_TARGET_TENANT="3"
+TRK_WRAPPER_PATTERN='_[-+*#0-9a-zA-Z].'
+TRK_WRAPPER_FILE="/etc/asterisk/extensions__65_connect_trk33_wrapper.conf"
+TRK_WRAPPER_BACKUP_FILE="${TRK_WRAPPER_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+TRK_WRAPPER_TMP_NEW="/tmp/connect-trk33-wrapper-new.$$.conf"
+# Baseline drift hash captured by scripts/pbx/diag-connect-trk33-wrapper-feasibility.sh
+# from `asterisk -rx "dialplan show trk-33-dial" | head -80 | sha256sum`. Used as
+# a pre-install gate so we refuse to ship the wrapper if VitalPBX has regenerated
+# trk-33-dial between feasibility capture and install.
+TRK_WRAPPER_BASELINE_SHA256="9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695"
+
+trap 'rm -f "$TMP_NEW" "$PJSIP_TMP_NEW" "$TRK_WRAPPER_TMP_NEW"' EXIT
 
 # Skipped-tenant rollup (install mode only). Each entry is "T<id>: <reason>".
 # Initialized to the empty list so `set -u` is happy when nothing was skipped.
@@ -484,6 +531,16 @@ do_health_check() {
     printf '[SKIP] sample endpoint check (no tenants in reverse-map)\n'
   fi
 
+  # Canary trk-33 wrapper checks (additive — only contribute failures when
+  # the wrapper file is actually present; absent file is reported [INFO]).
+  local wrapper_fail=0
+  trk_wrapper_check || wrapper_fail=$?
+  if [[ -f "$TRK_WRAPPER_FILE" ]]; then
+    # Each wrapper sub-check we want counted in the totals.
+    checks=$((checks + 2))
+    fail=$((fail + wrapper_fail))
+  fi
+
   printf '\n====================================================\n'
   if [[ $fail -eq 0 ]]; then
     printf 'RESULT: PASS (%s/%s checks healthy)\n' "$checks" "$checks"
@@ -541,6 +598,16 @@ do_rollback() {
     skipped=$((skipped + 1))
   fi
 
+  # Canary trk-33 wrapper — remove the Connect-owned include if present.
+  # Connect-owned only; never touches /etc/asterisk/vitalpbx/.
+  if [[ -f "$TRK_WRAPPER_FILE" ]]; then
+    trk_wrapper_rollback
+    removed=$((removed + 1))
+  else
+    printf '[SKIP]   %s already absent\n' "$TRK_WRAPPER_FILE"
+    skipped=$((skipped + 1))
+  fi
+
   asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
   printf '[RELOAD] asterisk -rx "dialplan reload"\n'
   pjsip_reload >/dev/null 2>&1 || true
@@ -563,6 +630,204 @@ do_rollback() {
   printf 'PBX behavior is now byte-identical to pre-install for the MOH enforcement layer.\n'
   printf 'Reverse-map AstDB keys (connect/pbx_tenant_map/*) are inert without the resolver;\n'
   printf 'clear with `asterisk -rx "database deltree connect/pbx_tenant_map"` if desired.\n'
+  return 0
+}
+
+# ── Canary trk-33 wrapper helpers ──────────────────────────────────────────
+# Verify the four proven invariants of generated [trk-33-dial]:
+#   - exact pattern '_[-+*#0-9a-zA-Z].' present (shape we shadow)
+#   - priority 21 still sets CHANNEL(musicclass)=default
+#   - priority 22 still sets __TRUNK_MOH_SET=yes
+#   - priority 44 still invokes U(sub-before-bridging-call^${TENANT}^...)
+# If $strict=1 (default), also require head-80 SHA256 to match the captured
+# baseline. The strict form is used at pre-install time. Post-install --check
+# runs with $strict=0 because the merged dialplan dump legitimately differs
+# once our wrapper is loaded (priority-1 shadow + extra NoOps), but the
+# generated priorities 21/22/44 must still be present in the dump.
+trk_wrapper_verify_invariants() {
+  local strict="${1:-1}"
+  local ctx="trk-${TRK_WRAPPER_TARGET_TRUNK}-dial"
+  local dump pri21 pri44 actual_sha rc=0
+
+  dump="$(asterisk -rx "dialplan show ${ctx}" 2>&1 || true)"
+
+  if ! printf '%s\n' "$dump" | grep -F "'${TRK_WRAPPER_PATTERN}'" >/dev/null; then
+    printf 'INVARIANT-FAIL: generated pattern %q not found in [%s]\n' \
+      "$TRK_WRAPPER_PATTERN" "$ctx" >&2
+    rc=1
+  fi
+
+  pri21="$(printf '%s\n' "$dump" | awk '/[[:space:]]21\./{print; exit}')"
+  if ! printf '%s' "$pri21" | grep -q 'CHANNEL(musicclass)=default'; then
+    printf 'INVARIANT-FAIL: priority 21 missing CHANNEL(musicclass)=default. Got: %s\n' \
+      "${pri21:-<empty>}" >&2
+    rc=1
+  fi
+
+  if ! printf '%s\n' "$dump" | awk '/[[:space:]]22\./{print; exit}' \
+       | grep -q '__TRUNK_MOH_SET=yes'; then
+    printf 'INVARIANT-FAIL: priority 22 missing __TRUNK_MOH_SET=yes\n' >&2
+    rc=1
+  fi
+
+  pri44="$(printf '%s\n' "$dump" | awk '/[[:space:]]44\./{print; exit}')"
+  if ! printf '%s' "$pri44" | grep -q 'U(sub-before-bridging-call\^\${TENANT}'; then
+    printf 'INVARIANT-FAIL: priority 44 missing U(sub-before-bridging-call^${TENANT}^...). Got: %s\n' \
+      "${pri44:-<empty>}" >&2
+    rc=1
+  fi
+
+  if [[ "$strict" = "1" ]]; then
+    actual_sha="$(printf '%s\n' "$dump" | head -80 | sha256sum | awk '{print $1}')"
+    if [[ "$actual_sha" != "$TRK_WRAPPER_BASELINE_SHA256" ]]; then
+      printf 'INVARIANT-FAIL: trk-%s-dial baseline drift\n  expected: %s\n  actual:   %s\n' \
+        "$TRK_WRAPPER_TARGET_TRUNK" "$TRK_WRAPPER_BASELINE_SHA256" "$actual_sha" >&2
+      rc=1
+    fi
+  fi
+
+  return $rc
+}
+
+trk_wrapper_restore_backup() {
+  warn "Restoring trk-${TRK_WRAPPER_TARGET_TRUNK} wrapper backup: $TRK_WRAPPER_BACKUP_FILE"
+  if [[ -s "$TRK_WRAPPER_BACKUP_FILE" ]]; then
+    cp -a "$TRK_WRAPPER_BACKUP_FILE" "$TRK_WRAPPER_FILE"
+  else
+    rm -f "$TRK_WRAPPER_FILE"
+  fi
+  asterisk -rx 'dialplan reload' >/dev/null 2>&1 || true
+}
+
+trk_wrapper_install() {
+  step "[trk-wrapper] Install canary outbound caller-leg MOH wrapper (trunk ${TRK_WRAPPER_TARGET_TRUNK} / tenant T${TRK_WRAPPER_TARGET_TENANT})"
+
+  step "[trk-wrapper 1/5] Verify generated [trk-${TRK_WRAPPER_TARGET_TRUNK}-dial] invariants + baseline drift"
+  if ! trk_wrapper_verify_invariants 1; then
+    die "Refusing to install canary wrapper: generated dialplan invariants or baseline differ. Investigate before retrying."
+  fi
+  echo "  ↳ OK — pattern, priorities 21/22/44, baseline SHA all match"
+
+  step "[trk-wrapper 2/5] Snapshot existing wrapper (if any)"
+  if [[ -f "$TRK_WRAPPER_FILE" ]]; then
+    cp -a "$TRK_WRAPPER_FILE" "$TRK_WRAPPER_BACKUP_FILE"
+    echo "  ↳ backed up to $TRK_WRAPPER_BACKUP_FILE"
+  else
+    : > "$TRK_WRAPPER_BACKUP_FILE"
+    echo "  ↳ no prior wrapper — fresh install"
+  fi
+
+  step "[trk-wrapper 3/5] Write wrapper include"
+  cat > "$TRK_WRAPPER_TMP_NEW" <<'CONNECT_TRK33_WRAPPER_EOF'
+; ============================================================================
+; Connect canary outbound caller-leg MOH wrapper
+; (Auto-installed by scripts/pbx/install-connect-tenant-moh-dialplan.sh
+;  with --enable-trk-wrapper=33 — DO NOT HAND-EDIT.)
+;
+; Scope (HARD-CODED, canary):
+;   - trunk 33 only          (context [trk-33-dial])
+;   - tenant T3 only         (TENANT == "T3" gate at priority 2)
+;   - any other tenant       -> immediate Goto into generated priority 2
+;
+; Mechanism: same-context, same-pattern shadow of the generated priority 1.
+; The shadow pattern is the EXACT generated form '_[-+*#0-9a-zA-Z].' — we do
+; NOT introduce a broader or narrower pattern (no `_X.`, no F1 specific-shadow).
+; The wrapper resolves the tenant's MOH class from AstDB, sets
+; CHANNEL(musicclass) + __TRUNK_MOH_SET=yes (so generated priority 21 sees
+; the gate already tripped), then Gotos generated priority 2. Priorities
+; 2..end of the generated chain run byte-for-byte unchanged.
+;
+; Read-only consumer of these AstDB keys (published by Connect API on every
+; MOH publish/rollback — see apps/api/src/server.ts publishMohToAstDb):
+;   connect/pbx_tenant_map/3/slug
+;   connect/t_<slug>/moh_class            (primary)
+;   connect/t_<slug>/active_moh_class     (fallback)
+;
+; Fail-safe: any missing key, non-T3 tenant, or empty class -> straight
+; Goto into priority 2. NEVER hangs up, redirects, alters CDR/recording.
+; ============================================================================
+
+[trk-33-dial]
+exten => _[-+*#0-9a-zA-Z].,1,NoOp(connect-trk33-wrapper enter exten=${EXTEN} tenant=${TENANT})
+ same => n,GotoIf($["${TENANT}" != "T3"]?passthrough)
+ same => n,Set(SLUG_LOCAL=${DB(connect/pbx_tenant_map/3/slug)})
+ same => n,GotoIf($["${SLUG_LOCAL}" = ""]?passthrough)
+ same => n,Set(CLS_LOCAL=${DB(connect/t_${SLUG_LOCAL}/moh_class)})
+ same => n,ExecIf($["${CLS_LOCAL}" = ""]?Set(CLS_LOCAL=${DB(connect/t_${SLUG_LOCAL}/active_moh_class)}))
+ same => n,GotoIf($["${CLS_LOCAL}" = ""]?passthrough)
+ same => n,Set(CHANNEL(musicclass)=${CLS_LOCAL})
+ same => n,Set(__TRUNK_MOH_SET=yes)
+ same => n,NoOp(connect-trk33-wrapper applied tenant=T3 class=${CLS_LOCAL})
+ same => n,Goto(trk-33-dial,${EXTEN},2)
+ same => n(passthrough),NoOp(connect-trk33-wrapper passthrough tenant=${TENANT})
+ same => n,Goto(trk-33-dial,${EXTEN},2)
+CONNECT_TRK33_WRAPPER_EOF
+  mv "$TRK_WRAPPER_TMP_NEW" "$TRK_WRAPPER_FILE"
+  chown asterisk:asterisk "$TRK_WRAPPER_FILE"
+  chmod 0644 "$TRK_WRAPPER_FILE"
+  echo "  ↳ wrote $TRK_WRAPPER_FILE ($(wc -l < "$TRK_WRAPPER_FILE" | tr -d ' ') lines)"
+
+  step "[trk-wrapper 4/5] Reload dialplan"
+  local reload_out
+  reload_out="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
+  echo "  ↳ $reload_out"
+
+  step "[trk-wrapper 5/5] Verify wrapper loaded + invariants preserved"
+  local show_out
+  show_out="$(asterisk -rx "dialplan show trk-${TRK_WRAPPER_TARGET_TRUNK}-dial" 2>&1 || true)"
+  if ! printf '%s\n' "$show_out" | grep -q 'connect-trk33-wrapper enter'; then
+    trk_wrapper_restore_backup
+    die "Wrapper sentinel NoOp not found after dialplan reload. Backup restored."
+  fi
+  # Post-install invariant check: strict=0 because the merged dialplan dump
+  # legitimately differs once our wrapper is loaded. We only require that
+  # the generated priorities 21/22/44 and pattern are still present.
+  if ! trk_wrapper_verify_invariants 0; then
+    trk_wrapper_restore_backup
+    die "Generated dialplan invariants no longer match after wrapper load. Backup restored."
+  fi
+  echo "  ↳ OK — wrapper sentinel loaded; generated invariants preserved"
+}
+
+trk_wrapper_check() {
+  local fail=0
+  printf '\n[CHECK] Canary outbound caller-leg MOH wrapper (trunk %s / tenant T%s)\n' \
+    "$TRK_WRAPPER_TARGET_TRUNK" "$TRK_WRAPPER_TARGET_TENANT"
+  if [[ ! -f "$TRK_WRAPPER_FILE" ]]; then
+    printf '[INFO] wrapper include absent — canary disabled: %s\n' "$TRK_WRAPPER_FILE"
+    return 0
+  fi
+  printf '[PASS] wrapper include present: %s\n' "$TRK_WRAPPER_FILE"
+
+  if trk_wrapper_verify_invariants 0 2>/dev/null; then
+    printf '[PASS] generated [trk-%s-dial] invariants present (pattern + pri 21/22/44)\n' \
+      "$TRK_WRAPPER_TARGET_TRUNK"
+  else
+    printf '[FAIL] generated [trk-%s-dial] invariants broken — re-run with diagnostic detail:\n' \
+      "$TRK_WRAPPER_TARGET_TRUNK"
+    trk_wrapper_verify_invariants 0 || true
+    fail=$((fail + 1))
+  fi
+
+  local show_out
+  show_out="$(asterisk -rx "dialplan show trk-${TRK_WRAPPER_TARGET_TRUNK}-dial" 2>&1 || true)"
+  if printf '%s\n' "$show_out" | grep -q 'connect-trk33-wrapper enter'; then
+    printf '[PASS] wrapper sentinel loaded in [trk-%s-dial]\n' "$TRK_WRAPPER_TARGET_TRUNK"
+  else
+    printf '[FAIL] wrapper sentinel not loaded in [trk-%s-dial]\n' "$TRK_WRAPPER_TARGET_TRUNK"
+    fail=$((fail + 1))
+  fi
+
+  return $fail
+}
+
+trk_wrapper_rollback() {
+  if [[ ! -f "$TRK_WRAPPER_FILE" ]]; then
+    printf '[SKIP]   %s already absent\n' "$TRK_WRAPPER_FILE"
+    return 0
+  fi
+  rm -f "$TRK_WRAPPER_FILE"
+  printf '[REMOVE] %s\n' "$TRK_WRAPPER_FILE"
   return 0
 }
 
@@ -939,6 +1204,18 @@ if [[ $SKIPPED_COUNT -gt 0 ]]; then
     printf '  - %s\n' "$s"
   done
   printf '  Hint: re-run Connect MOH publish for these tenants, then re-run this installer.\n'
+fi
+
+# ── 9. Optional canary trk-33 wrapper (additive, off by default) ───────────
+# Only runs when the operator passes --enable-trk-wrapper=33. Self-contained:
+# verifies generated [trk-33-dial] invariants + baseline SHA, writes one
+# Connect-owned include, reloads dialplan, verifies the wrapper loaded and
+# generated invariants are still preserved, restores backup + dies on any
+# failure. No effect on any other tenant or trunk.
+if [[ "$ENABLE_TRK_WRAPPER" = "33" ]]; then
+  trk_wrapper_install
+else
+  step "[trk-wrapper] Skipped (no --enable-trk-wrapper=33 flag)"
 fi
 
 cat <<DONE

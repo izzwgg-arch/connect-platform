@@ -839,6 +839,65 @@ Verification checklist (read-only):
    PBX behavior reverts to pre-enforcement. Reverse-map AstDB keys are
    inert on their own; clear with `database deltree connect/pbx_tenant_map`
    if desired.
+
+### Canary outbound caller-leg MOH wrapper — trunk 33 / tenant T3
+
+Symptom: outbound holds on trunk 33 for tenant T3 still play the wrong
+class even with the tenant MOH enforcement layer installed. Generated
+`[trk-33-dial]` priority 21 sets `CHANNEL(musicclass)=default` on the
+caller leg before the U-flag hook fires, and on this VitalPBX build
+`[sub-before-connecting-call]` is not invoked from the per-trunk
+caller dial path. See `TELEPHONY.md` → "Canary outbound caller-leg
+MOH wrapper (trunk 33 / tenant T3)" for the approved fix.
+
+Probe order (all read-only):
+
+1. Confirm AstDB has the reverse-map key the wrapper reads:
+   ```bash
+   ssh connect-pbx "asterisk -rx 'database get connect/pbx_tenant_map/3 slug'"
+   ssh connect-pbx "asterisk -rx 'database show connect/t_<slug>' | grep -E 'moh_class|active_moh_class'"
+   ```
+   Missing → run a Connect MOH publish for T3 first.
+
+2. Read-only health probe (no writes, no reloads):
+   ```bash
+   ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+   ```
+   The canary section reports `[INFO] wrapper include absent` when the
+   wrapper is not installed (expected default), or `[PASS] ... loaded`
+   plus `[PASS] generated [trk-33-dial] invariants present` when it is.
+
+3. Inspect the merged context — wrapper sentinel + generated tail:
+   ```bash
+   ssh connect-pbx "asterisk -rx 'dialplan show trk-33-dial'"
+   ```
+   Look for `connect-trk33-wrapper enter` at priority 1 AND priorities
+   21/22/44 still showing `CHANNEL(musicclass)=default` /
+   `__TRUNK_MOH_SET=yes` / `U(sub-before-bridging-call^${TENANT}^...)`.
+
+4. If the wrapper is loaded but holds still play the wrong class for
+   T3, capture both legs while a call is up:
+   ```bash
+   ssh connect-pbx "asterisk -rx 'core show channels concise'"
+   ssh connect-pbx "asterisk -rx 'core show channel <caller-chan>' | grep -i MusicClass"
+   ```
+   Caller-leg `MusicClass` must equal the AstDB-published class.
+
+Drift-mismatch recovery: `--enable-trk-wrapper=33` refuses to install
+if the baseline SHA over `dialplan show trk-33-dial | head -80`
+differs from `9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695`,
+or if any of priorities 21/22/44 / the exact pattern no longer match.
+If the installer reports `INVARIANT-FAIL: trk-33-dial baseline drift`,
+**do not bypass**. Capture the current `dialplan show trk-33-dial`
+output, attach to the recovery plan, and re-open architecture review
+before proceeding — VitalPBX has regenerated trk-33-dial.
+
+Rollback (instant, Connect-owned only):
+```bash
+ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
+# or, equivalent manual:
+ssh connect-pbx "rm -f /etc/asterisk/extensions__65_connect_trk33_wrapper.conf && asterisk -rx 'dialplan reload'"
+```
 - **IVR runbook**: `docs/pbx/IVR_VITALPBX_PARITY_RUNBOOK.md`,
   `docs/pbx/option-a-setup.md`, `docs/pbx/option-a-runtime-keys.md`.
 - **Live snapshot scripts** (PowerShell): `scripts/capture-forensic.ps1` (mentioned

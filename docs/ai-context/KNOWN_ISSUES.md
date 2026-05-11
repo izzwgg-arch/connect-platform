@@ -142,10 +142,22 @@ When you find a new fragile area, add it here.
   hook`, and VitalPBX source-of-truth DB updates. The only mechanism
   that remains is a wrapper/shadow of the trunk dial context, which
   is documented as high-risk and requires a separate written
-  architecture-review approval before any patch. Until that approval
-  is granted, MOH changes on this surface are frozen. Full audit
-  trail and operator policy in `docs/ai-context/TELEPHONY.md` →
+  architecture-review approval before any patch. Full audit trail
+  and operator policy in `docs/ai-context/TELEPHONY.md` →
   "Caller-leg MOH on outbound trunk calls — FROZEN as of 2026-05-10".
+  **Update 2026-05-10:** an approved canary same-context same-pattern
+  shadow ("F2") of `[trk-33-dial]` is now implemented in
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh` behind the
+  additive `--enable-trk-wrapper=33` flag (OFF by default). Scope is
+  hard-coded to **trunk 33 + tenant T3 only**, uses the EXACT
+  generated pattern `_[-+*#0-9a-zA-Z].`, and refuses to install if
+  the captured baseline SHA / priorities 21/22/44 / pattern shape
+  differ. **Code only — not yet installed on any PBX.** Installing
+  on the canary PBX requires a separate written operator approval.
+  Other tenants and trunks remain frozen. See `TELEPHONY.md` →
+  "Canary outbound caller-leg MOH wrapper (trunk 33 / tenant T3)"
+  and `DEPLOYMENT.md` → canary wrapper runbook for full operational
+  detail.
 - **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
   alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
   convenience alias for `module reload res_pjsip.so` on newer Asterisk

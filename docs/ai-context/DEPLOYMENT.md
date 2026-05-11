@@ -354,7 +354,9 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
   ```
   Removes only Connect-owned files + the sentinel `#include` line, then
-  reloads dialplan and pjsip. Idempotent — running again on an
+  reloads dialplan and pjsip. Also removes the canary trk-33 wrapper
+  (`/etc/asterisk/extensions__65_connect_trk33_wrapper.conf`) if
+  present. Idempotent — running again on an
   already-uninstalled host is safe.
 - **Rollback (manual equivalent, break-glass only)**. Do **not** use
   `asterisk -rx "pjsip reload"` — that CLI alias is missing on some
@@ -371,6 +373,101 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   enforcement layer. Reverse-map AstDB keys are inert if the includes
   are removed; clear with `database deltree connect/pbx_tenant_map` if
   desired.
+
+### Canary outbound caller-leg MOH wrapper — trunk 33 / tenant T3
+
+**Status:** code-complete in `scripts/pbx/install-connect-tenant-moh-dialplan.sh`
+behind the additive `--enable-trk-wrapper=33` flag. **Not yet installed
+on any PBX** — installing on the canary PBX requires a separate
+written operator approval. Architectural background lives in
+`TELEPHONY.md` → "Canary outbound caller-leg MOH wrapper (trunk 33 /
+tenant T3)". Probe order and drift-recovery in `DEBUGGING.md` →
+"Canary outbound caller-leg MOH wrapper — trunk 33 / tenant T3".
+
+**Architectural impact:** writes one Connect-owned include —
+`/etc/asterisk/extensions__65_connect_trk33_wrapper.conf` — that
+defines `[trk-33-dial]` with one extension at priority 1 using the
+EXACT generated pattern `_[-+*#0-9a-zA-Z].`. Gates strictly on
+`TENANT == "T3"`; any other tenant immediately `Goto`s priority 2 of
+the generated chain. Sets `CHANNEL(musicclass)` from the
+Connect-published AstDB map (`connect/pbx_tenant_map/3/slug` →
+`connect/t_<slug>/moh_class`, fallback `active_moh_class`) and
+`__TRUNK_MOH_SET=yes` so generated priority 21's
+`CHANNEL(musicclass)=default` is gated out by priority 22.
+
+**Operational risks:**
+
+- VitalPBX regenerating `trk-33-dial` after install would break the
+  baseline-SHA invariant. The installer refuses to install on drift;
+  the `--check` probe surfaces it. Recovery is rollback + re-open
+  architecture review.
+- Asterisk merge semantics across same-context same-pattern priority-1
+  definitions are build-specific. The installer requires the wrapper
+  sentinel NoOp to appear in `dialplan show trk-33-dial` after reload;
+  failure auto-restores the backup and aborts before declaring success.
+- No other trunk, no other tenant, no emergency-route interception,
+  no PJSIP changes, no schema changes.
+
+**Pre-install gate (refuses to write if any check fails):**
+
+1. Baseline SHA256 over `dialplan show trk-33-dial | head -80` equals
+   `9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695`.
+2. Exact generated pattern `_[-+*#0-9a-zA-Z].` present in `[trk-33-dial]`.
+3. Priority 21 contains `CHANNEL(musicclass)=default`.
+4. Priority 22 contains `__TRUNK_MOH_SET=yes`.
+5. Priority 44 contains `U(sub-before-bridging-call^${TENANT}^...`.
+
+**Install (after separate written approval only):**
+
+```bash
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --enable-trk-wrapper=33"
+```
+
+The installer is idempotent; re-running on an already-installed host
+backs up the prior wrapper file and re-verifies invariants.
+
+**Health probe (read-only, no writes, no reloads):**
+
+```bash
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+```
+
+When the wrapper file is present, this adds 2 sub-checks to the
+existing health-check totals: `[PASS] generated [trk-33-dial]
+invariants present` and `[PASS] wrapper sentinel loaded`. When absent
+(default), it prints `[INFO] wrapper include absent — canary disabled`
+and contributes nothing to the failure count.
+
+**Rollback (instant, Connect-owned only):**
+
+```bash
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
+```
+
+Removes `/etc/asterisk/extensions__65_connect_trk33_wrapper.conf` plus
+the other Connect-owned MOH-layer files and reloads dialplan. No
+VitalPBX-generated file is ever touched.
+
+Manual equivalent (break-glass only):
+
+```bash
+ssh <pbx> "rm -f /etc/asterisk/extensions__65_connect_trk33_wrapper.conf \\
+  && asterisk -rx 'dialplan reload'"
+```
+
+Post-rollback, `[trk-33-dial]` is byte-identical to pre-install for
+T3 and every other tenant on trunk 33.
+
+**Drift detection explanation:** the captured baseline SHA was
+produced by `scripts/pbx/diag-connect-trk33-wrapper-feasibility.sh`
+on 2026-05-10 from the first 80 lines of `dialplan show trk-33-dial`.
+The installer recomputes this hash before writing the wrapper and
+refuses if it differs (`INVARIANT-FAIL: trk-33-dial baseline drift`).
+The hash check is intentionally strict only at install time; the
+post-install `--check` probe verifies priorities 21/22/44 + pattern
+shape only, because the merged dialplan dump legitimately changes
+once the wrapper is loaded. Re-baselining (changing the constant) is
+a separate architecture-review activity and is not an operator action.
 
 ### Voicemail Phase 1 — staged rollout (do not deploy everything at once)
 

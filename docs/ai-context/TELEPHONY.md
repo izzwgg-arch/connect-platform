@@ -659,6 +659,91 @@ Why every safe option was rejected:
   versions, and may drift when VitalPBX regenerates the trunk
   context. Requires a separate written approval before any code lands.
 
+**Update 2026-05-10 — canary wrapper APPROVED (code only, not yet
+installed on PBX):** the same-context same-pattern shadow approach
+("F2") has been approved at the architecture level for **trunk 33 /
+tenant T3 only**. The implementation lives in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh` behind the
+additive `--enable-trk-wrapper=33` flag (OFF by default). See the
+**Canary outbound caller-leg MOH wrapper** section immediately below.
+No PBX install has been performed; that requires a separate written
+operator approval and is still subject to this FROZEN policy in
+spirit (one trunk, one tenant, instant rollback). Other tenants and
+other trunks remain frozen.
+
+#### Canary outbound caller-leg MOH wrapper (trunk 33 / tenant T3)
+
+**Status:** code-complete, **not installed on PBX**. Awaiting separate
+written approval for the PBX-side install.
+
+**Scope (hard-coded, narrow on purpose):**
+
+- Trunk `33` only — context `[trk-33-dial]`.
+- Tenant `T3` only — `TENANT == "T3"` gate at priority 2.
+- Any other tenant on trunk 33 → immediate `Goto(trk-33-dial,${EXTEN},2)`
+  (generated chain unchanged).
+- Emergency dialing untouched: priorities 2..end of the generated
+  chain run byte-for-byte identical to pre-install.
+
+**Mechanism:** same-context same-pattern shadow of generated priority 1
+of `[trk-33-dial]`. The wrapper uses the **exact** generated pattern
+`_[-+*#0-9a-zA-Z].` — not `_X.`, not a broader F1 specific-shadow.
+At priority 1 it: gates on `TENANT == "T3"`, resolves the MOH class
+from AstDB (`connect/pbx_tenant_map/3/slug` →
+`connect/t_<slug>/moh_class`, fallback `active_moh_class`), Sets
+`CHANNEL(musicclass)` + `__TRUNK_MOH_SET=yes` (so generated priority
+21's `CHANNEL(musicclass)=default` is gated out by `__TRUNK_MOH_SET`
+at priority 22), then `Goto(trk-33-dial,${EXTEN},2)`. Missing keys /
+non-T3 tenant / empty class → fall-through Goto, behavior identical
+to pre-install.
+
+**File written (Connect-owned, never edits VitalPBX-generated files):**
+
+- `/etc/asterisk/extensions__65_connect_trk33_wrapper.conf`
+
+**Drift / invariant guard (refuses install if any check fails):**
+
+1. Baseline SHA256 over `dialplan show trk-33-dial | head -80`
+   matches the captured baseline
+   `9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695`.
+2. The exact generated pattern `'_[-+*#0-9a-zA-Z].'` is present in
+   `[trk-33-dial]`.
+3. Priority 21 still contains `CHANNEL(musicclass)=default`.
+4. Priority 22 still contains `__TRUNK_MOH_SET=yes`.
+5. Priority 44 still contains `U(sub-before-bridging-call^${TENANT}^...`.
+
+Post-install verification additionally requires that the wrapper
+sentinel NoOp (`connect-trk33-wrapper enter`) appears in `dialplan show
+trk-33-dial` and that invariants 2–5 still hold. Any failure restores
+the backup automatically and aborts.
+
+**Operator commands (after separate approval to install on PBX):**
+
+```bash
+# Install (canary scope only — value 33 is the only accepted value)
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --enable-trk-wrapper=33"
+
+# Read-only health check (file presence + invariants + sentinel loaded)
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+
+# Instant rollback (Connect-owned files only)
+ssh <pbx> "sudo /root/install-connect-tenant-moh-dialplan.sh --rollback"
+```
+
+Manual rollback equivalent (also instant):
+
+```bash
+rm -f /etc/asterisk/extensions__65_connect_trk33_wrapper.conf
+asterisk -rx "dialplan reload"
+```
+
+**Hard-NOT list for this canary:** no `_X.` pattern, no F1 broader
+shadow, no edit to any `/etc/asterisk/vitalpbx/*` file, no other
+trunk, no other tenant, no voicemail / MOH publish / readiness
+changes, no PJSIP changes, no schema changes, no emergency-route
+interception. Any expansion of scope (additional trunks, additional
+tenants, broader pattern) requires a new architecture review.
+
 Operator policy while frozen:
 
 - Do **not** patch PJSIP again.
