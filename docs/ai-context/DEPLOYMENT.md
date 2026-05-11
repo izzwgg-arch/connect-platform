@@ -358,17 +358,23 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   (`/etc/asterisk/extensions__65_connect_trk33_wrapper.conf`) if
   present. Idempotent — running again on an
   already-uninstalled host is safe.
-- **Canary wrapper re-attempt gate (updated 2026-05-11):** before any
+- **Canary wrapper re-attempt gate (updated 2026-05-11b):** before any
   future `--enable-trk-wrapper=33` attempt, the operator MUST run, in
-  order: `diag-connect-moh-preflight-snapshot.sh` → place a T3 test
-  call → `diag-connect-live-call-tenant-vars.sh --tenant-id 3` →
+  order: (1) `diag-connect-moh-preflight-snapshot.sh`; (2) place a T3
+  test call; (3) `diag-connect-live-call-tenant-vars.sh --tenant-id 3`
+  — must return `SAFE_TENANT_SOURCE=channel` (or `endpoint`); (4)
   `rollback-connect-moh-canary.sh --trunk 33 --expected-sha <...>`
-  (rollback drill against a host where the wrapper is NOT installed).
-  The wrapper may only proceed when live-call PROOF resolves
-  `SAFE_TENANT_SOURCE` to `endpoint` / `channel` / `CALL_SOURCE`
-  (never `none`). All three scripts are read-only or
-  Connect-canary-only and live under `scripts/pbx/`. Full runbook in
-  `DEBUGGING.md` → "Outbound caller-leg MOH safety harness (2026-05-11)".
+  rollback drill; (5) `diag-connect-trk33-drift-compare.sh 33 3`
+  — structural-invariant / TENANT-guard / TRUNK_SHARED_RISK probes
+  must all PASS (the script's hard-coded SHA-line is currently STALE
+  and informational only; `REBASE_SAFE=yes` is the gate). The
+  wrapper's tenant-identity gate is now `${CHAN_LOCAL:0:9} ==
+  "PJSIP/T3_"` (channel-name prefix), NOT `${TENANT}`.
+  `TRK_WRAPPER_BASELINE_SHA256` is re-pinned to
+  `c59ab206c79078f1a4879270c982826114af6ecc8f83b08d6d26dcbf467602c8`.
+  All harness scripts are read-only or Connect-canary-only and live
+  under `scripts/pbx/`. Full runbook in `DEBUGGING.md` → "Outbound
+  caller-leg MOH safety harness (2026-05-11)".
 - **`--check` semantics (updated 2026-05-10):** the two PJSIP-dependent
   probes (PJSIP include present, sample endpoint carries
   `CHANNEL(musicclass)`) are now SOFT and emit `[WARN]` rather than

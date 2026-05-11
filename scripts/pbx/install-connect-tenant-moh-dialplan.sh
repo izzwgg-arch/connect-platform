@@ -351,7 +351,12 @@ TRK_WRAPPER_TMP_NEW="/tmp/connect-trk33-wrapper-new.$$.conf"
 # from `asterisk -rx "dialplan show trk-33-dial" | head -80 | sha256sum`. Used as
 # a pre-install gate so we refuse to ship the wrapper if VitalPBX has regenerated
 # trk-33-dial between feasibility capture and install.
-TRK_WRAPPER_BASELINE_SHA256="9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695"
+# Re-baselined 2026-05-11 against canary PBX 209.145.60.79 after the
+# previous baseline (9636ed09…) drifted (VitalPBX regen) and after the
+# wrapper guard was changed from `${TENANT}` to `${CHANNEL(name)}` prefix.
+# See live-call PROOF in `scripts/pbx/diag-connect-live-call-tenant-vars.sh`
+# (SAFE_TENANT_SOURCE=channel) and the corresponding TELEPHONY.md update.
+TRK_WRAPPER_BASELINE_SHA256="c59ab206c79078f1a4879270c982826114af6ecc8f83b08d6d26dcbf467602c8"
 
 trap 'rm -f "$TMP_NEW" "$PJSIP_TMP_NEW" "$TRK_WRAPPER_TMP_NEW"' EXIT
 
@@ -769,8 +774,17 @@ trk_wrapper_install() {
 ;
 ; Scope (HARD-CODED, canary):
 ;   - trunk 33 only          (context [trk-33-dial])
-;   - tenant T3 only         (TENANT == "T3" gate at priority 2)
-;   - any other tenant       -> immediate Goto into generated priority 2
+;   - tenant T3 only         (CHANNEL(name) starts with "PJSIP/T3_")
+;   - any other channel name -> immediate Goto into generated priority 2
+;
+; Tenant-identity gate (revised 2026-05-11):
+;   We do NOT trust ${TENANT}. Live-call diagnostic
+;   (scripts/pbx/diag-connect-live-call-tenant-vars.sh) proved ${TENANT}
+;   is not bound on the caller leg by the time [trk-33-dial] priority 1
+;   runs on this VitalPBX/Asterisk build. ${CHANNEL(name)} IS bound
+;   (Asterisk assigns it at INVITE time from the matched PJSIP endpoint
+;   name, e.g. "PJSIP/T3_302-00000a93"). The wrapper gates on the first
+;   9 characters of CHANNEL(name) being exactly "PJSIP/T3_".
 ;
 ; Mechanism: same-context, same-pattern shadow of the generated priority 1.
 ; The shadow pattern is the EXACT generated form '_[-+*#0-9a-zA-Z].' — we do
@@ -786,13 +800,15 @@ trk_wrapper_install() {
 ;   connect/t_<slug>/moh_class            (primary)
 ;   connect/t_<slug>/active_moh_class     (fallback)
 ;
-; Fail-safe: any missing key, non-T3 tenant, or empty class -> straight
-; Goto into priority 2. NEVER hangs up, redirects, alters CDR/recording.
+; Fail-safe: any non-PJSIP/T3_ caller, missing slug, or empty class ->
+; straight Goto into priority 2. NEVER hangs up, redirects, alters
+; CDR/recording. NEVER references ${TENANT} as a guard.
 ; ============================================================================
 
 [trk-33-dial]
-exten => _[-+*#0-9a-zA-Z].,1,NoOp(connect-trk33-wrapper enter exten=${EXTEN} tenant=${TENANT})
- same => n,GotoIf($["${TENANT}" != "T3"]?passthrough)
+exten => _[-+*#0-9a-zA-Z].,1,NoOp(connect-trk33-wrapper enter exten=${EXTEN} chan=${CHANNEL(name)})
+ same => n,Set(CHAN_LOCAL=${CHANNEL(name)})
+ same => n,GotoIf($["${CHAN_LOCAL:0:9}" != "PJSIP/T3_"]?passthrough)
  same => n,Set(SLUG_LOCAL=${DB(connect/pbx_tenant_map/3/slug)})
  same => n,GotoIf($["${SLUG_LOCAL}" = ""]?passthrough)
  same => n,Set(CLS_LOCAL=${DB(connect/t_${SLUG_LOCAL}/moh_class)})
@@ -800,9 +816,9 @@ exten => _[-+*#0-9a-zA-Z].,1,NoOp(connect-trk33-wrapper enter exten=${EXTEN} ten
  same => n,GotoIf($["${CLS_LOCAL}" = ""]?passthrough)
  same => n,Set(CHANNEL(musicclass)=${CLS_LOCAL})
  same => n,Set(__TRUNK_MOH_SET=yes)
- same => n,NoOp(connect-trk33-wrapper applied tenant=T3 class=${CLS_LOCAL})
+ same => n,NoOp(connect-trk33-wrapper applied chan=${CHAN_LOCAL} class=${CLS_LOCAL})
  same => n,Goto(trk-33-dial,${EXTEN},2)
- same => n(passthrough),NoOp(connect-trk33-wrapper passthrough tenant=${TENANT})
+ same => n(passthrough),NoOp(connect-trk33-wrapper passthrough chan=${CHAN_LOCAL})
  same => n,Goto(trk-33-dial,${EXTEN},2)
 CONNECT_TRK33_WRAPPER_EOF
   mv "$TRK_WRAPPER_TMP_NEW" "$TRK_WRAPPER_FILE"

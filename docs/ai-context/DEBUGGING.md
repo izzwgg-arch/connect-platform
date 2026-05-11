@@ -981,6 +981,29 @@ If step 3 reports `SAFE_TENANT_SOURCE = none`, the wrapper remains
 not pass `--force`, do not bypass. Re-open architecture review with
 the live-call PROOF block attached.
 
+**Update 2026-05-11b — wrapper gate revised + baseline re-pinned.**
+After steps 1–4 returned `SAFE_TENANT_SOURCE=channel` and
+`PJSIP/T3_302-00000a93` as the live caller channel, the wrapper
+heredoc in `scripts/pbx/install-connect-tenant-moh-dialplan.sh` was
+revised to gate on `${CHAN_LOCAL:0:9} == "PJSIP/T3_"` instead of
+`${TENANT} == "T3"`, and `TRK_WRAPPER_BASELINE_SHA256` was re-pinned
+to `c59ab206c79078f1a4879270c982826114af6ecc8f83b08d6d26dcbf467602c8`.
+Before any future `--enable-trk-wrapper=33` attempt the operator MUST
+**re-run the drift-compare diag** against the new baseline:
+
+```bash
+ssh connect-pbx "sudo bash /root/diag-connect-trk33-drift-compare.sh 33 3"
+```
+
+Note that the drift-compare script's hard-coded
+`EXPECTED_BASELINE_SHA256` is currently STALE (still
+`9636ed09…`); the script's `MATCH/MISMATCH` line will report
+`MISMATCH` against the live PBX. The structural invariant probes,
+TENANT-guard probe, and TRUNK_SHARED_RISK probe are unaffected and
+must all PASS — that is the gate, not the SHA-line. A follow-up
+commit will re-pin the diag's hard-coded SHA; until then, treat the
+SHA-line as informational only.
+
 `rollback-connect-moh-canary.sh` is the canonical break-glass: it
 deletes only `/etc/asterisk/extensions__65_connect_trk<N>_wrapper.conf`
 (defense-in-depth refuses to touch any other path), backs up to

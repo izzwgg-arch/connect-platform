@@ -673,23 +673,41 @@ as long as all HARD probes pass. Caller-leg MOH coverage on this
 build is delivered by the canary outbound trunk wrapper
 (`--enable-trk-wrapper=33`), documented immediately below.
 
-**Update 2026-05-11 — canary wrapper remains NO-GO; safety harness landed.**
-A `--enable-trk-wrapper=33` attempt was correctly refused at the
-installer's baseline-SHA gate, and the read-only drift-compare
-diagnostic resolved `REBASE_SAFE=no` with reason `${TENANT} cannot be
-proven bound on the caller channel when wrapper would run`. The
-wrapper file is NOT on disk and the dialplan `[trk-33-dial]` context
-is unchanged. A three-script PBX safety harness now exists under
-`scripts/pbx/`: `diag-connect-moh-preflight-snapshot.sh` (forensic
-snapshot), `diag-connect-live-call-tenant-vars.sh` (live-call
-introspection that decides `SAFE_TENANT_SOURCE ∈ {endpoint, channel,
-CALL_SOURCE, none}` from `CHANNEL(endpoint)` / channel-name prefix /
-explicit chanvar — `${TENANT}` is explicitly NOT a safe source), and
+**Update 2026-05-11b — canary wrapper revised to gate on
+`CHANNEL(name)` prefix; baseline re-pinned; install still NOT
+attempted.** Live-call diagnostic
+(`scripts/pbx/diag-connect-live-call-tenant-vars.sh`) on canary PBX
+`209.145.60.79` returned `T3_CALLER_LEG_FOUND=yes`,
+`T3_CALLER_CHANNEL=PJSIP/T3_302-00000a93`, `SAFE_TENANT_SOURCE=channel`.
+The wrapper heredoc in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh` has been revised
+to gate on the first 9 characters of `${CHANNEL(name)}` being exactly
+`PJSIP/T3_` (substring expression `${CHAN_LOCAL:0:9}`). `${TENANT}`
+is no longer referenced anywhere in the wrapper body. The installer's
+`TRK_WRAPPER_BASELINE_SHA256` constant has also been re-pinned from
+`9636ed09…` (stale; pre-VitalPBX-regen) to
+`c59ab206c79078f1a4879270c982826114af6ecc8f83b08d6d26dcbf467602c8`
+(the live first-80-lines SHA captured by
+`diag-connect-moh-preflight-snapshot.sh` 2026-05-11T05:01:18Z).
+The wrapper file is **still NOT on disk** and the dialplan
+`[trk-33-dial]` context is unchanged. The four invariant probes
+(pattern, pri 21 / 22 / 44) are unchanged — the pri-44 probe still
+checks the **generated** dialplan for `U(sub-before-bridging-call^${TENANT}…`,
+which is a property of VitalPBX, not of our wrapper.
+
+A three-script PBX safety harness lives under `scripts/pbx/`:
+`diag-connect-moh-preflight-snapshot.sh` (forensic snapshot),
+`diag-connect-live-call-tenant-vars.sh` (live-call introspection that
+decides `SAFE_TENANT_SOURCE ∈ {endpoint, channel, CALL_SOURCE, none}`
+from `CHANNEL(endpoint)` / channel-name prefix / explicit chanvar —
+`${TENANT}` is explicitly NOT a safe source), and
 `rollback-connect-moh-canary.sh` (Connect-canary-only rollback with
 on-disk + sentinel + first-80-lines SHA verification). Any future
-re-attempt at `--enable-trk-wrapper=33` is gated on the live-call
-diagnostic returning a non-`none` SAFE_TENANT_SOURCE. See
-`DEBUGGING.md` "Outbound caller-leg MOH safety harness (2026-05-11)".
+re-attempt at `--enable-trk-wrapper=33` is gated on (a) the
+drift-compare diag returning `REBASE_SAFE=yes` against the new
+baseline `c59ab206…`, and (b) the live-call diag returning
+`SAFE_TENANT_SOURCE=channel` (or `endpoint`). See `DEBUGGING.md`
+"Outbound caller-leg MOH safety harness (2026-05-11)".
 
 **Update 2026-05-10 — canary wrapper APPROVED (code only, not yet
 installed on PBX):** the same-context same-pattern shadow approach

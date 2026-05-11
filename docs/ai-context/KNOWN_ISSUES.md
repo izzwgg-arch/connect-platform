@@ -190,6 +190,23 @@ When you find a new fragile area, add it here.
   remains NO-GO until live-call diag returns a safe non-`${TENANT}`
   identity source. See `DEBUGGING.md` "Outbound caller-leg MOH safety
   harness (2026-05-11)".
+  **Update 2026-05-11b — `${TENANT}` provenance blocker RESOLVED in
+  code; install still NOT attempted.** Live-call diag returned
+  `SAFE_TENANT_SOURCE=channel` with caller channel
+  `PJSIP/T3_302-00000a93`. The wrapper heredoc in
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh` was revised to
+  gate on `${CHAN_LOCAL:0:9} == "PJSIP/T3_"`; `${TENANT}` is no longer
+  referenced in the wrapper body. `TRK_WRAPPER_BASELINE_SHA256` was
+  re-pinned to
+  `c59ab206c79078f1a4879270c982826114af6ecc8f83b08d6d26dcbf467602c8`.
+  Wrapper file remains absent on disk; live `[trk-33-dial]` is
+  unchanged. Re-attempt of `--enable-trk-wrapper=33` is now gated on
+  drift-compare returning `REBASE_SAFE=yes` against the new baseline.
+  Tech debt: `scripts/pbx/diag-connect-trk33-drift-compare.sh` still
+  hard-codes the OLD `9636ed09…` SHA; its MATCH/MISMATCH line is
+  informational only until a follow-up commit re-pins it. The
+  drift-compare's structural-invariant + TENANT-guard +
+  TRUNK_SHARED_RISK decision logic is unaffected.
 - **Some VitalPBX/Asterisk builds do not ship the `pjsip reload` CLI
   alias (fixed 2026-05).** `asterisk -rx "pjsip reload"` is the
   convenience alias for `module reload res_pjsip.so` on newer Asterisk
