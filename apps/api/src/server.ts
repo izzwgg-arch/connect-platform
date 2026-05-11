@@ -63,7 +63,10 @@ import {
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
 import { sendBufferWithOptionalRange } from "./httpVoicemailRange";
-import { isTenantLevelVoicemailAdministrator } from "./voicemailAccessPolicy";
+import {
+  voicemailNonSuperAdminUsesOwnedMailboxesOnly,
+  userMayAccessVoicemailRowAfterTenantMatch,
+} from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
@@ -14239,6 +14242,21 @@ function canonicalCdrCallKey(linkedId: string | null | undefined, fallbackId: st
   return raw.replace(/:out\d*$/i, "") || fallbackId;
 }
 
+/** Voicemail list/item/stream: no shared cache across users; scope hints for clients. */
+function applyVoicemailScopeResponseHeaders(
+  reply: any,
+  voicemailScopeVersion: string,
+  scopedMailboxesForUser: string[] | null,
+) {
+  reply.header("Cache-Control", "private, no-store, max-age=0");
+  reply.header("Pragma", "no-cache");
+  reply.header("X-Voicemail-Scope-Version", voicemailScopeVersion);
+  reply.header(
+    "X-Scoped-Mailboxes",
+    scopedMailboxesForUser === null ? "" : scopedMailboxesForUser.join(","),
+  );
+}
+
 // ── GET /voice/voicemail ─────────────────────────────────────────────────────
 app.get("/voice/voicemail", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
@@ -14252,44 +14270,77 @@ app.get("/voice/voicemail", async (req, reply) => {
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
-  /** Logged after query — mailboxes this JWT user may list (standard users only). */
+  /** Logged after query — mailboxes this JWT user may list (owned-scope mode). */
   let scopedMailboxesForLog: string[] | undefined;
 
   const where: Record<string, any> = { deletedAt: null, folder: q.folder };
 
+  /** SEV-1: default force-owned scope — ADMIN/TENANT_ADMIN use owned mailboxes only on this route. */
+  const legacyTenantWideAdmin =
+    !isSuperAdmin && !voicemailNonSuperAdminUsesOwnedMailboxesOnly(user.role, isSuperAdmin);
+
   if (isSuperAdmin) {
     // Privacy: never return cross-tenant results. Global/workspace-all listing is forbidden.
     if (!q.tenantId || q.tenantId === "global") {
+      applyVoicemailScopeResponseHeaders(reply, "super-admin", null);
       return reply.code(400).send({
         error: "tenant_required",
         message: "Select a workspace tenant. Voicemail cannot be listed across all tenants.",
+        voicemailScopeVersion: "super-admin",
+        scopedMailboxesForUser: null,
       });
     }
     const tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
     if (!tenantIdFilter?.length) {
-      return reply.code(400).send({ error: "tenant_not_found" });
+      applyVoicemailScopeResponseHeaders(reply, "super-admin", null);
+      return reply.code(400).send({
+        error: "tenant_not_found",
+        voicemailScopeVersion: "super-admin",
+        scopedMailboxesForUser: null,
+      });
     }
     where.tenantId = tenantIdFilter.length === 1 ? tenantIdFilter[0]! : { in: tenantIdFilter };
     const extQ = (q.extension || "").trim();
     if (extQ) where.extension = extQ;
-  } else if (isTenantLevelVoicemailAdministrator(user.role)) {
-    // Tenant staff: scope to JWT tenant only; optional ?extension narrows one mailbox (same tenant).
+  } else if (legacyTenantWideAdmin) {
+    // Break-glass only: VOICEMAIL_FORCE_OWNED_EXTENSION_SCOPE=false — tenant-wide list for staff.
     if (!user.tenantId) {
-      return reply.send({ voicemails: [], total: 0, page: q.page });
+      applyVoicemailScopeResponseHeaders(reply, "legacy-tenant-admin", null);
+      return reply.send({
+        voicemails: [],
+        total: 0,
+        page: q.page,
+        voicemailScopeVersion: "legacy-tenant-admin",
+        scopedMailboxesForUser: null,
+      });
     }
     where.tenantId = user.tenantId;
     const extQ = (q.extension || "").trim();
     if (extQ) where.extension = extQ;
   } else {
-    // Standard users: ignore client ?tenantId / ?extension — JWT tenant + owned mailboxes only.
+    // Owned-only: USER; ADMIN/TENANT_ADMIN when force flag is true (default). Never trust client ?tenantId / ?extension.
     if (!user.tenantId || !user.sub) {
-      return reply.send({ voicemails: [], total: 0, page: q.page });
+      applyVoicemailScopeResponseHeaders(reply, "contained-owned", []);
+      return reply.send({
+        voicemails: [],
+        total: 0,
+        page: q.page,
+        voicemailScopeVersion: "contained-owned",
+        scopedMailboxesForUser: [],
+      });
     }
     where.tenantId = user.tenantId;
     const owned = await getUserExtensionNumbers(user);
     scopedMailboxesForLog = owned;
     if (!owned.length) {
-      return reply.send({ voicemails: [], total: 0, page: q.page });
+      applyVoicemailScopeResponseHeaders(reply, "contained-owned", []);
+      return reply.send({
+        voicemails: [],
+        total: 0,
+        page: q.page,
+        voicemailScopeVersion: "contained-owned",
+        scopedMailboxesForUser: [],
+      });
     }
     where.extension = owned.length === 1 ? owned[0] : { in: owned };
   }
@@ -14302,6 +14353,19 @@ app.get("/voice/voicemail", async (req, reply) => {
     db.voicemail.count({ where }),
   ]);
 
+  const listScopeVersion = isSuperAdmin
+    ? "super-admin"
+    : legacyTenantWideAdmin
+      ? "legacy-tenant-admin"
+      : "contained-owned";
+  const listScopedMailboxes: string[] | null = isSuperAdmin
+    ? (q.extension || "").trim()
+      ? [(q.extension || "").trim()]
+      : null
+    : legacyTenantWideAdmin
+      ? null
+      : scopedMailboxesForLog ?? [];
+
   app.log.info(
     {
       sub: user.sub,
@@ -14312,6 +14376,8 @@ app.get("/voice/voicemail", async (req, reply) => {
       effectiveWhereTenant: where.tenantId ?? null,
       effectiveWhereExtension: where.extension ?? null,
       scopedMailboxesForUser: scopedMailboxesForLog,
+      voicemailScopeVersion: listScopeVersion,
+      legacyTenantWideAdmin,
       folder: q.folder,
       page: q.page,
       returnedPageRows: voicemails.length,
@@ -14319,6 +14385,8 @@ app.get("/voice/voicemail", async (req, reply) => {
     },
     "[VOICEMAIL_LIST_SCOPE]",
   );
+
+  applyVoicemailScopeResponseHeaders(reply, listScopeVersion, listScopedMailboxes);
 
   // Resolve tenant display names in one batched lookup. Voicemail.tenantId may
   // be either a Connect cuid or a 'vpbx:<slug>' placeholder for unresolved PBX
@@ -14369,32 +14437,44 @@ app.get("/voice/voicemail", async (req, reply) => {
     }),
     total,
     page: q.page,
+    voicemailScopeVersion: listScopeVersion,
+    scopedMailboxesForUser: listScopedMailboxes,
   });
 });
 
 /**
- * Enforce RBAC for a single voicemail row (deny-by-default):
- *   - SUPER_ADMIN → allowed (break-glass; list still requires explicit tenant)
- *   - TENANT_ADMIN / ADMIN → same tenant (any extension in that tenant)
- *   - everyone else → same tenant and extension owned by user.sub
- * Returns true if allowed; otherwise sends a 403 and returns false.
+ * Enforce RBAC for a single voicemail row (deny-by-default).
+ * When `VOICEMAIL_FORCE_OWNED_EXTENSION_SCOPE` is true (default), ADMIN / TENANT_ADMIN
+ * must own the mailbox extension like USER. Legacy tenant-wide staff access exists only
+ * when that env is explicitly set to `false`.
  */
 async function canAccessVoicemail(
   vm: { tenantId: string | null; extension: string },
   user: JwtUser,
   reply: any,
 ): Promise<boolean> {
-  if (isRole(user, ["SUPER_ADMIN"])) return true;
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const owned = isSuperAdmin ? [] : await getUserExtensionNumbers(user);
+  const legacy =
+    !isSuperAdmin && !voicemailNonSuperAdminUsesOwnedMailboxesOnly(user.role, isSuperAdmin);
+  const scopeVersion = isSuperAdmin ? "super-admin" : legacy ? "legacy-tenant-admin" : "contained-owned";
+  const scopedMailboxes = isSuperAdmin ? null : legacy ? null : owned;
+  applyVoicemailScopeResponseHeaders(reply, scopeVersion, scopedMailboxes);
 
-  // Tenant check — allow either direct match or cross-form (cuid ↔ vpbx:slug) match.
+  if (isSuperAdmin) return true;
+
   const userTenantIds = user.tenantId ? await resolveTenantIdFilterSet(user.tenantId) : null;
   const tenantOk = vm.tenantId && (userTenantIds?.includes(vm.tenantId) ?? vm.tenantId === user.tenantId);
-  if (!tenantOk) { reply.code(403).send({ error: "forbidden" }); return false; }
+  if (!tenantOk) {
+    reply.code(403).send({ error: "forbidden" });
+    return false;
+  }
 
-  if (isTenantLevelVoicemailAdministrator(user.role)) return true;
-
-  const owned = await getUserExtensionNumbers(user);
-  if (!owned.includes(vm.extension)) {
+  if (!userMayAccessVoicemailRowAfterTenantMatch({
+    vmExtension: vm.extension,
+    userRole: user.role,
+    ownedExtensions: owned,
+  })) {
     reply.code(403).send({ error: "forbidden" });
     return false;
   }
@@ -15055,7 +15135,8 @@ async function finishVoicemailStreamFromBuffer(
     }
   }
 
-  reply.header("Cache-Control", "private, max-age=3600");
+  reply.header("Cache-Control", "private, no-store, max-age=0");
+  reply.header("Pragma", "no-cache");
   if (asAttachment) {
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
