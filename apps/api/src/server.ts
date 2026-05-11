@@ -96,10 +96,15 @@ import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
 import {
   assertExtensionExistsForTenant as assertExtensionExistsForTenantHelper,
+  buildExtensionOverrideKeys,
+  buildExtensionOverrideSnapshot,
   canManageExtensionOverrideFor,
+  computeExtensionKeysClearForRollback,
   deleteExtensionOverrideForTenant,
+  extractExtensionSnapshotFromKeys,
   listExtensionOverridesForTenant,
   normalizeExtension as normalizeMohExtension,
+  readEnabledExtensionOverridesForTenant,
   upsertExtensionOverride,
 } from "./mohExtensionOverride";
 import { passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
@@ -3767,7 +3772,14 @@ function resolveApkPath(filename: string): string | null {
   return resolved;
 }
 
-async function readApkManifest(): Promise<{ version: string | null; filename: string; sizeBytes: number | null; modifiedAt: string | null }> {
+async function readApkManifest(): Promise<{
+  version: string | null;
+  filename: string;
+  sizeBytes: number | null;
+  modifiedAt: string | null;
+  releaseNotes: string | null;
+  commitSha: string | null;
+}> {
   const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
   let stat: import("fs").Stats | null = null;
   try {
@@ -3776,13 +3788,21 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
     stat = null;
   }
   let version: string | null = null;
+  let releaseNotes: string | null = null;
+  let commitSha: string | null = null;
   try {
     const manifestRaw = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
     // Strip a leading UTF-8 BOM (some editors/PowerShell encodings add one).
     const manifest = manifestRaw.charCodeAt(0) === 0xfeff ? manifestRaw.slice(1) : manifestRaw;
-    const parsed = JSON.parse(manifest) as { version?: string };
+    const parsed = JSON.parse(manifest) as { version?: string; releaseNotes?: string; commitSha?: string };
     if (parsed && typeof parsed.version === "string" && /^\d+\.\d+\.\d+/.test(parsed.version)) {
       version = parsed.version;
+    }
+    if (parsed && typeof parsed.releaseNotes === "string" && parsed.releaseNotes.trim().length > 0) {
+      releaseNotes = parsed.releaseNotes.trim().slice(0, 2000);
+    }
+    if (parsed && typeof parsed.commitSha === "string" && /^[0-9a-f]{7,40}$/i.test(parsed.commitSha.trim())) {
+      commitSha = parsed.commitSha.trim().toLowerCase();
     }
   } catch {
     /* manifest is optional */
@@ -3792,6 +3812,8 @@ async function readApkManifest(): Promise<{ version: string | null; filename: st
     filename: APK_LATEST_FILENAME,
     sizeBytes: stat ? stat.size : null,
     modifiedAt: stat ? stat.mtime.toISOString() : null,
+    releaseNotes,
+    commitSha,
   };
 }
 
@@ -3822,9 +3844,31 @@ async function getAndroidApkUrlForInviteEmail(): Promise<string | null> {
   }
 }
 
-function renderAndroidApkDownloadPage(input: { apkUrl: string; version: string | null; sizeBytes: number | null }): string {
+function escapeHtmlForApkPage(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderAndroidApkDownloadPage(input: {
+  apkUrl: string;
+  version: string | null;
+  sizeBytes: number | null;
+  releaseNotes?: string | null;
+  commitSha?: string | null;
+}): string {
   const versionText = input.version ? `Version ${input.version}` : "Latest Android build";
   const sizeText = input.sizeBytes ? `${(input.sizeBytes / 1024 / 1024).toFixed(2)} MB` : "APK download";
+  const commitLine =
+    input.commitSha && input.commitSha.length > 0
+      ? `<div class="meta" style="margin-top:8px;">Commit ${escapeHtmlForApkPage(input.commitSha)}</div>`
+      : "";
+  const notesBlock =
+    input.releaseNotes && input.releaseNotes.length > 0
+      ? `<p class="hint" style="margin-top:14px;line-height:1.5;">${escapeHtmlForApkPage(input.releaseNotes)}</p>`
+      : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -3849,6 +3893,8 @@ function renderAndroidApkDownloadPage(input: { apkUrl: string; version: string |
     <h1>Download Connect for Android</h1>
     <p>Tap the button below to download the Android app directly from Connect.</p>
     <div class="meta">${versionText} · ${sizeText}</div>
+    ${commitLine}
+    ${notesBlock}
     <a class="button" href="${input.apkUrl}" download>Download Android App</a>
     <p class="hint">After the download finishes, Android may ask you to allow installs from this source the first time.</p>
   </main>
@@ -3867,6 +3913,8 @@ app.get("/mobile/android/download", async (_req, reply) => {
     apkUrl: apkDownloadHref(APK_LATEST_FILENAME),
     version: manifest.version,
     sizeBytes: manifest.sizeBytes,
+    releaseNotes: manifest.releaseNotes,
+    commitSha: manifest.commitSha,
   }));
 });
 
@@ -3910,6 +3958,8 @@ app.get("/downloads/:filename", async (req, reply) => {
       apkUrl: apkDownloadHref(filename),
       version: manifest.version,
       sizeBytes: stat.size,
+      releaseNotes: manifest.releaseNotes,
+      commitSha: manifest.commitSha,
     }));
   }
 
@@ -3998,6 +4048,8 @@ app.get("/mobile/android/latest", async (_req, reply) => {
     downloadPageUrl: androidApkDownloadPageUrl(),
     sizeBytes: manifest.sizeBytes,
     publishedAt: manifest.modifiedAt,
+    ...(manifest.releaseNotes ? { releaseNotes: manifest.releaseNotes } : {}),
+    ...(manifest.commitSha ? { commitSha: manifest.commitSha } : {}),
   };
 });
 
@@ -20098,6 +20150,23 @@ type NativeInboundMohSyncResult = {
    *  layer (PBX-side `extensions__65_connect_tenant_moh.conf`). Best-effort:
    *  publish failure is captured here, never bubbled up to fail the MOH publish. */
   tenantMohEnforcement?: TenantMohEnforcementEvidence;
+  // Phase 3A (2026-05-11): per-extension MOH override evidence. The publish
+  // path appends `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}`
+  // keys to the AstDB write. Live calls do NOT consume these yet — the
+  // dialplan resolver is Phase 3B. These fields exist so a forensic / portal
+  // query can answer "did this publish carry per-extension overrides?"
+  // without re-loading `MohExtensionOverride`.
+  /** Number of enabled extension overrides included in this publish. Equals
+   *  `extensionOverridesSnapshot.length` on the same record. */
+  extensionOverrideCount?: number;
+  /** Sorted-ASC list of extension tokens included in this publish. */
+  extensionOverrideExtensions?: string[];
+  /** Number of `(family,key)` pairs written under the per-extension family.
+   *  Always `2 * extensionOverrideCount` when all rows are valid. */
+  extensionOverrideKeysPublished?: number;
+  /** Rollback only: number of empty-string tombstone keys written to clear
+   *  per-extension keys that the rolled-back publish had added. */
+  extensionOverrideKeysCleared?: number;
 };
 
 async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string): Promise<NativeInboundMohSyncResult> {
@@ -20225,13 +20294,38 @@ async function doMohPublish(
   const readiness = await assertMohRuntimeReadiness(tenantId, profile.vitalPbxMohClassName);
   profile.vitalPbxMohClassName = readiness.selectedClass;
   const slug = await getMohSlugForTenant(tenantId);
-  const keys = buildMohKeys(slug, profile, mode);
+  const tenantDefaultKeys = buildMohKeys(slug, profile, mode);
+
+  // Phase 3A (2026-05-11): per-extension MOH overrides are appended to the
+  // tenant publish payload. Asterisk does NOT yet read these keys (the
+  // dialplan resolver lands in Phase 3B), so this is functionally inert at
+  // call-time — but the keys are persisted in AstDB, in MohPublishRecord.
+  // keysWritten, and snapshotted on extensionOverridesSnapshot so a future
+  // rollback can restore/clear them deterministically.
+  const extensionOverrideRows = await readEnabledExtensionOverridesForTenant(db as any, tenantId);
+  const extensionOverrideSnapshot = buildExtensionOverrideSnapshot(extensionOverrideRows);
+  const extensionKeys = buildExtensionOverrideKeys(slug, extensionOverrideRows);
+  const keys = [...tenantDefaultKeys, ...extensionKeys];
+
   const previousMohClass = lastPublish?.newMohClass ?? null;
-  // Use last publish's keysWritten as the "previous snapshot" for rollback
+  // Use last publish's keysWritten as the "previous snapshot" for rollback.
+  // This naturally carries forward any per-extension keys from the prior
+  // publish, so a rollback chain reconstructs the right "before" state.
   const previousKeysSnapshot: any[] = Array.isArray(lastPublish?.keysWritten) ? lastPublish.keysWritten : [];
 
   const record = await (db as any).mohPublishRecord.create({
-    data: { tenantId, publishedBy, source, previousMohClass, newMohClass: profile.vitalPbxMohClassName, keysWritten: keys, previousKeysSnapshot, status: "pending", isRollback: false },
+    data: {
+      tenantId,
+      publishedBy,
+      source,
+      previousMohClass,
+      newMohClass: profile.vitalPbxMohClassName,
+      keysWritten: keys,
+      previousKeysSnapshot,
+      extensionOverridesSnapshot: extensionOverrideSnapshot as any,
+      status: "pending",
+      isRollback: false,
+    },
   });
 
   await publishMohToAstDb(slug, keys);
@@ -20281,6 +20375,13 @@ async function doMohPublish(
       nativePbxInboundExtensionsQueues: !connectUploadedMoh && !rawNativeSync.skipped && rawNativeSync.errors.length === 0,
     },
     tenantMohEnforcement,
+    // Phase 3A evidence. Per-extension MOH overrides do NOT propagate to
+    // native VitalPBX inbound rows or extension records — they are an AstDB
+    // concern only. `coverage.nativePbxInboundExtensionsQueues` therefore
+    // does not include extension overrides in its truth value.
+    extensionOverrideCount: extensionOverrideSnapshot.length,
+    extensionOverrideExtensions: extensionOverrideSnapshot.map((e) => e.extension),
+    extensionOverrideKeysPublished: extensionKeys.length,
   };
   if (!connectUploadedMoh && (rawNativeSync.skipped || rawNativeSync.errors.length)) {
     const reason = rawNativeSync.reason || rawNativeSync.errors[0] || "native_tenant_moh_sync_failed";
@@ -20894,19 +20995,35 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
 
   // Older snapshots predate the runtime `moh_class` alias. Preserve rollback
   // semantics by restoring both aliases to the same class when only one exists.
-  const activeAlias = restoreKeys.find((k) => k.key === "active_moh_class");
-  const runtimeAlias = restoreKeys.find((k) => k.key === "moh_class");
+  // (Tenant-scope keys only — per-extension keys always use both aliases.)
+  const activeAlias = restoreKeys.find((k) => k.key === "active_moh_class" && k.family === `connect/t_${slug}`);
+  const runtimeAlias = restoreKeys.find((k) => k.key === "moh_class" && k.family === `connect/t_${slug}`);
   if (activeAlias && !runtimeAlias) {
     restoreKeys.push({ family: activeAlias.family, key: "moh_class", value: activeAlias.value });
   } else if (runtimeAlias && !activeAlias) {
     restoreKeys.push({ family: runtimeAlias.family, key: "active_moh_class", value: runtimeAlias.value });
   }
 
+  // Phase 3A: clear per-extension override keys that the target publish
+  // ADDED relative to the prior state. Empty-string is a tombstone — the
+  // future dialplan resolver (Phase 3B) treats empty `moh_class` under an
+  // extension family as "no override, fall through to tenant default." The
+  // existing AstDB write channel cannot DEL keys, so writing empty values
+  // is the closest semantic equivalent and the same approach used by the
+  // `connect/pbx_tenant_map` reverse-map cleanup.
+  const targetKeysWritten = Array.isArray(target.keysWritten) ? (target.keysWritten as Array<{ family: string; key: string; value: string }>) : [];
+  const extensionKeysToClear = computeExtensionKeysClearForRollback(targetKeysWritten, restoreKeys);
+  if (extensionKeysToClear.length) {
+    restoreKeys = [...restoreKeys, ...extensionKeysToClear];
+  }
+  const restoredExtensionSnapshot = extractExtensionSnapshotFromKeys(restoreKeys);
+
   const record = await (db as any).mohPublishRecord.create({
     data: {
       tenantId: target.tenantId, publishedBy: (user as any).id ?? "unknown",
       source: "rollback", previousMohClass: target.newMohClass, newMohClass: restoredClass,
       keysWritten: restoreKeys, previousKeysSnapshot: Array.isArray(target.keysWritten) ? target.keysWritten : [],
+      extensionOverridesSnapshot: restoredExtensionSnapshot as any,
       status: "pending", isRollback: true,
     },
   });
@@ -20937,11 +21054,23 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
         "moh: rollback reverse-map publish skipped or failed (non-fatal)",
       );
     }
+    // Phase 3A: include per-extension rollback evidence so a forensic /
+    // portal query can confirm "this rollback restored N overrides and
+    // cleared M added-by-target keys."
+    const extensionOverrideKeysPublished = restoreKeys.filter(
+      (k) => k.value.length > 0 && /^connect\/t_[0-9A-Za-z_-]{1,64}\/extensions\/[0-9A-Za-z_-]{1,32}$/.test(k.family),
+    ).length;
     await (db as any).mohPublishRecord.update({
       where: { id: record.id },
       data: {
         status: "success",
-        nativeSync: { tenantMohEnforcement: rollbackEnforcement } as any,
+        nativeSync: {
+          tenantMohEnforcement: rollbackEnforcement,
+          extensionOverrideCount: restoredExtensionSnapshot.length,
+          extensionOverrideExtensions: restoredExtensionSnapshot.map((e) => e.extension),
+          extensionOverrideKeysPublished,
+          extensionOverrideKeysCleared: extensionKeysToClear.length,
+        } as any,
       },
     });
     await (db as any).mohLastPublishedState.upsert({
@@ -20949,7 +21078,14 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
       create: { tenantId: target.tenantId, mohClass: restoredClass, holdMode: "rollback" },
       update: { mohClass: restoredClass, holdMode: "rollback", publishedAt: new Date() },
     });
-    return reply.send({ ok: true, restoredMohClass: restoredClass, recordId: record.id, tenantMohEnforcement: rollbackEnforcement });
+    return reply.send({
+      ok: true,
+      restoredMohClass: restoredClass,
+      recordId: record.id,
+      tenantMohEnforcement: rollbackEnforcement,
+      extensionOverrideCount: restoredExtensionSnapshot.length,
+      extensionOverrideKeysCleared: extensionKeysToClear.length,
+    });
   } catch (err: any) {
     await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message } });
     return reply.code(503).send({ error: "rollback_failed", detail: err?.message });

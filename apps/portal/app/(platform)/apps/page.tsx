@@ -10,7 +10,11 @@ export default function AppsPage() {
       <div className="stack">
       <PageHeader title="Apps & Pairing" subtitle="Distribute mobile apps and pair extension access via QR." actions={<QRPairingModal />} />
       <section className="grid two">
-        <AppDownloadCard title="ConnectComms Mobile" description="Android APK and iOS App Store access for extension login and on-the-go calling." />
+        <AppDownloadCard
+          variant="mobile"
+          title="ConnectComms Mobile"
+          description="Android APK and iOS App Store access for extension login and on-the-go calling."
+        />
         <AppDownloadCard title="ConnectComms Desktop" description="Desktop softphone rollout channel for Windows and macOS users." />
       </section>
       <section className="panel">
