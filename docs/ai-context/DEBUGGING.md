@@ -492,14 +492,19 @@ Per-service:
         page size **100**); historically **page 1 only** hid messages past the first **100** in a folder — fixed
         by client-side paging up to **`VOICEMAIL_MAX_PAGES_PER_FOLDER`** (**`voicemailPagination.ts`**). Filters
         on **`VoicemailTab`** (**new** / **urgent** / **old**) mirror portal semantics.
-   10. **`/internal/voicemail-notify` extension resolution.** The handler resolves the mailbox with
-      `Extension.findFirst({ extNumber: mailbox, status: ACTIVE })` **without** scoping by tenant.
-      If two Connect tenants share the same active `extNumber`, the **first** row wins — wrong
-      `pbxLink`, `extension_not_found`, or mis-attributed `tenantId`. Confirm uniqueness or disambiguate
-      with AMI `context` + mapping when debugging notify-only failures.
+   10. **`/internal/voicemail-notify` extension resolution.** The handler calls
+      **`resolveExtensionForVoicemailNotify(mailbox, context)`** (`apps/api/src/voicemailNotifyResolveExtension.ts`):
+      all **ACTIVE** rows for `extNumber === mailbox`, then disambiguates with AMI voicemail **`context`**
+      against **`TenantPbxLink` + `PbxTenantDirectory`**. **Single match** → ingest; **multiple tenants +
+      matching context** → one row; **ambiguous / `default` with duplicates** → **skip** with
+      `notifyResolveReason` (no cross-tenant push). Logs: **`voicemail-notify: extension not resolved`**
+      with **`notifyResolveReason`**. **List/stream isolation:** `GET /voice/voicemail` and stream routes
+      enforce JWT tenant + mailbox rules in **`server.ts`** (see **`KNOWN_ISSUES.md`** voicemail privacy bullet).
    11. **Playback** — for `src_unsupported` / cannot play: hit
       `GET /voice/voicemail/:id/stream?token=...` with curl `-I` and inspect status,
-      `Content-Type`, and body size. `503` + JSON means upstream audio/recfile failure,
+      `Content-Type`, and body size. **`206 Partial Content`** is normal when the client sends **`Range`**;
+      the API implements **`sendBufferWithOptionalRange`** (`apps/api/src/httpVoicemailRange.ts`).
+      `503` + JSON means upstream audio/recfile failure,
       not a client codec limitation alone. After **Phase 2** (helper **`2026.05.08.2`+**, **api**
       deployed), successful **spool fallback playback** returns **`200`**, **`Content-Type: audio/*`**
       (often **`audio/mpeg`** after transcode). **API** logs may include
@@ -511,6 +516,20 @@ Per-service:
       inside **`app-api-1`** only proves **api** shipped Phase 2 (`DEPLOYMENT.md` **Recorded Phase 2 — api shipped**).
       **Operator install:** exact **`curl` + `bash`** for **`209.145.60.79`** is in **`DEPLOYMENT.md`** § **Phase 2 — operator handoff**.
       **App-host smoke (secret not printed):** from **`ssh connect`**, use **`docker exec app-api-1 printenv PBX_ROUTE_HELPER_SECRET`** only inside a remote script (do not **`echo`**). Call **`spool/list`** to pick a real **`msgNum`**, then **`POST …/voicemail/spool/audio`** — **200**, **`audio/wav`**, non-empty body (**`DEPLOYMENT.md`** recorded verification). Invalid stem **`not-a-msg`** → **400** **`invalid_msgNum`**. **`docker logs app-api-1`** for **`helper_audio_fallback: true`** after playing a spool-backed row.
+   11b. **Post-deploy voicemail privacy proof (operator checklist).** After queue
+      **`api`** + **`portal`** (`AGENTS.md`), run the **proof matrix** and paste results
+      into the release ticket: (1) **T1 / ext 101** JWT cannot **`GET /voice/voicemail`**
+      or **`GET /voice/voicemail/:id/stream`** rows belonging to **T2 / 101**; (2) symmetric
+      for **T2**; (3) same tenant **USER** on **102** cannot list/play **103**; (4) **tenant
+      admin** can list/play any mailbox in **their** tenant only; (5) **super admin**
+      **`GET /voice/voicemail`** without **`tenantId`** or with **`tenantId=global`** → **400**
+      **`tenant_required`**; (6) **`curl -I`** on stream → **200**; **`curl -I -H "Range: bytes=0-3"`**
+      → **206** + **`Content-Range`**; wrong user's token → **403** JSON (no audio body).
+      **Notify:** **`docker logs app-api-1`** — **`voicemail-notify: extension not resolved`**
+      must include **`notifyResolveReason`**; push should only hit **`ownerUserId`** for the
+      resolved extension (or disable push with **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=false`**
+      until proven — **`KNOWN_ISSUES.md`**). **Call history parity:** super-admin **`GET /calls/history`**
+      without **`tenantId`** is still fleet-wide by design — see **`KNOWN_ISSUES.md`** chat/history audit bullet.
    12. Optional sanity: `GET /pbx/live/combined` where available; correlate with
       `voicemail` rows + `connectCdr.recordingPath` for recording issues.
 6. For SMS issues: `db.smsMessage`, `db.providerHealth`, BullMQ queue depth via

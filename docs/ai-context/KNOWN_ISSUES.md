@@ -656,6 +656,40 @@ When you find a new fragile area, add it here.
 
 ## Voicemail / recordings
 
+- **Voicemail privacy / tenant + mailbox isolation (non-negotiable).** Voicemail
+  list (`GET /voice/voicemail`), playback (`GET /voice/voicemail/:id/stream` and
+  `/download`), PATCH, and push notifications must never return or target another
+  tenant’s or another user’s mailbox. **Rules:** derive `tenantId` for non–super-admin
+  callers from the JWT only; never trust query/body `tenantId` for those roles;
+  `TENANT_ADMIN` / `ADMIN` may see any mailbox **in their JWT tenant**; everyone
+  else is limited to extensions **owned by `ownerUserId = sub`**; `SUPER_ADMIN`
+  must pass an explicit `tenantId` for listing (no `global` / fleet-wide). Internal
+  `POST /internal/voicemail-notify` must resolve `Extension` with mailbox **and**
+  AMI voicemail `context` (see `resolveExtensionForVoicemailNotify`) — **never**
+  `findFirst(extNumber)` across tenants. **Containment:** set
+  `VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=false` on **api** if push must stop during
+  an incident. **Verify:** two users, two tenants, same extension digits — each
+  sees only their tenant’s rows; notify logs show `notifyResolveReason` and the
+  correct `ownerUserId`; playback returns **200** or **206** with `Accept-Ranges`
+  when the client sends `Range`. **Production deploy evidence (per release, not
+  stored here):** queue **api** then **portal** only (`AGENTS.md`); record **commit
+  SHA**, **job IDs**, and log lines **`[deploy-api] done <sha>`** /
+  **`[deploy-portal] done <sha>`**; confirm the SHA matches `commitHash` / branch
+  enqueued (clone dirty-tree caveat in `AGENTS.md`). **Push:** note whether
+  **`VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED`** stayed **true** or was set **false**
+  on **api** for containment until notify targeting is proven.
+- **Call history + chat (privacy audit, 2026-05).** **`GET /calls/history`**
+  (`apps/api/src/server.ts`): non–super-admin callers always get a **JWT-derived
+  `tenantIdFilter`** (plus **extension-scoped** filtering for roles that are not
+  tenant-wide viewers — see **`isTenantWideCallViewer`** / **`isExtensionScopedCallViewer`**).
+  **Super admin** with **no** `tenantId` query omits a tenant predicate on **`connectCdr`**
+  (fleet-wide history) — **not** the same rule as post-SEV-1 **`GET /voice/voicemail`**
+  (explicit tenant required). Treat as a **product/security parity TODO** if fleet-wide
+  history should be restricted or audit-logged like voicemail. **Connect chat**
+  (`apps/api/src/connectChatRoutes.ts`): **`effectiveChatTenantId`** (JWT; super-admin
+  may set **`x-tenant-context`**); **`GET /chat/threads/:threadId/messages`** requires an
+  active **`connectChatParticipant`** for **`user.sub`** with **`thread.tenantId`**
+  matching — cross-tenant thread access by ID without membership is **denied** (**404**).
 - **Voicemail upsert key drift risk.** Worker uses `pbxMessageId` (preferring
   VitalPBX `msg_id`); a future API shape change could break dedupe. The
   `runVoicemailSyncCycle` function defensively reads multiple aliases — keep that.
@@ -729,10 +763,11 @@ When you find a new fragile area, add it here.
   **Worker helper starvation (fixed 2026-05):** previously a **global** “first N extensions” cap could
   skip mailboxes every cycle; the worker now **fair-schedules** helper calls across tenants with a
   rotating cursor (`packages/shared/src/voicemailSyncFair.ts`, `apps/worker/src/voicemailSyncCycle.ts`).
-  **`/internal/voicemail-notify`** still resolves `Extension` by **`extNumber` only**
-  (`findFirst` without tenant) — duplicate active extension numbers across Connect tenants can
-  mis-route or skip notify. Evidence checklist: **`DEBUGGING.md`** § voicemail items **8–10**;
-  merge-based REST+spool reconcile and tenant-scoped notify remain backlog if needed.
+  **`/internal/voicemail-notify`** resolves `Extension` via
+  **`resolveExtensionForVoicemailNotify`** (mailbox + AMI `context` + PBX directory
+  mapping). Duplicate `extNumber` across tenants without a resolvable context yields
+  **`ambiguous_*`** / **`no_tenant_matches_voicemail_context`** and **skips** sync
+  rather than guessing (privacy-safe). Evidence: **`DEBUGGING.md`** § voicemail items **8–10**.
 - **Fair scheduler ≠ automatic historic backfill.** After deploy, operators may still need a **one-time**
   **`voicemail-spool-audit.ts`** → **`voicemail-spool-backfill.ts`** (`--all-tenants` or targeted) →
   **re-audit** sequence on the **app worker** container to close gaps accumulated while mailboxes were

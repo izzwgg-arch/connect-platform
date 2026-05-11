@@ -572,12 +572,21 @@ export default function VoicemailPage() {
   const buildQuery = useCallback((folder: FolderKey) => {
     const params = new URLSearchParams({ folder, page: String(page) });
     if (contextTenantId) params.set("tenantId", contextTenantId);
-    else if (adminScope === "GLOBAL") params.set("tenantId", "global");
+    // Super-admin global scope: never send tenantId=global — API rejects it; fetch is skipped until a tenant is selected.
     if (extensionFilter.trim()) params.set("extension", extensionFilter.trim());
     return params.toString();
-  }, [adminScope, contextTenantId, extensionFilter, page]);
+  }, [contextTenantId, extensionFilter, page]);
+
+  const skipFetchNoTenant = adminScope === "GLOBAL" && !contextTenantId;
 
   const state = useAsyncResource<MailboxData>(async () => {
+    if (skipFetchNoTenant) {
+      return {
+        voicemails: [],
+        totals: { inbox: 0, urgent: 0, old: 0 },
+        page,
+      };
+    }
     const responses = await Promise.all(FOLDERS.map((folder) => apiGet<VoicemailResponse>(`/voice/voicemail?${buildQuery(folder)}`)));
     const totals = FOLDERS.reduce((acc, folder, idx) => {
       acc[folder] = responses[idx]?.total ?? 0;
@@ -590,7 +599,7 @@ export default function VoicemailPage() {
       return true;
     });
     return { voicemails, totals, page };
-  }, [reloadKey, buildQuery, page]);
+  }, [reloadKey, buildQuery, page, skipFetchNoTenant]);
 
   useEffect(() => {
     setSelected(null);
@@ -774,7 +783,15 @@ export default function VoicemailPage() {
         <section className="vm-feed custom-scrollbar" aria-label="Voicemail feed">
           {state.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
           {state.status === "error" ? <ErrorState message={state.error} /> : null}
-          {state.status === "success" && filteredVoicemails.length === 0 ? (
+          {state.status === "success" && skipFetchNoTenant ? (
+            <div className="vm-empty">
+              <EmptyState
+                title="Select a workspace"
+                message="Choose a tenant from the workspace switcher to load voicemail. Listing voicemail across all tenants is not permitted."
+              />
+            </div>
+          ) : null}
+          {state.status === "success" && !skipFetchNoTenant && filteredVoicemails.length === 0 ? (
             <div className="vm-empty">
               <EmptyState
                 title={allVoicemails.length === 0 ? "No voicemails yet" : "No voicemails match your filters"}
@@ -782,7 +799,7 @@ export default function VoicemailPage() {
               />
             </div>
           ) : null}
-          {state.status === "success" && filteredVoicemails.length > 0 ? (
+          {state.status === "success" && !skipFetchNoTenant && filteredVoicemails.length > 0 ? (
             <>
               {(["Today", "Yesterday", "Earlier"] as const).map((group) => (
                 grouped[group].length > 0 ? (

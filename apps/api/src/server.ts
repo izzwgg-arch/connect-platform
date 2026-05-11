@@ -62,6 +62,9 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
+import { sendBufferWithOptionalRange } from "./httpVoicemailRange";
+import { isTenantLevelVoicemailAdministrator } from "./voicemailAccessPolicy";
+import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
@@ -14249,40 +14252,53 @@ app.get("/voice/voicemail", async (req, reply) => {
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
-  const isAdmin      = isRole(user, ["ADMIN"]);
-
-  // Tenant scope:
-  //   super admin → ?tenantId=global  → no tenant restriction
-  //                 ?tenantId=<id>     → restrict to that tenant (vpbx: or cuid)
-  //   others      → always their own tenant cuid
-  let tenantIdFilter: string[] | null = null;
-  if (!isSuperAdmin) {
-    if (user.tenantId) tenantIdFilter = [user.tenantId];
-  } else if (q.tenantId && q.tenantId !== "global") {
-    tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
-  }
 
   const where: Record<string, any> = { deletedAt: null, folder: q.folder };
-  if (tenantIdFilter) {
-    where.tenantId = tenantIdFilter.length === 1
-      ? tenantIdFilter[0]
-      : { in: tenantIdFilter };
-  }
 
-  // Extension scope
-  if (q.extension && (isSuperAdmin || isAdmin)) {
-    where.extension = q.extension;
-  } else if (!isSuperAdmin && !isAdmin) {
-    // Regular users see only their own extension's mailbox
-    const userExt = await db.extension.findFirst({
-      where: { ownerUserId: user.sub, tenantId: user.tenantId ?? undefined },
-    });
-    if (!userExt) return reply.send({ voicemails: [], total: 0, page: q.page });
-    where.extension = userExt.extNumber;
+  if (isSuperAdmin) {
+    // Privacy: never return cross-tenant results. Global/workspace-all listing is forbidden.
+    if (!q.tenantId || q.tenantId === "global") {
+      return reply.code(400).send({
+        error: "tenant_required",
+        message: "Select a workspace tenant. Voicemail cannot be listed across all tenants.",
+      });
+    }
+    const tenantIdFilter = await resolveTenantIdFilterSet(q.tenantId);
+    if (!tenantIdFilter?.length) {
+      return reply.code(400).send({ error: "tenant_not_found" });
+    }
+    where.tenantId = tenantIdFilter.length === 1 ? tenantIdFilter[0]! : { in: tenantIdFilter };
+    const extQ = (q.extension || "").trim();
+    if (extQ) where.extension = extQ;
+  } else if (isTenantLevelVoicemailAdministrator(user.role)) {
+    // Tenant staff: scope to JWT tenant only; optional ?extension narrows one mailbox (same tenant).
+    if (!user.tenantId) {
+      return reply.send({ voicemails: [], total: 0, page: q.page });
+    }
+    where.tenantId = user.tenantId;
+    const extQ = (q.extension || "").trim();
+    if (extQ) where.extension = extQ;
+  } else {
+    // Standard users: ignore client ?tenantId / ?extension — JWT tenant + owned mailboxes only.
+    if (!user.tenantId || !user.sub) {
+      return reply.send({ voicemails: [], total: 0, page: q.page });
+    }
+    where.tenantId = user.tenantId;
+    const owned = await getUserExtensionNumbers(user);
+    if (!owned.length) {
+      return reply.send({ voicemails: [], total: 0, page: q.page });
+    }
+    where.extension = owned.length === 1 ? owned[0] : { in: owned };
   }
 
   app.log.info(
-    { requestedTenantId: q.tenantId ?? null, tenantIdFilter, extension: where.extension ?? null, folder: q.folder, role: user.role },
+    {
+      requestedTenantId: q.tenantId ?? null,
+      effectiveTenantId: where.tenantId ?? null,
+      extension: where.extension ?? null,
+      folder: q.folder,
+      role: user.role,
+    },
     "[VOICEMAIL_FILTER] resolved scope",
   );
 
@@ -14347,10 +14363,10 @@ app.get("/voice/voicemail", async (req, reply) => {
 });
 
 /**
- * Enforce RBAC for a single voicemail row:
- *   - super admin → always allowed
- *   - tenant admin → must share tenantId (cuid OR vpbx:slug form)
- *   - regular user → must share tenantId AND own the extension
+ * Enforce RBAC for a single voicemail row (deny-by-default):
+ *   - SUPER_ADMIN → allowed (break-glass; list still requires explicit tenant)
+ *   - TENANT_ADMIN / ADMIN → same tenant (any extension in that tenant)
+ *   - everyone else → same tenant and extension owned by user.sub
  * Returns true if allowed; otherwise sends a 403 and returns false.
  */
 async function canAccessVoicemail(
@@ -14365,14 +14381,10 @@ async function canAccessVoicemail(
   const tenantOk = vm.tenantId && (userTenantIds?.includes(vm.tenantId) ?? vm.tenantId === user.tenantId);
   if (!tenantOk) { reply.code(403).send({ error: "forbidden" }); return false; }
 
-  if (isRole(user, ["ADMIN"])) return true;
+  if (isTenantLevelVoicemailAdministrator(user.role)) return true;
 
-  // Regular user — must own the extension.
-  const userExt = await db.extension.findFirst({
-    where: { ownerUserId: user.sub, tenantId: user.tenantId ?? undefined },
-    select: { extNumber: true },
-  });
-  if (!userExt || userExt.extNumber !== vm.extension) {
+  const owned = await getUserExtensionNumbers(user);
+  if (!owned.includes(vm.extension)) {
     reply.code(403).send({ error: "forbidden" });
     return false;
   }
@@ -14996,6 +15008,7 @@ function pbxHelperSpoolFolderFromVoicemail(vm: { pbxFolder: string | null; folde
 }
 
 async function finishVoicemailStreamFromBuffer(
+  req: any,
   vm: { id: string; readAt: Date | null },
   reply: any,
   asAttachment: boolean,
@@ -15032,9 +15045,6 @@ async function finishVoicemailStreamFromBuffer(
     }
   }
 
-  reply.header("Content-Type", responseContentType);
-  reply.header("Content-Length", String(buf.byteLength));
-  reply.header("Accept-Ranges", "bytes");
   reply.header("Cache-Control", "private, max-age=3600");
   if (asAttachment) {
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
@@ -15044,10 +15054,11 @@ async function finishVoicemailStreamFromBuffer(
     await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
   }
 
-  reply.send(buf);
+  sendBufferWithOptionalRange(req, reply, Buffer.from(buf), responseContentType);
 }
 
 async function streamVoicemailAudio(
+  req: any,
   vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null },
   reply: any,
   asAttachment: boolean,
@@ -15097,7 +15108,7 @@ async function streamVoicemailAudio(
         },
         "voicemail: helper_audio_fallback",
       );
-      await finishVoicemailStreamFromBuffer(vm, reply, asAttachment, mailbox, sourceBuf, ext);
+      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, ext);
       return true;
     } catch (err: any) {
       app.log.warn(
@@ -15218,7 +15229,7 @@ async function streamVoicemailAudio(
   const recfileLower = (recfile ?? "").toLowerCase();
   const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
   const sourceBuf = Buffer.from(await pbxResp.arrayBuffer());
-  await finishVoicemailStreamFromBuffer(vm, reply, asAttachment, mailbox, sourceBuf, fileExt);
+  await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt);
 }
 
 // ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
@@ -15239,7 +15250,7 @@ app.get("/voice/voicemail/:id/stream", async (req, reply) => {
     { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder },
     "voicemail: stream request",
   );
-  try { return await streamVoicemailAudio(vm, reply, false); }
+  try { return await streamVoicemailAudio(req, vm, reply, false); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message, stack: err?.stack }, "voicemail: stream failed");
     return reply.code(503).send({ error: "audio_unavailable" });
@@ -15258,7 +15269,7 @@ app.get("/voice/voicemail/:id/download", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
-  try { return await streamVoicemailAudio(vm, reply, true); }
+  try { return await streamVoicemailAudio(req, vm, reply, true); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message }, "voicemail: download failed");
     return reply.code(503).send({ error: "audio_unavailable" });
@@ -21212,14 +21223,13 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
 
   const { mailbox, context, newCount } = body.data;
 
-  // Resolve extension + tenant
-  const ext = await db.extension.findFirst({
-    where:   { extNumber: mailbox, status: "ACTIVE" },
-    include: { pbxLink: true },
-  });
+  const { extension: ext, reason: notifyResolveReason } = await resolveExtensionForVoicemailNotify(mailbox, context);
   if (!ext?.pbxLink?.pbxExtensionId) {
-    app.log.debug({ mailbox }, "voicemail-notify: extension not found — skipping");
-    return reply.send({ ok: true, synced: false, reason: "extension_not_found" });
+    app.log.warn(
+      { mailbox, context, notifyResolveReason },
+      "voicemail-notify: extension not resolved — skipping (privacy-safe)",
+    );
+    return reply.send({ ok: true, synced: false, reason: notifyResolveReason });
   }
 
   try {
@@ -21366,7 +21376,13 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           listened: folder !== "inbox",
         },
       });
-      if (!existingVoicemail && folder === "inbox" && ext.ownerUserId) {
+      const pushEnabled = (process.env.VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED || "true").toLowerCase() !== "false";
+      if (
+        pushEnabled &&
+        !existingVoicemail &&
+        folder === "inbox" &&
+        ext.ownerUserId
+      ) {
         await sendPushToUserDevices({
           tenantId: link.tenantId,
           userId: ext.ownerUserId,
