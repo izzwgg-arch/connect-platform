@@ -119,3 +119,114 @@ docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scri
 ## 7. Gesheft-specific RCA (generalized)
 
 Any single-tenant RCA must show **which row** of section 2 applied: helper list contents, `mailboxPath`, REST `voicemail_records` vs disk, default **inbox** API response vs DB by folder, and worker JSON for that cycle. **Do not** treat Gesheft as the only configuration of this failure class; use **`voicemail-fleet-stale-report.ts`** fleet-wide, then deep-dive **only** rows with elevated `stale_risk_level`.
+
+---
+
+## 8. Staged rollout — schema-2 PBX helper + Connect (`e78a0de`)
+
+### 8.1 Root cause (why voicemails stayed missing after Connect shipped)
+
+Connect **`e78a0de`** can **page and merge** helper responses (`fetchAllVoicemailSpoolMessages`). Production was still running helper **`2026.05.08.2`**, which **does not** implement schema **2**: it behaves like a **hard-capped, wrong-sorted** spool window (typically **400** rows, no **`maxOrigtimeAll`**). Busy mailboxes (e.g. Gesheft **101** / **102**) can therefore omit **newest** `origtime` files entirely while Connect “successfully” ingests only the stale subset.
+
+**Required on-PBX:** helper **`VERSION` `2026.05.10.1`** or newer from the **same pinned installer** as commit **`e78a0de`** (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`).
+
+### 8.2 Connect side (completed)
+
+**Deploy queue:** `api` and `worker` deployed at **`e78a0de`** (log tails: `[deploy-api] done e78a0de …`, `[deploy-worker] done e78a0de …`). API loopback health `{"ok":true}`. Worker image includes **`fetchAllVoicemailSpoolMessages`** (`packages/integrations/src/pbxRouteHelperEnv.ts` in-container).
+
+### 8.3 PBX side — automated agent limit (2026-05-11)
+
+**From Connect app host** (`ssh connect`): **`curl -s http://209.145.60.79:8757/health`** still returned **`"version":"2026.05.08.2"`** — schema **2** **not** live.
+
+**IDE / agent SSH:** **`root@209.145.60.79`** is **not** available from the Cursor agent environment (**`Permission denied (publickey)`**). **Operator with root (or jump host) on the PBX** must run §8.4–8.6.
+
+### 8.4 Rollback **before** upgrade (PBX root; run first)
+
+Pinned installer **re-writes** `/etc/connect-pbx-helper.env` from values loaded at start of the script; on a normal **re-run**, it **sources** the existing file first, so **`CONNECT_PBX_HELPER_SECRET`** and MySQL password **carry forward** — no silent rotation **if** `/etc/connect-pbx-helper.env` already exists.
+
+**Caveats (read before `bash`):**
+
+- The installer runs **`chown -R asterisk:asterisk /var/spool/asterisk/voicemail`** (permission repair). It does **not** delete messages, but it **does** touch the spool tree.
+- On **first start** after upgrade, the embedded Python may run **`asterisk -rx "dialplan reload"`** **only if** the auto-managed VM-greeting drop-in content **changed** vs what is on disk (usually **no** reload when content is unchanged).
+
+```bash
+# PBX as root — snapshot BEFORE upgrade
+TS=$(date +%Y%m%d-%H%M%S)
+B=/root/connect-pbx-helper-backup-$TS
+mkdir -p "$B"
+cp -a /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py "$B/" 2>/dev/null || true
+cp -a /etc/connect-pbx-helper.env "$B/" 2>/dev/null || true
+cp -a /etc/systemd/system/connect-pbx-helper.service "$B/" 2>/dev/null || true
+cp -a /etc/asterisk/vitalpbx/extensions__95-connect-vm-greeting.conf "$B/" 2>/dev/null || true
+echo "Backup dir: $B"
+```
+
+**Rollback procedure (if upgrade is bad):**
+
+```bash
+# PBX as root
+B=/root/connect-pbx-helper-backup-<TS>   # use the path printed above
+systemctl stop connect-pbx-helper
+cp -a "$B/vitalpbx-inbound-route-helper.py" /opt/connect-pbx-helper/
+cp -a "$B/connect-pbx-helper.env" /etc/connect-pbx-helper.env
+chmod 0600 /etc/connect-pbx-helper.env
+chown root:root /etc/connect-pbx-helper.env
+# Optional: restore unit or drop-in if you backed them up and they differed
+systemctl daemon-reload
+systemctl start connect-pbx-helper
+curl -s http://127.0.0.1:8757/health
+```
+
+**Rollback used in this thread:** **not used** (no successful PBX upgrade executed from the agent).
+
+### 8.5 Preflight (PBX root)
+
+```bash
+curl -s http://127.0.0.1:8757/health
+systemctl status connect-pbx-helper --no-pager -l || true
+test -f /etc/connect-pbx-helper.env && echo "env: ok" || echo "env: MISSING"
+# Optional fingerprint only (do not paste secret): shasum /etc/connect-pbx-helper.env
+```
+
+Record **before** version (expect **`2026.05.08.2`** until upgraded).
+
+### 8.6 Upgrade (PBX root) — pin **`e78a0de`**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/izzwgg-arch/connect-platform/e78a0de/scripts/pbx/install-vitalpbx-inbound-route-helper.sh -o /root/install-vitalpbx-inbound-route-helper-e78a0de.sh
+bash /root/install-vitalpbx-inbound-route-helper-e78a0de.sh
+curl -s http://127.0.0.1:8757/health
+```
+
+The script ends with **`systemctl restart connect-pbx-helper`** (helper only). **Do not** `systemctl restart asterisk` unless ops has a separate break-glass reason.
+
+### 8.7 Verify schema 2 (PBX loopback or app host)
+
+Authenticated **`POST /voicemail/spool/list`** for Gesheft (**`tenantId` `8`**, extensions **`101`** and **`102`**) must show at least:
+
+- **`spoolListSchema`: 2**
+- **`totalCount`**, **`returnedCount`**, **`truncated`**, **`maxOrigtimeAll`** (non-empty), **`sort`: `origtime_desc`**, **`folderMsgCounts`**
+- **`totalCount` ≥** prior ~**400** when the mailbox is larger than the old cap
+- First page **`messages`** newest-first by **`origtime`**
+
+Use header **`x-connect-pbx-helper-secret`** matching **`CONNECT_PBX_HELPER_SECRET`** on the PBX (aligns with Connect **`PBX_ROUTE_HELPER_*`** for that instance). **Do not** paste secrets into tickets.
+
+**Probes from Connect:** prefer **`docker exec app-worker-1`** + **`voicemail-spool-audit.ts`** / **`voicemail-fleet-stale-report.ts`** (same env as production). A raw `curl` using only **`app-api-1`** global **`PBX_ROUTE_HELPER_SECRET`** may return **`unauthorized`** when **`PBX_ROUTE_HELPER_BY_INSTANCE_JSON`** supplies the real secret.
+
+### 8.8 Backfill + fleet (app host, `app-worker-1`)
+
+After §8.7 passes:
+
+```bash
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=cmnlgnumu0001p9g6xyl1pbdd --extension=101'
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-spool-backfill.ts --tenant=cmnlgnumu0001p9g6xyl1pbdd --extension=102'
+docker exec app-worker-1 bash -lc 'cd /app/apps/worker && pnpm exec tsx src/scripts/voicemail-fleet-stale-report.ts --min-risk=medium'
+```
+
+Expect Gesheft **101**/**102** **`helper_spool_list_schema`: 2** and **no** stale **`HIGH`** driven solely by the old **400**-row cap / missing **`maxOrigtimeAll`**. Confirm **inserted > 0** when DB was missing rows the helper can now see; confirm portal/mobile lists.
+
+### 8.9 Pre-upgrade evidence (Connect worker, legacy helper)
+
+With helper still **`2026.05.08.2`**, **`voicemail-spool-audit.ts`** for Gesheft **101**/**102** showed **`spool_total`: 400**, **`helper_max_origtime_all`: null**, **`helper_pagination_complete`: true** (single legacy page). **`voicemail-spool-backfill.ts`** reported **400** messages and **0 inserts** (already ingested for that subset). **`voicemail-fleet-stale-report.ts`** (`--min-risk=medium`) left **Gesheft 101**/**102** at **`stale_risk_level`: HIGH** with **`spool_message_count`: 400** and **`helper_spool_list_schema`: null**.
+
+**Post-PBX-upgrade transcript:** operator should paste **before/after** `/health`, sample redacted **`spool/list`** metadata for **101**/**102**, backfill **`inserted`** counts, and fleet summary **after** §8.8 into the ticket (replace §8.9 numbers).

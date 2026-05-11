@@ -547,6 +547,8 @@ from **`origin` at a pinned commit** (Phase 1 pin: **`cf4a1f61c9064144c6d9c54b8a
 then run **`bash …/install-vitalpbx-inbound-route-helper.sh`**, which installs the
 embedded helper (**`VERSION` `2026.05.08.2`** as of Phase 2 — includes spool list + spool audio) and manages **`connect-pbx-helper.service`**.
 
+**Fleet / large-mailbox ingestion:** for **schema-2** spool listing (**`spoolListSchema: 2`**, **`maxOrigtimeAll`**, pagination — fixes the **400-row cap** class), pin commit **`e78a0de`** (helper **`VERSION` `2026.05.10.1`+). Operator backup + curl one-liner + verification live in **`VOICEMAIL_FLEET_STALE_RISK.md`** § **8** (do not duplicate here).
+
 If **`curl -s http://127.0.0.1:8757/health`** still shows **`2026.05.07.x`** after you
 believe the installer ran, the **running** process did not pick up the new tree (bad
 download, wrong host, service not restarted, or script error). **Do not** “fix” by
