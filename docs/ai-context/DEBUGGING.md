@@ -905,9 +905,31 @@ if the baseline SHA over `dialplan show trk-33-dial | head -80`
 differs from `9636ed092f6f8154deae751d199574c2cf7e3dd29eb00a263be5ae7b6f250695`,
 or if any of priorities 21/22/44 / the exact pattern no longer match.
 If the installer reports `INVARIANT-FAIL: trk-33-dial baseline drift`,
-**do not bypass**. Capture the current `dialplan show trk-33-dial`
-output, attach to the recovery plan, and re-open architecture review
-before proceeding — VitalPBX has regenerated trk-33-dial.
+**do not bypass**. Run the read-only drift-compare diagnostic to
+collect evidence before re-opening architecture review:
+
+```bash
+ssh connect-pbx "sudo bash /root/diag-connect-trk33-drift-compare.sh 33 3"
+```
+
+(or fetch the pinned script first with the same `curl` pattern used
+for the installer, then run the same command). The script never
+writes to `/etc/asterisk/`, never reloads anything, and returns:
+
+- exit `0` and `PROOF.REBASE_SAFE = yes` → invariants hold, `${TENANT}`
+  is provably bound, trunk is not visibly shared. Candidate for
+  re-baseline **after** architecture review approves a new constant.
+- exit `1` and `PROOF.REBASE_SAFE = no` → at least one of: pattern /
+  pri 21 / pri 22 / pri 44 is broken; `${TENANT}` cannot be proven
+  bound; OR trunk 33 is referenced by ≥ 2 distinct `T<n>_` tenant
+  prefixes. **NO-GO** — wrapper assumption is unsafe on this build.
+- exit `2` and `PROOF.REBASE_SAFE = unknown` → `dialplan show` was
+  empty / CLI unreachable / unable to enumerate upstream sites.
+  Treat as NO-GO until evidence is reproducible.
+
+Attach the full script output (sections A–G) to the recovery plan
+markdown when re-opening architecture review. Do **not** edit the
+installer's baseline SHA constant without that review.
 
 Rollback (instant, Connect-owned only):
 ```bash
