@@ -274,14 +274,17 @@ Modes:
                  up any prior same-named includes; rolls back on failure.
 
   --check        Read-only. Probes the live PBX state and prints PASS / WARN
-                 / FAIL per probe:
-                   1. dialplan include file present                  [HARD]
-                   2. resolver + global hook + shim contexts loaded  [HARD]
-                   3. PJSIP include file present                     [SOFT]
-                   4. AstDB reverse-map has at least one tenant      [HARD]
-                   5. sample T<id>_* endpoint carries CHANNEL(musicclass)
-                                                                    [SOFT]
-                   6. canary trk-33 wrapper invariants (when present) [HARD]
+                 / FAIL / INFO per probe:
+                   1.  dialplan include file present                 [HARD]
+                   2.  resolver + global hook + shim contexts loaded [HARD]
+                   2a. per-extension resolver installed (Phase 3B
+                       sentinel detect; PASS once Phase 3B ships,
+                       INFO otherwise; never FAILs)                  [INFO]
+                   3.  PJSIP include file present                    [SOFT]
+                   4.  AstDB reverse-map has at least one tenant     [HARD]
+                   5.  sample T<id>_* endpoint carries CHANNEL(musicclass)
+                                                                     [SOFT]
+                   6.  canary trk-33 wrapper invariants (when present) [HARD]
                  Exits 0 only when all HARD probes pass. SOFT probes (3, 5)
                  are emitted as `[WARN]` because PJSIP `[endpoint](+)` append
                  does not reliably set CHANNEL(musicclass) on this VitalPBX
@@ -454,13 +457,21 @@ print_context_verification() {
 }
 
 # ── Health-check mode (read-only) ──────────────────────────────────────────
-# Probes the running PBX and prints PASS/FAIL for each of the five hardening
+# Probes the running PBX and prints PASS/FAIL for each of the hardening
 # checks the requirements call out:
-#   1. dialplan include file present at the expected path           [HARD]
-#   2. resolver + global hook + shim contexts loaded                [HARD]
-#   3. PJSIP include file present                                   [SOFT]
-#   4. AstDB reverse-map has at least one tenant                    [HARD]
-#   5. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>  [SOFT]
+#   1. dialplan include file present at the expected path            [HARD]
+#   2. resolver + global hook + shim contexts loaded                 [HARD]
+#  2a. per-extension resolver installed in [sub-connect-tenant-moh]  [INFO]
+#       Phase 3B sentinel detection. Currently INFO-only because the
+#       resolver heredoc has not yet been updated to read the per-
+#       extension AstDB family. Reports PASS once the Phase 3B edit
+#       lands; reports INFO ("not installed; Phase 3A keys are inert")
+#       on every host where Phase 3B has not yet shipped. NEVER FAILs
+#       — its absence is the documented current state across the
+#       fleet, not a regression.
+#   3. PJSIP include file present                                    [SOFT]
+#   4. AstDB reverse-map has at least one tenant                     [HARD]
+#   5. sample T<id>_* endpoint carries CHANNEL(musicclass)=<class>   [SOFT]
 # Exits 0 when all HARD probes pass. SOFT probes (3, 5) emit `[WARN]`
 # instead of `[FAIL]` because PJSIP `[endpoint](+)` append is
 # unreliable on this VitalPBX build; caller-leg MOH coverage is the
@@ -487,6 +498,7 @@ do_health_check() {
   fi
 
   # 2. resolver + global hook + shim contexts loaded
+  local resolver_dump=""
   for pair in \
     "sub-connect-tenant-moh|Connect tenant MOH resolver" \
     "global-before-bridging-call-hook|Connect global before-bridging hook" \
@@ -497,11 +509,38 @@ do_health_check() {
     out="$(asterisk -rx "dialplan show $ctx" 2>&1 || true)"
     if echo "$out" | grep -q "$sentinel"; then
       printf '[PASS] dialplan context [%s] loaded\n' "$ctx"
+      # Capture the resolver dump for probe 2a (per-extension sentinel detect).
+      if [[ "$ctx" = "sub-connect-tenant-moh" ]]; then
+        resolver_dump="$out"
+      fi
     else
       printf '[FAIL] dialplan context [%s] not loaded\n' "$ctx"
       fail=$((fail + 1))
     fi
   done
+
+  # 2a. Per-extension resolver installed (Phase 3B sentinel detect).
+  # INFO-only on every host where Phase 3B's resolver heredoc has not yet
+  # shipped. NEVER FAILs and does NOT increment any of fail/warns/checks
+  # so the fleet-wide RESULT count stays exactly what probe 1-5 produce.
+  # The sentinel is the NoOp the Phase 3B resolver emits on the success
+  # path — see docs/pbx/phase-3b-moh-extension-resolver-design.md §3.
+  # Skipped (also non-counting) when probe 2's resolver context itself
+  # is not loaded — there is nothing to grep, and the FAIL is already
+  # accounted for above.
+  if [[ -n "$resolver_dump" ]]; then
+    if echo "$resolver_dump" | grep -Fq 'per-extension override applied'; then
+      printf '[PASS] per-extension resolver installed (Phase 3B sentinel present in [sub-connect-tenant-moh])\n'
+      checks=$((checks + 1))
+    else
+      printf '[INFO] per-extension resolver NOT installed — Phase 3A keys are published but inert\n'
+      printf '       until Phase 3B resolver heredoc is installed. See:\n'
+      printf '         docs/pbx/phase-3b-moh-extension-resolver-design.md\n'
+      printf '         scripts/pbx/diag-connect-moh-extension-key-readiness.sh (preflight gate)\n'
+    fi
+  else
+    printf '[SKIP] per-extension resolver detection skipped — [sub-connect-tenant-moh] not loaded (see probe 2 FAIL)\n'
+  fi
 
   # 3. PJSIP include file present (SOFT — deprecated on this build).
   # PJSIP `[endpoint](+)` append does not reliably set CHANNEL(musicclass)

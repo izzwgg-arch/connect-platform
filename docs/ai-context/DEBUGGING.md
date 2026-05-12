@@ -857,6 +857,23 @@ Verification checklist (read-only):
     Asterisk config, never reloads anything, never places a call. Design
     and install-gate details: `docs/pbx/phase-3b-moh-extension-resolver-design.md`.
 
+    To answer "has the Phase 3B resolver actually been installed on
+    this host yet?" the existing installer's `--check` mode now carries
+    a non-counting probe `2a` that greps the loaded
+    `[sub-connect-tenant-moh]` for the Phase 3B sentinel
+    `per-extension override applied`:
+
+    ```bash
+    ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
+    ```
+
+    On every host today the probe prints `[INFO] per-extension resolver
+    NOT installed — Phase 3A keys are published but inert`. After Phase
+    3B ships it flips to `[PASS] per-extension resolver installed (Phase
+    3B sentinel present in [sub-connect-tenant-moh])` and bumps the
+    `RESULT: PASS (5/5 ...)` line to `(6/6)`. The probe never FAILs;
+    its absence is the documented current state, not a regression.
+
 4. Confirm the per-tenant connect-leg hook + PJSIP append exist for THIS
    tenant (caller-leg coverage). The installer enumerates these from
    AstDB at install time, so a tenant whose first publish happened after

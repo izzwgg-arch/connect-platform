@@ -338,6 +338,18 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   `RESULT: FAIL`, the failure line tells you which check broke; fix the
   underlying issue (usually "Connect MOH publish has not run for this
   tenant") and proceed.
+
+  As of 2026-05-12, `--check` also emits a non-counting probe `2a` that
+  tells you whether the **Phase 3B per-extension resolver edit** has
+  shipped on this host. Today it prints `[INFO] per-extension resolver
+  NOT installed — Phase 3A keys are published but inert`. The probe
+  never FAILs and does not change the `5/5` count. Once Phase 3B's
+  resolver heredoc ships and the operator re-runs `install` (default
+  mode), the same probe will print `[PASS] per-extension resolver
+  installed` and the line will become `RESULT: PASS (6/6 checks
+  healthy)`. This is the post-install gate operators should grep for
+  after the Phase 3B install. Phase 3B itself is **not** shipping in
+  this deployment cycle — only the diagnostic probe is.
 - **Real test on canary tenant after install**:
     1. `POST /voice/moh/publish` for a tenant in Connect.
     2. On PBX: `asterisk -rx "database show connect/pbx_tenant_map"` →

@@ -275,11 +275,18 @@ When you find a new fragile area, add it here.
   read-only diagnostic
   `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` must exit 0
   on the canary PBX before any resolver edit is attempted. Not blocking
-  — tenant default MOH still works for all calls. Additional known
-  Phase 3B gap: the canary outbound trunk wrapper
-  (`--enable-trk-wrapper=33`) applies tenant default before the
-  connect-leg shim, so per-extension overrides on trunk 33 will require
-  a follow-up wrapper edit after Phase 3B.
+  — tenant default MOH still works for all calls. Operators can confirm
+  "still inert on this host" at any time without leaving the existing
+  runbook by running
+  `sudo /root/install-connect-tenant-moh-dialplan.sh --check` and
+  reading the new probe `2a` line: `[INFO] per-extension resolver NOT
+  installed — Phase 3A keys are published but inert`. Probe 2a flips
+  to `[PASS]` and the `RESULT` count flips from `(5/5)` to `(6/6)` only
+  after the Phase 3B resolver heredoc ships. Additional known Phase 3B
+  gap: the canary outbound trunk wrapper (`--enable-trk-wrapper=33`)
+  applies tenant default before the connect-leg shim, so per-extension
+  overrides on trunk 33 will require a follow-up wrapper edit after
+  Phase 3B.
 
 ## Mobile calling
 

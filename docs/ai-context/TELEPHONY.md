@@ -528,6 +528,17 @@ and exits 0 only when every mapped tenant has a tenant-default MOH, every
 per-extension family lives under a mapped slug, and every per-extension
 class value is loaded in `moh show classes`.
 
+The installer's own `--check` mode also reports whether the per-extension
+resolver edit has been installed yet: a non-counting probe `2a` greps the
+loaded `[sub-connect-tenant-moh]` for the Phase 3B sentinel NoOp
+(`per-extension override applied`). Today, on every PBX in the fleet,
+that probe prints `[INFO] per-extension resolver NOT installed — Phase 3A
+keys are published but inert`. The probe never FAILs and does not change
+the existing `RESULT: PASS (5/5 checks healthy)` count — it flips to
+`[PASS]` and increments the count to `(6/6)` only after the Phase 3B
+resolver heredoc lands. This makes "is Phase 3B installed?" answerable
+from a single `--check` run with no other tooling.
+
 Connect API populates the reverse tenant map via the existing MOH publish
 path (`apps/api/src/server.ts` → `mohReverseMapPublish.ts`):
 
