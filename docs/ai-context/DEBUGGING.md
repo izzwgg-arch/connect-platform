@@ -192,6 +192,7 @@ Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** wit
 
 1. **Tenant paths** (`/billing/settings`, `/billing/platform/invoices`, … from `billing/routes.ts`): decode JWT **`role`**. Must be one of **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`**. Also confirm **`portalPermissionSet`** from **`GET /me`** includes **`can_view_billing_overview`** (prefix rule for `/billing` in `server.ts`).
 2. **Platform Admin Billing** (`/admin/billing/overview`, `/admin/billing/platform/tenants`, …): JWT **`role`** must be **`SUPER_ADMIN`** — tenant admins get **403** by design. Portal should hide **Admin Billing** unless `backendJwtRole === "SUPER_ADMIN"` (see `navConfig.ts` / admin billing page).
+   - **Nav missing Admin Billing while `GET /me` shows `role: SUPER_ADMIN`:** Old or stripped JWTs may omit the **`role`** claim. **`backendJwtRole`** used to come only from the decoded token, so Admin Billing stayed hidden. **`AppProvider`** (`apps/portal/hooks/useAppContext.tsx`) syncs **`role`** and **`backendJwtRole`** from **`/me`** when **`me.role`** is present. **Workaround** without deploying portal: **logout and login** to mint a JWT that includes **`role`**. Permanent behavior is **`/me`** role sync after load.
 3. **Email jobs from billing:** `EmailJob.invoiceId` is set when **`queueBillingEmail`** passes **`invoiceId`** (`buildBillingEmailJobCreateData` in `billingAuth.ts`). If jobs lack `invoiceId`, grep callers of **`queueBillingEmail`**.
 4. **Portal vs API mismatch:** Tenant billing pages under **`/billing/*`** should use **`PermissionGate`** with **`can_view_billing_*`** keys aligned to **`navConfig.ts`** (overview, invoices, payments, receipts). If the nav shows Billing but the page shows “no access”, the user’s role is missing that portal permission even though JWT **`role`** may still allow the API — compare **`GET /me`** permissions to the gate on the page.
 5. **Invoice PDF vs branding:** PDF route **`GET /billing/platform/invoices/:id/pdf`** loads **`tenant.billingSettings`** for header/footer text. If the PDF still shows only the tenant name, confirm migration applied and **`invoiceCompanyName`** / footer columns exist on **`TenantBillingSettings`**. **Logo URL** affects **HTML emails only**; a non-https URL is dropped by **`sanitizeInvoiceLogoUrl`** in `invoiceBranding.ts`.
@@ -493,6 +494,23 @@ Reference: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox.
   Verify with Metro / `adb logcat`: look for `[contacts_import] import_contact_done`
   lines advancing; failures log `import_failed`. Filter:
   `adb logcat | grep contacts_import`
+
+- **Android release APK: contact import verification without Metro (2026-05-12).**
+  Only the **release** artifact (`gradlew assembleRelease` / `pnpm mobile:build:android:release`)
+  ships **`assets/index.android.bundle`** with the production JS bundle. A **debug**
+  install often contains **`expo_dev_launcher_android.bundle`** only, so patched
+  import diagnostics will not appear there. USB checklist: `adb devices -l` →
+  `adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk` →
+  `adb logcat -c` → launch `com.connectcommunications.mobile` → operator runs
+  **Import from phone** through **Import(N)**. Pull logs, for example:
+  `adb logcat -d -t 30000 | findstr /i "contacts_import ReactNativeJS"`.
+  Expected sequence: `final_import_button_rendered` → `final_import_button_pressed` →
+  `runImport_entered` → `import_contact_done` (repeats) → `import_complete`. Then
+  confirm **External** list, force-stop + reopen persistence, and second import
+  increases counts. **Do not run `scripts/android-publish.ps1` until that chain
+  passes on a real device**; publishing requires SSH to the `connect` host (see
+  `DEPLOYMENT.md` § Mobile builds). After an API change to `/mobile/android/latest`,
+  enqueue an **`api`** deploy so `versionCode` / `buildId` from the manifest are served.
 
 - **SMS chat back navigation (2026-05-07).**
   Symptom: inside an SMS/DM chat, pressing the Android hardware back button
@@ -1377,6 +1395,58 @@ NOT the VoIP.ms webhook. To debug SMS push failures:
    SMS push is a **FCM notification message** (has title/body), so Android FCM
    SDK shows it directly — `onMessageReceived` is NOT called for it. Look for
    `PostNotification` or `vibrateLinearmotor` lines in `NotificationService`.
+
+---
+
+## CRM call timeline events missing
+
+When a call is not showing up in the CRM contact timeline:
+
+1. **Check CRM is enabled for the tenant:**
+   ```sql
+   SELECT "enabled" FROM "CrmTenantSettings" WHERE "tenantId" = '<tenantId>';
+   ```
+   If no row or `enabled = false`, the hook returns immediately.
+
+2. **Check the contact is CRM-enrolled (`CrmContactMeta` exists):**
+   ```sql
+   SELECT id, stage FROM "CrmContactMeta" WHERE "contactId" = '<contactId>';
+   ```
+   Only enrolled contacts get timeline events.
+
+3. **Check the phone number matches:**
+   ```sql
+   SELECT "numberNormalized", "contactId" FROM "ContactPhone"
+   WHERE "numberNormalized" IN ('<digits_only_number>', '<10_digit_variant>')
+     AND "contactId" IN (
+       SELECT "contactId" FROM "CrmContactMeta" WHERE "tenantId" = '<tenantId>'
+     );
+   ```
+   The hook normalises by stripping all non-digits and also checks the ±1 prefix variant.
+
+4. **Check the timeline event wasn't already created (idempotency):**
+   ```sql
+   SELECT id, type, "linkedId", "createdAt" FROM "CrmTimelineEvent"
+   WHERE "contactId" = '<contactId>'
+     AND "linkedId" = '<cdrLinkedId>'
+   ORDER BY "createdAt" DESC;
+   ```
+
+5. **Check CDR ingest logs for hook errors:**
+   ```
+   docker logs app-api-1 --since 10m 2>&1 | grep "\[CRM\]\[cdrHook\]"
+   ```
+   The hook logs `[CRM][cdrHook] Unexpected error` on top-level failures and
+   `[CRM][cdrHook] Failed to write timeline for contact` on per-contact failures.
+   Neither error will appear in normal operation — their presence indicates a bug.
+
+6. **Check tenant resolution:** If the CDR's `tenantId` was not resolved (null), the hook
+   is skipped entirely. Check `tenantResolutionSource` on the `ConnectCdr` row:
+   ```sql
+   SELECT "linkedId", "tenantId", "tenantResolutionSource" FROM "ConnectCdr"
+   WHERE "linkedId" = '<linkedId>';
+   ```
+   A null `tenantId` means the CDR was not attributed to any Connect tenant.
 
 ---
 

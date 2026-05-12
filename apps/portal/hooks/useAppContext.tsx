@@ -12,7 +12,7 @@ type ThemeMode = "dark" | "light";
 type AppContextType = {
   user: User;
   role: Role;
-  /** Raw `role` claim from the JWT (e.g. ADMIN, SUPER_ADMIN) — not portal-mapped `Role`. */
+  /** Raw platform role for nav gates (e.g. SUPER_ADMIN): JWT claim until GET /me overwrites when `me.role` is present. */
   backendJwtRole: string | undefined;
   theme: ThemeMode;
   tenantId: string;
@@ -33,7 +33,8 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>("dark");
-  const [role, setRole] = useState<Role>("SUPER_ADMIN");
+  /** Proven only from JWT `role` or GET `/me` — never assume SUPER_ADMIN without either. */
+  const [role, setRole] = useState<Role>("END_USER");
   const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(undefined);
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -47,7 +48,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (stored === "dark" || stored === "light") setThemeState(stored);
 
     const jwt = readJwtPayload();
-    const resolvedRole = jwt?.role ? mapBackendRole(jwt.role) : "SUPER_ADMIN";
 
     const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
     // Default to scoped primary workspace (TENANT). GLOBAL is opt-in and only restored from localStorage.
@@ -57,8 +57,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAdminScopeState("TENANT");
     }
 
-    if (jwt?.role) setRole(resolvedRole);
-    setBackendJwtRole(jwt?.role ? String(jwt.role) : undefined);
+    if (jwt?.role) {
+      setRole(mapBackendRole(jwt.role));
+      setBackendJwtRole(String(jwt.role));
+    } else {
+      setBackendJwtRole(undefined);
+    }
     const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
     const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
     setTenantId(resolvedTenantId);
@@ -79,6 +83,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         tenantId?: string | null;
         tenantName?: string | null;
         avatarUrl?: string | null;
+        role?: string | null;
       }>("/me")
         .then((me) => {
           if (!active) return;
@@ -86,6 +91,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setPortalPermissionOverride(me.portalPermissionSet as Permission[]);
           } else {
             setPortalPermissionOverride(null);
+          }
+          if (me.role != null && String(me.role).trim() !== "") {
+            setRole(mapBackendRole(me.role));
+            setBackendJwtRole(String(me.role));
           }
           if (me.tenantId) {
             setMeTenant({
