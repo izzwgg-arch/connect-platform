@@ -56,6 +56,75 @@
 
 ---
 
+## PBX CPU spike — profiling Connect → Asterisk / VitalPBX traffic
+
+Use this when Asterisk/VitalPBX CPU is high and you suspect **Connect** (not human
+dial volume alone).
+
+### Single ARI reader (implemented 2026-05-12)
+
+- **`apps/telephony`** `AriBridgedActivePoller` is the **only** component that should
+  poll **`GET /ari/bridges`**, **`GET /ari/channels`**, and **`GET /ari/endpoints`**
+  on a steady interval (default **5 s**, env-tunable; min **3 s** unless debug).
+- After each poll, telephony writes a **short-lived JSON snapshot** to **Redis**
+  (key `connect:telephony:ariBridged:v1:<pbxHost>`; TTL default **15 s**). Requires
+  **`REDIS_URL`** on the telephony container (same Redis URL as API/worker is fine).
+- **`apps/api`** `/pbx/live/*` reads that snapshot first via `fetchAriSliceForPbxLiveFromRedisOrAri`
+  (`pbxLiveAriSlice.ts`). **Direct Vital ARI** runs only when the snapshot is missing/stale,
+  during **backoff** recovery it may return a **stale** snapshot instead of hammering ARI,
+  or when **`?directAri=1`** on `/pbx/live/diagnostics` / env **`PBX_LIVE_DIAGNOSTICS_DIRECT_ARI=true`**.
+
+### What still hits the PBX (code-backed)
+
+| Source | Mechanism | Rough cadence | PBX surface |
+|--------|-----------|----------------|-------------|
+| `apps/telephony` | `AriBridgedActivePoller.tick` | **`ARI_BRIDGED_ACTIVE_POLL_MS`** (default **5 s**) | ARI bridges + channels + endpoints |
+| `apps/telephony` | `AmiClient` keepalive | **30 s** | AMI `Ping` |
+| `apps/telephony` | `TelephonyService.refreshExtensionPresence` | **3 min** | AMI `ExtensionStateList`, `PJSIPShowContacts` |
+| `apps/telephony` | `PbxTenantMapCache` | **60 s** | HTTP to **Connect API** (not Asterisk) |
+| `apps/api` | Direct ARI fallback | **Rare** — snapshot miss/stale, diagnostics force, or cold start | Same ARI URLs via `VitalPbxClient` (deduped per PBX host + 5 s backoff on failure) |
+| `apps/api` | `startPbxLiveDashboardWarm` | **30 s** | Mostly **Redis + DB**; direct ARI only if snapshot unusable |
+| `apps/worker` | CDR / voicemail / MOH | See `SERVICES.md` | Vital REST / telephony HTTP (unchanged) |
+
+### Verifying ARI reduction after deploy
+
+1. **`CONNECT_PBX_PROFILE=1`** on telephony + api (briefly). Expect telephony
+   `pbx_outbound_profile` at **~1 / poll interval**, not per HTTP request.
+2. API logs: **`pbx_outbound_profile`** should be **absent** during normal dashboard
+   polling when Redis snapshot is fresh; look instead for **`pbx_live_ari_direct_fallback`**
+   if something forces direct ARI.
+3. Redis: `GET connect:telephony:ariBridged:v1:<PBX_HOST>` should exist and refresh
+   while telephony is healthy.
+
+### Env-gated structured logs (`CONNECT_PBX_PROFILE`)
+
+Set on the **telephony** and/or **api** container (compose env or stack env), then
+redeploy or restart only those services per `AGENTS.md`:
+
+- `CONNECT_PBX_PROFILE=1` (or string `true`)
+
+Telephony logs **`pbx_outbound_profile`** from `AriBridgedActivePoller` (includes
+`pollIntervalMs`). The API logs **`pbx_outbound_profile`** only when the **direct ARI**
+path runs. **Disable after a short capture.**
+
+### Production / container commands (read-only)
+
+```bash
+docker compose -f docker-compose.app.yml ps
+docker logs --since=15m app-telephony-1 2>&1 | rg "pbx_outbound_profile|ari_bridged_active_poll_failed"
+docker logs --since=15m app-api-1 2>&1 | rg "pbx_outbound_profile|pbx_live_ari_direct_fallback|pbx_live"
+docker logs --since=30m app-telephony-1 2>&1 | rg -c "pbx_outbound_profile" || true
+```
+
+### Rollback / operations notes
+
+- Revert env: remove `REDIS_URL` from telephony **or** stop telephony snapshot writes —
+  API will fall back to direct ARI (higher load).
+- Emergency faster poller: **`ARI_BRIDGED_ACTIVE_POLL_DEBUG=true`** and
+  **`ARI_BRIDGED_ACTIVE_POLL_MS=1000`** on telephony only (not a default).
+
+---
+
 ## Billing API 403
 
 Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** with **`forbidden`** (sometimes **`permission`** from the global JWT hook).
@@ -63,6 +132,25 @@ Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** wit
 1. **Tenant paths** (`/billing/settings`, `/billing/platform/invoices`, … from `billing/routes.ts`): decode JWT **`role`**. Must be one of **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`**. Also confirm **`portalPermissionSet`** from **`GET /me`** includes **`can_view_billing_overview`** (prefix rule for `/billing` in `server.ts`).
 2. **Platform Admin Billing** (`/admin/billing/overview`, `/admin/billing/platform/tenants`, …): JWT **`role`** must be **`SUPER_ADMIN`** — tenant admins get **403** by design. Portal should hide **Admin Billing** unless `backendJwtRole === "SUPER_ADMIN"` (see `navConfig.ts` / admin billing page).
 3. **Email jobs from billing:** `EmailJob.invoiceId` is set when **`queueBillingEmail`** passes **`invoiceId`** (`buildBillingEmailJobCreateData` in `billingAuth.ts`). If jobs lack `invoiceId`, grep callers of **`queueBillingEmail`**.
+
+---
+
+## SOLA / Cardknox billing webhook (`POST /webhooks/sola-cardknox`)
+
+1. **HTTP codes:** **`400`** + `missing_event_id` — no **`eventId` / `xRefNum`** after parse, or billing apply returned **`missing_correlation`**. **`403`** + `invalid_signature` — **`ck-signature`** / Sola HMAC did not verify (check tenant **`BillingSolaConfig.webhookSecret`** vs env fallback in `solaGateway.ts`).
+2. **DB:** Inspect **`BillingEventLog`** (e.g. `webhook.deduped`, `webhook.signature_rejected`, `payment_failed`, `payment_succeeded`) and **`PaymentTransaction`** for the invoice — **declined (`D`) and error (`E`)** rows should still exist alongside logs.
+3. **Correlation:** Confirm webhook **`xInvoice`** matches a charge (**`CONNECT:tenantId:invoiceId:…`**) or legacy **`invoiceNumber` / id**; confirm **`processorTransactionId`** / idempotency keys store **`xRefNum` / `xRefNumber` as strings**.
+4. **Double pay:** If a duplicate webhook fired, expect **`webhook.deduped`** (or an existing **`PaymentTransaction`** matching the dedupe OR clause) — see **`buildBillingWebhookDedupeOrClause`** in `solaBillingPayments.ts`.
+
+Reference: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox.
+
+---
+
+## Billing emails & dunning
+
+1. **Processor:** **`apps/api/src/server.ts`** polls **`EmailJob`** (`QUEUED`, `nextRunAt`) and sends via tenant (or fallback) **`EmailProviderConfig`**. Billing jobs are created only from **`billing/routes.ts`**, **`billingEmailLifecycle.ts`**, **`solaBillingPayments.ts`** (no SOLA calls inside the email layer).
+2. **Trace an invoice:** `EmailJob` where **`invoiceId`** = BillingInvoice id and **`type`** in (`BILLING_INVOICE_SENT`, `BILLING_PAYMENT_LINK`, `BILLING_RECEIPT`, `BILLING_PAYMENT_FAILED`, …). Match **`BillingEventLog`** types above; **`receipt_emailed`** / **`payment_failed_emailed`** rows use **`message`** = **`PaymentTransaction.id`** for dedupe.
+3. **Dunning:** **`BillingInvoice.metadata.dunning`** — **`dunning_scheduled`** / **`dunning_exhausted`** events. Worker **`runBillingDunningRetries`** (6h) + env **`BILLING_DUNNING_MAX_ATTEMPTS`**, **`BILLING_DUNNING_RETRY_DELAY_HOURS`**.
 
 ---
 
@@ -326,6 +414,22 @@ Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** wit
   viewers except READ_ONLY). Verify: sign in as USER or MANAGER → import one
   contact → `GET /contacts` (or pull-to-refresh in app) shows the new external
   contact; API must be deployed after this server change.
+
+- **Contact import progress stuck at “0 of N” (2026-05-12).**
+  Symptom: preview shows hundreds of contacts; after tapping Import, the sheet
+  stays on the progress view with **0** completed for a long time (or forever).
+  Common causes: (1) the UI counted **in-flight** uploads as done before the
+  first `POST /contacts` returned, so React often still painted **0** while the
+  first slow/hung network call blocked the serial loop; (2) **no fetch timeout**,
+  so a wedged TCP connection never failed; (3) an **unhandled throw** in the
+  import path left the sheet on the importing step with no error panel.
+  Fix: progress increments **only after each contact finishes** (success, skip,
+  duplicate, or failure); **parallel pool** (4) so work continues if one request
+  stalls; **45s AbortController timeout** per `POST /contacts`; `runImport`
+  wrapped in `try/catch` so unexpected errors surface on the error step.
+  Verify with Metro / `adb logcat`: look for `[contacts_import] import_contact_done`
+  lines advancing; failures log `import_failed`. Filter:
+  `adb logcat | grep contacts_import`
 
 - **SMS chat back navigation (2026-05-07).**
   Symptom: inside an SMS/DM chat, pressing the Android hardware back button

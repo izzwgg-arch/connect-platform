@@ -298,12 +298,19 @@ export async function buildImportPreview(authToken: string): Promise<ImportPrevi
 
 export type ImportProgressCallback = (progress: { done: number; total: number; currentName: string }) => void;
 
+/** Parallel uploads — avoids one hung POST blocking all progress updates. */
+const IMPORT_UPLOAD_CONCURRENCY = 4;
+
 /**
  * Import the given candidates into Connect. Each candidate becomes one
  * `POST /contacts` call. The server enforces tenant isolation via the
  * JWT, and rejects duplicate phones with `409 duplicate_phone` — we
  * count those as "duplicates merged" so the user sees a clean summary
  * instead of a wall of errors.
+ *
+ * Progress: `completed` increments only after each contact is fully
+ * processed (so the UI does not sit at "0" while the first slow network
+ * round-trip is in flight). A small pool runs uploads in parallel.
  */
 export async function importContacts(
   authToken: string,
@@ -318,14 +325,21 @@ export async function importContacts(
     failureMessages: [],
   };
 
-  let done = 0;
-  for (const c of candidates) {
-    done++;
-    onProgress?.({ done, total: candidates.length, currentName: c.displayName });
+  const total = candidates.length;
+  let completed = 0;
 
+  const bumpProgress = (currentName: string) => {
+    onProgress?.({ done: completed, total, currentName });
+  };
+
+  bumpProgress('Starting import…');
+
+  const queue = candidates.slice();
+
+  const processOne = async (c: PhoneContactCandidate): Promise<void> => {
     if (c.skipReason === 'no_phone' || c.phones.length === 0) {
       result.skippedNoPhone++;
-      continue;
+      return;
     }
 
     const input: CreateContactInput = {
@@ -350,14 +364,30 @@ export async function importContacts(
         if (msg === 'forbidden' || msg.includes('forbidden')) {
           detail =
             'Your account cannot add contacts. Ask a tenant admin to grant contact-management access, or try again as a different role.';
+        } else if (msg.includes('CONTACT_CREATE_TIMEOUT')) {
+          detail = 'Network timed out while saving this contact. Check your connection and try again.';
         }
-        if (result.failureMessages.length < 5) {
+        if (result.failureMessages.length < 8) {
           result.failureMessages.push(`${c.displayName}: ${detail}`);
         }
         log('import_failed', { name: c.displayName, err: msg });
       }
     }
+  };
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const c = queue.shift();
+      if (!c) return;
+      await processOne(c);
+      completed++;
+      log('import_contact_done', { completed, total, name: c.displayName });
+      bumpProgress(c.displayName);
+    }
   }
+
+  const pool = Math.max(1, Math.min(IMPORT_UPLOAD_CONCURRENCY, candidates.length));
+  await Promise.all(Array.from({ length: pool }, () => worker()));
 
   log('import_complete', result);
   return result;

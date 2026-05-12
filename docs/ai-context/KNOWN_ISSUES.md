@@ -14,12 +14,22 @@ When you find a new fragile area, add it here.
 
 - **Fixed 2026-05-12 — tenant billing 403 with valid portal access.** `registerBillingRoutes` used a **too-narrow** JWT role list (`ADMIN`, `BILLING`, `SUPER_ADMIN` only) for tenant paths while the portal granted billing via permissions. **`TENANT_ADMIN`** / **`BILLING_ADMIN`** received **403** on `/billing/settings`, `/billing/platform/invoices`, etc. Fix: shared allowlist in `apps/api/src/billing/billingAuth.ts` aligned with `canManageBilling()` in `server.ts`.
 - **Fixed 2026-05-12 — Admin Billing UI vs API.** The `/admin/billing` page and nav used **permission-only** gates; the API required **`SUPER_ADMIN`**. Non–super-admins saw UI then **403**. Fix: portal nav (`isNavItemVisibleForUser`) and admin billing page require **`backendJwtRole === "SUPER_ADMIN"`** plus `can_view_admin_billing`.
+- **Fixed 2026-05-12 — SOLA platform `BillingInvoice` webhook + charges.** `POST /webhooks/sola-cardknox` inlined platform-invoice handling (weaker dedupe, **`xInvoice`** = plain invoice number only) while **`cc:sale`** already needed unique gateway **`xInvoice`**. Fix: shared **`applySolaWebhookToBillingInvoice`** + **`resolvePlatformBillingInvoiceForWebhookRef`**, **`CONNECT:…`** `xInvoice` on charges, dedupe OR on processor ref + webhook idempotency keys, **`ck-signature`** verified before Sola HMAC. Details: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox.
+- **Fixed 2026-05-12 — BillingInvoice email & dunning gaps.** New invoices (API + worker) did not queue **`BILLING_INVOICE_SENT`**; webhooks did not queue receipt/failure emails; worker autopay had no capped retry metadata. Fix: **`billingEmailLifecycle.ts`** (queue + dedupe by `PaymentTransaction.id`), **`billingDunning.ts`**, worker dunning sweep, tenant **`POST .../email-payment-link`**. See **`BILLING.md`** § Automation & email.
 - **Dual billing surfaces.** New `BillingInvoice` routes in `billing/routes.ts` plus legacy `/billing/*` handlers in `server.ts` — easy to fix one path and miss the other. See `docs/ai-context/BILLING.md`.
 
 ---
 
 ## Telephony
 
+- **PBX CPU / duplicate ARI readers (resolved 2026-05-12).** Previously both telephony
+  and the API polled Asterisk ARI for bridged active calls. **Now:** telephony
+  `AriBridgedActivePoller` is the steady-state reader (interval **`ARI_BRIDGED_ACTIVE_POLL_MS`**,
+  default **5 s**, min **3 s** unless **`ARI_BRIDGED_ACTIVE_POLL_DEBUG`**); it publishes
+  a Redis snapshot (`connect:telephony:ariBridged:v1:<host>`). The API `/pbx/live/*`
+  path prefers that snapshot (`pbxLiveAriSlice.ts`) and hits Vital ARI only on miss/stale,
+  backoff escape, or explicit diagnostics **`?directAri=1`**. **Requirement:** telephony
+  must have **`REDIS_URL`** aligned with the API Redis for snapshots to appear.
 - **Active call counting vs VitalPBX active channels.** Multiple recent runbooks and
   snapshots:
     - `docs/LIVE_CALL_FORENSIC_RUNBOOK.md`, `docs/LIVE_CALL_VALIDATION.md`,
@@ -653,6 +663,10 @@ When you find a new fragile area, add it here.
     TENANT_ADMIN, …) received `403 forbidden` on every import row while still
     being able to load `GET /contacts`. Creation now uses `canCreateContacts`
     (view-capable roles except READ_ONLY). Deploy the API for imports to persist.
+  - **Import progress / hung uploads (FIXED 2026-05-12).** Serial `POST /contacts`
+    with no timeout could leave the progress UI at zero while the first request
+    blocked; imports now use a small parallel pool, per-request timeouts, and
+    progress counts only **finished** contacts.
 - **SMS chat back navigation — fixed 2026-05-07.** `ChatTab` is a bottom tab
   screen. Android hardware back button went to the previous tab (Team) instead
   of closing the open thread. Fix: `ChatTab` registers a `BackHandler` when

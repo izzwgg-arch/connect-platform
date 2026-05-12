@@ -308,6 +308,8 @@ export type CreateContactInput = {
   favorite?: boolean;
 };
 
+const CONTACT_CREATE_TIMEOUT_MS = 45_000;
+
 export async function createContact(token: string, input: CreateContactInput): Promise<{ contact: any }> {
   const body = {
     type: "external" as const,
@@ -319,17 +321,38 @@ export async function createContact(token: string, input: CreateContactInput): P
     favorite: input.favorite ?? false,
     active: true,
     phones: (input.phones || [])
-      .map((p) => ({ type: p.type || "mobile", numberRaw: p.numberRaw.trim(), isPrimary: p.isPrimary }))
+      .map((p) => ({
+        type: p.type || "mobile",
+        numberRaw: String(p.numberRaw ?? "").trim(),
+        isPrimary: p.isPrimary,
+      }))
       .filter((p) => p.numberRaw.length > 0),
     emails: (input.emails || [])
-      .map((e) => ({ type: e.type || "work", email: e.email.trim(), isPrimary: e.isPrimary }))
+      .map((e) => ({
+        type: e.type || "work",
+        email: String(e.email ?? "").trim(),
+        isPrimary: e.isPrimary,
+      }))
       .filter((e) => e.email.length > 0),
   };
-  const res = await fetch(`${API_BASE}/contacts`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CONTACT_CREATE_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error("CONTACT_CREATE_TIMEOUT");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const json = await parseJson(res);
   if (!res.ok) {
     const code = typeof json?.error === "string" ? json.error : "CONTACT_CREATE_FAILED";

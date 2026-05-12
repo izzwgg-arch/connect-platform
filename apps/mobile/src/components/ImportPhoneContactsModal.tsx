@@ -202,10 +202,21 @@ export function ImportPhoneContactsModal({
     }
     setStep('importing');
     setProgress({ done: 0, total: chosen.length, currentName: chosen[0]?.displayName ?? '' });
-    const res = await importContacts(authToken, chosen, (p) => setProgress(p));
-    setResult(res);
-    setStep('done');
-    onImported?.(res);
+    try {
+      const res = await importContacts(authToken, chosen, (p) => setProgress(p));
+      setResult(res);
+      setStep('done');
+      onImported?.(res);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      console.error('[contacts_import] runImport_failed', msg, err);
+      setErrorMessage(
+        msg.includes('import')
+          ? msg
+          : 'Import stopped unexpectedly. Check your connection and try again with a smaller selection first.',
+      );
+      setStep('error');
+    }
   }, [authToken, preview, selectedIds, onImported]);
 
   const closeModal = useCallback(() => {
@@ -367,10 +378,12 @@ export function ImportPhoneContactsModal({
               <View style={styles.center}>
                 <ActivityIndicator color={colors.primary} size="large" />
                 <Text style={[typography.body, { color: colors.text, marginTop: 14, fontWeight: '600' }]}>
-                  Importing {progress.done} of {progress.total}…
+                  {progress.done} of {progress.total} saved
                 </Text>
-                <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 6 }]} numberOfLines={1}>
-                  {progress.currentName}
+                <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 6 }]} numberOfLines={2}>
+                  {progress.done === 0 && progress.total > 0
+                    ? 'Starting uploads — the counter moves after each contact finishes (not while waiting on the network).'
+                    : progress.currentName}
                 </Text>
                 <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
                   <View
