@@ -12,9 +12,12 @@ import {
   type MohExtensionOverridePrismaClient,
   type MohExtensionOverrideRow,
   assertExtensionExistsForTenant,
+  buildExtensionOverrideKeys,
   buildExtensionOverrideSnapshot,
   canManageExtensionOverrideFor,
+  computeExtensionKeysClearForRollback,
   deleteExtensionOverrideForTenant,
+  extractExtensionSnapshotFromKeys,
   extensionActiveMohClassKey,
   extensionMohClassFamily,
   extensionMohClassKey,
@@ -467,4 +470,156 @@ test("disabled override is visible to the API list but NOT to the publish read",
   const publishRows = await readEnabledExtensionOverridesForTenant(fake as any, "A");
   assert.equal(publishRows.length, 1);
   assert.equal(publishRows[0].extension, "101");
+});
+
+// ── buildExtensionOverrideKeys ────────────────────────────────────────────
+
+test("buildExtensionOverrideKeys: emits {moh_class, active_moh_class} per enabled row, sorted by family", () => {
+  const rows: MohExtensionOverrideRow[] = [
+    { extension: "104", vitalPbxMohClassName: "moh4", enabled: true },
+    { extension: "101", vitalPbxMohClassName: "moh1", enabled: true },
+  ];
+  const keys = buildExtensionOverrideKeys("secro_selution", rows);
+  assert.deepEqual(keys, [
+    { family: "connect/t_secro_selution/extensions/101", key: "active_moh_class", value: "moh1" },
+    { family: "connect/t_secro_selution/extensions/101", key: "moh_class",        value: "moh1" },
+    { family: "connect/t_secro_selution/extensions/104", key: "active_moh_class", value: "moh4" },
+    { family: "connect/t_secro_selution/extensions/104", key: "moh_class",        value: "moh4" },
+  ]);
+});
+
+test("buildExtensionOverrideKeys: drops disabled rows, invalid extensions, and empty class", () => {
+  const rows: MohExtensionOverrideRow[] = [
+    { extension: "101", vitalPbxMohClassName: "moh1", enabled: true },
+    { extension: "102", vitalPbxMohClassName: "moh2", enabled: false }, // disabled
+    { extension: "a/b", vitalPbxMohClassName: "moh3", enabled: true },  // invalid
+    { extension: "104", vitalPbxMohClassName: "  ",   enabled: true },  // empty class
+    { extension: "105", vitalPbxMohClassName: "moh5", enabled: true },
+  ];
+  const keys = buildExtensionOverrideKeys("slug", rows);
+  // 2 rows × 2 keys = 4 entries
+  assert.equal(keys.length, 4);
+  const exts = new Set(keys.map((k) => k.family.split("/").pop()));
+  assert.deepEqual([...exts].sort(), ["101", "105"]);
+});
+
+test("buildExtensionOverrideKeys: empty input -> [] (no slug validation runs against empty list)", () => {
+  assert.deepEqual(buildExtensionOverrideKeys("slug", []), []);
+});
+
+test("buildExtensionOverrideKeys: rejects invalid slug as defense-in-depth", () => {
+  assert.throws(
+    () => buildExtensionOverrideKeys("a/b", [{ extension: "101", vitalPbxMohClassName: "m", enabled: true }]),
+    /invalid tenant slug/,
+  );
+});
+
+// ── extractExtensionSnapshotFromKeys ──────────────────────────────────────
+
+test("extractExtensionSnapshotFromKeys: reads only moh_class entries under per-extension family", () => {
+  const keys = [
+    { family: "connect/t_slug",                          key: "active_moh_class", value: "default" },
+    { family: "connect/t_slug",                          key: "moh_class",        value: "default" },
+    { family: "connect/t_slug/extensions/101",           key: "moh_class",        value: "moh1" },
+    { family: "connect/t_slug/extensions/101",           key: "active_moh_class", value: "moh1" },
+    { family: "connect/t_slug/extensions/102",           key: "moh_class",        value: "moh2" },
+    { family: "connect/t_slug/extensions/102",           key: "active_moh_class", value: "moh2" },
+  ];
+  assert.deepEqual(extractExtensionSnapshotFromKeys(keys), [
+    { extension: "101", vitalPbxMohClassName: "moh1" },
+    { extension: "102", vitalPbxMohClassName: "moh2" },
+  ]);
+});
+
+test("extractExtensionSnapshotFromKeys: empty-string values (tombstones) are excluded", () => {
+  const keys = [
+    { family: "connect/t_slug/extensions/101", key: "moh_class",        value: "" },
+    { family: "connect/t_slug/extensions/101", key: "active_moh_class", value: "" },
+    { family: "connect/t_slug/extensions/102", key: "moh_class",        value: "moh2" },
+  ];
+  assert.deepEqual(extractExtensionSnapshotFromKeys(keys), [
+    { extension: "102", vitalPbxMohClassName: "moh2" },
+  ]);
+});
+
+test("extractExtensionSnapshotFromKeys: ignores non-matching families and malformed entries", () => {
+  const keys = [
+    { family: "connect/t_slug/inboundroutes/8005551212", key: "moh_class", value: "x" }, // wrong family
+    { family: "random/garbage",                          key: "moh_class", value: "y" },
+    { family: "connect/t_slug/extensions/101",           key: "moh_class", value: "ok" },
+  ];
+  assert.deepEqual(extractExtensionSnapshotFromKeys(keys as any), [
+    { extension: "101", vitalPbxMohClassName: "ok" },
+  ]);
+});
+
+// ── computeExtensionKeysClearForRollback ──────────────────────────────────
+
+test("computeExtensionKeysClearForRollback: clears keys ADDED by target publish and missing from prev", () => {
+  const targetKeys = [
+    // tenant defaults — must NOT be cleared (not under per-extension family)
+    { family: "connect/t_slug", key: "moh_class",        value: "default" },
+    { family: "connect/t_slug", key: "active_moh_class", value: "default" },
+    // per-extension keys that target publish wrote
+    { family: "connect/t_slug/extensions/101", key: "moh_class",        value: "moh1" },
+    { family: "connect/t_slug/extensions/101", key: "active_moh_class", value: "moh1" },
+    { family: "connect/t_slug/extensions/102", key: "moh_class",        value: "moh2" },
+    { family: "connect/t_slug/extensions/102", key: "active_moh_class", value: "moh2" },
+  ];
+  const prevKeys = [
+    { family: "connect/t_slug", key: "moh_class",        value: "old" },
+    { family: "connect/t_slug", key: "active_moh_class", value: "old" },
+    // 101 already existed before, so target did not "add" it — no clear
+    { family: "connect/t_slug/extensions/101", key: "moh_class",        value: "older1" },
+    { family: "connect/t_slug/extensions/101", key: "active_moh_class", value: "older1" },
+  ];
+  const out = computeExtensionKeysClearForRollback(targetKeys, prevKeys);
+  assert.deepEqual(out, [
+    { family: "connect/t_slug/extensions/102", key: "active_moh_class", value: "" },
+    { family: "connect/t_slug/extensions/102", key: "moh_class",        value: "" },
+  ]);
+});
+
+test("computeExtensionKeysClearForRollback: when target adds nothing under per-extension family -> []", () => {
+  const targetKeys = [
+    { family: "connect/t_slug", key: "moh_class",        value: "x" },
+    { family: "connect/t_slug", key: "active_moh_class", value: "x" },
+  ];
+  const prevKeys = [
+    { family: "connect/t_slug", key: "moh_class",        value: "y" },
+    { family: "connect/t_slug", key: "active_moh_class", value: "y" },
+  ];
+  assert.deepEqual(computeExtensionKeysClearForRollback(targetKeys, prevKeys), []);
+});
+
+test("computeExtensionKeysClearForRollback: dedupes identical (family,key) entries from target", () => {
+  const targetKeys = [
+    { family: "connect/t_slug/extensions/101", key: "moh_class", value: "a" },
+    { family: "connect/t_slug/extensions/101", key: "moh_class", value: "a" },
+  ];
+  const out = computeExtensionKeysClearForRollback(targetKeys, []);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].value, "");
+});
+
+test("computeExtensionKeysClearForRollback: ignores non-extension families even if absent from prev", () => {
+  const targetKeys = [
+    { family: "connect/t_slug",                          key: "moh_class", value: "x" },
+    { family: "connect/t_slug/inboundroutes/8005551212", key: "moh_class", value: "x" },
+    { family: "connect/pbx_tenant_map/42",               key: "moh_class", value: "x" },
+  ];
+  assert.deepEqual(computeExtensionKeysClearForRollback(targetKeys, []), []);
+});
+
+// ── round-trip: build → extract recovers the original snapshot shape ──────
+
+test("round-trip: buildExtensionOverrideKeys → extractExtensionSnapshotFromKeys recovers snapshot", () => {
+  const rows: MohExtensionOverrideRow[] = [
+    { extension: "101", vitalPbxMohClassName: "moh1", enabled: true },
+    { extension: "104", vitalPbxMohClassName: "moh4", enabled: true },
+    { extension: "102", vitalPbxMohClassName: "",     enabled: true }, // dropped
+  ];
+  const keys = buildExtensionOverrideKeys("slug", rows);
+  const recovered = extractExtensionSnapshotFromKeys(keys);
+  assert.deepEqual(recovered, buildExtensionOverrideSnapshot(rows));
 });

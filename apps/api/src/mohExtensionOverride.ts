@@ -4,17 +4,28 @@
 // Phase 2 (2026-05-11) — adds API-layer helpers (list / upsert / delete /
 //   tenant-scoped extension lookup / permission predicate) consumed by the
 //   `/voice/moh/extension-overrides` routes registered in `server.ts`.
+// Phase 3A (2026-05-11) — adds publish-path helpers
+//   (`buildExtensionOverrideKeys`, `extractExtensionSnapshotFromKeys`,
+//   `computeExtensionKeysClearForRollback`) consumed by `doMohPublish` and
+//   `POST /voice/moh/rollback/:publishId`. The MOH publish path now writes
+//   per-extension AstDB keys, but **no consumer reads them yet** — the PBX
+//   dialplan resolver lands in Phase 3B.
 //
-// What is STILL inert at runtime after Phase 2:
-//   - No AstDB / AMI / network write happens in any helper here.
-//   - `publishMohToAstDb` is not changed; it neither reads nor writes
-//     per-extension keys.
-//   - The PBX dialplan resolver does not yet consume
-//     `connect/t_<slug>/extensions/<ext>/moh_class`.
+// What is STILL inert at runtime after Phase 3A:
+//   - No helper in this module performs network I/O. All AstDB writes go
+//     through `publishMohToAstDb` in `server.ts`, which calls the existing
+//     `/telephony/internal/ivr-publish` endpoint.
+//   - The PBX dialplan resolver does NOT yet consume
+//     `connect/t_<slug>/extensions/<ext>/moh_class`. Asterisk reads only
+//     tenant-scope keys today; per-extension keys sit in AstDB unread.
+//   - No PBX scripts, dialplan contexts, trunk wrappers, or installer
+//     templates were modified.
 //
-// Phase 2 is therefore "DB-only": the API can persist override intent, but
-// nothing surfaces it to a live call until the resolver lands in a later
-// phase, gated by the live-call diagnostic + drift-compare harness.
+// Phase 3A is therefore "publish writes to AstDB but nobody reads it yet":
+// the publish path persists per-extension override intent into AstDB
+// alongside tenant-default keys, but live calls remain on the tenant
+// default class until Phase 3B introduces a dialplan resolver that reads
+// the new key family.
 //
 // Design rationale (from the Phase 0 design returned 2026-05-11):
 //   - The runtime tenant identity comes from `CHANNEL(name)` (`PJSIP/T<id>_<ext>-...`).
@@ -23,8 +34,9 @@
 //     because the channel-name token is the AstDB key segment and must round-trip
 //     verbatim. Validation happens at this layer.
 //
-// IMPORTANT: nothing here writes to AstDB or AMI. The publish wiring lands in
-// a later phase, gated by the live-call diagnostic + drift-compare harness.
+// IMPORTANT: nothing in THIS MODULE performs network I/O. The publish path
+// in `server.ts` calls these pure helpers and then calls `publishMohToAstDb`
+// once with the combined tenant-default + per-extension key list.
 
 /** A row read from `MohExtensionOverride` for snapshot/key-building purposes. */
 export interface MohExtensionOverrideRow {
@@ -430,4 +442,159 @@ export function canManageExtensionOverrideFor(
   if (role !== "SUPER_ADMIN" && role !== "ADMIN") return false;
   if (role === "SUPER_ADMIN") return true;
   return typeof user.tenantId === "string" && user.tenantId === tenantId;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3A: publish-path helpers (still pure; no network I/O).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** AstDB key triple for the telephony publish endpoint. */
+export interface MohAstDbKey {
+  family: string;
+  key: string;
+  value: string;
+}
+
+/**
+ * Match either:
+ *   `connect/t_<slug>/extensions/<ext>` (per-extension family for keys)
+ * Capture group 1 = slug; group 2 = extension token.
+ *
+ * Restricting to the same character classes as `EXTENSION_RE` and `SLUG_RE`
+ * prevents corrupt families from being accidentally matched (e.g. a future
+ * namespace mistake that produces non-canonical slugs or extension tokens).
+ */
+const EXTENSION_FAMILY_RE = /^connect\/t_([0-9A-Za-z_-]{1,64})\/extensions\/([0-9A-Za-z_-]{1,32})$/;
+
+/**
+ * Build the per-extension AstDB key list to append to a tenant MOH publish.
+ *
+ * Emits, for every enabled override row whose `extension` normalizes and
+ * whose `vitalPbxMohClassName` is non-empty, exactly two key triples:
+ *   - `connect/t_<slug>/extensions/<ext>` `moh_class`
+ *   - `connect/t_<slug>/extensions/<ext>` `active_moh_class`
+ *
+ * Both keys carry the same value — the dialplan resolver (Phase 3B) reads
+ * `moh_class` first; `active_moh_class` is the fallback alias mirroring the
+ * tenant-scope convention.
+ *
+ * Output is sorted by extension ASC, then by key ASC, for byte-stable audit
+ * output and deterministic AstDB write ordering.
+ *
+ * Fails closed: invalid rows are silently dropped (matches the contract of
+ * `buildExtensionOverrideSnapshot`). The CRUD route layer (Phase 2) is
+ * responsible for rejecting bad input at write time, so a dropped row here
+ * indicates corrupt DB data rather than user-facing input.
+ */
+export function buildExtensionOverrideKeys(
+  slug: string,
+  rows: ReadonlyArray<MohExtensionOverrideRow>,
+): MohAstDbKey[] {
+  const safeSlug = assertSlug(slug);
+  const out: MohAstDbKey[] = [];
+  for (const row of rows) {
+    if (!row.enabled) continue;
+    const ext = normalizeExtension(row.extension);
+    if (ext === null) continue;
+    const cls = typeof row.vitalPbxMohClassName === "string" ? row.vitalPbxMohClassName.trim() : "";
+    if (cls.length === 0) continue;
+    const family = `connect/t_${safeSlug}/extensions/${ext}`;
+    out.push({ family, key: "moh_class",        value: cls });
+    out.push({ family, key: "active_moh_class", value: cls });
+  }
+  out.sort((a, b) => {
+    if (a.family < b.family) return -1;
+    if (a.family > b.family) return 1;
+    if (a.key < b.key) return -1;
+    if (a.key > b.key) return 1;
+    return 0;
+  });
+  return out;
+}
+
+/**
+ * Recover an extension-override snapshot from a flat AstDB key list. Used by
+ * the rollback handler to reconstruct what would have been
+ * `extensionOverridesSnapshot` for the restored state, given only the
+ * `previousKeysSnapshot` of the publish being rolled back.
+ *
+ * Reads only `moh_class` keys under `connect/t_<slug>/extensions/<ext>` with
+ * a non-empty value. Empty-string values are treated as tombstones (the
+ * rollback "clear" entries written by `computeExtensionKeysClearForRollback`)
+ * and excluded from the snapshot.
+ *
+ * Sorted by extension ASC for stability.
+ */
+export function extractExtensionSnapshotFromKeys(
+  keys: ReadonlyArray<MohAstDbKey>,
+): MohExtensionOverrideSnapshotEntry[] {
+  const out: MohExtensionOverrideSnapshotEntry[] = [];
+  for (const k of keys) {
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    if (k.key !== "moh_class") continue;
+    const m = EXTENSION_FAMILY_RE.exec(k.family);
+    if (!m) continue;
+    const ext = m[2];
+    const value = typeof k.value === "string" ? k.value : "";
+    if (value.length === 0) continue;
+    out.push({ extension: ext, vitalPbxMohClassName: value });
+  }
+  out.sort((a, b) => (a.extension < b.extension ? -1 : a.extension > b.extension ? 1 : 0));
+  return out;
+}
+
+/**
+ * For the rollback path: compute "clear" entries for extension keys that the
+ * target publish ADDED relative to the prior state.
+ *
+ * Inputs:
+ *   - `targetKeys` = the rollback target's `keysWritten` (state AFTER the
+ *      publish being rolled back).
+ *   - `prevKeys`   = the rollback target's `previousKeysSnapshot` (state
+ *      BEFORE the publish being rolled back).
+ *
+ * For every `(family, key)` pair in `targetKeys` whose family matches
+ * `connect/t_<slug>/extensions/<ext>` and whose `(family, key)` does NOT
+ * appear in `prevKeys`, emit `{ family, key, value: "" }`.
+ *
+ * Empty-string is the tombstone value: AstDB has no native delete via the
+ * existing `/telephony/internal/ivr-publish` channel, and the future
+ * dialplan resolver will treat empty `moh_class` as "no override" (Phase 3B
+ * contract). For Phase 3A this is purely audit-and-future-proofing — no
+ * code reads these keys yet.
+ *
+ * Pre-existing keys that the target publish also wrote (i.e., present in
+ * BOTH `targetKeys` and `prevKeys`) are not cleared — `prevKeys` will be
+ * replayed verbatim by the rollback caller and will overwrite them.
+ *
+ * Pure: no I/O.
+ */
+export function computeExtensionKeysClearForRollback(
+  targetKeys: ReadonlyArray<MohAstDbKey>,
+  prevKeys: ReadonlyArray<MohAstDbKey>,
+): MohAstDbKey[] {
+  const prevSet = new Set<string>();
+  for (const k of prevKeys) {
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    prevSet.add(`${k.family}\u0000${k.key}`);
+  }
+  const out: MohAstDbKey[] = [];
+  const seen = new Set<string>();
+  for (const k of targetKeys) {
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    if (!EXTENSION_FAMILY_RE.test(k.family)) continue;
+    const id = `${k.family}\u0000${k.key}`;
+    if (prevSet.has(id)) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ family: k.family, key: k.key, value: "" });
+  }
+  out.sort((a, b) => {
+    if (a.family < b.family) return -1;
+    if (a.family > b.family) return 1;
+    if (a.key < b.key) return -1;
+    if (a.key > b.key) return 1;
+    return 0;
+  });
+  return out;
 }
