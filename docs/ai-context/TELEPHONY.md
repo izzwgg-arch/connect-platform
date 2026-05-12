@@ -508,6 +508,26 @@ Three static dialplan contexts in
   `[sub-connect-tenant-moh]` using `${TENANT}/${CALLER}/${CALLEE}` set
   by `[sub-before-connecting-call]` priorities 2..4.
 
+**Per-extension overrides (Phase 3A writer live, resolver = Phase 3B,
+preflight-only at 2026-05-12).** `doMohPublish` (`apps/api/src/server.ts`)
+now writes `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}`
+for every enabled `MohExtensionOverride`, and the rollback handler writes
+empty-string tombstones. **The installed `[sub-connect-tenant-moh]` does
+NOT read these keys yet** — per-extension overrides are persisted but
+functionally inert on live calls until the Phase 3B resolver change
+ships. Phase 3B is scoped in
+`docs/pbx/phase-3b-moh-extension-resolver-design.md`; the install gate
+is a read-only diagnostic on the PBX:
+
+```bash
+ssh connect-pbx "sudo bash /root/diag-connect-moh-extension-key-readiness.sh"
+```
+
+The diagnostic never writes to Asterisk config, never reloads anything,
+and exits 0 only when every mapped tenant has a tenant-default MOH, every
+per-extension family lives under a mapped slug, and every per-extension
+class value is loaded in `moh show classes`.
+
 Connect API populates the reverse tenant map via the existing MOH publish
 path (`apps/api/src/server.ts` → `mohReverseMapPublish.ts`):
 

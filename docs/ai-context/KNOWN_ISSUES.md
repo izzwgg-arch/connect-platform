@@ -260,6 +260,26 @@ When you find a new fragile area, add it here.
   PBX directory slug correctly; the old family is inert (no dialplan reads
   it) but shows up in `database show connect`. Cleanup: `database deltree
   connect/t_<old-slug>` per tenant once verified. Not blocking.
+- **Per-extension MOH overrides are inert on live calls (open, Phase 3B
+  not yet shipped, 2026-05-12).** Phase 3A (`doMohPublish` in
+  `apps/api/src/server.ts`) writes
+  `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}` on
+  every publish and empty-string tombstones on rollback, but
+  `[sub-connect-tenant-moh]` in the installed dialplan only reads the
+  tenant-scope `connect/t_<slug>/moh_class`. Admin-configured per-
+  extension overrides are therefore persisted and visible in
+  `MohPublishRecord.extensionOverridesSnapshot` but do **not** change
+  what plays when the remote party holds. Fix ships with Phase 3B; the
+  design and install gate are pinned in
+  `docs/pbx/phase-3b-moh-extension-resolver-design.md` and the
+  read-only diagnostic
+  `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` must exit 0
+  on the canary PBX before any resolver edit is attempted. Not blocking
+  — tenant default MOH still works for all calls. Additional known
+  Phase 3B gap: the canary outbound trunk wrapper
+  (`--enable-trk-wrapper=33`) applies tenant default before the
+  connect-leg shim, so per-extension overrides on trunk 33 will require
+  a follow-up wrapper edit after Phase 3B.
 
 ## Mobile calling
 

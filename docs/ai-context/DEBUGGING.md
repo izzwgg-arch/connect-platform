@@ -835,6 +835,28 @@ Verification checklist (read-only):
    on the PBX (or it failed verification and rolled itself back — backup
    is in `/etc/asterisk/extensions__65_connect_tenant_moh.conf.bak.*`).
 
+3a. **Per-extension MOH debugging (Phase 3A writer live, Phase 3B
+    resolver NOT yet installed as of 2026-05-12).** When an admin sets a
+    `MohExtensionOverride` in Connect, the publish writes
+    `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}` keys
+    to AstDB, but **Asterisk does not read them yet** — live holds still
+    play the tenant default. This is expected behavior until Phase 3B
+    ships. To verify the AstDB write side is structurally healthy and
+    the resolver install gate is met, run the read-only diagnostic on
+    the PBX:
+
+    ```bash
+    ssh connect-pbx "sudo bash /root/diag-connect-moh-extension-key-readiness.sh"
+    ```
+
+    Exit 0 == Phase 3B resolver may proceed to its install gate. Non-zero
+    exit lists the HARD failures (orphan extension families under
+    unmapped slugs, per-extension class values not loaded in
+    `moh show classes`, missing tenant defaults) — those must be
+    resolved before any resolver edit. The diagnostic never writes to
+    Asterisk config, never reloads anything, never places a call. Design
+    and install-gate details: `docs/pbx/phase-3b-moh-extension-resolver-design.md`.
+
 4. Confirm the per-tenant connect-leg hook + PJSIP append exist for THIS
    tenant (caller-leg coverage). The installer enumerates these from
    AstDB at install time, so a tenant whose first publish happened after

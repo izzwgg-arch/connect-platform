@@ -96,6 +96,34 @@ Written by `runMohScheduleCycle()` in `apps/worker/src/main.ts` and by
 | `hold_announcement_interval` | string (int) | seconds between repeats (default `30`) |
 | `hold_announce` | string | resolved announcement ref (only when enabled) — convenience read for dialplan |
 
+### Per-extension MOH overrides (Phase 3A writer 2026-05-11; resolver = Phase 3B, preflight-only 2026-05-12)
+
+Subfamily under `connect/t_<slug>/extensions/<extension>/*`. Written by
+`apps/api` `POST /voice/moh/publish` (`doMohPublish`) and by its rollback
+counterpart, both via `apps/api/src/mohExtensionOverride.ts` helpers.
+**No Asterisk consumer yet** — the installed `[sub-connect-tenant-moh]`
+resolver still reads only the tenant-scope keys. Phase 3B will splice in
+the per-extension read path; the design is pinned in
+`docs/pbx/phase-3b-moh-extension-resolver-design.md` and its install gate
+is the read-only diagnostic
+`scripts/pbx/diag-connect-moh-extension-key-readiness.sh` (must exit 0
+on the canary PBX before any resolver edit).
+
+| Family | Key | Type | Purpose |
+|---|---|---|---|
+| `connect/t_<slug>/extensions/<ext>` | `moh_class` | string | per-extension MOH class override (mirrors tenant-default `moh_class`) |
+| `connect/t_<slug>/extensions/<ext>` | `active_moh_class` | string | duplicate alias for legacy/dual-read consumers |
+
+- `<ext>` is the canonical channel-name token (the second segment of
+  `PJSIP/T<id>_<extension>-…`), validated as `[A-Za-z0-9_-]{1,32}`.
+- Empty-string is a **tombstone** written by the rollback handler when
+  the rolled-back publish ADDED keys that did not exist before. The
+  Phase 3B resolver MUST treat empty `moh_class` under this family as
+  "no override — fall through to tenant default."
+- Helpers `extensionMohClassFamily` / `extensionMohClassKey` /
+  `extensionActiveMohClassKey` build the canonical strings; do not
+  hand-concatenate.
+
 ### Push-wake (lives under `connect/t_<slug>` per tenant)
 
 Written by `apps/api/src/server.ts` and by the IVR publish path. Read by
