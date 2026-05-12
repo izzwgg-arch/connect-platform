@@ -105,6 +105,7 @@ $manifestObj = [ordered]@{
   version     = $Version
   filename    = $latestName
   publishedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+  createdAt   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
   sizeBytes   = [int64]$apkSize
 }
 if ($ReleaseNotes -and $ReleaseNotes.Trim().Length -gt 0) {

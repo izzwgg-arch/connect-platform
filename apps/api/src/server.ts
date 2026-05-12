@@ -1353,6 +1353,11 @@ function canViewCustomers(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "BILLING", "MESSAGING", "SUPPORT", "READ_ONLY", "EXTENSION_USER", "USER"]);
 }
 
+/** Create tenant-scoped personal / external contacts (mobile import, portal add). */
+function canCreateContacts(user: JwtUser): boolean {
+  return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "BILLING", "MESSAGING", "SUPPORT", "EXTENSION_USER", "USER"]);
+}
+
 function canManageProviders(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN"]);
 }
@@ -3777,6 +3782,8 @@ async function readApkManifest(): Promise<{
   filename: string;
   sizeBytes: number | null;
   modifiedAt: string | null;
+  /** ISO time from publish manifest (`createdAt` / `publishedAt`) when present. */
+  manifestTimestamp: string | null;
   releaseNotes: string | null;
   commitSha: string | null;
 }> {
@@ -3790,11 +3797,18 @@ async function readApkManifest(): Promise<{
   let version: string | null = null;
   let releaseNotes: string | null = null;
   let commitSha: string | null = null;
+  let manifestTimestamp: string | null = null;
   try {
     const manifestRaw = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
     // Strip a leading UTF-8 BOM (some editors/PowerShell encodings add one).
     const manifest = manifestRaw.charCodeAt(0) === 0xfeff ? manifestRaw.slice(1) : manifestRaw;
-    const parsed = JSON.parse(manifest) as { version?: string; releaseNotes?: string; commitSha?: string };
+    const parsed = JSON.parse(manifest) as {
+      version?: string;
+      releaseNotes?: string;
+      commitSha?: string;
+      createdAt?: string;
+      publishedAt?: string;
+    };
     if (parsed && typeof parsed.version === "string" && /^\d+\.\d+\.\d+/.test(parsed.version)) {
       version = parsed.version;
     }
@@ -3804,6 +3818,14 @@ async function readApkManifest(): Promise<{
     if (parsed && typeof parsed.commitSha === "string" && /^[0-9a-f]{7,40}$/i.test(parsed.commitSha.trim())) {
       commitSha = parsed.commitSha.trim().toLowerCase();
     }
+    const tsRaw =
+      (parsed && typeof parsed.createdAt === "string" && parsed.createdAt.trim()) ||
+      (parsed && typeof parsed.publishedAt === "string" && parsed.publishedAt.trim()) ||
+      "";
+    if (tsRaw) {
+      const d = new Date(tsRaw);
+      if (!Number.isNaN(d.getTime())) manifestTimestamp = d.toISOString();
+    }
   } catch {
     /* manifest is optional */
   }
@@ -3812,6 +3834,7 @@ async function readApkManifest(): Promise<{
     filename: APK_LATEST_FILENAME,
     sizeBytes: stat ? stat.size : null,
     modifiedAt: stat ? stat.mtime.toISOString() : null,
+    manifestTimestamp,
     releaseNotes,
     commitSha,
   };
@@ -3858,9 +3881,15 @@ function renderAndroidApkDownloadPage(input: {
   sizeBytes: number | null;
   releaseNotes?: string | null;
   commitSha?: string | null;
+  /** ISO time from publish manifest or APK file mtime. */
+  releasedAt?: string | null;
 }): string {
   const versionText = input.version ? `Version ${input.version}` : "Latest Android build";
   const sizeText = input.sizeBytes ? `${(input.sizeBytes / 1024 / 1024).toFixed(2)} MB` : "APK download";
+  const releasedLine =
+    input.releasedAt && input.releasedAt.length > 0
+      ? `<div class="meta" style="margin-top:6px;">Build ${escapeHtmlForApkPage(input.releasedAt)}</div>`
+      : "";
   const commitLine =
     input.commitSha && input.commitSha.length > 0
       ? `<div class="meta" style="margin-top:8px;">Commit ${escapeHtmlForApkPage(input.commitSha)}</div>`
@@ -3893,6 +3922,7 @@ function renderAndroidApkDownloadPage(input: {
     <h1>Download Connect for Android</h1>
     <p>Tap the button below to download the Android app directly from Connect.</p>
     <div class="meta">${versionText} · ${sizeText}</div>
+    ${releasedLine}
     ${commitLine}
     ${notesBlock}
     <a class="button" href="${input.apkUrl}" download>Download Android App</a>
@@ -3915,6 +3945,7 @@ app.get("/mobile/android/download", async (_req, reply) => {
     sizeBytes: manifest.sizeBytes,
     releaseNotes: manifest.releaseNotes,
     commitSha: manifest.commitSha,
+    releasedAt: manifest.manifestTimestamp || manifest.modifiedAt,
   }));
 });
 
@@ -3960,6 +3991,7 @@ app.get("/downloads/:filename", async (req, reply) => {
       sizeBytes: stat.size,
       releaseNotes: manifest.releaseNotes,
       commitSha: manifest.commitSha,
+      releasedAt: manifest.manifestTimestamp || manifest.modifiedAt,
     }));
   }
 
@@ -4041,13 +4073,14 @@ app.get("/mobile/android/latest", async (_req, reply) => {
   if (!manifest.sizeBytes) {
     return reply.status(404).send({ error: "apk_not_published" });
   }
+  const publishedAt = manifest.manifestTimestamp || manifest.modifiedAt;
   return {
     platform: "android",
     version: manifest.version || "0.0.0",
     apkUrl: apkDownloadHref(APK_LATEST_FILENAME),
     downloadPageUrl: androidApkDownloadPageUrl(),
     sizeBytes: manifest.sizeBytes,
-    publishedAt: manifest.modifiedAt,
+    publishedAt,
     ...(manifest.releaseNotes ? { releaseNotes: manifest.releaseNotes } : {}),
     ...(manifest.commitSha ? { commitSha: manifest.commitSha } : {}),
   };
@@ -23557,7 +23590,7 @@ app.get("/contacts", async (req, reply) => {
 });
 
 app.post("/contacts", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  const user = await requirePermission(req, reply, canCreateContacts);
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });

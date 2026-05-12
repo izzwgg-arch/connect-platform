@@ -372,9 +372,38 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   3. `journalctl -u asterisk` 24h watch shows `per-extension override
      applied` lines with matching `slug` / `tenant_id`.
 
+  **Install class (updated 2026-05-12):** Phase 3B install is a
+  **PBX-host operator-run break-glass action**, in the same operational
+  class as `install-vitalpbx-inbound-route-helper.sh` (documented above
+  under "VitalPBX host: Connect route helper script"). It is **NOT**
+  managed by the deploy queue: the queue is app-host / container scoped
+  (`api`, `portal`, `telephony`, `realtime`, `worker`, `full-stack` —
+  see `docs/safe-deploy-queue.md`) and has no PBX target by design.
+  Earlier wording in this section that said Phase 3B "must be enqueued
+  through the deploy queue" was incorrect and is superseded by this
+  paragraph.
+
   Phase 3B install/enable commands are intentionally NOT generated in
-  this doc — they require a written operator approval per AGENTS.md
-  §Hard rules and must be enqueued through the deploy queue.
+  this doc. Before any `install-connect-tenant-moh-dialplan.sh` invocation
+  on a PBX host:
+
+  - **No PBX installer command may be run without explicit written
+    operator approval** captured per AGENTS.md §Hard rules /
+    "Emergency override". This applies to the Landau Home canary
+    (tenant 21, slug `landau_home`) and every subsequent host.
+  - **All four pre-install gate items above must pass first** (readiness
+    diag exit 0, preflight snapshot captured, ≥1 enabled
+    `MohExtensionOverride` row for a mapped tenant, `--check` exits 0
+    with probe 2a `[INFO]`). A failing or missing gate item blocks the
+    install regardless of approval.
+  - The installer must be staged at `/root/` on the PBX from the pinned
+    commit (`efe66d377d583478ceeeb4d7efdd55657e4166cc` for the current
+    Phase 3B resolver), and invoked by a human operator over SSH — the
+    same path already used for `install-vitalpbx-inbound-route-helper.sh`.
+
+  Rollback (`--rollback`) and read-only health (`--check`) follow the
+  same PBX-host operator-run path and are documented in the rollback
+  bullet below.
 - **Real test on canary tenant after install**:
     1. `POST /voice/moh/publish` for a tenant in Connect.
     2. On PBX: `asterisk -rx "database show connect/pbx_tenant_map"` →
@@ -1215,6 +1244,11 @@ Status checks:
 - APK distribution: `scripts/android-publish.ps1` copies a release APK into
   `/opt/connectcomms/downloads/` over scp; the api serves it via
   `/api/downloads/connectcomms-latest.apk` (filename allow-list enforced).
+  The script also uploads `connectcomms-latest.json` with at least `version`,
+  `publishedAt`, `createdAt` (UTC ISO timestamps at publish time), `sizeBytes`,
+  and optional `releaseNotes` / `commitSha`. `GET /mobile/android/latest` and
+  the HTML download page prefer `createdAt` / `publishedAt` from that JSON when
+  parseable, and fall back to the APK file `mtime` otherwise.
 - iOS distribution: UNKNOWN — verify with EAS submit configuration.
 
 ---

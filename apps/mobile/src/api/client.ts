@@ -331,7 +331,10 @@ export async function createContact(token: string, input: CreateContactInput): P
     body: JSON.stringify(body),
   });
   const json = await parseJson(res);
-  if (!res.ok) throw new Error(json?.error || "CONTACT_CREATE_FAILED");
+  if (!res.ok) {
+    const code = typeof json?.error === "string" ? json.error : "CONTACT_CREATE_FAILED";
+    throw new Error(code === "CONTACT_CREATE_FAILED" ? `${code}_${res.status}` : code);
+  }
   return json as { contact: any };
 }
 

@@ -56,6 +56,16 @@
 
 ---
 
+## Billing API 403
+
+Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** with **`forbidden`** (sometimes **`permission`** from the global JWT hook).
+
+1. **Tenant paths** (`/billing/settings`, `/billing/platform/invoices`, … from `billing/routes.ts`): decode JWT **`role`**. Must be one of **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`**. Also confirm **`portalPermissionSet`** from **`GET /me`** includes **`can_view_billing_overview`** (prefix rule for `/billing` in `server.ts`).
+2. **Platform Admin Billing** (`/admin/billing/overview`, `/admin/billing/platform/tenants`, …): JWT **`role`** must be **`SUPER_ADMIN`** — tenant admins get **403** by design. Portal should hide **Admin Billing** unless `backendJwtRole === "SUPER_ADMIN"` (see `navConfig.ts` / admin billing page).
+3. **Email jobs from billing:** `EmailJob.invoiceId` is set when **`queueBillingEmail`** passes **`invoiceId`** (`buildBillingEmailJobCreateData` in `billingAuth.ts`). If jobs lack `invoiceId`, grep callers of **`queueBillingEmail`**.
+
+---
+
 ## Useful log locations (from repo references)
 
 - **Server-side container logs**: `docker logs --since=10m <container>` (read-only is
@@ -305,6 +315,17 @@
   handler, then passes the result as `initialPermission` to the modal.
   Verify: fresh install or permission-revoked device → tap Import Contacts →
   Android permission dialog appears immediately → grant → modal loads contacts.
+
+- **Contact import succeeds in UI but zero rows saved (2026-05-12).**
+  Symptom: preview lists phone contacts; after Import, summary shows many failures
+  or `forbidden` in Metro / `adb logcat` / failure lines in the result panel.
+  Root cause: `POST /contacts` was gated with `canManageCustomerWorkflow` (only
+  SUPER_ADMIN / ADMIN / BILLING / SUPPORT) while `GET /contacts` allowed normal
+  staff roles — mobile users could **view** the directory but not **create** rows.
+  Fix: `POST /contacts` now uses `canCreateContacts` (same roster as directory
+  viewers except READ_ONLY). Verify: sign in as USER or MANAGER → import one
+  contact → `GET /contacts` (or pull-to-refresh in app) shows the new external
+  contact; API must be deployed after this server change.
 
 - **SMS chat back navigation (2026-05-07).**
   Symptom: inside an SMS/DM chat, pressing the Android hardware back button

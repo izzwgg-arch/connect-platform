@@ -130,6 +130,12 @@ export function ImportPhoneContactsModal({
       const msg = String(err?.message ?? err);
       if (msg.includes('contacts_permission_not_granted')) {
         setStep('permission');
+      } else if (msg.startsWith('contacts_read_failed:')) {
+        const detail = msg.replace(/^contacts_read_failed:/, '').trim() || 'Unknown error';
+        setErrorMessage(
+          `Could not read device contacts (${detail}). If you denied permission, open Settings and allow Contacts for Connect, then try again.`,
+        );
+        setStep('error');
       } else {
         setErrorMessage('Could not read your phone contacts. Please try again.');
         setStep('error');

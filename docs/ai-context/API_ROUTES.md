@@ -108,7 +108,12 @@ Plus four delegated registrars at lines ~30198–30265 (see top of file).
 - `GET /admin/sbc/status` (3586) / `GET /voice/sbc/status` (3592)
 - `GET /mobile/android/download` (3756)
 - `GET /downloads/:filename` (3776)
-- `GET /mobile/android/latest` (3886)
+- `GET /mobile/android/latest` (3886) — JSON includes `publishedAt` (prefers
+  `createdAt` / `publishedAt` from `connectcomms-latest.json` when present, else
+  APK `mtime`).
+- `POST /contacts` — creates external/personal contacts; gated by
+  `canCreateContacts` (directory viewers except READ_ONLY), not the narrower
+  `canManageCustomerWorkflow` used for bulk admin contact writes.
 
 ---
 
@@ -252,14 +257,14 @@ Breakdown by sub-prefix (count / approximate scope):
 > the AstDB key family `connect/t_<slug>` and any change must preserve key
 > shape and the snapshot-then-write contract.
 
-### `/voice/moh/extension-overrides/*` — per-extension MOH overrides (Phase 2, 2026-05-11)
+### `/voice/moh/extension-overrides/*` — per-extension MOH overrides (Phase 2, 2026-05-11; consumed by publish in Phase 3A, 2026-05-11)
 
 **Approx lines:** ~20449–20591 in `apps/api/src/server.ts` (between `DELETE /voice/moh/profiles/:id` and `PUT /voice/moh/schedule`).
-**Purpose:** CRUD for `MohExtensionOverride` rows that will (in a later phase) drive the AstDB key family `connect/t_<slug>/extensions/<ext>/moh_class`. **Phase 2 is DB-only** — these routes do **NOT** call `publishMohToAstDb`, do **NOT** write any AstDB key, and do **NOT** reach the telephony service.
+**Purpose:** CRUD for `MohExtensionOverride` rows that drive the AstDB key family `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}`. **The CRUD routes themselves remain DB-only** — they do **NOT** call `publishMohToAstDb`. **Phase 3A** wires the next call to `POST /voice/moh/publish` to read every enabled override and append the per-extension keys to the AstDB write; the dialplan resolver that actually reads them lands in Phase 3B.
 **Auth requirements:**
 - `GET` — `canViewCustomers` (any tenant-staff JWT).
 - `PUT` / `DELETE` — `canManageMoh` (`SUPER_ADMIN` | `ADMIN`); non-super-admin can only target own tenant (mirrors `/voice/moh/profiles`).
-**Risk:** **MEDIUM** while DB-only. Becomes **HIGH** when a future phase wires the resolver to consume these rows.
+**Risk:** **MEDIUM** — CRUD writes do not touch AstDB, but a subsequent `POST /voice/moh/publish` will. Becomes **HIGH** when the Phase 3B resolver starts honouring the keys on live calls.
 
 **Endpoints:**
 
@@ -281,7 +286,9 @@ Breakdown by sub-prefix (count / approximate scope):
 | 404 | `extension_not_found` | No `Extension` row matches `(tenantId, extNumber)`, or the matched row has `status === "DELETED"`. ACTIVE and SUSPENDED both pass. |
 | 400 / 409 | `invalid_moh_runtime_class` / `connect_asset_not_pbx_ready` / `connect_asset_not_in_sync_manifest` / `moh_runtime_class_not_synced` | Same readiness pipeline as `POST /voice/moh/profiles` (`assertMohRuntimeReadiness`). Failure body includes `detail` and `readiness`. |
 
-**Helpers (testable in isolation):** `apps/api/src/mohExtensionOverride.ts` exports `listExtensionOverridesForTenant`, `upsertExtensionOverride`, `deleteExtensionOverrideForTenant`, `assertExtensionExistsForTenant`, `canManageExtensionOverrideFor`, plus the Phase-1 key builders. Test coverage: `apps/api/src/mohExtensionOverride.test.ts` (29 tests including cross-tenant isolation, missing extension, soft-delete behaviour, role gating, and disabled-row leak guard).
+**Helpers (testable in isolation):** `apps/api/src/mohExtensionOverride.ts` exports `listExtensionOverridesForTenant`, `upsertExtensionOverride`, `deleteExtensionOverrideForTenant`, `assertExtensionExistsForTenant`, `canManageExtensionOverrideFor`, the Phase-1 key builders, and the Phase-3A publish helpers `readEnabledExtensionOverridesForTenant`, `buildExtensionOverrideSnapshot`, `buildExtensionOverrideKeys`, `extractExtensionSnapshotFromKeys`, `computeExtensionKeysClearForRollback`. Test coverage: `apps/api/src/mohExtensionOverride.test.ts` (41 tests including cross-tenant isolation, missing extension, soft-delete behaviour, role gating, disabled-row leak guard, key-build/extract round-trip, and rollback tombstone semantics).
+
+**Phase 3A publish wiring:** When `POST /voice/moh/publish` runs `doMohPublish`, it now also calls `readEnabledExtensionOverridesForTenant`, builds the per-extension key list, and appends it to `keysWritten` + the AstDB write payload. The same publish persists `MohPublishRecord.extensionOverridesSnapshot` and surfaces evidence on `nativeSync` (`extensionOverrideCount`, `extensionOverrideExtensions`, `extensionOverrideKeysPublished`). The rollback handler additionally writes empty-string tombstones for keys that the rolled-back publish ADDED relative to its own `previousKeysSnapshot` and reports `extensionOverrideKeysCleared` on `nativeSync` and the response body. **Asterisk does not consume these keys yet** — that arrives in Phase 3B.
 
 ### `POST /voice/moh/publish` — error codes (added 2026-05)
 
@@ -416,7 +423,7 @@ Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYM
 
 **Approx lines:** 21595 – 27438 (inline) + delegated under `apps/api/src/billing/routes.ts` (registered at line ~30198)
 **Purpose:** invoices, payment methods, billing runs, payment events, ledgers, plan management.
-**Auth requirements:** admin/owner JWT; webhook routes use signature verification.
+**Auth requirements:** JWT + portal permission prefix (see `PORTAL_API_PERMISSION_RULES` in `server.ts`: `/billing` → `can_view_billing_overview`, `/admin/billing` → `can_view_admin_billing`). **`apps/api/src/billing/routes.ts`** adds stricter **DB role** checks: tenant billing handlers allow **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`** (`billingAuth.ts`); **`/admin/billing/*` in that file** requires **`SUPER_ADMIN`** only. Webhook routes use signature verification (no JWT).
 **Risk:** **EXTREME** — touches `BillingInvoice`, `PaymentTransaction`, `PaymentEvent`, ledgers. Mis-firing a billing route can charge or refund real money.
 **Key endpoints:** 22 inline + many more in `billing/routes.ts`. Always read `apps/api/src/billing/routes.ts` directly when working in this area.
 

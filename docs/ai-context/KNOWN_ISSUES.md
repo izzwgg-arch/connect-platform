@@ -10,6 +10,14 @@ When you find a new fragile area, add it here.
 
 ---
 
+## Billing
+
+- **Fixed 2026-05-12 — tenant billing 403 with valid portal access.** `registerBillingRoutes` used a **too-narrow** JWT role list (`ADMIN`, `BILLING`, `SUPER_ADMIN` only) for tenant paths while the portal granted billing via permissions. **`TENANT_ADMIN`** / **`BILLING_ADMIN`** received **403** on `/billing/settings`, `/billing/platform/invoices`, etc. Fix: shared allowlist in `apps/api/src/billing/billingAuth.ts` aligned with `canManageBilling()` in `server.ts`.
+- **Fixed 2026-05-12 — Admin Billing UI vs API.** The `/admin/billing` page and nav used **permission-only** gates; the API required **`SUPER_ADMIN`**. Non–super-admins saw UI then **403**. Fix: portal nav (`isNavItemVisibleForUser`) and admin billing page require **`backendJwtRole === "SUPER_ADMIN"`** plus `can_view_admin_billing`.
+- **Dual billing surfaces.** New `BillingInvoice` routes in `billing/routes.ts` plus legacy `/billing/*` handlers in `server.ts` — easy to fix one path and miss the other. See `docs/ai-context/BILLING.md`.
+
+---
+
 ## Telephony
 
 - **Active call counting vs VitalPBX active channels.** Multiple recent runbooks and
@@ -640,6 +648,11 @@ When you find a new fragile area, add it here.
     the import button's `onPress` handler (active gesture context), then passes
     the resolved status to `ImportPhoneContactsModal` via the `initialPermission`
     prop. The modal's `boot()` uses that value instead of re-checking async.
+  - **API create permission (FIXED 2026-05-12).** `POST /contacts` incorrectly
+    required `canManageCustomerWorkflow`, so typical mobile roles (USER, MANAGER,
+    TENANT_ADMIN, …) received `403 forbidden` on every import row while still
+    being able to load `GET /contacts`. Creation now uses `canCreateContacts`
+    (view-capable roles except READ_ONLY). Deploy the API for imports to persist.
 - **SMS chat back navigation — fixed 2026-05-07.** `ChatTab` is a bottom tab
   screen. Android hardware back button went to the previous tab (Team) instead
   of closing the open thread. Fix: `ChatTab` registers a `BackHandler` when

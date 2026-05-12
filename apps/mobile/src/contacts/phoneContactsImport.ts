@@ -97,7 +97,8 @@ export async function checkContactsPermission(): Promise<PermissionState> {
 export async function requestContactsPermission(): Promise<PermissionState> {
   try {
     const res = await Contacts.requestPermissionsAsync();
-    log('permission_requested', { status: res.status, canAskAgain: res.canAskAgain });
+    const priv = (res as { accessPrivileges?: string }).accessPrivileges;
+    log('permission_requested', { status: res.status, canAskAgain: res.canAskAgain, accessPrivileges: priv });
     if (res.status === 'granted') return { status: 'granted' };
     if (res.status === 'denied') {
       return { status: 'denied', canAskAgain: res.canAskAgain ?? false };
@@ -172,17 +173,25 @@ export async function buildImportPreview(authToken: string): Promise<ImportPrevi
   // Pull the device address book. Pagination is unnecessary here — even
   // very large books (~3000) round-trip fast through the bridge because
   // we only request the fields we need.
-  const { data: osContacts } = await Contacts.getContactsAsync({
-    fields: [
-      Contacts.Fields.ID,
-      Contacts.Fields.Name,
-      Contacts.Fields.FirstName,
-      Contacts.Fields.LastName,
-      Contacts.Fields.Company,
-      Contacts.Fields.PhoneNumbers,
-      Contacts.Fields.Emails,
-    ],
-  });
+  let payload: Awaited<ReturnType<typeof Contacts.getContactsAsync>>;
+  try {
+    payload = await Contacts.getContactsAsync({
+      fields: [
+        Contacts.Fields.ID,
+        Contacts.Fields.Name,
+        Contacts.Fields.FirstName,
+        Contacts.Fields.LastName,
+        Contacts.Fields.Company,
+        Contacts.Fields.PhoneNumbers,
+        Contacts.Fields.Emails,
+      ],
+    });
+  } catch (err) {
+    const m = String((err as any)?.message ?? err);
+    log('getContactsAsync_failed', { err: m });
+    throw new Error(`contacts_read_failed:${m}`);
+  }
+  const osContacts = Array.isArray(payload?.data) ? payload.data : [];
   log('os_contacts_loaded', { total: osContacts.length });
 
   // Pull the existing Connect contacts so we can flag duplicates.
@@ -337,8 +346,13 @@ export async function importContacts(
         result.duplicatesMerged++;
       } else {
         result.failures++;
+        let detail = msg;
+        if (msg === 'forbidden' || msg.includes('forbidden')) {
+          detail =
+            'Your account cannot add contacts. Ask a tenant admin to grant contact-management access, or try again as a different role.';
+        }
         if (result.failureMessages.length < 5) {
-          result.failureMessages.push(`${c.displayName}: ${msg}`);
+          result.failureMessages.push(`${c.displayName}: ${detail}`);
         }
         log('import_failed', { name: c.displayName, err: msg });
       }
