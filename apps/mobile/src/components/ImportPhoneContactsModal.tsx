@@ -369,6 +369,53 @@ export function ImportPhoneContactsModal({
                   </Text>
                 </TouchableOpacity>
 
+                {/* Cancel / Import above the list so long previews never push CTAs below the fold (Android). */}
+                <View
+                  style={[
+                    styles.footer,
+                    {
+                      paddingHorizontal: 0,
+                      marginBottom: 10,
+                      ...(Platform.OS === 'android'
+                        ? { elevation: 6, zIndex: 2, backgroundColor: colors.surfaceElevated }
+                        : {}),
+                    },
+                  ]}
+                >
+                  <TouchableOpacity
+                    onPress={onClose}
+                    style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
+                    activeOpacity={0.78}
+                  >
+                    <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityState={{ disabled: selectedIds.size === 0 }}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                    onPress={() => {
+                      const selectedCount = selectedIds.size;
+                      // Do not use `disabled={true}` on this control: RN suppresses onPress when
+                      // disabled, so logcat never showed final_import_button_pressed / runImport_*.
+                      importDiag('final_import_button_pressed', { selectedCount });
+                      void runImport();
+                    }}
+                    style={[
+                      styles.btn,
+                      styles.btnPrimary,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity: selectedIds.size === 0 ? 0.42 : 1,
+                      },
+                    ]}
+                    activeOpacity={0.84}
+                  >
+                    <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
+                    <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
+                      Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
                 <View style={styles.previewScrollRegion}>
                   <FlatList
                     style={styles.previewFlatList}
@@ -388,40 +435,6 @@ export function ImportPhoneContactsModal({
                       </Text>
                     }
                   />
-
-                  <View style={[styles.footer, { paddingHorizontal: 0 }]}>
-                    <TouchableOpacity
-                      onPress={onClose}
-                      style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
-                      activeOpacity={0.78}
-                    >
-                      <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      accessibilityState={{ disabled: selectedIds.size === 0 }}
-                      onPress={() => {
-                        const selectedCount = selectedIds.size;
-                        // Do not use `disabled={true}` on this control: RN suppresses onPress when
-                        // disabled, so logcat never showed final_import_button_pressed / runImport_*.
-                        importDiag('final_import_button_pressed', { selectedCount });
-                        void runImport();
-                      }}
-                      style={[
-                        styles.btn,
-                        styles.btnPrimary,
-                        {
-                          backgroundColor: colors.primary,
-                          opacity: selectedIds.size === 0 ? 0.42 : 1,
-                        },
-                      ]}
-                      activeOpacity={0.84}
-                    >
-                      <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
-                      <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
-                        Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
                 </View>
               </>
             )}
@@ -798,7 +811,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: 8,
   },
-  /** Keeps FlatList height-bounded so Cancel/Import stay visible above the sheet bottom (safe area). */
+  /** Wraps only the preview list; Cancel/Import sit above this region so CTAs stay on-screen. */
   previewScrollRegion: {
     flex: 1,
     minHeight: 0,

@@ -665,6 +665,16 @@ When you find a new fragile area, add it here.
   per-contact `POST /contacts` and treats `409 duplicate_phone` as
   "merged". If a real `/contacts/import` endpoint is added later, swap
   the fallback in `phoneContactsImport.ts::importContacts`.
+  - **Import preview footer unreachable on Android (FIXED 2026-05-12, commit `27d9b8e`).**
+    Symptom: preview listed contacts but the bottom **Cancel / Import(N)** strip was
+    off-screen or taps did not reach `runImport` (flow appeared hung with no server
+    traffic). Fix: bounded flex layout (`minHeight: 0`, `flex: 1` on list + footer
+    region) in `ImportPhoneContactsModal`. **Follow-up:** with hundreds of rows the
+    footer could still sit **below the scroll fold**, so users tapped list rows instead
+    of Import — **Cancel / Import** were moved **above** the `FlatList` so the CTAs
+    stay visible without scrolling. Logcat (`[contacts_import]`): confirm
+    `final_import_button_rendered` → `final_import_button_pressed` → `runImport_entered`
+    before expecting `import_contact_done` / `import_complete`.
   - **Permission request timing fix (2026-05-07).** On Android 12+, calling
     `requestPermissionsAsync()` from inside a React Native `Modal`'s `useEffect`
     can silently fail (gesture window has expired). Fix: `ContactTab` now calls
