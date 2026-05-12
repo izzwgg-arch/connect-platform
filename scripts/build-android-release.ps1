@@ -12,13 +12,16 @@ $repoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $androidDir = Join-Path $repoRoot "apps\mobile\android"
 
 function Find-JavaHome {
-  $candidates = @(
+  # Build candidate list first; piping a single string into Where-Object yields a scalar,
+  # and then $candidates[0] becomes the first *character* — breaks TrimEnd on JAVA_HOME.
+  $candidatePaths = @(
     $env:JAVA_HOME,
     "$env:LOCALAPPDATA\Programs\Android\Android Studio\jbr",
     "${env:ProgramFiles}\Android\Android Studio\jbr",
     "${env:ProgramFiles}\Android\Android Studio\jre"
-  ) | Where-Object { $_ -and (Test-Path (Join-Path $_ "bin\java.exe")) }
-  if ($candidates.Count -gt 0) { return $candidates[0] }
+  )
+  $candidates = @($candidatePaths | Where-Object { $_ -and (Test-Path (Join-Path $_ "bin\java.exe")) })
+  if ($candidates.Count -gt 0) { return [string]$candidates[0] }
   $studio = Join-Path ${env:ProgramFiles} "Android"
   if (Test-Path $studio) {
     Get-ChildItem $studio -Directory -ErrorAction SilentlyContinue | ForEach-Object {
@@ -57,7 +60,7 @@ or run this script from a Developer PowerShell where JAVA_HOME is already set.
   exit 1
 }
 
-$env:JAVA_HOME = $javaHome.TrimEnd('\')
+$env:JAVA_HOME = [string]$javaHome.TrimEnd('\')
 $env:PATH = "$(Join-Path $env:JAVA_HOME 'bin');$env:PATH"
 
 Write-Host "Using JAVA_HOME=$env:JAVA_HOME"
