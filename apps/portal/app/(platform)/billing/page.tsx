@@ -54,14 +54,30 @@ export default function BillingOverviewPage() {
                 <div className="row-actions">
                   <Link className="btn primary" href="/billing/invoices">View Invoices</Link>
                   <Link className="btn ghost" href="/billing/payments">Manage Payment Method</Link>
+                  <PermissionGate permission="can_view_settings_billing" fallback={null}>
+                    <Link className="btn ghost" href="/billing/settings">
+                      Billing Settings
+                    </Link>
+                  </PermissionGate>
                 </div>
+                {nextBill ? <p className="muted" style={{ marginTop: 12, maxWidth: 520 }}>{nextBill}</p> : null}
               </div>
               <div className="billing-hero-metrics">
-                <span><strong>{dollars(settings.data.extensionPriceCents)}</strong><small>Per extension</small></span>
-                <span><strong>{dollars(settings.data.additionalPhoneNumberPriceCents)}</strong><small>Additional number</small></span>
-                <span><strong>{settings.data.autoBillingEnabled ? `Day ${settings.data.billingDayOfMonth}` : "Manual"}</strong><small>Autopay</small></span>
+                <span>
+                  <strong>{settings.data.autoBillingEnabled ? `Day ${settings.data.billingDayOfMonth}` : "Manual"}</strong>
+                  <small>Autopay</small>
+                </span>
+                <span>
+                  <strong>{settings.data.defaultPaymentMethodId ? "On file" : "None"}</strong>
+                  <small>Default card</small>
+                </span>
               </div>
             </section>
+          ) : null}
+          {usage.status === "success" && invoices.status === "success" ? (
+            <p className="muted" style={{ marginTop: -4 }}>
+              {lastPaid ? <>Last payment: {lastPaid}.</> : <>No paid invoices recorded yet.</>}
+            </p>
           ) : null}
           {usage.status === "success" && invoices.status === "success" ? (
             <section className="metric-grid">
@@ -74,21 +90,6 @@ export default function BillingOverviewPage() {
             </section>
           ) : null}
           <section className="billing-setup-grid">
-            <DetailCard title="Billing profile">
-              {settings.status === "success" ? (
-                <div className="kv-grid">
-                  <span>Autopay</span><strong>{settings.data.autoBillingEnabled ? `On (day ${settings.data.billingDayOfMonth})` : "Off (manual)"}</strong>
-                  <span>Billing email</span><strong>{settings.data.billingEmail ? String(settings.data.billingEmail) : "— not set"}</strong>
-                  <span>Default card</span><strong>{settings.data.defaultPaymentMethodId ? "On file" : "None"}</strong>
-                  <span>Extension price</span><strong>{dollars(settings.data.extensionPriceCents)}</strong>
-                  <span>Additional number</span><strong>{dollars(settings.data.additionalPhoneNumberPriceCents)}</strong>
-                  <span>SMS package</span><strong>{dollars(settings.data.smsPriceCents)}</strong>
-                  <span>Taxes</span><strong>{settings.data.taxEnabled ? "Enabled" : "Disabled"}</strong>
-                </div>
-              ) : null}
-              {nextBill ? <p className="muted" style={{ marginTop: 12 }}>{nextBill}</p> : null}
-              {lastPaid ? <p className="muted" style={{ marginTop: 8 }}>Last payment: {lastPaid}</p> : <p className="muted" style={{ marginTop: 8 }}>No paid invoices recorded yet.</p>}
-            </DetailCard>
             <DetailCard title="Latest invoice">
               {latestInvoice ? (
                 <div className="billing-preview-total">

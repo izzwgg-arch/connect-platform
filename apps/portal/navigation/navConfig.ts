@@ -18,6 +18,10 @@ import {
   Grid3X3,
   Headphones,
   History,
+  CheckSquare,
+  FileUp,
+  PhoneCall,
+  ClipboardList,
   LayoutDashboard,
   LayoutGrid,
   Lock,
@@ -39,6 +43,7 @@ import {
   Server,
   Settings2,
   Shield,
+  SlidersHorizontal,
   UserCog,
   Users,
   UsersRound,
@@ -81,12 +86,18 @@ export const navItems: NavItem[] = [
   { id: "pbx.call_reports", href: "/pbx/call-reports", label: "Call Reports", icon: "CP", lucide: BarChart3, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_reports" },
 
   { id: "crm.dashboard", href: "/crm/dashboard", label: "CRM Dashboard", icon: "CD", lucide: LayoutDashboard, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_dashboard" },
+  { id: "crm.contacts", href: "/crm/contacts", label: "Contacts", icon: "CC", lucide: UsersRound, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_contacts" },
+  { id: "crm.tasks", href: "/crm/tasks", label: "Tasks", icon: "CT", lucide: CheckSquare, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_tasks" },
+  { id: "crm.live_call", href: "/crm/live-call", label: "Live Call Workspace", icon: "CL", lucide: PhoneCall, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_live_call" },
+  { id: "crm.scripts", href: "/crm/scripts", label: "Scripts", icon: "CS", lucide: FileText, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_scripts" },
+  { id: "crm.checklists", href: "/crm/checklists", label: "Checklists", icon: "CC", lucide: ClipboardList, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_checklists" },
+  { id: "crm.import", href: "/crm/import", label: "Import Leads", icon: "CI", lucide: FileUp, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_import" },
   { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
 
   { id: "settings.tenant", href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", href: "/settings/email", label: "Email Settings", icon: "EM", lucide: Mail, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_email" },
   { id: "settings.system_health", href: "/calls/health", label: "System Health", icon: "SH", lucide: Activity, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_system_health" },
-  { id: "settings.billing", href: "/settings/billing", label: "Billing Settings", icon: "BS", lucide: CreditCard, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_billing" },
+  { id: "settings.billing", href: "/billing/settings", label: "Billing Settings", icon: "BS", lucide: CreditCard, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_billing" },
   { id: "settings.messaging", href: "/settings/messaging", label: "Messaging Settings", icon: "MS", lucide: Send, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_messaging" },
 
   { id: "admin.console", href: "/admin", label: "Admin Console", icon: "AD", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_console" },
@@ -96,6 +107,7 @@ export const navItems: NavItem[] = [
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
+  { id: "admin.billing_settings", href: "/admin/billing/settings", label: "Admin Billing Settings", icon: "AS", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
   { id: "admin.cdr_tenant_map", href: "/admin/cdr-tenant-map", label: "CDR Tenant Map", icon: "CM", lucide: Map, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_cdr_tenant_map" },
   { id: "admin.ops_center", href: "/admin/ops-center", label: "Ops Center", icon: "OC", lucide: LayoutGrid, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_ops_center" },
   { id: "admin.incidents", href: "/admin/incidents", label: "Incident Center", icon: "IC", lucide: AlertTriangle, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_incidents" },
@@ -105,6 +117,7 @@ export const navItems: NavItem[] = [
   { id: "admin.deploy_center", href: "/admin/deploy-center", label: "Deploy Center", icon: "DC", lucide: Rocket, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_deploy_center" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
+  { id: "billing.settings", href: "/billing/settings", label: "Billing Settings", icon: "BS", lucide: SlidersHorizontal, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_settings_billing" },
   { id: "billing.invoices", href: "/billing/invoices", label: "Invoices", icon: "IN", lucide: FileText, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_invoices" },
   { id: "billing.payments", href: "/billing/payments", label: "Payments", icon: "PM", lucide: Banknote, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_payments" },
   { id: "billing.receipts", href: "/billing/receipts", label: "Receipts", icon: "RC", lucide: FileCheck, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_receipts" },
@@ -136,6 +149,6 @@ export function isNavItemVisibleForUser(
   backendJwtRole: string | undefined,
 ): boolean {
   if (!can(item.sectionPermission) || !can(item.permission)) return false;
-  if (item.id === "admin.billing" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if ((item.id === "admin.billing" || item.id === "admin.billing_settings") && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }
