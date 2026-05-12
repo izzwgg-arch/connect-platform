@@ -20,6 +20,7 @@ import { MobilePushNotifier } from "./services/MobilePushNotifier";
 import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
 import { HealingEngine } from "./services/HealingEngine";
+import { createAriBridgedRedisPublisher } from "./services/ariBridgedRedisPublisher";
 import * as metrics from "../metrics";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
@@ -70,7 +71,22 @@ export function createTelephonyModule(server: http.Server) {
   const telephonyService = new TelephonyService(ami, ari, callStore, extStore, queueStore, {
     pbxTenantMapCache: pbxMapCache,
   });
-  const ariBridgedPoller = new AriBridgedActivePoller(ari, telephonyService.getResolver());
+  const snapshotPbxHost = env.TELEPHONY_ARI_SNAPSHOT_PBX_HOST?.trim() || env.PBX_HOST.trim();
+  const ariBridgedSnapshotPublisher = createAriBridgedRedisPublisher({
+    redisUrl: env.REDIS_URL,
+    pbxHost: snapshotPbxHost,
+  });
+  const ariBridgedPoller = new AriBridgedActivePoller(ari, telephonyService.getResolver(), {
+    pollIntervalMs: env.ARI_BRIDGED_ACTIVE_POLL_MS,
+    afterPoll: async (out) => {
+      await ariBridgedSnapshotPublisher.publishFromPoll({
+        ...out,
+        pollIntervalMs: env.ARI_BRIDGED_ACTIVE_POLL_MS,
+        pbxHost: snapshotPbxHost,
+        ttlSec: env.TELEPHONY_ARI_SNAPSHOT_TTL_SEC,
+      });
+    },
+  });
   ariBridgedPoller.on("update", (result) => {
     if (!ari._isConnected) return;
     callStore.reconcileActiveBridges(result.bridges.map((bridge) => bridge.bridgeId));
@@ -218,6 +234,7 @@ export function createTelephonyModule(server: http.Server) {
     pbxMapCache.stop();
     broadcaster.stop();
     ariBridgedPoller.stop();
+    void ariBridgedSnapshotPublisher.close().catch(() => undefined);
     socketServer.close();
     ami.stop();
     ari.stop();

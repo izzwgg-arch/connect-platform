@@ -26,8 +26,14 @@
 4. **Deduplicate using stable identifiers.** Use `linkedid` / `uniqueid` already used
    in the call store. Don't introduce new identity schemes.
 5. **Never aggressively poll the PBX** if AMI/ARI events already deliver state.
-   Existing intervals (5 s ARI bridged poll, 60 s presence refresh, 60 s voicemail
-   fallback, 5 s call invite expiry) are tuned. Adding more is a regression risk.
+   Baseline intervals (verify in env before changing): **ARI bridged poller**
+   **`ARI_BRIDGED_ACTIVE_POLL_MS`** (default **5000 ms**, minimum **3000 ms** unless
+   **`ARI_BRIDGED_ACTIVE_POLL_DEBUG`** enables **1000 ms** emergency/test mode),
+   AMI presence refresh **3 min**, worker voicemail fallback **60 s**, worker
+   call-invite expiry **5 s**. **`apps/api` must not add steady-state Vital ARI
+   bridged polling** — dashboard live rows read the **telephony Redis snapshot**
+   (`DEBUGGING.md` § PBX CPU profiling, `pbxLiveAriSlice.ts`). Adding parallel pollers
+   is a regression risk.
 6. **Never change VitalPBX behavior blindly.** Dialplan, contexts (e.g.
    `[connect-tenant-router]`, `[connect-tenant-ivr]`, `[connect-fallback-ivr]`), and
    AstDB schemas are owned by `docs/pbx/option-a-custom-context.conf` and the
@@ -89,14 +95,27 @@
 
 ## ARI (Asterisk REST Interface)
 
+### Single source of truth for bridged “active call” lists
+
+- **Steady-state reader:** `apps/telephony/src/telephony/ari/AriBridgedActivePoller.ts`
+  calls **`GET /ari/bridges`**, **`GET /ari/channels`**, and **`GET /ari/endpoints`**
+  on **`ARI_BRIDGED_ACTIVE_POLL_MS`** (default **5 s**; min **3 s** unless debug).
+  It emits `update` so `callStore.reconcileActiveBridges(...)` can evict zombies.
+- **Optional `CALLERID(num)`** fetches add `GET /ari/channels/:id/variable` for new
+  `PJSIP/T{n}_` legs (cached per channel id).
+- **Redis snapshot:** after each successful poll, telephony writes JSON to Redis
+  (`connect:telephony:ariBridged:v1:<pbxHost>`; TTL **`TELEPHONY_ARI_SNAPSHOT_TTL_SEC`**
+  default **15 s**). Requires **`REDIS_URL`** on telephony. Key host defaults to
+  **`PBX_HOST`**; override with **`TELEPHONY_ARI_SNAPSHOT_PBX_HOST`** (must match API).
+- **API consumers:** `apps/api/src/pbxLiveAriSlice.ts` + `/pbx/live/*` prefer that
+  snapshot and only call **`VitalPbxClient.getAriBridgedActiveCalls`** on miss/stale,
+  explicit diagnostics **`?directAri=1`**, or after ARI failure backoff (see logs
+  `pbx_live_ari_direct_fallback`).
+
 - HTTP `ARI_BASE_URL` (default `http://209.145.60.79:8088`).
   Username `ARI_USERNAME`, app `ARI_APP_NAME=connectcomms`.
 - Client: `apps/telephony/src/telephony/ari/AriClient.ts`.
 - Actions wrapper: `AriActions.ts`.
-- **Bridged Active Poller**: `AriBridgedActivePoller.ts` — polls bridges (interval is
-  5 s in `apps/telephony/src/telephony/services/...` — verify) and emits an `update`
-  event used to call `callStore.reconcileActiveBridges(...)`. This evicts zombie calls
-  whose bridge no longer exists.
 - ARI WebSocket events: see `docs/ARI_WEBSOCKET_ENABLE.md` for setup notes.
 
 ---

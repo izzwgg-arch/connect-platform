@@ -92,6 +92,27 @@ export class AriClient extends EventEmitter {
     return this.rest<AriEndpoint[]>("GET", "/ari/endpoints");
   }
 
+  /** Registration counts from `/ari/endpoints` (same semantics as VitalPbxClient.getAriEndpointCounts). */
+  async getEndpointRegistrationCounts(): Promise<{
+    registered: number;
+    unregistered: number;
+    total: number;
+  } | null> {
+    try {
+      const payload = await this.getEndpoints();
+      let registered = 0;
+      let unregistered = 0;
+      for (const ep of payload) {
+        const state = String((ep as { state?: string; status?: string }).state || (ep as { status?: string }).status || "").toLowerCase();
+        if (state === "online" || state === "registered") registered++;
+        else unregistered++;
+      }
+      return { registered, unregistered, total: payload.length };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Fetch a channel variable (e.g. CALLERID(num)) via ARI.
    * Returns the value string, or null if the channel/variable doesn't exist.

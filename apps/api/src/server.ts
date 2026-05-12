@@ -17,6 +17,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import {
   acknowledgeVoicemailIngestIncident,
   classifyHelperFailure,
@@ -174,6 +175,11 @@ app.register(fastifyMultipart, {
 });
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
+const PBX_ARI_SNAPSHOT_HOST = (process.env.TELEPHONY_ARI_SNAPSHOT_PBX_HOST || process.env.PBX_HOST || "209.145.60.79").trim();
+const PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE = Number(process.env.TELEPHONY_ARI_SNAPSHOT_TTL_SEC || 15);
+const PBX_ARI_SNAPSHOT_STALE_MS = Number(
+  process.env.TELEPHONY_ARI_SNAPSHOT_STALE_MS || Math.round(PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE * 1500),
+);
 const smsQueue = new Queue("sms-send", { connection: redis });
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
@@ -28904,7 +28910,11 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
     verifyAdapter = envAdapter;
   }
 
-  const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
+  const validSignature =
+    verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
+    envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
+    verifyAdapter.verifyWebhook(req.headers as any, rawBody) ||
+    envAdapter.verifyWebhook(req.headers as any, rawBody);
   if (!validSignature) {
     return reply.status(403).send({ error: "invalid_signature" });
   }
@@ -29054,7 +29064,7 @@ automationRuleTimer.unref();
 // Active calls require Asterisk ARI; set PBX_ARI_USER + PBX_ARI_PASS.
 //
 // CACHING STRATEGY
-//   live-combined:<tenantId>  TTL 10 s   per-tenant CDR + ARI fetch result
+//   live-combined:<tenantId>  TTL 30 s   per-tenant CDR + ARI fetch result
 //   admin-live-combined       TTL 30 s   all-tenant aggregation
 //   resources:<tenantId>:<r>  TTL 120 s  extension/trunk/queue list proxies
 //
@@ -29241,71 +29251,40 @@ type PbxLiveResult = {
   answeredToday: number;
   missedToday: number;
   activeCalls: number;
-  activeCallsSource: "ari" | "unavailable";
+  activeCallsSource: "ari" | "telephony_redis" | "unavailable";
   activeCallsList: ReturnType<typeof normalizePbxActiveCall>[];
   registeredEndpoints: number | null;
   unregisteredEndpoints: number | null;
+  /** Age of telephony Redis snapshot when `activeCallsSource === "telephony_redis"`. */
+  activeCallsSnapshotAgeMs: number | null;
   tenantId: string;
   lastUpdatedAt: string;
 };
 
 async function fetchAriSliceForPbxLive(
   client: VitalPbxClient,
-  tenantLabel: string
-): Promise<Pick<PbxLiveResult, "activeCallsList" | "activeCallsSource" | "registeredEndpoints" | "unregisteredEndpoints">> {
-  const ariUser = process.env.PBX_ARI_USER || "";
-  const ariPass = process.env.PBX_ARI_PASS || "";
-  let activeCallsList: ReturnType<typeof normalizePbxActiveCall>[] = [];
-  let activeCallsSource: "ari" | "unavailable" = "unavailable";
-  let registeredEndpoints: number | null = null;
-  let unregisteredEndpoints: number | null = null;
-  if (ariUser && ariPass) {
-    const [bridged, endpointCounts] = await Promise.all([
-      client.getAriBridgedActiveCalls(ariUser, ariPass).catch(() => null),
-      client.getAriEndpointCounts(ariUser, ariPass).catch(() => null)
-    ]);
-    if (bridged) {
-      activeCallsSource = "ari";
-      activeCallsList = bridged.bridges.map((b) =>
-        normalizePbxActiveCall(
-          {
-            id: b.sourceKind === "bridge" ? `bridge:${b.bridgeId}` : b.bridgeId,
-            state: "Up",
-            caller: { number: b.caller },
-            connected: { number: b.callee },
-            dialplan: {
-              context: b.dialplanContext ?? "",
-              exten: b.dialplanExten ?? ""
-            },
-            bridgeId: b.bridgeId,
-            bridgeChannelCount: b.channelCount
-          },
-          tenantLabel
-        )
-      );
-      if (
-        bridged.debug.totalBridges > 0 &&
-        bridged.debug.qualifyingBridges === 0 &&
-        bridged.debug.orphanLegCalls === 0
-      ) {
-        app.log.warn(
-          {
-            tenantLabel,
-            activeCalls: bridged.activeCalls,
-            verification: bridged.verification
-          },
-          "pbx_live:ari_bridged_active_all_bridges_excluded"
-        );
-      } else if (process.env.PBX_ARI_BRIDGED_VERIFY_LOG?.toLowerCase() === "true") {
-        app.log.info({ tenantLabel, verification: bridged.verification }, "pbx_live:ari_bridged_active_verify");
-      }
-    }
-    if (endpointCounts) {
-      registeredEndpoints = endpointCounts.registered;
-      unregisteredEndpoints = endpointCounts.unregistered;
-    }
-  }
-  return { activeCallsList, activeCallsSource, registeredEndpoints, unregisteredEndpoints };
+  tenantLabel: string,
+  opts?: { forceDirectAri?: boolean },
+): Promise<
+  Pick<
+    PbxLiveResult,
+    | "activeCallsList"
+    | "activeCallsSource"
+    | "registeredEndpoints"
+    | "unregisteredEndpoints"
+    | "activeCallsSnapshotAgeMs"
+  >
+> {
+  return fetchAriSliceForPbxLiveFromRedisOrAri({
+    client,
+    tenantLabel,
+    redis,
+    snapshotPbxHost: PBX_ARI_SNAPSHOT_HOST,
+    snapshotStaleMs: PBX_ARI_SNAPSHOT_STALE_MS,
+    forceDirectAri: opts?.forceDirectAri ?? false,
+    normalizeRow: normalizePbxActiveCall,
+    log: app.log,
+  });
 }
 
 function withPbxLiveTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -29339,7 +29318,8 @@ async function fetchPbxLiveSummaryForLink(
     activeCallsList,
     activeCallsSource,
     registeredEndpoints,
-    unregisteredEndpoints
+    unregisteredEndpoints,
+    activeCallsSnapshotAgeMs,
   } = await fetchAriSliceForPbxLive(client, tenantId);
 
   return {
@@ -29354,6 +29334,7 @@ async function fetchPbxLiveSummaryForLink(
     activeCallsList,
     registeredEndpoints,
     unregisteredEndpoints,
+    activeCallsSnapshotAgeMs,
     tenantId,
     lastUpdatedAt: new Date().toISOString()
   };
@@ -29645,14 +29626,19 @@ app.get("/pbx/live/diagnostics", async (req, reply) => {
       token: auth.token,
       secret: auth.secret
     });
-    const ari = await fetchAriSliceForPbxLive(client, user.tenantId);
-    const ariOk = ari.activeCallsSource === "ari";
+    const forceDirectAri =
+      String((req.query as { directAri?: string })?.directAri) === "1" ||
+      String(process.env.PBX_LIVE_DIAGNOSTICS_DIRECT_ARI || "").toLowerCase() === "true";
+    const ari = await fetchAriSliceForPbxLive(client, user.tenantId, { forceDirectAri });
+    const ariOk = ari.activeCallsSource === "ari" || ari.activeCallsSource === "telephony_redis";
     return reply.send({
       step: "ok",
       ok: true,
       message: ariOk
-        ? "ConnectCdr today KPIs + ARI reachable (no VitalPBX REST CDR used)."
-        : "ConnectCdr today KPIs loaded; ARI not configured or unreachable.",
+        ? forceDirectAri && ari.activeCallsSource === "ari"
+          ? "ConnectCdr today KPIs + direct ARI probe (directAri=1)."
+          : "ConnectCdr today KPIs + live bridge data (telephony snapshot or ARI)."
+        : "ConnectCdr today KPIs loaded; live bridge data not available.",
       baseUrlHost,
       pbxTenantId: link.pbxTenantId ?? null,
       timezone: process.env.PBX_TIMEZONE?.trim() || "UTC",
@@ -29699,8 +29685,8 @@ app.get("/pbx/live/combined", async (req, reply) => {
       const r = await getPbxLiveCombined(syntheticLink, `vpbx:${pbxTenantOverride}`);
       const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:vpbx:${pbxTenantOverride}`, undefined, { fromCache: false });
       return {
-        summary: { tenantId: pbxTenantOverride, callsToday: r.callsToday, incomingToday: r.incomingToday, outgoingToday: r.outgoingToday, internalToday: r.internalToday, answeredToday: r.answeredToday, missedToday: r.missedToday, activeCalls: r.activeCalls, activeCallsSource: r.activeCallsSource, registeredEndpoints: r.registeredEndpoints, unregisteredEndpoints: r.unregisteredEndpoints, lastUpdatedAt: r.lastUpdatedAt },
-        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, lastUpdatedAt: r.lastUpdatedAt },
+        summary: { tenantId: pbxTenantOverride, callsToday: r.callsToday, incomingToday: r.incomingToday, outgoingToday: r.outgoingToday, internalToday: r.internalToday, answeredToday: r.answeredToday, missedToday: r.missedToday, activeCalls: r.activeCalls, activeCallsSource: r.activeCallsSource, registeredEndpoints: r.registeredEndpoints, unregisteredEndpoints: r.unregisteredEndpoints, activeCallsSnapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null, lastUpdatedAt: r.lastUpdatedAt },
+        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null, lastUpdatedAt: r.lastUpdatedAt },
         cached: meta.cached,
         lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
         stale: meta.stale,
@@ -29734,11 +29720,13 @@ app.get("/pbx/live/combined", async (req, reply) => {
         activeCallsSource: r.activeCallsSource,
         registeredEndpoints: r.registeredEndpoints,
         unregisteredEndpoints: r.unregisteredEndpoints,
+        activeCallsSnapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
         lastUpdatedAt: r.lastUpdatedAt
       },
       activeCalls: {
         calls: r.activeCallsList,
         source: r.activeCallsSource,
+        snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
         lastUpdatedAt: r.lastUpdatedAt
       },
       cached: meta.cached,
@@ -29778,6 +29766,7 @@ app.get("/pbx/live/summary", async (req, reply) => {
       missedToday: r.missedToday,
       activeCalls: r.activeCalls,
       activeCallsSource: r.activeCallsSource,
+      activeCallsSnapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
       lastUpdatedAt: r.lastUpdatedAt,
       cached: meta.cached,
       lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
@@ -29810,6 +29799,7 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
     return {
       calls: r.activeCallsList,
       source: r.activeCallsSource,
+      snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
       lastUpdatedAt: r.lastUpdatedAt,
       cached: meta.cached,
       lastUpdated: meta.lastUpdated || r.lastUpdatedAt,

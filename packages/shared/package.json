@@ -24,12 +24,16 @@
     "./mohRuntimeClass": {
       "types": "./src/mohRuntimeClass.ts",
       "default": "./src/mohRuntimeClass.ts"
+    },
+    "./ariBridgedSnapshot": {
+      "types": "./src/ariBridgedSnapshot.ts",
+      "default": "./src/ariBridgedSnapshot.ts"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts",
+    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts",
     "lint": "echo lint-shared"
   },
   "dependencies": {

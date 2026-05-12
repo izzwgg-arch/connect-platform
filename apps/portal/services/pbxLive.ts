@@ -13,8 +13,10 @@ export type PbxLiveSummary = {
   answeredToday: number;
   missedToday: number;
   activeCalls: number;
-  /** "ari" when real-time channel data was available; "unavailable" when ARI not configured */
-  activeCallsSource: "ari" | "unavailable";
+  /** "ari" direct Vital ARI; "telephony_redis" snapshot from telephony; "unavailable" when neither */
+  activeCallsSource: "ari" | "telephony_redis" | "unavailable";
+  /** Age of telephony snapshot when source is telephony_redis */
+  activeCallsSnapshotAgeMs?: number | null;
   /** Registered P/SIP endpoint count from ARI /ari/endpoints; null when ARI not configured */
   registeredEndpoints: number | null;
   /** Unregistered P/SIP endpoint count; null when ARI not configured */
@@ -40,7 +42,8 @@ export type PbxActiveCall = {
 
 export type PbxActiveCallsResponse = {
   calls: PbxActiveCall[];
-  source: "ari" | "unavailable";
+  source: "ari" | "telephony_redis" | "unavailable";
+  snapshotAgeMs?: number | null;
   lastUpdatedAt: string;
 };
 

@@ -8,10 +8,9 @@ import type { TenantResolver } from "../state/TenantResolver";
 import { normalizeExtensionFromChannel } from "../normalizers/normalizeExtension";
 import { env } from "../../config/env";
 import { childLogger } from "../../logging/logger";
+import type { AfterAriBridgedPoll } from "../services/ariBridgedPollerTypes";
 
 const log = childLogger("AriBridgedActivePoller");
-
-const POLL_MS = 1000;
 
 function bridgeRowsToNormalizedCalls(
   rows: BridgedActiveCallRow[],
@@ -145,7 +144,7 @@ export declare interface AriBridgedActivePoller {
   on(event: "update", listener: (payload: BridgedActiveResult) => void): this;
 }
 
-/** Polls ARI bridges+channels at 1 Hz (no per-AMI-event fanout). */
+/** Polls ARI bridges+channels on `pollIntervalMs` (from env; use `CONNECT_PBX_PROFILE` for profiling). */
 export class AriBridgedActivePoller extends EventEmitter {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
@@ -161,7 +160,8 @@ export class AriBridgedActivePoller extends EventEmitter {
 
   constructor(
     private readonly ari: AriClient,
-    private readonly tenantResolver?: TenantResolver,
+    private readonly tenantResolver: TenantResolver | undefined,
+    private readonly opts: { pollIntervalMs: number; afterPoll?: AfterAriBridgedPoll },
   ) {
     super();
   }
@@ -169,7 +169,7 @@ export class AriBridgedActivePoller extends EventEmitter {
   start(): void {
     if (this.timer) return;
     void this.tick();
-    this.timer = setInterval(() => void this.tick(), POLL_MS);
+    this.timer = setInterval(() => void this.tick(), this.opts.pollIntervalMs);
     if (this.timer.unref) this.timer.unref();
   }
 
@@ -226,6 +226,8 @@ export class AriBridgedActivePoller extends EventEmitter {
     }
 
     try {
+      const profile = env.CONNECT_PBX_PROFILE;
+      const tAri0 = profile ? Date.now() : 0;
       const [bridges, channels] = await Promise.all([
         this.ari.getBridges(),
         this.ari.getChannels(),
@@ -272,6 +274,34 @@ export class AriBridgedActivePoller extends EventEmitter {
       }
       if (varFetches.length > 0) await Promise.all(varFetches);
 
+      let registeredEndpoints: number | null = null;
+      let unregisteredEndpoints: number | null = null;
+      let totalEndpoints: number | null = null;
+      const epCounts = await this.ari.getEndpointRegistrationCounts();
+      if (epCounts) {
+        registeredEndpoints = epCounts.registered;
+        unregisteredEndpoints = epCounts.unregistered;
+        totalEndpoints = epCounts.total;
+      }
+
+      if (profile) {
+        log.info(
+          {
+            event: "pbx_outbound_profile",
+            caller: "AriBridgedActivePoller.tick",
+            service: "telephony",
+            pollIntervalMs: this.opts.pollIntervalMs,
+            ariListMs: Date.now() - tAri0,
+            rawBridges: bridges.length,
+            rawChannels: channels.length,
+            qualifyingBridges: result.debug.qualifyingBridges,
+            channelVarFetches: varFetches.length,
+            ariPaths: ["/ari/bridges", "/ari/channels", "/ari/endpoints"],
+          },
+          "PBX outbound ARI (bridged active poll)",
+        );
+      }
+
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ verification: result.verification }, "ari_bridged_active_verify_poll");
       }
@@ -282,6 +312,17 @@ export class AriBridgedActivePoller extends EventEmitter {
         result.debug.orphanLegCalls === 0
       ) {
         log.warn({ verification: result.verification }, "ari_bridged_active_all_bridges_excluded");
+      }
+
+      if (this.opts.afterPoll) {
+        await this.opts.afterPoll({
+          result,
+          registeredEndpoints,
+          unregisteredEndpoints,
+          totalEndpoints,
+          rawBridgeCount: bridges.length,
+          rawChannelCount: channels.length,
+        });
       }
 
       this.emit("update", result);

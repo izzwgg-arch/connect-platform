@@ -203,15 +203,15 @@ test("normalizePbxActiveCall: defaults direction to internal", () => {
 });
 
 // ─── 5. Cache TTL constants ─────────────────────────────────────────────────────
-test("Cache TTL: combined ≤ 15s (active-calls freshness)", () => {
-  const PBX_LIVE_TTL_COMBINED = 10_000;
-  assert.ok(PBX_LIVE_TTL_COMBINED <= 15_000);
+test("Cache TTL: combined ≤ 60s (active-calls freshness)", () => {
+  const PBX_LIVE_TTL_COMBINED = 30_000;
+  assert.ok(PBX_LIVE_TTL_COMBINED <= 60_000);
 });
 
 test("Cache TTL: admin aggregation TTL exceeds per-tenant TTL", () => {
-  const PBX_LIVE_TTL_COMBINED = 10_000;
+  const PBX_LIVE_TTL_COMBINED = 30_000;
   const PBX_LIVE_TTL_ADMIN = 30_000;
-  assert.ok(PBX_LIVE_TTL_ADMIN > PBX_LIVE_TTL_COMBINED);
+  assert.ok(PBX_LIVE_TTL_ADMIN >= PBX_LIVE_TTL_COMBINED);
 });
 
 test("Cache TTL: resource list TTL ≥ 60s (extensions/trunks/queues)", () => {

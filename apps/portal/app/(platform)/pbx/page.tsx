@@ -22,7 +22,7 @@ import {
 export default function PbxOverviewPage() {
   const { adminScope } = useAppContext();
 
-  // Single combined tick — one HTTP call per interval, server-cached 10 s.
+  // Single combined tick — one HTTP call per interval; API caches combined payload ~30 s (see server PBX_LIVE_*).
   const [combinedTick, setCombinedTick] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => setCombinedTick((v) => v + 1), 60_000);
@@ -42,12 +42,12 @@ export default function PbxOverviewPage() {
     ? Math.round((summary.answeredToday / summary.callsToday) * 100)
     : null;
 
-  const hasAri = summary?.activeCallsSource === "ari";
+  const hasAri = summary?.activeCallsSource === "ari" || summary?.activeCallsSource === "telephony_redis";
   const regCount = summary?.registeredEndpoints;
   const unregCount = summary?.unregisteredEndpoints;
 
   const kpiTiles = [
-    { label: "Active Calls",   value: summary?.activeCalls !== undefined ? String(summary.activeCalls) : "--",    meta: hasAri ? "Live via ARI" : "ARI not configured" },
+    { label: "Active Calls",   value: summary?.activeCalls !== undefined ? String(summary.activeCalls) : "--",    meta: hasAri ? "Live from telephony" : "Live data unavailable" },
     { label: "Calls Today",    value: summary?.callsToday !== undefined ? String(summary.callsToday) : "--",       meta: "Completed calls (CDR)" },
     { label: "Incoming",       value: summary?.incomingToday !== undefined ? String(summary.incomingToday) : "--", meta: "Inbound today" },
     { label: "Outgoing",       value: summary?.outgoingToday !== undefined ? String(summary.outgoingToday) : "--", meta: "Outbound today" },
@@ -114,7 +114,12 @@ export default function PbxOverviewPage() {
           )}
           <div className="row-wrap" style={{ marginTop: "0.5rem" }}>
             <span className="chip neutral">
-              Source: {activeCalls?.source === "ari" ? "ARI (live)" : "Unavailable"}
+              Source:{" "}
+              {activeCalls?.source === "telephony_redis"
+                ? "Telephony snapshot (Redis)"
+                : activeCalls?.source === "ari"
+                  ? "ARI (live)"
+                  : "Unavailable"}
             </span>
             <span className="chip neutral">
               Last updated: {activeCalls?.lastUpdatedAt ? new Date(activeCalls.lastUpdatedAt).toLocaleTimeString() : "--"}
