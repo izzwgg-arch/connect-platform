@@ -248,7 +248,7 @@
 - **Modified by:** `apps/api` `/voice/moh/*`, `apps/worker`
   `runMohScheduleCycle()`.
 
-## MohExtensionOverride / MohAssignmentJob (Phase 1, 2026-05-11 — schema only; Phase 2, 2026-05-11 — API routes live, DB-only)
+## MohExtensionOverride / MohAssignmentJob (Phase 1, 2026-05-11 — schema only; Phase 2, 2026-05-11 — API routes live, DB-only; Phase 3A, 2026-05-11 — publish wiring + rollback)
 - **Schema:** `MohExtensionOverride` and `MohAssignmentJob` in
   `packages/db/prisma/schema.prisma`; migration
   `packages/db/prisma/migrations/20260521090000_moh_extension_override_phase1/`.
@@ -269,15 +269,28 @@
   parsed from `CHANNEL(name)` (`PJSIP/T<id>_<extension>-…`). NOT an FK to
   `Extension`; cross-validation is the API write layer's responsibility
   (Phase 2). Helpers: `apps/api/src/mohExtensionOverride.ts`.
-- **`MohPublishRecord.extensionOverridesSnapshot`:** new nullable JSON
-  column, default `'[]'`. Populated in a later phase when the publish
-  helper writes per-extension keys; legacy rows read as empty array.
-- **High-risk?** Currently **no** (no runtime path). Becomes high-risk in
-  later phases when AstDB writes go live.
+- **`MohPublishRecord.extensionOverridesSnapshot`:** nullable JSON column,
+  default `'[]'`. **Populated as of Phase 3A (2026-05-11)** by `doMohPublish`
+  (sorted ASC by extension; only enabled rows with non-empty class) and by
+  the rollback handler (reconstructed from `previousKeysSnapshot` via
+  `extractExtensionSnapshotFromKeys`). Legacy rows still read as empty array.
+- **High-risk?** **Low at call-time** — Asterisk does not yet read the
+  per-extension keys. The dialplan resolver lands in Phase 3B; until then
+  the keys are persisted but functionally inert on live calls.
 - **Modified by (Phase 2, 2026-05-11):** `apps/api` `/voice/moh/extension-overrides`
   (`GET` / `PUT` / `DELETE`) — see `API_ROUTES.md`. Routes are **DB-only**:
-  no AstDB write, no telephony call, no `publishMohToAstDb` change. Future:
-  bulk-job worker (Phase 4) consumes `MohAssignmentJob`.
+  no AstDB write, no telephony call, no `publishMohToAstDb` change.
+- **Modified by (Phase 3A, 2026-05-11):** `apps/api` `POST /voice/moh/publish`
+  (`doMohPublish`) appends `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}`
+  keys for every enabled override to the AstDB write, persists the snapshot on
+  the new `MohPublishRecord`, and exposes evidence (`extensionOverrideCount`,
+  `extensionOverrideExtensions`, `extensionOverrideKeysPublished`) on
+  `nativeSync`. The rollback handler (`POST /voice/moh/publish/:id/rollback`)
+  writes empty-string tombstones for keys the target publish ADDED relative to
+  its `previousKeysSnapshot`, surfaces `extensionOverrideKeysCleared` on
+  `nativeSync`, and replays the prior snapshot verbatim. Future: bulk-job
+  worker (Phase 4) consumes `MohAssignmentJob`; dialplan resolver (Phase 3B)
+  is the first consumer of these AstDB keys.
 
 ## DidRouteMapping / DidRouteSwitchLog
 - **Schema:** lines 2465 / 2520
@@ -299,13 +312,21 @@
 - **Modified by:** `apps/api` `/outbound-routes` and
   `/admin/users/:id/outbound-routes`.
 
+## TenantBillingSettings (invoice presentation)
+
+- **Schema:** `TenantBillingSettings` in `packages/db/prisma/schema.prisma` — core pricing/autopay plus optional **`invoiceCompanyName`**, **`invoiceLogoUrl`** (https, used in HTML emails only), **`invoiceSupportEmail`**, **`invoiceSupportPhone`**, **`invoiceFooterNote`**, **`invoicePaymentInstructions`** (migration `20260512120000_tenant_invoice_branding`).
+- **Purpose:** Resolved in **`invoiceBranding.ts`** for **`renderBillingInvoicePdf`** (`pdf.ts`) and billing emails (`emailTemplates.ts`, `billingEmailLifecycle.ts`). **`paymentTermsDays`** remains the due offset / “Net N days” source.
+- **`metadata` JSON:** optional. **`taxProviderId`** (`tax_profile_v1` \| `external_telecom_stub`) selects the tax engine for invoice preview/create (`taxProvider.ts`). Other keys may be added later; **`PUT /admin/billing/tenants/:id/settings`** merges **`taxProviderId`** without wiping unrelated metadata.
+
 ## BillingInvoice / BillingInvoiceLineItem / BillingRun / BillingEventLog
 - **Schema:** lines 683 / 721 / 790 / 809
 - **Purpose:** Connect-owned invoicing pipeline (driven by `apps/worker`
-  `monthlyBilling` cycle and admin actions).
+  `runMonthlyBillingAutomation` + `runBillingDunningRetries`, and admin/API actions).
+- **`BillingInvoice.metadata`:** optional JSON. **`dunning`** holds `{ attempts, maxAttempts, nextRetryAt }` for autopay retry backoff (see `billingDunning.ts`). **`taxCalculationAudit`** (set at invoice creation in `invoiceEngine.ts`) stores the tax provider snapshot: provider id/version, inputs, line summaries, notes — see `taxProvider.ts`. Dunning merges preserve existing keys (root object spread).
+- **`BillingEventLog.type` (examples):** `invoice_created`, `invoice_emailed`, `payment_link_emailed`, `autopay_attempted`, `payment_succeeded`, `payment_failed`, `dunning_scheduled`, `dunning_exhausted`, `receipt_emailed` / `payment_failed_emailed` (also used as dedupe markers with `message` = `PaymentTransaction.id`).
 - **Tenant-scoped?** Yes.
 - **High-risk?** **Extreme** — money.
-- **Modified by:** `apps/worker` (billing run), `apps/api/src/billing/*`.
+- **Modified by:** `apps/worker` (billing run + dunning sweep), `apps/api/src/billing/*`.
 
 ## Subscription
 - **Schema:** line 549
@@ -315,7 +336,7 @@
   `paymentMethodExpMonth/Year`.
 - **Tenant-scoped?** Yes (1-1 with tenant).
 - **High-risk?** **Extreme**.
-- **Modified by:** `apps/api/src/billing/*`, `apps/worker` dunning cycle.
+- **Modified by:** `apps/api/src/billing/*` (subscription UI); legacy worker references only where still wired.
 
 ## PaymentTransaction
 - **Schema:** line 765
@@ -324,6 +345,12 @@
   `responseMessage`, `rawResponseSafeJson`, `idempotencyKey` (unique).
 - **High-risk?** **Extreme**.
 - **Modified by:** `apps/api/src/billing/*`.
+
+## EmailJob (billing subset)
+- **Schema:** line 1368
+- **Purpose:** Outbound email queue; processor in **`apps/api/src/server.ts`** (`processEmailJobsBatch`).
+- **Billing rows:** `tenantId` + optional **`invoiceId`** (BillingInvoice) + **`type`** (`BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY`, `BILLING_PAYMENT_LINK`, `BILLING_RECEIPT`, `BILLING_PAYMENT_FAILED`, …). Payload shape: **`buildBillingEmailJobCreateData`** in `billingAuth.ts`.
+- **High-risk?** High — duplicate sends hurt trust; rely on **`BillingEventLog`** dedupe rows + idempotent queue helpers in **`billingEmailLifecycle.ts`**.
 
 ## ConnectChatThread / ConnectChatParticipant / ConnectChatMessage / ConnectChatMessageAttachment / ConnectChatMessageReaction
 - **Schema:** lines 2696 / 2724 / 2745 / 2776 / 2802

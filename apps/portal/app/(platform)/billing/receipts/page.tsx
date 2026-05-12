@@ -19,7 +19,7 @@ export default function BillingReceiptsPage() {
   const paidInvoices = invoices.status === "success" ? invoices.data.filter((invoice) => invoice.status === "PAID" || invoice.transactions?.some((tx: any) => tx.status === "APPROVED")) : [];
 
   return (
-    <PermissionGate permission="can_view_reports" fallback={<div className="state-box">You do not have receipt access.</div>}>
+    <PermissionGate permission="can_view_billing_receipts" fallback={<div className="state-box">You do not have receipt access.</div>}>
       <div className="stack compact-stack billing-admin-shell">
         <PageHeader title="Receipts" subtitle="Paid invoices, payment receipts, and receipt email status." />
         {invoices.status === "loading" ? <LoadingSkeleton rows={5} /> : null}

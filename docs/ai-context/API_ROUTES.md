@@ -425,7 +425,11 @@ Operator copy/paste (PBX install pin, secret rotation, deploy queue): **`DEPLOYM
 **Purpose:** invoices, payment methods, billing runs, payment events, ledgers, plan management.
 **Auth requirements:** JWT + portal permission prefix (see `PORTAL_API_PERMISSION_RULES` in `server.ts`: `/billing` → `can_view_billing_overview`, `/admin/billing` → `can_view_admin_billing`). **`apps/api/src/billing/routes.ts`** adds stricter **DB role** checks: tenant billing handlers allow **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`** (`billingAuth.ts`); **`/admin/billing/*` in that file** requires **`SUPER_ADMIN`** only. Webhook routes use signature verification (no JWT).
 **Risk:** **EXTREME** — touches `BillingInvoice`, `PaymentTransaction`, `PaymentEvent`, ledgers. Mis-firing a billing route can charge or refund real money.
-**Key endpoints:** 22 inline + many more in `billing/routes.ts`. Always read `apps/api/src/billing/routes.ts` directly when working in this area.
+**Key endpoints:** 22 inline + many more in `billing/routes.ts`. Tenant **`POST /billing/platform/invoices/:id/email-payment-link`** queues **`BILLING_PAYMENT_LINK`**; tenant **`POST /billing/platform/invoices/:id/email-invoice`** queues **`BILLING_INVOICE_READY`** (same template family as admin resend). Tenant **`PUT /billing/settings/branding`** updates invoice/email presentation (`invoiceCompanyName`, https-only `invoiceLogoUrl`, support contacts, footer, payment instructions). Admin **`PUT /admin/billing/tenants/:tenantId/settings`** accepts the same optional presentation keys merged with pricing. Admin **`GET /admin/billing/overview`** includes **`recentFailures`**. Admin **`GET /admin/billing/runs/recent?limit=5`** lists latest **`BillingRun`** rows (declare before **`GET /admin/billing/runs/:id`**). Admin **`GET /admin/billing/invoices/:id/events`** returns **`BillingEventLog`** rows (read-only). Always read `apps/api/src/billing/routes.ts` directly when working in this area.
+
+### SOLA / Cardknox (`POST /webhooks/sola-cardknox`)
+
+Form/key-value webhook (also accepts JSON-shaped bodies when parsed). Platform **`BillingInvoice`** updates go through **`applySolaWebhookToBillingInvoice`** (`solaBillingPayments.ts`) with **`ck-signature` first**, then Sola HMAC where configured. **`400`** `missing_event_id` when correlation id is missing; **`403`** `invalid_signature` on verification failure. Correlation: **`CONNECT:…` `xInvoice`** (see `BILLING.md`). Full behavior: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox.
 
 ---
 

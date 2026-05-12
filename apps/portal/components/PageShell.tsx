@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSidebarRail } from "../hooks/useSidebarRail";
-import { navItems } from "../navigation/navConfig";
+import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { SidebarNav } from "./SidebarNav";
 import { Topbar } from "./Topbar";
 
@@ -21,13 +21,13 @@ function titleFromPath(pathname: string): string {
 
 export function PageShell({ children, banners }: { children: ReactNode; banners?: ReactNode }) {
   const pathname = usePathname();
-  const { can } = useAppContext();
+  const { can, backendJwtRole } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail } = useSidebarRail();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const visibleItems = useMemo(
-    () => navItems.filter((item) => can(item.sectionPermission) && can(item.permission)),
-    [can],
+    () => navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole)),
+    [can, backendJwtRole],
   );
   const activeNavItem = useMemo(
     () => [...navItems]
@@ -35,7 +35,8 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
       .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`)),
     [pathname],
   );
-  const routeAllowed = !activeNavItem || (can(activeNavItem.sectionPermission) && can(activeNavItem.permission));
+  const routeAllowed =
+    !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
 
   useEffect(() => {
     if (!isMobile) setMobileNavOpen(false);

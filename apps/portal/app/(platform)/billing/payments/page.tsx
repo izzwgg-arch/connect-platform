@@ -59,7 +59,7 @@ export default function BillingPaymentsPage() {
   }, [solaPublicConfig]);
 
   return (
-    <PermissionGate permission="can_view_reports" fallback={<div className="state-box">You do not have payment access.</div>}>
+    <PermissionGate permission="can_view_billing_payments" fallback={<div className="state-box">You do not have payment access.</div>}>
       <div className="stack compact-stack billing-admin-shell">
         <PageHeader title="Payment Methods" subtitle="Saved SOLA tokenized cards. Raw card numbers are never stored in ConnectComms." />
         <section className="billing-tenant-hero">

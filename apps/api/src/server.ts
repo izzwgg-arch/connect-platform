@@ -95,6 +95,8 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerBillingRoutes } from "./billing/routes";
+import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
+import { getBillingSolaAdapter } from "./billing/solaGateway";
 import {
   assertExtensionExistsForTenant as assertExtensionExistsForTenantHelper,
   buildExtensionOverrideKeys,
@@ -28777,59 +28779,24 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
 
   const payload = (event.payload || {}) as Record<string, any>;
   const platformInvoiceRef = String(payload.xInvoice || payload.invoice || payload.Invoice || "").trim();
-  const platformRefNum = String(payload.xRefNum || payload.xRefnum || event.eventId || "").trim();
-  const platformInvoice = platformInvoiceRef
-    ? await (db as any).billingInvoice.findFirst({ where: { OR: [{ invoiceNumber: platformInvoiceRef }, { id: platformInvoiceRef }] }, include: { paymentMethod: true } })
-    : null;
+  const platformInvoice = platformInvoiceRef ? await resolvePlatformBillingInvoiceForWebhookRef(platformInvoiceRef) : null;
   if (platformInvoice) {
-    let verifyAdapter = envAdapter;
-    try {
-      const tenantSola = await getTenantSolaConfig(platformInvoice.tenantId, { requireEnabled: false, allowFallbackEnv: true });
-      verifyAdapter = getSolaAdapter(tenantSola.adapterConfig);
-    } catch {
-      verifyAdapter = envAdapter;
-    }
-    const validSignature =
-      verifyAdapter.verifyWebhook(req.headers as any, rawBody) ||
-      verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
-      envAdapter.verifyWebhook(req.headers as any, rawBody) ||
-      envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
-    if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
-
-    const existingTx = platformRefNum
-      ? await (db as any).paymentTransaction.findFirst({ where: { processor: "SOLA", processorTransactionId: platformRefNum } })
-      : null;
-    if (existingTx) return { ok: true, deduped: true, invoiceId: platformInvoice.id };
-
-    const approved = event.status === "SUCCEEDED";
-    const tx = await (db as any).paymentTransaction.create({
-      data: {
-        tenantId: platformInvoice.tenantId,
-        invoiceId: platformInvoice.id,
-        paymentMethodId: platformInvoice.paymentMethodId || null,
-        amountCents: event.amountCents || platformInvoice.balanceDueCents || platformInvoice.totalCents,
-        currency: event.currency || platformInvoice.currency || "USD",
-        status: approved ? "APPROVED" : event.status === "FAILED" ? "DECLINED" : "PENDING",
-        processor: "SOLA",
-        processorTransactionId: platformRefNum || null,
-        responseCode: payload.xResult ? String(payload.xResult) : null,
-        responseMessage: payload.xError || payload.xStatus ? String(payload.xError || payload.xStatus) : null,
-        rawResponseSafeJson: payload as any,
-        idempotencyKey: platformRefNum ? `webhook:${platformRefNum}` : undefined,
-      },
+    const result = await applySolaWebhookToBillingInvoice({
+      platformInvoice,
+      event,
+      payload,
+      rawBody,
+      headers: req.headers as any,
+      envAdapter,
+      getBillingSolaAdapterForTenant: getBillingSolaAdapter,
     });
-    if (approved) {
-      await (db as any).billingInvoice.update({
-        where: { id: platformInvoice.id },
-        data: { status: "PAID", amountPaidCents: platformInvoice.totalCents, balanceDueCents: 0, paidAt: new Date(), failedAt: null },
-      });
-      await (db as any).billingEventLog.create({ data: { tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id, type: "webhook.payment_approved", metadata: { transactionId: tx.id, providerEventId: event.eventId } } });
-    } else if (event.status === "FAILED") {
-      await (db as any).billingInvoice.update({ where: { id: platformInvoice.id }, data: { status: "FAILED", failedAt: new Date() } });
-      await (db as any).alert.create({ data: { tenantId: platformInvoice.tenantId, severity: "HIGH", category: "BILLING", message: `Payment failed for invoice ${platformInvoice.invoiceNumber}`, metadata: { invoiceId: platformInvoice.id, transactionId: tx.id } } }).catch(() => null);
-      await (db as any).billingEventLog.create({ data: { tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id, type: "webhook.payment_failed", metadata: { transactionId: tx.id, providerEventId: event.eventId } } });
+    if (!result.ok) {
+      if (result.error === "missing_correlation") return reply.status(400).send({ error: "missing_event_id" });
+      return reply.status(403).send({ error: "invalid_signature" });
     }
-    return { ok: true, invoiceId: platformInvoice.id, transactionId: tx.id };
+    if ("deduped" in result && result.deduped) return { ok: true, deduped: true, invoiceId: result.invoiceId };
+    const applied = result as { ok: true; invoiceId: string; transactionId: string; approved: boolean };
+    return { ok: true, invoiceId: applied.invoiceId, transactionId: applied.transactionId, approved: applied.approved };
   }
 
   const seen = await db.paymentEvent.findFirst({ where: { provider: "SOLA_CARDKNOX", providerEventId: event.eventId } });
@@ -28850,7 +28817,11 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
       verifyAdapter = envAdapter;
     }
 
-    const validSignature = verifyAdapter.verifyWebhook(req.headers as any, rawBody) || verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) || envAdapter.verifyWebhook(req.headers as any, rawBody) || envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody);
+    const validSignature =
+      verifyAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
+      envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
+      verifyAdapter.verifyWebhook(req.headers as any, rawBody) ||
+      envAdapter.verifyWebhook(req.headers as any, rawBody);
     if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
 
     await db.paymentEvent.create({

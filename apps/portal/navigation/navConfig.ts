@@ -37,6 +37,7 @@ import {
   Route,
   Send,
   Server,
+  Settings2,
   Shield,
   UserCog,
   Users,
@@ -79,6 +80,9 @@ export const navItems: NavItem[] = [
   { id: "pbx.call_recordings", href: "/pbx/call-recordings", label: "Call Recordings", icon: "CR", lucide: Disc, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_recordings" },
   { id: "pbx.call_reports", href: "/pbx/call-reports", label: "Call Reports", icon: "CP", lucide: BarChart3, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_reports" },
 
+  { id: "crm.dashboard", href: "/crm/dashboard", label: "CRM Dashboard", icon: "CD", lucide: LayoutDashboard, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_dashboard" },
+  { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
+
   { id: "settings.tenant", href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", href: "/settings/email", label: "Email Settings", icon: "EM", lucide: Mail, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_email" },
   { id: "settings.system_health", href: "/calls/health", label: "System Health", icon: "SH", lucide: Activity, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_system_health" },
@@ -112,14 +116,26 @@ export const navItems: NavItem[] = [
   { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" }
 ];
 
-/** Sidebar section order: Workspace → PBX → Apps → Billing → Admin → Settings */
-export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "pbx", "apps", "billing", "admin", "settings"];
+/** Sidebar section order: Workspace → PBX → CRM → Apps → Billing → Admin → Settings */
+export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "pbx", "crm", "apps", "billing", "admin", "settings"];
 
 export const navSectionMeta: Record<NavItem["section"], { label: string; railIcon: string }> = {
   workspace: { label: "Workspace", railIcon: "WS" },
   pbx: { label: "PBX", railIcon: "PB" },
+  crm: { label: "CRM", railIcon: "CR" },
   settings: { label: "Settings", railIcon: "ST" },
   admin: { label: "Admin", railIcon: "AD" },
   billing: { label: "Billing", railIcon: "BL" },
   apps: { label: "Apps", railIcon: "AP" }
 };
+
+/** Admin Billing nav + /admin/billing API require JWT SUPER_ADMIN (platform), not only portal permission. */
+export function isNavItemVisibleForUser(
+  item: NavItem,
+  can: (permission: Permission) => boolean,
+  backendJwtRole: string | undefined,
+): boolean {
+  if (!can(item.sectionPermission) || !can(item.permission)) return false;
+  if (item.id === "admin.billing" && backendJwtRole !== "SUPER_ADMIN") return false;
+  return true;
+}

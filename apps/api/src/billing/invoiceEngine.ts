@@ -1,6 +1,9 @@
 import { db } from "@connect/db";
-import { calculateTaxLines } from "./taxes";
 import { calculateTenantBillingUsage, type BillingUsageSnapshot } from "./usage";
+import { clearDunningSlice } from "./billingDunning";
+import { queueInvoiceSentOnFinalize } from "./billingEmailLifecycle";
+import type { TaxCalculationAuditSnapshot } from "./taxProvider";
+import { resolveTaxProvider } from "./taxProvider";
 
 export type BillingInvoicePreview = {
   tenantId: string;
@@ -21,6 +24,8 @@ export type BillingInvoicePreview = {
   subtotalCents: number;
   taxCents: number;
   totalCents: number;
+  /** Persisted on invoice `metadata.taxCalculationAudit` at creation. */
+  taxCalculationAudit: TaxCalculationAuditSnapshot;
 };
 
 export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
@@ -126,14 +131,27 @@ export async function buildBillingInvoicePreview(input: {
 
   const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
   const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
-  const taxLines = calculateTaxLines({
+  const taxProvider = resolveTaxProvider(settings);
+  const taxResult = taxProvider.calculateTaxes({
+    tenantId: input.tenantId,
     taxEnabled: !!settings.taxEnabled,
-    taxProfile: settings.taxProfile,
+    taxProfile: settings.taxProfile || null,
+    taxProfileId: settings.taxProfileId || null,
     taxableSubtotalCents,
     extensionCount: usage.extensionCount,
   });
-  for (const line of taxLines) lineItems.push(line);
-  const taxCents = taxLines.reduce((sum, item) => sum + item.amountCents, 0);
+  for (const line of taxResult.lines) {
+    lineItems.push({
+      type: line.type,
+      description: line.description,
+      quantity: line.quantity,
+      unitPriceCents: line.unitPriceCents,
+      amountCents: line.amountCents,
+      taxable: line.taxable,
+      metadata: line.metadata,
+    });
+  }
+  const taxCents = taxResult.lines.reduce((sum, item) => sum + item.amountCents, 0);
   const totalCents = Math.max(0, subtotalCents + taxCents);
 
   return {
@@ -146,6 +164,7 @@ export async function buildBillingInvoicePreview(input: {
     subtotalCents,
     taxCents,
     totalCents,
+    taxCalculationAudit: taxResult.audit,
   };
 }
 
@@ -155,6 +174,8 @@ export async function createBillingInvoice(input: {
   periodEnd?: Date;
   dueDate?: Date;
   status?: "DRAFT" | "OPEN";
+  /** Merged into `BillingEventLog` row for `invoice_created` (e.g. `{ source: "worker_monthly" }`). */
+  invoiceCreatedEventMetadata?: Record<string, unknown>;
 }): Promise<any> {
   const preview = await buildBillingInvoicePreview(input);
   const invoiceNumber = await nextInvoiceNumber(input.tenantId);
@@ -170,6 +191,7 @@ export async function createBillingInvoice(input: {
       taxCents: preview.taxCents,
       totalCents: preview.totalCents,
       balanceDueCents: preview.totalCents,
+      metadata: { taxCalculationAudit: preview.taxCalculationAudit },
       lineItems: {
         create: preview.lineItems.map((item) => ({
           tenantId: input.tenantId,
@@ -185,7 +207,20 @@ export async function createBillingInvoice(input: {
     },
     include: { lineItems: true, tenant: true },
   });
-  await logBillingEvent({ tenantId: input.tenantId, invoiceId: invoice.id, type: "invoice.created", metadata: { invoiceNumber } });
+  await logBillingEvent({
+    tenantId: input.tenantId,
+    invoiceId: invoice.id,
+    type: "invoice_created",
+    metadata: { invoiceNumber, ...(input.invoiceCreatedEventMetadata || {}) },
+  });
+  await queueInvoiceSentOnFinalize({
+    id: invoice.id,
+    tenantId: invoice.tenantId,
+    invoiceNumber: invoice.invoiceNumber,
+    totalCents: invoice.totalCents,
+    balanceDueCents: invoice.balanceDueCents,
+    dueDate: invoice.dueDate,
+  }).catch(() => null);
   return invoice;
 }
 
@@ -201,6 +236,7 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
       balanceDueCents: Math.max(0, invoice.totalCents - paid),
       paidAt: new Date(),
       failedAt: null,
+      metadata: clearDunningSlice(invoice.metadata),
     },
   });
   await logBillingEvent({ tenantId: invoice.tenantId, invoiceId, type: "invoice.paid", metadata: { amountCents: paid } });

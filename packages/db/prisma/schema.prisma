@@ -404,6 +404,8 @@ model Tenant {
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
   voicemailIngestIncidents        VoicemailIngestIncident[]
+  crmSettings                     CrmTenantSettings?
+  crmUserAccess                   CrmUserAccess[]
 }
 
 model User {
@@ -460,6 +462,7 @@ model User {
   outboundRoutePermissions       UserOutboundRoutePermission[] @relation("UserOutboundRoutePermissionUser")
   connectChatParticipants        ConnectChatParticipant[]
   connectChatMessages            ConnectChatMessage[]          @relation("ConnectChatMessageSenderUser")
+  crmAccess                      CrmUserAccess[]
 }
 
 enum UserRole {
@@ -671,6 +674,15 @@ model TenantBillingSettings {
   creditsCents                    Int            @default(0)
   discountPercent                 Decimal        @default(0) @db.Decimal(7, 6)
   metadata                        Json?
+  /// Display name on invoices/emails (falls back to tenant name).
+  invoiceCompanyName            String?
+  /// HTTPS URL for logo in HTML emails only (PDF uses text header — no remote image fetch).
+  invoiceLogoUrl                String?
+  invoiceSupportEmail             String?
+  invoiceSupportPhone             String?
+  /// Plain text, length-capped in API (invoice PDF + email footers).
+  invoiceFooterNote             String?
+  invoicePaymentInstructions    String?
   createdAt                       DateTime       @default(now())
   updatedAt                       DateTime       @updatedAt
   tenant                          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2931,4 +2943,45 @@ model PlatformRolePermissionSnapshot {
   id        String   @id @default("default")
   roles     Json
   updatedAt DateTime @updatedAt
+}
+
+// ─── CRM Foundation ───────────────────────────────────────────────────────────
+
+enum CrmUserRole {
+  AGENT
+  MANAGER
+  ADMIN
+}
+
+/// Per-tenant CRM feature flags. Created on-demand when a tenant admin enables CRM.
+/// Absence of a row = CRM disabled. enabled=false also disables all CRM API routes for the tenant.
+model CrmTenantSettings {
+  id                   String   @id @default(cuid())
+  tenantId             String   @unique
+  enabled              Boolean  @default(false)
+  localPresenceEnabled Boolean  @default(false)
+  transcriptionEnabled Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Per-user CRM access grant. Only users with enabled=true can access CRM agent features.
+/// Absence of a row = no CRM access for that user (even if CrmTenantSettings.enabled=true).
+/// Tenant admins and super admins bypass this check for management routes.
+model CrmUserAccess {
+  id        String      @id @default(cuid())
+  tenantId  String
+  userId    String
+  enabled   Boolean     @default(true)
+  role      CrmUserRole @default(AGENT)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, enabled])
 }

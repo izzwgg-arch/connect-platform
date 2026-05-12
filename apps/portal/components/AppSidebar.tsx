@@ -1,12 +1,12 @@
 "use client";
 
-import { navItems } from "../navigation/navConfig";
+import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { useAppContext } from "../hooks/useAppContext";
 import { SidebarNavGroup } from "./SidebarNavGroup";
 
 export function AppSidebar() {
-  const { can } = useAppContext();
-  const visible = navItems.filter((item) => can(item.sectionPermission) && can(item.permission));
+  const { can, backendJwtRole } = useAppContext();
+  const visible = navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole));
 
   return (
     <aside className="sidebar">

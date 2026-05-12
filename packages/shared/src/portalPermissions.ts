@@ -4,6 +4,7 @@ export type PortalRoleBucket = (typeof PORTAL_ROLE_BUCKETS)[number];
 export type PortalSidebarSectionKey =
   | "workspace"
   | "pbx"
+  | "crm"
   | "apps"
   | "billing"
   | "admin"
@@ -12,6 +13,7 @@ export type PortalSidebarSectionKey =
 export const SIDEBAR_SECTIONS = [
   { id: "workspace", label: "Workspace", permission: "can_view_section_workspace" },
   { id: "pbx", label: "PBX", permission: "can_view_section_pbx" },
+  { id: "crm", label: "CRM", permission: "can_view_section_crm" },
   { id: "apps", label: "Apps", permission: "can_view_section_apps" },
   { id: "billing", label: "Billing", permission: "can_view_section_billing" },
   { id: "admin", label: "Admin", permission: "can_view_section_admin" },
@@ -35,6 +37,9 @@ export const SIDEBAR_ITEMS = [
   { id: "pbx.moh_scheduling", section: "pbx", label: "MOH Scheduling", href: "/pbx/moh-scheduling", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", section: "pbx", label: "Call Recordings", href: "/pbx/call-recordings", permission: "can_view_pbx_call_recordings" },
   { id: "pbx.call_reports", section: "pbx", label: "Call Reports", href: "/pbx/call-reports", permission: "can_view_pbx_call_reports" },
+
+  { id: "crm.dashboard", section: "crm", label: "CRM Dashboard", href: "/crm/dashboard", permission: "can_view_crm_dashboard" },
+  { id: "crm.settings", section: "crm", label: "CRM Settings", href: "/crm/settings", permission: "can_view_crm_settings" },
 
   { id: "apps.home", section: "apps", label: "Apps", href: "/apps", permission: "can_view_apps_home" },
   { id: "apps.sms_campaigns", section: "apps", label: "SMS Campaigns", href: "/apps/sms-campaigns", permission: "can_view_apps_sms_campaigns" },
@@ -112,6 +117,8 @@ export const ACTION_PERMISSION_KEYS = [
   "can_manage_did_routing",
   "can_publish_did_routing",
   "can_manage_deploys",
+  "can_view_crm",
+  "can_manage_crm",
 ] as const;
 
 export type SidebarSectionPermissionKey = (typeof SIDEBAR_SECTIONS)[number]["permission"];
@@ -130,6 +137,7 @@ export const PORTAL_PERMISSION_KEYS = [
 
 const WORKSPACE_SECTION = ["can_view_section_workspace"] as PortalPermissionKey[];
 const PBX_SECTION = ["can_view_section_pbx"] as PortalPermissionKey[];
+const CRM_SECTION = ["can_view_section_crm"] as PortalPermissionKey[];
 const APPS_SECTION = ["can_view_section_apps"] as PortalPermissionKey[];
 const BILLING_SECTION = ["can_view_section_billing"] as PortalPermissionKey[];
 const ADMIN_SECTION = ["can_view_section_admin"] as PortalPermissionKey[];
@@ -194,6 +202,9 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_admin_call_flight",
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
+  // CRM — tenant admins get view+manage; end users get neither by default (must be granted via CrmUserAccess)
+  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard"],
+  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_settings"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [
@@ -238,6 +249,7 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_upload_moh",
   "can_manage_did_routing",
   "can_publish_did_routing",
+  "can_manage_crm",
 ];
 
 const SUPER_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [

@@ -9,16 +9,20 @@ import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { useAppContext } from "../../../../hooks/useAppContext";
 
 export default function SettingsBillingPage() {
   const [busy, setBusy] = useState("");
+  const { can } = useAppContext();
   const config = useAsyncResource(() => apiGet<any>("/billing/sola/config"), []);
+  const tenantBilling = useAsyncResource(() => apiGet<any>("/billing/settings"), []);
   const current = config.status === "success" ? config.data?.config : null;
+  const bs = tenantBilling.status === "success" ? tenantBilling.data : null;
 
   return (
     <PermissionGate permission="can_view_settings" fallback={<div className="state-box">You do not have billing settings access.</div>}>
       <div className="stack compact-stack billing-admin-shell">
-        <PageHeader title="Billing Settings" subtitle="Tenant SOLA/Cardknox credentials and customer billing workspace." />
+        <PageHeader title="Billing Settings" subtitle="Tenant SOLA/Cardknox credentials, invoice presentation, and customer billing workspace." />
         <section className="billing-tenant-hero">
           <div>
             <span className="eyebrow">Billing workspace</span>
@@ -36,6 +40,50 @@ export default function SettingsBillingPage() {
         </section>
         {config.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {config.status === "error" ? <ErrorState message={config.error} /> : null}
+        {tenantBilling.status === "error" ? <ErrorState message={tenantBilling.error} /> : null}
+
+        {can("can_view_billing_overview") && bs ? (
+          <DetailCard title="Invoice & email presentation">
+            <p className="muted" style={{ marginBottom: 14 }}>
+              Shown on PDF invoices (text header) and billing emails. Logo URL must be <strong>https</strong> — used in HTML emails only, not embedded in PDFs.
+            </p>
+            <form
+              className="billing-form"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                setBusy("brand");
+                try {
+                  const form = new FormData(event.currentTarget);
+                  await apiPut("/billing/settings/branding", {
+                    invoiceCompanyName: String(form.get("invoiceCompanyName") || "").trim() || null,
+                    invoiceLogoUrl: String(form.get("invoiceLogoUrl") || "").trim() || null,
+                    invoiceSupportEmail: String(form.get("invoiceSupportEmail") || "").trim() || null,
+                    invoiceSupportPhone: String(form.get("invoiceSupportPhone") || "").trim() || null,
+                    invoiceFooterNote: String(form.get("invoiceFooterNote") || "").trim() || null,
+                    invoicePaymentInstructions: String(form.get("invoicePaymentInstructions") || "").trim() || null,
+                  });
+                  window.location.reload();
+                } finally {
+                  setBusy("");
+                }
+              }}
+            >
+              <label>Company display name <input name="invoiceCompanyName" defaultValue={bs.invoiceCompanyName || ""} placeholder="Shown on invoice & emails" /></label>
+              <label>Logo URL (https only) <input name="invoiceLogoUrl" type="url" defaultValue={bs.invoiceLogoUrl || ""} placeholder="https://cdn.example.com/logo.png" /></label>
+              <label>Billing support email <input name="invoiceSupportEmail" type="email" defaultValue={bs.invoiceSupportEmail || ""} placeholder="billing-support@yourcompany.com" /></label>
+              <label>Billing support phone <input name="invoiceSupportPhone" defaultValue={bs.invoiceSupportPhone || ""} placeholder="+1 …" /></label>
+              <label>Invoice footer / legal note <textarea name="invoiceFooterNote" rows={3} defaultValue={bs.invoiceFooterNote || ""} placeholder="Plain text, shown on PDF and email footers" /></label>
+              <label>Payment instructions <textarea name="invoicePaymentInstructions" rows={3} defaultValue={bs.invoicePaymentInstructions || ""} placeholder="Wire details, remittance notes, etc." /></label>
+              <p className="muted" style={{ fontSize: "0.85rem" }}>
+                Default due offset is <strong>{bs.paymentTermsDays ?? 15}</strong> days (set in Admin Billing → Monthly Pricing). Emails include “Net N days” from that value.
+              </p>
+              <div className="row-actions">
+                <button className="btn primary" type="submit" disabled={!!busy}>{busy === "brand" ? "Saving…" : "Save presentation"}</button>
+              </div>
+            </form>
+          </DetailCard>
+        ) : null}
+
         <DetailCard title="This Tenant SOLA Gateway">
           <form className="billing-form" onSubmit={async (event) => {
             event.preventDefault();

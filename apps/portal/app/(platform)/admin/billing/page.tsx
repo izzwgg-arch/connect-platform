@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, apiPut } from "../../../../services/apiClient";
+import { DataTable } from "../../../../components/DataTable";
 import { DetailCard } from "../../../../components/DetailCard";
 import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../../components/MetricCard";
 import { PageHeader } from "../../../../components/PageHeader";
-import { PermissionGate } from "../../../../components/PermissionGate";
+import { useAppContext } from "../../../../hooks/useAppContext";
 
 type TenantRow = {
   id: string;
@@ -43,13 +44,26 @@ function toCents(value: FormDataEntryValue | null) {
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 }
 
+function worstOpenStatus(invoices: any[] | undefined): string {
+  const list = invoices || [];
+  const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)));
+  if (active.some((i) => i.status === "FAILED")) return "FAILED";
+  if (active.some((i) => i.status === "OVERDUE")) return "OVERDUE";
+  if (active.some((i) => i.status === "OPEN" || i.status === "DRAFT")) return "OPEN";
+  return "—";
+}
+
 export default function AdminBillingPage() {
+  const { can, backendJwtRole } = useAppContext();
+  const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const [busy, setBusy] = useState<string | null>(null);
   const [selectedTenantId, setSelectedTenantId] = useState<string>("");
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [platformToast, setPlatformToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const overview = useAsyncResource(() => apiGet<any>("/admin/billing/overview"), []);
+  const runs = useAsyncResource(() => apiGet<{ runs: any[] }>("/admin/billing/runs/recent?limit=8"), []);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
   const selectedTenant = tenantRows.find((tenant) => tenant.id === selectedTenantId) || tenantRows[0] || null;
@@ -87,15 +101,31 @@ export default function AdminBillingPage() {
     try {
       await apiPost("/admin/billing/runs/monthly", { dryRun });
       window.location.reload();
+    } catch (err: any) {
+      setPlatformToast({ kind: "err", text: err?.message || "Monthly run failed." });
+      window.setTimeout(() => setPlatformToast(null), 5000);
     } finally {
       setBusy(null);
     }
   }
 
+  if (!canPlatformAdminBilling) {
+    return (
+      <div className="state-box">
+        Platform Admin Billing is only available to platform administrators (JWT role SUPER_ADMIN) with billing access. Tenant administrators should use{" "}
+        <a href="/billing">Billing</a> for their own workspace.
+      </div>
+    );
+  }
+
   return (
-    <PermissionGate permission="can_view_admin" fallback={<div className="state-box">You do not have admin billing access.</div>}>
-      <div className="stack compact-stack billing-admin-shell">
+    <div className="stack compact-stack billing-admin-shell">
         <PageHeader title="Admin Billing" subtitle="Set every tenant's SOLA gateway, monthly pricing, taxes, auto-billing, invoices, and payment status." />
+        {platformToast ? (
+          <div className={`billing-toast billing-toast--${platformToast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
+            {platformToast.text}
+          </div>
+        ) : null}
         {overview.status === "loading" || tenants.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {overview.status === "error" ? <ErrorState message={overview.error} /> : null}
         {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}
@@ -108,6 +138,41 @@ export default function AdminBillingPage() {
           </section>
         ) : null}
 
+        {overview.status === "success" && (overview.data.recentFailures?.length > 0) ? (
+          <DetailCard title="Recent failed / overdue invoices">
+            <DataTable
+              rows={overview.data.recentFailures as any[]}
+              columns={[
+                { key: "t", label: "Tenant", render: (r) => r.tenantName || r.tenantId },
+                { key: "inv", label: "Invoice", render: (r) => r.invoiceNumber || r.invoiceId },
+                { key: "st", label: "Status", render: (r) => r.status },
+                { key: "bal", label: "Balance", render: (r) => dollars(r.balanceDueCents) },
+                { key: "fail", label: "Failed at", render: (r) => (r.failedAt ? new Date(r.failedAt).toLocaleString() : "—") },
+              ]}
+            />
+          </DetailCard>
+        ) : null}
+
+        {runs.status === "success" && runs.data.runs?.length ? (
+          <DetailCard title="Recent billing runs">
+            <div className="billing-line-list">
+              {runs.data.runs.map((run: any) => (
+                <div key={run.id}>
+                  <span>
+                    <strong>{run.dryRun ? "Dry run" : "Live run"}</strong>
+                    <small>
+                      {run.status} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}
+                      {run.tenantId ? ` · tenant ${run.tenantId}` : " · all tenants"}
+                    </small>
+                  </span>
+                  <strong>{run.finishedAt ? "Done" : "In progress"}</strong>
+                </div>
+              ))}
+            </div>
+          </DetailCard>
+        ) : null}
+        {runs.status === "error" ? <ErrorState message={runs.error} /> : null}
+
         <div className="billing-admin-grid">
           <aside className="billing-tenant-rail">
             <div className="billing-panel-head">
@@ -117,11 +182,18 @@ export default function AdminBillingPage() {
             <div className="billing-tenant-list">
               {tenantRows.map((tenant) => {
                 const active = tenant.id === selectedTenant?.id;
+                const payState = worstOpenStatus(tenant.invoices);
+                const hasCard = (tenant.paymentMethods || []).length > 0;
                 return (
                   <button key={tenant.id} type="button" className={`billing-tenant-item ${active ? "active" : ""}`} onClick={() => setSelectedTenantId(tenant.id)}>
                     <span>
                       <strong>{tenant.name}</strong>
-                      <small>{tenant.billingSettings?.autoBillingEnabled ? `Auto day ${tenant.billingSettings.billingDayOfMonth}` : "Manual billing"}</small>
+                      <small>
+                        Autopay {tenant.billingSettings?.autoBillingEnabled ? "on" : "off"}
+                        {tenant.billingSettings?.autoBillingEnabled ? ` · day ${tenant.billingSettings.billingDayOfMonth}` : ""}
+                        {" · "}Card {hasCard ? "on file" : "missing"}
+                        {payState !== "—" ? ` · ${payState}` : ""}
+                      </small>
                     </span>
                     <em>{dollars(tenant.balanceDueCents || 0)}</em>
                   </button>
@@ -145,18 +217,24 @@ export default function AdminBillingPage() {
                     <span><strong>{dollars(projectedMrr)}</strong><small>Projected monthly</small></span>
                     <span><strong>{detail.usage.extensionCount}</strong><small>Extensions</small></span>
                     <span><strong>{detail.usage.phoneNumberCount}</strong><small>Numbers</small></span>
+                    <span><strong>{detail.settings?.autoBillingEnabled ? `Day ${detail.settings.billingDayOfMonth}` : "Manual"}</strong><small>Autopay</small></span>
+                    <span><strong>{detail.settings?.smsBillingEnabled ? "On" : "Off"}</strong><small>SMS billing</small></span>
                     <span><strong>{detail.sola.config?.isEnabled ? "Enabled" : detail.sola.configured ? "Configured" : "Missing"}</strong><small>SOLA</small></span>
                   </div>
                 </section>
 
                 <section className="billing-setup-grid">
                   <BillingSettingsForm detail={detail} onSaved={() => loadDetail(detail.tenant.id)} />
+                  <InvoiceBrandingForm detail={detail} onSaved={() => loadDetail(detail.tenant.id)} />
+                </section>
+
+                <section className="billing-setup-grid">
                   <SolaSettingsForm detail={detail} onSaved={() => loadDetail(detail.tenant.id)} />
+                  <PaymentMethodsCard detail={detail} />
                 </section>
 
                 <section className="billing-setup-grid">
                   <InvoicePreviewCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
-                  <PaymentMethodsCard detail={detail} />
                 </section>
 
                 <RecentInvoicesCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
@@ -173,15 +251,21 @@ export default function AdminBillingPage() {
           </div>
         </DetailCard>
       </div>
-    </PermissionGate>
   );
 }
 
 function BillingSettingsForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
   const [saving, setSaving] = useState(false);
   const settings = detail.settings || {};
+  const meta = settings.metadata && typeof settings.metadata === "object" && !Array.isArray(settings.metadata) ? settings.metadata : {};
+  const taxProviderId = String((meta as Record<string, unknown>).taxProviderId || "tax_profile_v1");
   return (
     <DetailCard title="Monthly Pricing">
+      <div className="billing-status-pill warn" style={{ marginBottom: 12, textAlign: "left", whiteSpace: "normal", lineHeight: 1.45 }}>
+        <strong>Tax / fees notice</strong>
+        {" — "}
+        Amounts use configurable Tax Profiles (manual rates) or the optional stub provider. This is not verified telecom tax software. For Orange County NY and other jurisdictions, rates and fee types must be confirmed with an accountant or certified telecom tax provider before relying on automated billing. Integrating an external tax engine via the provider setting is recommended for production telecom tax.
+      </div>
       <form className="billing-form" onSubmit={async (event) => {
         event.preventDefault();
         setSaving(true);
@@ -195,6 +279,7 @@ function BillingSettingsForm({ detail, onSaved }: { detail: TenantDetail; onSave
             smsBillingEnabled: form.get("smsBillingEnabled") === "on",
             taxEnabled: form.get("taxEnabled") === "on",
             taxProfileId: String(form.get("taxProfileId") || "") || null,
+            taxProviderId: String(form.get("taxProviderId") || "tax_profile_v1"),
             autoBillingEnabled: form.get("autoBillingEnabled") === "on",
             billingDayOfMonth: Number(form.get("billingDayOfMonth") || 1),
             paymentTermsDays: Number(form.get("paymentTermsDays") || 15),
@@ -219,6 +304,12 @@ function BillingSettingsForm({ detail, onSaved }: { detail: TenantDetail; onSave
             {detail.taxProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
           </select>
         </label>
+        <label>Tax calculation provider
+          <select name="taxProviderId" defaultValue={taxProviderId}>
+            <option value="tax_profile_v1">Tax profile (configurable rates in Connect)</option>
+            <option value="external_telecom_stub">External telecom stub (no tax lines — placeholder)</option>
+          </select>
+        </label>
         <div className="billing-check-grid">
           <label><input name="firstPhoneNumberFree" type="checkbox" defaultChecked={settings.firstPhoneNumberFree !== false} /> First number free</label>
           <label><input name="smsBillingEnabled" type="checkbox" defaultChecked={!!settings.smsBillingEnabled} /> Bill SMS package</label>
@@ -226,6 +317,42 @@ function BillingSettingsForm({ detail, onSaved }: { detail: TenantDetail; onSave
           <label><input name="autoBillingEnabled" type="checkbox" defaultChecked={!!settings.autoBillingEnabled} /> Auto-charge monthly</label>
         </div>
         <button className="btn primary" type="submit" disabled={saving}>{saving ? "Saving..." : "Save Pricing"}</button>
+      </form>
+    </DetailCard>
+  );
+}
+
+function InvoiceBrandingForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const settings = detail.settings || {};
+  return (
+    <DetailCard title="Invoice & email branding">
+      <p className="muted" style={{ marginBottom: 12 }}>HTTPS logo URL is used in HTML emails only. PDF uses a clean text header.</p>
+      <form className="billing-form" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          const form = new FormData(event.currentTarget);
+          await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, {
+            invoiceCompanyName: String(form.get("invoiceCompanyName") || "").trim() || null,
+            invoiceLogoUrl: String(form.get("invoiceLogoUrl") || "").trim() || null,
+            invoiceSupportEmail: String(form.get("invoiceSupportEmail") || "").trim() || null,
+            invoiceSupportPhone: String(form.get("invoiceSupportPhone") || "").trim() || null,
+            invoiceFooterNote: String(form.get("invoiceFooterNote") || "").trim() || null,
+            invoicePaymentInstructions: String(form.get("invoicePaymentInstructions") || "").trim() || null,
+          });
+          onSaved();
+        } finally {
+          setSaving(false);
+        }
+      }}>
+        <label>Company display name <input name="invoiceCompanyName" defaultValue={settings.invoiceCompanyName || ""} /></label>
+        <label>Logo URL (https) <input name="invoiceLogoUrl" type="url" defaultValue={settings.invoiceLogoUrl || ""} placeholder="https://…" /></label>
+        <label>Support email <input name="invoiceSupportEmail" type="email" defaultValue={settings.invoiceSupportEmail || ""} /></label>
+        <label>Support phone <input name="invoiceSupportPhone" defaultValue={settings.invoiceSupportPhone || ""} /></label>
+        <label>Footer / legal note <textarea name="invoiceFooterNote" rows={2} defaultValue={settings.invoiceFooterNote || ""} /></label>
+        <label>Payment instructions <textarea name="invoicePaymentInstructions" rows={2} defaultValue={settings.invoicePaymentInstructions || ""} /></label>
+        <button className="btn primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save branding"}</button>
       </form>
     </DetailCard>
   );
@@ -347,19 +474,79 @@ function PaymentMethodsCard({ detail }: { detail: TenantDetail }) {
 }
 
 function RecentInvoicesCard({ detail, busy, setBusy, onSaved }: { detail: TenantDetail; busy: string | null; setBusy: (v: string | null) => void; onSaved: () => void }) {
+  const [logInvoiceId, setLogInvoiceId] = useState<string | null>(null);
+  const [logEvents, setLogEvents] = useState<{ id: string; type: string; message: string | null; createdAt: string; metadata?: unknown }[]>([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logError, setLogError] = useState("");
+
+  async function toggleLog(invoiceId: string) {
+    if (logInvoiceId === invoiceId) {
+      setLogInvoiceId(null);
+      return;
+    }
+    setLogInvoiceId(invoiceId);
+    setLogLoading(true);
+    setLogError("");
+    setLogEvents([]);
+    try {
+      const res = await apiGet<{ events: any[] }>(`/admin/billing/invoices/${invoiceId}/events`);
+      setLogEvents(res.events || []);
+    } catch (err: any) {
+      setLogError(err?.message || "Unable to load billing events.");
+    } finally {
+      setLogLoading(false);
+    }
+  }
+
   return (
     <DetailCard title="Recent Invoices">
       {detail.invoices.length === 0 ? <p className="muted">No invoices yet for this tenant.</p> : null}
       <div className="billing-invoice-stack">
         {detail.invoices.map((invoice) => (
-          <div className="billing-invoice-row" key={invoice.id}>
+          <div className="billing-invoice-row" key={invoice.id} style={{ flexWrap: "wrap" }}>
             <span><strong>{invoice.invoiceNumber}</strong><small>{invoice.status} · due {new Date(invoice.dueDate).toLocaleDateString()}</small></span>
             <em>{dollars(invoice.totalCents)}</em>
             <div className="row-actions">
+              <button className="btn ghost" type="button" disabled={!!busy} onClick={() => { void toggleLog(invoice.id); }}>{logInvoiceId === invoice.id ? "Hide log" : "Activity"}</button>
               <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy(`send-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/send`, {}); onSaved(); } finally { setBusy(null); } }}>Send</button>
               {invoice.status !== "PAID" && invoice.status !== "VOID" ? <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy(`paid-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/mark-paid`, {}); onSaved(); } finally { setBusy(null); } }}>Mark Paid</button> : null}
+              {invoice.status !== "PAID" && invoice.status !== "VOID" && (detail.settings?.defaultPaymentMethodId || (detail.paymentMethods?.length ?? 0) > 0) ? (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={!!busy}
+                  onClick={async () => {
+                    setBusy(`retry-${invoice.id}`);
+                    try {
+                      await apiPost(`/admin/billing/invoices/${invoice.id}/retry-payment`, {});
+                      onSaved();
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                >
+                  {busy === `retry-${invoice.id}` ? "Charging…" : "Charge card"}
+                </button>
+              ) : null}
               {invoice.status !== "PAID" && invoice.status !== "VOID" ? <button className="btn danger" type="button" disabled={!!busy} onClick={async () => { setBusy(`void-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/void`, {}); onSaved(); } finally { setBusy(null); } }}>Void</button> : null}
             </div>
+            {logInvoiceId === invoice.id ? (
+              <div style={{ width: "100%", marginTop: 10 }}>
+                {logLoading ? <p className="muted">Loading events…</p> : null}
+                {logError ? <ErrorState message={logError} /> : null}
+                {!logLoading && !logError && logEvents.length === 0 ? <p className="muted">No BillingEventLog rows for this invoice.</p> : null}
+                {!logLoading && !logError && logEvents.length > 0 ? (
+                  <DataTable
+                    rows={logEvents}
+                    columns={[
+                      { key: "c", label: "Time", render: (r) => new Date(r.createdAt).toLocaleString() },
+                      { key: "t", label: "Type", render: (r) => r.type },
+                      { key: "m", label: "Detail", render: (r) => r.message || (r.metadata ? JSON.stringify(r.metadata) : "—") },
+                    ]}
+                  />
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

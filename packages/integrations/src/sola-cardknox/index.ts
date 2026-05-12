@@ -69,13 +69,17 @@ export type SaveCardInput = {
   invoice?: string;
 };
 
+/** Per Sola/Cardknox docs: pass a unique xInvoice per sale for duplicate detection; use xAllowDuplicate only when intentionally allowing repeats. */
 export type ChargeTokenInput = {
   token: string;
   amountCents: number;
-  invoice?: string;
+  /** Sent as xInvoice to gatewayjson — must be unique per charge attempt (see Sola duplicate-handling docs). */
+  gatewayXInvoice: string;
   customerId?: string;
   idempotencyKey?: string;
   recurringIndicator?: "Recurring" | "Stored" | "Single";
+  /** Maps to xAllowDuplicate=TRUE on the gateway (disables duplicate block for this request). */
+  allowGatewayDuplicate?: boolean;
 };
 
 export type RefundTransactionInput = {
@@ -84,12 +88,20 @@ export type RefundTransactionInput = {
   invoice?: string;
 };
 
+/** Sola Transaction API (gatewayjson) host — see https://docs.solapayments.com/ */
+export const DEFAULT_CARDKNOX_GATEWAY_BASE = "https://x1.cardknox.com";
+
 function ensureConfigured(config: SolaCardknoxConfig) {
-  if (!config.baseUrl || !config.apiKey) {
+  if (!config.apiKey) {
     const err: any = new Error("NOT_CONFIGURED");
     err.code = "NOT_CONFIGURED";
     throw err;
   }
+}
+
+function gatewayBaseUrl(config: SolaCardknoxConfig): string {
+  const raw = String(config.baseUrl || "").trim();
+  return raw ? raw.replace(/\/$/, "") : DEFAULT_CARDKNOX_GATEWAY_BASE;
 }
 
 function timeoutSignal(ms: number): AbortSignal {
@@ -172,7 +184,13 @@ export function normalizeCardknoxResponse(payload: Record<string, any>): Cardkno
     xStatus: payload?.xStatus ? String(payload.xStatus) : undefined,
     xError: payload?.xError ? String(payload.xError) : undefined,
     xErrorCode: payload?.xErrorCode ? String(payload.xErrorCode) : undefined,
-    xRefNum: payload?.xRefNum ? String(payload.xRefNum) : payload?.xRefnum ? String(payload.xRefnum) : undefined,
+    xRefNum: payload?.xRefNum
+      ? String(payload.xRefNum)
+      : payload?.xRefnum
+        ? String(payload.xRefnum)
+        : payload?.xRefNumber
+          ? String(payload.xRefNumber)
+          : undefined,
     xMaskedCardNumber: payload?.xMaskedCardNumber ? String(payload.xMaskedCardNumber) : undefined,
     xCardType: payload?.xCardType ? String(payload.xCardType) : undefined,
     xExp: payload?.xExp ? String(payload.xExp) : undefined,
@@ -230,7 +248,7 @@ async function postJson(config: SolaCardknoxConfig, path: string, body: Record<s
     if (config.apiSecret) reqBody.xSecret = config.apiSecret;
   }
 
-  const res = await fetch(`${String(config.baseUrl).replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`, {
+  const res = await fetch(`${gatewayBaseUrl(config)}${path.startsWith("/") ? path : `/${path}`}`, {
     method: "POST",
     headers,
     body: JSON.stringify(reqBody),
@@ -273,7 +291,7 @@ async function postGatewayJson(config: SolaCardknoxConfig, body: Record<string, 
   const reqBody: Record<string, any> = { ...body, xKey: config.apiKey };
   if (config.apiSecret) reqBody.xSecret = config.apiSecret;
 
-  const res = await fetch(`${String(config.baseUrl).replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`, {
+  const res = await fetch(`${gatewayBaseUrl(config)}${path.startsWith("/") ? path : `/${path}`}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(reqBody),
@@ -373,16 +391,17 @@ export class SolaCardknoxAdapter {
   }
 
   async chargeToken(input: ChargeTokenInput): Promise<CardknoxTransactionResponse> {
-    return postGatewayJson(this.config, {
+    const body: Record<string, unknown> = {
       xCommand: "cc:sale",
       xToken: input.token,
       xAmount: (input.amountCents / 100).toFixed(2),
-      xInvoice: input.invoice,
+      xInvoice: input.gatewayXInvoice,
       xCustomerId: input.customerId,
       xRecurringIndicator: input.recurringIndicator || "Recurring",
-      xAllowDuplicate: "TRUE",
       xCustom01: input.idempotencyKey
-    });
+    };
+    if (input.allowGatewayDuplicate) body.xAllowDuplicate = "TRUE";
+    return postGatewayJson(this.config, body as Record<string, any>);
   }
 
   async refundTransaction(input: RefundTransactionInput): Promise<CardknoxTransactionResponse> {
@@ -422,8 +441,9 @@ export class SolaCardknoxAdapter {
 
   parseWebhookEvent(rawBody: string): SolaWebhookEvent {
     const parsed = rawBody.trim().startsWith("{") ? JSON.parse(rawBody || "{}") : parseFormEncoded(rawBody);
+    const refFromPayload = parsed.xRefNum || parsed.xRefnum || parsed.xRefNumber || parsed.XRefNum;
     return {
-      eventId: parsed.eventId || parsed.id || parsed.xRefnum,
+      eventId: parsed.eventId || parsed.id || (refFromPayload ? String(refFromPayload) : undefined),
       type: String(parsed.type || parsed.eventType || parsed.xCommand || parsed.xStatus || "unknown"),
       status: toStatus(parsed),
       amountCents: parseAmountCents(parsed.amountCents ?? parsed.xAuthAmount ?? parsed.xAmount),
@@ -433,4 +453,24 @@ export class SolaCardknoxAdapter {
       payload: parsed
     };
   }
+}
+
+/**
+ * Unique `xInvoice` per `gatewayjson` `cc:sale` (Sola duplicate detection — see Sola docs).
+ * Webhook echoes `xInvoice`; use {@link parseConnectBillingGatewayXInvoice} to resolve `BillingInvoice`.
+ */
+export function buildConnectBillingGatewayXInvoice(tenantId: string, invoiceId: string, invoiceNumber: string): string {
+  const safe = String(invoiceNumber || "").replace(/[^a-zA-Z0-9-_.]/g, "_").slice(0, 64);
+  return `CONNECT:${tenantId}:${invoiceId}:${Date.now()}:${safe}`;
+}
+
+export function parseConnectBillingGatewayXInvoice(xInvoice: string): { tenantId: string; invoiceId: string; invoiceNumberHint?: string } | null {
+  if (!xInvoice || !xInvoice.startsWith("CONNECT:")) return null;
+  const parts = xInvoice.split(":");
+  if (parts.length < 4) return null;
+  const tenantId = parts[1];
+  const invoiceId = parts[2];
+  const invoiceNumberHint = parts.length > 4 ? parts.slice(4).join(":") : undefined;
+  if (!tenantId || !invoiceId) return null;
+  return { tenantId, invoiceId, invoiceNumberHint };
 }
