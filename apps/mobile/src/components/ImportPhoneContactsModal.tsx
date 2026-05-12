@@ -270,7 +270,7 @@ export function ImportPhoneContactsModal({
               backgroundColor: colors.surfaceElevated,
               borderColor: colors.border,
               paddingTop: 12,
-              paddingBottom: insets.bottom + 16,
+              // Bottom padding lives on the footer row so the CTA always sits above the gesture bar.
             },
           ]}
         >
@@ -302,7 +302,54 @@ export function ImportPhoneContactsModal({
             </TouchableOpacity>
           </View>
 
-          <View style={[styles.body, { paddingHorizontal: spacing['4'] }]}>
+          {/* ── Cancel / Import — pinned directly inside sheet, above the scrollable body.
+               Lives here (not inside body) so it gets a concrete layout reference from
+               the sheet's explicit height, independent of FlatList content measurement. */}
+          {step === 'preview' && (
+            <View
+              style={[
+                styles.previewFooter,
+                {
+                  paddingHorizontal: spacing['4'],
+                  paddingBottom: insets.bottom + 16,
+                  backgroundColor: colors.surfaceElevated,
+                },
+              ]}
+            >
+              <TouchableOpacity
+                onPress={onClose}
+                style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
+                activeOpacity={0.78}
+              >
+                <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityState={{ disabled: selectedIds.size === 0 }}
+                hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                onPress={() => {
+                  const selectedCount = selectedIds.size;
+                  importDiag('final_import_button_pressed', { selectedCount });
+                  void runImport();
+                }}
+                style={[
+                  styles.btn,
+                  styles.btnPrimary,
+                  {
+                    backgroundColor: colors.primary,
+                    opacity: selectedIds.size === 0 ? 0.42 : 1,
+                  },
+                ]}
+                activeOpacity={0.84}
+              >
+                <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
+                <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
+                  Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={[styles.body, { paddingHorizontal: spacing['4'], paddingBottom: step !== 'preview' ? insets.bottom + 16 : 0 }]}>
             {step === 'permission' && (
               <PermissionView
                 onGrant={grant}
@@ -368,53 +415,6 @@ export function ImportPhoneContactsModal({
                     {selectedIds.size} selected
                   </Text>
                 </TouchableOpacity>
-
-                {/* Cancel / Import above the list so long previews never push CTAs below the fold (Android). */}
-                <View
-                  style={[
-                    styles.footer,
-                    {
-                      paddingHorizontal: 0,
-                      marginBottom: 10,
-                      ...(Platform.OS === 'android'
-                        ? { elevation: 6, zIndex: 2, backgroundColor: colors.surfaceElevated }
-                        : {}),
-                    },
-                  ]}
-                >
-                  <TouchableOpacity
-                    onPress={onClose}
-                    style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
-                    activeOpacity={0.78}
-                  >
-                    <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    accessibilityState={{ disabled: selectedIds.size === 0 }}
-                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-                    onPress={() => {
-                      const selectedCount = selectedIds.size;
-                      // Do not use `disabled={true}` on this control: RN suppresses onPress when
-                      // disabled, so logcat never showed final_import_button_pressed / runImport_*.
-                      importDiag('final_import_button_pressed', { selectedCount });
-                      void runImport();
-                    }}
-                    style={[
-                      styles.btn,
-                      styles.btnPrimary,
-                      {
-                        backgroundColor: colors.primary,
-                        opacity: selectedIds.size === 0 ? 0.42 : 1,
-                      },
-                    ]}
-                    activeOpacity={0.84}
-                  >
-                    <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
-                    <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
-                      Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
 
                 <View style={styles.previewScrollRegion}>
                   <FlatList
@@ -719,6 +719,11 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     borderWidth: StyleSheet.hairlineWidth,
+    // Explicit height is required so flex: 1 children (body, previewScrollRegion)
+    // have a concrete parent constraint to expand into. maxHeight alone does not
+    // provide that — the sheet would collapse to intrinsic content height and
+    // flex: 1 would resolve to 0.
+    height: '88%',
     maxHeight: '92%',
     width: '100%',
   },
@@ -811,7 +816,17 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: 8,
   },
-  /** Wraps only the preview list; Cancel/Import sit above this region so CTAs stay on-screen. */
+  /**
+   * Cancel / Import row — a direct child of `sheet` (sibling of body) so it always
+   * renders against the sheet's explicit height, never inside the scrollable region.
+   */
+  previewFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  /** Wraps only the preview list; scrolls independently below the pinned CTA row. */
   previewScrollRegion: {
     flex: 1,
     minHeight: 0,
