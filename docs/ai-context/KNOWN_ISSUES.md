@@ -22,6 +22,7 @@ When you find a new fragile area, add it here.
 
 ## Connect API
 
+- **Fixed 2026-05-13 — Connect Desktop background polls hammering `app-api-1` CPU.** `DesktopNotificationsBridge` polled every **30 s** with a **hard-coded** `GET /voice/voicemail?folder=inbox&page=1&pageSize=10` that omitted **`tenantId`**, so **`SUPER_ADMIN`** sessions hit **`400 tenant_required`** (see `GET /voice/voicemail` in `server.ts`). The same loop called **`loadSmsThreads("GLOBAL")`**, which always **`GET /admin/sms/provider-health`** first — even while the user sat on unrelated pages (nginx showed **Referer: `/billing/invoices`**). **Fix:** `apps/portal/lib/desktopNotificationPoll.ts` (valid probe path + **independent exponential backoff** per SMS vs voicemail), `fetchTenantSmsInboxThreads()` in `apps/portal/services/platformData.ts`, and `apps/portal/components/DesktopNotificationsBridge.tsx` (tenant SMS inbox only for notifications; voicemail probe gated on `can_view_workspace_voicemail`). Diagnosis used **nginx `access.log`** + **`connect_api_request_duration_seconds`** from **`GET /metrics`** — see **`DEBUGGING.md`** § *API CPU — nginx + Prometheus (no env profiler)*.
 - **API container CPU high — hot HTTP routes (investigate with profiling).** Symptom:
   sustained **`app-api-1`** CPU without a clear PBX cause. **Do not assume** `/pbx/live/*`
   until logs/metrics prove it. **Steps:** (1) Prometheus histogram

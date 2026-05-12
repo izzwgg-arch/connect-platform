@@ -56,6 +56,27 @@
 
 ---
 
+## API CPU — nginx access log + Prometheus (no env profiler)
+
+When **`CONNECT_API_PROFILE`** is not enabled, you can still find **route hammering**
+from the edge and from in-process counters:
+
+1. **Nginx** — default access log path is typically **`/var/log/nginx/access.log`**
+   (see `access_log` in **`/etc/nginx/nginx.conf`**). Aggregate **`$request_uri`**
+   (or the path field in your log format) with **`awk` / `sort` / `uniq -c`**. Filter
+   **`4xx`/`5xx`** with **`$9`** (status field position depends on format — confirm with
+   **`tail -n 3`** first). Correlate **User-Agent** and **Referer** for desktop vs mobile.
+2. **Prometheus** — from the app host: **`curl -sS http://127.0.0.1:3001/metrics`**
+   (bind address per `docker-compose.app.yml`) and **`grep connect_api_request_duration_seconds_count`**.
+   Series are **counters since API process start** — pair with **`process_start_time_seconds{service="api"}`**
+   for rates.
+3. **Case study (2026-05):** Connect Desktop **`@connect/desktop`** hit **`/api/voice/voicemail?...`**
+   and **`/api/admin/sms/provider-health`** on the **same 30 s** cadence from
+   **`DesktopNotificationsBridge`** — fixed in portal by valid voicemail query + tenant
+   SMS inbox for notifications + per-probe backoff (**`apps/portal/lib/desktopNotificationPoll.ts`**).
+
+---
+
 ## API CPU spike — profiling HTTP hot routes (`app-api-1`)
 
 Use this when **`app-api-1` CPU is high** and you need to know **which HTTP paths**,

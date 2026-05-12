@@ -22,6 +22,13 @@
 - **Temporary logs:** **`CONNECT_API_PROFILE=1`** (and optional **`CONNECT_API_PROFILE_EACH=1`**) — see **`apps/api/src/apiRequestProfiler.ts`** and **`docs/ai-context/DEBUGGING.md`** § *API CPU spike — profiling HTTP hot routes*.
 - **No route semantics change** from profiling flags alone — they only add log output.
 
+### Operational note — `GET /admin/sms/provider-health`
+
+Returns aggregate SMS provider health for **admin / ops** dashboards. **Do not** wire
+this into **high-frequency background loops** (e.g. 30 s desktop notification timers) —
+it is heavier than tenant **`GET /sms/messages`**. Connect Desktop notifications use
+**`fetchTenantSmsInboxThreads()`** in **`apps/portal/services/platformData.ts`** instead.
+
 ## Why the line ranges are huge
 
 `server.ts` is **not grouped by feature**. Routes for the same prefix are

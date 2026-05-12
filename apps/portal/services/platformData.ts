@@ -422,6 +422,30 @@ export type SmsThread = {
   campaignId?: string;
 };
 
+/**
+ * Tenant SMS inbox for notification polling. Throws on API/parse errors (unlike
+ * `loadSmsThreads`, which swallows errors for UI fallbacks).
+ */
+export async function fetchTenantSmsInboxThreads(): Promise<SmsThread[]> {
+  const messages = await apiGet<any[]>("/sms/messages");
+  if (!Array.isArray(messages)) throw new Error("invalid sms response");
+  const byTo = new Map<string, SmsThread>();
+  for (const msg of messages) {
+    const key = String(msg.toNumber || msg.fromNumber || msg.id);
+    if (!byTo.has(key)) {
+      byTo.set(key, {
+        id: String(msg.id || key),
+        phone: key,
+        preview: String(msg.body || "Message"),
+        status: String(msg.status || "QUEUED"),
+        campaignId: msg.campaignId ? String(msg.campaignId) : undefined,
+      });
+    }
+    if (byTo.size >= 30) break;
+  }
+  return Array.from(byTo.values());
+}
+
 export async function loadSmsThreads(scope: AdminScope): Promise<{ threads: SmsThread[]; scopeLabel: "GLOBAL" | "TENANT" }> {
   if (scope === "GLOBAL") {
     try {
@@ -443,23 +467,8 @@ export async function loadSmsThreads(scope: AdminScope): Promise<{ threads: SmsT
   }
 
   try {
-    const messages = await apiGet<any[]>("/sms/messages");
-    if (!Array.isArray(messages)) throw new Error("invalid sms response");
-    const byTo = new Map<string, SmsThread>();
-    for (const msg of messages) {
-      const key = String(msg.toNumber || msg.fromNumber || msg.id);
-      if (!byTo.has(key)) {
-        byTo.set(key, {
-          id: String(msg.id || key),
-          phone: key,
-          preview: String(msg.body || "Message"),
-          status: String(msg.status || "QUEUED"),
-          campaignId: msg.campaignId ? String(msg.campaignId) : undefined
-        });
-      }
-      if (byTo.size >= 30) break;
-    }
-    return { threads: Array.from(byTo.values()), scopeLabel: "TENANT" };
+    const threads = await fetchTenantSmsInboxThreads();
+    return { threads, scopeLabel: "TENANT" };
   } catch {
     return { scopeLabel: "TENANT", threads: [] };
   }

@@ -3,8 +3,12 @@
 import { useEffect, useRef } from "react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { apiGet } from "../services/apiClient";
-import { loadSmsThreads } from "../services/platformData";
+import { ApiError, apiGet } from "../services/apiClient";
+import { fetchTenantSmsInboxThreads, type SmsThread } from "../services/platformData";
+import {
+  buildDesktopVoicemailInboxProbePath,
+  NotificationProbeBackoff,
+} from "../lib/desktopNotificationPoll";
 
 type VoicemailProbe = {
   voicemails?: Array<{
@@ -18,10 +22,15 @@ type VoicemailProbe = {
 
 export function DesktopNotificationsBridge() {
   const phone = useSipPhone();
-  const { adminScope } = useAppContext();
+  const { backendJwtRole, tenantId, can } = useAppContext();
   const previousCall = useRef({ state: phone.callState, direction: phone.callDirection, remoteParty: phone.remoteParty });
   const knownThreadIds = useRef<Set<string> | null>(null);
   const knownVoicemailIds = useRef<Set<string> | null>(null);
+  const backoffRef = useRef(new NotificationProbeBackoff());
+
+  useEffect(() => {
+    backoffRef.current = new NotificationProbeBackoff();
+  }, [tenantId, backendJwtRole]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind === "phone-engine") return;
@@ -41,47 +50,75 @@ export function DesktopNotificationsBridge() {
     if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind === "phone-engine") return;
 
     let cancelled = false;
-    const poll = async () => {
-      const [sms, voicemail] = await Promise.allSettled([
-        loadSmsThreads(adminScope),
-        apiGet<VoicemailProbe>("/voice/voicemail?folder=inbox&page=1&pageSize=10"),
-      ]);
+    const backoff = backoffRef.current;
 
+    const applySmsNotifications = (threads: SmsThread[]) => {
+      const ids = new Set(threads.map((thread) => thread.id));
+      const previous = knownThreadIds.current;
+      if (previous) {
+        const newest = threads.find((thread) => !previous.has(thread.id));
+        if (newest) {
+          void window.connectDesktop?.notifications?.show({
+            kind: "message",
+            title: "New message",
+            body: `${newest.phone}: ${newest.preview}`,
+            route: `/sms?phone=${encodeURIComponent(newest.phone)}`,
+          });
+        }
+      }
+      knownThreadIds.current = ids;
+    };
+
+    const poll = async () => {
       if (cancelled) return;
 
-      if (sms.status === "fulfilled") {
-        const ids = new Set(sms.value.threads.map((thread) => thread.id));
-        const previous = knownThreadIds.current;
-        if (previous) {
-          const newest = sms.value.threads.find((thread) => !previous.has(thread.id));
-          if (newest) {
-            void window.connectDesktop?.notifications?.show({
-              kind: "message",
-              title: "New message",
-              body: `${newest.phone}: ${newest.preview}`,
-              route: `/sms?phone=${encodeURIComponent(newest.phone)}`,
-            });
-          }
+      let smsThreads: SmsThread[] | null = null;
+      if (!backoff.shouldSkip("sms")) {
+        try {
+          smsThreads = await fetchTenantSmsInboxThreads();
+          backoff.recordSuccess("sms");
+        } catch (e) {
+          const st = e instanceof ApiError ? e.status : 599;
+          backoff.recordFailure("sms", st);
         }
-        knownThreadIds.current = ids;
       }
 
-      if (voicemail.status === "fulfilled") {
-        const unread = (voicemail.value.voicemails || []).filter((item) => !item.listened);
-        const ids = new Set(unread.map((item) => item.id));
-        const previous = knownVoicemailIds.current;
-        if (previous) {
-          const newest = unread.find((item) => !previous.has(item.id));
-          if (newest) {
-            void window.connectDesktop?.notifications?.show({
-              kind: "voicemail",
-              title: "New voicemail",
-              body: newest.callerName || newest.callerId || "Voicemail",
-              route: "/voicemail",
-            });
+      if (smsThreads && !cancelled) {
+        applySmsNotifications(smsThreads);
+      }
+
+      const vmPath =
+        can("can_view_workspace_voicemail") &&
+        buildDesktopVoicemailInboxProbePath({
+          folder: "inbox",
+          page: 1,
+          tenantId,
+          backendJwtRole,
+        });
+
+      if (vmPath && !backoff.shouldSkip("voicemail") && !cancelled) {
+        try {
+          const voicemail = await apiGet<VoicemailProbe>(vmPath);
+          backoff.recordSuccess("voicemail");
+          const unread = (voicemail.voicemails || []).filter((item) => !item.listened);
+          const ids = new Set(unread.map((item) => item.id));
+          const previous = knownVoicemailIds.current;
+          if (previous) {
+            const newest = unread.find((item) => !previous.has(item.id));
+            if (newest) {
+              void window.connectDesktop?.notifications?.show({
+                kind: "voicemail",
+                title: "New voicemail",
+                body: newest.callerName || newest.callerId || "Voicemail",
+                route: "/voicemail",
+              });
+            }
           }
+          knownVoicemailIds.current = ids;
+        } catch (e) {
+          const st = e instanceof ApiError ? e.status : 599;
+          backoff.recordFailure("voicemail", st);
         }
-        knownVoicemailIds.current = ids;
       }
     };
 
@@ -91,7 +128,7 @@ export function DesktopNotificationsBridge() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [adminScope]);
+  }, [backendJwtRole, can, tenantId]);
 
   return null;
 }
