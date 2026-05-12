@@ -56,6 +56,67 @@
 
 ---
 
+## API CPU spike — profiling HTTP hot routes (`app-api-1`)
+
+Use this when **`app-api-1` CPU is high** and you need to know **which HTTP paths**,
+**which client IPs**, and **rough latency** — without guessing from PBX or ARI.
+
+### Existing metrics (no extra env)
+
+- **`GET /metrics`** on the API (admin-auth as implemented in `server.ts`) exposes
+  histogram **`connect_api_request_duration_seconds`** with labels **`method`**, **`route`**,
+  **`status`**. In Prometheus/Grafana, rank by **`rate(...[5m])`** or **`increase`** and
+  inspect high-count **`route`** label values.
+
+### Temporary structured profiler (env-gated)
+
+Implemented in **`apps/api/src/apiRequestProfiler.ts`**, installed from `server.ts`.
+**Default off** — no per-request noise in production.
+
+| Env | Effect |
+|-----|--------|
+| **`CONNECT_API_PROFILE=1`** | Every **10 s**, one **`pino`** line with **`msg":"api_request_profile_summary"`** and **`topRoutes`** (count, avgMs, maxMs) plus **`topClientIps`**. Grep logs for **`api_request_profile`**. |
+| **`CONNECT_API_PROFILE_EACH=1`** | **Also** log **one line per completed request** with **`msg":"api_request_profile"`** (method, route template, status, durationMs, ip, truncated user-agent, `userId`/`tenantId`/`role` when JWT ran, `authKind`, optional `content-length`). **Very noisy** — enable only for a short diagnostic window. |
+
+**Does not log:** bodies, Authorization values, cookies, or full URLs with query strings
+(sensitive tokens sometimes appear in `?token=` for media downloads — only the path
+prefix is logged on per-request lines).
+
+**Deploy:** set env on the **API** container only, redeploy **api** via the deploy queue,
+watch logs, then **remove** the env flags.
+
+### Production log commands (read-only)
+
+```bash
+# Last 20 minutes — API container (JSON logs; adjust time)
+docker logs app-api-1 --since 20m 2>&1 | grep api_request_profile | tail -200
+
+# If logs are plain / single-line without jq, still useful:
+docker logs app-api-1 --since 20m 2>&1 | grep -E '"(GET|POST|PUT|PATCH|DELETE) ' | tail -100
+```
+
+If nginx writes an **access log** with `$request_method`, `$request_uri`, `$status`,
+`$remote_addr`, and `$http_user_agent`, aggregate there for **p95** (API logs above
+expose **avg/max over 10 s windows** from the profiler, not full p95).
+
+### Likely high-frequency callers (code pointers — verify with profiler)
+
+- **Mobile** — React Query `refetchInterval` on chat / threads (e.g. multi-second
+  intervals in `apps/mobile/src/screens/tabs/ChatTab.tsx`).
+- **Internal** — `/internal/*` and shared-secret routes (CDR ingest, voicemail notify,
+  mobile ring, telephony map); correlate **`authKind":"internal_path"`** in per-request
+  mode or infer from **`topRoutes`** shape.
+- **Portal PBX dashboard** — `apps/portal/app/(platform)/pbx/page.tsx` uses a **60 s**
+  combined refresh tick; if `/pbx/live/combined` still dominates, check **how many**
+  concurrent browser sessions / tenants are open.
+- **Auth storms** — many **401/429** on the same route + IP (use status in per-request
+  mode or extend summary later if needed).
+
+**Do not** disable features or change polling until **`topRoutes`** / **`topClientIps`**
+identifies the offender.
+
+---
+
 ## PBX CPU spike — profiling Connect → Asterisk / VitalPBX traffic
 
 Use this when Asterisk/VitalPBX CPU is high and you suspect **Connect** (not human

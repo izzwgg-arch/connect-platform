@@ -17,6 +17,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { installApiRequestProfiler } from "./apiRequestProfiler";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import {
   acknowledgeVoicemailIngestIncident,
@@ -4208,6 +4209,8 @@ app.addHook("onResponse", async (req, reply) => {
     }
   }
 });
+
+installApiRequestProfiler(app);
 
 app.get("/metrics", async (req, reply) => {
   const body = await apiRegistry.metrics();

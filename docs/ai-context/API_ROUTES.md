@@ -16,6 +16,12 @@
   - `registerUserExtensionProvisioningRoutes(app, …)` → `apps/api/src/userExtensionProvisioning.ts` (line ~30200)
   - `registerConnectChatRoutes(app, …)` → `apps/api/src/connectChatRoutes.ts` (line ~30265)
 
+### Request profiling (CPU / hot routes)
+
+- **Prometheus:** histogram **`connect_api_request_duration_seconds`** (`method`, `route`, `status`) — see **`GET /metrics`** in `server.ts`.
+- **Temporary logs:** **`CONNECT_API_PROFILE=1`** (and optional **`CONNECT_API_PROFILE_EACH=1`**) — see **`apps/api/src/apiRequestProfiler.ts`** and **`docs/ai-context/DEBUGGING.md`** § *API CPU spike — profiling HTTP hot routes*.
+- **No route semantics change** from profiling flags alone — they only add log output.
+
 ## Why the line ranges are huge
 
 `server.ts` is **not grouped by feature**. Routes for the same prefix are

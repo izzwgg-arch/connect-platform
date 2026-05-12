@@ -20,6 +20,20 @@ When you find a new fragile area, add it here.
 
 ---
 
+## Connect API
+
+- **API container CPU high — hot HTTP routes (investigate with profiling).** Symptom:
+  sustained **`app-api-1`** CPU without a clear PBX cause. **Do not assume** `/pbx/live/*`
+  until logs/metrics prove it. **Steps:** (1) Prometheus histogram
+  **`connect_api_request_duration_seconds`** from **`GET /metrics`** (admin-auth).
+  (2) Short window with **`CONNECT_API_PROFILE=1`** on the API container — grep
+  **`api_request_profile`** for **`api_request_profile_summary`** (10 s aggregates:
+  top routes + client IPs). (3) Optional **`CONNECT_API_PROFILE_EACH=1`** only for a
+  few minutes — per-request lines; **disable after** diagnosis. Full runbook:
+  **`docs/ai-context/DEBUGGING.md`** § *API CPU spike — profiling HTTP hot routes*.
+
+---
+
 ## Telephony
 
 - **PBX CPU / duplicate ARI readers (resolved 2026-05-12).** Previously both telephony
