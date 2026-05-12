@@ -260,33 +260,36 @@ When you find a new fragile area, add it here.
   PBX directory slug correctly; the old family is inert (no dialplan reads
   it) but shows up in `database show connect`. Cleanup: `database deltree
   connect/t_<old-slug>` per tenant once verified. Not blocking.
-- **Per-extension MOH overrides are inert on live calls (open, Phase 3B
-  not yet shipped, 2026-05-12).** Phase 3A (`doMohPublish` in
+- **Per-extension MOH overrides are inert on live calls (Phase 3B
+  resolver in repo as of 2026-05-12; live-call effect lands per-host
+  on next installer run).** Phase 3A (`doMohPublish` in
   `apps/api/src/server.ts`) writes
   `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}` on
-  every publish and empty-string tombstones on rollback, but
-  `[sub-connect-tenant-moh]` in the installed dialplan only reads the
-  tenant-scope `connect/t_<slug>/moh_class`. Admin-configured per-
-  extension overrides are therefore persisted and visible in
-  `MohPublishRecord.extensionOverridesSnapshot` but do **not** change
-  what plays when the remote party holds. Fix ships with Phase 3B; the
-  design and install gate are pinned in
-  `docs/pbx/phase-3b-moh-extension-resolver-design.md` and the
-  read-only diagnostic
-  `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` must exit 0
-  on the canary PBX before any resolver edit is attempted. Not blocking
-  — tenant default MOH still works for all calls. Operators can confirm
-  "still inert on this host" at any time without leaving the existing
-  runbook by running
-  `sudo /root/install-connect-tenant-moh-dialplan.sh --check` and
-  reading the new probe `2a` line: `[INFO] per-extension resolver NOT
-  installed — Phase 3A keys are published but inert`. Probe 2a flips
-  to `[PASS]` and the `RESULT` count flips from `(5/5)` to `(6/6)` only
-  after the Phase 3B resolver heredoc ships. Additional known Phase 3B
-  gap: the canary outbound trunk wrapper (`--enable-trk-wrapper=33`)
-  applies tenant default before the connect-leg shim, so per-extension
-  overrides on trunk 33 will require a follow-up wrapper edit after
-  Phase 3B.
+  every publish and empty-string tombstones on rollback. The Phase 3B
+  resolver edit to `[sub-connect-tenant-moh]` in
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh` now reads the
+  per-extension family before the tenant-default reads, with a tenant-
+  id cross-check and empty-string-as-tombstone semantics; full design
+  in `docs/pbx/phase-3b-moh-extension-resolver-design.md`. **The repo
+  change does NOT touch any PBX.** Each host remains on its previously
+  installed dialplan (per-extension overrides inert) until an operator
+  re-runs the installer there. Operators can check the per-host
+  status by running
+  `sudo /root/install-connect-tenant-moh-dialplan.sh --check`:
+  - Pre-install: probe 2a prints `[INFO] per-extension resolver NOT
+    installed — Phase 3A keys are published but inert`. RESULT stays
+    `(5/5 checks healthy)`. This is the documented pre-install state
+    on every host today.
+  - Post-install: probe 2a prints `[PASS] per-extension resolver
+    installed`. RESULT flips to `(6/6 checks healthy)`.
+  No PBX install command has been generated yet (per AGENTS.md §Hard
+  rules: requires written operator approval + deploy queue). Not
+  blocking — tenant default MOH still works for all calls. Known
+  Phase 3B follow-up: the canary outbound trunk wrapper
+  (`--enable-trk-wrapper=33`) applies tenant default before the
+  connect-leg shim, so per-extension overrides on trunk 33 will
+  require a separate wrapper edit after Phase 3B is installed and
+  signed off. Out of Phase 3B scope.
 
 ## Mobile calling
 

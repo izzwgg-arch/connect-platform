@@ -96,18 +96,23 @@ Written by `runMohScheduleCycle()` in `apps/worker/src/main.ts` and by
 | `hold_announcement_interval` | string (int) | seconds between repeats (default `30`) |
 | `hold_announce` | string | resolved announcement ref (only when enabled) — convenience read for dialplan |
 
-### Per-extension MOH overrides (Phase 3A writer 2026-05-11; resolver = Phase 3B, preflight-only 2026-05-12)
+### Per-extension MOH overrides (Phase 3A writer 2026-05-11; Phase 3B resolver in repo 2026-05-12)
 
 Subfamily under `connect/t_<slug>/extensions/<extension>/*`. Written by
 `apps/api` `POST /voice/moh/publish` (`doMohPublish`) and by its rollback
 counterpart, both via `apps/api/src/mohExtensionOverride.ts` helpers.
-**No Asterisk consumer yet** — the installed `[sub-connect-tenant-moh]`
-resolver still reads only the tenant-scope keys. Phase 3B will splice in
-the per-extension read path; the design is pinned in
-`docs/pbx/phase-3b-moh-extension-resolver-design.md` and its install gate
-is the read-only diagnostic
+**Asterisk consumer:** `[sub-connect-tenant-moh]` in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh` reads this subfamily
+before the tenant-scope `moh_class` / `active_moh_class`. The lookup
+runs only after a channel-name → tenant cross-check (parsed `T<id>`
+must equal the resolver's `TENANT_ID`); empty-string values are
+treated as tombstones and fall through to the tenant default. The
+resolver edit is in repo but live-call effect on any given host is
+gated on someone running the installer there. Design pinned in
+`docs/pbx/phase-3b-moh-extension-resolver-design.md`; install gate is
+the read-only diagnostic
 `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` (must exit 0
-on the canary PBX before any resolver edit).
+on the canary PBX before the updated installer is run there).
 
 | Family | Key | Type | Purpose |
 |---|---|---|---|
@@ -118,8 +123,10 @@ on the canary PBX before any resolver edit).
   `PJSIP/T<id>_<extension>-…`), validated as `[A-Za-z0-9_-]{1,32}`.
 - Empty-string is a **tombstone** written by the rollback handler when
   the rolled-back publish ADDED keys that did not exist before. The
-  Phase 3B resolver MUST treat empty `moh_class` under this family as
-  "no override — fall through to tenant default."
+  Phase 3B resolver treats empty `moh_class` / `active_moh_class`
+  under this family as "no override — fall through to tenant default"
+  (`GotoIf` after both reads). Phase 3A never writes empty as a normal
+  class value, so the semantic is unambiguous.
 - Helpers `extensionMohClassFamily` / `extensionMohClassKey` /
   `extensionActiveMohClassKey` build the canonical strings; do not
   hand-concatenate.

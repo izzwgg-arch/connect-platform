@@ -339,17 +339,42 @@ batch — that should **rotate**, not persist on the **same** mailbox forever.
   underlying issue (usually "Connect MOH publish has not run for this
   tenant") and proceed.
 
-  As of 2026-05-12, `--check` also emits a non-counting probe `2a` that
-  tells you whether the **Phase 3B per-extension resolver edit** has
-  shipped on this host. Today it prints `[INFO] per-extension resolver
-  NOT installed — Phase 3A keys are published but inert`. The probe
-  never FAILs and does not change the `5/5` count. Once Phase 3B's
-  resolver heredoc ships and the operator re-runs `install` (default
-  mode), the same probe will print `[PASS] per-extension resolver
-  installed` and the line will become `RESULT: PASS (6/6 checks
-  healthy)`. This is the post-install gate operators should grep for
-  after the Phase 3B install. Phase 3B itself is **not** shipping in
-  this deployment cycle — only the diagnostic probe is.
+  `--check` emits a probe `2a` that tells you whether the **Phase 3B
+  per-extension resolver edit** is installed on this host. The Phase
+  3B resolver heredoc is now in repo
+  (`scripts/pbx/install-connect-tenant-moh-dialplan.sh`); on any host
+  that has NOT yet been re-installed since the heredoc landed, probe
+  2a prints `[INFO] per-extension resolver NOT installed — Phase 3A
+  keys are published but inert`. The probe never FAILs and does not
+  change the `5/5` count in that state. After an operator re-runs
+  `install` (default mode) on that host the same probe prints
+  `[PASS] per-extension resolver installed` and the line becomes
+  `RESULT: PASS (6/6 checks healthy)`. **Pre-install gate (must all
+  pass on the canary PBX before an install command is generated)**:
+
+  1. `sudo /root/diag-connect-moh-extension-key-readiness.sh --tag before-3b`
+     exits 0.
+  2. `sudo /root/diag-connect-moh-preflight-snapshot.sh --tag before-3b`
+     captured and retained.
+  3. At least one enabled `MohExtensionOverride` row exists for a
+     mapped tenant.
+  4. `sudo /root/install-connect-tenant-moh-dialplan.sh --check`
+     exits 0 with probe 2a `[INFO]` (the expected pre-install state).
+
+  **Post-install verification (24h canary, T3 / Secro only)**:
+
+  1. Probe 2a prints `[PASS] per-extension resolver installed` and
+     `RESULT: PASS (6/6 checks healthy)`.
+  2. Live hold test on an extension with an override row: both bridge
+     legs show `MusicClass: <override-class>`. Cross-tenant attended
+     transfer falls back to the foreign tenant's default. An extension
+     without an override row falls through to the tenant default.
+  3. `journalctl -u asterisk` 24h watch shows `per-extension override
+     applied` lines with matching `slug` / `tenant_id`.
+
+  Phase 3B install/enable commands are intentionally NOT generated in
+  this doc — they require a written operator approval per AGENTS.md
+  §Hard rules and must be enqueued through the deploy queue.
 - **Real test on canary tenant after install**:
     1. `POST /voice/moh/publish` for a tenant in Connect.
     2. On PBX: `asterisk -rx "database show connect/pbx_tenant_map"` →

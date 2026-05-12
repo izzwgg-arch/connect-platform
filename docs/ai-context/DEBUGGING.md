@@ -858,21 +858,44 @@ Verification checklist (read-only):
     and install-gate details: `docs/pbx/phase-3b-moh-extension-resolver-design.md`.
 
     To answer "has the Phase 3B resolver actually been installed on
-    this host yet?" the existing installer's `--check` mode now carries
-    a non-counting probe `2a` that greps the loaded
-    `[sub-connect-tenant-moh]` for the Phase 3B sentinel
-    `per-extension override applied`:
+    this host yet?" the existing installer's `--check` mode carries a
+    probe `2a` that greps the loaded `[sub-connect-tenant-moh]` for
+    the Phase 3B sentinel `per-extension override applied`:
 
     ```bash
     ssh connect-pbx "sudo /root/install-connect-tenant-moh-dialplan.sh --check"
     ```
 
-    On every host today the probe prints `[INFO] per-extension resolver
-    NOT installed — Phase 3A keys are published but inert`. After Phase
-    3B ships it flips to `[PASS] per-extension resolver installed (Phase
-    3B sentinel present in [sub-connect-tenant-moh])` and bumps the
+    The Phase 3B resolver heredoc landed in repo. On any host that has
+    NOT yet been re-installed since the heredoc landed, probe 2a will
+    still print `[INFO] per-extension resolver NOT installed — Phase
+    3A keys are published but inert`. After an operator re-runs the
+    installer (default mode) on that host, the same probe flips to
+    `[PASS] per-extension resolver installed (Phase 3B sentinel
+    present in [sub-connect-tenant-moh])` and bumps the
     `RESULT: PASS (5/5 ...)` line to `(6/6)`. The probe never FAILs;
-    its absence is the documented current state, not a regression.
+    its `[INFO]` state on an un-re-installed host is the documented
+    pre-install state for that host, not a regression.
+
+    Live-call verification after a successful install (canary only):
+
+    ```bash
+    # Place a call from an extension that has an admin-configured override.
+    # While the bridge is up, on the PBX:
+    sudo asterisk -rx 'core show channels concise'
+    sudo asterisk -rx 'core show channel <caller-chan>' | grep -iE 'MusicClass|__CONNECT_MOH'
+    sudo asterisk -rx 'core show channel <callee-chan>' | grep -iE 'MusicClass|__CONNECT_MOH'
+    # Then 24h watch:
+    sudo journalctl -u asterisk --since '24 hours ago' \
+      | grep -iE 'per-extension override applied|per-extension override skipped'
+    ```
+
+    Both bridge legs must show `MusicClass: <override-class>` for an
+    extension with an override row and `MusicClass: <tenant-default>`
+    for an extension without one. The `applied` lines in the journal
+    must have `slug` matching the resolver's `tenant_id` (cross-tenant
+    leak would show mismatched slug/tenant_id — should be impossible
+    per the resolver's cross-tenant guard).
 
 4. Confirm the per-tenant connect-leg hook + PJSIP append exist for THIS
    tenant (caller-leg coverage). The installer enumerates these from

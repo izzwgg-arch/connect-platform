@@ -1,12 +1,26 @@
-# Phase 3B — Per-extension MOH resolver design (preflight only)
+# Phase 3B — Per-extension MOH resolver design
 
-**Status:** Preflight design. No PBX install, resolver change, trunk-wrapper
-edit, portal UI, worker bulk job, or deploy is shipping in this phase.
+**Status:** Resolver heredoc landed in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh`. The change is
+purely in the repo — no PBX install, no deploy queue run, no trunk-
+wrapper edit has been executed from this repo change. The edited
+installer awaits an operator-driven install on the canary PBX **after**
+the preflight gate in §6 passes. Portal UI, worker bulk job, and the
+trunk-33 wrapper follow-up remain unimplemented and out of scope.
 
-**Scope of this doc:** the resolver snippet Phase 3B would splice into
-`[sub-connect-tenant-moh]`, the install gate, the rollback contract, and the
-risks. The only code shipping alongside this doc is the read-only diagnostic
-`scripts/pbx/diag-connect-moh-extension-key-readiness.sh`.
+**Scope of this doc:** the resolver snippet Phase 3B splices into
+`[sub-connect-tenant-moh]`, the install gate, the rollback contract, and
+the risks. The shipped code consists of:
+
+- `scripts/pbx/install-connect-tenant-moh-dialplan.sh` — resolver heredoc
+  edit (Phase 3B insertion between the existing slug-resolved guard and
+  the existing tenant-default read).
+- `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` — read-only
+  preflight diagnostic (already shipped at SHA `066f437`).
+- `scripts/pbx/install-connect-tenant-moh-dialplan.sh --check` probe 2a
+  — sentinel detector (already shipped at SHA `6697184`). Sentinel
+  substring `per-extension override applied` matches the success-path
+  NoOp this snippet emits on the live PBX.
 
 ---
 
@@ -19,16 +33,25 @@ risks. The only code shipping alongside this doc is the read-only diagnostic
   - `connect/t_<slug>/extensions/<ext>/active_moh_class`
   Tombstone contract: rollback writes empty-string for keys that the
   rolled-back publish ADDED. The existing AstDB write channel cannot DEL.
-- **Asterisk has no reader for this family yet.** The currently-installed
-  resolver `[sub-connect-tenant-moh]` (heredoc'd inside
-  `scripts/pbx/install-connect-tenant-moh-dialplan.sh`, approx. line 947)
-  only reads `connect/t_<slug>/moh_class` with `active_moh_class` fallback.
-- Per-extension overrides are therefore persisted and snapshotted on every
-  publish but **functionally inert on live calls**. The tenant default still
-  plays on hold for every extension.
+- **Asterisk reader (Phase 3B, now in repo).** The resolver heredoc
+  `[sub-connect-tenant-moh]` inside
+  `scripts/pbx/install-connect-tenant-moh-dialplan.sh` now reads the
+  per-extension family **before** the tenant-default `moh_class` /
+  `active_moh_class` reads. The new lookup runs only after TENANT_ID +
+  TENANT_SLUG_LOCAL are resolved and only after a channel-name → tenant
+  cross-check; on any failure it falls through to the unchanged tenant-
+  default read. Behaviour is purely additive — the existing tenant-
+  default path is byte-identical.
+- **Live-call effect lands only at installer run time.** The repo edit
+  changes only the heredoc body the installer emits when re-run. The
+  PBX continues running whatever resolver was last installed until a
+  re-install lands. Phase 3A keys remain persisted and snapshotted as
+  before; their interpretation flips from inert to active on the host
+  the moment the new dialplan reloads.
 
-Phase 3B closes that gap. This document pins the resolver design before any
-installer edit is attempted.
+This document pins the shipped resolver design and the install gate
+that must be satisfied before any operator-driven install command is
+generated.
 
 ---
 
@@ -167,23 +190,33 @@ Berkeley DB point lookups (sub-millisecond). Negligible.
 
 ---
 
-## 5. Install gate (required before Phase 3B ships)
+## 5. Install gate (required before an operator runs the updated installer)
 
-1. `sudo bash scripts/pbx/diag-connect-moh-extension-key-readiness.sh`
+The repo edit has shipped, but the canary PBX must clear every gate
+below **before** an install command is generated and run:
+
+1. `sudo bash /root/diag-connect-moh-extension-key-readiness.sh --tag before-3b`
    exits 0 on the canary PBX.
-2. `sudo bash scripts/pbx/diag-connect-moh-preflight-snapshot.sh --tag before-3b`
+2. `sudo bash /root/diag-connect-moh-preflight-snapshot.sh --tag before-3b`
    captured and retained.
 3. At least one non-zero `MohExtensionOverride` row exists for a mapped
    tenant (otherwise the resolver change ships untested).
 4. `sudo /root/install-connect-tenant-moh-dialplan.sh --check` exits 0
-   (current state is healthy before we edit it).
-5. When the Phase 3B installer edit ships, `--check` gets a new HARD
-   probe that greps the loaded resolver for the sentinel
-   `per-extension override applied` NoOp.
-6. Deploy ONLY via the deploy queue per `AGENTS.md` §Hard rules.
+   (current state is healthy before we edit it). Probe 2a will read
+   `[INFO] per-extension resolver NOT installed` here — that is the
+   expected pre-install state.
+5. After install, the same `--check` must report
+   `[PASS] per-extension resolver installed` (probe 2a flips to PASS
+   automatically because the new heredoc's success-path NoOp contains
+   the substring `per-extension override applied`). `RESULT` count
+   must read `(6/6 checks healthy)`.
+6. Deploy ONLY via the deploy queue per `AGENTS.md` §Hard rules. No
+   direct SSH installer invocation.
 7. Rollout: canary tenant (T3 / Secro) only for the first 24h. Sign-off
-   requires a live hold test on an extension that has an override
-   configured, plus a ConnectCdr check.
+   requires the live-call matrix in §F of the implementation plan
+   (caller + callee `MusicClass` shows the override class, cross-
+   tenant transfer falls back to foreign tenant default, no-override
+   extension falls through to tenant default).
 
 ---
 
@@ -233,12 +266,22 @@ Partial-fail (resolver loads but plays the wrong class): operator runs
 
 ---
 
-## 8. What ships alongside this doc (preflight only)
+## 8. What ships in repo at this status
 
+- `scripts/pbx/install-connect-tenant-moh-dialplan.sh` — resolver
+  heredoc carries the Phase 3B per-extension lookup. Live-call effect
+  on a host is gated on someone running the installer there.
 - `scripts/pbx/diag-connect-moh-extension-key-readiness.sh` — read-only
-  diagnostic (details in its own header; exit 0 is the Phase 3B install
-  gate).
+  preflight diagnostic (header pinned at SHA `066f437`; exit 0 is the
+  Phase 3B install gate).
+- `scripts/pbx/install-connect-tenant-moh-dialplan.sh --check` probe 2a
+  — sentinel detector (header pinned at SHA `6697184`). Flips from
+  `[INFO]` to `[PASS]` automatically the first time a re-installed
+  dialplan reloads with the new heredoc.
 - This design doc.
-- Doc updates in `docs/ai-context/{TELEPHONY,DEBUGGING,KNOWN_ISSUES,ASTDB_KEYS}.md`.
+- Doc updates in
+  `docs/ai-context/{TELEPHONY,DEBUGGING,DEPLOYMENT,KNOWN_ISSUES,ASTDB_KEYS}.md`.
 
-Nothing else. No installer edit, no dialplan reload, no deploy.
+What is **not** in this change set: no PBX install command run, no
+deploy queue invocation, no dialplan reload, no trunk-wrapper edit,
+no portal UI, no worker bulk job, no API or schema change.

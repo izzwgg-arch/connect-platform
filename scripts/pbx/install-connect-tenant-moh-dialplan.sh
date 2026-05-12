@@ -969,8 +969,10 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ;
 ;   connect/pbx_tenant_map/<numeric-vital-tenant-id>/slug      → tenant slug
 ;   connect/pbx_tenant_map/<numeric-vital-tenant-id>/moh_class → effective class
-;   connect/t_<slug>/moh_class                                 → primary value
-;   connect/t_<slug>/active_moh_class                          → fallback alias
+;   connect/t_<slug>/moh_class                                 → tenant default
+;   connect/t_<slug>/active_moh_class                          → tenant alias
+;   connect/t_<slug>/extensions/<ext>/moh_class                → per-extension override (Phase 3B)
+;   connect/t_<slug>/extensions/<ext>/active_moh_class         → per-extension alias  (Phase 3B)
 ;
 ; Wired in via the VitalPBX-generated [sub-before-bridging-call] in
 ; extensions__20-baseplan.conf, which Gosubs [global-before-bridging-call-hook]
@@ -978,9 +980,25 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ; be bridged so when that leg is later put on hold, MoH plays the tenant's
 ; selected class.
 ;
-; Fail-safe: any missing AstDB key, missing endpoint prefix, or non-numeric
-; tenant id results in a bare Return() and leaves the channel's musicclass
-; untouched. NEVER hangs up, redirects, or alters CDR/recording behavior.
+; Lookup order (first non-empty wins):
+;   1. connect/t_<slug>/extensions/<ext>/moh_class          (Phase 3B)
+;   2. connect/t_<slug>/extensions/<ext>/active_moh_class   (Phase 3B alias)
+;   3. connect/t_<slug>/moh_class                           (tenant default)
+;   4. connect/t_<slug>/active_moh_class                    (tenant alias)
+;
+; The per-extension lookup (1, 2) only runs when the channel name resolves
+; cleanly to "T<TENANT_ID>_<ext>" with <ext> matching [A-Za-z0-9_-]{1,32}
+; AND the parsed tenant id equals the resolver's already-resolved TENANT_ID
+; (cross-tenant defence — see scripts/pbx/install-connect-tenant-moh-dialplan.sh
+; design notes / docs/pbx/phase-3b-moh-extension-resolver-design.md §4.1).
+; Empty-string AstDB values are treated as tombstones (left by Phase 3A
+; rollback) — they fall through to the next lookup, never apply as "".
+;
+; Fail-safe: any missing AstDB key, missing endpoint prefix, non-numeric
+; tenant id, channel-name parse failure, or extension-token shape failure
+; results in a bare Return() (when no tenant default exists) or a fall
+; through to the tenant default (when one does). NEVER hangs up, redirects,
+; or alters CDR/recording behavior.
 ; ============================================================================
 
 [sub-connect-tenant-moh]
@@ -1010,6 +1028,40 @@ exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} call
  same => n,GotoIf($["${TENANT_ID}" = ""]?done)
  same => n,Set(TENANT_SLUG_LOCAL=${DB(connect/pbx_tenant_map/${TENANT_ID}/slug)})
  same => n,GotoIf($["${TENANT_SLUG_LOCAL}" = ""]?done)
+ ; ── Phase 3B: per-extension MOH override lookup ─────────────────────────────
+ ; Runs only after TENANT_ID + TENANT_SLUG_LOCAL are resolved. Cross-checks
+ ; the channel-name tenant token against TENANT_ID before reading per-
+ ; extension AstDB keys. Empty-string values are tombstones (written by
+ ; Phase 3A rollback) — fall through to tenant default below. Never hangs
+ ; up, redirects, or alters CDR. On any parse / mismatch / lookup failure,
+ ; falls through to the existing tenant-default read on the line marked
+ ; "tenant-default read" below. Sentinel NoOp on the success path is
+ ; "Connect tenant MOH per-extension override applied …" — also the
+ ; substring `--check` probe 2a greps for.
+ same => n,Set(EXT_OVR=)
+ same => n,Set(CHAN_ENDPOINT=${CHANNEL(pjsip,endpoint)})
+ same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_NAME_LOCAL=${CHANNEL(name)}))
+ same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_NAME_LOCAL=${CUT(CHAN_NAME_LOCAL,/,2-)}))
+ same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_ENDPOINT=${REGEX("^(.+)-[0-9a-fA-F]+$" ${CHAN_NAME_LOCAL})}))
+ same => n,Set(CH_HEAD=${CUT(CHAN_ENDPOINT,_,1)})
+ same => n,Set(CH_TAIL=${CUT(CHAN_ENDPOINT,_,2-)})
+ same => n,GotoIf($["${CH_HEAD:0:1}" != "T"]?skip_ext_ovr)
+ same => n,Set(CH_TID=${FILTER(0-9,${CH_HEAD:1})})
+ same => n,GotoIf($["${CH_TID}" = ""]?skip_ext_ovr)
+ same => n,GotoIf($["${CH_TID}" != "${TENANT_ID}"]?skip_ext_ovr)
+ same => n,GotoIf($["${CH_TAIL}" = ""]?skip_ext_ovr)
+ same => n,Set(CH_EXT_SAFE=${FILTER(A-Za-z0-9_-,${CH_TAIL})})
+ same => n,GotoIf($["${CH_EXT_SAFE}" != "${CH_TAIL}"]?skip_ext_ovr)
+ same => n,GotoIf($[${LEN(${CH_EXT_SAFE})} > 32]?skip_ext_ovr)
+ same => n,Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh_class)})
+ same => n,ExecIf($["${EXT_OVR}" = ""]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/active_moh_class)}))
+ same => n,GotoIf($["${EXT_OVR}" = ""]?skip_ext_ovr)
+ same => n,Set(CHANNEL(musicclass)=${EXT_OVR})
+ same => n,Set(__CONNECT_MOH=${EXT_OVR})
+ same => n,NoOp(Connect tenant MOH per-extension override applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ext=${CH_EXT_SAFE} class=${EXT_OVR})
+ same => n,Return()
+ same => n(skip_ext_ovr),NoOp(Connect tenant MOH per-extension override skipped tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ch=${CHAN_ENDPOINT})
+ ; ── Tenant-default read (existing pre-Phase-3B path) ────────────────────────
  same => n,Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/moh_class)})
  same => n,ExecIf($["${MOH_CLASS_LOCAL}" = ""]?Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/active_moh_class)}))
  same => n,GotoIf($["${MOH_CLASS_LOCAL}" = ""]?done)

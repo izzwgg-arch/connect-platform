@@ -508,14 +508,27 @@ Three static dialplan contexts in
   `[sub-connect-tenant-moh]` using `${TENANT}/${CALLER}/${CALLEE}` set
   by `[sub-before-connecting-call]` priorities 2..4.
 
-**Per-extension overrides (Phase 3A writer live, resolver = Phase 3B,
-preflight-only at 2026-05-12).** `doMohPublish` (`apps/api/src/server.ts`)
-now writes `connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}`
-for every enabled `MohExtensionOverride`, and the rollback handler writes
-empty-string tombstones. **The installed `[sub-connect-tenant-moh]` does
-NOT read these keys yet** — per-extension overrides are persisted but
-functionally inert on live calls until the Phase 3B resolver change
-ships. Phase 3B is scoped in
+**Per-extension overrides (Phase 3A writer live, Phase 3B resolver in
+repo as of 2026-05-12; live-call effect lands per-host on next
+installer run).** `doMohPublish` (`apps/api/src/server.ts`) writes
+`connect/t_<slug>/extensions/<ext>/{moh_class,active_moh_class}` for
+every enabled `MohExtensionOverride`, and the rollback handler writes
+empty-string tombstones. `[sub-connect-tenant-moh]` in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh` now reads the
+per-extension family **before** the tenant-default reads: it derives
+the channel's tenant + extension from `CHANNEL(pjsip,endpoint)`
+(preferred) or `CHANNEL(name)` regex (fallback), cross-checks the
+parsed tenant id against the channel-context-derived `TENANT_ID`
+(defence-in-depth against attended-transfer / Local-channel leaks),
+and reads `connect/t_<slug>/extensions/<ext>/moh_class` with
+`.../active_moh_class` fallback. Empty-string values are tombstones —
+the resolver falls through to the tenant default. On any parse, shape,
+mismatch, or empty-key failure the resolver falls through to the
+existing tenant-default `Set(MOH_CLASS_LOCAL=…)` read; it never hangs
+up, never redirects, never alters CDR. **The repo carries the new
+heredoc, but live calls on any specific PBX continue to behave per
+the previously-installed dialplan until an operator runs the updated
+installer on that host.** Phase 3B is scoped in
 `docs/pbx/phase-3b-moh-extension-resolver-design.md`; the install gate
 is a read-only diagnostic on the PBX:
 
