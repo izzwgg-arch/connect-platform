@@ -39,6 +39,12 @@ import {
   type PhoneContactCandidate,
 } from '../contacts/phoneContactsImport';
 
+/** Temporary diagnostics for import CTA — remove or downgrade after production verification. */
+function importDiag(tag: string, payload?: Record<string, unknown>) {
+  if (payload === undefined) console.log(`[contacts_import] ${tag}`);
+  else console.log(`[contacts_import] ${tag}`, payload);
+}
+
 type Step = 'permission' | 'permission_denied' | 'loading' | 'preview' | 'importing' | 'done' | 'error';
 
 type ProgressState = { done: number; total: number; currentName: string } | null;
@@ -194,9 +200,23 @@ export function ImportPhoneContactsModal({
   }, [allFilteredSelected, importableInFiltered]);
 
   const runImport = useCallback(async () => {
-    if (!authToken || !preview) return;
+    const selectedCount = selectedIds.size;
+    importDiag('runImport_entered', { selectedCount });
+    if (!authToken) {
+      importDiag('runImport_returned_early', { reason: 'no_auth_token', selectedCount });
+      return;
+    }
+    if (!preview) {
+      importDiag('runImport_returned_early', { reason: 'no_preview', selectedCount });
+      return;
+    }
     const chosen = preview.candidates.filter((c) => selectedIds.has(c.id));
     if (chosen.length === 0) {
+      importDiag('runImport_returned_early', {
+        reason: 'nothing_selected',
+        selectedCount,
+        previewCandidateCount: preview.candidates.length,
+      });
       Alert.alert('Nothing selected', 'Pick at least one contact to import.');
       return;
     }
@@ -218,6 +238,22 @@ export function ImportPhoneContactsModal({
       setStep('error');
     }
   }, [authToken, preview, selectedIds, onImported]);
+
+  useEffect(() => {
+    if (step !== 'preview' || !preview) return;
+    const selectedCount = selectedIds.size;
+    const disabled = selectedCount === 0;
+    const importableCount = preview.candidates.filter((c) => !c.alreadyExists && !c.skipReason).length;
+    const selectedNotInPreview = [...selectedIds].filter((id) => !preview.candidates.some((c) => c.id === id));
+    importDiag('final_import_button_rendered', {
+      selectedCount,
+      disabled,
+      newCount: preview.newCount,
+      importableCount,
+      selectedIdsMatchLoaded: selectedNotInPreview.length === 0,
+      orphanSelectedCount: selectedNotInPreview.length,
+    });
+  }, [step, preview, selectedIds]);
 
   const closeModal = useCallback(() => {
     if (step === 'importing') return; // don't allow close mid-import
@@ -333,43 +369,59 @@ export function ImportPhoneContactsModal({
                   </Text>
                 </TouchableOpacity>
 
-                <FlatList
-                  data={filteredCandidates}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={{ paddingBottom: 120 }}
-                  renderItem={({ item }) => (
-                    <CandidateRow
-                      candidate={item}
-                      selected={selectedIds.has(item.id)}
-                      onToggle={toggle}
-                    />
-                  )}
-                  ListEmptyComponent={
-                    <Text style={[typography.body, { color: colors.textTertiary, textAlign: 'center', marginTop: 32 }]}>
-                      No contacts match your search.
-                    </Text>
-                  }
-                />
+                <View style={styles.previewScrollRegion}>
+                  <FlatList
+                    style={styles.previewFlatList}
+                    data={filteredCandidates}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={styles.previewListContent}
+                    renderItem={({ item }) => (
+                      <CandidateRow
+                        candidate={item}
+                        selected={selectedIds.has(item.id)}
+                        onToggle={toggle}
+                      />
+                    )}
+                    ListEmptyComponent={
+                      <Text style={[typography.body, { color: colors.textTertiary, textAlign: 'center', marginTop: 32 }]}>
+                        No contacts match your search.
+                      </Text>
+                    }
+                  />
 
-                <View style={[styles.footer, { paddingHorizontal: 0 }]}>
-                  <TouchableOpacity
-                    onPress={onClose}
-                    style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
-                    activeOpacity={0.78}
-                  >
-                    <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={runImport}
-                    style={[styles.btn, styles.btnPrimary, { backgroundColor: colors.primary }]}
-                    activeOpacity={0.84}
-                    disabled={selectedIds.size === 0}
-                  >
-                    <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
-                    <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
-                      Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={[styles.footer, { paddingHorizontal: 0 }]}>
+                    <TouchableOpacity
+                      onPress={onClose}
+                      style={[styles.btn, styles.btnSecondary, { borderColor: colors.border }]}
+                      activeOpacity={0.78}
+                    >
+                      <Text style={[typography.labelLg, { color: colors.textSecondary }]}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityState={{ disabled: selectedIds.size === 0 }}
+                      onPress={() => {
+                        const selectedCount = selectedIds.size;
+                        // Do not use `disabled={true}` on this control: RN suppresses onPress when
+                        // disabled, so logcat never showed final_import_button_pressed / runImport_*.
+                        importDiag('final_import_button_pressed', { selectedCount });
+                        void runImport();
+                      }}
+                      style={[
+                        styles.btn,
+                        styles.btnPrimary,
+                        {
+                          backgroundColor: colors.primary,
+                          opacity: selectedIds.size === 0 ? 0.42 : 1,
+                        },
+                      ]}
+                      activeOpacity={0.84}
+                    >
+                      <Ionicons name="cloud-upload-outline" size={17} color="#fff" />
+                      <Text style={[typography.labelLg, { color: '#fff', marginLeft: 8 }]}>
+                        Import {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </>
             )}
@@ -655,6 +707,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
     borderWidth: StyleSheet.hairlineWidth,
     maxHeight: '92%',
+    width: '100%',
   },
   headerRow: {
     alignItems: 'center',
@@ -689,6 +742,7 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
+    minHeight: 0,
     paddingTop: 8,
   },
   center: {
@@ -743,6 +797,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
     marginBottom: 8,
+  },
+  /** Keeps FlatList height-bounded so Cancel/Import stay visible above the sheet bottom (safe area). */
+  previewScrollRegion: {
+    flex: 1,
+    minHeight: 0,
+  },
+  previewFlatList: {
+    flex: 1,
+  },
+  previewListContent: {
+    paddingBottom: 12,
   },
   row: {
     flexDirection: 'row',

@@ -53,7 +53,7 @@ if (-not (Test-Path $mobileDir)) {
 
 Set-Location $mobileDir
 Write-Host "[mobile-live] Starting Metro from $mobileDir"
-Write-Host "[mobile-live] Open the Connect DEV CLIENT app on the phone — JS updates will fast-refresh."
+Write-Host "[mobile-live] Open the Connect DEV CLIENT app on the phone; JS updates will fast-refresh."
 Write-Host ""
 
-pnpm exec expo start --dev-client --localhost
+pnpm exec expo start --dev-client --localhost --port 8081
