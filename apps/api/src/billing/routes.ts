@@ -643,12 +643,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return { ok: true, simulated: result.simulated, config: maskSolaConfig(updated, secrets) };
     } catch (err: any) {
       const code = String(err?.code || "SOLA_VALIDATION_FAILED");
+      const xError: string | undefined = err?.xError || undefined;
+      const xErrorCode: string | undefined = err?.xErrorCode || undefined;
+      const xResult: string | undefined = err?.xResult || undefined;
+      const message = xError || code;
       const updated = await (db as any).billingSolaConfig.update({
         where: { tenantId },
-        data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: code, updatedByUserId: u.sub },
+        data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: xErrorCode || code, updatedByUserId: u.sub },
       });
-      await logBillingEvent({ tenantId, type: "sola.test_failed", message: "SOLA gateway test failed.", metadata: { code } });
-      return reply.code(400).send({ error: "sola_validation_failed", code, config: maskSolaConfig(updated, secrets) });
+      await logBillingEvent({ tenantId, type: "sola.test_failed", message: "SOLA gateway test failed.", metadata: { code, xError, xErrorCode, xResult } });
+      return reply.code(400).send({ error: "sola_validation_failed", code, message, xResult, xErrorCode, config: maskSolaConfig(updated, secrets) });
     }
   });
 

@@ -91,6 +91,36 @@ export type RefundTransactionInput = {
 /** Sola Transaction API (gatewayjson) host — see https://docs.solapayments.com/ */
 export const DEFAULT_CARDKNOX_GATEWAY_BASE = "https://x1.cardknox.com";
 
+/**
+ * Returns true when `xErrorCode` / `xError` indicates the API key itself is
+ * invalid or unauthorized, as opposed to a card/token/transaction error.
+ *
+ * Error codes per https://docs.cardknox.com/api/error-codes:
+ *   01208 – Specified Key Not Found  (xKey invalid / not found)
+ *   01082 – Login Failed
+ *   01078 – Authentication Error
+ *   00104 – Login failed (untrusted domain)
+ *   01222 – Unauthorized Token / Vendor ID or iFields key invalid
+ *
+ * Text fallback handles gateways that omit numeric xErrorCode.
+ */
+export function isApiKeyAuthError(xErrorCode: string, xError: string): boolean {
+  const KEY_AUTH_CODES = new Set(["01208", "01082", "01078", "00104", "01222"]);
+  if (xErrorCode && KEY_AUTH_CODES.has(String(xErrorCode).trim())) return true;
+  const lower = String(xError || "").toLowerCase();
+  return (
+    lower.includes("invalid xkey") ||
+    lower.includes("invalid key") ||
+    lower.includes("key not found") ||
+    lower.includes("specified key not found") ||
+    lower.includes("not authorized") ||
+    lower.includes("access denied") ||
+    lower.includes("unauthorized") ||
+    lower.includes("login failed") ||
+    lower.includes("authentication error")
+  );
+}
+
 function ensureConfigured(config: SolaCardknoxConfig) {
   if (!config.apiKey) {
     const err: any = new Error("NOT_CONFIGURED");
@@ -318,19 +348,39 @@ export class SolaCardknoxAdapter {
   async testConnection(): Promise<{ ok: boolean; simulated: boolean }> {
     if (this.config.simulate) return { ok: true, simulated: true };
 
-    /** Reachability + xKey check via gatewayjson only (no card, no monetary capture). */
+    /**
+     * Connectivity + xKey probe via gatewayjson (no card, no monetary capture).
+     *
+     * We send cc:auth with a deliberately non-existent token.  With a VALID key
+     * the gateway responds xResult:"E" + xErrorCode:"01727" ("Specified Token Not
+     * Found") — this is the expected outcome; the key IS working.
+     * With an INVALID key it responds xResult:"E" + xErrorCode:"01208"
+     * ("Specified Key Not Found") or similar auth codes — that means the key is
+     * wrong and we should surface the error.
+     * xResult:"D" (declined) or "A" (approved) also confirm the key is accepted.
+     */
     const payload = await postGatewayJson(this.config, {
       xCommand: "cc:auth",
-      xToken: "CONNECT_VALIDATION_INVALID_TOKEN",
+      xToken: "CONNECT_VALIDATION_PROBE",
       xAmount: "0.00",
       xInvoice: `CONNECT_PING_${Date.now()}`,
     });
-    const xr = String((payload as any).xResult || "").toUpperCase();
-    if (xr === "E") {
-      const err: any = new Error("SOLA_GATEWAY_ERROR");
-      err.code = String((payload as any).xError || (payload as any).xStatus || "SOLA_GATEWAY_ERROR");
+
+    const xResult = String(payload.xResult || "").toUpperCase();
+    const xError = String(payload.xError || "");
+    const xErrorCode = String(payload.xErrorCode || "");
+
+    if (xResult === "E" && isApiKeyAuthError(xErrorCode, xError)) {
+      const err: any = new Error("SOLA_VALIDATION_FAILED");
+      err.code = "SOLA_VALIDATION_FAILED";
+      err.xResult = xResult;
+      err.xError = xError || undefined;
+      err.xErrorCode = xErrorCode || undefined;
       throw err;
     }
+
+    // xResult "D", "A", or "E" for non-key reasons (e.g. token not found) all
+    // confirm the gateway is reachable and the API key is accepted.
     return { ok: true, simulated: false };
   }
 

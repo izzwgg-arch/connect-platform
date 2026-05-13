@@ -11591,8 +11591,22 @@ app.get("/admin/incidents", async (req, reply) => {
   // ── 1. Fetch system health from telephony service ─────────────────────────
   type TelephonyHealthResp = {
     status: "ok" | "degraded" | "down";
-    ami: { connected: boolean; lastEventAt: string | null; lastError: string | null };
-    ari: { restHealthy: boolean; lastError: string | null };
+    pbxLinkState?: "healthy" | "reconnecting" | "degraded" | "stale";
+    ami: {
+      connected: boolean;
+      lastEventAt: string | null;
+      lastError: string | null;
+      lastTrafficAt?: string | null;
+      reconnectCount?: number;
+      reconnectAttempt?: number;
+      lastDisconnectAt?: string | null;
+      connectedSince?: string | null;
+    };
+    ari: {
+      restHealthy: boolean;
+      lastError: string | null;
+      consecutiveProbeFailures?: number;
+    };
     activeCalls: number;
     uptimeSec: number;
   };
@@ -22792,12 +22806,16 @@ app.post("/billing/sola/config/test", async (req, reply) => {
     return { ok: true, simulated: result.simulated, code: "OK" };
   } catch (e: any) {
     const code = String(e?.code || "SOLA_VALIDATION_FAILED");
+    const xError: string | undefined = e?.xError || undefined;
+    const xErrorCode: string | undefined = e?.xErrorCode || undefined;
+    const xResult: string | undefined = e?.xResult || undefined;
+    const message = xError || code;
     const updated = await db.billingSolaConfig.update({
       where: { tenantId: admin.tenantId },
-      data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: code, updatedByUserId: admin.sub }
+      data: { lastTestAt: new Date(), lastTestResult: "FAILED", lastTestErrorCode: xErrorCode || code, updatedByUserId: admin.sub }
     });
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "SOLA_CREDENTIAL_TESTED_FAILED", entityType: "BillingSolaConfig", entityId: updated.id });
-    return reply.status(400).send({ error: "SOLA_VALIDATION_FAILED", code });
+    return reply.status(400).send({ error: "SOLA_VALIDATION_FAILED", code, message, xResult, xErrorCode });
   }
 });
 
