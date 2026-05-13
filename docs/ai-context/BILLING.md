@@ -81,6 +81,37 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 All three log a `BillingEventLog` event. **Admin add-card (iFields tokenization from the admin portal) is deferred.** Ask customers to add cards via the tenant billing portal (`/billing/payments`) for now.
 
+### Admin SMS payment links
+
+| Route | Purpose |
+|-------|---------|
+| `GET /admin/billing/platform/tenants/:tenantId/sms-capability` | Check whether the tenant has an enabled SMS provider + from-number. Returns `{ capable, fromNumber, provider, reason }` |
+| `POST /admin/billing/invoices/:id/sms-payment-link` | Send a payment link SMS to an operator-supplied destination phone. Body: `{ phone: string, note?: string }` |
+
+**Design:** Direct synchronous send from the API (not BullMQ). Billing payment links are low-volume and operator-triggered; immediate feedback is required. No new Prisma models or migrations needed.
+
+**Provider resolution (`resolveTenantSmsProvider`):**
+1. Load tenant `smsPrimaryProvider` (`TWILIO` | `VOIPMS`)
+2. Load `ProviderCredential` for that provider (must be `isEnabled: true`)
+3. Decrypt credentials (`decryptJson`) and construct `TwilioSmsProvider` or `VoipMsSmsProvider`
+4. From-number: tenant `defaultSmsFromNumber`, else first active `PhoneNumber`
+5. Returns `null` if any step fails → `sms_provider_unavailable`
+
+**Safeguards:**
+- Duplicate send: no same phone for the same invoice in the last 2 minutes (checked via `BillingEventLog` before send)
+- Invalid phone: basic length check; provider returns its own error for truly invalid numbers
+- Voided invoices blocked; PAID invoices allowed (operator may resend history)
+- Operator note (if provided) appended to the `BillingEventLog` message
+- Both success (`billing.sms_payment_link_sent`) and failure (`billing.sms_payment_link_failed`) events logged with `toPhone`, `fromPhone`, `providerMessageId`, `adminUserId`
+
+**Portal `SmsPaymentLinkModal`:**
+- Opens from the **SMS link** button on each actionable invoice row
+- Loads SMS capability on open; shows "SMS not available" with reason if provider is unconfigured
+- Step 1 (form): phone input + optional operator note
+- Step 2 (confirm): message preview (showing exact text, from-number, destination)
+- Step 3 (done): success confirmation; duplicate-submit blocked via `ref`
+- Message format: `{tenantName}: Pay invoice {invNum} ({balance}): {paymentUrl}`
+
 ## SOLA / Cardknox (implementation facts)
 
 - **Vendor:** SOLA (Cardknox). **Authoritative product docs:** [https://docs.solapayments.com/](https://docs.solapayments.com/)

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { SolaCardknoxAdapter, type SolaCardknoxConfig } from "@connect/integrations";
+import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
 import { buildBillingInvoicePreview, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
@@ -60,6 +60,63 @@ async function requirePlatformBilling(req: any, reply: any): Promise<BillingUser
 
 function publicPortalBase(): string {
   return process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com";
+}
+
+function centsToDollarsStr(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+// ── SMS provider resolution for billing ───────────────────────────────────────
+
+type TenantSmsProviderResult = {
+  provider: import("@connect/integrations").SmsProvider;
+  fromNumber: string;
+  providerName: string;
+};
+
+async function resolveTenantSmsProvider(tenantId: string): Promise<TenantSmsProviderResult | null> {
+  const tenant = await (db as any).tenant.findUnique({
+    where: { id: tenantId },
+    select: {
+      smsPrimaryProvider: true,
+      defaultSmsFromNumber: { select: { phoneNumber: true } },
+    },
+  });
+  if (!tenant) return null;
+
+  const providerName: string = tenant.smsPrimaryProvider || "TWILIO";
+  const credential = await (db as any).providerCredential.findUnique({
+    where: { tenantId_provider: { tenantId, provider: providerName } },
+  });
+  if (!credential || !credential.isEnabled) return null;
+
+  let smsProvider: import("@connect/integrations").SmsProvider;
+  try {
+    if (providerName === "TWILIO") {
+      const creds = decryptJson<TwilioCredentials>(credential.credentialsEncrypted);
+      if (!creds.accountSid || !creds.authToken) return null;
+      smsProvider = new TwilioSmsProvider(creds, false);
+    } else {
+      const creds = decryptJson<VoipMsCredentials>(credential.credentialsEncrypted);
+      if (!creds.username || !creds.password || !creds.fromNumber) return null;
+      smsProvider = new VoipMsSmsProvider(creds, false);
+    }
+  } catch {
+    return null;
+  }
+
+  let fromNumber: string | null = tenant.defaultSmsFromNumber?.phoneNumber ?? null;
+  if (!fromNumber) {
+    const anyNum = await (db as any).phoneNumber.findFirst({
+      where: { tenantId, status: "ACTIVE" },
+      select: { phoneNumber: true },
+      orderBy: { createdAt: "asc" },
+    });
+    fromNumber = anyNum?.phoneNumber ?? null;
+  }
+  if (!fromNumber) return null;
+
+  return { provider: smsProvider, fromNumber, providerName };
 }
 
 function ensureCredentialCrypto(reply: any): boolean {
@@ -965,6 +1022,95 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     await (db as any).tenantBillingSettings.updateMany({ where: { tenantId, defaultPaymentMethodId: methodId }, data: { defaultPaymentMethodId: null } });
     await logBillingEvent({ tenantId, type: "payment_method.removed", message: `Admin removed saved card`, metadata: { paymentMethodId: methodId, adminUserId: u.sub } });
     return { ok: true };
+  });
+
+  // ── Admin SMS payment link ────────────────────────────────────────────────────
+
+  app.get("/admin/billing/platform/tenants/:tenantId/sms-capability", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const result = await resolveTenantSmsProvider(tenantId);
+    if (!result) {
+      return { capable: false, fromNumber: null, provider: null, reason: "No enabled SMS provider credentials found for this tenant." };
+    }
+    return { capable: true, fromNumber: result.fromNumber, provider: result.providerName, reason: null };
+  });
+
+  app.post("/admin/billing/invoices/:id/sms-payment-link", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const input = z.object({
+      phone: z.string().min(7).max(20).optional(),
+      note: z.string().max(300).optional(),
+    }).parse(req.body || {});
+
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      include: { tenant: { include: { billingSettings: true } } },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
+
+    const smsCtx = await resolveTenantSmsProvider(invoice.tenantId);
+    if (!smsCtx) {
+      return reply.code(400).send({ error: "sms_provider_unavailable", message: "No enabled SMS provider credentials found for this tenant." });
+    }
+
+    const rawPhone = (input.phone || "").trim();
+    if (!rawPhone || rawPhone.length < 7) {
+      return reply.code(400).send({ error: "destination_phone_required", message: "Provide a destination phone number." });
+    }
+    const normalizedPhone = rawPhone.startsWith("+") ? rawPhone : `+1${rawPhone.replace(/\D/g, "")}`;
+    if (normalizedPhone.replace(/\D/g, "").length < 10) {
+      return reply.code(400).send({ error: "invalid_phone", message: "Phone number appears too short — check the number and try again." });
+    }
+
+    // Duplicate send protection: no same phone for this invoice in the last 2 minutes
+    const recentEvents = await (db as any).billingEventLog.findMany({
+      where: { invoiceId: id, type: "billing.sms_payment_link_sent", createdAt: { gte: new Date(Date.now() - 2 * 60_000) } },
+      select: { metadata: true },
+    });
+    const isDuplicate = recentEvents.some((e: any) => e.metadata?.toPhone === normalizedPhone);
+    if (isDuplicate) {
+      return reply.code(429).send({ error: "duplicate_sms_send", message: "A payment link was already sent to this number in the last 2 minutes. Please wait before resending." });
+    }
+
+    const payUrl = `${publicPortalBase()}/billing/invoices/${encodeURIComponent(invoice.id)}`;
+    const invLabel = invoice.invoiceNumber || invoice.id.slice(0, 8);
+    const balanceStr = centsToDollarsStr(invoice.balanceDueCents ?? invoice.totalCents);
+    const msgBody = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invLabel} (${balanceStr}): ${payUrl}`;
+
+    let providerMessageId: string | undefined;
+    try {
+      const result = await smsCtx.provider.sendMessage({
+        tenantId: invoice.tenantId,
+        to: normalizedPhone,
+        from: smsCtx.fromNumber,
+        body: msgBody,
+      });
+      providerMessageId = result.providerMessageId;
+    } catch (err: any) {
+      await logBillingEvent({
+        tenantId: invoice.tenantId,
+        invoiceId: id,
+        type: "billing.sms_payment_link_failed",
+        message: `SMS payment link send failed: ${err?.message || "unknown error"}`,
+        metadata: { toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, adminUserId: u.sub },
+      });
+      return reply.code(502).send({ error: "sms_send_failed", message: err?.message || "SMS provider returned an error. Check the phone number and try again." });
+    }
+
+    await logBillingEvent({
+      tenantId: invoice.tenantId,
+      invoiceId: id,
+      type: "billing.sms_payment_link_sent",
+      message: `Payment link sent via SMS to ${normalizedPhone}${input.note ? ` — ${input.note}` : ""}`,
+      metadata: { toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, providerMessageId, adminUserId: u.sub },
+    });
+
+    return { ok: true, toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, providerMessageId };
   });
 
   // ── Admin explicit charge with saved card ────────────────────────────────────

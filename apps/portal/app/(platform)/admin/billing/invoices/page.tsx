@@ -98,6 +98,13 @@ type TxDetail = TxRow & {
   idempotencyKey: string | null;
 };
 
+type SmsCapability = {
+  capable: boolean;
+  fromNumber: string | null;
+  provider: string | null;
+  reason: string | null;
+};
+
 type TxListResult = { transactions: TxRow[]; total: number; page: number; pages: number; limit: number };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -635,6 +642,166 @@ function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () =
   );
 }
 
+// ── SmsPaymentLinkModal ────────────────────────────────────────────────────────
+
+function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; onClose: () => void; onSuccess: () => void }) {
+  const [step, setStep] = useState<"form" | "confirm" | "done">("form");
+  const [phone, setPhone] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [sentTo, setSentTo] = useState("");
+  const submitted = useRef(false);
+
+  const capability = useAsyncResource<SmsCapability>(
+    () => apiGet<SmsCapability>(`/admin/billing/platform/tenants/${invoice.tenantId}/sms-capability`),
+    [invoice.tenantId],
+  );
+  const cap = capability.status === "success" ? capability.data : null;
+
+  const payUrl = `${typeof window !== "undefined" ? window.location.origin.replace(/:3000$/, ":3001") : ""}`
+    + `/billing/invoices/${invoice.id}`;
+  const msgPreview = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(invoice.balanceDueCents)}): ${payUrl}`;
+
+  async function send() {
+    if (submitted.current || busy) return;
+    submitted.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await apiPost<{ ok: boolean; toPhone: string; fromPhone: string; providerMessageId?: string }>(
+        `/admin/billing/invoices/${invoice.id}/sms-payment-link`,
+        { phone, note: note.trim() || undefined },
+      );
+      setSentTo(res.toPhone);
+      setStep("done");
+      onSuccess();
+    } catch (err) {
+      setError(billingErrorMessage(err, "SMS send failed."));
+      submitted.current = false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ ...modalStyle, width: "min(500px, 96vw)" }}>
+        <div className="row-actions" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0, flex: 1 }}>
+            Send Payment Link via SMS
+          </h3>
+          <button className="btn ghost" type="button" onClick={onClose}>✕</button>
+        </div>
+
+        <p style={{ fontSize: 13, margin: "0 0 14px" }}>
+          <strong>{invoice.tenant?.name}</strong> · Invoice {invoice.invoiceNumber || invoice.id.slice(0, 8)} · Balance: <strong>{dollars(invoice.balanceDueCents)}</strong>
+        </p>
+
+        {/* Provider capability check */}
+        {capability.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+        {capability.status === "error" ? <ErrorState message={capability.error} /> : null}
+
+        {cap && !cap.capable ? (
+          <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
+            <strong>SMS not available for this tenant.</strong>
+            <p style={{ margin: "4px 0 0", color: "#6b7280" }}>{cap.reason}</p>
+            <p style={{ margin: "8px 0 0", color: "#6b7280" }}>Configure Twilio or VoIP.ms credentials in the tenant SMS settings before using this feature.</p>
+          </div>
+        ) : null}
+
+        {cap?.capable ? (
+          <>
+            <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 6, padding: "8px 12px", fontSize: 12, marginBottom: 14, color: "#6b7280" }}>
+              From: <strong>{cap.fromNumber}</strong> · Provider: {cap.provider}
+            </div>
+
+            {step === "done" ? (
+              <>
+                <div style={{ color: "green", marginBottom: 16, fontSize: 14 }}>
+                  ✓ Payment link sent to {sentTo}.
+                </div>
+                <button className="btn primary" type="button" onClick={onClose}>Close</button>
+              </>
+            ) : step === "confirm" ? (
+              <>
+                <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 8, padding: "12px 14px", marginBottom: 14, fontSize: 13 }}>
+                  <p style={{ margin: "0 0 6px" }}>
+                    Sending to: <strong>{phone}</strong>
+                  </p>
+                  <p style={{ margin: "0 0 6px", color: "#6b7280", fontSize: 12 }}>
+                    Message preview (approximate):
+                  </p>
+                  <div style={{ fontFamily: "monospace", fontSize: 11, background: "#fff", borderRadius: 4, padding: "8px 10px", border: "1px solid var(--border, #e0e0e0)", wordBreak: "break-all" }}>
+                    {msgPreview}
+                  </div>
+                  {note ? <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 12 }}>Note: {note}</p> : null}
+                </div>
+                {error ? <div style={{ color: "#dc2626", marginBottom: 10, fontSize: 13 }}>{error}</div> : null}
+                <div className="row-actions">
+                  <button className="btn primary" type="button" disabled={busy} onClick={send}>
+                    {busy ? "Sending…" : "Send SMS"}
+                  </button>
+                  <button className="btn ghost" type="button" disabled={busy} onClick={() => { setStep("form"); submitted.current = false; }}>
+                    ← Back
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                    Destination phone number: <span style={{ color: "#dc2626" }}>*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    maxLength={20}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+1 (555) 555-5555"
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
+                  />
+                  <p style={{ margin: "4px 0 0", fontSize: 11, color: "#6b7280" }}>
+                    US numbers: enter 10 digits or +1 format. International: include + and country code.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                    Operator note (optional — logged to activity):
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={300}
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="e.g. Customer requested resend"
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
+                  />
+                </div>
+
+                {error ? <div style={{ color: "#dc2626", marginBottom: 10, fontSize: 13 }}>{error}</div> : null}
+
+                <div className="row-actions">
+                  <button
+                    className="btn primary"
+                    type="button"
+                    disabled={phone.trim().length < 7}
+                    onClick={() => setStep("confirm")}
+                  >
+                    Preview &amp; confirm →
+                  </button>
+                  <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
+                </div>
+              </>
+            )}
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 // ── Invoices tab ──────────────────────────────────────────────────────────────
 
 function InvoicesTab() {
@@ -653,6 +820,7 @@ function InvoicesTab() {
   const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(null);
   const [payInvoice, setPayInvoice] = useState<InvoiceRow | null>(null);
   const [cardsForTenant, setCardsForTenant] = useState<{ tenantId: string; name: string } | null>(null);
+  const [smsInvoice, setSmsInvoice] = useState<InvoiceRow | null>(null);
   const [listRev, setListRev] = useState(0);
 
   useEffect(() => {
@@ -885,10 +1053,17 @@ function InvoicesTab() {
                       {isLogOpen ? "Hide log" : "Activity"}
                     </button>
 
-                    {/* SMS placeholder — deferred */}
-                    <button className="btn ghost" type="button" disabled title="SMS payment link — coming soon">
-                      SMS link
-                    </button>
+                    {canAct ? (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={!!busy}
+                        onClick={() => setSmsInvoice(inv)}
+                        title="Send payment link via SMS"
+                      >
+                        SMS link
+                      </button>
+                    ) : null}
                   </div>
 
                   {/* Inline event log */}
@@ -941,6 +1116,14 @@ function InvoicesTab() {
           tenantId={cardsForTenant.tenantId}
           tenantName={cardsForTenant.name}
           onClose={() => setCardsForTenant(null)}
+        />
+      ) : null}
+
+      {smsInvoice ? (
+        <SmsPaymentLinkModal
+          invoice={smsInvoice}
+          onClose={() => setSmsInvoice(null)}
+          onSuccess={() => setListRev((r) => r + 1)}
         />
       ) : null}
     </>
