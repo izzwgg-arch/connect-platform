@@ -891,6 +891,46 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 11C — SMS Conversation Panel on Contact Detail
+
+```
+[ ] 1. Data source: timeline filter only
+        - SMS conversation derived from existing CrmTimelineEvent rows
+        - No new API endpoint added
+        - smsEvents = timeline filtered SMS_SENT + SMS_RECEIVED, newest first, max 25
+
+[ ] 2. SMS conversation panel renders
+        - Contact with no SMS: shows "No messages yet."
+        - SMS_SENT message: right-aligned blue bubble, to-phone chip, timestamp
+        - SMS_RECEIVED message: left-aligned purple bubble, from-phone chip, timestamp
+        - Panel header shows message count
+
+[ ] 3. Reply composer
+        - Calls real POST /crm/contacts/:id/sms
+        - ⌘↵ sends, or Send button
+        - Multi-phone selector if contact has >1 phone
+        - On success: clears box, refreshes timeline (loadTimeline called correctly)
+        - On failure: shows real error from API
+        - No fake success
+
+[ ] 4. doNotSms handling
+        - doNotSms=true: opted-out notice replaces composer
+        - doNotSms=false: composer always visible (no collapse toggle)
+
+[ ] 5. "Last SMS in" hint in CRM Details
+        - Only shown when at least one SMS_RECEIVED event exists
+        - Uses existing timeline data (no extra fetch)
+        - formatTimeAgo shows relative time
+
+[ ] 6. Bug fix
+        - handleSendSms now calls loadTimeline() correctly
+          (previously set timeline state to the wrapper object instead of events array)
+
+[ ] 7. Portal typecheck passes (0 errors)
+```
+
+---
+
 ## Phase 11B — Inbound SMS Timeline Events (SMS_RECEIVED)
 
 ```

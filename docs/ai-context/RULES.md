@@ -524,6 +524,16 @@
     - No new API route is needed for CRM recording playback — the existing stream endpoint
       covers all CRM roles (`canViewCustomers` permission includes all authenticated roles).
 
+85. **CRM SMS conversation panel must use timeline/provider-backed SMS events only.**
+    - The SMS conversation view on `/crm/contacts/:id` is derived by filtering
+      `CrmTimelineEvent` rows (`SMS_SENT`, `SMS_RECEIVED`) from the already-loaded
+      timeline state. No separate "SMS inbox" endpoint, no fake chat history.
+    - The composer calls the real `POST /crm/contacts/:id/sms` and refreshes
+      the timeline via `loadTimeline()` after success.
+    - `doNotSms` contacts must see the opted-out notice instead of the composer.
+    - No global SMS inbox, no unread counters, no MMS preview, no bulk SMS from
+      this panel. Keep it scoped to the single-contact conversation view.
+
 84. **CRM inbound SMS hook must be non-blocking and must never duplicate the inbound system.**
     - `crmInboundSmsHook` (API: `apps/api/src/crm/inboundSmsHook.ts`; worker:
       `apps/worker/src/crmInboundSmsHook.ts`) is fire-and-forget. Callers MUST use

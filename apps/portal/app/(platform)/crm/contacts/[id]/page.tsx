@@ -131,6 +131,16 @@ function formatDateTime(iso: string): string {
     " " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+function formatTimeAgo(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return days < 7 ? `${days}d ago` : formatDate(iso);
+}
+
 function stageColor(stage: CrmStage): string {
   return STAGE_OPTIONS.find((s) => s.value === stage)?.color ?? "#6b7280";
 }
@@ -449,7 +459,6 @@ export default function CrmContactDetailPage() {
   const [newEmailPosting, setNewEmailPosting] = useState(false);
 
   // SMS panel state
-  const [smsOpen, setSmsOpen] = useState(false);
   const [smsPhone, setSmsPhone] = useState<string>("");
   const [smsMessage, setSmsMessage] = useState("");
   const [smsSending, setSmsSending] = useState(false);
@@ -717,9 +726,7 @@ export default function CrmContactDetailPage() {
       });
       setSmsSuccess(true);
       setSmsMessage("");
-      // Refresh timeline so SMS_SENT event appears
-      const updated = await apiGet<TimelineEvent[]>(`/crm/contacts/${id}/timeline`);
-      setTimeline(updated);
+      await loadTimeline();
       setTimeout(() => setSmsSuccess(false), 3000);
     } catch (e: any) {
       setSmsError(e?.message || "Failed to send SMS");
@@ -753,6 +760,15 @@ export default function CrmContactDetailPage() {
   }
 
   const stage = contact.crmStage ?? "LEAD";
+
+  // Derive SMS conversation from timeline — newest-first, capped at 25.
+  // No new API call; reuses the timeline already loaded for the Activity feed.
+  const smsEvents = timeline
+    .filter((e) => e.type === "SMS_SENT" || e.type === "SMS_RECEIVED")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 25);
+
+  const lastSmsIn = smsEvents.find((e) => e.type === "SMS_RECEIVED") ?? null;
 
   return (
     <div className="stack compact-stack">
@@ -972,6 +988,12 @@ export default function CrmContactDetailPage() {
                       &nbsp;· {formatDate(contact.lastDispositionAt)}
                     </span>
                   )}
+                </span>
+              )}
+              {lastSmsIn && (
+                <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "#7c3aed" }}>
+                  <MessageSquareDot size={12} />
+                  Last SMS in: {formatTimeAgo(lastSmsIn.createdAt)}
                 </span>
               )}
             </div>
@@ -1262,22 +1284,74 @@ export default function CrmContactDetailPage() {
               </button>
             )}
           </div>
-          {/* ── Send SMS panel — only when contact has a phone and has not opted out ── */}
-          {contact.phones.length > 0 && !contact.doNotSms && (
-            <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-              <button
-                onClick={() => { setSmsOpen((o) => !o); setSmsError(null); setSmsSuccess(false); }}
-                style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem", padding: 0, fontWeight: 700, fontSize: "0.875rem", color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.04em" }}
-              >
-                <MessageSquareDot size={13} style={{ color: "#0891b2" }} />
-                Send SMS
-                <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--text-dim)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-                  {smsOpen ? "▲" : "▼"}
-                </span>
-              </button>
+          {/* ── SMS conversation panel — history + composer ─────────────────── */}
+          {contact.phones.length > 0 && (
+            <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
 
-              {smsOpen && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "0.125rem" }}>
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
+                <MessageSquareDot size={13} style={{ color: "#0891b2" }} />
+                <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
+                  SMS
+                </h3>
+                {smsEvents.length > 0 && (
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", fontWeight: 400 }}>
+                    · {smsEvents.length} message{smsEvents.length !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </div>
+
+              {/* Message history — newest first, max 25 */}
+              {timelineLoading ? (
+                <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>Loading…</p>
+              ) : smsEvents.length === 0 ? (
+                <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>No messages yet.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxHeight: "260px", overflowY: "auto" }}>
+                  {smsEvents.map((ev) => {
+                    const isSent = ev.type === "SMS_SENT";
+                    const m = ev.metadata as Record<string, unknown> | null;
+                    const phone = isSent
+                      ? (typeof m?.to === "string" ? m.to : null)
+                      : (typeof m?.from === "string" ? m.from : null);
+                    return (
+                      <div key={ev.id} style={{ display: "flex", flexDirection: "column", alignItems: isSent ? "flex-end" : "flex-start" }}>
+                        <div style={{
+                          maxWidth: "88%",
+                          padding: "0.375rem 0.625rem",
+                          borderRadius: isSent ? "0.75rem 0.75rem 0.25rem 0.75rem" : "0.75rem 0.75rem 0.75rem 0.25rem",
+                          background: isSent ? "#e0f2fe" : "#f3e8ff",
+                          color: isSent ? "#0c4a6e" : "#3b0764",
+                          fontSize: "0.8125rem",
+                          lineHeight: 1.5,
+                          wordBreak: "break-word",
+                        }}>
+                          {ev.body || <em style={{ opacity: 0.6 }}>(no body)</em>}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.1rem" }}>
+                          {phone && (
+                            <span style={{ fontSize: "0.6875rem", color: "var(--text-dim)", fontFamily: "monospace" }}>
+                              {phone}
+                            </span>
+                          )}
+                          <span style={{ fontSize: "0.6875rem", color: "var(--text-dim)" }}>
+                            {formatDateTime(ev.createdAt)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Composer or doNotSms notice */}
+              {contact.doNotSms ? (
+                <div style={{ padding: "0.4rem 0.625rem", borderRadius: "0.375rem", background: "#fef2f2", border: "1px solid #fca5a5", fontSize: "0.8125rem", color: "#991b1b", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <MessageSquareDot size={12} />
+                  SMS disabled — contact has opted out
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
                   {contact.phones.length > 1 && (
                     <select
                       value={smsPhone}
@@ -1292,25 +1366,33 @@ export default function CrmContactDetailPage() {
                       ))}
                     </select>
                   )}
-                  <textarea
-                    value={smsMessage}
-                    onChange={(e) => setSmsMessage(e.target.value)}
-                    rows={3}
-                    placeholder="Type your message…"
-                    maxLength={1600}
-                    style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5, fontSize: "0.8125rem" }}
-                  />
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <div style={{ display: "flex", gap: "0.375rem", alignItems: "flex-end" }}>
+                    <textarea
+                      value={smsMessage}
+                      onChange={(e) => setSmsMessage(e.target.value)}
+                      rows={2}
+                      placeholder="Reply…"
+                      maxLength={1600}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                          e.preventDefault();
+                          handleSendSms();
+                        }
+                      }}
+                      style={{ ...inputStyle, resize: "none", lineHeight: 1.5, fontSize: "0.8125rem", flex: 1 }}
+                    />
                     <button
                       onClick={handleSendSms}
                       disabled={smsSending || !smsMessage.trim()}
-                      style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", padding: "0.35rem 0.875rem", borderRadius: "0.375rem", border: "none", cursor: "pointer", background: "#0891b2", color: "#fff", fontSize: "0.8125rem", fontWeight: 600, opacity: smsSending || !smsMessage.trim() ? 0.6 : 1 }}
+                      title="Send SMS (⌘↵)"
+                      style={{ padding: "0.5rem 0.625rem", borderRadius: "0.375rem", border: "none", cursor: "pointer", background: "#0891b2", color: "#fff", opacity: smsSending || !smsMessage.trim() ? 0.6 : 1, flexShrink: 0 }}
                     >
-                      <Send size={11} />
-                      {smsSending ? "Sending…" : "Send SMS"}
+                      <Send size={14} />
                     </button>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
-                      {smsMessage.length}/1600
+                      {smsMessage.length > 0 ? `${smsMessage.length}/1600` : "⌘↵ to send"}
                     </span>
                     {smsSuccess && (
                       <span style={{ fontSize: "0.8125rem", color: "#059669", fontWeight: 600 }}>✓ Sent</span>
@@ -1321,12 +1403,6 @@ export default function CrmContactDetailPage() {
                   )}
                 </div>
               )}
-            </div>
-          )}
-          {contact.doNotSms && contact.phones.length > 0 && (
-            <div style={{ padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", border: "1px solid #fca5a5", fontSize: "0.8125rem", color: "#991b1b", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              <MessageSquareDot size={12} />
-              SMS disabled — this contact has opted out
             </div>
           )}
 
