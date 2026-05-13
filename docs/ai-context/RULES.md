@@ -508,6 +508,22 @@
     - This is read-only. Do not add any telephony control action to the on-call row.
     - The extension lookup is a single `findMany` scoped to `{ tenantId, ownerUserId: { in: userIds }, status: "ACTIVE" }` — bounded, no N+1.
 
+80. **CRM recording playback must always route through the existing safe recording endpoint.**
+    - Use `GET /voice/recording/:linkedId/stream` (or `/download`). These are the ONLY paths
+      that proxy audio from the PBX — they never expose `recordingPath` to the client.
+    - Pass the JWT as `?token=<jwt>` for browser `<audio>` elements (this pattern is explicitly
+      supported by the endpoint; the token is read server-side and Authorization is injected).
+    - Read the token from `localStorage.getItem("token") || localStorage.getItem("cc-token")`
+      (same pattern as `apiClient.ts` `browserToken()`).
+    - The endpoint already enforces tenant isolation: non-SUPER_ADMIN users are blocked if
+      `cdr.tenantId !== user.tenantId`.
+    - Never construct a raw PBX URL in the portal. Never expose `recordingPath` in any API
+      response visible to the browser.
+    - The "Play recording" button must only render when `recordingAvailable === true`
+      AND `event.linkedId` is present in the timeline event.
+    - No new API route is needed for CRM recording playback — the existing stream endpoint
+      covers all CRM roles (`canViewCustomers` permission includes all authenticated roles).
+
 ---
 
 ## Documentation

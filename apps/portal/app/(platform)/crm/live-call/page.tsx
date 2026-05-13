@@ -10,6 +10,7 @@ import {
   GitMerge, User,
 } from "lucide-react";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
+import { CrmRecordingPlayer } from "../../../../components/CrmRecordingPlayer";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
@@ -1269,15 +1270,7 @@ export default function LiveCallWorkspacePage() {
                                   </span>
                                 )}
                                 {hasRecording && event.linkedId && (
-                                  <a
-                                    href={`/api/voice/recording/${encodeURIComponent(event.linkedId)}/stream`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ fontSize: "0.6875rem", color: "#5b21b6", display: "inline-flex", alignItems: "center", gap: "0.2rem" }}
-                                  >
-                                    <Mic size={9} />
-                                    Rec
-                                  </a>
+                                  <CrmRecordingPlayer linkedId={event.linkedId} compact />
                                 )}
                               </div>
                             )}

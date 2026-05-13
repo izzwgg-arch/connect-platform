@@ -836,6 +836,61 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 10A — Recording Playback from CRM Timeline
+
+```
+[ ] 1. Recording player component exists
+        - apps/portal/components/CrmRecordingPlayer.tsx created
+        - Renders "Play recording" button (collapsed) and <audio controls> (expanded)
+        - Token read from localStorage ("token" or "cc-token")
+        - URL: /api/voice/recording/:linkedId/stream?token=...
+        - Error state shown if audio fails to load
+
+[ ] 2. Contact detail page shows inline player
+        - /crm/contacts/:id → CDR_INBOUND / CDR_OUTBOUND events with recordingAvailable=true
+          render <CrmRecordingPlayer> (not an <a> link)
+        - Events with recordingAvailable=false (or missing) show NO play button
+
+[ ] 3. Live-call workspace shows compact inline player
+        - /crm/live-call → CDR events with hasRecording=true render
+          <CrmRecordingPlayer compact> (not an <a> link)
+
+[ ] 4. Inline playback works end-to-end
+        - Click "Play recording" → audio element appears with the recording
+        - Audio can be played, paused, and seeked (Range header support confirmed)
+        - Collapse button (■) hides the audio element
+
+[ ] 5. Error state is handled
+        - If recording file is missing on PBX → "Unavailable" text + red icon shown
+        - No console errors for missing recordings
+
+[ ] 6. CDR events without recording show no button
+        - Events where recordingAvailable is false/null: no play button rendered
+
+[ ] 7. Cross-tenant access blocked
+        - Tenant isolation enforced server-side (user.tenantId !== cdr.tenantId → 403)
+        - No way to play a recording from a different tenant
+
+[ ] 8. No API changes
+        - Confirm: no changes to apps/api/**
+        - Confirm: no new Prisma migrations
+        - Confirm: no telephony changes
+
+[ ] 9. Portal typecheck passes
+        pnpm tsc --noEmit (apps/portal) → 0 errors
+
+[ ] 10. Bundle verification
+        - Confirm portal bundle contains: "Play recording", "Unavailable", "CrmRecordingPlayer"
+          (or minified equivalent)
+        - Confirm bundle does NOT contain raw "recordingPath" strings passed to <audio> src
+
+[ ] 11. Phone system /health unaffected
+        - /health returns {"ok":true}
+        - No telephony changes; PBX untouched
+```
+
+---
+
 ## Quick Commands
 
 ```bash

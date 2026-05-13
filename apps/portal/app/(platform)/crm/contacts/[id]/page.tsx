@@ -9,6 +9,7 @@ import {
   ClipboardList, CheckCheck, GitMerge, AlertTriangle, Calendar,
 } from "lucide-react";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
+import { CrmRecordingPlayer } from "../../../../../components/CrmRecordingPlayer";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 
@@ -295,20 +296,7 @@ function TimelineItem({ event, currentUserId, onEditNote, onDeleteNote }: Timeli
                 {disposition}
               </span>
               {recordingAvailable && event.linkedId && (
-                <a
-                  href={`/api/voice/recording/${encodeURIComponent(event.linkedId)}/stream`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: "0.25rem",
-                    fontSize: "0.6875rem", fontWeight: 600, padding: "0.125rem 0.375rem",
-                    borderRadius: 4, background: "#ede9fe", color: "#5b21b6",
-                    textDecoration: "none",
-                  }}
-                >
-                  <Mic size={10} />
-                  Recording
-                </a>
+                <CrmRecordingPlayer linkedId={event.linkedId} />
               )}
             </div>
           );
