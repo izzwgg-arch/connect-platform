@@ -509,6 +509,96 @@ Run after deploying Phase 8C portal changes.
 
 ---
 
+## Phase 8F — Wrap-Up Timer + Callback-Focused Power Flow
+
+### Automated/API checks
+```bash
+# Queue endpoint still returns 200 with all filter variants
+curl -s -H "Authorization: Bearer $JWT" "$API/crm/queue?filter=pending" | python -c "import sys,json; d=json.load(sys.stdin); print('OK pending', len(d['queue']))"
+curl -s -H "Authorization: Bearer $JWT" "$API/crm/queue?filter=due" | python -c "import sys,json; d=json.load(sys.stdin); print('OK due', len(d['queue']))"
+curl -s -H "Authorization: Bearer $JWT" "$API/crm/queue?filter=overdue" | python -c "import sys,json; d=json.load(sys.stdin); print('OK overdue', len(d['queue']))"
+
+# Zero API changes — no migration, no new routes
+# Verify queue page bundle contains Phase 8F code
+docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queue_paused" /app/apps/portal/.next/server/app/ -r 2>/dev/null | head -3
+```
+
+### Browser smoke test (manual, requires real lead in queue)
+```
+[ ] 1. Wrap-up timer after outcome save
+       - Enter power mode (?mode=power)
+       - Dial a lead (C) then click any outcome button (e.g. "No Answer")
+       - WrapUpOverlay appears showing: countdown (5→4→3…), lead preview, Go Now / Pause / Skip Next buttons
+       - Countdown reaches 0 → overlay disappears → next PowerCard shows
+       - VERIFY: no call was placed; FloatingDialer was not triggered
+
+[ ] 2. Go Now button
+       - After saving outcome, WrapUpOverlay appears
+       - Click "Go Now" (or press G) → immediately advances to next PowerCard
+
+[ ] 3. Pause from wrap-up
+       - After outcome save, WrapUpOverlay appears with countdown running
+       - Click "Pause" → countdown freezes; amber banner appears; PAUSED badge in header
+       - WrapUpOverlay still shows but countdown is frozen at current value
+       - Press P or click Resume → countdown restarts
+
+[ ] 4. Skip Next Lead during wrap-up
+       - WrapUpOverlay is showing with lead preview
+       - Click "Skip Next Lead" (or press X) → overlay closes, lead is skipped via API
+       - Next PowerCard shows the lead AFTER the skipped one
+
+[ ] 5. Persistent pause survives reload
+       - Pause the queue (click Pause or P)
+       - Reload the page (?mode=power still in URL)
+       - Queue opens in paused state (PAUSED badge in header, amber health banner)
+       - Resume → PAUSED badge clears; localStorage key removed
+
+[ ] 6. Callback filter toggle
+       - While in power mode, click "Due" in the filter toggle group (header)
+       - URL changes to ?mode=power&filter=due
+       - Queue reloads showing only callbacks due
+       - Click "Overdue" → URL = ?mode=power&filter=overdue
+       - Click "Pending" → URL = ?mode=power (no filter param)
+       - VERIFY: manual queue tabs are unchanged (not URL-driven)
+
+[ ] 7. Queue health banner
+       - Simulate SIP disconnected (unregister softphone) → amber banner: "SIP disconnected…"
+       - With queue paused → amber banner: "Queue paused…"
+       - With overdue callbacks and Pending filter active → red banner: "N callbacks overdue"
+         + "Switch to Overdue →" link navigates to overdue filter
+       - All banners disappear when conditions are resolved
+
+[ ] 8. Keyboard shortcuts — new
+       - During wrap-up: G → Go Now (immediate advance)
+       - Anytime in power mode: P → toggles pause (works even when paused)
+       - During wrap-up: X → Skip Next Lead
+       - Typing in a textarea: G/P/X do NOT fire (input guard working)
+
+[ ] 9. Keyboard shortcuts — existing preserved
+       - Outside wrap-up, not paused: C = dial, S = skip, D = defer
+       - While paused: C/S/D/G/X do NOT fire; only P works
+
+[ ] 10. Next lead preview in WrapUpOverlay
+        - After saving outcome, WrapUpOverlay shows the upcoming lead's: name, stage, last
+          disposition with relative time, attempt count, callback time if present
+        - Uses already-loaded queue data (no extra API request in network tab)
+        - If queue has only one lead remaining, "no more leads" message shows instead
+
+[ ] 11. Wrap-up with empty queue
+        - Save outcome on the LAST lead in the queue
+        - WrapUpOverlay shows "No more leads" message
+        - Countdown reaches 0 → "Queue Complete!" state shows
+        - Go Now → "Queue Complete!" state
+
+[ ] 12. No regressions — manual mode
+        - Stop power mode → manual queue page works normally
+        - Tabs: Next Up / Due Today / Overdue / Upcoming all switch correctly
+        - Skip/Defer/DNC/Set Callback all function as before
+        - No wrap-up overlay appears in manual mode
+```
+
+---
+
 ## Quick Commands
 
 ```bash

@@ -444,6 +444,31 @@
     - After a successful save the note field must be cleared. This is handled automatically
       by `key={member.id}` on `<PowerCard>` which forces a full unmount on member change.
 
+73. **Wrap-up timer (Phase 8F+) must NEVER auto-dial or trigger `crm:dial`.**
+    - The `WrapUpOverlay` countdown auto-advances ONLY by changing UI state
+      (`setWrapUpActive(false)`), never by dispatching telephony events.
+    - All `setInterval` / `setTimeout` instances created by the wrap-up effect must be
+      cleared in the `useEffect` cleanup function. Do not leave dangling timers on unmount
+      or navigation. Use `useRef` to track the interval ID and clear it on every state branch.
+    - The countdown MUST NOT start when `paused === true`. If the user pauses mid-countdown
+      the timer must stop immediately (handled by including `paused` in the effect deps).
+    - "Skip Next Lead" during wrap-up calls the existing `handleAction(id, "skip")` endpoint;
+      it does not restart the wrap-up countdown.
+
+74. **Persistent Power Dialer pause (`localStorage`).**
+    - Pause state is stored under the key `"crm_power_queue_paused"` in `localStorage`.
+    - On mount, read this key to restore the paused state so agents are not surprise-unpaused
+      after a page reload or navigation.
+    - When unpausing, `localStorage.removeItem(PAUSE_STORAGE_KEY)` — do not write `"false"`.
+    - Never read/write this key outside `QueuePageInner`. It is a UI preference, not data.
+
+75. **Power mode queue filter is URL-driven (`?filter=` param).**
+    - The filter toggle in the Power Dialer sticky header navigates to
+      `?mode=power&filter=due` or `?mode=power&filter=overdue` (pending = no `filter` param).
+    - This keeps the selected filter in browser history and survives hard reload.
+    - Manual mode tabs are NOT URL-driven and must remain unchanged (local `filter` state).
+    - Do not mix manual-mode tab state with power-mode URL filter state.
+
 ---
 
 ## Documentation
