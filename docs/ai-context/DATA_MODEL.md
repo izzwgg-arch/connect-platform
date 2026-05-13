@@ -409,6 +409,217 @@
 
 ---
 
+## CRM models (Phase 1A + 1B)
+
+### `CrmContactMeta` (Phase 1B)
+- **Schema:** end of `packages/db/prisma/schema.prisma` (after CrmUserAccess)
+- **Purpose:** CRM overlay on an existing `Contact` row. A Contact becomes a CRM contact when this row is created. **No contact data is duplicated** — phones/emails/names all live on `Contact`.
+- **Tenant-scoped?** Yes — both `tenantId` and via `contact.tenantId`.
+- **High-risk?** No.
+- **Modified by:** `apps/api` via `POST /crm/contacts`, `PATCH /crm/contacts/:id`.
+
+Key fields:
+- `contactId`: FK → `Contact.id` (CASCADE, **@unique** — strict 1:1)
+- `stage`: `CrmContactStage` enum (LEAD / CONTACTED / QUALIFIED / CUSTOMER / CLOSED_LOST)
+- `assignedToUserId`: FK → `User.id` (SetNull on delete)
+- `doNotCall`, `doNotSms`: compliance flags
+- `lastActivityAt`: updated by timeline events (Phase 2)
+- `lastDisposition` _(Phase 2D)_: last saved disposition string (e.g. "Answered", "No Answer")
+- `lastDispositionAt` _(Phase 2D)_: timestamp of last disposition save; exposed on contact API response
+
+To read a CRM contact: `db.contact.findFirst({ where: { id, tenantId }, include: { crmMeta: true, phones: true, emails: true } })`
+
+**Important:** A `Contact` without a `crmMeta` row is a regular phone-book contact, NOT a CRM contact. Do not list it in `/crm/contacts`.
+
+---
+
+## CRM Foundation models (Phase 1A)
+
+Added in migration `20260522000000_crm_foundation`. All new tables — no existing models modified.
+
+### `CrmTenantSettings`
+- **Schema:** end of `packages/db/prisma/schema.prisma` (last section)
+- **Purpose:** Per-tenant CRM enablement flag + feature flags.
+- **Tenant-scoped?** Yes — `tenantId UNIQUE`.
+- **High-risk?** No (settings only — no telephony impact).
+- **Modified by:** `apps/api` via `PUT /crm/settings` (admin-only).
+- **Absence of a row = CRM disabled.** Do not read this model expecting a row to always exist.
+
+Key fields: `enabled`, `localPresenceEnabled` (Phase 2), `transcriptionEnabled` (Phase 3).
+
+### `CrmUserAccess`
+- **Schema:** end of `packages/db/prisma/schema.prisma` (last section)
+- **Purpose:** Per-user CRM access grant: role (AGENT / MANAGER / ADMIN) + enabled flag.
+- **Tenant-scoped?** Yes — `@@unique([tenantId, userId])`.
+- **High-risk?** No.
+- **Modified by:** `apps/api` via `PUT /crm/users/:userId` (admin-only).
+- **Absence of a row = no CRM access for that user**, even if `CrmTenantSettings.enabled=true`.
+
+Key fields: `enabled`, `role` (`CrmUserRole` enum: `AGENT | MANAGER | ADMIN`).
+
+### `CrmContactMeta`
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** CRM-specific overlay on `Contact`. One row per CRM-managed contact.
+- **Tenant-scoped?** Yes — `tenantId` index + `contactId UNIQUE`.
+- **High-risk?** No.
+- **Do NOT store identity data here.** Name, phone, email live on `Contact`.
+
+Key fields: `stage` (`CrmContactStage`: `LEAD | CONTACTED | QUALIFIED | CUSTOMER | CLOSED_LOST`),
+`assignedToUserId`, `doNotCall`, `doNotSms`, `lastActivityAt`.
+
+### `CrmTimelineEvent` _(Phase 1C)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Append-only audit log of CRM activity for a contact.
+- **Tenant-scoped?** Yes — `tenantId` on all indexes.
+- **High-risk?** No. **Never delete timeline events** — they are an immutable log.
+- **Written by:** `apps/api/src/crm/timelineHelper.ts` `writeTimelineEvent()`.
+
+Key fields: `type` (`CrmTimelineEventType`: `CONTACT_CREATED | STAGE_CHANGED | NOTE_ADDED | NOTE_EDITED | CDR_INBOUND | CDR_OUTBOUND | TASK_CREATED | TASK_COMPLETED | TASK_CANCELED | CHECKLIST_COMPLETED | DISPOSITION_SET | CONTACT_MERGED | ASSIGNED_TO_USER`),
+`title`, `body` (human-readable text), `metadata` (JSON), `linkedId` (for CDR events = `ConnectCdr.linkedId`; for notes = `CrmContactNote.id`),
+`createdByUserId`.
+
+**Phase 5C — `ASSIGNED_TO_USER` event:** Written non-blocking in `PATCH /crm/contacts/:id` only when `assignedToUserId` changes on an individual contact edit.
+`metadata`: `{ fromUserId, toUserId, fromName, toName }`. Not written for bulk reassign (would create noise).
+Migration: `20260512140000_crm_assigned_to_user_event`.
+
+**Phase 5A — `CONTACT_MERGED` event:** Written on the `keepContact` after a successful merge.
+`metadata`: `{ mergedContactId, mergedContactName, phonesAdded, emailsAdded, campaignMembersMoved, campaignMembersSkipped }`.
+Timeline events, notes, tasks, checklist responses, and non-conflicting campaign memberships are moved from the archived contact to the kept contact atomically.
+
+**Phase 2A — CDR events:** `CDR_INBOUND`/`CDR_OUTBOUND` are now live. Written by `apps/api/src/crm/cdrHook.ts`
+`fireCrmCdrHook()` after `ConnectCdr` upsert. Metadata shape:
+`{ direction, fromNumber, toNumber, durationSec, talkSec, disposition, recordingAvailable, cdrLinkedId }`.
+`linkedId` field = `ConnectCdr.linkedId` (used to link to recording stream endpoint).
+**Deduplication:** partial unique index `CrmTimelineEvent_contactId_linkedId_type_unique` (WHERE linkedId IS NOT NULL)
+plus lookup-before-create in hook prevents duplicate CDR events.
+Index `@@index([contactId, linkedId])` added for fast dedup lookups.
+
+### `CrmContactNote` _(Phase 1C)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Structured per-author notes on a contact. Multiple notes per contact.
+- **Tenant-scoped?** Yes.
+- **High-risk?** No.
+- **Creating a note always also writes a `CrmTimelineEvent(NOTE_ADDED)`** via `timelineHelper`.
+- **Editing a note body also updates the linked `CrmTimelineEvent(NOTE_ADDED)` body** and writes `NOTE_EDITED`.
+
+Key fields: `body`, `pinned` (bool), `createdByUserId`.
+
+Note: `Contact.notes` (single string) remains as a scratch-pad field and is separate from `CrmContactNote`.
+
+### `CrmContactTask` _(Phase 1D)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Follow-up tasks / action items linked to a CRM contact.
+- **Tenant-scoped?** Yes.
+- **High-risk?** No.
+- **Timeline events written for:** `TASK_CREATED` (on create), `TASK_COMPLETED` (on status→DONE), `TASK_CANCELED` (on status→CANCELED or DELETE).
+- **No timeline events for minor edits** (title, body, dueAt, priority changes).
+
+Key fields: `title`, `body`, `dueAt`, `assignedToUserId`, `priority` (`CrmTaskPriority`: `LOW | MEDIUM | HIGH | URGENT`),
+`status` (`CrmTaskStatus`: `OPEN | IN_PROGRESS | DONE | CANCELED`), `completedAt`, `completedByUserId`, `createdByUserId`.
+
+Important: `onDelete: Restrict` on `createdByUserId` — a user cannot be deleted if they have created tasks (same as notes).
+
+### `CrmScript` _(Phase 2C)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Plain-text call scripts displayed in the Live Call Workspace.
+- **Tenant-scoped?** Yes.
+- **High-risk?** No (read-only by agents during calls; no telephony coupling).
+- **Soft-delete:** `isActive = false` (archive). No hard deletes.
+- **Routes:** `apps/api/src/crm/scriptRoutes.ts`
+
+Key fields: `name`, `body` (Text), `isActive`, `createdByUserId`.
+
+---
+
+### `CrmChecklist` _(Phase 2C)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Named checklist templates containing ordered `CrmChecklistItem` rows.
+- **Tenant-scoped?** Yes.
+- **High-risk?** No.
+- **Soft-delete:** `isActive = false` (archive).
+- **Routes:** `apps/api/src/crm/checklistRoutes.ts`
+
+Key fields: `name`, `isActive`, `createdByUserId`. Related: `items CrmChecklistItem[]`, `responses CrmChecklistResponse[]`.
+
+---
+
+### `CrmChecklistItem` _(Phase 2C)_
+- **Purpose:** A single item inside a `CrmChecklist` template.
+- **Cascade-deletes** with checklist.
+
+Key fields: `checklistId`, `label`, `required`, `sortOrder`.
+
+---
+
+### `CrmChecklistResponse` _(Phase 2C)_
+- **Purpose:** Agent's filled answer-set for a checklist, linked to a contact and optionally to a CDR `linkedId`.
+- **Tenant-scoped?** Yes.
+- **Writes timeline event:** `CHECKLIST_COMPLETED` (non-blocking) after successful create.
+- **`answers`:** JSON map `{ [itemId]: boolean }`.
+
+Key fields: `checklistId`, `contactId`, `linkedId?`, `completedByUserId`, `answers`.
+
+**Phase 2C — CHECKLIST_COMPLETED timeline events:** Written by `checklistRoutes.ts` `POST /crm/checklists/:id/respond`.
+Metadata shape: `{ checklistName, checklistId, responseId, itemsTotal, itemsChecked, allRequiredDone, linkedId }`.
+
+---
+
+### `CrmCampaign` _(Phase 3A)_
+- **Purpose:** Named outbound calling campaign. Groups contacts for coordinated calling workflows.
+- **Tenant-scoped?** Yes.
+- **Status lifecycle:** `DRAFT → ACTIVE → PAUSED → COMPLETED | ARCHIVED`
+- **Optional links:** `scriptId? → CrmScript`, `checklistId? → CrmChecklist` (applied to all members).
+- **Creator:** `createdByUserId → User`.
+
+Key fields: `name`, `description?`, `status` (`CrmCampaignStatus`), `scriptId?`, `checklistId?`, `createdByUserId`.
+
+---
+
+### `CrmCampaignMember` _(Phase 3A)_
+- **Purpose:** A single contact enrolled in a `CrmCampaign` — the primary queue row for agents.
+- **Tenant-scoped?** Yes.
+- **Unique constraint:** `(campaignId, contactId)` — one contact per campaign.
+- **Status lifecycle:** `PENDING → IN_PROGRESS → CONTACTED | CALLBACK | CONVERTED | SKIPPED | DO_NOT_CALL`
+- **attemptCount:** Incremented by the API each time an outcome (disposition) is saved with `memberId` present.
+- **lastAttemptAt:** Set to now() each time an attempt is recorded.
+- **Queue source:** `GET /crm/queue` = `CrmCampaignMember` where `status NOT IN [CONVERTED, DO_NOT_CALL, SKIPPED]` AND `campaign.status = ACTIVE` AND `assignedToUserId = currentUser`, ordered by `sortOrder / createdAt`.
+- **Defer behavior:** Sets `status = PENDING`, increments `sortOrder` to max+1 (moves to end of queue).
+
+Key fields: `campaignId`, `contactId`, `assignedToUserId?`, `status`, `attemptCount`, `lastAttemptAt?`, `sortOrder`, `callbackAt?`, `callbackNote?`.
+
+**Phase 3A — Disposition → member status mapping:**  
+`POST /crm/queue/:memberId { action: "outcome", disposition }` maps:
+- contains "convert"/"closed" → `CONVERTED`
+- contains "callback" → `CALLBACK`
+- contains "not interest"/"dnc" → `DO_NOT_CALL`
+- else → `CONTACTED`
+
+**Phase 3C — Callback scheduling:**
+- `callbackAt DateTime?` — when the agent should call back. Set by queue `action: "set-callback"`, by campaign member PATCH, or auto-set by disposition endpoint when `memberId` + CALLBACK + `followUpAt` are all present.
+- `callbackNote String?` — optional reason for the callback.
+- Index `(tenantId, assignedToUserId, status, callbackAt)` supports the Due/Overdue/Upcoming tab queries.
+- **`CALLBACK` status is non-terminal** — it does NOT satisfy campaign auto-completion. Only `CONVERTED`, `SKIPPED`, `DO_NOT_CALL`, `CONTACTED` are terminal.
+- Clearing a callback (`action: "clear-callback"`) sets `callbackAt = null`, `callbackNote = null`, `status = PENDING`.
+
+---
+
+### `CrmImportBatch` _(Phase 1E)_
+- **Schema:** end of `packages/db/prisma/schema.prisma`
+- **Purpose:** Tracks a single CSV import run with per-row result counts and error details.
+- **Tenant-scoped?** Yes.
+- **High-risk?** No (CRM-only, no telephony coupling).
+- **Import logic:** Inline in `apps/api/src/crm/importRoutes.ts`. Synchronous for MVP (max 5 MB / 5000 rows).
+- **Dedup strategy:** Match by `ContactPhone.numberNormalized` or `ContactEmail.email` within tenant. Never creates duplicate contacts for the same phone/email.
+- **Always creates `CrmContactMeta`** (LEAD stage) on both new contacts and matched existing contacts. Never downgrades an existing stage.
+- **XLSX:** Deferred — requires external dependency. CSV only for Phase 1E.
+
+Key fields: `status` (`CrmImportBatchStatus`: `PENDING | PROCESSING | DONE | PARTIAL | FAILED`),
+`totalRows`, `createdCount`, `updatedCount`, `skippedCount`, `errorCount`,
+`errors` (JSON array of `{ row, reason }` objects, capped at 50 in API response),
+`mapping` (JSON: detected column mapping `{ csvColumnIndex: fieldName }`).
+
+---
+
 ## What is NOT in this cheat sheet (intentional)
 
 To keep this file short and useful, the following lower-traffic models are

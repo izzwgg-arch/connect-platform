@@ -1282,3 +1282,82 @@ Status checks:
    `NEXT_PUBLIC_TELEPHONY_WS_URL`.
 8. **Don't restart the deploy worker** as part of a normal deploy — the queue
    manages itself. See `AGENTS.md`.
+
+---
+
+## CRM module rollout (first-time deploy)
+
+The CRM module ships entirely as **additive** Prisma migrations and new API routes. Only the
+`api` service needs to be deployed for the DB changes. The `portal` deploy makes the UI
+available but does not affect DB state.
+
+### Pre-deploy checklist
+
+- [ ] Confirm no active deploy job: `GET /ops/deploy/status` → `runningCount: 0`
+- [ ] Dry-run first: enqueue `api` with `"dryRun": true` and verify the log shows the 13 CRM
+  migrations as pending (all named `2026052*_crm_*`).
+- [ ] No CRM migration should show as `already applied` on the first rollout (they are all new).
+
+### Migration order (confirmed safe, Phase 6B)
+
+All 13 CRM migrations are stamped `20260522*` and run in this order:
+
+```
+20260522000000_crm_foundation                 — CrmTenantSettings, CrmUserAccess
+20260522010000_crm_contact_meta               — Contact, CrmContactMeta, phones, emails
+20260522020000_crm_timeline_notes             — CREATE TYPE CrmTimelineEventType, CrmTimelineEvent
+20260522030000_crm_tasks                      — TASK_* enum values, CrmContactTask
+20260522040000_crm_import                     — CrmImportBatch, CrmImportRow
+20260522050000_crm_cdr_dedup_index            — CDR dedup partial unique index
+20260522060000_crm_scripts_checklists         — CHECKLIST_COMPLETED, script/checklist tables
+20260522070000_crm_disposition                — DISPOSITION_SET, disposition columns
+20260522080000_crm_campaigns                  — CrmCampaign, CrmCampaignMember
+20260522090000_crm_campaign_member_callback   — callbackAt, callbackNote columns
+20260522100000_crm_caller_id_pool             — CrmCallerIdPool
+20260522110000_crm_contact_merged_event       — CONTACT_MERGED enum value
+20260522120000_crm_assigned_to_user_event     — ASSIGNED_TO_USER enum value
+```
+
+**No migration is destructive.** All are CREATE TABLE, ALTER TABLE ADD COLUMN, CREATE INDEX,
+or ALTER TYPE ADD VALUE IF NOT EXISTS. Any `prisma migrate deploy` on a clean DB applies
+them in the above order without conflicts.
+
+### Deploy order
+
+1. Enqueue `api` (migrations run automatically on container start via `prisma migrate deploy`).
+2. Wait for `[deploy-api] done <sha>` in the job log. Confirm SHA matches the committed branch.
+3. Enqueue `portal` once API deploy succeeds.
+
+### Post-deploy smoke test
+
+```bash
+# 1. API health
+curl -s https://app.connectcomunications.com/api/health
+# → {"ok":true}
+
+# 2. CRM settings returns disabled-by-default shape
+curl -s https://app.connectcomunications.com/api/crm/settings \
+  -H "Authorization: Bearer <ANY_TENANT_JWT>"
+# → {"enabled":false,"localPresenceEnabled":false,"transcriptionEnabled":false}
+
+# 3. Confirm CRM schema in running container
+ssh connect "docker exec app-api-1 grep -c 'CrmTimelineEventType' /app/packages/db/prisma/schema.prisma"
+# → 2
+```
+
+See `docs/ai-context/CRM_ROLLOUT_CHECKLIST.md` § 12 for the full step-by-step deploy
+verification commands including CRM enablement, user access grant, contact creation,
+and telephony regression check.
+
+### Rollback
+
+Because all CRM migrations are additive, there is **no DB-level rollback**. If a regression
+is found after the `api` deploy:
+
+1. **Disable CRM** for affected tenants via `PUT /crm/settings {"enabled": false}`. This
+   gates all CRM routes immediately (`403 crm_not_enabled`) and hides the CRM nav on the
+   next `/me` call. Telephony is completely unaffected.
+2. Re-enqueue `api` pinned to the previous known-good commit SHA if the regression is in
+   non-CRM API code.
+3. Do NOT attempt to roll back the Prisma migrations — the enum values and tables are
+   inert if CRM is disabled and will not affect any other platform behavior.

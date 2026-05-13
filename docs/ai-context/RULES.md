@@ -1,0 +1,390 @@
+# RULES — hard guardrails
+
+> Read `CURSOR_START_HERE.md` first. These are non-negotiable rules for any change to
+> Connect Communications. They exist because each one has been violated in the past
+> and caused a regression. The platform is in production. Do not bend these without
+> explicit human approval in the chat.
+
+---
+
+## Tenant isolation
+
+1. **Every Prisma query that returns tenant-scoped data must include `tenantId` in
+   the `where` clause.** No exceptions for "convenience" reads.
+2. **Telephony WS payloads are tenant-filtered.** The filter is:
+   `record.tenantId === viewer.tenantId` extended by `tenantAliasMatcher` (handles
+   `vpbx:<slug>` ↔ Connect CUID). Do not bypass this matcher.
+3. **AstDB family writes must scope to `connect/t_<tenantSlug>`** (or `connect/didmap/<e164>`
+   when the DID belongs to that tenant, or the `connect/system` global family).
+   The endpoint `/telephony/internal/ivr-publish` enforces this with a hard check —
+   do not relax `family_scope_mismatch`.
+4. **MOH and IVR runtime keys must never reference another tenant's slug.**
+5. **JWTs must always carry `tenantId` for normal users.** Admin/superadmin tokens
+   may carry `tenantId=null` but must satisfy a `requireSuperAdmin`/`requireAdmin`
+   check before reaching tenant-scoped data.
+
+---
+
+## Do not break existing tenants
+
+6. **No backwards-incompatible API contract change without a migration plan.**
+   Renaming a field, removing a route, or changing a field's type can crash
+   live tenant clients (browser portal, desktop, mobile).
+7. **No silent default-flip.** If you change a default (e.g. `PBX_TIMEZONE`,
+   `MOBILE_PUSH_SIMULATE`, `SMS_PROVIDER_TEST_MODE`), call it out in the PR/chat
+   summary.
+8. **Mobile push fields are part of the contract.** The worker stringifies all FCM
+   data values to keep Android cold-start delivery working. Do not remove fields
+   from `INCOMING_CALL`, `INVITE_CANCELED`, or `MISSED_CALL` payloads without
+   updating native Android handlers.
+
+---
+
+## Server safety
+
+9. **SSH port 22 must remain open and configured exactly as it is.** No firewall,
+   nginx, or iptables/ufw edits.
+10. **Never edit `/etc/nginx`, `/etc/ssh`, `/etc/ufw`, `/opt/connectcomms/env/`,
+    or `/etc/systemd/...`** from the codebase, scripts, or agent commands. These are
+    operator-owned.
+11. **Do not change Docker network names, volume mounts, or compose service names**
+    without coordinated docs + deploy plan. Service discovery (e.g.
+    `http://api:3001`, `http://telephony:3003`) and persistent volumes
+    (`moh-assets`, `ivr-prompts`, `chat-attachments`) must keep the same names.
+
+---
+
+## Data exposure
+
+12. **Tenant data must never leak across tenants.** Audit any new endpoint that
+    accepts a `tenantId` from the body/query — verify it matches `request.user.tenantId`
+    or a super-admin scope.
+13. **Recording, voicemail, and chat attachment URLs must be signed.** Do not
+    bypass `mohStorage.ts::buildSignedDownloadUrl`, `chatSignedUrl`, or the equivalent
+    prompt signing.
+14. **Encrypted credentials stay encrypted.** Use `@connect/security`
+    (`encryptJson`/`decryptJson`). Never log decrypted secrets.
+
+---
+
+## Concurrency & duplication
+
+15. **Do not duplicate background workers, telephony consumers, or BullMQ queue
+    consumers.** One process per role:
+    - One AMI client (telephony).
+    - One ARI client + bridged poller (telephony).
+    - One BullMQ `sms-send` consumer (worker).
+    - One per-cycle setInterval per scheduled job (worker).
+    Spawning a second instance breaks at-least-once into duplicate-call-counted.
+16. **Do not introduce aggressive polling** when AMI/ARI events already cover the
+    state. The 5 s ARI bridged poll, 60 s presence refresh, 60 s voicemail fallback,
+    5 s call invite expiry, and 5 min IVR/MOH reconcile cycles are deliberately tuned.
+17. **Honor the global serialization in the deploy queue.** Only one deploy job runs
+    at a time. Do not bypass with parallel `docker compose` or `deploy-tag.sh`.
+
+---
+
+## Architecture posture
+
+18. **Do not rewrite architecture unless explicitly requested.** Surgical fixes only.
+    Refactors must be standalone PRs / chats with explicit approval.
+19. **Prefer surgical fixes over generalizations.** Adding a feature flag/env switch is
+    cheaper than rewriting a module.
+20. **Preserve backwards compatibility** in JSON shapes returned to portal/mobile
+    clients. Add fields, do not remove or rename.
+
+---
+
+## Deployment, security, infra
+
+21. **All deploys go through the queue.** See `AGENTS.md`. Never run
+    `pnpm prisma migrate`, `docker compose ...`, or `deploy-tag.sh` manually on the
+    server.
+22. **Migrations only run during the `api` deploy job**, and only when
+    `packages/db/prisma/**` actually changed.
+23. **Never restart all PM2 processes.** Touch only the target service.
+24. **Never change deployment, security, or firewall configs** unless the user
+    explicitly asks for it in this chat.
+
+---
+
+## Risky changes
+
+25. **All risky changes must include rollback notes** in the chat summary:
+    - What files changed.
+    - Exact revert command (`git revert <sha>` or list of file rollbacks).
+    - Whether the deploy queue rollback flow applies.
+26. **All telephony changes must include forensic validation** — a before/after
+    capture from `GET /forensic`, `GET /diagnostics`, plus VitalPBX active channel
+    count. See `docs/LIVE_CALL_FORENSIC_RUNBOOK.md`.
+27. **All PBX-impacting changes must include a validation plan** even if no
+    AstDB writes occur. State the expected behavior, the test method, and the
+    failure mode.
+
+---
+
+## Mobile call state
+
+28. **Mobile call state is HIGH risk.** Any change in `NotificationsContext.tsx`,
+    `SipContext.tsx`, `CallSessionManager.tsx`, `voipPush.ts`, `callkeep.ts`,
+    `telecom.ts`, or the native FCM/keepalive code must be:
+    - reproduced with logs first,
+    - paired with a clear root cause, and
+    - tested on a real device (UNKNOWN how reliably emulators reproduce push-wake).
+29. **Never silently change the FCM payload shape.** Cold-killed Android apps
+    rely on `data`-only messages to wake `FirebaseMessagingService` and stop the
+    ringtone — see the long inline comment in
+    `apps/worker/src/main.ts::sendPushToUserDevices`.
+
+---
+
+## Voicemail and recordings
+
+30. **Voicemail rows must dedupe by `pbxMessageId`.** The worker upsert prefers
+    VitalPBX's `msg_id` and falls back to a deterministic composite. Do not invent
+    new keys.
+31. **Recording streaming must always go through `apps/api`**, never the PBX
+    directly. Do not link clients to PBX URLs.
+
+---
+
+## CRM module (Phase 1A+)
+
+32. **CRM is optional — never make it a hard dependency for any telephony or core Connect feature.**
+    - If `CrmTenantSettings` row is absent or `enabled=false`, all CRM API routes must return
+      gracefully (settings endpoint returns defaults; write endpoints return 403 `crm_not_enabled`).
+    - No CRM code in the telephony service (`apps/telephony`). CRM reads telephony events; telephony must never read CRM.
+    - No CDR hooks in CRM until explicitly designed. The existing `ConnectCdr` and `CallRecord` models are telephony-owned; CRM may *read* them but must not write or delete them.
+    - `CrmUserAccess` absence = no CRM agent access, but normal phone system works unchanged.
+    - All future CRM tables must include `tenantId` and be filtered by it in every query.
+
+33. **Every `/crm/*` route (except `GET /crm/settings`) must call `requireCrmAccess` from `apps/api/src/crm/guard.ts`.**
+    - `requireCrmAccess` checks: (1) JWT present, (2) `CrmTenantSettings.enabled`, (3) `CrmUserAccess.enabled` for regular users (admins bypass step 3).
+    - Do not inline these checks in individual handlers — always use the guard.
+    - Error codes must be: `crm_not_enabled` (403), `crm_user_not_enabled` (403), `crm_permission_denied` (403).
+    - Admin-only CRM operations (settings write, user management) must use `requireCrmAdmin` instead.
+
+34. **`CrmContactMeta` is a metadata overlay, not a duplicate contact store.**
+    - All contact data (names, phones, emails, addresses) lives in `Contact` and `ContactPhone`/`ContactEmail`.
+    - Never copy or mirror phone numbers or emails into `CrmContactMeta`.
+    - The existing `/contacts/*` API is NOT the CRM contacts API — they are separate surfaces sharing the same underlying `Contact` row.
+
+35. **`CrmTimelineEvent` is append-only. Never delete or update timeline event rows directly.**
+    - The only allowed update is patching `body` on a `NOTE_ADDED` event when its linked note is edited — done via `updateLinkedTimelineBody()` in `timelineHelper.ts`.
+    - Always use `writeTimelineEvent()` from `timelineHelper.ts` to write new events. Never call `db.crmTimelineEvent.create()` directly from route handlers.
+    - `CDR_INBOUND` / `CDR_OUTBOUND` event types are **reserved**. Do not write them until the Phase 2 CDR hook is implemented.
+
+36. **CRM timeline events must be non-blocking.**
+    - `writeTimelineEvent()` catches and logs all errors internally. Timeline failures must never propagate to the caller or cause a 500 on the primary operation (contact create, note create, stage change, etc.).
+
+37. **CRM import uses synchronous in-request processing.**
+    - Max file size: 5 MB. Max rows: 5,000. CSV only; XLSX deferred.
+    - Row errors are captured in `CrmImportBatch.errors` JSON and never abort the entire batch.
+    - Import dedup uses `ContactPhone.numberNormalized` and `ContactEmail.email` — always within the tenant. Never creates duplicate contacts for the same normalized phone or email.
+    - Import never downgrades an existing `CrmContactMeta.stage`. It only upserts a LEAD stage if no CrmContactMeta exists yet.
+    - Import uses `source: "IMPORT"` on new `Contact` rows so they can be distinguished from manually-created contacts.
+
+39. **CRM screen pop must never modify telephony behavior.**
+    - `CrmScreenPop` only *reads* from `useTelephony().activeCalls`. It never writes to the WS, does not call any telephony API, and does not affect call routing.
+    - API: `GET /crm/contacts/lookup` returns 403 silently when CRM is disabled — screen pop catches the error and shows nothing.
+    - Deduplication is `seenLinkedIds` ref — never re-pops the same `linkedId` in the same session.
+    - Do not add `await` to any CRM lookup inside a telephony event handler.
+
+38. **The CRM CDR hook (`fireCrmCdrHook`) must NEVER block CDR ingest.**
+    - Call site in `/internal/cdr-ingest` (server.ts) must be: `fireCrmCdrHook({...}).catch(() => {})` — no `await`.
+    - The hook itself is fully wrapped in try/catch at every level and never throws.
+    - If CRM is disabled for the tenant, the hook returns immediately without any DB queries.
+    - Only contacts with `CrmContactMeta` (CRM-enrolled) are linked. Do not write timeline events for un-enrolled contacts.
+    - Do not create duplicate `CrmTimelineEvent` rows for the same `(contactId, linkedId, type)` combination. The partial unique index on `CrmTimelineEvent` and the lookup-before-create in the hook both guard this.
+
+39. **CRM checklist responses must NOT block the calling API route.**
+    - `writeTimelineEvent()` for `CHECKLIST_COMPLETED` is called without `await` in `checklistRoutes.ts`.
+    - A failed timeline write must not cause the `POST /crm/checklists/:id/respond` route to return an error.
+    - `answers` JSON is stored as-is; never mutate it after save.
+
+40. **CRM scripts and checklists are soft-deleted only.**
+    - Use `isActive = false` (archive). Do NOT hard-delete `CrmScript` or `CrmChecklist` rows.
+    - `CrmChecklistItem` rows are deleted only when their parent checklist's items are replaced via `PATCH /crm/checklists/:id` with a new `items` array (full replace).
+    - `CrmChecklistResponse` rows are immutable once created. No update or delete endpoints.
+
+42. **Disposition saves are transactional for primary data, non-blocking for timeline.**
+    - `POST /crm/contacts/:id/disposition` wraps `CrmContactMeta` update + optional `CrmContactNote` + optional `CrmContactTask` in a single `db.$transaction([...])`.
+    - All `writeTimelineEvent()` calls happen **after** the transaction, without `await`.
+    - A timeline write failure must not roll back or fail the disposition save.
+    - The disposition endpoint returns `{ ok, disposition, stageChanged, noteCreated, taskCreated }` — callers should use these flags to update the UI without re-fetching when possible.
+
+43. **`STAGE_CHANGED` from disposition only fires if the stage actually changes.**
+    - Compare `nextStage` against `CrmContactMeta.stage` before writing the event.
+    - Do not write `STAGE_CHANGED` if `nextStage === currentStage` or if `nextStage` is not provided.
+
+41. **Live Call Workspace must not call or modify telephony state.**
+    - `LiveCallBanner` reads from `useTelephony()` (read-only context).
+    - No hangup, mute, hold, or transfer actions implemented in the workspace.
+    - Script/checklist data is CRM-only; no coupling to Asterisk, VitalPBX, or AMI.
+
+---
+
+## Logging & telemetry
+
+35. **Do not log secrets, JWTs, decrypted credentials, raw SIP passwords, or
+    Twilio/VoIP.ms tokens.**
+36. **Use the `[CALL_TIMELINE]` structured log lines** when adding tracepoints to
+    call flow — they are parsed by ops scripts.
+37. **Use Pino's `childLogger("Telephony")` (or equivalent)** for telephony logs to
+    keep filters working.
+
+44. **Campaign queue uses `CrmCampaignMember` directly — no separate queue table.**
+    - `GET /crm/queue` queries `CrmCampaignMember` filtered by: `assignedToUserId = currentUser`, `status NOT IN [CONVERTED, DO_NOT_CALL, SKIPPED]`, `campaign.status = ACTIVE`.
+    - Order: `sortOrder ASC`, `createdAt ASC`.
+    - Do not add a separate queue model; the member row IS the queue item.
+
+45. **`PATCH /crm/queue/:memberId { action: "defer" }` moves item to end of queue, not next day.**
+    - Sets `sortOrder = max(sortOrder in campaign) + 1`, resets status to `PENDING`.
+    - Do not set a date/time for deferred items — use `CrmContactTask` if a specific callback time is needed.
+
+46. **Campaign member status is updated by `PATCH /crm/queue/:memberId { action: "outcome", disposition }` only if memberId is present.**
+    - This is called non-blocking from `live-call/page.tsx` after a successful disposition save.
+    - Disposition → member status mapping: "convert"/"closed" → `CONVERTED`, "callback" → `CALLBACK`, "not interest"/"dnc" → `DO_NOT_CALL`, else → `CONTACTED`.
+    - Always increments `attemptCount` and sets `lastAttemptAt = now()` for outcome actions.
+
+47. **Campaigns must always be tenant-scoped.**
+    - All `CrmCampaign` and `CrmCampaignMember` queries must include `tenantId` in their `where` clause.
+    - No cross-tenant member or campaign access is possible by design.
+
+48. **Campaign auto-completion is non-blocking and fire-and-forget.**
+    - `checkAndAutoCompleteCampaign(campaignId, tenantId)` is called with `.catch(() => {})` — never awaited.
+    - Terminal statuses (campaign can complete): `CONVERTED`, `SKIPPED`, `DO_NOT_CALL`, `CONTACTED`.
+    - Non-terminal statuses (campaign stays open): `PENDING`, `IN_PROGRESS`, `CALLBACK`.
+    - Auto-complete only fires on ACTIVE or PAUSED campaigns (uses `updateMany` with status filter).
+    - Empty campaigns (zero members) are never auto-completed.
+
+49. **`CALLBACK` is intentionally non-terminal for campaign auto-completion.**
+    - A member in `CALLBACK` status means there is still work to do (call them back).
+    - Campaign will not auto-complete while any member is `PENDING`, `IN_PROGRESS`, or `CALLBACK`.
+
+50. **`GET /crm/campaigns/:id/contacts/available` excludes existing members server-side.**
+    - Do not load all contacts in the UI and filter client-side.
+    - This route returns only CRM-enrolled (`crmMeta IS NOT NULL`), active contacts not already in the campaign.
+    - Supports `?q=` search (name/phone/email) and `?page=`/`?limit=` pagination. Limit cap: 50.
+
+51. **Live Workspace campaign prefill does not force selection — it only sets a default.**
+    - `ScriptPanel` and `ChecklistPanel` use a `didPrefill` ref to apply the default once on first render.
+    - If the campaign has no scriptId/checklistId, panels remain at "— Select —" (user picks manually).
+    - User can always override the prefilled selection.
+
+52. **`callbackAt` on `CrmCampaignMember` is set via three paths — they must not conflict.**
+    - **Queue action** `PATCH /crm/queue/:memberId { action: "set-callback", callbackAt, callbackNote }` — explicit scheduling from the queue UI or campaign detail.
+    - **Campaign member PATCH** `PATCH /crm/campaigns/:id/members/:memberId { callbackAt, callbackNote }` — inline editing from campaign detail table.
+    - **Disposition endpoint** `POST /crm/contacts/:id/disposition { memberId, followUpAt, disposition }` — auto-set when disposition contains "callback" and `followUpAt` is provided. This is non-blocking and does NOT update `status`; the queue PATCH action handles that separately.
+    - These paths write `callbackAt` only — they do NOT conflict because status is managed by the queue PATCH.
+
+53. **Queue callback tab filters are time-bounded to avoid stale data.**
+    - `?filter=overdue` → `callbackAt < startOfToday` (past due, need immediate action)
+    - `?filter=due` → `callbackAt <= endOfToday` (includes overdue — call today)
+    - `?filter=upcoming` → `callbackAt >= startOfTomorrow OR callbackAt IS NULL`
+    - All filters also require `status = CALLBACK`, `assignedToUserId = currentUser`, `campaign.status = ACTIVE`.
+    - Tab badge counts are returned alongside the queue data in `counts: { pending, due, overdue, upcoming }`.
+
+54. **`clear-callback` action resets member to `PENDING`, not `CALLBACK`.**
+    - Sets `callbackAt = null`, `callbackNote = null`, `status = PENDING`.
+    - This re-queues the contact in the "Next Up" tab for normal outreach.
+    - Do not set status to CONTACTED on clear — the contact hasn't been reached.
+
+55. **`assign-to-me` queue action is tenant-scoped by design.**
+    - `PATCH /crm/queue/:memberId { action: "assign-to-me" }` sets `assignedToUserId = JWT.sub`.
+    - The route already verifies `tenantId` ownership before updating, so no cross-tenant assignment is possible.
+
+56. **CRM report endpoints use `groupBy` for aggregate counts — no per-row loops.**
+    - `GET /crm/reports/campaigns`: fetches all campaigns (cap 200) + one `groupBy(campaignId, status)` for member counts + one `groupBy(campaignId)` for attempt sums. O(1) queries regardless of member count.
+    - `GET /crm/reports/agents`: fetches CRM user list + 5 parallel `groupBy` queries. Never loops over users.
+    - `GET /crm/reports/follow-ups`: 5 counts + 5 `findMany` (capped at 100 rows each). No correlated subqueries.
+    - Do NOT add per-user or per-campaign subqueries inside report endpoints. If the data isn't available in a groupBy, omit it or document the gap.
+
+57. **Report endpoints have no caching layer — they hit the database on every request.**
+    - This is intentional for Phase 4A. Volume is low (manager use, not polling).
+    - If reports become slow (> 500ms p95), add a `reportCache` table or Redis TTL cache — do NOT add it preemptively.
+    - All queries are bounded: `take: 200` on campaigns, `take: 100` on follow-up detail rows, all filtered by `tenantId`.
+
+58. **`can_view_crm_reports` permission is required for all report endpoints and the `/crm/reports` page.**
+    - It is included in both `can_view_crm` and `can_manage_crm` permission bundles.
+    - Report endpoints use `requireCrmAccess` (not admin-only) — all CRM users can view reports.
+    - The `/crm/reports?tab=` URL param enables deep-linking from dashboard stat cards.
+
+59. **CRM local presence is advisory only. It does NOT touch the PBX or SIP call setup.**
+    - `selectCrmCallerId()` returns a DID to display to the agent, but the actual SIP caller ID
+      is still controlled by the PBX per-extension configuration.
+    - `POST /crm/calls/originate` must never contain AMI originate, ARI channel create, or any
+      PBX action. It only selects a caller ID and logs the intent.
+    - The actual call is placed client-side: the UI dispatches `crm:dial` event (or calls
+      `phone.dial()` directly), which goes through the existing `useSipPhone` → JsSIP path.
+    - `selectCrmCallerId()` never throws. If anything fails, it returns `undefined` and the
+      call proceeds with the default PBX caller ID.
+
+60. **Only tenant-owned ACTIVE PhoneNumber rows may be added to `CrmCallerIdPool`.**
+    - The API validates `PhoneNumber.tenantId === requestingTenant.id` on POST.
+    - `selectCrmCallerId()` double-checks `phoneNumber.tenantId === tenantId` after the join.
+    - This prevents cross-tenant caller ID spoofing.
+    - If a PhoneNumber is released (status → RELEASED/INACTIVE) its pool entries are still
+      filtered out by `selectCrmCallerId` because it checks `status === "ACTIVE"`.
+
+62. **`crm:dial` CustomEvent must always route through the existing FloatingDialer `dialTarget()` path.**
+    - `FloatingDialer` is the single owner of `phone.dial()` for all UI-triggered calls.
+    - No CRM code may call `phone.dial()` directly — it must dispatch `crm:dial` and let
+      the FloatingDialer listener handle it.
+    - `dialTarget()` already guards: trims the target, sets dialpad input, opens the dialer,
+      and only calls `phone.dial()` when `regState === "registered"`.
+    - The `crm:dial` handler must NEVER: modify SIP headers, change caller ID at SIP level,
+      add extra dial prefixes, or bypass the regState check.
+    - If `dialTarget` is ever renamed or moved, the `crm:dial` listener must be updated too.
+
+61. **Local presence `areaCode3` is admin-set, not auto-detected from PhoneNumber.areaCode.**
+    - `PhoneNumber.areaCode` may be null or inconsistently formatted for ported numbers.
+    - Pool entries have their own `areaCode3` field (exactly 3 digits) set by the admin.
+    - The "Add to pool" UI pre-fills `areaCode3` from `PhoneNumber.areaCode` if available,
+      but the admin can override it. This is intentional.
+
+65. **Phone/email add deduplicates at the DB level.**
+    - `POST /crm/contacts/:id/phones` normalises the raw number with `normalisePhone()` and rejects
+      if the same `(contactId, numberNormalized)` pair already exists (409). No silent overwrite.
+    - `POST /crm/contacts/:id/emails` lowercases the email and checks the `(contactId, email)` unique
+      index. 409 on collision.
+    - Delete is unconditional — no "must keep one primary" guard at the API layer. UI confirms before
+      deleting. If the deleted entry was the only primary, the contact will have no primary phone/email
+      until the user designates one.
+
+66. **Bulk reassign is admin-only, capped at 500, and never crosses tenants.**
+    - `POST /crm/contacts/bulk-reassign` uses `requireCrmAdmin` and the `where: { tenantId, contactId: { in: ids } }`
+      filter — contacts from other tenants are silently excluded.
+    - `assignedToUserId` is validated to belong to the same tenant before the update runs.
+    - No timeline events are written for bulk reassign (too noisy for multi-contact ops).
+    - Clear assignment (`assignedToUserId: null`) is allowed explicitly.
+    - Individual `PATCH /crm/contacts/:id` assignment changes DO write a non-blocking
+      `ASSIGNED_TO_USER` timeline event with `{ fromUserId, toUserId, fromName, toName }` metadata.
+
+63. **Contact merge is admin-only and atomic.**
+    - Only `ADMIN / TENANT_ADMIN / SUPER_ADMIN` roles may call `POST /crm/contacts/merge`.
+    - Both contacts must belong to the same tenant (enforced by DB query + `tenantId`).
+    - The merge transaction moves CRM data (timeline, notes, tasks, checklist responses,
+      campaign memberships) from `mergeContactId` → `keepContactId` before archiving the
+      merged contact. Cross-tenant data movement is impossible.
+    - Campaign membership conflicts (keepContact already enrolled in the same campaign) are
+      silently skipped — never error, never double-enroll.
+    - Merged contact is archived via `active=false, archivedAt=now`. It is NOT hard-deleted.
+      Its ID remains valid in foreign keys for audit purposes.
+    - A `CONTACT_MERGED` timeline event is written on `keepContact` after the transaction.
+
+64. **Duplicate detection is suggestion-only.**
+    - `GET /crm/contacts/:id/duplicates` returns at most 5 candidates matched by phone,
+      email, or display name. It never auto-merges or hides contacts.
+    - Match is based on `numberNormalized` (phone) or `email` (email) or
+      case-insensitive `displayName`. No fuzzy/Levenshtein — keep it cheap.
+    - Any CRM user can view duplicates. Only admins see the Merge button in the UI.
+
+---
+
+## Documentation
+
+39. **Update `docs/ai-context/KNOWN_ISSUES.md` whenever you discover or fix a fragile
+    area.** Future agents will save tokens.
+40. **Mark uncertain claims as "UNKNOWN — verify before changing".** Do not write
+    fiction.

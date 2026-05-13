@@ -566,6 +566,19 @@ export function FloatingDialer() {
     if (phone.regState === "registered") phone.dial(trimmed);
   }, [phone]);
 
+  // CRM click-to-call: listen for crm:dial events dispatched by the CRM Live Workspace.
+  // Delegates entirely to dialTarget() — same guards as manual dial (regState check,
+  // setDialpadInput, setOpen, phone.dial). Caller ID is NOT modified here.
+  useEffect(() => {
+    function handleCrmDial(e: Event) {
+      const target = (e as CustomEvent<{ target?: unknown }>).detail?.target;
+      if (typeof target !== "string" || !target.trim()) return;
+      dialTarget(target.trim());
+    }
+    window.addEventListener("crm:dial", handleCrmDial);
+    return () => window.removeEventListener("crm:dial", handleCrmDial);
+  }, [dialTarget]);
+
   const updateRinger = useCallback((next: boolean) => {
     setRingerOn(next);
     setWebRingerEnabled(next);

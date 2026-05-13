@@ -406,6 +406,17 @@ model Tenant {
   voicemailIngestIncidents        VoicemailIngestIncident[]
   crmSettings                     CrmTenantSettings?
   crmUserAccess                   CrmUserAccess[]
+  crmContactMeta                  CrmContactMeta[]
+  crmTimelineEvents               CrmTimelineEvent[]
+  crmContactNotes                 CrmContactNote[]
+  crmTasks                        CrmContactTask[]
+  crmImportBatches                CrmImportBatch[]
+  crmScripts                      CrmScript[]
+  crmChecklists                   CrmChecklist[]
+  crmChecklistResponses           CrmChecklistResponse[]
+  crmCampaigns                    CrmCampaign[]
+  crmCampaignMembers              CrmCampaignMember[]
+  crmCallerIdPool                 CrmCallerIdPool[]             @relation("TenantCrmCallerIdPool")
 }
 
 model User {
@@ -463,6 +474,18 @@ model User {
   connectChatParticipants        ConnectChatParticipant[]
   connectChatMessages            ConnectChatMessage[]          @relation("ConnectChatMessageSenderUser")
   crmAccess                      CrmUserAccess[]
+  crmContactsAssigned            CrmContactMeta[]              @relation("CrmContactAssignedTo")
+  crmTimelineEventsCreated       CrmTimelineEvent[]            @relation("CrmTimelineEventCreatedBy")
+  crmContactNotesCreated         CrmContactNote[]              @relation("CrmContactNoteCreatedBy")
+  crmTasksAssigned               CrmContactTask[]              @relation("CrmTaskAssignedTo")
+  crmTasksCompleted              CrmContactTask[]              @relation("CrmTaskCompletedBy")
+  crmTasksCreated                CrmContactTask[]              @relation("CrmTaskCreatedBy")
+  crmImportBatches               CrmImportBatch[]
+  crmScriptsCreated              CrmScript[]                   @relation("CrmScriptCreatedBy")
+  crmChecklistsCreated           CrmChecklist[]                @relation("CrmChecklistCreatedBy")
+  crmChecklistResponses          CrmChecklistResponse[]        @relation("CrmChecklistResponseCompletedBy")
+  crmCampaignsCreated            CrmCampaign[]                 @relation("CrmCampaignCreatedBy")
+  crmCampaignMembersAssigned     CrmCampaignMember[]           @relation("CrmCampaignMemberAssignedTo")
 }
 
 enum UserRole {
@@ -969,10 +992,11 @@ model PhoneNumber {
   releasedAt        DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
-  tenant            Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultForTenants Tenant[]            @relation("TenantDefaultSmsFromNumber")
-  smsMessages       SmsMessage[]        @relation("SmsMessageFromNumber")
-  pbxDidLinks       PbxDidLink[]
+  tenant              Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForTenants   Tenant[]            @relation("TenantDefaultSmsFromNumber")
+  smsMessages         SmsMessage[]        @relation("SmsMessageFromNumber")
+  pbxDidLinks         PbxDidLink[]
+  crmCallerIdPool     CrmCallerIdPool[]   @relation("PhoneNumberCrmCallerIdPool")
 
   @@index([tenantId, status])
   @@index([provider, status])
@@ -1196,10 +1220,16 @@ model Contact {
   tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   extension   Extension?             @relation(fields: [extensionId], references: [id], onDelete: SetNull)
   creator     User?                  @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
-  phones      ContactPhone[]
-  emails      ContactEmail[]
-  addresses   ContactAddress[]
-  tagLinks    ContactTagAssignment[]
+  phones              ContactPhone[]
+  emails              ContactEmail[]
+  addresses           ContactAddress[]
+  tagLinks            ContactTagAssignment[]
+  crmMeta                  CrmContactMeta?
+  crmTimelineEvents        CrmTimelineEvent[]
+  crmNotes                 CrmContactNote[]
+  crmTasks                 CrmContactTask[]
+  crmChecklistResponses    CrmChecklistResponse[]
+  crmCampaignMembers       CrmCampaignMember[]
 
   @@unique([tenantId, extensionId])
   @@index([tenantId, type, active])
@@ -2984,4 +3014,364 @@ model CrmUserAccess {
 
   @@unique([tenantId, userId])
   @@index([tenantId, enabled])
+}
+
+// ─── CRM Contacts ─────────────────────────────────────────────────────────────
+
+enum CrmContactStage {
+  LEAD
+  CONTACTED
+  QUALIFIED
+  CUSTOMER
+  CLOSED_LOST
+}
+
+/// CRM metadata overlay on top of an existing Contact record.
+/// A Contact becomes a CRM contact when this row is created.
+/// Deleting the Contact cascades and removes the CRM meta.
+/// No contact data is duplicated — all phones/emails/names live on Contact.
+model CrmContactMeta {
+  id                 String          @id @default(cuid())
+  contactId          String          @unique
+  tenantId           String
+  stage              CrmContactStage @default(LEAD)
+  assignedToUserId   String?
+  doNotCall          Boolean         @default(false)
+  doNotSms           Boolean         @default(false)
+  lastActivityAt     DateTime?
+  lastDisposition    String?
+  lastDispositionAt  DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo User?   @relation("CrmContactAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, stage])
+  @@index([tenantId, assignedToUserId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, lastActivityAt])
+}
+
+// ─── CRM Timeline & Notes ─────────────────────────────────────────────────────
+
+enum CrmCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum CrmCampaignMemberStatus {
+  PENDING
+  IN_PROGRESS
+  CONTACTED
+  CALLBACK
+  CONVERTED
+  SKIPPED
+  DO_NOT_CALL
+}
+
+enum CrmTimelineEventType {
+  CONTACT_CREATED
+  STAGE_CHANGED
+  NOTE_ADDED
+  NOTE_EDITED
+  TASK_CREATED
+  TASK_COMPLETED
+  TASK_CANCELED
+  CDR_INBOUND
+  CDR_OUTBOUND
+  CHECKLIST_COMPLETED
+  DISPOSITION_SET
+  CONTACT_MERGED
+  ASSIGNED_TO_USER
+}
+
+/// Immutable audit-style record of CRM activity for a contact.
+/// body stores human-readable content (note text, stage description).
+/// metadata stores machine-readable detail (e.g. { from, to } for stage changes).
+/// linkedId references an external row (e.g. CrmContactNote.id, ConnectCdr.id).
+/// Do NOT delete timeline events; they are an append-only log.
+model CrmTimelineEvent {
+  id              String                 @id @default(cuid())
+  tenantId        String
+  contactId       String
+  type            CrmTimelineEventType
+  title           String
+  body            String?
+  metadata        Json?
+  linkedId        String?
+  createdByUserId String?
+  createdAt       DateTime               @default(now())
+
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact       Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdByUser User?   @relation("CrmTimelineEventCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, contactId, createdAt])
+  @@index([tenantId, type, createdAt])
+  @@index([contactId, createdAt])
+  @@index([contactId, linkedId]) // fast dedup lookup for CDR hook
+}
+
+/// Structured notes on a CRM contact. Multiple notes per contact; each has an author.
+/// When a note is created, a CrmTimelineEvent(NOTE_ADDED) is also written.
+/// When edited, both the note body and the linked timeline event body are updated.
+model CrmContactNote {
+  id              String   @id @default(cuid())
+  tenantId        String
+  contactId       String
+  body            String
+  pinned          Boolean  @default(false)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact       Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdByUser User    @relation("CrmContactNoteCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, contactId, createdAt])
+  @@index([contactId, createdAt])
+}
+
+// ─── CRM Tasks ────────────────────────────────────────────────────────────────
+
+enum CrmTaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum CrmTaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELED
+}
+
+/// A follow-up task or action item linked to a CRM contact.
+/// Timeline events are written for creation, completion, and cancellation.
+/// Minor edits (title, body, dueAt, priority) do NOT write timeline events.
+model CrmContactTask {
+  id                String          @id @default(cuid())
+  tenantId          String
+  contactId         String
+  title             String
+  body              String?
+  dueAt             DateTime?
+  assignedToUserId  String?
+  priority          CrmTaskPriority @default(MEDIUM)
+  status            CrmTaskStatus   @default(OPEN)
+  completedAt       DateTime?
+  completedByUserId String?
+  createdByUserId   String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact     Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedTo  User?   @relation("CrmTaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  completedBy User?   @relation("CrmTaskCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  createdBy   User    @relation("CrmTaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, contactId, status, dueAt])
+  @@index([tenantId, assignedToUserId, status, dueAt])
+  @@index([tenantId, status, dueAt])
+}
+
+// ─── CRM Import ───────────────────────────────────────────────────────────────
+
+enum CrmImportBatchStatus {
+  PENDING
+  PROCESSING
+  DONE
+  PARTIAL
+  FAILED
+}
+
+/// Tracks a single CSV import run. Rows are processed synchronously for MVP.
+/// errors Json stores per-row error details: [{ row: number, reason: string }]
+/// mapping Json stores the auto-detected column mapping: { csvHeader: fieldKey }
+model CrmImportBatch {
+  id             String               @id @default(cuid())
+  tenantId       String
+  fileName       String
+  status         CrmImportBatchStatus @default(PENDING)
+  totalRows      Int                  @default(0)
+  processedRows  Int                  @default(0)
+  createdCount   Int                  @default(0)
+  updatedCount   Int                  @default(0)
+  skippedCount   Int                  @default(0)
+  errorCount     Int                  @default(0)
+  errors         Json                 @default("[]")
+  mapping        Json?
+  createdByUserId String
+  createdAt      DateTime             @default(now())
+  completedAt    DateTime?
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User   @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+}
+
+/// Call script — plain-text body shown in the Live Call Workspace.
+/// Agents select a script before or during a call. Not linked to a contact directly.
+model CrmScript {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  body            String   @db.Text
+  isActive        Boolean  @default(true)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("CrmScriptCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  campaigns CrmCampaign[]
+
+  @@index([tenantId, isActive, createdAt])
+}
+
+/// Call checklist template — a named list of required/optional items.
+/// Agents fill in a CrmChecklistResponse per call/contact.
+model CrmChecklist {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  isActive        Boolean  @default(true)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User                  @relation("CrmChecklistCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  items     CrmChecklistItem[]
+  responses CrmChecklistResponse[]
+  campaigns CrmCampaign[]
+
+  @@index([tenantId, isActive, createdAt])
+}
+
+/// Individual item inside a CrmChecklist template.
+model CrmChecklistItem {
+  id          String       @id @default(cuid())
+  checklistId String
+  label       String
+  required    Boolean      @default(false)
+  sortOrder   Int          @default(0)
+
+  checklist CrmChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+
+  @@index([checklistId, sortOrder])
+}
+
+/// A saved agent response to a checklist during a call.
+/// answers is a JSON map of { [itemId]: boolean }.
+/// CHECKLIST_COMPLETED timeline event is written when this is created.
+model CrmChecklistResponse {
+  id                String   @id @default(cuid())
+  tenantId          String
+  checklistId       String
+  contactId         String
+  linkedId          String?  // CDR linkedId if call is known; null if saved offline
+  completedByUserId String
+  answers           Json     // { [itemId]: boolean }
+  createdAt         DateTime @default(now())
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  checklist   CrmChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  contact     Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  completedBy User         @relation("CrmChecklistResponseCompletedBy", fields: [completedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, contactId, createdAt])
+  @@index([contactId, createdAt])
+}
+
+// ─── CRM Campaigns ────────────────────────────────────────────────────────────
+
+/// A named outbound calling campaign. Members are contacts enrolled in the campaign.
+/// Optionally linked to a CrmScript and/or CrmChecklist for agent use.
+model CrmCampaign {
+  id              String              @id @default(cuid())
+  tenantId        String
+  name            String
+  description     String?
+  status          CrmCampaignStatus   @default(DRAFT)
+  scriptId        String?
+  checklistId     String?
+  createdByUserId String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User         @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  script    CrmScript?   @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  checklist CrmChecklist? @relation(fields: [checklistId], references: [id], onDelete: SetNull)
+  members   CrmCampaignMember[]
+
+  @@index([tenantId, status, createdAt])
+}
+
+/// A single contact enrolled in a CrmCampaign — the primary queue row.
+/// One contact can appear in multiple campaigns, but only once per campaign (@@unique).
+/// attemptCount tracks how many call outcomes have been saved for this member.
+model CrmCampaignMember {
+  id                String                    @id @default(cuid())
+  tenantId          String
+  campaignId        String
+  contactId         String
+  assignedToUserId  String?
+  status            CrmCampaignMemberStatus   @default(PENDING)
+  attemptCount      Int                       @default(0)
+  lastAttemptAt     DateTime?
+  sortOrder         Int                       @default(0)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaign   CrmCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact    Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedTo User?       @relation("CrmCampaignMemberAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  callbackAt   DateTime?
+  callbackNote String?
+
+  @@unique([campaignId, contactId])
+  @@index([tenantId, campaignId, status, sortOrder])
+  @@index([tenantId, assignedToUserId, status])
+  @@index([tenantId, assignedToUserId, status, callbackAt])
+}
+
+// Add back-relations to CrmScript and CrmChecklist so campaigns can link to them
+// (required by Prisma for optional FK relations pointing back)
+// These are added inline here to avoid schema-order dependency issues.
+
+/// Phase 4B — CRM Local Presence Caller ID Pool.
+/// Associates tenant-owned PhoneNumber DIDs with 3-digit US area codes so that
+/// selectCrmCallerId() can pick the best outbound caller ID for a destination.
+/// Only PhoneNumber rows belonging to the same tenant may be added.
+/// The actual call is still placed client-side via SIP/WebRTC; this is advisory only.
+model CrmCallerIdPool {
+  id            String   @id @default(cuid())
+  tenantId      String
+  phoneNumberId String
+  areaCode3     String   @db.VarChar(3)   /// 3-digit US area code, e.g. "512"
+  label         String?                   /// Optional human label for the pool entry
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant      Tenant      @relation("TenantCrmCallerIdPool", fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumber PhoneNumber @relation("PhoneNumberCrmCallerIdPool", fields: [phoneNumberId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phoneNumberId])
+  @@index([tenantId, areaCode3, isActive])
+  @@index([tenantId, isActive])
 }

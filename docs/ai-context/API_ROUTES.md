@@ -407,13 +407,13 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded |
 | GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. |
 | GET | `/crm/contacts/:id` | Full contact with phones, emails, crmMeta. Includes `lastDisposition`, `lastDispositionAt`. |
-| PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage (writes `STAGE_CHANGED` only if stage changes) |
+| PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage. Writes `STAGE_CHANGED` only if stage changes. Writes `ASSIGNED_TO_USER` (non-blocking, fire-and-forget) only if `assignedToUserId` changes individually — **not** written for bulk reassign. |
 | POST | `/crm/contacts/:id/disposition` | **Phase 2D** — save call outcome. Body: `{ disposition, note?, linkedId?, followUpAt?, nextStage?, memberId? }`. Updates `CrmContactMeta.lastDisposition/lastDispositionAt/lastActivityAt`, optionally creates note + task, writes non-blocking timeline events. **Phase 3C:** if `memberId` is provided and disposition contains "callback" and `followUpAt` is set, non-blocking updates `CrmCampaignMember.callbackAt`+`callbackNote`. |
 
-### Timeline & Notes (Phase 1C)
+### Timeline & Notes (Phase 1C — fixed Phase 5C)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/contacts/:id/timeline` | All events, newest-first, max 200 |
+| GET | `/crm/contacts/:id/timeline` | All events, newest-first, max 200. Returns `{ contactId, events[] }` where each event has `id, type, title, body, metadata, linkedId, createdAt, createdBy`. **Phase 5C fix:** removed Phase 1B placeholder from `contactRoutes.ts`; real query in `timelineRoutes.ts` now serves all requests. |
 | POST | `/crm/contacts/:id/notes` | Create note + `NOTE_ADDED` event |
 | PATCH | `/crm/contacts/:id/notes/:noteId` | Edit note body/pin; writes `NOTE_EDITED` |
 | DELETE | `/crm/contacts/:id/notes/:noteId` | Soft-delete note |
