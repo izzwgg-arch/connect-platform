@@ -1367,12 +1367,279 @@ function TransactionsTab() {
   );
 }
 
+// ── Reports tab ───────────────────────────────────────────────────────────────
+
+type AgingRow = {
+  invoiceId: string;
+  invoiceNumber: string | null;
+  tenantId: string;
+  tenantName: string;
+  status: string;
+  dueDate: string | null;
+  daysOverdue: number;
+  balanceDueCents: number;
+  totalCents: number;
+};
+
+type FailedPaymentRow = {
+  invoiceId: string;
+  invoiceNumber: string | null;
+  tenantId: string;
+  tenantName: string;
+  totalCents: number;
+  balanceDueCents: number;
+  status: string;
+  lastFailureReason: string | null;
+  lastResponseCode: string | null;
+  lastAttemptAt: string | null;
+  failedAt: string | null;
+};
+
+type AgingResult = { rows: AgingRow[]; capped: boolean };
+type FailedPaymentsResult = { rows: FailedPaymentRow[]; capped: boolean };
+
+function CappedNotice({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <div style={{ padding: "6px 10px", borderRadius: 6, background: "#fef9c3", border: "1px solid #fde68a", fontSize: 12, color: "#713f12", marginBottom: 8 }}>
+      ⚠ Result set is capped — not all records are shown. Use filters or export CSV to retrieve more data.
+    </div>
+  );
+}
+
+function ReportsTab() {
+  // Aging report state
+  const [agingData, setAgingData] = useState<AgingResult | null>(null);
+  const [agingLoading, setAgingLoading] = useState(false);
+  const [agingError, setAgingError] = useState<string | null>(null);
+
+  // Failed payments report state
+  const [failedData, setFailedData] = useState<FailedPaymentsResult | null>(null);
+  const [failedLoading, setFailedLoading] = useState(false);
+  const [failedError, setFailedError] = useState<string | null>(null);
+
+  // CSV export filter state
+  const [exportStatus, setExportStatus] = useState("ALL");
+
+  function buildExportHref(type: "invoices" | "transactions") {
+    const p = new URLSearchParams();
+    if (exportStatus !== "ALL") p.set("status", exportStatus);
+    return `/api/admin/billing/reports/export/${type}?${p.toString()}`;
+  }
+
+  async function loadAging() {
+    setAgingLoading(true);
+    setAgingError(null);
+    try {
+      const result = await apiGet<AgingResult>("/admin/billing/reports/aging");
+      setAgingData(result);
+    } catch (err: unknown) {
+      setAgingError(billingErrorMessage(err, "Failed to load aging report."));
+    } finally {
+      setAgingLoading(false);
+    }
+  }
+
+  async function loadFailedPayments() {
+    setFailedLoading(true);
+    setFailedError(null);
+    try {
+      const result = await apiGet<FailedPaymentsResult>("/admin/billing/reports/failed-payments");
+      setFailedData(result);
+    } catch (err: unknown) {
+      setFailedError(billingErrorMessage(err, "Failed to load failed payments report."));
+    } finally {
+      setFailedLoading(false);
+    }
+  }
+
+  const agingColumns = [
+    { key: "tenant", label: "Tenant", render: (r: AgingRow) => r.tenantName },
+    { key: "inv", label: "Invoice #", render: (r: AgingRow) => r.invoiceNumber || "—" },
+    {
+      key: "status", label: "Status",
+      render: (r: AgingRow) => <span className={`billing-status-pill ${invStatusClass(r.status)}`}>{r.status}</span>,
+    },
+    { key: "due", label: "Due Date", render: (r: AgingRow) => fmtDate(r.dueDate) },
+    {
+      key: "overdue", label: "Days Overdue",
+      render: (r: AgingRow) => (
+        <span style={{ color: r.daysOverdue > 0 ? "var(--danger, #dc2626)" : "inherit", fontWeight: r.daysOverdue > 30 ? 700 : 400 }}>
+          {r.daysOverdue > 0 ? `${r.daysOverdue}d` : "—"}
+        </span>
+      ),
+    },
+    { key: "balance", label: "Balance Due", render: (r: AgingRow) => <strong style={{ color: "var(--danger, #dc2626)" }}>{dollars(r.balanceDueCents)}</strong> },
+    { key: "total", label: "Total", render: (r: AgingRow) => dollars(r.totalCents) },
+  ];
+
+  const failedColumns = [
+    { key: "tenant", label: "Tenant", render: (r: FailedPaymentRow) => r.tenantName },
+    { key: "inv", label: "Invoice #", render: (r: FailedPaymentRow) => r.invoiceNumber || "—" },
+    {
+      key: "status", label: "Status",
+      render: (r: FailedPaymentRow) => <span className={`billing-status-pill ${invStatusClass(r.status)}`}>{r.status}</span>,
+    },
+    { key: "total", label: "Amount", render: (r: FailedPaymentRow) => dollars(r.totalCents) },
+    { key: "balance", label: "Balance Due", render: (r: FailedPaymentRow) => dollars(r.balanceDueCents) },
+    { key: "reason", label: "Last Failure Reason", render: (r: FailedPaymentRow) => r.lastFailureReason || "—" },
+    { key: "code", label: "Response Code", render: (r: FailedPaymentRow) => r.lastResponseCode || "—" },
+    { key: "attempt", label: "Last Attempt", render: (r: FailedPaymentRow) => fmtDatetime(r.lastAttemptAt) },
+  ];
+
+  return (
+    <div className="stack compact-stack">
+
+      {/* ── CSV Exports ─────────────────────────────────────────────────── */}
+      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
+        <h4 style={{ margin: "0 0 10px" }}>CSV Exports</h4>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+          Downloads are generated server-side and include all matching rows (up to the safety cap). Files are named with today&apos;s date.
+        </p>
+
+        <div className="row-actions" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+            Status filter:
+            <select
+              value={exportStatus}
+              onChange={(e) => setExportStatus(e.target.value)}
+              style={{ fontSize: 13, padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border, #d1d5db)" }}
+            >
+              {INV_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
+          <a
+            className="btn ghost"
+            href={buildExportHref("invoices")}
+            download
+            style={{ fontSize: 13, textDecoration: "none" }}
+          >
+            ⬇ Download invoices CSV
+          </a>
+          <a
+            className="btn ghost"
+            href={buildExportHref("transactions")}
+            download
+            style={{ fontSize: 13, textDecoration: "none" }}
+          >
+            ⬇ Download transactions CSV
+          </a>
+        </div>
+      </div>
+
+      {/* ── Aging Report ────────────────────────────────────────────────── */}
+      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
+        <div className="row-actions" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0, flex: 1 }}>Aging Report</h4>
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={loadAging}
+            disabled={agingLoading}
+            style={{ fontSize: 13 }}
+          >
+            {agingLoading ? "Loading…" : agingData ? "↻ Refresh" : "Load report"}
+          </button>
+          {agingData && (
+            <a
+              className="btn ghost"
+              href="/api/admin/billing/reports/aging/export"
+              download
+              style={{ fontSize: 13, textDecoration: "none" }}
+            >
+              ⬇ CSV
+            </a>
+          )}
+        </div>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+          All open invoices with outstanding balance, sorted by due date ascending.
+        </p>
+
+        {agingError ? <div className="billing-status-pill bad" style={{ marginBottom: 8 }}>{agingError}</div> : null}
+
+        {agingData ? (
+          <>
+            <CappedNotice visible={agingData.capped} />
+            <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              {agingData.rows.length} invoice{agingData.rows.length !== 1 ? "s" : ""}
+              {agingData.capped ? " (capped)" : ""}
+            </p>
+            {agingData.rows.length === 0 ? (
+              <p className="muted">No open invoices with outstanding balance. 🎉</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <DataTable rows={agingData.rows.map((r) => ({ ...r, id: r.invoiceId }))} columns={agingColumns} />
+              </div>
+            )}
+          </>
+        ) : (
+          !agingLoading && <p className="muted" style={{ fontSize: 13 }}>Click &quot;Load report&quot; to run the aging report.</p>
+        )}
+      </div>
+
+      {/* ── Failed Payments Report ───────────────────────────────────────── */}
+      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
+        <div className="row-actions" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0, flex: 1 }}>Failed Payments</h4>
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={loadFailedPayments}
+            disabled={failedLoading}
+            style={{ fontSize: 13 }}
+          >
+            {failedLoading ? "Loading…" : failedData ? "↻ Refresh" : "Load report"}
+          </button>
+          {failedData && (
+            <a
+              className="btn ghost"
+              href="/api/admin/billing/reports/failed-payments/export"
+              download
+              style={{ fontSize: 13, textDecoration: "none" }}
+            >
+              ⬇ CSV
+            </a>
+          )}
+        </div>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+          Invoices in FAILED or OVERDUE status with last processor response.
+        </p>
+
+        {failedError ? <div className="billing-status-pill bad" style={{ marginBottom: 8 }}>{failedError}</div> : null}
+
+        {failedData ? (
+          <>
+            <CappedNotice visible={failedData.capped} />
+            <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              {failedData.rows.length} invoice{failedData.rows.length !== 1 ? "s" : ""}
+              {failedData.capped ? " (capped)" : ""}
+            </p>
+            {failedData.rows.length === 0 ? (
+              <p className="muted">No failed invoices. 🎉</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <DataTable rows={failedData.rows.map((r) => ({ ...r, id: r.invoiceId }))} columns={failedColumns} />
+              </div>
+            )}
+          </>
+        ) : (
+          !failedLoading && <p className="muted" style={{ fontSize: 13 }}>Click &quot;Load report&quot; to run the failed payments report.</p>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
 // ── Page root ─────────────────────────────────────────────────────────────────
 
 export default function AdminBillingInvoicesPage() {
   const { can, backendJwtRole } = useAppContext();
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
-  const [activeTab, setActiveTab] = useState<"invoices" | "transactions">("invoices");
+  const [activeTab, setActiveTab] = useState<"invoices" | "transactions" | "reports">("invoices");
 
   if (!canAdmin) {
     return (
@@ -1398,7 +1665,7 @@ export default function AdminBillingInvoicesPage() {
 
         {/* Tab bar */}
         <div className="row-actions" style={{ borderBottom: "2px solid var(--border, #e0e0e0)", marginBottom: 16, paddingBottom: 0, gap: 0 }}>
-          {(["invoices", "transactions"] as const).map((tab) => (
+          {(["invoices", "transactions", "reports"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -1416,12 +1683,12 @@ export default function AdminBillingInvoicesPage() {
                 textTransform: "capitalize",
               }}
             >
-              {tab === "invoices" ? "Invoices" : "Transactions"}
+              {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Transactions" : "Reports"}
             </button>
           ))}
         </div>
 
-        {activeTab === "invoices" ? <InvoicesTab /> : <TransactionsTab />}
+        {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : <ReportsTab />}
       </div>
     </BillingPageChrome>
   );

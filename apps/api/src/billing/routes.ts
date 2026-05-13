@@ -21,6 +21,18 @@ import { billingInvoicePdfApiUrl, queuePaymentLinkEmail } from "./billingEmailLi
 import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
+import {
+  agingToCsv,
+  csvMeta,
+  failedPaymentsToCsv,
+  invoiceExportToCsv,
+  queryAgingReport,
+  queryFailedPaymentsReport,
+  queryInvoiceExport,
+  queryTransactionExport,
+  todayDateSuffix,
+  transactionExportToCsv,
+} from "./billingReports";
 
 type BillingUser = {
   sub: string;
@@ -934,6 +946,84 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       select: { id: true, type: true, message: true, metadata: true, createdAt: true },
     });
     return { tenantId: invoice.tenantId, events };
+  });
+
+  // ── Billing reports ─────────────────────────────────────────────────────────
+
+  app.get("/admin/billing/reports/aging", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { rows, capped } = await queryAgingReport(db as any);
+    return { rows, capped, rowCap: rows.length };
+  });
+
+  app.get("/admin/billing/reports/aging/export", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
+    const { rows, capped } = await queryAgingReport(db as any);
+    const meta = csvMeta("Billing Aging Report", generatedBy);
+    const csv = agingToCsv(rows, meta);
+    const filename = `billing-aging-${todayDateSuffix()}.csv`;
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("X-Report-Capped", capped ? "true" : "false")
+      .send(csv);
+  });
+
+  app.get("/admin/billing/reports/failed-payments", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { rows, capped } = await queryFailedPaymentsReport(db as any);
+    return { rows, capped, rowCap: rows.length };
+  });
+
+  app.get("/admin/billing/reports/failed-payments/export", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
+    const { rows, capped } = await queryFailedPaymentsReport(db as any);
+    const meta = csvMeta("Billing Failed Payments Report", generatedBy);
+    const csv = failedPaymentsToCsv(rows, meta);
+    const filename = `billing-failed-payments-${todayDateSuffix()}.csv`;
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("X-Report-Capped", capped ? "true" : "false")
+      .send(csv);
+  });
+
+  app.get("/admin/billing/reports/export/invoices", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const q = req.query as { status?: string; tenantId?: string };
+    const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
+    const { rows, capped } = await queryInvoiceExport(db as any, { status: q.status, tenantId: q.tenantId });
+    const meta = csvMeta("Billing Invoice Export", generatedBy);
+    const csv = invoiceExportToCsv(rows, meta);
+    const filename = `billing-invoices-${todayDateSuffix()}.csv`;
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("X-Report-Capped", capped ? "true" : "false")
+      .send(csv);
+  });
+
+  app.get("/admin/billing/reports/export/transactions", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const q = req.query as { status?: string; tenantId?: string };
+    const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
+    const { rows, capped } = await queryTransactionExport(db as any, { status: q.status, tenantId: q.tenantId });
+    const meta = csvMeta("Billing Transaction Export", generatedBy);
+    const csv = transactionExportToCsv(rows, meta);
+    const filename = `billing-transactions-${todayDateSuffix()}.csv`;
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("X-Report-Capped", capped ? "true" : "false")
+      .send(csv);
   });
 
   app.post("/admin/billing/invoices/:id/send", async (req, reply) => {
