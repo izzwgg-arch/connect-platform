@@ -123,6 +123,73 @@ deploy_common_log_timing() {
 # Git sync + change detection
 # --------------------------------------------------------------------------
 
+deploy_common_resolve_target_commit() {
+  local ROOT="$1"
+  local BRANCH="$2"
+  local COMMIT="${3:-}"
+  local REF_KIND="${4:-branch}"
+  cd "$ROOT" || deploy_common_fail "cd $ROOT"
+
+  if [[ -n "$COMMIT" ]]; then
+    git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || deploy_common_fail "unknown commit: $COMMIT"
+    git rev-parse "${COMMIT}^{commit}"
+    return 0
+  fi
+
+  if [[ "$REF_KIND" == "tag" ]]; then
+    [[ -n "$BRANCH" ]] || deploy_common_fail "tag is required"
+    git rev-parse --verify "refs/tags/${BRANCH}^{commit}" 2>/dev/null || deploy_common_fail "tag not found: $BRANCH"
+    return 0
+  fi
+
+  [[ -n "$BRANCH" ]] || deploy_common_fail "branch is required"
+  git rev-parse --verify "origin/${BRANCH}^{commit}" 2>/dev/null || deploy_common_fail "origin/${BRANCH} not found (git fetch origin?)"
+}
+
+deploy_common_dry_run_checkout_safety() {
+  local ROOT="$1"
+  local BRANCH="$2"
+  local COMMIT="${3:-}"
+  local REF_KIND="${4:-branch}"
+  export GIT_TERMINAL_PROMPT=0
+  cd "$ROOT" || deploy_common_fail "cd $ROOT"
+
+  deploy_common_emit_stage "dry-run"
+  deploy_common_log "DRY RUN checkout safety: fetching refs"
+  git fetch origin --prune --tags >&2 || deploy_common_fail "git fetch origin --prune --tags failed"
+
+  local old_head target_head
+  old_head="$(git rev-parse HEAD)" || deploy_common_fail "unable to read current HEAD"
+  target_head="$(deploy_common_resolve_target_commit "$ROOT" "$BRANCH" "$COMMIT" "$REF_KIND")" || deploy_common_fail "unable to resolve target commit"
+  deploy_common_emit_deployed_commit "$target_head"
+  deploy_common_log "DRY RUN checkout safety: current=${old_head:0:12} target=${target_head:0:12}"
+
+  local dirty_file changed_file blocking_file
+  dirty_file="$(mktemp)" || deploy_common_fail "mktemp failed"
+  changed_file="$(mktemp)" || deploy_common_fail "mktemp failed"
+  blocking_file="$(mktemp)" || deploy_common_fail "mktemp failed"
+
+  {
+    git diff --name-only
+    git diff --name-only --cached
+    git ls-files --others --exclude-standard
+  } | sort -u > "$dirty_file"
+
+  git diff --name-only "${old_head}..${target_head}" | sort -u > "$changed_file"
+  comm -12 "$dirty_file" "$changed_file" > "$blocking_file"
+
+  if [[ -s "$blocking_file" ]]; then
+    deploy_common_log "DRY RUN checkout safety: BLOCKED; dirty paths would be overwritten by target checkout:"
+    sed 's/^/[deploy-common]   /' "$blocking_file" >&2
+    rm -f "$dirty_file" "$changed_file" "$blocking_file"
+    deploy_common_fail "dry-run checkout safety failed; clean/commit/port the blocking paths before real deploy"
+  fi
+
+  deploy_common_log "DRY RUN checkout safety: OK; no dirty paths overlap target changes"
+  deploy_common_log "DRY RUN checkout safety: dirty_path_count=$(wc -l < "$dirty_file" | tr -d '[:space:]') target_changed_path_count=$(wc -l < "$changed_file" | tr -d '[:space:]')"
+  rm -f "$dirty_file" "$changed_file" "$blocking_file"
+}
+
 deploy_common_git_sync() {
   local ROOT="$1"
   local BRANCH="$2"
@@ -133,17 +200,17 @@ deploy_common_git_sync() {
   # Redirect all git output to stderr so the command substitution that captures
   # the return value of this function (the old HEAD SHA) is not polluted by
   # git's fast-forward summary, fetch progress, or checkout messages.
-  git fetch origin --prune >&2
+  git fetch origin --prune >&2 || deploy_common_fail "git fetch origin --prune failed"
 
   local old_head
   old_head="$(git rev-parse HEAD)"
 
   if [[ -n "$COMMIT" ]]; then
     git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || deploy_common_fail "unknown commit: $COMMIT"
-    git checkout --detach "$COMMIT" >&2
+    git checkout --detach "$COMMIT" >&2 || deploy_common_fail "git checkout --detach $COMMIT failed"
   else
     git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1 || deploy_common_fail "origin/${BRANCH} not found (git fetch origin?)"
-    git checkout -B "$BRANCH" "origin/${BRANCH}" >&2
+    git checkout -B "$BRANCH" "origin/${BRANCH}" >&2 || deploy_common_fail "git checkout -B $BRANCH origin/$BRANCH failed"
     git pull --ff-only origin "$BRANCH" >&2 || deploy_common_fail "git pull --ff-only failed"
   fi
 
@@ -327,8 +394,9 @@ deploy_common_rollback_git() {
 }
 
 # --------------------------------------------------------------------------
-# Health checks — short timeout, few retries. Callers wrap with their own
-# rollback on failure.
+# Health checks — short per-attempt curl timeout; callers choose attempt count
+# and sleep between tries. Callers wrap with their own rollback on failure.
+# Retries stay quiet; one diagnostic line is logged only after the last try.
 # --------------------------------------------------------------------------
 
 deploy_common_wait_http_ok() {
@@ -336,13 +404,28 @@ deploy_common_wait_http_ok() {
   local attempts="${2:-30}"
   local delay="${3:-2}"
   local n=0
+  local bodyf errf
+  bodyf="$(mktemp 2>/dev/null || echo "/tmp/deploy_wait_http_ok_body.$$")"
+  errf="$(mktemp 2>/dev/null || echo "/tmp/deploy_wait_http_ok_err.$$")"
   while [[ "$n" -lt "$attempts" ]]; do
     if curl -sfS --connect-timeout 2 --max-time 10 "$url" >/dev/null 2>&1; then
+      rm -f "$bodyf" "$errf" 2>/dev/null || true
       return 0
     fi
     n=$((n + 1))
     sleep "$delay"
   done
+  # Final probe (no -f): capture HTTP code, curl exit, short body, stderr tail.
+  local http_code curl_ec snippet err_snip
+  curl_ec=0
+  http_code="$(
+    curl -sS -o "$bodyf" -w '%{http_code}' --connect-timeout 2 --max-time 10 "$url" 2>"$errf"
+  )" || curl_ec=$?
+  [[ -n "$http_code" ]] || http_code="000"
+  snippet="$(head -c 256 "$bodyf" 2>/dev/null | tr '\n\r' '  ')"
+  err_snip="$(head -c 200 "$errf" 2>/dev/null | tr '\n\r' '  ')"
+  deploy_common_log "wait_http_ok FAILED after ${attempts} tries url=${url} http_code=${http_code} curl_exit=${curl_ec} body_snippet=${snippet} stderr_snippet=${err_snip}"
+  rm -f "$bodyf" "$errf" 2>/dev/null || true
   return 1
 }
 

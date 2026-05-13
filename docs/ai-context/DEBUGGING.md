@@ -872,7 +872,9 @@ ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>
 
 If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
-reviewed, committed/ported, or explicitly restored. If an older deploy queue log
+reviewed, committed/ported, or explicitly restored. **API health timeout vs slow startup:** If `[deploy-api] FAIL: health check failed after deploy` appears after a long **`[timing] restart=…ms`** line, see **`DEPLOYMENT.md`** § **API post-restart health** — the queue polls loopback **`/health`** while Prisma + **`tsx`** cold start may still be running; the final log line **`[deploy-common] wait_http_ok FAILED …`** records **curl exit**, **HTTP code**, and snippets for the last probe.
+
+If an older deploy queue log
 shows `error: Your local changes to … would be overwritten by checkout …
 Aborting` followed by `[deploy-common] stage=change-detect` (no fail-fast), the
 deploy ran on the dirty pre-existing tree, **not** on your commit. Recovery:

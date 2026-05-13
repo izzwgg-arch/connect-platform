@@ -1177,6 +1177,8 @@ From `docs/safe-deploy-queue.md` and `scripts/`:
 | Shared helpers | `scripts/lib/deploy-common.sh` |
 | Rollback | `scripts/release/rollback.sh` |
 
+**API post-restart health (`scripts/deploy-api.sh`):** After `docker compose up -d api`, the container entrypoint runs `prisma generate`, `prisma migrate deploy`, and `pnpm --filter @connect/api dev` before Fastify listens on **`:3001`**. The deploy script polls **`http://127.0.0.1:3001/health`** (a static `{ ok: true }` route) with **`deploy_common_wait_http_ok`**: by default **90 attempts × 2 s sleep** between attempts (plus per-attempt curl timeouts), so cold starts have roughly **three minutes** of wall-clock budget before rollback. Normal retries produce **no** extra log lines; if the wait still fails, the job log gets **one** `[deploy-common] wait_http_ok FAILED …` line with **HTTP code**, **curl exit code**, and **short body/stderr snippets** for RCA (connection refused vs non-2xx vs timeout).
+
 `scripts/build-changed.sh` and `scripts/smoke-fast.sh` exist for local fast checks.
 
 ---
@@ -1246,9 +1248,16 @@ Status checks:
   `/api/downloads/connectcomms-latest.apk` (filename allow-list enforced).
   The script also uploads `connectcomms-latest.json` with at least `version`,
   `publishedAt`, `createdAt` (UTC ISO timestamps at publish time), `sizeBytes`,
-  and optional `releaseNotes` / `commitSha`. `GET /mobile/android/latest` and
-  the HTML download page prefer `createdAt` / `publishedAt` from that JSON when
-  parseable, and fall back to the APK file `mtime` otherwise.
+  and optional `releaseNotes` / `commitSha`. When Android SDK **build-tools**
+  are on the publisher machine, the script runs **`aapt dump badging`** on the APK
+  to add **`versionCode`** and a **`buildId`** from `versionName`’s `+suffix`
+  (see `SHIP_BUILD_ID` in `apps/mobile/android/app/build.gradle`); otherwise pass
+  **`-VersionCode`** / **`-BuildId`**, or rely on **`-CommitSha`** for a short
+  `buildId` fallback. `GET /mobile/android/latest` and the HTML download page
+  expose `versionCode` / `buildId` when the manifest contains them. Both
+  endpoints prefer `createdAt` / `publishedAt` from that JSON when parseable,
+  and fall back to the APK file `mtime` otherwise. **Deploy the `api` service**
+  after changing how those fields are read or returned.
 - iOS distribution: UNKNOWN — verify with EAS submit configuration.
 
 ---

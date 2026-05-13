@@ -35,9 +35,9 @@ cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
-  deploy_common_emit_stage "dry-run"
-  log "DRY RUN — no git/docker/prisma/health changes"
-  log "Would: git sync (branch=${BRANCH:-} commit=${COMMIT:-}), pnpm install if lock/pkg changed,"
+  log "DRY RUN — verifying git checkout safety; no git checkout/docker/prisma/health changes"
+  deploy_common_dry_run_checkout_safety "$ROOT" "${BRANCH:-main}" "$COMMIT"
+  log "Would next: pnpm install if lock/pkg changed,"
   log "  prisma migrate deploy IF prisma/** changed, docker compose build/up ${SERVICE}, curl /health"
   log "(requested_by=${REQ})"
   exit 0
@@ -119,7 +119,7 @@ deploy_common_log_timing "restart" "$(deploy_common_stopwatch_elapsed_ms "$RESTA
 deploy_common_emit_stage "health"
 HEALTH_START="$(deploy_common_stopwatch_start)"
 log "health check http://127.0.0.1:3001/health"
-if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 45 2; then
+if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 90 2; then
   rollback
   fail "health check failed after deploy (requested by ${REQ})"
 fi
