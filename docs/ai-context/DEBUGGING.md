@@ -880,7 +880,18 @@ ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>
 
 If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
-reviewed, committed/ported, or explicitly restored. **API health timeout vs slow startup:** If `[deploy-api] FAIL: health check failed after deploy` appears after a long **`[timing] restart=…ms`** line, see **`DEPLOYMENT.md`** § **API post-restart health** — the queue polls loopback **`/health`** while Prisma + **`tsx`** cold start may still be running; the final log line **`[deploy-common] wait_http_ok FAILED …`** records **curl exit**, **HTTP code**, and snippets for the last probe.
+reviewed, committed/ported, or explicitly restored. **API health timeout vs slow startup:** If `[deploy-api] FAIL: health check failed after deploy` appears after a long **`[timing] restart=…ms`** line, see **`DEPLOYMENT.md`** § **API post-restart health**. The queue polls loopback **`/health`** while `prisma generate` + `prisma migrate deploy` + **`tsx`** cold start may still be running inside the container. When the budget (~5 min) is exhausted the job log contains three diagnostic sections — look for them between `stage=health` and `stage=rollback`:
+
+```
+[deploy-common] wait_http_ok FAILED after 150 tries url=… http_code=… curl_exit=… body_snippet=… stderr_snippet=…
+--- health failed: docker compose ps api ---
+<compose ps output>
+--- health failed: app-api-1 last 120 lines ---
+<container stdout/stderr — prisma errors, tsx compile errors, startup crashes>
+--- end health-failure container logs ---
+```
+
+`curl_exit=7` = connection refused (process not listening yet or crashed before bind). `curl_exit=28` = timeout. `http_code=000` = no HTTP response at all. If the container logs show a startup crash or `SyntaxError`/`TypeError`, the code is broken and the health timeout is a symptom, not the root cause. If logs show normal startup progress and no crash, the issue is purely a cold-start timing race.
 
 If an older deploy queue log
 shows `error: Your local changes to … would be overwritten by checkout …

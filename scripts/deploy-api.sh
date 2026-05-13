@@ -119,7 +119,13 @@ deploy_common_log_timing "restart" "$(deploy_common_stopwatch_elapsed_ms "$RESTA
 deploy_common_emit_stage "health"
 HEALTH_START="$(deploy_common_stopwatch_start)"
 log "health check http://127.0.0.1:3001/health"
-if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 90 2; then
+if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 150 2; then
+  # Capture container state BEFORE rollback replaces app-api-1.
+  log "--- health failed: docker compose ps api ---"
+  docker compose -f "$COMPOSE" ps api 2>&1 || true
+  log "--- health failed: app-api-1 last 120 lines ---"
+  docker logs --tail=120 app-api-1 2>&1 || true
+  log "--- end health-failure container logs ---"
   rollback
   fail "health check failed after deploy (requested by ${REQ})"
 fi

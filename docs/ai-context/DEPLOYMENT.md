@@ -1177,7 +1177,11 @@ From `docs/safe-deploy-queue.md` and `scripts/`:
 | Shared helpers | `scripts/lib/deploy-common.sh` |
 | Rollback | `scripts/release/rollback.sh` |
 
-**API post-restart health (`scripts/deploy-api.sh`):** After `docker compose up -d api`, the container entrypoint runs `prisma generate`, `prisma migrate deploy`, and `pnpm --filter @connect/api dev` before Fastify listens on **`:3001`**. The deploy script polls **`http://127.0.0.1:3001/health`** (a static `{ ok: true }` route) with **`deploy_common_wait_http_ok`**: by default **90 attempts × 2 s sleep** between attempts (plus per-attempt curl timeouts), so cold starts have roughly **three minutes** of wall-clock budget before rollback. Normal retries produce **no** extra log lines; if the wait still fails, the job log gets **one** `[deploy-common] wait_http_ok FAILED …` line with **HTTP code**, **curl exit code**, and **short body/stderr snippets** for RCA (connection refused vs non-2xx vs timeout).
+**API post-restart health (`scripts/deploy-api.sh`):** After `docker compose up -d api`, the container entrypoint runs `prisma generate`, `prisma migrate deploy`, and `pnpm --filter @connect/api dev` before Fastify listens on **`:3001`**. The deploy script polls **`http://127.0.0.1:3001/health`** (a static `{ ok: true }` route) with **`deploy_common_wait_http_ok`**: **150 attempts × 2 s sleep** between attempts, giving roughly **five minutes** of polling budget before rollback. Normal retries produce **no** extra log lines. When the budget is exhausted the job log records:
+
+1. **`[deploy-common] wait_http_ok FAILED after N tries url=… http_code=… curl_exit=… body_snippet=… stderr_snippet=…`** — from the final diagnostic curl probe (always logs now; prior bug: bash 4.4/5.x could fire the inherited ERR trap inside the command substitution before the log line ran — fixed 2026-05-13 by wrapping the probe in `set +e`/`set -e`).
+2. **`docker compose ps api`** output — shows container state at failure time.
+3. **`docker logs --tail=120 app-api-1`** output — shows the last 120 lines of API startup, including any startup crash, prisma error, or tsx compile error. Captured **before** rollback so the evidence survives container replacement.
 
 `scripts/build-changed.sh` and `scripts/smoke-fast.sh` exist for local fast checks.
 

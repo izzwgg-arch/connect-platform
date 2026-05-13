@@ -415,17 +415,30 @@ deploy_common_wait_http_ok() {
     n=$((n + 1))
     sleep "$delay"
   done
-  # Final probe (no -f): capture HTTP code, curl exit, short body, stderr tail.
-  local http_code curl_ec snippet err_snip
-  curl_ec=0
-  http_code="$(
-    curl -sS -o "$bodyf" -w '%{http_code}' --connect-timeout 2 --max-time 10 "$url" 2>"$errf"
-  )" || curl_ec=$?
+  # Final diagnostic probe.
+  #
+  # Must run under `set +e` because bash 4.4/5.x fires the caller's ERR trap
+  # for a variable-assignment whose command-substitution returns non-zero, even
+  # when the assignment is guarded by `||`.  In deploy-api.sh that trap is
+  # `rollback`, which would abort this function before the log line runs — the
+  # confirmed root cause of "wait_http_ok FAILED" never appearing in logs.
+  local http_code curl_ec snippet err_snip httpf
+  http_code="000"; curl_ec=0; snippet=""; err_snip=""
+  httpf="$(mktemp 2>/dev/null || printf '%s' "/tmp/deploy_wait_http_ok_http.$$")"
+  set +e
+  curl -sS -o "$bodyf" --write-out '%{http_code}' \
+       --connect-timeout 2 --max-time 10 "$url" >"$httpf" 2>"$errf"
+  curl_ec=$?
+  http_code="$(cat "$httpf" 2>/dev/null)"
   [[ -n "$http_code" ]] || http_code="000"
   snippet="$(head -c 256 "$bodyf" 2>/dev/null | tr '\n\r' '  ')"
   err_snip="$(head -c 200 "$errf" 2>/dev/null | tr '\n\r' '  ')"
   deploy_common_log "wait_http_ok FAILED after ${attempts} tries url=${url} http_code=${http_code} curl_exit=${curl_ec} body_snippet=${snippet} stderr_snippet=${err_snip}"
-  rm -f "$bodyf" "$errf" 2>/dev/null || true
+  rm -f "$bodyf" "$errf" "$httpf" 2>/dev/null || true
+  # Re-enable errexit before returning so the caller's set -e is restored.
+  # return 1 does not trigger ERR trap in bash 4.4+ (return is not a simple
+  # command for ERR-trap purposes), but we restore set -e regardless.
+  set -e
   return 1
 }
 
