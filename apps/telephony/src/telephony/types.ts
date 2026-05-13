@@ -110,11 +110,23 @@ export interface NormalizedQueueState {
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
+export type PbxLinkState = "healthy" | "reconnecting" | "degraded" | "stale";
+
 export interface ConnectionHealth {
   connected: boolean;
   lastEventAt: string | null;
+  /**
+   * Count of successful AMI reconnections after an outage (from internal backoff state).
+   * Distinct from `reconnectAttempt` (current backoff generation).
+   */
   reconnectCount: number;
   lastError: string | null;
+  /** ISO timestamp of last AMI event *or* response frame (includes Ping/Pong). */
+  lastTrafficAt: string | null;
+  /** Current backoff generation; 0 while stably connected. */
+  reconnectAttempt: number;
+  lastDisconnectAt: string | null;
+  connectedSince: string | null;
 }
 
 export interface AriHealth {
@@ -124,10 +136,14 @@ export interface AriHealth {
   webSocketSupported: false;
   lastCheckAt: string | null;
   lastError: string | null;
+  /** Probes failed since last successful `/ari/asterisk/info` (resets on success). */
+  consecutiveProbeFailures: number;
 }
 
 export interface TelephonyHealth {
   status: "ok" | "degraded" | "down";
+  /** PBX link quality for operators (banner / ops); see `computePbxLinkState`. */
+  pbxLinkState: PbxLinkState;
   ami: ConnectionHealth;
   ari: AriHealth;
   activeCalls: number;

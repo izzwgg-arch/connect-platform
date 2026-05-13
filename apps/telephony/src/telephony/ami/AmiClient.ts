@@ -48,7 +48,13 @@ export class AmiClient extends EventEmitter {
   private actionSeq = 0;
   _isConnected = false;
   lastEventAt: Date | null = null;
+  /** Last AMI event *or* authenticated response (Ping/Pong, CoreShowChannels, etc.). */
+  lastTrafficAt: Date | null = null;
   lastError: string | null = null;
+  lastDisconnectAt: Date | null = null;
+  connectedSince: Date | null = null;
+  /** Backoff chosen for the most recent scheduled reconnect (observability). */
+  lastScheduledBackoffMs = 0;
 
   constructor(cfg: AmiClientConfig) {
     super();
@@ -65,6 +71,16 @@ export class AmiClient extends EventEmitter {
     abort(this.reconnect);
     this.clearTimers();
     this.destroySocket("shutdown");
+  }
+
+  /** For health / metrics: AMI exponential-backoff generation (0 = stable). */
+  getReconnectAttempt(): number {
+    return this.reconnect.attempt;
+  }
+
+  /** Count of successful logins after at least one prior failure (outage recoveries). */
+  getSuccessfulRecoveries(): number {
+    return this.reconnect.totalReconnects;
   }
 
   // Send a raw AMI action. Returns the generated ActionID.
@@ -253,7 +269,22 @@ export class AmiClient extends EventEmitter {
 
   private connect(): void {
     if (isAborted(this.reconnect)) return;
-    log.info({ host: this.cfg.host, port: this.cfg.port }, "AMI connecting");
+    this.clearReconnectTimer();
+    const isRetry = this.reconnect.attempt > 0;
+    if (isRetry) {
+      log.info(
+        {
+          msg: "pbx_reconnect_attempt",
+          subsystem: "AMI",
+          retryCount: this.reconnect.attempt,
+          host: this.cfg.host,
+          port: this.cfg.port,
+        },
+        "pbx_reconnect_attempt",
+      );
+    } else {
+      log.info({ host: this.cfg.host, port: this.cfg.port }, "AMI connecting");
+    }
 
     const sock = new net.Socket();
     this.socket = sock;
@@ -263,6 +294,7 @@ export class AmiClient extends EventEmitter {
 
     sock.setEncoding("utf8");
     sock.setTimeout(45_000);
+    sock.setKeepAlive(true, 15_000);
 
     sock.connect(this.cfg.port, this.cfg.host);
 
@@ -309,6 +341,17 @@ export class AmiClient extends EventEmitter {
         this.lastError = err.message;
         this.emit("error", err);
         this.destroySocket("bad greeting");
+        log.warn(
+          {
+            msg: "pbx_reconnect_failed",
+            subsystem: "AMI",
+            errorClass: "bad_greeting",
+            err: err.message,
+            retryCount: this.reconnect.attempt,
+          },
+          "pbx_reconnect_failed",
+        );
+        this.scheduleReconnect("bad_greeting", err.message);
         return;
       }
 
@@ -370,9 +413,25 @@ export class AmiClient extends EventEmitter {
           this.authenticated = true;
           this._isConnected = true;
           onConnected(this.reconnect);
+          this.clearReconnectTimer();
+          this.connectedSince = new Date();
+          const downtimeMs =
+            this.lastDisconnectAt != null ? Date.now() - this.lastDisconnectAt.getTime() : undefined;
+          if (this.reconnect.totalReconnects > 0 && downtimeMs != null) {
+            log.info(
+              {
+                msg: "pbx_reconnect_success",
+                subsystem: "AMI",
+                downtimeMs,
+                successfulReconnects: this.reconnect.totalReconnects,
+              },
+              "pbx_reconnect_success",
+            );
+          }
           log.info("AMI authenticated successfully");
           this.startKeepalive();
           this.emit("connected");
+          this.noteAmiTraffic();
         } else {
           const msg = frame["Message"] ?? "Authentication failed";
           this.lastError = msg;
@@ -381,8 +440,6 @@ export class AmiClient extends EventEmitter {
           if (this.listenerCount("error") > 0) {
             this.emit("error", err);
           }
-          // destroySocket clears the socket; handleDisconnect schedules reconnect.
-          // Call destroySocket first so the socket is gone before we reschedule.
           if (this.socket) {
             this.socket.removeAllListeners();
             this.socket.destroy();
@@ -392,23 +449,34 @@ export class AmiClient extends EventEmitter {
           this.greetingReceived = false;
           this.authenticated = false;
           this._isConnected = false;
-          // Reconnect with backoff (service will retry indefinitely)
-          onFailed(this.reconnect);
-          const delay = nextDelayMs(this.reconnect);
-          log.info({ attempt: this.reconnect.attempt, delayMs: delay }, "AMI scheduling reconnect after auth failure");
-          this.reconnectTimer = setTimeout(() => { this.connect(); }, delay);
-          if (this.reconnectTimer.unref) this.reconnectTimer.unref();
+          log.warn(
+            {
+              msg: "pbx_reconnect_failed",
+              subsystem: "AMI",
+              errorClass: "auth_failed",
+              err: msg,
+            },
+            "pbx_reconnect_failed",
+          );
+          this.scheduleReconnect("auth_failed", msg);
         }
         return;
       }
       this.emit("response", frame);
+      this.noteAmiTraffic();
       return;
     }
 
     if (frame["Event"] !== undefined) {
       this.lastEventAt = new Date();
       this.emit("event", frame);
+      this.noteAmiTraffic();
     }
+  }
+
+  private noteAmiTraffic(): void {
+    if (!this.authenticated) return;
+    this.lastTrafficAt = new Date();
   }
 
   private startKeepalive(): void {
@@ -433,23 +501,59 @@ export class AmiClient extends EventEmitter {
     this.clearKeepalive();
 
     if (wasConnected) {
+      const connectedForMs =
+        this.connectedSince != null ? Date.now() - this.connectedSince.getTime() : undefined;
+      this.lastDisconnectAt = new Date();
+      this.connectedSince = null;
+      log.warn(
+        {
+          msg: "pbx_connection_lost",
+          subsystem: "AMI",
+          reason,
+          lastError: this.lastError,
+          connectedForMs,
+        },
+        "pbx_connection_lost",
+      );
       log.warn({ reason }, "AMI disconnected");
       this.emit("disconnected", reason);
     }
 
     if (isAborted(this.reconnect)) return;
 
+    this.scheduleReconnect(reason, this.lastError);
+  }
+
+  /** Exponential backoff + jitter; safe to call from any failure path (indefinite retries until `stop`). */
+  private scheduleReconnect(reason: string, errMsg: string | null): void {
+    if (isAborted(this.reconnect)) return;
     onFailed(this.reconnect);
     const delay = nextDelayMs(this.reconnect);
+    this.lastScheduledBackoffMs = delay;
+    this.clearReconnectTimer();
     log.info(
-      { attempt: this.reconnect.attempt, delayMs: delay },
-      "AMI scheduling reconnect",
+      {
+        msg: "pbx_reconnect_scheduled",
+        subsystem: "AMI",
+        reason,
+        retryCount: this.reconnect.attempt,
+        backoffMs: delay,
+        err: errMsg,
+      },
+      "pbx_reconnect_scheduled",
     );
-
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.connect();
     }, delay);
     if (this.reconnectTimer.unref) this.reconnectTimer.unref();
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   private destroySocket(reason: string): void {
@@ -468,10 +572,7 @@ export class AmiClient extends EventEmitter {
 
   private clearTimers(): void {
     this.clearKeepalive();
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    this.clearReconnectTimer();
   }
 
   private clearKeepalive(): void {

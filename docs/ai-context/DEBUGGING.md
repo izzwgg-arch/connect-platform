@@ -38,6 +38,14 @@
 | `GET /healing/status` | `HealingEngine` status. |
 | `GET /healing/log?maxAgeMs=...` | Recent healing actions. |
 
+### PBX reboot — telephony recovery (read-only checks)
+
+1. Prefer verifying **without** restarting Connect: after VitalPBX/Asterisk returns, AMI **5038** and ARI **8088** must accept connections from the telephony container.
+2. Poll **`GET /health`** on telephony (`http://telephony:3003/health` from Docker, or the operator-facing URL). Watch **`pbxLinkState`**: expect **`reconnecting`** while AMI is down, then **`healthy`** once AMI and ARI probes succeed ( **`degraded`** is normal if ARI lags briefly behind AMI).
+3. In telephony logs, grep **`pbx_reconnect_success`** / **`pbx_connection_lost`** / **`pbx_resubscribe_success`**. If the PBX is up but **`pbx_reconnect_success`** never appears for AMI, check AMI credentials, `manager.conf`, or firewall to **5038**.
+4. **`ami.lastTrafficAt`** should advance during idle PBX (Ping/Pong and other responses). If **`ami.connected`** is true but **`pbxLinkState`** flips to **`stale`**, treat as a possible half-open TCP path — capture network evidence before code changes.
+5. Portal live calls and BLF ultimately require AMI events; extended ARI outage alone yields **`degraded`**, not a dead dashboard.
+
 `apps/api`:
 
 | Path | Notes |

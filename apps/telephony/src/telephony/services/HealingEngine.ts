@@ -92,6 +92,8 @@ export class HealingEngine {
   private ariWasConnected = true;
   private lastCallFailureCount = 0;
   private lastCallFailureTsMs = 0;
+  /** Skip false AMI/ARI "disconnect" logs on the first tick before baseline is sampled. */
+  private pbxConnectivityPrimed = false;
 
   constructor(
     private readonly callStore: CallStateStore,
@@ -287,6 +289,13 @@ export class HealingEngine {
     const health = this.healthService.getHealth();
     const amiNow = health.ami.connected;
     const ariNow = health.ari.restHealthy;
+
+    if (!this.pbxConnectivityPrimed) {
+      this.amiWasConnected = amiNow;
+      this.ariWasConnected = ariNow;
+      this.pbxConnectivityPrimed = true;
+      return;
+    }
 
     // AMI disconnect → reconnect transition
     if (!this.amiWasConnected && amiNow) {

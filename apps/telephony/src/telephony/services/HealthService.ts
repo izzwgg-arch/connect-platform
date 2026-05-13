@@ -6,6 +6,7 @@ import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import type { AriBridgedActivePoller } from "../ari/AriBridgedActivePoller";
 import { env } from "../../config/env";
+import { computePbxLinkState } from "./pbxLinkState";
 
 export class HealthService {
   private readonly startedAt = Date.now();
@@ -35,8 +36,16 @@ export class HealthService {
       status = "down"; // AMI down — no event feed
     }
 
+    const pbxLinkState = computePbxLinkState({
+      amiConnected: amiHealth.connected,
+      ariHealthy: ariHealth.restHealthy,
+      lastAmiTrafficAt: amiHealth.lastTrafficAt,
+      connectedSince: amiHealth.connectedSince,
+    });
+
     return {
       status,
+      pbxLinkState,
       ami: amiHealth,
       ari: ariHealth,
       activeCalls: this.bridgePoller.getActiveCallCount(),
@@ -51,8 +60,12 @@ export class HealthService {
     return {
       connected: this.ami._isConnected,
       lastEventAt: this.ami.lastEventAt?.toISOString() ?? null,
-      reconnectCount: 0,
+      reconnectCount: this.ami.getSuccessfulRecoveries(),
       lastError: this.ami.lastError,
+      lastTrafficAt: this.ami.lastTrafficAt?.toISOString() ?? null,
+      reconnectAttempt: this.ami.getReconnectAttempt(),
+      lastDisconnectAt: this.ami.lastDisconnectAt?.toISOString() ?? null,
+      connectedSince: this.ami.connectedSince?.toISOString() ?? null,
     };
   }
 
@@ -62,6 +75,7 @@ export class HealthService {
       webSocketSupported: false,
       lastCheckAt: this.ari.lastRestCheckAt?.toISOString() ?? null,
       lastError: this.ari.lastError,
+      consecutiveProbeFailures: this.ari.consecutiveProbeFailures,
     };
   }
 

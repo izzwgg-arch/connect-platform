@@ -39,6 +39,8 @@ export class AriClient extends EventEmitter {
   private readonly cfg: AriClientConfig;
   private probeTimer: NodeJS.Timeout | null = null;
   private stopped = false;
+  /** Increments on each failed `/ari/asterisk/info` probe; reset on success. */
+  consecutiveProbeFailures = 0;
 
   /** True while the most recent REST probe succeeded. */
   _isConnected = false;
@@ -68,6 +70,7 @@ export class AriClient extends EventEmitter {
   /** Stop health probing. */
   stop(): void {
     this.stopped = true;
+    this.consecutiveProbeFailures = 0;
     if (this.probeTimer) {
       clearTimeout(this.probeTimer);
       this.probeTimer = null;
@@ -203,23 +206,52 @@ export class AriClient extends EventEmitter {
 
       if (!this._isConnected) {
         this._isConnected = true;
+        this.consecutiveProbeFailures = 0;
+        log.info(
+          {
+            msg: "pbx_reconnect_success",
+            subsystem: "ARI_REST",
+            baseUrl: this.cfg.baseUrl,
+          },
+          "pbx_reconnect_success",
+        );
         log.info({ baseUrl: this.cfg.baseUrl }, "ARI REST probe succeeded — marking healthy");
         this.emit("rest:healthy");
       } else {
+        this.consecutiveProbeFailures = 0;
         log.debug({ baseUrl: this.cfg.baseUrl }, "ARI REST probe OK");
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       this.lastRestCheckAt = new Date();
+      this.consecutiveProbeFailures++;
 
       if (this._isConnected) {
         this._isConnected = false;
+        log.warn(
+          {
+            msg: "pbx_connection_lost",
+            subsystem: "ARI_REST",
+            err: msg,
+            consecutiveProbeFailures: this.consecutiveProbeFailures,
+          },
+          "pbx_connection_lost",
+        );
         log.warn({ err: msg }, "ARI REST probe failed — marking unhealthy");
         const errObj = err instanceof Error ? err : new Error(msg);
         this.emit("rest:unhealthy", errObj);
         if (this.listenerCount("error") > 0) this.emit("error", errObj);
       } else {
+        log.debug(
+          {
+            msg: "pbx_reconnect_attempt",
+            subsystem: "ARI_REST",
+            err: msg,
+            consecutiveProbeFailures: this.consecutiveProbeFailures,
+          },
+          "pbx_reconnect_attempt",
+        );
         log.debug({ err: msg }, "ARI REST probe still failing");
       }
     }

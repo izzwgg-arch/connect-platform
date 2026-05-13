@@ -91,6 +91,13 @@
 - AMI **must not** be talked to from `apps/api` directly except via the telephony
   service's HTTP endpoints.
 
+### PBX restart / network loss (AMI + ARI recovery)
+
+- **AMI** (`AmiClient.ts`): on TCP close or login failure, reconnects **indefinitely** with exponential backoff + jitter (`AmiReconnect.ts`, cap ~30s). `setKeepAlive(true)` helps detect dead peers. On disconnect, `TelephonyService` clears call ghosts; on the next successful login it re-sends **`CoreShowChannels`** and **`ExtensionStateList` / `PJSIPShowContacts`** (bootstrap `setTimeout` handlers are cleared on each disconnect to avoid stacking duplicate actions across churn).
+- **ARI** (`AriClient.ts`): REST-only probes **`GET /ari/asterisk/info`** (this PBX build has no ARI WebSocket). Healthy interval **30s**, failing interval **10s**; `_isConnected` tracks the last probe outcome.
+- **`GET /health`** (`HealthService`): adds **`pbxLinkState`** (`healthy` \| `reconnecting` \| `degraded` \| `stale`), AMI **`lastTrafficAt`** (any authenticated frame, including Ping responses), **`reconnectCount`** / **`reconnectAttempt`**, **`lastDisconnectAt`**, **`connectedSince`**, and ARI **`consecutiveProbeFailures`**. `status=down` remains **HTTP 503** when AMI is not authenticated (canonical event loss).
+- **Structured log messages** (grep / log aggregation): `pbx_connection_lost`, `pbx_reconnect_scheduled`, `pbx_reconnect_attempt`, `pbx_reconnect_success`, `pbx_reconnect_failed`, `pbx_resubscribe_start`, `pbx_resubscribe_success`.
+
 ---
 
 ## ARI (Asterisk REST Interface)

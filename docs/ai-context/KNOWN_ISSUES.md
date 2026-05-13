@@ -65,7 +65,11 @@ When you find a new fragile area, add it here.
 - **AMI reconnect ghosts.** AMI reconnect can leave stale channel index entries.
   `reconcileActiveBridges(...)` + `forceEvictZombie(...)` + 60 s
   `startPeriodicStaleCleanup` mitigate this. UNKNOWN whether all paths converge —
-  monitor `/diagnostics`.
+  monitor `/diagnostics`. **Update 2026-05-12:** AMI **bad-greeting** and **auth-failure**
+  paths now use the same reconnect scheduler as TCP close (previously a bad greeting
+  could strand the client with no reconnect). Bootstrap timers are cleared on each
+  disconnect to avoid stacked `CoreShowChannels` / presence refreshes. See
+  `TELEPHONY.md` § “PBX restart / network loss”.
 - **Tenant alias handling (`vpbx:<slug>` ↔ Connect CUID).** Without this, regular
   users see empty Live Calls / Team Directory while admins see everything. Lives
   in `PbxTenantMapCache.tenantAliasesEqual`. Do not bypass.
@@ -960,6 +964,49 @@ When you find a new fragile area, add it here.
 - **Webhook `sms_message` fan-out in API** (`connectChatRoutes.ts`) remains as-is
   for the unlikely case VoIP.ms ever switches to real webhook delivery. The two
   paths produce the same push payload shape.
+
+## CRM module (Phases 1A–6B, shipped 2026-05)
+
+- **Local presence is advisory only — not SIP-enforced (open, accepted).** The CRM
+  `POST /crm/calls/originate` endpoint selects a matching area-code DID from
+  `CrmCallerIdPool` and returns it as a suggested `callerId`. It does NOT modify SIP
+  headers, AMI originate parameters, or PBX config. The actual outbound caller ID
+  is whatever the normal SIP/PBX flow uses. This is intentional (no PBX changes allowed
+  without a separate architecture review). Future work: pass the advisory callerId
+  through `crm:dial` → `FloatingDialer` → SIP header if the PBX operator approves it.
+
+- **XLSX import deferred — CSV only (open).** `POST /crm/import/upload` accepts CSV
+  only. An XLSX parser was scoped but not implemented. Agents must export to CSV before
+  importing. The row cap is 5,000 rows per batch; file size cap is 5 MB.
+
+- **Transcription is a stub — not implemented (open).** `CrmTenantSettings.transcriptionEnabled`
+  exists and can be toggled, but no transcription pipeline is wired. Enabling the flag
+  has no effect beyond saving the boolean. A real implementation requires a separate
+  architecture decision (Whisper, Deepgram, etc.) and is explicitly out of scope for
+  the current CRM release.
+
+- **CRM nav requires re-login / hard reload after first access grant (open, documented).**
+  When an admin grants `CrmUserAccess` to a user, the portal shows the CRM nav only after
+  the user's next `GET /me` call (triggered by page reload or re-login). There is no
+  live-push of permission changes. This is documented in `CRM_ROLLOUT_CHECKLIST.md` § 1.
+
+- **No power dialer or predictive dialer (open, out of scope).** The CRM campaign queue
+  is a manual assembly-line workflow. Agents pick their next contact and click Call.
+  There is no auto-dial, no pacing algorithm, and no AMD (answering machine detection).
+  These require AMI originate integration which is not part of the current release.
+
+- **Bulk reassign writes no timeline event (intentional).** `POST /crm/contacts/bulk-reassign`
+  does not write `ASSIGNED_TO_USER` events to avoid flooding the timeline of every contact
+  in a large reassignment operation. Only individual `PATCH /crm/contacts/:id` assignment
+  changes create timeline events.
+
+- **Migration ordering — FIXED in Phase 6B.** The two enum-extension migrations
+  (`CONTACT_MERGED`, `ASSIGNED_TO_USER`) were originally created with May-12 timestamps
+  (`20260512*`), which caused `ALTER TYPE "CrmTimelineEventType"` to run before
+  `CREATE TYPE "CrmTimelineEventType"` on a fresh install. Fixed: both migrations were
+  moved to `20260522110000` and `20260522120000` (after the foundation migrations).
+  The production DB was not affected because the CRM had not yet been deployed at the
+  time of the fix.
 
 ## Build / repo hygiene
 

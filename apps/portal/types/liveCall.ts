@@ -61,11 +61,17 @@ export interface LiveQueueState {
   updatedAt: string;
 }
 
+export type PbxLinkState = "healthy" | "reconnecting" | "degraded" | "stale";
+
 export interface TelephonyConnectionHealth {
   connected: boolean;
   lastEventAt: string | null;
   reconnectCount: number;
   lastError: string | null;
+  lastTrafficAt?: string | null;
+  reconnectAttempt?: number;
+  lastDisconnectAt?: string | null;
+  connectedSince?: string | null;
 }
 
 export interface TelephonyAriHealth {
@@ -74,10 +80,12 @@ export interface TelephonyAriHealth {
   webSocketSupported: false;
   lastCheckAt: string | null;
   lastError: string | null;
+  consecutiveProbeFailures?: number;
 }
 
 export interface TelephonyHealth {
   status: "ok" | "degraded" | "down";
+  pbxLinkState?: PbxLinkState;
   ami: TelephonyConnectionHealth;
   ari: TelephonyAriHealth;
   activeCalls: number;

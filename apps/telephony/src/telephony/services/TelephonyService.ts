@@ -31,6 +31,8 @@ export class TelephonyService {
   private readonly outboundMohCache = new Map<string, { value: string; expiresAt: number }>();
   private readonly outboundMohApplied = new Map<string, string>();
   private readonly outboundMohByLinkedId = new Map<string, { tenantId: string; tenantSlug: string; mohClass: string }>();
+  /** Cleared on AMI disconnect to avoid stacked bootstraps across reconnect churn. */
+  private amiBootstrapTimers: NodeJS.Timeout[] = [];
 
   constructor(
     private readonly ami: AmiClient,
@@ -67,10 +69,34 @@ export class TelephonyService {
 
     this.ami.on("connected", () => {
       log.info("AMI connected — telephony service active");
+      this.clearAmiBootstrapTimers();
+      log.info(
+        {
+          msg: "pbx_resubscribe_start",
+          subsystem: "AMI_BOOTSTRAP",
+          actions: ["CoreShowChannels", "ExtensionStateList", "PJSIPShowContacts"],
+        },
+        "pbx_resubscribe_start",
+      );
       // Bootstrap: request all currently active channels so reconnects don't miss ongoing calls.
       // 500ms delay lets AMI finish its initial burst of FullyBooted/status events first.
-      setTimeout(() => this.bootstrapActiveChannels(), 500);
-      setTimeout(() => this.bootstrapExtensionPresence(), 1000);
+      this.amiBootstrapTimers.push(
+        setTimeout(() => {
+          this.bootstrapActiveChannels();
+        }, 500),
+      );
+      this.amiBootstrapTimers.push(
+        setTimeout(() => {
+          this.bootstrapExtensionPresence();
+        }, 1000),
+      );
+      this.amiBootstrapTimers.push(
+        setTimeout(() => {
+          if (this.ami._isConnected) {
+            log.info({ msg: "pbx_resubscribe_success", subsystem: "AMI_BOOTSTRAP" }, "pbx_resubscribe_success");
+          }
+        }, 1_500),
+      );
       // Re-run extension presence at 6s and 18s after connect.
       // When the telephony and API containers restart together the PbxTenantMapCache
       // HTTP request to the API may fail on the first attempt (API not ready yet).
@@ -78,17 +104,33 @@ export class TelephonyService {
       // tenantId=null, making BLF invisible to non-admin users.  The re-runs below
       // fire after the map cache has had time to load, ensuring correct tenantId
       // resolution even when the API was slow or temporarily unavailable.
-      setTimeout(() => { if (this.ami._isConnected) this.bootstrapExtensionPresence(); }, 6_000);
-      setTimeout(() => { if (this.ami._isConnected) this.bootstrapExtensionPresence(); }, 18_000);
+      this.amiBootstrapTimers.push(
+        setTimeout(() => {
+          if (this.ami._isConnected) this.bootstrapExtensionPresence();
+        }, 6_000),
+      );
+      this.amiBootstrapTimers.push(
+        setTimeout(() => {
+          if (this.ami._isConnected) this.bootstrapExtensionPresence();
+        }, 18_000),
+      );
     });
 
     this.ami.on("disconnected", (reason) => {
+      this.clearAmiBootstrapTimers();
       log.warn({ reason }, "AMI disconnected — clearing call state to avoid ghosts");
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ reason }, "live_call: disconnect_clearAll_triggered");
       }
       this.calls.clearAll();
     });
+  }
+
+  private clearAmiBootstrapTimers(): void {
+    for (const t of this.amiBootstrapTimers) {
+      clearTimeout(t);
+    }
+    this.amiBootstrapTimers = [];
   }
 
   private bootstrapActiveChannels(): void {
@@ -126,6 +168,14 @@ export class TelephonyService {
 
     // REST health probe events (replaces WebSocket connect/disconnect events).
     this.ari.on("rest:healthy", () => {
+      log.info(
+        {
+          msg: "pbx_resubscribe_success",
+          subsystem: "ARI_REST",
+          note: "REST call-control + bridged poller path usable again",
+        },
+        "pbx_resubscribe_success",
+      );
       log.info("ARI REST probe healthy");
     });
 
