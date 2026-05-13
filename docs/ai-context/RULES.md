@@ -524,6 +524,20 @@
     - No new API route is needed for CRM recording playback — the existing stream endpoint
       covers all CRM roles (`canViewCustomers` permission includes all authenticated roles).
 
+83. **CRM SMS must use the real tenant SMS provider and must never fake success.**
+    - `POST /crm/contacts/:id/sms` must call `provider.sendMessage()` (Twilio or VoIP.ms via
+      `packages/integrations`) and only write the `SMS_SENT` CrmTimelineEvent AFTER the provider
+      call resolves successfully.
+    - If the provider throws or returns an error, return 502 `sms_send_failed` and do NOT write
+      the timeline event.
+    - Always check `CrmContactMeta.doNotSms` before sending. Return 400 `do_not_sms` if true.
+    - Never expose raw provider credentials or intermediate error details that could leak secrets.
+    - Do NOT create fake/simulated SMS sends. If the tenant has no SMS provider configured,
+      return 503 `sms_not_configured` — do not silently succeed.
+    - The Send SMS panel in the portal must be hidden when `contact.doNotSms === true`.
+    - Schema: `CrmTimelineEventType.SMS_SENT` added via migration
+      `20260523010000_crm_sms_timeline_event`. This is the only CRM SMS timeline event type.
+
 81. **CRM browser notification reminders are one-time, page-resident, non-background.**
     - The "Enable reminders" button on the CRM dashboard uses `window.Notification.requestPermission()`
       — it fires ONE real OS-level notification with current overdue counts when permission is granted.

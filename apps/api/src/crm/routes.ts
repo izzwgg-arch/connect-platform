@@ -11,6 +11,7 @@ import { registerCrmChecklistRoutes } from "./checklistRoutes";
 import { registerCrmCampaignRoutes } from "./campaignRoutes";
 import { registerCrmReportRoutes } from "./reportRoutes";
 import { registerCrmCallerIdPoolRoutes } from "./callerIdPoolRoutes";
+import { registerCrmSmsRoutes } from "./smsRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -260,4 +261,7 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
   // Register CRM caller ID pool routes (Phase 4B — Local Presence)
   await registerCrmCallerIdPoolRoutes(app);
+
+  // Register CRM SMS routes (Phase 11A — SMS from contact)
+  await registerCrmSmsRoutes(app);
 }

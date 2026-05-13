@@ -891,6 +891,51 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 11A — SMS from CRM Contact
+
+```
+[ ] 1. Migration applied
+        - CrmTimelineEventType enum has SMS_SENT value in Prisma schema
+        - Migration SQL: 20260523010000_crm_sms_timeline_event/migration.sql
+
+[ ] 2. API endpoint exists and works
+        - POST /crm/contacts/:id/sms returns 200 with { ok, to, from, provider, providerMessageId }
+        - doNotSms contact returns 400 do_not_sms
+        - Contact with no phones returns 400 no_phone
+        - Wrong tenant contact returns 404 not_found
+        - Unauthenticated returns 401
+        - SMS not configured for tenant returns 503 sms_not_configured
+        - Provider error returns 502 sms_send_failed (no timeline event written)
+
+[ ] 3. Timeline event written only on success
+        - After real send, GET /crm/contacts/:id/timeline shows SMS_SENT event
+        - Event body contains message text (up to 500 chars)
+        - Event metadata contains { to, from, provider }
+
+[ ] 4. Portal contact detail page
+        - Send SMS panel visible when contact has phones and doNotSms is false
+        - Send SMS panel hidden when doNotSms is true (shows "opted out" notice instead)
+        - Panel collapsed by default (▼ toggle)
+        - Phone selector shown when contact has multiple phones
+        - Message counter: N/1600
+        - Send button disabled while sending or when message is empty
+        - On success: "✓ Sent" indicator + message cleared + timeline refreshed
+        - On error: error message shown without fake success
+
+[ ] 5. Timeline rendering
+        - SMS_SENT events show MessageSquareDot icon (cyan)
+        - SMS_SENT events show to/from/provider metadata chips
+        - Body (message text) shown in timeline item
+
+[ ] 6. No telephony/PBX changes
+        - /health still returns {"ok":true}
+
+[ ] 7. Portal + API typecheck passes
+        pnpm tsc --noEmit (apps/portal, apps/api) → 0 errors each
+```
+
+---
+
 ## Phase 10B — Callback/Task Alert Strip and Activity Digest
 
 ```
