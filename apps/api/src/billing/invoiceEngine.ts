@@ -228,6 +228,15 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
   const invoice = await (db as any).billingInvoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new Error("BILLING_INVOICE_NOT_FOUND");
   const paid = amountCents ?? invoice.totalCents;
+  // Phase-0 guard: reject partial amounts until PARTIALLY_PAID status exists.
+  // A PAID invoice with balanceDueCents > 0 is an impossible state: dunning skips it,
+  // the portal hides the Pay button, and the PDF stamps "PAID" on an outstanding balance.
+  if (paid < invoice.totalCents) {
+    const err: any = new Error("PARTIAL_PAYMENT_NOT_SUPPORTED");
+    err.code = "PARTIAL_PAYMENT_NOT_SUPPORTED";
+    err.hint = "Partial mark-paid is not supported yet. Pass the full remaining balance or wait for PARTIALLY_PAID support.";
+    throw err;
+  }
   const updated = await (db as any).billingInvoice.update({
     where: { id: invoiceId },
     data: {

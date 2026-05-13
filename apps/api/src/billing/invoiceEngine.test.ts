@@ -40,6 +40,13 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     lastCreateData: null,
   };
 
+  // Mutable invoice slot shared by the mark-paid guard sub-tests below.
+  // guardCapture uses an object wrapper so TypeScript can track the assignment inside
+  // the async update() callback (plain `let x = null` causes narrowing to `never`).
+  let guardInvoice: Record<string, unknown> = {};
+  const guardCapture: { updateData: Record<string, unknown> | null } = { updateData: null };
+  let guardUpdateCount = 0;
+
   const db = {
     tenantBillingSettings: {
       upsert: async () => ({
@@ -64,7 +71,13 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
         state.lastCreateData = data;
         return { id: "inv-1", tenant: { name: "Tenant" }, lineItems: [], ...data };
       },
-      update: async () => ({}),
+      // findUnique is used by markBillingInvoicePaid (guard tests below)
+      findUnique: async () => guardInvoice,
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        guardUpdateCount++;
+        guardCapture.updateData = data;
+        return { ...guardInvoice, ...data };
+      },
     },
     billingEventLog: { create: async () => ({}) },
     emailJob: { findFirst: async () => null, create: async () => ({}) },
@@ -74,7 +87,9 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     namedExports: { db },
   });
 
-  const { buildBillingInvoicePreview, createBillingInvoice } = await import("./invoiceEngine");
+  const { buildBillingInvoicePreview, createBillingInvoice, markBillingInvoicePaid } = await import("./invoiceEngine");
+
+  // ── existing: invoice preview + create ──────────────────────────────────────
 
   const preview1 = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.ok(preview1.taxCalculationAudit);
@@ -111,4 +126,42 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const meta = cap["metadata"] as { taxCalculationAudit?: { providerId?: string } };
   assert.ok(meta.taxCalculationAudit);
   assert.equal(meta.taxCalculationAudit.providerId, TAX_PROFILE_PROVIDER_ID);
+
+  // ── Phase-0 guard: markBillingInvoicePaid ───────────────────────────────────
+  // Three sub-cases reuse the same already-loaded invoiceEngine module above.
+
+  // Guard case 1: partial amount → rejects, update must NOT be called
+  guardInvoice = { id: "inv-g1", tenantId: "t1", totalCents: 10000, balanceDueCents: 10000, metadata: null };
+  guardUpdateCount = 0;
+  await assert.rejects(
+    () => markBillingInvoicePaid("inv-g1", 5000),
+    (err: any) => {
+      assert.equal(err.code, "PARTIAL_PAYMENT_NOT_SUPPORTED", "error code must be PARTIAL_PAYMENT_NOT_SUPPORTED");
+      assert.ok(typeof err.hint === "string" && err.hint.length > 0, "error must carry a hint");
+      return true;
+    },
+  );
+  assert.equal(guardUpdateCount, 0, "billingInvoice.update must NOT be called on partial amount");
+
+  // Guard case 2: no amountCents → defaults to totalCents → PAID, balanceDue=0
+  guardInvoice = { id: "inv-g2", tenantId: "t1", totalCents: 10000, balanceDueCents: 10000, metadata: null };
+  guardCapture.updateData = null;
+  await markBillingInvoicePaid("inv-g2");
+  // Cast as `any` to bypass TypeScript's narrowing of guardCapture.updateData to null
+  // (flow analysis from the explicit `= null` reset above would otherwise produce never).
+  const d2 = guardCapture.updateData as any;
+  assert.ok(d2, "billingInvoice.update must have been called (case 2)");
+  assert.equal(d2.status, "PAID", "status must be PAID when no amount passed");
+  assert.equal(d2.balanceDueCents, 0, "balanceDueCents must be 0");
+  assert.equal(d2.amountPaidCents, 10000, "amountPaidCents must equal totalCents");
+
+  // Guard case 3: amountCents === totalCents → PAID, balanceDue=0
+  guardInvoice = { id: "inv-g3", tenantId: "t1", totalCents: 8500, balanceDueCents: 8500, metadata: null };
+  guardCapture.updateData = null;
+  await markBillingInvoicePaid("inv-g3", 8500);
+  const d3 = guardCapture.updateData as any;
+  assert.ok(d3, "billingInvoice.update must have been called (case 3)");
+  assert.equal(d3.status, "PAID", "status must be PAID when exact amount passed");
+  assert.equal(d3.balanceDueCents, 0, "balanceDueCents must be 0 for exact amount");
+  assert.equal(d3.amountPaidCents, 8500, "amountPaidCents must equal the passed amount");
 });
