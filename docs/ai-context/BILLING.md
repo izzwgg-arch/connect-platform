@@ -49,6 +49,82 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 - **Audit trail:** Each **`BillingInvoice`** stores **`metadata.taxCalculationAudit`** (JSON) at creation: provider id/version, `computedAt`, tax enabled flag, `taxProfileId`, jurisdiction summary from the profile, taxable inputs, calculated line summaries, optional notes (e.g. missing profile, stub). **Dunning** still uses **`metadata.dunning`**; merges preserve `taxCalculationAudit` (`billingDunning.ts` spreads root metadata).
 - **Invoice lines:** Tax/fee rows are normal **`BillingInvoiceLineItem`** rows; provider stamps **`metadata.taxProviderId`** on profile-driven tax lines for traceability.
 
+## Customer billing portal — page inventory
+
+Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenant routes (`/billing/…`) only.
+
+| Page | Route | Permission | Key API calls |
+|------|-------|------------|---------------|
+| Dashboard | `/billing` | `can_view_billing_overview` | `GET /billing/settings`, `GET /billing/platform/invoices` |
+| Invoice list | `/billing/invoices` | `can_view_billing_invoices` | `GET /billing/platform/invoices` |
+| Invoice detail | `/billing/invoices/:id` | `can_view_billing_invoices` | `GET /billing/platform/invoices/:id`, `POST .../pay`, `.../email-invoice`, `.../email-payment-link` |
+| Payment methods | `/billing/payments` | `can_view_billing_payments` | `GET /billing/payment-methods`, `POST .../sola/save`, `POST .../:id/default`, `DELETE .../:id`, `GET /billing/sola/public-config` |
+| Receipts | `/billing/receipts` | `can_view_billing_receipts` | `GET /billing/platform/invoices` |
+
+### `/billing` — Dashboard
+- **Failed payment banner**: shown when the worst open invoice is FAILED or OVERDUE. Includes "Pay now" + "Update payment method" links.
+- **3-stat summary**: Balance due (red when > 0) · Autopay (day or Off) · Default card (On file or None + Add link).
+- **Unpaid callout**: first 4 unpaid invoices listed with status pill + "Pay now" direct link to detail. Shown only when balance > 0.
+- **Recent payments**: last 3 PAID invoices with date and amount. Link to receipts.
+- **All-clear state**: "✓ All paid" when `openBalance === 0`.
+- **Usage metrics removed** from this view (extensions, phone numbers not relevant on billing overview).
+
+### `/billing/invoices` — Invoice list
+- Sorted: FAILED → OVERDUE → OPEN → DRAFT → PAID → VOID (unpaid always first).
+- Status pills use `invoiceStatusLabel` (human-readable: "Pending", "Payment failed", "Overdue", "Paid", "Voided").
+- **No inline "Charge card"** button — payment action is on the detail page only to prevent accidental charges.
+- Period formatted as "Mar 1 – Mar 31, 2026". CTA says "Pay now" for failed/overdue rows, "Open" for others.
+
+### `/billing/invoices/:id` — Invoice detail
+- **Invoice header card**: invoice number, human-readable status pill, total, balance due (red when > 0), due date, billing period.
+- **Pay this invoice** section (when not PAID/VOID):
+  - With default PM: "Pay $X.XX" → **2-step inline confirm** ("Charge $X.XX to your default card?") → charge POSTed; APPROVED/DECLINED shown in toast.
+  - Without PM: "Add payment method" CTA + optional "Email payment link".
+  - Email actions (email invoice / email payment link) conditionally shown when `billingEmail` is set on tenant settings.
+  - Hint shown when `billingEmail` missing, links to Billing Settings.
+- **Paid banner** (when status === PAID): "✓ Paid {date}" + "Download PDF" + "Email receipt".
+- **Line items**: `DataTable` with description, qty, unit price, amount.
+- **Payment history**: renders `invoice.transactions` — each shows amount, date, card last4/brand, status pill, response message.
+- **Activity timeline**: vertical timeline (`.billing-timeline`) showing all `invoice.events` descending; labels via `billingEventLabel`; good/bad dot colors for payment events.
+
+### `/billing/payments` — Payment methods
+- **"SOLA" vendor brand removed** from all customer-facing copy. References replaced with "secure card form", "PCI-compliant payment processor", "card details".
+- **Advanced SUT token entry removed** (internal debug tool not appropriate for customers).
+- **Add a card** section: iFields hosted form loads on `solaPublicConfig.enabled && ifieldsKey`; shows "Contact support" hint when not configured.
+- `makeDefault` set to `true` only when no cards exist (first card is auto-default).
+- **Card operations** (make default, remove) now use toast feedback (`showToast`) instead of silent `window.location.reload()`.
+- **Remove confirmation**: click "Remove" shows "Remove this card?" + "Confirm remove" / "Cancel" inline (no modal).
+- `submittedRef` prevents double-submit on card save.
+
+### `/billing/receipts` — Receipts
+- Shows only PAID invoices + invoices with at least one APPROVED transaction. Sorted by `paidAt` desc.
+- Each row: invoice number, paid date, card used (brand + last4 from first APPROVED transaction), amount, PDF download button.
+- Mobile: card label and PDF button hidden at `< 640px` (amount still visible).
+
+### Shared helpers (`apps/portal/lib/billingUi.ts`)
+| Export | Purpose |
+|--------|---------|
+| `invoiceStatusLabel(status)` | Human-readable: OPEN→"Pending", FAILED→"Payment failed", OVERDUE→"Overdue", etc. |
+| `invoiceStatusClass(status)` | CSS modifier: good/warn/bad |
+| `transactionStatusLabel(status)` | APPROVED→"Approved", DECLINED→"Declined", ERROR→"Error" |
+| `transactionStatusClass(status)` | CSS modifier |
+| `billingEventLabel(type)` | Human-readable event type for timeline |
+| `formatDate(d)` | "May 13, 2026" |
+| `formatDateTime(d)` | "May 13, 2026, 2:37 PM" |
+
+### New CSS classes (`apps/portal/app/globals.css`)
+| Class | Purpose |
+|-------|---------|
+| `.billing-alert-banner` | Failed payment / overdue prominent banner with icon, body, actions |
+| `.billing-stat-grid` | 3-column responsive stat card row (collapses on mobile) |
+| `.billing-stat-card` | Individual stat card with label, value, sub, cta slots |
+| `.billing-unpaid-callout` | Unpaid invoices section (also used for recent payments) |
+| `.billing-invoice-header` | Invoice detail header card with meta grid |
+| `.billing-pay-confirm` | Inline 2-step pay confirmation row |
+| `.billing-tx-list` / `.billing-tx-row` | Transaction history list |
+| `.billing-timeline` / `.billing-timeline-item` | Vertical dot-line activity timeline |
+| `.billing-receipt-row` | Receipt list rows with card/PDF columns hidden on mobile |
+
 ## Operator portal (billing)
 
 - **Tenant:** **`/billing`** (overview — balances, invoices, usage metrics, activity; configuration links to **`/billing/settings`**), **`/billing/settings`** (same content as **`/settings/billing`**: SOLA/Cardknox tenant config + invoice branding via existing APIs), **`/billing/invoices`**, **`/billing/invoices/[id]`**, **`/billing/payments`**, **`/billing/receipts`** — see `apps/portal/app/(platform)/billing/**`. Uses tenant routes only (`/billing/...`). Invoice detail shows **`BillingEventLog`** via fields on **`GET /billing/platform/invoices/:id`** (no extra events route). Actions call **`POST .../email-invoice`**, **`POST .../email-payment-link`**, **`POST .../pay`**, PDF query on the API host — buttons stay disabled while a request is in flight; email actions require **`billingEmail`** on tenant settings (portal shows a hint when missing).

@@ -4,6 +4,76 @@ export function dollars(cents: number | undefined | null) {
   return `$${(Number(cents || 0) / 100).toFixed(2)}`;
 }
 
+export function formatDate(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  try { return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+  catch { return "—"; }
+}
+
+export function formatDateTime(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  try { return new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); }
+  catch { return "—"; }
+}
+
+export function invoiceStatusLabel(status: string | undefined | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "DRAFT": return "Draft";
+    case "OPEN": return "Pending";
+    case "PAID": return "Paid";
+    case "FAILED": return "Payment failed";
+    case "OVERDUE": return "Overdue";
+    case "VOID": return "Voided";
+    default: return status || "Unknown";
+  }
+}
+
+export function invoiceStatusClass(status: string | undefined | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "PAID": return "good";
+    case "FAILED": case "OVERDUE": return "bad";
+    case "OPEN": case "DRAFT": return "warn";
+    default: return "";
+  }
+}
+
+export function transactionStatusLabel(status: string | undefined | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "APPROVED": return "Approved";
+    case "DECLINED": return "Declined";
+    case "ERROR": return "Error";
+    case "PENDING": return "Pending";
+    default: return status || "—";
+  }
+}
+
+export function transactionStatusClass(status: string | undefined | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "APPROVED": return "good";
+    case "DECLINED": case "ERROR": return "bad";
+    default: return "warn";
+  }
+}
+
+export function billingEventLabel(type: string | undefined | null): string {
+  switch (String(type || "")) {
+    case "invoice_created": return "Invoice created";
+    case "invoice_emailed": return "Invoice emailed";
+    case "payment_succeeded": return "Payment succeeded";
+    case "payment_failed": return "Payment failed";
+    case "payment_link_emailed": return "Payment link emailed";
+    case "invoice_marked_paid": return "Marked as paid";
+    case "invoice_voided": return "Invoice voided";
+    case "webhook.received": return "Webhook received";
+    case "webhook.deduped": return "Webhook duplicate (skipped)";
+    case "receipt_emailed": return "Receipt emailed";
+    case "payment_failed_emailed": return "Failure notice emailed";
+    case "billing.sms_payment_link_sent": return "SMS payment link sent";
+    case "billing.sms_payment_link_failed": return "SMS payment link failed";
+    default: return type || "Event";
+  }
+}
+
 export function nextBillingSummary(billingDayOfMonth: number | undefined | null, autoBillingEnabled: boolean): string | null {
   if (!autoBillingEnabled) return null;
   const day = Number(billingDayOfMonth);
