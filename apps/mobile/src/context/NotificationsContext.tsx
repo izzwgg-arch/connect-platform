@@ -132,6 +132,10 @@ Notifications.setNotificationHandler({
     if (CALL_TYPES.has(type)) {
       return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
     }
+    const USER_ALERT_TYPES = new Set(["voicemail", "missed_call", "dm_message", "sms_message"]);
+    if (USER_ALERT_TYPES.has(type) && data?.alertTitle) {
+      return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
+    }
     // When IncomingCallFirebaseService consumes the FCM payload before expo-
     // notifications sees it, the JS notification arrives with empty data.type.
     // Detect this by looking for telltale call-invite keys on the raw payload
@@ -3584,6 +3588,15 @@ export function NotificationsProvider({
     const pushSub = Notifications.addNotificationReceivedListener(async (evt) => {
       const data = evt.request.content.data as MobilePushPayload;
       const now = Date.now();
+      const t = typeof (data as any)?.type === "string" ? String((data as any).type) : "";
+      if (t === "voicemail" || t === "missed_call" || t === "dm_message" || t === "sms_message") {
+        console.log("[CONNECT_USER_ALERT] notification_received", {
+          type: t,
+          channel: (data as any)?.androidChannelId,
+          messageId: (data as any)?.messageId,
+          voicemailId: (data as any)?.voicemailId,
+        });
+      }
 
       // If notification data is null/empty (common when IncomingCallFirebaseService.java
       // handles the FCM message first), try to recover from the native cache file.
@@ -3644,7 +3657,7 @@ export function NotificationsProvider({
         return;
       }
 
-      if (data?.type === "INVITE_CLAIMED" || data?.type === "INVITE_CANCELED") {
+      if (data?.type === "INVITE_CLAIMED" || data?.type === "INVITE_CANCELED" || data?.type === "MISSED_CALL") {
         // Belt-and-braces silence: stop the native Android ringtone + dismiss
         // the native full-screen UI regardless of JS state. The native service
         // ALSO receives this FCM (handleCallTerminationNative) and does the
@@ -3686,7 +3699,7 @@ export function NotificationsProvider({
             );
             return prev;
           }
-          // INVITE_CLAIMED (answered on another device): dismiss immediately.
+          // INVITE_CLAIMED (answered on another device) or MISSED_CALL: dismiss immediately.
           clearExpireTimer();
           shownInviteIdRef.current = null;
           setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
@@ -3695,35 +3708,10 @@ export function NotificationsProvider({
       }
 
       // ── Missed call local notification ───────────────────────────────────
-      // MISSED_CALL is sent as a data-only FCM push (so the native service
-      // can stop the ringtone). The OS never shows a system notification for
-      // data-only pushes, so we schedule a local one here after the ringtone
-      // has already been dismissed natively.
-      if (data?.type === "MISSED_CALL") {
-        const d = data as any;
-        const callerLabel: string =
-          d.callerNameOrNumber ||
-          d.callerNumber ||
-          d.fromDisplay ||
-          d.fromNumber ||
-          "Unknown";
-        Notifications.scheduleNotificationAsync({
-          content: {
-            title: "Missed call",
-            body: `Missed call from ${callerLabel}`,
-            data: {
-              type: "missed_call",
-              callId: d.callId ?? d.inviteId ?? null,
-              callerNumber: d.callerNumber ?? d.fromNumber ?? null,
-              tenantId: d.tenantId ?? null,
-              extensionId: d.extensionId ?? null,
-            },
-            sound: "default",
-            ...(Platform.OS === "android" && { android: { channelId: "connect-missed-calls" } }),
-          },
-          trigger: null,
-        }).catch(() => undefined);
-      }
+      // Removed: JS scheduleNotificationAsync for MISSED_CALL was redundant on
+      // Android. IncomingCallFirebaseService.postMissedCallNotification() posts
+      // the native notification directly via the connect-missed-calls channel,
+      // so the JS path produced a duplicate notification every time.
     });
 
     // ── Notification response listener (system tray tap) ─────────────────

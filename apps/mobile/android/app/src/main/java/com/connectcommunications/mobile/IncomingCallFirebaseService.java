@@ -94,12 +94,16 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      * the case where the JS layer has not yet run (e.g. first cold wake).
      */
     private static final String MISSED_CALL_CHANNEL_ID = "connect-missed-calls";
+    /** Must match NotificationsContext / Expo `androidChannelId` for user-alert pushes. */
+    private static final String VOICEMAIL_CHANNEL_ID = "connect-voicemail";
+    private static final String MESSAGES_CHANNEL_ID = "connect-messages";
     /**
      * Base notification id for missed-call banners. Kept well above the
      * NOTIFICATION_ID_BASE + 10000 incoming-call range to avoid collisions with
      * dismissIncomingCallUi() which cancels IDs in the incoming-call range only.
      */
     private static final int MISSED_CALL_NOTIF_ID_BASE = 52000;
+    private static final int USER_ALERT_NOTIF_ID_BASE = 53000;
     /**
      * If no real INCOMING_CALL FCM ever arrives within this window the
      * placeholder self-dismisses so the user is not left staring at a
@@ -271,6 +275,14 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             return;
         }
 
+        if (isUserAlertPushType(type)) {
+            try {
+                handleUserAlertDataPushNative(type, appData);
+            } catch (Exception e) {
+                Log.e(TAG, "[CONNECT_USER_ALERT] handleUserAlertDataPushNative failed: " + e.getMessage(), e);
+            }
+        }
+
         if ("INCOMING_CALL".equals(type)) {
             try {
                 String inviteForRing = appData.get("inviteId");
@@ -359,6 +371,119 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         } catch (Exception e) {
             Log.w(TAG, "emitCallFlowNative failed: " + e.getMessage());
         }
+    }
+
+    private static boolean isUserAlertPushType(String type) {
+        return "voicemail".equals(type)
+            || "missed_call".equals(type)
+            || "dm_message".equals(type)
+            || "sms_message".equals(type);
+    }
+
+    /**
+     * Data-only user alerts (voicemail / missed_call / chat) arrive here with
+     * {@code alertTitle} / {@code alertBody} / {@code androidChannelId} in the FCM
+     * data map. When the app is not in a JS foreground bucket, post a tray
+     * notification natively (Expo's JS listener does not run for strict data-only).
+     */
+    private void handleUserAlertDataPushNative(String type, Map<String, String> data) {
+        String channelId = data.get("androidChannelId");
+        if (channelId == null || channelId.isEmpty()) {
+            if ("voicemail".equals(type)) {
+                channelId = VOICEMAIL_CHANNEL_ID;
+            } else if ("missed_call".equals(type)) {
+                channelId = MISSED_CALL_CHANNEL_ID;
+            } else {
+                channelId = MESSAGES_CHANNEL_ID;
+            }
+        }
+        String title = data.get("alertTitle");
+        String body = data.get("alertBody");
+        if (title == null) title = "";
+        if (body == null) body = "";
+        String messageId = data.get("messageId");
+        String voicemailId = data.get("voicemailId");
+        Log.i(TAG, "[CONNECT_USER_ALERT] received type=" + type
+            + " channel=" + channelId
+            + " messageId=" + (messageId != null ? messageId : "")
+            + " voicemailId=" + (voicemailId != null ? voicemailId : ""));
+
+        String appState = lastPushReceivedAppState;
+        if ("FOREGROUND".equals(appState) || "VISIBLE".equals(appState)) {
+            Log.i(TAG, "[CONNECT_USER_ALERT] foreground_skip_native_tray type=" + type);
+            return;
+        }
+
+        ensureUserAlertChannel(channelId);
+
+        String dedupeKey = type + ":" + (messageId != null ? messageId : "")
+            + ":" + (voicemailId != null ? voicemailId : "")
+            + ":" + (data.get("callId") != null ? data.get("callId") : "");
+        int notifHash = Math.abs(dedupeKey.hashCode() % 8000);
+        int notifId = USER_ALERT_NOTIF_ID_BASE + notifHash;
+
+        android.net.Uri tapUri;
+        if ("voicemail".equals(type)) {
+            String vm = voicemailId != null ? voicemailId : "";
+            tapUri = android.net.Uri.parse(
+                "com.connectcommunications.mobile://voicemail?voicemailId=" + android.net.Uri.encode(vm));
+        } else if ("missed_call".equals(type)) {
+            tapUri = android.net.Uri.parse("com.connectcommunications.mobile://missed-call");
+        } else {
+            String conv = data.get("conversationId") != null ? data.get("conversationId") : "";
+            String mid = messageId != null ? messageId : "";
+            tapUri = android.net.Uri.parse(
+                "com.connectcommunications.mobile://chat?conversationId=" + android.net.Uri.encode(conv)
+                    + "&messageId=" + android.net.Uri.encode(mid));
+        }
+        Intent tapIntent = new Intent(Intent.ACTION_VIEW, tapUri);
+        tapIntent.setClass(this, MainActivity.class);
+        tapIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent tapPi = PendingIntent.getActivity(this, notifId, tapIntent, piFlags);
+
+        try {
+            NotificationCompat.Builder b = new NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(R.drawable.notification_icon)
+                .setContentTitle(title.isEmpty() ? "Connect" : title)
+                .setContentText(body.isEmpty() ? " " : body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(tapPi);
+            NotificationManagerCompat.from(this).notify(notifId, b.build());
+            Log.i(TAG, "[CONNECT_USER_ALERT] posted_tray notifId=" + notifId + " type=" + type);
+        } catch (Throwable t) {
+            Log.w(TAG, "[CONNECT_USER_ALERT] post_failed: " + t.getMessage());
+        }
+    }
+
+    private void ensureUserAlertChannel(String channelId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (nm.getNotificationChannel(channelId) != null) return;
+        String name;
+        String desc;
+        int importance = NotificationManager.IMPORTANCE_HIGH;
+        if (VOICEMAIL_CHANNEL_ID.equals(channelId)) {
+            name = "Voicemail";
+            desc = "Voicemail notifications";
+        } else if (MISSED_CALL_CHANNEL_ID.equals(channelId)) {
+            name = "Missed Calls";
+            desc = "Missed call notifications";
+        } else {
+            name = "Messages";
+            desc = "Chat and SMS notifications";
+        }
+        NotificationChannel ch = new NotificationChannel(channelId, name, importance);
+        ch.setDescription(desc);
+        ch.enableVibration(true);
+        ch.setVibrationPattern(new long[]{0, 200, 100, 200});
+        nm.createNotificationChannel(ch);
+        Log.i(TAG, "[CONNECT_USER_ALERT] channel_created id=" + channelId);
     }
 
     @Override
@@ -706,7 +831,8 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     private void handleCallTerminationNative(String type, Map<String, String> data) {
         String inviteId = data.get("inviteId");
         if (inviteId == null || inviteId.isEmpty()) inviteId = data.get("callId");
-        Log.i(TAG, "[LOCK_CALL_CLEANUP] native_termination type=" + type + " inviteId=" + inviteId);
+        String pushReason = data.get("reason");
+        Log.i(TAG, "[LOCK_CALL_CLEANUP] native_termination type=" + type + " inviteId=" + inviteId + " reason=" + pushReason);
         Log.i(TAG, "[CALL_INCOMING] native termination type=" + type + " inviteId=" + inviteId);
         // Termination implies the call is gone — placeholder must die too,
         // even if no real INCOMING_CALL ever arrived (e.g. dialplan timed out).
@@ -902,10 +1028,16 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                     ? Math.abs(inviteId.hashCode() % 9000)
                     : 0);
 
-            Intent tapIntent = new Intent(this, MainActivity.class);
+            // Use a deep-link URI with the existing app scheme so React Native's
+            // Linking module receives the URL on both cold-start (getInitialURL)
+            // and resume (onNewIntent → Linking 'url' event). MainActivity passes
+            // it through untouched — neutralizeStaleIncomingCallIntent only acts
+            // on host "incoming-call", not "missed-call".
+            android.net.Uri missedCallUri = android.net.Uri.parse(
+                "com.connectcommunications.mobile://missed-call");
+            Intent tapIntent = new Intent(Intent.ACTION_VIEW, missedCallUri);
+            tapIntent.setClass(this, MainActivity.class);
             tapIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            tapIntent.putExtra("notificationType", "missed_call");
-            tapIntent.putExtra("inviteId", inviteId != null ? inviteId : "");
             int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 piFlags |= PendingIntent.FLAG_IMMUTABLE;

@@ -1,4 +1,4 @@
-﻿import { randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { db } from "@connect/db";
@@ -24,7 +24,7 @@ import {
 import { createBillingInvoice } from "../../api/src/billing/invoiceEngine";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
-import { runVoicemailSpoolReconcileCycle } from "./voicemailSpoolReconcileCycle";
+import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
 import {
   isConnectMohRuntimeClass,
@@ -32,6 +32,7 @@ import {
   isValidMohRuntimeClass,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
   pickCanonicalTenantSlug,
+  buildExpoPushV2Item,
 } from "@connect/shared";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -325,18 +326,25 @@ async function sendPushToUserDevices(input: {
   //
   // All FCM data values MUST be strings (Firebase spec). Expo silently
   // promotes the push to a notification message if values fail to serialize,
-  // so we stringify every field explicitly.
-  const stringifiedData: Record<string, string> = {};
-  for (const [k, v] of Object.entries(input.payload)) {
-    if (v === undefined || v === null) continue;
-    stringifiedData[k] = typeof v === "string" ? v : JSON.stringify(v);
-  }
-  const messages = devices.map((d) => ({
-    to: d.expoPushToken,
-    priority: "high" as const,
-    ttl: 45,
-    data: stringifiedData,
-  }));
+  // so we stringify every field explicitly via buildExpoPushV2Item.
+  const messages = devices.map((d) =>
+    buildExpoPushV2Item({
+      to: String(d.expoPushToken),
+      payload: { ...(input.payload as unknown as Record<string, unknown>) },
+    }),
+  );
+
+  console.info(
+    JSON.stringify({
+      event: "MOBILE_PUSH_AUDIT",
+      stage: "expo_messages_built",
+      source: "worker",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      notificationType: input.payload.type,
+      deviceCount: messages.length,
+    }),
+  );
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (expoPushAccessToken) headers.authorization = `Bearer ${expoPushAccessToken}`;
@@ -538,6 +546,18 @@ async function processPolledCall(link: any, call: { callId: string; state: strin
     await db.auditLog.create({ data: { tenantId: link.tenantId, action: "CALL_INVITE_CANCELED_BY_PBX", entityType: "CallInvite", entityId: invite.id } });
     if (nextStatus === "EXPIRED") {
       await createMissedCallRecordForInvite(invite, "MISSED").catch(() => undefined);
+      await sendPushToUserDevices({
+        tenantId: invite.tenantId,
+        userId: invite.userId,
+        payload: {
+          type: "INVITE_CANCELED",
+          inviteId: invite.id,
+          pbxCallId: invite.pbxCallId,
+          reason: "EXPIRED",
+          tenantId: invite.tenantId,
+          timestamp: new Date().toISOString(),
+        },
+      }).catch(() => undefined);
     } else {
       await createMissedCallRecordForInvite(invite, "CANCELED").catch(() => undefined);
       await sendPushToUserDevices({
@@ -1417,10 +1437,8 @@ setInterval(() => {
   runPbxJobCycle().catch((err) => console.error("pbx job cycle failed", err?.message || err));
 }, 60 * 1000);
 
-// SMS push notification for VoIP.ms poll path.
-// Unlike call-control pushes (data-only), SMS pushes include title/body/channelId so
-// Android FCM SDK can display them directly even when the app is swiped away, without
-// needing to wake onMessageReceived on a killed app.
+// SMS push notification for VoIP.ms poll path — same data-only + high priority
+// envelope as API `sendPushToUserDevices` (see packages/shared expoMobilePushFormat).
 async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
   const allDevices = await db.mobileDevice.findMany({
     where: { tenantId: input.tenantId, userId: input.userId, active: true },
@@ -1429,23 +1447,20 @@ async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
   const devices = allDevices.filter((d): d is { expoPushToken: string } => d.expoPushToken != null);
   if (!devices.length) return;
 
-  const messages = devices.map((d) => ({
-    to: d.expoPushToken,
-    priority: "high" as const,
-    title: "New message",
-    body: input.preview,
-    ttl: 3600,
-    data: {
-      type: "sms_message",
-      conversationId: input.conversationId,
-      messageId: input.messageId,
-      phoneNumber: input.phoneNumber,
-      tenantId: input.tenantId,
-      preview: input.preview,
-      timestamp: input.timestamp,
-    },
-    android: { channelId: "connect-messages" },
-  }));
+  const messages = devices.map((d) =>
+    buildExpoPushV2Item({
+      to: String(d.expoPushToken),
+      payload: {
+        type: "sms_message",
+        conversationId: input.conversationId,
+        messageId: input.messageId,
+        phoneNumber: input.phoneNumber,
+        tenantId: input.tenantId,
+        preview: input.preview,
+        timestamp: input.timestamp,
+      },
+    }),
+  );
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (expoPushAccessToken) headers.authorization = `Bearer ${expoPushAccessToken}`;
@@ -1519,17 +1534,10 @@ runPbxCdrSyncCycle().catch((err) => console.error("initial pbx cdr sync failed",
 runVoicemailSyncCycle().catch((err) => console.error("initial voicemail sync failed", err?.message || err));
 
 // Insert-only spool reconcile (schema-2 pagination): durable catch-up for all PBX-linked mailboxes.
-// VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS=0 disables. Default 15 minutes.
+// VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS=0 disables. Default 15 minutes base; scheduler applies adaptive backoff + jitter.
 const vmSpoolReconcileMs = Number(process.env.VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS || 15 * 60 * 1000);
 if (Number.isFinite(vmSpoolReconcileMs) && vmSpoolReconcileMs > 0) {
-  setInterval(() => {
-    runVoicemailSpoolReconcileCycle().catch((err) =>
-      console.error("voicemail spool reconcile failed", err?.message || err),
-    );
-  }, vmSpoolReconcileMs);
-  runVoicemailSpoolReconcileCycle().catch((err) =>
-    console.error("initial voicemail spool reconcile failed", err?.message || err),
-  );
+  startVoicemailSpoolReconcileLoop();
 }
 
 setInterval(() => {

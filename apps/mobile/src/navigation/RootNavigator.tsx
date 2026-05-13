@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { NativeModules, Platform, StyleSheet, View } from 'react-native';
+import { Linking, NativeModules, Platform, StyleSheet, View } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { CommonActions, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -359,7 +359,7 @@ export function RootNavigator() {
   const routeFromNotification = (target: MobileNotificationRoute) => {
     const tabRoute =
       target.type === 'voicemail'
-        ? { name: 'Voicemail' }
+        ? { name: 'Voicemail', params: { voicemailId: target.voicemailId } }
         : target.type === 'missed_call'
           ? { name: 'Recent' }
           : { name: 'Chat', params: { threadId: target.conversationId } };
@@ -402,6 +402,47 @@ export function RootNavigator() {
       queueRoute(response.notification.request.content.data);
     });
 
+    return () => sub.remove();
+  }, []);
+
+  // ── Missed-call deep-link handler ─────────────────────────────────────────
+  // Native postMissedCallNotification fires a tap intent with URI
+  // com.connectcommunications.mobile://missed-call. MainActivity passes it
+  // through to React Native's Linking module untouched (neutralizeStale only
+  // acts on host "incoming-call"). We queue a missed_call route so the
+  // existing pendingNotificationRouteRef machinery navigates to Recent.
+  useEffect(() => {
+    const handlePushRouteUrl = (url: string | null) => {
+      if (!url) return;
+      if (url === 'com.connectcommunications.mobile://missed-call') {
+        pendingNotificationRouteRef.current = { type: 'missed_call' };
+        return;
+      }
+      if (url.startsWith('com.connectcommunications.mobile://voicemail')) {
+        const q = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+        const params = new URLSearchParams(q);
+        const voicemailId = params.get('voicemailId') || undefined;
+        pendingNotificationRouteRef.current = { type: 'voicemail', voicemailId };
+        return;
+      }
+      if (url.startsWith('com.connectcommunications.mobile://chat')) {
+        const q = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+        const params = new URLSearchParams(q);
+        const conversationId = params.get('conversationId');
+        const messageId = params.get('messageId') || undefined;
+        if (conversationId) {
+          pendingNotificationRouteRef.current = {
+            type: 'dm_message',
+            conversationId,
+            messageId,
+          };
+        }
+      }
+    };
+    Linking.getInitialURL()
+      .then(handlePushRouteUrl)
+      .catch(() => undefined);
+    const sub = Linking.addEventListener('url', ({ url }) => handlePushRouteUrl(url));
     return () => sub.remove();
   }, []);
 

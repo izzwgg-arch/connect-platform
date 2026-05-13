@@ -35,6 +35,30 @@ function isExternalDialTarget(raw: string | null | undefined): boolean {
   return digits.length >= 10 && digits.length <= 15;
 }
 
+/** True when PBX channels / dialplan context indicate the caller reached voicemail. */
+export function looksDivertedToVoicemail(call: NormalizedCall): boolean {
+  const chJoined = (call.channels || []).join(" ").toLowerCase();
+  if (
+    chJoined.includes("voicemail") ||
+    chJoined.includes("vmail") ||
+    chJoined.includes("@vm") ||
+    chJoined.includes("app-voicemail")
+  ) {
+    return true;
+  }
+  const meta = call.metadata || {};
+  const single = String(meta.cdrDcontext || "").toLowerCase();
+  if (single.includes("voicemail") || single.includes("app-voicemail")) return true;
+  const list = meta.cdrDcontexts;
+  if (Array.isArray(list)) {
+    for (const x of list) {
+      const s = String(x || "").toLowerCase();
+      if (s.includes("voicemail") || s.includes("app-voicemail")) return true;
+    }
+  }
+  return false;
+}
+
 export type MobilePushRingPayload = {
   linkedId: string;
   toExtension: string;
@@ -42,7 +66,7 @@ export type MobilePushRingPayload = {
   fromDisplay: string | null;
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
-  state?: "ringing" | "hungup";
+  state?: "ringing" | "hungup" | "diverted_to_voicemail";
 };
 
 /**
@@ -58,6 +82,8 @@ export class MobilePushNotifier {
   // De-dupe set: once we have found extensions and sent a push for a linkedId,
   // skip subsequent callUpsert events for the same call.
   private readonly pushed = new Set<string>();
+  /** One-shot stop-ring notify per call so we do not spam /internal/mobile-ring-notify. */
+  private readonly voicemailStopSent = new Set<string>();
 
   constructor() {
     const base = env.CDR_INGEST_URL
@@ -84,9 +110,8 @@ export class MobilePushNotifier {
     // before CDR ingest (which arrives 20–60s later), so it's critical for
     // stopping the native ringtone the moment the caller hangs up.
     if (call.state === "hungup") {
-      const wasPushed = this.pushed.has(call.linkedId);
+      this.voicemailStopSent.delete(call.linkedId);
       this.pushed.delete(call.linkedId);
-      if (!wasPushed) return;
       const payload: MobilePushRingPayload = {
         linkedId: call.linkedId,
         toExtension: "",
@@ -107,6 +132,35 @@ export class MobilePushNotifier {
         );
       });
       return;
+    }
+
+    // Caller reached voicemail while the mobile ring pipeline is still active —
+    // cancel the CallInvite + INVITE_CANCELED immediately (do not wait for hangup).
+    if (
+      this.pushed.has(call.linkedId) &&
+      !this.voicemailStopSent.has(call.linkedId) &&
+      looksDivertedToVoicemail(call)
+    ) {
+      this.voicemailStopSent.add(call.linkedId);
+      const payload: MobilePushRingPayload = {
+        linkedId: call.linkedId,
+        toExtension: "",
+        fromNumber: call.from ?? null,
+        fromDisplay: call.fromName ?? null,
+        connectTenantId: call.tenantId ?? null,
+        pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
+        state: "diverted_to_voicemail",
+      };
+      log.info(
+        { linkedId: call.linkedId, connectTenantId: call.tenantId },
+        "mobile-ring: notifying API of diverted_to_voicemail (stop ring)",
+      );
+      this.postAsync(payload).catch((err: unknown) => {
+        log.warn(
+          { linkedId: call.linkedId, err: (err as Error)?.message },
+          "mobile-ring: voicemail divert notify failed",
+        );
+      });
     }
 
     // Push for inbound (PSTN→extension) AND internal (extension→extension) ringing calls.

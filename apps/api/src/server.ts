@@ -41,6 +41,8 @@ import {
   vmExtractCallerName,
   vmExtractCallerNumber,
   vmNormalizeFolder,
+  buildExpoPushV2Item,
+  EXPO_PUSH_USER_ALERT_TYPES,
 } from "@connect/shared";
 import {
   FakeNumberProvider,
@@ -2693,169 +2695,38 @@ async function sendPushToUserDevices(input: {
     return { queued: filtered.length, simulated: true };
   }
 
-  const title = input.payload.type === "INCOMING_CALL"
-    ? "Incoming call"
-    : input.payload.type === "INVITE_CLAIMED"
-      ? "Call answered on another device"
-      : input.payload.type === "INVITE_CANCELED"
-        ? "Call ended"
-        : input.payload.type === "voicemail"
-          ? "New voicemail"
-          : input.payload.type === "missed_call"
-            ? "Missed call"
-            : input.payload.type === "dm_message"
-              ? input.payload.senderName || "New message"
-              : input.payload.type === "sms_message"
-                ? input.payload.phoneNumber
-        : "Missed call";
-  const body = input.payload.type === "INCOMING_CALL"
-    ? `Call from ${input.payload.fromDisplay || input.payload.fromNumber}`
-    : input.payload.type === "INVITE_CLAIMED"
-      ? "This call was answered on another device."
-      : input.payload.type === "INVITE_CANCELED"
-        ? "This call has ended."
-        : input.payload.type === "voicemail"
-          ? `Voicemail from ${input.payload.callerNameOrNumber || "Unknown caller"}`
-          : input.payload.type === "missed_call"
-            ? `Missed call from ${input.payload.callerNameOrNumber || input.payload.callerNumber}`
-            : input.payload.type === "dm_message"
-              ? (input.payload.preview || "Sent a message")
-              : input.payload.type === "sms_message"
-                ? (input.payload.preview || "Sent an attachment")
-        : `Missed call from ${input.payload.fromDisplay || input.payload.fromNumber}`;
+  const payloadType = input.payload.type;
+  const deliveryClass =
+    payloadType === "INCOMING_CALL" || payloadType === "INCOMING_CALL_WAKE"
+      ? "call_control_data_high"
+      : payloadType === "INVITE_CANCELED" || payloadType === "INVITE_CLAIMED" || payloadType === "MISSED_CALL"
+        ? "call_termination_data_high"
+        : EXPO_PUSH_USER_ALERT_TYPES.has(String(payloadType))
+          ? "user_alert_data_high"
+          : "generic_data_high";
 
-  const isIncomingCall = input.payload.type === "INCOMING_CALL";
-  // INCOMING_CALL_WAKE travels the same data-only/high-priority path as
-  // INCOMING_CALL so Android delivers it via FirebaseMessagingService
-  // .onMessageReceived (not the OS notification tray). The native FCM service
-  // routes it to the wake handler instead of the ringing UI.
-  const isIncomingCallWake = input.payload.type === "INCOMING_CALL_WAKE";
-  // INVITE_CANCELED / INVITE_CLAIMED / MISSED_CALL MUST wake the native
-  // FirebaseMessagingService on a cold-killed app so it can stop the ringtone
-  // started by the prior INCOMING_CALL push. If we send them as Expo
-  // notification messages (sound/title/body/channelId/priority=default), Android
-  // delivers them via the system notification tray without invoking
-  // onMessageReceived — the ringtone then plays forever until the user taps the
-  // stale incoming-call notification.
-  //
-  // Fix: send these as strict data-only, priority=high pushes — identical to
-  // the INCOMING_CALL path — so the FCM data payload always lands in
-  // IncomingCallFirebaseService.onMessageReceived → handleCallTerminationNative
-  // → dismissIncomingCallUi → stopIncomingCallRingtone regardless of app state.
-  const isCallTerminationPush =
-    input.payload.type === "INVITE_CANCELED" ||
-    input.payload.type === "INVITE_CLAIMED" ||
-    input.payload.type === "MISSED_CALL";
+  const messages = filtered.map((d) =>
+    buildExpoPushV2Item({
+      to: String(d.expoPushToken),
+      payload: { ...(input.payload as unknown as Record<string, unknown>) },
+    }),
+  );
 
-  const messages = filtered.map((d) => {
-    if (isIncomingCall) {
-      const p = input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL" }>;
-      // Strict data-only: no title/body/sound/channelId — avoids FCM "notification"
-      // messages that skip app JS and never run CallKeep from the background task.
-      const data = fcmDataStrings({
-        type: p.type,
-        inviteId: p.inviteId,
-        callId: p.inviteId,
-        from: p.fromNumber,
-        fromNumber: p.fromNumber,
-        fromDisplay: p.fromDisplay ?? "",
-        toExtension: p.toExtension,
-        tenantId: p.tenantId,
-        timestamp: p.timestamp,
-        pbxCallId: p.pbxCallId ?? "",
-        sipCallTarget: p.sipCallTarget ?? "",
-        pbxSipUsername: p.pbxSipUsername ?? "",
-      });
-      app.log.info(
-        {
-          mobilePush: "INCOMING_CALL_DATA_ONLY",
-          dataKeys: Object.keys(data),
-          inviteId: p.inviteId,
-          tokenTail: String(d.expoPushToken).slice(-12),
-        },
-        "mobile-push: outgoing INCOMING_CALL (data-only, high priority)",
-      );
-      return {
-        to: d.expoPushToken,
-        priority: "high" as const,
-        ttl: 45,
-        data,
-      };
-    }
-    if (isIncomingCallWake) {
-      const p = input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL_WAKE" }>;
-      // Strict data-only — same delivery class as INCOMING_CALL so the FCM
-      // service handles it even when the app is killed/backgrounded. The
-      // native handler MUST NOT show any UI for this push; it just kicks
-      // SIP REGISTER so the device is reachable when the PBX dials in ~6s.
-      const data = fcmDataStrings({
-        type: p.type,
-        pbxCallId: p.pbxCallId,
-        from: p.fromNumber,
-        fromNumber: p.fromNumber,
-        fromDisplay: p.fromDisplay ?? "",
-        toExtension: p.toExtension,
-        tenantId: p.tenantId,
-        pbxVitalTenantId: p.pbxVitalTenantId ?? "",
-        timestamp: p.timestamp,
-        wakeRequestedAt: p.wakeRequestedAt,
-      });
-      app.log.info(
-        {
-          mobilePush: "INCOMING_CALL_WAKE_DATA_ONLY",
-          dataKeys: Object.keys(data),
-          pbxCallId: p.pbxCallId,
-          toExtension: p.toExtension,
-          tokenTail: String(d.expoPushToken).slice(-12),
-        },
-        "mobile-push: outgoing INCOMING_CALL_WAKE (data-only, high priority)",
-      );
-      return {
-        to: d.expoPushToken,
-        priority: "high" as const,
-        // Short TTL: if FCM can't deliver within 10s the dialplan's Wait()
-        // will already have ended and this push is useless. Drop it.
-        ttl: 10,
-        data,
-      };
-    }
-    if (isCallTerminationPush) {
-      const p = input.payload as Extract<MobilePushPayload, { type: "INVITE_CANCELED" | "INVITE_CLAIMED" | "MISSED_CALL" }>;
-      const data = fcmDataStrings({ ...(p as object) });
-      app.log.info(
-        {
-          mobilePush: "CALL_TERMINATION_DATA_ONLY",
-          payloadType: p.type,
-          inviteId: p.inviteId,
-          tokenTail: String(d.expoPushToken).slice(-12),
-        },
-        "mobile-push: outgoing call-termination (data-only, high priority)",
-      );
-      return {
-        to: d.expoPushToken,
-        priority: "high" as const,
-        ttl: 45,
-        data,
-      };
-    }
-    const channelId =
-      input.payload.type === "voicemail"
-        ? "connect-voicemail"
-        : input.payload.type === "missed_call"
-          ? "connect-missed-calls"
-          : input.payload.type === "dm_message" || input.payload.type === "sms_message"
-            ? "connect-messages"
-            : "connect-calls";
-    return {
-      to: d.expoPushToken,
-      sound: "default",
-      title,
-      body,
-      data: fcmDataStrings({ ...(input.payload as object) }),
-      priority: "default" as const,
-      channelId,
-    };
-  });
+  app.log.info(
+    {
+      event: "MOBILE_PUSH_AUDIT",
+      stage: "expo_messages_built",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      notificationType: payloadType,
+      deliveryClass,
+      deviceCount: messages.length,
+      skippedCount: Math.max(0, totalRowsFound - filtered.length),
+      rowsMissingToken,
+    },
+    "mobile_push_audit.expo_messages_built",
+  );
+
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (mobilePushAccessToken) headers.authorization = `Bearer ${mobilePushAccessToken}`;
@@ -2895,6 +2766,21 @@ async function sendPushToUserDevices(input: {
   const expoBody = await expoRes.json().catch(() => null);
   const expoTickets = Array.isArray(expoBody?.data) ? (expoBody.data as any[]) : [];
   const expoErrors = expoTickets.filter((r: any) => r?.status === "error");
+
+  app.log.info(
+    {
+      event: "MOBILE_PUSH_AUDIT",
+      stage: "expo_response",
+      tenantId: input.tenantId,
+      userId: input.userId,
+      notificationType: input.payload.type,
+      httpOk: expoRes.ok,
+      httpStatus: expoRes.status,
+      ticketCount: expoTickets.length,
+      errorCount: expoErrors.length,
+    },
+    "mobile_push_audit.expo_response",
+  );
 
   // Per-device tracking. Powers the admin /admin/mobile/devices diagnostics
   // surface and the in-app Call Wake Diagnostics screen, so the user (and we)
@@ -25484,7 +25370,9 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     fromDisplay: z.string().nullable().optional(),
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
-    state: z.enum(["ringing", "hungup"]).optional(),
+    state: z.enum(["ringing", "hungup", "diverted_to_voicemail"]).optional(),
+    /** When state is hungup, optional override for INVITE_CANCELED `reason` (default pbx_hangup). */
+    cancelReason: z.string().max(120).optional().nullable(),
   }).parse(req.body || {});
 
   app.log.info(
@@ -25492,9 +25380,9 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     "mobile-ring-notify: received"
   );
 
-  // ── Hangup fast-path: cancel any PENDING invite for this pbxCallId and push
-  // INVITE_CANCELED so the native ringtone stops immediately on the device.
-  if (input.state === "hungup") {
+  // ── Hangup / voicemail-divert fast-path: cancel any PENDING invite for this
+  // pbxCallId and push INVITE_CANCELED so the native ringtone stops immediately.
+  if (input.state === "hungup" || input.state === "diverted_to_voicemail") {
     const pending = await db.callInvite.findMany({
       where: {
         pbxCallId: input.linkedId,
@@ -25513,6 +25401,10 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         data: { status: "CANCELED", canceledAt: new Date() },
       });
       canceled += 1;
+      const terminationReason =
+        input.state === "diverted_to_voicemail"
+          ? "diverted_to_voicemail"
+          : (input.cancelReason?.trim() || "pbx_hangup");
       try {
         await sendPushToUserDevices({
           tenantId: inv.tenantId,
@@ -25521,7 +25413,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
             type: "INVITE_CANCELED",
             inviteId: inv.id,
             pbxCallId: inv.pbxCallId,
-            reason: "pbx_hangup",
+            reason: terminationReason,
             tenantId: inv.tenantId,
             timestamp: nowIso,
           },

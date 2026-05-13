@@ -384,6 +384,131 @@ and log **`helper_audio_fallback: true`** (`TELEPHONY.md`).
 
 ---
 
+## CRM Module (`/crm/*`) — Phases 1A–2D
+
+All routes registered via `registerCrmRoutes(app)` in `server.ts`.
+**Auth:** JWT + CRM access guard (`requireCrmAccess` / `requireCrmAdmin`).
+**Risk:** **MEDIUM** — CRM-only data, no telephony coupling except CDR hook.
+**Source files:** `apps/api/src/crm/`
+
+### Settings & Access (Phase 1A)
+| Method | Path | Guard | Notes |
+|--------|------|-------|-------|
+| GET | `/crm/settings` | any CRM user | Returns `CrmTenantSettings` |
+| PUT | `/crm/settings` | admin | Enable/disable CRM for tenant |
+| GET | `/crm/users/:userId` | admin | User's CRM access record |
+| PUT | `/crm/users/:userId` | admin | Enable/set role (AGENT/MANAGER/ADMIN) |
+
+### Contacts (Phase 1B)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/contacts` | List CRM contacts with filters (stage, assignedToMe, search, page/limit) |
+| POST | `/crm/contacts` | Create contact + CrmContactMeta |
+| GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded |
+| GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. |
+| GET | `/crm/contacts/:id` | Full contact with phones, emails, crmMeta. Includes `lastDisposition`, `lastDispositionAt`. |
+| PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage (writes `STAGE_CHANGED` only if stage changes) |
+| POST | `/crm/contacts/:id/disposition` | **Phase 2D** — save call outcome. Body: `{ disposition, note?, linkedId?, followUpAt?, nextStage?, memberId? }`. Updates `CrmContactMeta.lastDisposition/lastDispositionAt/lastActivityAt`, optionally creates note + task, writes non-blocking timeline events. **Phase 3C:** if `memberId` is provided and disposition contains "callback" and `followUpAt` is set, non-blocking updates `CrmCampaignMember.callbackAt`+`callbackNote`. |
+
+### Timeline & Notes (Phase 1C)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/contacts/:id/timeline` | All events, newest-first, max 200 |
+| POST | `/crm/contacts/:id/notes` | Create note + `NOTE_ADDED` event |
+| PATCH | `/crm/contacts/:id/notes/:noteId` | Edit note body/pin; writes `NOTE_EDITED` |
+| DELETE | `/crm/contacts/:id/notes/:noteId` | Soft-delete note |
+
+### Tasks (Phase 1D)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/tasks/stats` | Dashboard counts: `{ myOpen, dueToday, overdue, callsLinkedToday, dispositionsToday }` |
+| GET | `/crm/tasks` | Global tasks list with filters |
+| POST | `/crm/contacts/:id/tasks` | Create task + `TASK_CREATED` event |
+| GET | `/crm/contacts/:id/tasks` | Contact tasks (filter: status, limit) |
+| PATCH | `/crm/contacts/:id/tasks/:taskId` | Update task; status transitions write `TASK_COMPLETED`/`TASK_CANCELED` |
+| DELETE | `/crm/contacts/:id/tasks/:taskId` | Delete task |
+
+### Contact Phone & Email Management (Phase 5B)
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/contacts/:id/phones` | Add a phone to a contact. Body: `{ numberRaw, type?, isPrimary? }`. Deduplicates by normalised number (`contactId_numberNormalized` unique index). Returns 409 on duplicate. If `isPrimary=true`, clears existing primary first. Returns updated full contact. |
+| DELETE | `/crm/contacts/:id/phones/:phoneId` | Remove a specific phone. Tenant-scoped. Returns `{ ok: true }`. |
+| POST | `/crm/contacts/:id/emails` | Add an email. Body: `{ email, type?, isPrimary? }`. Deduplicates by lowercased email. Returns 409 on duplicate. Returns updated full contact. |
+| DELETE | `/crm/contacts/:id/emails/:emailId` | Remove a specific email. Tenant-scoped. Returns `{ ok: true }`. |
+
+### Bulk Contact Reassign (Phase 5B)
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/contacts/bulk-reassign` | **Admin only.** Body: `{ contactIds: string[], assignedToUserId: string \| null }`. Updates `CrmContactMeta.assignedToUserId` for all matching contacts in the tenant. Max 500 IDs per call. `null` clears assignment. Returns `{ ok, updated }`. No timeline events written (bulk action). |
+
+### Contact Duplicate Detection & Merge (Phase 5A)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/contacts/:id/duplicates` | Suggests potential duplicate contacts matching by shared normalised phone, email, or exact display name. Returns up to 5 results with `matchReasons[]`. Any CRM user can view; merging is admin-only. |
+| POST | `/crm/contacts/merge` | **Admin only.** Body: `{ keepContactId, mergeContactId }`. Both must be active and in the same tenant. Moves CrmTimelineEvent, CrmContactNote, CrmContactTask, CrmChecklistResponse, CrmCampaignMember (skips campaign conflicts), unique phones/emails to `keepContact`. Archives `mergeContact` (`active=false, archivedAt=now`). Writes `CONTACT_MERGED` timeline event on `keepContact`. Returns `{ ok, phonesAdded, emailsAdded, campaignMembersMoved, campaignMembersSkipped }`. |
+
+### Import (Phase 1E)
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/import/upload` | CSV upload, auto-maps columns, deduplicates, returns `CrmImportBatch` |
+| GET | `/crm/import/batches` | List batches |
+| GET | `/crm/import/batches/:id` | Single batch detail |
+
+### Scripts (Phase 2C)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/scripts` | List active scripts (`includeInactive=true` for archived) |
+| GET | `/crm/scripts/:id` | Single script with full body |
+| POST | `/crm/scripts` | Create (admin); requires `name` + `body` |
+| PATCH | `/crm/scripts/:id` | Update name/body/isActive (admin) |
+| DELETE | `/crm/scripts/:id` | Archive — sets `isActive=false` (admin) |
+
+### Checklists (Phase 2C)
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/checklists` | List active checklists with items |
+| GET | `/crm/checklists/:id` | Single checklist with items |
+| POST | `/crm/checklists` | Create + items (admin) |
+| PATCH | `/crm/checklists/:id` | Update; `items` array replaces all items atomically (admin) |
+| DELETE | `/crm/checklists/:id` | Archive (admin) |
+| POST | `/crm/checklists/:id/respond` | Save `CrmChecklistResponse`. Body: `{ contactId, linkedId?, answers }`. Writes `CHECKLIST_COMPLETED` event. |
+
+**CDR hook (Phase 2A):** `POST /internal/cdr-ingest` calls `fireCrmCdrHook()` (no await) after `ConnectCdr` upsert. Writes `CDR_INBOUND`/`CDR_OUTBOUND` timeline events for CRM-enrolled contacts matched by phone.
+
+**Campaign routes (Phase 3A):** `apps/api/src/crm/campaignRoutes.ts`
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/campaigns` | List campaigns (default: exclude ARCHIVED). Filter: `?status=` |
+| POST | `/crm/campaigns` | Create campaign (admin). Body: `{ name, description?, status?, scriptId?, checklistId? }` |
+| GET | `/crm/campaigns/:id` | Campaign detail + statusCounts per member status |
+| PATCH | `/crm/campaigns/:id` | Update name/description/status/scriptId/checklistId (admin) |
+| DELETE | `/crm/campaigns/:id` | Archive campaign (sets status=ARCHIVED, admin) |
+| POST | `/crm/campaigns/:id/members/add` | Add contacts (by contactId array). Skips duplicates. Only CRM-enrolled contacts. (admin) |
+| GET | `/crm/campaigns/:id/members` | List members with contact details. Filters: `?status=`, `?assignedToMe=true` |
+| PATCH | `/crm/campaigns/:id/members/:memberId` | Update member status/assignment/sortOrder/attemptCount/callbackAt/callbackNote (Phase 3C: adds callbackAt+callbackNote) |
+| GET | `/crm/queue` | My Queue with filter support. `?filter=pending` (default, PENDING/IN_PROGRESS), `?filter=due` (CALLBACK, callbackAt ≤ end of today), `?filter=overdue` (CALLBACK, callbackAt < today), `?filter=upcoming` (CALLBACK, callbackAt ≥ tomorrow). Returns `{ queue, total, counts: { pending, due, overdue, upcoming } }`. |
+| POST | `/crm/queue/next` | Fetch next PENDING item and set it to IN_PROGRESS |
+| PATCH | `/crm/queue/:memberId` | Queue action. `action`: `skip`, `defer`, `dnc`, `outcome` (maps disposition→status, increments attemptCount), `assign-to-me` (sets assignedToUserId=currentUser), `set-callback` (sets status=CALLBACK, callbackAt, callbackNote), `clear-callback` (sets callbackAt=null, callbackNote=null, status=PENDING). Body also accepts `callbackAt?`, `callbackNote?` alongside explicit `status`. |
+| POST | `/crm/campaigns/:id/members/bulk-assign` | Bulk-assign (or clear) members. Body: `{ memberIds: string[], assignedToUserId: string\|null }`. Returns `{ updated: number }`. Admin only. |
+| GET | `/crm/campaigns/:id/contacts/available` | Search CRM contacts NOT already in campaign. Params: `?q=`, `?limit=`, `?page=`. Returns paginated contacts. Admin only. |
+| GET | `/crm/campaigns/:id/export.csv` | Export all campaign members as CSV download. Columns: Name, Phone, Email, Company, Stage, Status, Assigned To, Attempts, Last Attempt, Last Disposition. |
+
+**Guard errors:** `crm_not_enabled` (403), `crm_user_not_enabled` (403), `crm_permission_denied` (403), `contact_not_in_crm` (400 for disposition on non-enrolled contact).
+
+### CRM Reports _(Phase 4A)_
+
+All report endpoints require `requireCrmAccess` (not admin-only). Tenant-isolated. No pagination on aggregate endpoints; detail rows are capped at 100.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/crm/reports/daily` | Tenant-wide today snapshot: `dispositionsToday`, `callsLinkedToday`, `contactsCreatedToday`, `tasksDueToday`, `overdueTasks`, `callbacksDueToday`, `overdueCallbacks`, `activeCampaigns`, `queueRemaining`. Always "today" — no date range parameter. |
+| GET | `/crm/reports/campaigns` | Per-campaign performance. `?status=all\|ACTIVE\|PAUSED\|COMPLETED` (default: all non-archived). Returns array: `{ id, name, status, total, pending, contacted, callbacks, converted, dnc, conversionRate, totalAttempts, lastActivityAt }`. Uses a single `groupBy` query for member counts. Cap 200 campaigns. |
+| GET | `/crm/reports/agents` | Per-agent activity summary. `?days=1\|7\|30` (default 30, max 90). Returns `{ agents: [...], lookbackDays }` where each agent has: `assignedQueue`, `callbacksDueToday`, `dispositionsToday`, `convertedLast` (in lookback window), `openTasks`. Uses `groupBy` — no per-user loops. Only CRM-enabled users included. |
+| GET | `/crm/reports/follow-ups` | Bucketed follow-up health. Returns `{ callbacks: { overdue, dueToday, dueThisWeek }, tasks: { overdue, dueToday } }`. Each bucket has `{ count, rows[] }` with contact name/phone, assignedTo, campaign, due time. Rows capped at 100 per bucket. |
+
+---
+
 ## Calls / Forensic / Internal
 
 **Approx lines:** 20731 – 21556 (scattered)

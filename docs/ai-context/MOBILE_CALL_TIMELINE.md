@@ -98,15 +98,24 @@ Reference: `scripts/pbx/install-connect-wake-dialplan.sh` lines ~283–325.
 
 ## Stage 2 — Connect API push fan-out
 
-`apps/api/src/server.ts` `sendPushToUserDevices(...)` (around lines
-**~2500–2800**) is the only place that emits the call-related pushes.
-Three payload types share the same data-only, priority=high transport:
+`apps/api/src/server.ts` `sendPushToUserDevices(...)` is the canonical API-side
+fan-out. **Shared shaping** lives in `packages/shared/src/expoMobilePushFormat.ts`
+(`buildExpoPushV2Item`): every mobile payload is an **FCM data message** with
+`priority: "high"` — including voicemail, missed-call tray, and chat/SMS alerts.
+User-visible text for non-call alerts is carried in `data.alertTitle`,
+`data.alertBody`, and `data.androidChannelId` (never in Expo's top-level
+`title`/`body`, which would downgrade Android to notification-only delivery and
+skip `IncomingCallFirebaseService.onMessageReceived`).
+
+Structured API logs: `mobile_push_audit.expo_messages_built` and
+`mobile_push_audit.expo_response` (stable `event` / `stage` fields).
 
 | Payload type | TTL | Purpose | Native handler |
 |---|---:|---|---|
 | `INCOMING_CALL_WAKE` | 10s | "Get ready: SIP REGISTER now" — no UI. | wake handler |
 | `INCOMING_CALL` | 45s | "Ring now" — drives CallKeep / CallKit. | ringing UI |
 | `INVITE_CANCELED` / `INVITE_CLAIMED` / `MISSED_CALL` | 45s | Stop the ringtone / dismiss UI. | termination handler |
+| `voicemail` / `missed_call` / `dm_message` / `sms_message` | 1h / 1h / … | User alerts (tray). | user-alert handler + JS |
 
 **Critical contract — read this comment block before touching push code**
 (`server.ts` ~line 2604):
@@ -121,9 +130,10 @@ Three payload types share the same data-only, priority=high transport:
 > data-only, priority=high pushes**.
 
 Strict data-only means:
-- No `title`, `body`, `sound`, `channelId`.
-- No Expo notification template.
-- All fields are stringified (`fcmDataStrings`) so FCM accepts them.
+- No Expo top-level `title`, `body`, `sound`, `channelId` for **any** mobile type
+  (call control **or** user alerts) — use `buildExpoPushV2Item` so FCM always
+  delivers to `onMessageReceived`.
+- All `data` values are strings (see `stringifyFcmDataValues` in shared).
 - Priority `"high"` so they bypass Doze.
 
 Every push attempt updates the `MobileDevice` row's `lastPushSentAt`,
@@ -152,20 +162,35 @@ Every push attempt updates the `MobileDevice` row's `lastPushSentAt`,
     CallStyle notification as a fallback surface.
   - `INVITE_CANCELED` / `INVITE_CLAIMED` / `MISSED_CALL` →
     `dismissIncomingCallUi` + `stopIncomingCallRingtone`.
+  - `voicemail` / `missed_call` / `dm_message` / `sms_message` (data-only user
+    alerts) → when the process is **not** `FOREGROUND`/`VISIBLE`, post a tray
+    notification on `androidChannelId` using `alertTitle` / `alertBody`, with
+    deep links `com.connectcommunications.mobile://voicemail?…`,
+    `…://missed-call`, `…://chat?…` (see `RootNavigator.tsx`). Always
+    `forwardToExpo` so JS stays in sync.
 
-**Android Telecom (SELF_MANAGED ConnectionService) — DISABLED
-(2026-05-07, Phase D):**
-`TelecomBridge.startIncomingCall()` is no longer called. The SELF_MANAGED
-Telecom path was removed because it caused the OS-native phone call screen
-(indistinguishable from the Samsung/T-Mobile dialer) to appear before the
-SIP INVITE arrived. Users who answered there encountered a silent timeout
-(JsSIP's `answerIncoming()` polls up to 8 s for a session that may not
-exist yet). The Connect IncomingCallScreen is the sole answer surface because
-it only renders after `newRTCSession` fires — i.e., the SIP session already
-exists. `ConnectConnectionService`, `ConnectIncomingConnection`, and
-`TelecomBridge` remain in the codebase for rollback; the Telecom PhoneAccount
-is still registered at app start but no incoming call is ever dispatched to
-it. See `KNOWN_ISSUES.md` "Phase D" for full context.
+**Android Telecom (SELF_MANAGED ConnectionService) — RE-ENABLED (Phase 1,
+2026-05-07):**
+`TelecomBridge.startIncomingCall()` is called for all non-foregrounded
+incoming calls. Falls back to the CallStyle/FSI path transparently if the
+PhoneAccount is not enabled or `addNewIncomingCall()` fails.
+
+Answer correctness contract (Phase 1 fix):
+- `ConnectIncomingConnection.onAnswer()` does **NOT** call `setActive()`.
+  Instead it arms a 15 s safety watchdog and emits `Telecom.Answer` to JS.
+- JS runs `handleAcceptInvite()` (the same pipeline as the in-app Answer
+  button) with a 4 s cold-start invite-resolution poll.
+- On SIP success: JS calls `NativeModules.IncomingCallUi.telecomMarkActive()`
+  → `ConnectIncomingConnection.markActive()` → `setActive()`. OS in-call
+  timer starts at the correct moment.
+- On SIP failure: JS calls `terminateTelecomCall(inviteId, "other")` →
+  `terminate()` → `setDisconnected(CANCELED)`. OS shows "call ended".
+- If JS never responds within 15 s, the watchdog terminates the Connection.
+
+Phase 1 known tradeoff: on Samsung One UI, both the Samsung native phone UI
+and the Connect CallStyle notification appear simultaneously (two answer
+surfaces). Both correctly connect the SIP call. Phase 2 will resolve the
+duplicate. See `KNOWN_ISSUES.md` "Phase 1" for full context.
 
 ### iOS — PushKit + CallKit
 
@@ -244,10 +269,13 @@ marks rows that never reach a terminal state and broadcasts a
 - **TTL mismatch.** `INCOMING_CALL_WAKE` is TTL=10s by design — if FCM
   can't deliver in 10s the dialplan's `Wait()` is over and the push is
   useless. Don't increase this TTL "to be safe".
-- **[RESOLVED — Phase D] Telecom native call screen answer race.**
-  `TelecomBridge.startIncomingCall()` caused the OS system phone UI to
-  appear before the SIP INVITE existed, leading to silent answer failures.
-  Fixed 2026-05-07 by disabling the Telecom dispatch. See `KNOWN_ISSUES.md`.
+- **[RESOLVED — Phase 1] Telecom native call screen answer race.**
+  Phase D disabled Telecom dispatch entirely to avoid the answer race but
+  this broke lock-screen wake reliability (FSI blocked by Android 14/15+
+  OEM restrictions when app is killed). Phase 1 re-enables Telecom and fixes
+  the root cause: `setActive()` is now deferred until after
+  `sip.answerIncomingInvite()` succeeds (JS calls `telecomMarkActive()`).
+  See `KNOWN_ISSUES.md` "Phase 1" for full context.
 
 ---
 

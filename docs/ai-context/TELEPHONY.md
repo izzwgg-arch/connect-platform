@@ -193,6 +193,23 @@
       direction, disposition, startedAt, answeredAt, endedAt, durationSec, talkSec,
       rawLegCount, dcontext, isForwarded, fromName).
     - `CallRecord` — legacy table (kept for backward-compat).
+- **CRM screen pop (Phase 2B)**: The portal's `CrmScreenPop` component (mounted in `AppShell`)
+  watches the existing telephony WS via `useTelephony()` (`TelephonyContext.tsx`). On a new
+  `direction === "inbound"` + `state === "ringing"` call, it calls `GET /crm/contacts/lookup?phone=`
+  with `call.from`. If matched, it shows a non-intrusive flyout (bottom-right) with contact
+  name, stage, task count, and "Open Contact" / "Live Workspace" / "Dismiss" actions.
+  Deduplication: `seenLinkedIds` ref prevents repeat lookups for the same call. 403/failure = silent skip.
+  No telephony code touched. No new WS service. Only reads from existing `useTelephony()` state.
+
+- **CRM CDR hook (Phase 2A)**: After `ConnectCdr` upsert succeeds in `/internal/cdr-ingest`,
+  the handler calls `fireCrmCdrHook(...)` **without await** (fire-and-forget, `.catch(() => {})`).
+  The hook lives in `apps/api/src/crm/cdrHook.ts`. It:
+  1. Returns immediately if CRM is disabled for the tenant.
+  2. Normalises from/to numbers and queries `ContactPhone.numberNormalized` for CRM-enrolled contacts.
+  3. Writes a `CrmTimelineEvent` (type `CDR_INBOUND` or `CDR_OUTBOUND`) with call metadata.
+  4. Updates `CrmContactMeta.lastActivityAt`.
+  5. Never throws — CDR ingest is completely unaffected by any CRM error.
+  **Rule**: This hook MUST remain fire-and-forget. NEVER add `await` to the call site.
 
 ---
 
@@ -205,6 +222,10 @@
   `VitalPbxClient.getExtensionVoicemailRecords` (`packages/integrations/src/vitalpbx/client.ts`)
   and upserts `voicemail` rows. Handles legacy and new payload shapes (`date`, `clid`,
   `recfile`, `filename`, `msg_id` vs `origtime`, `callerid`, `msg_num`).
+- **Scheduled spool reconcile (insert-only gap repair, not realtime notify):**
+  `runVoicemailSpoolReconcileCycle` in `apps/worker/src/voicemailSpoolReconcileCycle.ts`
+  is started via **`startVoicemailSpoolReconcileLoop()`** — a **self-scheduling** loop with
+  **adaptive delay + jitter** after each run (default **base** interval **`VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS`** = **15 min**; set **`0`** to disable the loop entirely). This path hits the on-PBX helper **`POST /voicemail/spool/list`** for **schema-2** pagination to **insert missing** `Voicemail` rows only; it is **slower** than AMI/notify + the 60 s sync when nothing is broken. **Do not** tune it like the realtime path — see **`VOICEMAIL_FLEET_STALE_RISK.md`** §5 for env knobs (**`VOICEMAIL_SPOOL_RECONCILE_MAILBOX_DELAY_MS`**, **`VOICEMAIL_SPOOL_RECONCILE_TENANT_DELAY_MS`**, probe skip, backoff caps).
 - **Tenant scoping on REST (critical for diagnostics).** `VitalPbxClient` defaults to
   `tenantTransport: "header"` — the VitalPBX tenant id is sent as the **`tenant` HTTP
   header**, not only as `?tenant=` on the URL. Raw `curl` or scripts that omit that
@@ -984,11 +1005,23 @@ three diagnostic scripts under [scripts/pbx/](scripts/pbx/).
   DID-, and extension-number-agnostic. Run with
   `pnpm --filter @connect/telephony test`. See `TEST_INVENTORY.md` for
   the per-case detail.
+  **Voicemail stop-ring (2026-05-12):** when AMI already showed a ring push
+  for `linkedId`, a later upsert that adds voicemail-class channels or an
+  `app-voicemail` dialplan context triggers a **one-shot** POST to
+  `/internal/mobile-ring-notify` with `state: "diverted_to_voicemail"`, which
+  cancels pending `CallInvite` rows and emits `INVITE_CANCELED` with
+  `reason: "diverted_to_voicemail"` so Android stops the native ringtone
+  without waiting for caller hangup. **Hangup parity:** `state: "hungup"`
+  always POSTs to the API (even when no ring push was deduped) so
+  orphaned `PENDING` invites still receive `INVITE_CANCELED`.
 - **APNs VoIP** (iOS): `react-native-voip-push-notification` listens for VoIP push,
   CallKit shows incoming UI.
 - **Invite lifecycle**: `CallInvite` rows in DB; status `PENDING → ACCEPTED |
   EXPIRED | CANCELED`. Worker expiry every 5 s. `INVITE_CANCELED` / `MISSED_CALL`
-  pushes are sent to terminate the ringtone.
+  pushes are sent to terminate the ringtone. **PBX active-call poll** (`processPolledCall` in
+  `apps/worker/src/main.ts`): when the PBX marks a ringing invite `EXPIRED`, the worker now
+  also sends `INVITE_CANCELED` (`reason: "EXPIRED"`) before missed-call bookkeeping so
+  mobile ringers are not stuck until the invite TTL watchdog.
 - **Diagnostics**: `mobile/src/diagnostics/CallFlightRecorder.ts` and
   `callWakeDiagnostics.ts` post wake events / timeline rows for forensics.
 - **Audio**: `apps/mobile/src/audio/audioRouteManager.ts` is the **single
@@ -1030,6 +1063,32 @@ three diagnostic scripts under [scripts/pbx/](scripts/pbx/).
     - `forceEvictZombie(...)` invoked from `/telephony/calls/stale-hangup-for-extension`
       when the portal's last-resort safeguard fires.
     - Periodic stale cleanup every 60 s (`startPeriodicStaleCleanup`).
+
+---
+
+## CRM Local Presence _(Phase 4B — does NOT touch telephony)_
+
+Local presence in the CRM is **advisory only** — it selects a caller ID DID from
+`CrmCallerIdPool` based on destination area code, but:
+
+- Does NOT use AMI originate
+- Does NOT use ARI channel create
+- Does NOT modify PBX configuration
+- Does NOT change the SIP caller ID on the actual call
+
+The actual outbound SIP caller ID is still set by VitalPBX per-extension trunk configuration.
+The selected DID is returned to the UI for display only.
+
+**CRM click-to-call (`crm:dial` event):** The Live Workspace "Call" button dispatches
+`window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target } }))`. `FloatingDialer`
+listens for this event and delegates to its existing `dialTarget(target)` function — which
+sets the dialpad input, opens the dialer, and calls `phone.dial(target)` if registered.
+This is the same code path as manual dial. No SIP headers or caller ID are modified.
+
+**If local presence is not working:** Check `GET /crm/caller-id-pool/suggest?to=<number>`.
+It returns `{ matched, selectedCallerId, areaCode3, localPresenceEnabled }`. If `matched=false`,
+either the pool has no entry for that area code, or `localPresenceEnabled=false` on the tenant.
+This endpoint is safe to call in production at any time — it is purely read-only.
 
 ---
 

@@ -46,7 +46,7 @@ process.env.CDR_INGEST_URL = "http://test.invalid/internal/cdr-ingest";
 // Late require so the env above is in place when the module's top-level
 // `loadEnv()` runs.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { MobilePushNotifier } = require("./MobilePushNotifier");
+const { MobilePushNotifier, looksDivertedToVoicemail } = require("./MobilePushNotifier");
 // `import type` is erased and does not trigger env loading.
 import type { NormalizedCall, CallDirection, CallState } from "../types";
 
@@ -522,4 +522,21 @@ test("decision is DID-agnostic and extension-number-agnostic", async () => {
   } finally {
     restore();
   }
+});
+
+test("looksDivertedToVoicemail detects voicemail channels and dialplan context", () => {
+  assert.equal(
+    looksDivertedToVoicemail(makeCall({ linkedId: "vm-ch", channels: ["Local/101@subVoicemail"] })),
+    true,
+  );
+  assert.equal(
+    looksDivertedToVoicemail(
+      makeCall({
+        linkedId: "vm-dcx",
+        metadata: { cdrDcontext: "from-internal-t2_cos-all,103,1,app-voicemail,default,s,1" },
+      }),
+    ),
+    true,
+  );
+  assert.equal(looksDivertedToVoicemail(makeCall({ linkedId: "no-vm", channels: ["PJSIP/T2_103-000"] })), false);
 });
