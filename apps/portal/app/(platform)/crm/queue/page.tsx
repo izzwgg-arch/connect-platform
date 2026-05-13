@@ -7,6 +7,7 @@ import {
   RefreshCw, CheckCheck, Inbox, CalendarClock, UserCheck, X, Edit2,
   ChevronRight, AlertCircle, Zap, ZapOff, Pause, Play, ArrowRight,
   PhoneMissed, Voicemail, ThumbsUp, ThumbsDown, CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
@@ -44,7 +45,10 @@ type QueueFilter = "pending" | "due" | "overdue" | "upcoming";
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const PAUSE_STORAGE_KEY = "crm_power_queue_paused";
+const SORT_MODE_KEY = "crm_queue_sort_mode";
 const WRAP_UP_SECONDS = 5;
+
+type SortMode = "smart" | "original";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -69,6 +73,19 @@ function callbackTimeLabel(iso: string): { label: string; urgent: boolean } {
   const dStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const tStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   return { label: `${dStr} at ${tStr}`, urgent: false };
+}
+
+function priorityReason(member: QueueMember): string | null {
+  if (member.status === "CALLBACK" && member.callbackAt) {
+    const diff = new Date(member.callbackAt).getTime() - Date.now();
+    if (diff < 0) return "Overdue callback";
+    const hours = diff / 3600_000;
+    if (hours <= 24) return "Due today";
+    return "Scheduled callback";
+  }
+  if (member.attemptCount === 0) return "Fresh lead";
+  if (member.attemptCount <= 3) return "Fewer attempts";
+  return null;
 }
 
 const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
@@ -195,6 +212,7 @@ function PowerCard({
   paused,
   acting,
   feedback,
+  sortMode,
   onCall,
   onAction,
   onOpenWorkspace,
@@ -205,6 +223,7 @@ function PowerCard({
   paused: boolean;
   acting: boolean;
   feedback: string | null;
+  sortMode: SortMode;
   onCall: () => void;
   onAction: (action: string, extra?: Record<string, unknown>) => void;
   onOpenWorkspace: () => void;
@@ -281,11 +300,24 @@ function PowerCard({
     <div className="bg-white rounded-2xl p-6 border-2 border-blue-400 shadow-lg mb-4">
       {/* Status badge */}
       <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Current Lead</span>
           {member.attemptCount > 0 && (
-            <span className="ml-2 text-xs text-gray-400">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
+            <span className="text-xs text-gray-400">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
           )}
+          {sortMode === "smart" && (() => {
+            const reason = priorityReason(member);
+            if (!reason) return null;
+            const isUrgent = reason === "Overdue callback" || reason === "Due today";
+            return (
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 ${
+                isUrgent ? "bg-red-100 text-red-700" : "bg-indigo-50 text-indigo-700"
+              }`}>
+                <Sparkles className="h-3 w-3" />
+                {reason}
+              </span>
+            );
+          })()}
         </div>
         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
           {MEMBER_STATUS_LABELS[member.status]}
@@ -869,6 +901,15 @@ function QueuePageInner() {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState("");
+
+  // Sort mode — persisted so it survives navigation/reload.
+  // Power mode defaults to "smart"; manual mode defaults to "original".
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    if (typeof window === "undefined") return powerModeActive ? "smart" : "original";
+    const stored = localStorage.getItem(SORT_MODE_KEY) as SortMode | null;
+    if (stored === "smart" || stored === "original") return stored;
+    return powerModeActive ? "smart" : "original";
+  });
   const [callbackModalMember, setCallbackModalMember] = useState<QueueMember | null>(null);
 
   // Pause state — persisted to localStorage so it survives navigation/reload
@@ -884,6 +925,11 @@ function QueuePageInner() {
     else localStorage.removeItem(PAUSE_STORAGE_KEY);
   }, [paused]);
 
+  // Persist sort mode
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem(SORT_MODE_KEY, sortMode);
+  }, [sortMode]);
+
   // Wrap-up timer state — shown between leads after a successful outcome save
   const [wrapUpActive, setWrapUpActive] = useState(false);
   const [wrapUpCountdown, setWrapUpCountdown] = useState(WRAP_UP_SECONDS);
@@ -897,14 +943,15 @@ function QueuePageInner() {
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
-  const load = useCallback(async (f?: QueueFilter) => {
+  const load = useCallback(async (f?: QueueFilter, s?: SortMode) => {
     // In power mode use the URL-derived filter unless an explicit override is passed
     const activeFilter = f ?? (powerModeActive ? powerFilter : filter);
+    const activeSort = s ?? sortMode;
     setLoading(true);
     setError("");
     try {
-      const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts }>(
-        `/crm/queue?filter=${activeFilter}`,
+      const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string }>(
+        `/crm/queue?filter=${activeFilter}&sort=${activeSort}`,
         token
       );
       setQueue(res.queue);
@@ -916,7 +963,7 @@ function QueuePageInner() {
     setLoading(false);
   // powerFilter is derived from searchParams (stable ref) — safe to include
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, powerFilter, powerModeActive, token]);
+  }, [filter, powerFilter, powerModeActive, sortMode, token]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -965,7 +1012,13 @@ function QueuePageInner() {
 
   function switchFilter(f: QueueFilter) {
     setFilter(f);
-    load(f);
+    load(f, sortMode);
+  }
+
+  function toggleSortMode() {
+    const next: SortMode = sortMode === "smart" ? "original" : "smart";
+    setSortMode(next);
+    load(undefined, next);
   }
 
   function switchPowerFilter(f: QueueFilter) {
@@ -1198,8 +1251,28 @@ function QueuePageInner() {
                   PAUSED
                 </span>
               )}
+              {/* Smart sort indicator */}
+              {sortMode === "smart" && !paused && (
+                <span className="flex items-center gap-1 text-blue-100 text-xs shrink-0">
+                  <Sparkles className="h-3 w-3" />
+                  Smart priority on
+                </span>
+              )}
             </div>
             <div className="flex gap-2 shrink-0">
+              {/* Sort toggle */}
+              <button
+                onClick={toggleSortMode}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  sortMode === "smart"
+                    ? "bg-indigo-500 hover:bg-indigo-400 text-white"
+                    : "bg-white/20 hover:bg-white/30 text-blue-100"
+                }`}
+                title={sortMode === "smart" ? "Switch to original order" : "Switch to smart priority order"}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {sortMode === "smart" ? "Smart" : "Original"}
+              </button>
               <button
                 onClick={() => { setPaused((p) => !p); setWrapUpActive(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
@@ -1313,15 +1386,31 @@ function QueuePageInner() {
           </div>
           <div className="flex items-center gap-2">
             {!powerModeActive && (
-              <button
-                onClick={() => router.push("/crm/queue?mode=power")}
-                disabled={loading || total === 0}
-                className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                title={total === 0 ? "No pending leads to dial" : "Start Power Dialer mode"}
-              >
-                <Zap className="h-4 w-4" />
-                Start Power Dialer
-              </button>
+              <>
+                {/* Sort toggle — manual mode */}
+                <button
+                  onClick={toggleSortMode}
+                  disabled={loading}
+                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                    sortMode === "smart"
+                      ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                  }`}
+                  title={sortMode === "smart" ? "Smart priority order — click for original" : "Original sort order — click for smart priority"}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {sortMode === "smart" ? "Smart" : "Original"}
+                </button>
+                <button
+                  onClick={() => router.push("/crm/queue?mode=power")}
+                  disabled={loading || total === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  title={total === 0 ? "No pending leads to dial" : "Start Power Dialer mode"}
+                >
+                  <Zap className="h-4 w-4" />
+                  Start Power Dialer
+                </button>
+              </>
             )}
             <button onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -1406,6 +1495,7 @@ function QueuePageInner() {
                 paused={paused}
                 acting={acting}
                 feedback={actionFeedback}
+                sortMode={sortMode}
                 onCall={() => handlePowerDial(next)}
                 onAction={(action, extra) => handleAction(next.id, action, extra)}
                 onOpenWorkspace={() => openWorkspacePowerMode(next)}

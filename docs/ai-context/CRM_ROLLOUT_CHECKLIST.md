@@ -891,6 +891,64 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 12A — Smart Queue Prioritization
+
+```
+[ ] 1. API: sort=smart on GET /crm/queue
+        - sort=smart accepted; sort=original preserves exact pre-12A ordering
+        - No schema change, no migration
+
+[ ] 2. Smart ranking tiers (overdue → due today → upcoming → fresh → low-attempt → stale)
+        - Overdue callbacks (callbackAt < now) rank before due-today
+        - Due-today callbacks rank before zero-attempt fresh leads
+        - Zero-attempt leads rank before 1-3 attempt leads
+        - 1-3 attempt leads rank before 4+ attempt leads
+        - Within callbacks: ordered callbackAt ASC (most overdue first)
+        - Within leads: sortOrder ASC then createdAt ASC
+
+[ ] 3. filter=pending + sort=smart includes CALLBACK members
+        - WHERE status IN (PENDING, IN_PROGRESS, CALLBACK) when sort=smart
+        - Overdue/due callbacks appear at top of the pending list
+        - filter=original still uses status IN (PENDING, IN_PROGRESS) only
+
+[ ] 4. DNC/converted/skipped excluded
+        - DO_NOT_CALL, CONVERTED, SKIPPED never appear in smart sort results
+        - Same exclusion as original mode
+
+[ ] 5. Candidate cap: 500 rows
+        - Smart sort fetches max 500 candidates, ranks in-process, slices to limit
+        - Does not load unbounded rows
+
+[ ] 6. Power mode defaults to sort=smart
+        - Power Dialer opens with sortMode=smart (localStorage default)
+        - Manual mode opens with sortMode=original (localStorage default)
+        - Both are user-toggleable via the sort button
+
+[ ] 7. UI: sort toggle
+        - Power mode header: Smart/Original toggle button (Sparkles icon)
+        - Manual mode header: Smart/Original toggle button
+        - "Smart priority on" text shown in power bar when smart is active
+        - Toggling reloads queue immediately with the new sort param
+
+[ ] 8. Power mode: priority reason badge on current lead
+        - "Overdue callback" badge — red chip, Sparkles icon
+        - "Due today" badge — red chip, Sparkles icon
+        - "Fresh lead" badge — indigo chip, Sparkles icon
+        - "Fewer attempts" badge — indigo chip, Sparkles icon
+        - Badge only shows when sort=smart
+        - Badge derived client-side from member.status/callbackAt/attemptCount
+
+[ ] 9. No auto-dial, no predictive dial
+        - Toggling sort mode does NOT trigger any call
+        - Power Dialer call still requires explicit agent action (button or C key)
+        - No telephony code changed
+
+[ ] 10. API typecheck passes (0 errors)
+[ ] 11. Portal typecheck passes (0 errors)
+```
+
+---
+
 ## Phase 11C — SMS Conversation Panel on Contact Detail
 
 ```

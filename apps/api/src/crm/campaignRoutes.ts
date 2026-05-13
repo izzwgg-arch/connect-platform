@@ -576,12 +576,20 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   });
 
   // ── GET /crm/queue ─────────────────────────────────────────────────────────
-  // My Queue with filter support.
+  // My Queue with filter + sort support.
   // ?filter=pending (default) — PENDING/IN_PROGRESS in ACTIVE campaigns
   // ?filter=due     — CALLBACK, callbackAt <= end of today
   // ?filter=overdue — CALLBACK, callbackAt < start of today
   // ?filter=upcoming — CALLBACK, callbackAt >= start of tomorrow OR null
   // ?filter=all     — all non-terminal statuses
+  //
+  // ?sort=smart   — priority-ranked order (overdue callbacks → due today → upcoming
+  //                 soon → fresh leads → low-attempt leads → older leads).
+  //                 On filter=pending, smart sort also pulls in CALLBACK members
+  //                 so overdue/due callbacks surface above zero-attempt leads.
+  //                 Candidate cap: 500 rows fetched, ranked in-process, then sliced
+  //                 to the requested limit.  Safe for per-user tenant-scoped queues.
+  // ?sort=original — stable DB order (existing behaviour, default for manual mode)
   app.get("/crm/queue", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
@@ -590,11 +598,13 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
     const filter = q.filter ?? "pending";
+    const sortMode = q.sort === "smart" ? "smart" : "original";
 
     const now = new Date();
     const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
     const endOfToday = new Date(now); endOfToday.setHours(23, 59, 59, 999);
     const startOfTomorrow = new Date(startOfToday); startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+    const day7 = new Date(now); day7.setDate(day7.getDate() + 7);
 
     let whereClause: Record<string, unknown>;
 
@@ -634,14 +644,88 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       };
     } else {
       // default: pending
+      // smart sort expands to include CALLBACK so overdue/due callbacks appear first
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: { in: ["PENDING", "IN_PROGRESS"] },
+        status: sortMode === "smart"
+          ? { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }
+          : { in: ["PENDING", "IN_PROGRESS"] },
         campaign: { status: "ACTIVE" },
       };
     }
 
+    // ── Smart in-process ranking ──────────────────────────────────────────────
+    // Priority tiers (lower = higher priority):
+    //   0  overdue callback  (callbackAt < now)
+    //   1  due today         (callbackAt <= endOfToday)
+    //   2  upcoming callback (callbackAt in next 7 days)
+    //   3  fresh lead        (attemptCount === 0)
+    //   4  low-attempt lead  (attemptCount 1–3)
+    //   5  stale lead        (attemptCount > 3)
+    // Within each tier: callbacks sort by callbackAt ASC (most overdue first);
+    // leads sort by sortOrder ASC then createdAt ASC.
+    function smartTier(m: { status: string; callbackAt: Date | null; attemptCount: number }): number {
+      if (m.status === "CALLBACK" && m.callbackAt) {
+        if (m.callbackAt < now) return 0;
+        if (m.callbackAt <= endOfToday) return 1;
+        if (m.callbackAt < day7) return 2;
+        return 2;
+      }
+      if (m.attemptCount === 0) return 3;
+      if (m.attemptCount <= 3) return 4;
+      return 5;
+    }
+
+    const SMART_CANDIDATE_CAP = 500;
+
+    if (sortMode === "smart") {
+      // Fetch candidates up to the cap, then rank in-process, then slice.
+      const candidates = await db.crmCampaignMember.findMany({
+        where: whereClause,
+        orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
+        take: SMART_CANDIDATE_CAP,
+        include: {
+          ...MEMBER_INCLUDE,
+          campaign: { select: { id: true, name: true, scriptId: true, checklistId: true } },
+        },
+      });
+
+      candidates.sort((a, b) => {
+        const ta = smartTier(a);
+        const tb = smartTier(b);
+        if (ta !== tb) return ta - tb;
+        // Within tier: callbacks by callbackAt ASC; leads by sortOrder then createdAt
+        if (ta <= 2 && a.callbackAt && b.callbackAt) {
+          return a.callbackAt.getTime() - b.callbackAt.getTime();
+        }
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      });
+
+      const total = candidates.length;
+      const page = candidates.slice(0, limit);
+      const formatted = page.map((m) => ({
+        ...formatMember(m),
+        campaign: m.campaign ? { id: m.campaign.id, name: m.campaign.name, scriptId: m.campaign.scriptId, checklistId: m.campaign.checklistId } : null,
+      }));
+
+      const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: { status: "ACTIVE" } } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: { status: "ACTIVE" } } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: { status: "ACTIVE" } } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: { status: "ACTIVE" } } }),
+      ]);
+
+      return {
+        queue: formatted,
+        total,
+        sort: "smart",
+        counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },
+      };
+    }
+
+    // ── Original (stable DB) ordering ─────────────────────────────────────────
     const orderBy =
       (filter === "due" || filter === "overdue" || filter === "upcoming")
         ? [{ callbackAt: "asc" as const }, { sortOrder: "asc" as const }]
@@ -676,6 +760,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return {
       queue: formatted,
       total,
+      sort: "original",
       counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },
     };
   });

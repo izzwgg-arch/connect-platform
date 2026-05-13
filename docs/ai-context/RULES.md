@@ -577,6 +577,20 @@
     - Alert strip must link to real, working pages: `/crm/queue?filter=overdue`, `/crm/queue?filter=due`,
       `/crm/tasks?due=overdue`, `/crm/tasks?due=today`.
 
+86. **CRM Smart Queue is ranking-only and must never auto-dial or predict calls.**
+    - `?sort=smart` on `GET /crm/queue` re-orders candidates by priority tier (overdue callbacks →
+      due-today callbacks → upcoming callbacks → fresh zero-attempt leads → low-attempt leads →
+      stale leads). It NEVER changes which contacts get called — that decision stays with the agent.
+    - Smart sort on `filter=pending` expands the status filter to include `CALLBACK` so overdue/due
+      callbacks surface above zero-attempt leads. Candidate cap: 500 rows fetched, ranked in-process
+      (`smartTier()`), then sliced to the requested `limit`.
+    - No auto-dialing. No predictive dialing. No telephony changes. The Power Dialer "call" action
+      is always explicitly triggered by the agent pressing the Call button or keyboard shortcut `C`.
+    - `sort=original` must preserve the pre-12A ordering (sortOrder ASC, createdAt ASC for pending;
+      callbackAt ASC for callback filters).
+    - Sort preference is persisted in `localStorage` (`crm_queue_sort_mode`). Power mode defaults
+      to `"smart"` on first use; manual mode defaults to `"original"`.
+
 ---
 
 ## Documentation
