@@ -12,7 +12,7 @@ const MEMBER_INCLUDE = {
       displayName: true,
       phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
       emails: { where: { isPrimary: true }, select: { email: true }, take: 1 },
-      crmMeta: { select: { stage: true, lastActivityAt: true, lastDisposition: true } },
+      crmMeta: { select: { stage: true, lastActivityAt: true, lastDisposition: true, lastDispositionAt: true } },
     },
   },
   assignedTo: { select: { id: true, displayName: true, email: true } },
@@ -93,6 +93,7 @@ function formatMember(m: any) {
           crmStage: m.contact.crmMeta?.stage ?? null,
           lastActivityAt: m.contact.crmMeta?.lastActivityAt ?? null,
           lastDisposition: m.contact.crmMeta?.lastDisposition ?? null,
+          lastDispositionAt: m.contact.crmMeta?.lastDispositionAt ?? null,
         }
       : null,
     assignedTo: m.assignedTo ?? null,

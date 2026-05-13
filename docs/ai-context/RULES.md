@@ -411,6 +411,39 @@
     - Guard: `if (e.metaKey || e.ctrlKey || e.altKey) return;`
     - These guards must never be removed.
 
+70. **Inline outcome buttons on PowerCard (Phase 8B+) must call real API endpoints — never
+    UI-only state changes.**
+    - Every outcome button (No Answer, Voicemail, Interested, Not Interested, Callback,
+      Converted) must call `POST /crm/contacts/:id/disposition` to record the disposition
+      on the contact, and `PATCH /crm/queue/:memberId` with `action: "outcome"` to update
+      member status + increment attempt count.
+    - Outcomes must **not** be simulated client-side. An API error must surface an inline
+      error message; the queue must not advance until both calls succeed.
+    - The Callback outcome **must** collect a `followUpAt` datetime before saving. Saving
+      without a datetime is not allowed (Save button is disabled until datetime is chosen).
+    - These rules apply to any future outcome added to the inline panel.
+
+71. **"Not Interested" ≠ "Do Not Call". Never conflate them.**
+    - "Not Interested" is a soft outcome: the agent spoke to the contact and they declined.
+      The contact's `lastDisposition` is set to "Not Interested" on the contact record, but
+      the queue member status is set to `CONTACTED` (not `DO_NOT_CALL`).
+    - Implementation: send `disposition: "Not Interested"` to `POST /crm/contacts/:id/disposition`
+      (the real record) but send `disposition: "contacted"` to `PATCH /crm/queue/:memberId`
+      (avoids the server-side `d.includes("not interest")` → `DO_NOT_CALL` pattern match).
+    - "Do Not Call" (`action: "dnc"`) is a **hard, explicit action** in the Queue Actions
+      section with its own confirmation dialog. It sets `DO_NOT_CALL` and should never be
+      triggered automatically by a soft outcome.
+    - Do not change this split without a product decision.
+
+72. **Optional outcome notes on PowerCard (Phase 8C+) must write real CRM notes.**
+    - The "Add note" textarea in the outcome panel passes `note` to
+      `POST /crm/contacts/:id/disposition`, which creates a real `CrmContactNote` row and
+      a `DISPOSITION_SET` timeline event with the note body.
+    - Empty or whitespace-only notes must not be sent (the endpoint would create a blank
+      note row). Only send `note` if `outcomeNoteText.trim()` is non-empty.
+    - After a successful save the note field must be cleared. This is handled automatically
+      by `key={member.id}` on `<PowerCard>` which forces a full unmount on member change.
+
 ---
 
 ## Documentation

@@ -337,6 +337,178 @@ Run after deploying Phase 8A portal changes. All checks are manual browser-based
 
 ---
 
+## Phase 8B — Inline Outcome Panel Smoke Test
+
+Run after deploying Phase 8B portal changes. All checks are manual browser-based.
+Prerequisites same as Phase 8A (CRM enabled, ≥3 PENDING members, SIP registered).
+
+### Checklist
+
+```
+[ ] 1. Outcome panel is visible on PowerCard
+       - Enter power mode (/crm/queue?mode=power)
+       - Below the green Call button, a "Log Outcome" section is visible
+       - 6 buttons in a 3-column grid: No Answer, Voicemail, Interested,
+         Not Interested, Callback, Converted
+       - All buttons are clearly labeled and have icons
+
+[ ] 2. No Answer — saves and advances
+       - Click Call, then click "No Answer"
+       - No confirmation required — saves immediately
+       - "No Answer saved ✓ — loading next lead…" flash appears briefly
+       - Queue reloads → next PENDING lead appears on card
+       - In DB / contact timeline: disposition "No Answer" is recorded
+       - Queue member status → CONTACTED
+
+[ ] 3. Voicemail — saves and advances
+       - Same as No Answer but with "Voicemail" button
+       - Disposition "Voicemail" recorded; member status CONTACTED
+
+[ ] 4. Interested — saves and advances
+       - Click "Interested"
+       - Saves immediately, advances queue
+       - Disposition "Interested" recorded; member status CONTACTED
+
+[ ] 5. Not Interested — confirmation then saves
+       - Click "Not Interested"
+       - Inline orange confirmation box appears:
+         "Mark as 'Not Interested'? This will remove this lead from your
+          active queue (Do Not Call for this campaign)."
+       - Click Cancel → confirmation disappears, no action taken
+       - Click "Not Interested" again → confirm → click "Confirm"
+       - Lead disappears from queue; member status → DO_NOT_CALL
+       - Disposition "Not Interested" recorded on contact
+
+[ ] 6. Callback — inline time picker then saves
+       - Click "Callback"
+       - Inline yellow picker appears with datetime-local input + optional note field
+       - Datetime defaults to 1 hour from now
+       - Click Cancel → picker closes, no action taken
+       - Pick a future date/time, optionally add note
+       - "Save Callback →" button is disabled until datetime is chosen
+       - Click "Save Callback →"
+       - "Callback saved ✓ — loading next lead…" flash
+       - Queue reloads (lead may move to callback tab, not shown in pending)
+       - Contact timeline: disposition "Callback" recorded; task created (follow-up)
+       - Queue member: status → CALLBACK, callbackAt set
+
+[ ] 7. Converted — saves and advances
+       - Click "Converted"
+       - Saves immediately, advances queue
+       - Disposition "Converted" recorded; member status → CONVERTED
+
+[ ] 8. API failure handling
+       - (Simulate by temporarily navigating while save is in flight, or test
+         against a member with no contact — check that error banner appears)
+       - If either API call fails: red inline error message appears below buttons
+       - Queue does NOT advance (lead stays on card)
+       - Error message clears next time an outcome is attempted
+
+[ ] 9. Buttons disabled while saving
+       - All 6 outcome buttons show disabled (opacity-40) while a save is in progress
+       - Call button also disabled while saving
+       - "Saving outcome…" text appears
+
+[ ] 10. Full Workspace still accessible
+        - "Full Workspace" button is still present in Queue Actions section
+        - Opens /crm/live-call?...&mode=power as before
+        - Notes, scripts, checklists, and full outcome flow still work there
+
+[ ] 11. DNC queue action still works
+        - "DNC" button in Queue Actions section (below outcome panel) still works
+        - Shows confirm dialog, marks member as DO_NOT_CALL
+
+[ ] 12. Skip / Defer / Reschedule still work
+        - All existing Queue Actions buttons still behave as in Phase 8A
+
+[ ] 13. Manual queue mode completely unaffected
+        - Stop power mode, verify normal MemberCard has no outcome panel
+        - Manual mode: Skip/Defer/DNC all work as before
+
+[ ] 14. Outcome panel resets between leads
+        - After an outcome saves and a new lead loads, confirm that:
+          - No stale error message shown
+          - No inline picker open
+          - Note field is cleared / hidden (key={member.id} forces full remount)
+
+[ ] 15. Keyboard shortcuts still work
+        - C, S, D shortcuts still fire correctly (guards against input still active)
+        - Typing in the callback note field must NOT trigger C/S/D shortcuts
+```
+
+---
+
+## Phase 8C — Outcome Semantics Fix + Inline Notes Smoke Test
+
+Run after deploying Phase 8C portal changes.
+
+### Checklist
+
+```
+[ ] 1. Not Interested — maps to CONTACTED, NOT DO_NOT_CALL
+       - Enter power mode with a PENDING lead
+       - Click "Not Interested"
+       - Lead advances to next (no confirmation required)
+       - Verify: contact's lastDisposition = "Not Interested" (check contact detail page
+         or CRM timeline — disposition event should say "Not Interested")
+       - Verify: queue member status = CONTACTED (NOT DO_NOT_CALL)
+       - Lead should still appear if you visit the queue's callback/contacted tabs
+
+[ ] 2. DNC still requires explicit action + confirmation
+       - Click "DNC" in the Queue Actions section (below outcome panel)
+       - Native confirm dialog appears: "Mark [Name] as Do Not Call?"
+       - Cancel → nothing happens
+       - Confirm → member status set to DO_NOT_CALL
+       - Lead does not appear in any queue tab (filtered out permanently)
+
+[ ] 3. Not Interested vs DNC are distinct flows
+       - "Not Interested" button saves without any confirmation (fast path)
+       - "DNC" in Queue Actions shows confirmation (deliberate path)
+       - Both record different things: "Not Interested" = CONTACTED, DNC = DO_NOT_CALL
+
+[ ] 4. Outcome note — "+ Add note" toggle
+       - In power mode, click "No Answer" directly (no note) → saves, advances
+       - Go to next lead, click "+ Add note" link
+       - Note textarea appears (2 rows, gray background)
+       - "Clear" link collapses it and empties the text
+       - Type a note, click "No Answer" → saves with "No Answer saved with note ✓"
+       - Check contact's CRM timeline — DISPOSITION_SET event should include note body
+
+[ ] 5. Note with Interested — creates real CRM note
+       - Open "+ Add note", type "Interested in the Pro plan"
+       - Click "Interested"
+       - Contact detail page → Notes tab: note "Interested in the Pro plan" exists
+       - Timeline: DISPOSITION_SET event shows the note
+
+[ ] 6. Empty note does not create blank note
+       - Open "+ Add note" textarea, leave it blank (or just whitespace)
+       - Click any outcome
+       - Contact notes: no blank note created
+       - Feedback shows "X saved ✓" not "X saved with note ✓"
+
+[ ] 7. Callback note still works
+       - Click "Callback" → inline picker opens
+       - "+ Add note" toggle is hidden (callback has its own note field)
+       - Fill in a datetime and a callback note
+       - Save → contact timeline: DISPOSITION_SET event; queue member: callbackNote set
+
+[ ] 8. Note clears between leads
+       - Add a note, save an outcome → next lead appears
+       - "+ Add note" link is shown (collapsed) — textarea is not pre-filled
+       - Confirms key={member.id} forces a clean remount
+
+[ ] 9. Keyboard shortcut guard: typing in note textarea does NOT trigger C/S/D
+       - Click "+ Add note", focus the textarea
+       - Press C, S, D — no call/skip/defer fires
+       - This is the keyboard input guard working correctly
+
+[ ] 10. Manual queue mode unchanged
+        - Stop power mode — MemberCards have no note textarea or outcome panel
+        - Manual skip/defer/DNC all work as before
+```
+
+---
+
 ## Quick Commands
 
 ```bash
