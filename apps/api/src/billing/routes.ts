@@ -33,6 +33,17 @@ import {
   todayDateSuffix,
   transactionExportToCsv,
 } from "./billingReports";
+import {
+  markDoNotCharge,
+  pauseInvoiceCollections,
+  queryCollectionsOverview,
+  queryPreviewRetries,
+  readTenantCollectionsConfig,
+  resumeInvoiceCollections,
+  skipNextRetry as skipInvoiceNextRetry,
+  validateTenantCollectionsConfigUpdate,
+  writeTenantCollectionsConfig,
+} from "./billingCollections";
 
 type BillingUser = {
   sub: string;
@@ -1024,6 +1035,119 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       .header("Content-Disposition", `attachment; filename="${filename}"`)
       .header("X-Report-Capped", capped ? "true" : "false")
       .send(csv);
+  });
+
+  // ── Collections: read-only overview ──────────────────────────────────────
+
+  app.get("/admin/billing/collections/overview", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const overview = await queryCollectionsOverview(db as any);
+    return overview;
+  });
+
+  app.get("/admin/billing/collections/preview-retries", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const preview = await queryPreviewRetries(db as any);
+    return preview;
+  });
+
+  // ── Collections: per-tenant config ───────────────────────────────────────
+
+  app.get("/admin/billing/platform/tenants/:tenantId/collections-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+    if (!settings) return reply.code(404).send({ error: "tenant_billing_settings_not_found" });
+    return { tenantId, collections: readTenantCollectionsConfig(settings.metadata) };
+  });
+
+  app.put("/admin/billing/platform/tenants/:tenantId/collections-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const body = req.body as any;
+    const validation = validateTenantCollectionsConfigUpdate(body);
+    if (!validation.ok) return reply.code(400).send({ error: "validation_error", message: validation.error });
+
+    const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+    if (!settings) return reply.code(404).send({ error: "tenant_billing_settings_not_found" });
+
+    const newMeta = writeTenantCollectionsConfig(settings.metadata, {
+      dunningEnabled: "dunningEnabled" in body ? body.dunningEnabled : undefined,
+      maxAttempts: "maxAttempts" in body ? body.maxAttempts : undefined,
+      retryDelayHours: "retryDelayHours" in body ? body.retryDelayHours : undefined,
+    });
+    await (db as any).tenantBillingSettings.update({ where: { tenantId }, data: { metadata: newMeta } });
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId,
+        type: "collections_action",
+        message: `collections-config updated by ${(u as any).email || (u as any).sub}`,
+        metadata: {
+          action: "update_collections_config",
+          operatorId: (u as any).sub,
+          reason: body.reason ?? null,
+          prevState: readTenantCollectionsConfig(settings.metadata),
+          nextState: readTenantCollectionsConfig(newMeta),
+        },
+      },
+    });
+    return { tenantId, collections: readTenantCollectionsConfig(newMeta) };
+  });
+
+  // ── Collections: per-invoice actions ─────────────────────────────────────
+
+  app.post("/admin/billing/invoices/:id/collections/pause", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = req.body as any;
+    const result = await pauseInvoiceCollections(db as any, id, (u as any).sub, body?.reason ?? null);
+    if (!result.ok) {
+      const code = result.code === "invoice_not_found" ? 404 : 400;
+      return reply.code(code).send({ error: result.code, message: result.error });
+    }
+    return result;
+  });
+
+  app.post("/admin/billing/invoices/:id/collections/resume", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const result = await resumeInvoiceCollections(db as any, id, (u as any).sub);
+    if (!result.ok) {
+      const code = result.code === "invoice_not_found" ? 404 : 400;
+      return reply.code(code).send({ error: result.code, message: result.error });
+    }
+    return result;
+  });
+
+  app.post("/admin/billing/invoices/:id/collections/skip-next-retry", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const result = await skipInvoiceNextRetry(db as any, id, (u as any).sub);
+    if (!result.ok) {
+      const code = result.code === "invoice_not_found" ? 404 : 400;
+      return reply.code(code).send({ error: result.code, message: result.error });
+    }
+    return result;
+  });
+
+  app.post("/admin/billing/invoices/:id/collections/do-not-charge", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = req.body as any;
+    const result = await markDoNotCharge(db as any, id, (u as any).sub, body?.reason ?? null);
+    if (!result.ok) {
+      const code = result.code === "invoice_not_found" ? 404 : 400;
+      return reply.code(code).send({ error: result.code, message: result.error });
+    }
+    return result;
   });
 
   app.post("/admin/billing/invoices/:id/send", async (req, reply) => {

@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiGet } from "../../../../../services/apiClient";
+import { apiGet, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../../../components/PageHeader";
+import { billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { TenantDetail } from "../_components/tenantBillingConfigForms";
 import {
@@ -17,6 +18,116 @@ import {
 } from "../_components/tenantBillingConfigForms";
 
 type TenantRow = { id: string; name: string };
+
+type CollectionsConfig = {
+  dunningEnabled: boolean | null;
+  maxAttempts: number | null;
+  retryDelayHours: number | null;
+};
+
+function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: string; onSaved: () => void }) {
+  const [config, setConfig] = useState<CollectionsConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await apiGet<{ tenantId: string; collections: CollectionsConfig }>(
+        `/admin/billing/platform/tenants/${tenantId}/collections-config`,
+      );
+      setConfig(r.collections);
+    } catch (err: unknown) {
+      setError(billingErrorMessage(err, "Failed to load collections config."));
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (loading) return <LoadingSkeleton rows={3} />;
+  if (error) return <ErrorState message={error} />;
+  if (!config) return null;
+
+  return (
+    <DetailCard title="Collections Automation">
+      <div style={{ fontSize: 12, background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#713f12" }}>
+        <strong>Phase 1:</strong> Config is stored here. Worker enforcement of per-tenant dunning overrides requires a Phase 2 worker deployment.
+      </div>
+      <form
+        className="billing-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSaving(true);
+          setToast(null);
+          try {
+            const fd = new FormData(e.currentTarget);
+            const dunningRaw = fd.get("dunningEnabled") as string;
+            const payload: Record<string, unknown> = {
+              dunningEnabled: dunningRaw === "true" ? true : dunningRaw === "false" ? false : null,
+              maxAttempts: fd.get("maxAttempts") ? Number(fd.get("maxAttempts")) : null,
+              retryDelayHours: fd.get("retryDelayHours") ? Number(fd.get("retryDelayHours")) : null,
+            };
+            const updated = await apiPut<{ tenantId: string; collections: CollectionsConfig }>(
+              `/admin/billing/platform/tenants/${tenantId}/collections-config`,
+              payload,
+            );
+            setConfig(updated.collections);
+            setToast({ type: "ok", text: "Collections config saved." });
+            onSaved();
+          } catch (err: unknown) {
+            setToast({ type: "err", text: billingErrorMessage(err, "Save failed.") });
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        <label>
+          Dunning / autopay retry
+          <select name="dunningEnabled" defaultValue={config.dunningEnabled === null ? "null" : String(config.dunningEnabled)}>
+            <option value="null">Use global default (inherit autoBillingEnabled)</option>
+            <option value="true">Enabled — retry failed invoices on this tenant</option>
+            <option value="false">Disabled — skip autopay retries for this tenant</option>
+          </select>
+        </label>
+        <label>
+          Max retry attempts (blank = global default, currently 3)
+          <input
+            name="maxAttempts"
+            type="number"
+            min={1}
+            max={10}
+            defaultValue={config.maxAttempts ?? ""}
+            placeholder="e.g. 4"
+          />
+        </label>
+        <label>
+          Retry delay hours (blank = global default, currently 72)
+          <input
+            name="retryDelayHours"
+            type="number"
+            min={1}
+            max={336}
+            defaultValue={config.retryDelayHours ?? ""}
+            placeholder="e.g. 48"
+          />
+        </label>
+        {toast ? (
+          <div className={`billing-status-pill ${toast.type === "ok" ? "ok" : "bad"}`} style={{ fontSize: 13 }}>
+            {toast.text}
+          </div>
+        ) : null}
+        <button className="btn primary" type="submit" disabled={saving} style={{ fontSize: 13 }}>
+          {saving ? "Saving…" : "Save collections config"}
+        </button>
+      </form>
+    </DetailCard>
+  );
+}
 
 function AdminBillingSettingsBody() {
   const router = useRouter();
@@ -143,6 +254,7 @@ function AdminBillingSettingsBody() {
           </section>
           <section className="billing-setup-grid">
             <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+            <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>
         </>
       ) : null}

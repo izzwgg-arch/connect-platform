@@ -58,6 +58,7 @@ type InvoiceDetail = Omit<InvoiceRow, "transactions"> & {
   transactions: InvoiceTxRow[];
   events: InvoiceEventRow[];
   isLiveCharge: boolean;
+  metadata?: unknown;
 };
 
 type AdminPaymentMethod = {
@@ -176,9 +177,22 @@ const modalStyle: React.CSSProperties = {
 
 // ── InvoiceDetailModal ────────────────────────────────────────────────────────
 
+function readInvoiceCollections(metadata: unknown) {
+  const root = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as Record<string, unknown>) : {};
+  const c = root.collections && typeof root.collections === "object" && !Array.isArray(root.collections) ? (root.collections as Record<string, unknown>) : {};
+  const paused = Boolean(c.paused);
+  const doNotCharge = Boolean(c.doNotCharge);
+  const skipNextRetry = Boolean(c.skipNextRetry);
+  const status: "NORMAL" | "PAUSED" | "DO_NOT_CHARGE" = doNotCharge ? "DO_NOT_CHARGE" : paused ? "PAUSED" : "NORMAL";
+  return { status, paused, doNotCharge, skipNextRetry, pausedBy: c.pausedBy as string | null ?? null, pauseReason: c.pauseReason as string | null ?? null };
+}
+
 function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: string; onClose: () => void; onAction: () => void }) {
-  const data = useAsyncResource<InvoiceDetail>(() => apiGet<InvoiceDetail>(`/admin/billing/invoices/${invoiceId}`), [invoiceId]);
+  const [rev, setRev] = useState(0);
+  const data = useAsyncResource<InvoiceDetail>(() => apiGet<InvoiceDetail>(`/admin/billing/invoices/${invoiceId}`), [invoiceId, rev]);
   const inv = data.status === "success" ? data.data : null;
+  const [collectionsMsg, setCollectionsMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [collectionsBusy, setCollectionsBusy] = useState(false);
 
   return (
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -269,6 +283,125 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                 />
               </>
             ) : null}
+
+            {/* Collections controls */}
+            {(() => {
+              if (!inv || ["PAID", "VOID"].includes(inv.status)) return null;
+              const cs = readInvoiceCollections(inv.metadata);
+              return (
+                <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                  <div className="row-actions" style={{ marginBottom: 8 }}>
+                    <strong style={{ fontSize: 13 }}>Collections Controls</strong>
+                    <span className={`billing-status-pill ${cs.status === "DO_NOT_CHARGE" ? "bad" : cs.status === "PAUSED" ? "warn" : "ok"}`} style={{ fontSize: 11 }}>
+                      {cs.status}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 5, padding: "5px 9px", marginBottom: 10, color: "#713f12" }}>
+                    ⚠ Phase 1: Controls are stored now. Worker enforcement of pause/do-not-charge requires Phase 2 deployment.
+                  </div>
+                  {cs.paused && (
+                    <p style={{ fontSize: 12, margin: "0 0 6px", color: "#6b7280" }}>
+                      Paused by {cs.pausedBy || "operator"}{cs.pauseReason ? ` — ${cs.pauseReason}` : ""}
+                    </p>
+                  )}
+                  {cs.skipNextRetry && !cs.paused && (
+                    <p style={{ fontSize: 12, margin: "0 0 6px", color: "#6b7280" }}>Skip-next-retry is set.</p>
+                  )}
+                  {collectionsMsg && (
+                    <div className={`billing-status-pill ${collectionsMsg.type === "ok" ? "ok" : "bad"}`} style={{ marginBottom: 8, fontSize: 12 }}>
+                      {collectionsMsg.text}
+                    </div>
+                  )}
+                  <div className="row-actions" style={{ flexWrap: "wrap", gap: 6 }}>
+                    {!cs.paused && !cs.doNotCharge && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={collectionsBusy}
+                        style={{ fontSize: 12 }}
+                        onClick={async () => {
+                          setCollectionsBusy(true);
+                          setCollectionsMsg(null);
+                          try {
+                            await apiPost(`/admin/billing/invoices/${invoiceId}/collections/pause`, {});
+                            setCollectionsMsg({ type: "ok", text: "Paused. Worker enforcement in Phase 2." });
+                            setRev((r) => r + 1);
+                          } catch (err: unknown) {
+                            setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Pause failed.") });
+                          } finally { setCollectionsBusy(false); }
+                        }}
+                      >
+                        ⏸ Pause collections
+                      </button>
+                    )}
+                    {(cs.paused || cs.doNotCharge || cs.skipNextRetry) && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={collectionsBusy}
+                        style={{ fontSize: 12 }}
+                        onClick={async () => {
+                          setCollectionsBusy(true);
+                          setCollectionsMsg(null);
+                          try {
+                            await apiPost(`/admin/billing/invoices/${invoiceId}/collections/resume`, {});
+                            setCollectionsMsg({ type: "ok", text: "Resumed." });
+                            setRev((r) => r + 1);
+                          } catch (err: unknown) {
+                            setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Resume failed.") });
+                          } finally { setCollectionsBusy(false); }
+                        }}
+                      >
+                        ▶ Resume
+                      </button>
+                    )}
+                    {!cs.skipNextRetry && !cs.paused && !cs.doNotCharge && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={collectionsBusy}
+                        style={{ fontSize: 12 }}
+                        onClick={async () => {
+                          setCollectionsBusy(true);
+                          setCollectionsMsg(null);
+                          try {
+                            await apiPost(`/admin/billing/invoices/${invoiceId}/collections/skip-next-retry`, {});
+                            setCollectionsMsg({ type: "ok", text: "Skip-next-retry set. Worker enforcement in Phase 2." });
+                            setRev((r) => r + 1);
+                          } catch (err: unknown) {
+                            setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Skip failed.") });
+                          } finally { setCollectionsBusy(false); }
+                        }}
+                      >
+                        ⏭ Skip next retry
+                      </button>
+                    )}
+                    {!cs.doNotCharge && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={collectionsBusy}
+                        style={{ fontSize: 12, color: "var(--danger, #dc2626)", borderColor: "var(--danger, #dc2626)" }}
+                        onClick={async () => {
+                          if (!window.confirm("Mark this invoice as Do Not Auto-Charge? The worker will not attempt autopay. You can Resume later.")) return;
+                          setCollectionsBusy(true);
+                          setCollectionsMsg(null);
+                          try {
+                            await apiPost(`/admin/billing/invoices/${invoiceId}/collections/do-not-charge`, {});
+                            setCollectionsMsg({ type: "ok", text: "Marked do-not-charge. Worker enforcement in Phase 2." });
+                            setRev((r) => r + 1);
+                          } catch (err: unknown) {
+                            setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Failed.") });
+                          } finally { setCollectionsBusy(false); }
+                        }}
+                      >
+                        🚫 Do not auto-charge
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="row-actions" style={{ marginTop: 16 }}>
               <button className="btn primary" type="button" onClick={() => { onAction(); onClose(); }}>Refresh list</button>
@@ -1634,12 +1767,244 @@ function ReportsTab() {
   );
 }
 
+// ── Collections tab ───────────────────────────────────────────────────────────
+
+type CollectionsRow = {
+  invoiceId: string;
+  invoiceNumber: string | null;
+  tenantId: string;
+  tenantName: string;
+  status: string;
+  balanceDueCents: number;
+  totalCents: number;
+  dueDate: string | null;
+  failedAt: string | null;
+  dunningAttempts: number;
+  dunningMaxAttempts: number;
+  nextRetryAt: string | null;
+  collections: {
+    status: "NORMAL" | "PAUSED" | "DO_NOT_CHARGE";
+    paused: boolean;
+    doNotCharge: boolean;
+    skipNextRetry: boolean;
+    pausedBy: string | null;
+    pauseReason: string | null;
+    updatedAt: string | null;
+  };
+  lastFailureReason: string | null;
+};
+
+type CollectionsOverview = {
+  counts: { failed: number; retryEligible: number; paused: number; exhausted: number; doNotCharge: number };
+  retryEligible: CollectionsRow[];
+  paused: CollectionsRow[];
+  exhausted: CollectionsRow[];
+  previewNote: string;
+};
+
+type PreviewRetriesResult = { rows: CollectionsRow[]; note: string };
+
+function collectionsStatusPill(s: string) {
+  if (s === "DO_NOT_CHARGE") return "bad";
+  if (s === "PAUSED") return "warn";
+  return "ok";
+}
+
+function CollectionsRowTable({ rows, onOpenInvoice }: { rows: CollectionsRow[]; onOpenInvoice: (id: string) => void }) {
+  if (rows.length === 0) return <p className="muted" style={{ fontSize: 13 }}>None.</p>;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <DataTable
+        rows={rows.map((r) => ({ ...r, id: r.invoiceId }))}
+        columns={[
+          { key: "inv", label: "Invoice", render: (r: CollectionsRow) => (
+            <button className="btn ghost" type="button" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => onOpenInvoice(r.invoiceId)}>
+              {r.invoiceNumber || r.invoiceId.slice(0, 8)}
+            </button>
+          )},
+          { key: "tenant", label: "Tenant", render: (r: CollectionsRow) => r.tenantName },
+          { key: "status", label: "Status", render: (r: CollectionsRow) => <span className={`billing-status-pill ${invStatusClass(r.status)}`}>{r.status}</span> },
+          { key: "col", label: "Collections", render: (r: CollectionsRow) => <span className={`billing-status-pill ${collectionsStatusPill(r.collections.status)}`}>{r.collections.status}</span> },
+          { key: "bal", label: "Balance", render: (r: CollectionsRow) => <strong style={{ color: "var(--danger, #dc2626)" }}>{dollars(r.balanceDueCents)}</strong> },
+          { key: "att", label: "Attempts", render: (r: CollectionsRow) => `${r.dunningAttempts}/${r.dunningMaxAttempts}` },
+          { key: "next", label: "Next retry", render: (r: CollectionsRow) => r.nextRetryAt ? fmtDatetime(r.nextRetryAt) : "—" },
+          { key: "fail", label: "Last failure", render: (r: CollectionsRow) => r.lastFailureReason ? <span style={{ fontSize: 11 }}>{r.lastFailureReason}</span> : "—" },
+        ]}
+      />
+    </div>
+  );
+}
+
+function CollectionsTab() {
+  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
+  const [overviewRev, setOverviewRev] = useState(0);
+  const [previewRev, setPreviewRev] = useState(0);
+  const [overviewLoaded, setOverviewLoaded] = useState(false);
+  const [previewLoaded, setPreviewLoaded] = useState(false);
+
+  const [overview, setOverview] = useState<CollectionsOverview | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+
+  const [preview, setPreview] = useState<PreviewRetriesResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true);
+    setOverviewError(null);
+    try {
+      const r = await apiGet<CollectionsOverview>("/admin/billing/collections/overview");
+      setOverview(r);
+      setOverviewLoaded(true);
+    } catch (err: unknown) {
+      setOverviewError(billingErrorMessage(err, "Failed to load collections overview."));
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, []);
+
+  const loadPreview = useCallback(async () => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const r = await apiGet<PreviewRetriesResult>("/admin/billing/collections/preview-retries");
+      setPreview(r);
+      setPreviewLoaded(true);
+    } catch (err: unknown) {
+      setPreviewError(billingErrorMessage(err, "Failed to load preview."));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, []);
+
+  // Re-load on rev bump
+  useEffect(() => {
+    if (overviewLoaded) void loadOverview();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overviewRev]);
+
+  useEffect(() => {
+    if (previewLoaded) void loadPreview();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewRev]);
+
+  function afterInvoiceAction() {
+    if (overviewLoaded) setOverviewRev((r) => r + 1);
+    if (previewLoaded) setPreviewRev((r) => r + 1);
+  }
+
+  return (
+    <div className="stack compact-stack">
+      {/* Phase 1 notice */}
+      <div style={{ padding: "10px 14px", background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 8, fontSize: 13, color: "#713f12", marginBottom: 4 }}>
+        <strong>Phase 1 — Controls stored, worker enforcement pending.</strong>
+        {" "}Pause, skip, and do-not-charge flags are saved here and visible in invoice detail.
+        The dunning worker does <em>not yet</em> check these flags — that requires a Phase 2 worker deployment.
+      </div>
+
+      {/* Overview section */}
+      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 8 }}>
+        <div className="row-actions" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0 }}>Collections Overview</h4>
+          <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={overviewLoading} onClick={() => {
+            if (!overviewLoaded) { void loadOverview(); } else { setOverviewRev((r) => r + 1); }
+          }}>
+            {overviewLoading ? "Loading…" : overviewLoaded ? "↺ Refresh" : "Load overview"}
+          </button>
+        </div>
+        {overviewError ? <ErrorState message={overviewError} /> : null}
+        {overviewLoading ? <LoadingSkeleton rows={3} /> : null}
+        {overview && !overviewLoading ? (
+          <div className="stack compact-stack">
+            {/* Count badges */}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+              {[
+                { label: "Failed/Open", value: overview.counts.failed, style: "bad" },
+                { label: "Retry eligible", value: overview.counts.retryEligible, style: "warn" },
+                { label: "Paused", value: overview.counts.paused, style: "warn" },
+                { label: "Exhausted", value: overview.counts.exhausted, style: "bad" },
+                { label: "Do-not-charge", value: overview.counts.doNotCharge, style: "bad" },
+              ].map(({ label, value, style }) => (
+                <div key={label} style={{ textAlign: "center" }}>
+                  <div className={`billing-status-pill ${style}`} style={{ fontSize: 18, fontWeight: 700, padding: "4px 14px" }}>{value}</div>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Retry-eligible */}
+            {overview.retryEligible.length > 0 && (
+              <>
+                <h5 style={{ margin: "12px 0 4px" }}>Ready to retry</h5>
+                <CollectionsRowTable rows={overview.retryEligible} onOpenInvoice={setOpenInvoiceId} />
+              </>
+            )}
+
+            {/* Paused */}
+            {overview.paused.length > 0 && (
+              <>
+                <h5 style={{ margin: "12px 0 4px" }}>Paused / Do-not-charge</h5>
+                <CollectionsRowTable rows={overview.paused} onOpenInvoice={setOpenInvoiceId} />
+              </>
+            )}
+
+            {/* Exhausted */}
+            {overview.exhausted.length > 0 && (
+              <>
+                <h5 style={{ margin: "12px 0 4px" }}>Retries exhausted</h5>
+                <CollectionsRowTable rows={overview.exhausted} onOpenInvoice={setOpenInvoiceId} />
+              </>
+            )}
+
+            {overview.retryEligible.length === 0 && overview.paused.length === 0 && overview.exhausted.length === 0 && (
+              <p className="muted" style={{ fontSize: 13 }}>No invoices in collections at this time.</p>
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      {/* Preview next sweep */}
+      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 8 }}>
+        <div className="row-actions" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0 }}>Preview Next Dunning Sweep</h4>
+          <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={previewLoading} onClick={() => {
+            if (!previewLoaded) { void loadPreview(); } else { setPreviewRev((r) => r + 1); }
+          }}>
+            {previewLoading ? "Loading…" : previewLoaded ? "↺ Refresh" : "Load preview"}
+          </button>
+        </div>
+        {previewError ? <ErrorState message={previewError} /> : null}
+        {previewLoading ? <LoadingSkeleton rows={3} /> : null}
+        {preview && !previewLoading ? (
+          <div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>{preview.note}</div>
+            {preview.rows.length === 0 ? (
+              <p className="muted" style={{ fontSize: 13 }}>No invoices would be picked up by the next sweep.</p>
+            ) : (
+              <CollectionsRowTable rows={preview.rows} onOpenInvoice={setOpenInvoiceId} />
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      {openInvoiceId ? (
+        <InvoiceDetailModal
+          invoiceId={openInvoiceId}
+          onClose={() => setOpenInvoiceId(null)}
+          onAction={afterInvoiceAction}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 // ── Page root ─────────────────────────────────────────────────────────────────
 
 export default function AdminBillingInvoicesPage() {
   const { can, backendJwtRole } = useAppContext();
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
-  const [activeTab, setActiveTab] = useState<"invoices" | "transactions" | "reports">("invoices");
+  const [activeTab, setActiveTab] = useState<"invoices" | "transactions" | "reports" | "collections">("invoices");
 
   if (!canAdmin) {
     return (
@@ -1665,7 +2030,7 @@ export default function AdminBillingInvoicesPage() {
 
         {/* Tab bar */}
         <div className="row-actions" style={{ borderBottom: "2px solid var(--border, #e0e0e0)", marginBottom: 16, paddingBottom: 0, gap: 0 }}>
-          {(["invoices", "transactions", "reports"] as const).map((tab) => (
+          {(["invoices", "transactions", "reports", "collections"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -1683,12 +2048,12 @@ export default function AdminBillingInvoicesPage() {
                 textTransform: "capitalize",
               }}
             >
-              {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Transactions" : "Reports"}
+              {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Transactions" : tab === "reports" ? "Reports" : "Collections"}
             </button>
           ))}
         </div>
 
-        {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : <ReportsTab />}
+        {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : activeTab === "reports" ? <ReportsTab /> : <CollectionsTab />}
       </div>
     </BillingPageChrome>
   );
