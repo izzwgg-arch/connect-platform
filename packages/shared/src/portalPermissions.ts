@@ -39,6 +39,14 @@ export const SIDEBAR_ITEMS = [
   { id: "pbx.call_reports", section: "pbx", label: "Call Reports", href: "/pbx/call-reports", permission: "can_view_pbx_call_reports" },
 
   { id: "crm.dashboard", section: "crm", label: "CRM Dashboard", href: "/crm/dashboard", permission: "can_view_crm_dashboard" },
+  { id: "crm.contacts", section: "crm", label: "Contacts", href: "/crm/contacts", permission: "can_view_crm_contacts" },
+  { id: "crm.tasks", section: "crm", label: "Tasks", href: "/crm/tasks", permission: "can_view_crm_tasks" },
+  { id: "crm.live_call", section: "crm", label: "Live Call Workspace", href: "/crm/live-call", permission: "can_view_crm_live_call" },
+  { id: "crm.scripts", section: "crm", label: "Scripts", href: "/crm/scripts", permission: "can_view_crm_scripts" },
+  { id: "crm.checklists", section: "crm", label: "Checklists", href: "/crm/checklists", permission: "can_view_crm_checklists" },
+  { id: "crm.campaigns", section: "crm", label: "Campaigns", href: "/crm/campaigns", permission: "can_view_crm_campaigns" },
+  { id: "crm.queue", section: "crm", label: "My Queue", href: "/crm/queue", permission: "can_view_crm_queue" },
+  { id: "crm.import", section: "crm", label: "Import Leads", href: "/crm/import", permission: "can_view_crm_import" },
   { id: "crm.settings", section: "crm", label: "CRM Settings", href: "/crm/settings", permission: "can_view_crm_settings" },
 
   { id: "apps.home", section: "apps", label: "Apps", href: "/apps", permission: "can_view_apps_home" },
@@ -119,6 +127,13 @@ export const ACTION_PERMISSION_KEYS = [
   "can_manage_deploys",
   "can_view_crm",
   "can_manage_crm",
+  "can_view_crm_tasks",
+  "can_view_crm_import",
+  "can_view_crm_live_call",
+  "can_view_crm_scripts",
+  "can_view_crm_checklists",
+  "can_view_crm_campaigns",
+  "can_view_crm_queue",
 ] as const;
 
 export type SidebarSectionPermissionKey = (typeof SIDEBAR_SECTIONS)[number]["permission"];
@@ -203,8 +218,8 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
   // CRM — tenant admins get view+manage; end users get neither by default (must be granted via CrmUserAccess)
-  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard"],
-  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_settings"],
+  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_campaigns", "can_view_crm_queue"],
+  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_campaigns", "can_view_crm_queue"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [
