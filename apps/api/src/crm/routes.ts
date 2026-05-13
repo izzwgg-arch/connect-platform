@@ -158,7 +158,7 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
     const [tenantUsers, crmAccess] = await Promise.all([
       db.user.findMany({
-        where: { tenantId, status: { not: "DELETED" as any } },
+        where: { tenantId, status: { not: "DISABLED" as any } },
         select: { id: true, email: true, firstName: true, lastName: true, displayName: true, role: true },
         orderBy: { email: "asc" },
       }),
