@@ -708,6 +708,111 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return invoice;
   });
 
+  app.get("/admin/billing/invoices", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const q = req.query as { status?: string; tenantId?: string; search?: string; page?: string; limit?: string };
+    const page = Math.max(1, Number.parseInt(String(q.page || "1"), 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(String(q.limit || "50"), 10) || 50));
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {};
+    if (q.status && q.status !== "ALL") where.status = q.status;
+    if (q.tenantId) where.tenantId = q.tenantId;
+    if (q.search) {
+      const s = String(q.search).trim();
+      where.OR = [
+        { invoiceNumber: { contains: s, mode: "insensitive" } },
+        { tenant: { name: { contains: s, mode: "insensitive" } } },
+      ];
+    }
+
+    const [total, invoices] = await Promise.all([
+      (db as any).billingInvoice.count({ where }),
+      (db as any).billingInvoice.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          invoiceNumber: true,
+          tenantId: true,
+          status: true,
+          totalCents: true,
+          subtotalCents: true,
+          taxCents: true,
+          balanceDueCents: true,
+          dueDate: true,
+          paidAt: true,
+          failedAt: true,
+          periodStart: true,
+          periodEnd: true,
+          lastEmailStatus: true,
+          lastEmailedAt: true,
+          createdAt: true,
+          tenant: {
+            select: {
+              id: true,
+              name: true,
+              billingSettings: { select: { billingEmail: true, defaultPaymentMethodId: true } },
+            },
+          },
+          paymentMethod: { select: { id: true, brand: true, last4: true } },
+          transactions: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { id: true, status: true, processorTransactionId: true, responseCode: true, amountCents: true, createdAt: true },
+          },
+        },
+      }),
+    ]);
+
+    return { invoices, total, page, pages: Math.ceil(total / limit), limit };
+  });
+
+  app.get("/admin/billing/transactions", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const q = req.query as { status?: string; tenantId?: string; invoiceId?: string; page?: string; limit?: string };
+    const page = Math.max(1, Number.parseInt(String(q.page || "1"), 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(String(q.limit || "50"), 10) || 50));
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {};
+    if (q.status && q.status !== "ALL") where.status = q.status;
+    if (q.tenantId) where.tenantId = q.tenantId;
+    if (q.invoiceId) where.invoiceId = q.invoiceId;
+
+    const [total, transactions] = await Promise.all([
+      (db as any).paymentTransaction.count({ where }),
+      (db as any).paymentTransaction.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          tenantId: true,
+          invoiceId: true,
+          amountCents: true,
+          currency: true,
+          status: true,
+          processor: true,
+          processorTransactionId: true,
+          responseCode: true,
+          responseMessage: true,
+          createdAt: true,
+          tenant: { select: { id: true, name: true } },
+          invoice: { select: { id: true, invoiceNumber: true } },
+          paymentMethod: { select: { id: true, brand: true, last4: true } },
+        },
+      }),
+    ]);
+
+    return { transactions, total, page, pages: Math.ceil(total / limit), limit };
+  });
+
   app.get("/admin/billing/invoices/:id/events", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;

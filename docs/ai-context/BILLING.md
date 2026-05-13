@@ -21,6 +21,7 @@
 | HTML email bodies (billing) | `apps/api/src/billing/emailTemplates.ts` |
 | Monthly autopay + dunning sweep | `apps/worker/src/main.ts` (`runMonthlyBillingAutomation`, `runBillingDunningRetries`, `chargeWorkerInvoice`) |
 | Platform admin billing UI (overview) | `apps/portal/app/(platform)/admin/billing/page.tsx` |
+| Platform admin payment operations UI (invoices + transactions) | `apps/portal/app/(platform)/admin/billing/invoices/page.tsx` |
 | Platform admin billing settings UI | `apps/portal/app/(platform)/admin/billing/settings/page.tsx` |
 | Nav visibility for Admin Billing | `apps/portal/navigation/navConfig.ts` → `isNavItemVisibleForUser` |
 | Tenant billing settings UI (shared) | `apps/portal/app/(platform)/billing/TenantBillingSettingsContent.tsx` |
@@ -52,6 +53,11 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 - **Tenant:** **`/billing`** (overview — balances, invoices, usage metrics, activity; configuration links to **`/billing/settings`**), **`/billing/settings`** (same content as **`/settings/billing`**: SOLA/Cardknox tenant config + invoice branding via existing APIs), **`/billing/invoices`**, **`/billing/invoices/[id]`**, **`/billing/payments`**, **`/billing/receipts`** — see `apps/portal/app/(platform)/billing/**`. Uses tenant routes only (`/billing/...`). Invoice detail shows **`BillingEventLog`** via fields on **`GET /billing/platform/invoices/:id`** (no extra events route). Actions call **`POST .../email-invoice`**, **`POST .../email-payment-link`**, **`POST .../pay`**, PDF query on the API host — buttons stay disabled while a request is in flight; email actions require **`billingEmail`** on tenant settings (portal shows a hint when missing).
 - **Platform admin:** **`/admin/billing`** (operational overview, tenant rail, preview, payment methods, recent invoices, platform monthly run) and **`/admin/billing/settings?tenantId=…`** (per-tenant **Monthly Pricing**, invoice branding, **SOLA Gateway** forms) — **`SUPER_ADMIN`** + `can_view_admin_billing`; uses **`/admin/billing/...`** only. Recent failures table comes from **`GET /admin/billing/overview`**. Run history from **`GET /admin/billing/runs/recent`**. Per-invoice **Activity** loads **`GET /admin/billing/invoices/:id/events`**.
+- **Payment Operations page:** **`/admin/billing/invoices`** — cross-tenant operator view with two tabs:
+  - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. Columns: invoice #, tenant, period, total/balance, status, due/paid dates, card last4, last processor ref. Actions per row: Mark Paid, Charge card (if saved card present), Send invoice email, Email payment link, Void, Activity log (inline expand). Disabled **SMS link** placeholder (deferred). Filter by status pill; live search by invoice # or tenant name.
+  - **Transactions tab:** read-only paginated audit of all `PaymentTransaction` records via **`GET /admin/billing/transactions?status=&tenantId=&page=&limit=`**. Columns: date, tenant, invoice #, amount, status, card, processor ref, response code. No action buttons.
+  - Linked from **`/admin/billing`** via a **Payment Operations** button.
+  - Both routes are `requirePlatformBilling` (`SUPER_ADMIN` only). No DB migration needed — queries existing tables.
 
 ## SOLA / Cardknox (implementation facts)
 

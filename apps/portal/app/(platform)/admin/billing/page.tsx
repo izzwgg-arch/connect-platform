@@ -109,6 +109,9 @@ export default function AdminBillingPage() {
           </div>
         ) : null}
         <div className="row-actions" style={{ marginBottom: -4 }}>
+          <Link className="btn primary" href="/admin/billing/invoices">
+            Payment Operations
+          </Link>
           <Link
             className="btn ghost"
             href={selectedTenant?.id ? `/admin/billing/settings?tenantId=${encodeURIComponent(selectedTenant.id)}` : "/admin/billing/settings"}
