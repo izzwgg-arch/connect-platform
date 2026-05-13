@@ -138,10 +138,10 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
     - **Send invoice**, **Email link**, **Void**, **Activity log** (inline expand) — unchanged.
     - Disabled **SMS link** placeholder (deferred).
   - **Transactions tab:** paginated audit of all `PaymentTransaction` records via **`GET /admin/billing/transactions?status=&tenantId=&page=&limit=`**. Each row has a **Detail** button opening `TransactionDetailModal` — shows amount, card, processor ref, response code/message, idempotency key, and full gateway response JSON (loaded via `GET /admin/billing/transactions/:id`).
-  - **Collections tab:** operator-grade dunning visibility and per-invoice controls. All data is lazy-loaded. Phase 1 only (controls stored; worker enforcement requires Phase 2). Two sections:
+  - **Collections tab:** operator-grade dunning visibility and per-invoice controls. All data is lazy-loaded. Phase 2 active (worker fully enforces all controls). Two sections:
     - **Collections Overview** — on-demand via `GET /admin/billing/collections/overview`. Shows count badges (failed/open, retry-eligible, paused, exhausted, do-not-charge) and three tables: "Ready to retry", "Paused / Do-not-charge", "Retries exhausted". Each row has an invoice button that opens `InvoiceDetailModal`.
-    - **Preview Next Dunning Sweep** — on-demand via `GET /admin/billing/collections/preview-retries`. Lists invoices the dunning worker would pick up on the next sweep, given current `nextRetryAt` and attempt counts. Flags shown but **not yet enforced by worker** (Phase 1).
-    - A yellow **Phase 1 notice** is always visible: "Controls stored, worker enforcement pending."
+    - **Preview Next Dunning Sweep** — on-demand via `GET /admin/billing/collections/preview-retries`. Lists invoices the dunning worker would pick up on the next sweep, given current `nextRetryAt` and attempt counts.
+    - A green **"Worker enforcement active"** notice is shown: changes take effect on the next dunning sweep (every 6 h).
   - **Reports tab:** lazy-loaded operator reports and CSV exports. No data is fetched until the operator clicks "Load report". Three sections:
     - **CSV Exports** — direct `<a download>` links to `GET /admin/billing/reports/export/invoices` and `GET /admin/billing/reports/export/transactions`. Optional status filter. Files named `billing-invoices-YYYY-MM-DD.csv` / `billing-transactions-YYYY-MM-DD.csv`. Generated-At and Generated-By metadata rows at the top.
     - **Aging Report** — on-demand load via `GET /admin/billing/reports/aging`. Shows all OPEN/FAILED/OVERDUE invoices with outstanding balance: tenant, invoice #, status, due date, days overdue (red/bold when > 30), balance due. "⬇ CSV" button (`GET /admin/billing/reports/aging/export`, file `billing-aging-YYYY-MM-DD.csv`) appears after load.
@@ -150,7 +150,7 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
     - All tables are read-only. Overflow is scrollable for mobile.
   - Linked from **`/admin/billing`** via a **Payment Operations** button.
   - All admin billing routes are `requirePlatformBilling` (`SUPER_ADMIN` only). No DB migration needed.
-- **Admin Billing Settings** (`/admin/billing/settings`): now includes a **Collections Automation** card (alongside Monthly Pricing, Invoice Branding, SOLA Gateway). Calls `GET/PUT /admin/billing/platform/tenants/:tenantId/collections-config` to read/write `TenantBillingSettings.metadata.collections`. Same Phase 1 notice.
+- **Admin Billing Settings** (`/admin/billing/settings`): now includes a **Collections Automation** card (alongside Monthly Pricing, Invoice Branding, SOLA Gateway). Calls `GET/PUT /admin/billing/platform/tenants/:tenantId/collections-config` to read/write `TenantBillingSettings.metadata.collections`. Shows green "Worker enforcement active" notice.
 
 ### Billing reports — API routes
 
@@ -171,10 +171,10 @@ All routes: `SUPER_ADMIN` only (`requirePlatformBilling`). Read-only. No schema 
 
 **Filename convention:** `billing-{type}-YYYY-MM-DD.csv` (today's date at time of download).
 
-### Collections automation controls — Phase 1 (API + Portal)
+### Collections automation controls — Phase 1 + Phase 2 (complete)
 
-**Phase 1 (2026-05):** Stores and displays controls. Worker enforcement requires Phase 2.  
-**Phase 2 (deferred):** Worker reads metadata flags before retrying invoices.
+**Phase 1 (2026-05):** Stores and displays controls (API + Portal).  
+**Phase 2 (2026-05):** Worker enforcement — dunning sweep fully honours all Phase 1 flags.
 
 #### Metadata-only storage (no schema changes)
 
@@ -216,18 +216,30 @@ Every operator action (per-invoice and per-tenant config) writes a `BillingEvent
 - `metadata.reason` — optional free-text from request body
 - `metadata.prevState` and `metadata.nextState` — full collections slice before/after
 
-#### Phase 1 / Phase 2 boundary
+#### Phase 1 / Phase 2 boundary (all complete)
 
-| Capability | Phase 1 (done) | Phase 2 (deferred) |
-|-----------|---------------|-------------------|
+| Capability | Phase 1 | Phase 2 |
+|-----------|---------|---------|
 | Store pause/do-not-charge/skip flags | ✅ | — |
 | Show flags in Collections tab UI | ✅ | — |
 | Show flags in InvoiceDetailModal | ✅ | — |
-| Worker respects `paused` flag | ❌ | ✅ |
-| Worker respects `doNotCharge` flag | ❌ | ✅ |
-| Worker respects `skipNextRetry` flag | ❌ | ✅ |
-| Worker reads per-tenant `maxAttempts`/`retryDelayHours` overrides | ❌ | ✅ |
-| Deterministic idempotency keys (`worker:billing:sale:${invoice.id}:a${attempt}`) | ❌ | ✅ |
+| Worker respects `paused` flag | — | ✅ |
+| Worker respects `doNotCharge` flag | — | ✅ |
+| Worker respects `skipNextRetry` (clears flag + logs) | — | ✅ |
+| Worker reads per-tenant `maxAttempts`/`retryDelayHours` overrides | — | ✅ |
+| Deterministic idempotency keys (`worker:billing:sale:${invoice.id}:a${attempt}`) | — | ✅ |
+| Audit log `collections_action: skip_next_retry_consumed` | — | ✅ |
+| Audit log `collections_action: sweep_skipped_<reason>` (one per skipped invoice per sweep) | — | ✅ |
+
+#### Phase 2 worker behaviour
+
+The worker's `runBillingDunningRetries` (runs every 6 h) now calls `runDunningSweepEligibility` which classifies timing-eligible invoices into three buckets:
+
+1. **`toCharge`** — invoices that pass all collections checks → charged with deterministic idempotency key `worker:billing:sale:${invoice.id}:a${attemptNumber}`.
+2. **`skipNextRetryInvoices`** — invoices with `skipNextRetry=true` → flag cleared via `consumeSkipNextRetryFlag` (writes `collections_action: skip_next_retry_consumed` to `BillingEventLog`), not charged this sweep.
+3. **`skipped`** — invoices blocked by `paused`, `doNotCharge`, or tenant-level `dunningEnabled=false` → one `collections_action: sweep_skipped_<reason>` log per invoice per sweep (best-effort, does not fail the sweep).
+
+Per-tenant `maxAttempts` and `retryDelayHours` overrides are passed through to `applyDunningAfterAutopayFailure` so the next retry window is also tenant-scoped. Env defaults are preserved when the tenant override is null.
 
 ### Admin manual payment flow — safeguards
 - `POST /admin/billing/invoices/:id/pay` checks SOLA config mode: if `isEnabled && mode === "PROD" && !simulate`, it is a **live charge** and requires `confirmLive: true` in the body — returns `400 confirm_live_required` otherwise.

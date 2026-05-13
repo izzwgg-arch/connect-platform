@@ -55,8 +55,8 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
 
   return (
     <DetailCard title="Collections Automation">
-      <div style={{ fontSize: 12, background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#713f12" }}>
-        <strong>Phase 1:</strong> Config is stored here. Worker enforcement of per-tenant dunning overrides requires a Phase 2 worker deployment.
+      <div style={{ fontSize: 12, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#166534" }}>
+        <strong>Worker enforcement active.</strong> Per-tenant dunning overrides (max attempts, retry delay) are applied on every dunning sweep.
       </div>
       <form
         className="billing-form"

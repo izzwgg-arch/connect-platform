@@ -14,7 +14,11 @@ import {
   WirePbxClient,
   buildConnectBillingGatewayXInvoice,
 } from "@connect/integrations";
-import { listInvoicesEligibleForDunningRetry, applyDunningAfterAutopayFailure } from "../../api/src/billing/billingDunning";
+import {
+  runDunningSweepEligibility,
+  consumeSkipNextRetryFlag,
+  applyDunningAfterAutopayFailure,
+} from "../../api/src/billing/billingDunning";
 import {
   clearInvoiceDunningMetadata,
   queueInvoiceSentOnFinalize,
@@ -1850,19 +1854,33 @@ async function createWorkerBillingInvoice(setting: any, periodStart: Date, perio
   });
 }
 
-async function chargeWorkerInvoice(invoice: any, method: any, runId: string | null): Promise<any> {
+/**
+ * @param attemptNumber  1 for the initial monthly-billing charge; dunning.attempts+1 for retries.
+ *   Used to build a deterministic idempotency key so restarting the worker after a crash
+ *   cannot produce a duplicate charge for the same attempt.
+ * @param dunningOverrides  Per-tenant maxAttempts/retryDelayMs — passed to applyDunningAfterAutopayFailure
+ *   so the next retry window respects tenant settings.
+ */
+async function chargeWorkerInvoice(
+  invoice: any,
+  method: any,
+  runId: string | null,
+  attemptNumber = 1,
+  dunningOverrides?: { effectiveMaxAttempts?: number; effectiveDelayMs?: number },
+): Promise<any> {
   await (db as any).billingEventLog.create({
     data: {
       tenantId: invoice.tenantId,
       invoiceId: invoice.id,
       runId: runId || null,
       type: "autopay_attempted",
-      metadata: { source: runId ? "monthly_run" : "dunning_retry" },
+      metadata: { source: runId ? "monthly_run" : "dunning_retry", attemptNumber },
     },
   });
   const token = decryptJson<string>(method.tokenEncrypted);
   const adapter = await getWorkerSolaAdapterForTenant(invoice.tenantId);
-  const idempotencyKey = `worker:billing:sale:${invoice.id}:${Date.now()}`;
+  // Deterministic key: restart-safe — same attempt cannot produce a second charge.
+  const idempotencyKey = `worker:billing:sale:${invoice.id}:a${attemptNumber}`;
   const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);
   const response = await adapter.chargeToken({
     token,
@@ -1909,7 +1927,14 @@ async function chargeWorkerInvoice(invoice: any, method: any, runId: string | nu
       transactionId: transaction.id,
       reason: response.xError,
     });
-    await applyDunningAfterAutopayFailure({ invoiceId: invoice.id, tenantId: invoice.tenantId, runId });
+    await applyDunningAfterAutopayFailure({
+      invoiceId: invoice.id,
+      tenantId: invoice.tenantId,
+      runId,
+      overrides: dunningOverrides
+        ? { maxAttempts: dunningOverrides.effectiveMaxAttempts, retryDelayMs: dunningOverrides.effectiveDelayMs }
+        : undefined,
+    });
   }
   await (db as any).billingEventLog.create({
     data: {
@@ -1931,14 +1956,38 @@ async function runBillingDunningRetries(): Promise<void> {
   if (_billingDunningSweepRunning) return;
   _billingDunningSweepRunning = true;
   try {
-    const list = await listInvoicesEligibleForDunningRetry(25);
-    for (const inv of list) {
+    const sweep = await runDunningSweepEligibility(25);
+
+    // Log invoices blocked by collections controls (best-effort; don't fail sweep on log error).
+    for (const { invoice, reason } of sweep.skipped) {
+      console.log(`billing dunning skip invoiceId=${invoice.id} tenantId=${invoice.tenantId} reason=${reason}`);
+      (db as any).billingEventLog.create({
+        data: {
+          tenantId: invoice.tenantId,
+          invoiceId: invoice.id,
+          type: "collections_action",
+          message: `dunning sweep skipped: ${reason}`,
+          metadata: { action: `sweep_skipped_${reason}`, operatorId: "worker:dunning" },
+        },
+      }).catch(() => null);
+    }
+
+    // Consume skipNextRetry flags — clear flag, log audit event, do not charge.
+    for (const inv of sweep.skipNextRetryInvoices) {
+      console.log(`billing dunning skipNextRetry consumed invoiceId=${inv.id}`);
+      await consumeSkipNextRetryFlag(inv.id, inv.tenantId).catch((err: any) => {
+        console.error("failed to consume skipNextRetry flag", inv.id, err?.message);
+      });
+    }
+
+    // Charge eligible invoices with deterministic attempt numbers and per-tenant overrides.
+    for (const { invoice: inv, attemptNumber, effectiveMaxAttempts, effectiveDelayMs } of sweep.toCharge) {
       try {
         const pmId = inv.tenant?.billingSettings?.defaultPaymentMethodId;
         if (!pmId) continue;
         const method = await (db as any).paymentMethod.findUnique({ where: { id: pmId } });
         if (!method?.active) continue;
-        await chargeWorkerInvoice(inv, method, null);
+        await chargeWorkerInvoice(inv, method, null, attemptNumber, { effectiveMaxAttempts, effectiveDelayMs });
       } catch (err: any) {
         console.error("billing dunning retry failed", inv?.tenantId, err?.message || err);
       }

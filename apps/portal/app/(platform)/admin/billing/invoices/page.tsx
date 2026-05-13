@@ -296,8 +296,8 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                       {cs.status}
                     </span>
                   </div>
-                  <div style={{ fontSize: 12, background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 5, padding: "5px 9px", marginBottom: 10, color: "#713f12" }}>
-                    ⚠ Phase 1: Controls are stored now. Worker enforcement of pause/do-not-charge requires Phase 2 deployment.
+                  <div style={{ fontSize: 12, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 5, padding: "5px 9px", marginBottom: 10, color: "#166534" }}>
+                    ✓ Worker enforcement active — changes take effect on the next dunning sweep (every 6 h).
                   </div>
                   {cs.paused && (
                     <p style={{ fontSize: 12, margin: "0 0 6px", color: "#6b7280" }}>
@@ -1896,11 +1896,11 @@ function CollectionsTab() {
 
   return (
     <div className="stack compact-stack">
-      {/* Phase 1 notice */}
-      <div style={{ padding: "10px 14px", background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 8, fontSize: 13, color: "#713f12", marginBottom: 4 }}>
-        <strong>Phase 1 — Controls stored, worker enforcement pending.</strong>
-        {" "}Pause, skip, and do-not-charge flags are saved here and visible in invoice detail.
-        The dunning worker does <em>not yet</em> check these flags — that requires a Phase 2 worker deployment.
+      {/* Collections status — Phase 2 worker active */}
+      <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, color: "#166534", marginBottom: 4 }}>
+        <strong>Worker enforcement active.</strong>
+        {" "}Pause, skip, and do-not-charge controls are honoured by the dunning worker on every sweep (every 6 h).
+        Per-tenant dunning overrides (max attempts, retry delay) are also applied.
       </div>
 
       {/* Overview section */}
