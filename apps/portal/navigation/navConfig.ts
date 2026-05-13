@@ -96,6 +96,7 @@ export const navItems: NavItem[] = [
   { id: "crm.scripts", href: "/crm/scripts", label: "Scripts", icon: "CS", lucide: FileText, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_scripts" },
   { id: "crm.checklists", href: "/crm/checklists", label: "Checklists", icon: "CC", lucide: ClipboardList, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_checklists" },
   { id: "crm.reports", href: "/crm/reports", label: "Reports", icon: "CR", lucide: BarChart3, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
+  { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
   { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
 
   { id: "settings.tenant", href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_tenant" },

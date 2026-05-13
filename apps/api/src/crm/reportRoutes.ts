@@ -215,6 +215,7 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
       dispositionGroups,  // per user — dispositions today
       conversionGroups,   // per user — conversions in lookback window
       taskGroups,         // per user — open tasks
+      extensionRows,      // per user — owned active SIP extensions (for wallboard on-call matching)
     ] = await Promise.all([
       // Queue: all non-terminal ACTIVE campaign members per user
       (db as any).crmCampaignMember.groupBy({
@@ -271,6 +272,12 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         },
         _count: { id: true },
       }),
+      // Active SIP extensions owned by these users — used by wallboard on-call matching.
+      // Returns at most one extension per user in most deployments; multiple are supported.
+      (db as any).extension.findMany({
+        where: { tenantId, ownerUserId: { in: userIds }, status: "ACTIVE" },
+        select: { ownerUserId: true, extNumber: true },
+      }),
     ]);
 
     // Build lookup maps
@@ -279,6 +286,15 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
     const dispByUser        = new Map<string, number>((dispositionGroups as any[]).map((g: any) => [g.createdByUserId, g._count.id]));
     const convertedByUser   = new Map<string, number>((conversionGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
     const openTasksByUser   = new Map<string, number>((taskGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
+
+    // Extension map: userId → extNumber[] (most users have 0 or 1; multi-extension is valid)
+    const extsByUser = new Map<string, string[]>();
+    for (const e of extensionRows as Array<{ ownerUserId: string | null; extNumber: string }>) {
+      if (!e.ownerUserId) continue;
+      const arr = extsByUser.get(e.ownerUserId) ?? [];
+      arr.push(e.extNumber);
+      extsByUser.set(e.ownerUserId, arr);
+    }
 
     const agents = (crmUsers as any[]).map((u: any) => ({
       userId: u.userId,
@@ -290,7 +306,8 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
       dispositionsToday: dispByUser.get(u.userId) ?? 0,
       convertedLast:     convertedByUser.get(u.userId) ?? 0,
       openTasks:         openTasksByUser.get(u.userId) ?? 0,
-      lookbackDays: days,
+      lookbackDays:      days,
+      extensions:        extsByUser.get(u.userId) ?? [],
     }));
 
     // Sort by dispositionsToday desc, then convertedLast desc

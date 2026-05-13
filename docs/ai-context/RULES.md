@@ -469,6 +469,45 @@
     - Manual mode tabs are NOT URL-driven and must remain unchanged (local `filter` state).
     - Do not mix manual-mode tab state with power-mode URL filter state.
 
+76. **CRM Wallboard is read-only; no telephony controls.**
+    - `/crm/wallboard` aggregates existing report endpoints and live telephony WS data.
+    - It MUST NOT render any button that dials, transfers, holds, or terminates a call.
+    - Live call data comes from `useTelephony().activeCalls` (TelephonyContext); never add
+      SIP or AMI commands to the wallboard page.
+    - Do not add a new WebSocket service for the wallboard. Use the existing telephony WS
+      for live call state and REST polling (≤ 60 s) for CRM report data.
+    - Timer cleanup: use `useRef` for interval IDs and clear them in the `useEffect` return.
+      The per-call duration ticker, the report-refresh interval, the 1-second countdown tick,
+      and the TV-mode clock tick must ALL be cleaned up on unmount.
+
+77. **Wallboard TV mode is a CSS overlay, not a layout change.**
+    - TV mode (`?tv=1`) renders a `position: fixed; inset: 0; z-index: 50` div that overlays
+      the global `AppShell` sidebar. Do NOT modify `AppShell`, `PlatformLayout`, or any shared
+      layout/provider file to achieve fullscreen.
+    - The TV mode URL param is written with `window.history.replaceState` to avoid a full
+      page navigation; `setTvMode` state is toggled in-memory alongside the URL update.
+    - The TV mode clock ticks every 10 s (not every 1 s) to minimise re-renders.
+
+78. **Wallboard agent idle badges are advisory only, never punitive.**
+    - Idle/attention badges are derived from fields already in the `/crm/reports/agents`
+      response (`dispositionsToday`, `callbacksDueToday`, `assignedQueue`).
+    - Do NOT invent a "presence" or "online" concept; there is no real-time user presence
+      system. Badges reflect report-period activity (today), not live keyboard/mouse presence.
+    - Badge hierarchy: "Needs attention" (overdue CBs + no dispositions) > "Callbacks due" >
+      "No outcomes today" > silent (active or idle with no queue). Active agents show no badge.
+
+79. **Wallboard "On call" badge must use verified extension ownership only.**
+    - The on-call match is performed by checking `Extension.extNumber` (for extensions where
+      `Extension.ownerUserId = agentUserId` and `status = "ACTIVE"`) against the live call's
+      `extensions[]`, `source_extension`, and `destination_extension` fields from the WS.
+    - The `extensions[]` array is returned by `GET /crm/reports/agents` as an additive field.
+    - If `extensions[]` is empty (agent has no owned extension), show NO badge — never guess.
+    - If the call data has missing/null `from`/`to` fields, the Set-based match still works
+      safely because `null` is never added to the `extSet`.
+    - "On call" badge suppresses idle/attention badges for that agent row (one badge at a time).
+    - This is read-only. Do not add any telephony control action to the on-call row.
+    - The extension lookup is a single `findMany` scoped to `{ tenantId, ownerUserId: { in: userIds }, status: "ACTIVE" }` — bounded, no N+1.
+
 ---
 
 ## Documentation

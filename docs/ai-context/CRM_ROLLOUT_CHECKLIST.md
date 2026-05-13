@@ -599,6 +599,243 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 9A — Manager Live Wallboard
+
+```
+[ ] 1. Wallboard route loads
+        - Navigate to /crm/wallboard
+        - Page renders without error
+        - Blue summary strip visible with 8 stat tiles
+        - "WS Live" or "Connecting…" badge visible top-left
+
+[ ] 2. Permission gating
+        - Log in as agent user without can_view_crm_reports
+        - "Live Wallboard" nav item is NOT visible
+        - Direct access to /crm/wallboard returns 401 or redirects
+
+[ ] 3. CRM disabled tenant
+        - Disable CRM for tenant (CrmTenantSettings.enabled = false)
+        - Wallboard responds with appropriate error (403 or CRM disabled page)
+
+[ ] 4. Summary strip — values
+        - "Active Calls" shows real-time telephony active call count (from WS)
+        - "Queue Remaining" matches /crm/reports/daily.queueRemaining
+        - "Overdue Callbacks" shown in red when > 0
+        - "Dispositions Today" increments as agents work
+
+[ ] 5. Live Calls panel
+        - Panel shows all active (non-hungup) calls for the tenant
+        - Direction icon: green PhoneIncoming for inbound, blue PhoneOutgoing for outbound
+        - Call state badge: "ringing" = yellow, "up" = green, "held" = gray
+        - Duration updates every ~10 seconds (ticking display)
+        - Empty state: "No active calls" when no calls
+        - NO dial / hold / transfer / end buttons anywhere on panel
+
+[ ] 6. Agent Activity panel
+        - Rows rendered for each CRM user (with can_view_crm access)
+        - Columns: Agent, Dispositions, Queue, Callbacks, Tasks, Conv.
+        - Blue bold number for dispositionsToday > 0
+        - Orange for callbacksDueToday > 0
+        - Green bold for conversions > 0
+        - Empty state when no CRM agents configured
+
+[ ] 7. Campaign Progress panel
+        - Shows only ACTIVE campaigns
+        - Progress bar segments: purple (contacted) + yellow (callbacks) + green (converted) + gray (dnc)
+        - Conversion rate badge visible when > 0%
+        - Link to campaign detail page (/crm/campaigns/:id)
+        - Empty state when no active campaigns
+
+[ ] 8. Follow-Up Urgency panel
+        - 4 mini summary tiles: Overdue Callbacks, Due Today (CB), Overdue Tasks, Tasks Due Today
+        - Overdue tiles show red border when count > 0
+        - Top 10 actionable rows list: red dot = overdue, yellow dot = due today
+        - Rows link to /crm/contacts/:id
+        - Empty state: "All caught up!" with green checkmark
+        - "View all" links point to /crm/reports and /crm/tasks
+
+[ ] 9. 60-second auto-refresh
+        - Watch Network tab: /crm/reports/daily, /crm/reports/agents,
+          /crm/reports/campaigns, /crm/reports/follow-ups all fire ~every 60 s
+        - Refresh button forces immediate re-fetch and updates "Updated X ago"
+        - No polling > 4 requests/minute for CRM endpoints
+
+[ ] 10. Timer cleanup
+        - Open wallboard, navigate away → no ongoing interval fires after leaving
+          (confirm no repeated API calls in Network tab after page change)
+        - Live call duration tick also stops
+
+[ ] 11. No telephony regressions
+        - Existing phone calls still work after opening wallboard
+        - useTelephony() WS connection not duplicated
+        - No new WS connection created by wallboard page
+        - Phone system /health still returns {"ok":true}
+
+[ ] 12. Bundle artifact verification
+        # In compiled portal bundle chunk for /crm/wallboard:
+        grep -r "Live Wallboard" .next/static/chunks/
+        grep -r "Active Calls" .next/static/chunks/
+        grep -r "Agent Activity" .next/static/chunks/
+        grep -r "crm_power_queue_paused" .next/static/chunks/  # must NOT appear in wallboard chunk
+        # Confirm no crm:dial near wallboard code
+```
+
+---
+
+## Phase 9B — Wallboard Polish (TV Mode, Countdown, Agent Badges)
+
+```
+[ ] 1. Normal wallboard loads with all Phase 9A features intact
+        - /crm/wallboard renders without error
+        - Summary strip, all 4 panels visible
+        - "WS Live" badge present
+
+[ ] 2. Refresh countdown — normal mode
+        - Header shows "Refreshes in Xs" with X counting down from 60
+        - Countdown turns amber when ≤ 10 seconds remain
+        - Clicking "Refresh" button:
+          - Shows "Refreshing…" while loading
+          - Resets countdown to 60 after data returns
+          - Updates "Updated X ago" timestamp
+
+[ ] 3. Countdown cleanup
+        - Navigate away from /crm/wallboard
+        - Confirm no interval continues to fire (Network tab should show
+          no more /crm/reports/* requests after leaving the page)
+
+[ ] 4. TV Mode toggle
+        - "TV Mode" button visible in top-right of header
+        - Clicking it:
+          - URL changes to ?tv=1 (no page reload)
+          - Dark full-screen overlay appears (covers sidebar)
+          - Large clock displayed center-header (HH:MM format)
+          - Stat tiles show text-5xl numbers
+          - Panel headers/table text is larger
+        - "Exit TV" button in TV header returns to normal mode (?tv removed)
+
+[ ] 5. TV Mode URL persistence
+        - Navigate to /crm/wallboard?tv=1 directly
+        - TV mode activates automatically on load
+        - Page reload at ?tv=1 stays in TV mode
+
+[ ] 6. TV Mode clock
+        - Clock shows correct local time in HH:MM
+        - Date shown below clock (e.g. "Wed, May 13")
+        - Clock updates every ~10 seconds (not every second)
+
+[ ] 7. TV Mode refresh countdown
+        - Countdown "Refreshes in Xs" shown in top-right of TV header
+        - Turns amber at ≤ 10s remaining
+        - "Refreshing…" shows during active fetch
+        - Resets to 60 after each refresh
+
+[ ] 8. Agent idle badges (normal and TV mode)
+        - Create or simulate an agent with:
+          - callbacksDueToday > 0 AND dispositionsToday === 0
+          → "Needs attention" badge (red) appears under agent name
+        - Agent with callbacksDueToday > 0 AND dispositionsToday > 0
+          → "Callbacks due" badge (orange)
+        - Agent with assignedQueue > 0 AND dispositionsToday === 0
+          → "No outcomes today" badge (amber)
+        - Active agent (dispositionsToday > 0, no callbacks due)
+          → No badge
+        - Badges show in both normal and TV mode
+
+[ ] 9. Agent on-call hint — NOT implemented
+        - Extension-to-user mapping is not available without an API change.
+        - Confirm: no "On call" indicator exists. Do not add fake presence.
+
+[ ] 10. Empty states are informative
+        - Disable all campaigns → CampaignPanel shows:
+          "No active campaigns · Activate a campaign to track progress here"
+        - No CRM agents → AgentPanel shows:
+          "No CRM agents configured · Enable CRM access for users in CRM Settings"
+        - No active calls → LiveCallsPanel shows:
+          "No active calls right now · New calls will appear here in real time"
+        - No overdue items → FollowUpsPanel shows:
+          "All caught up! · No overdue callbacks or tasks"
+
+[ ] 11. Urgent alert in normal mode header
+        - If totalUrgent (overdue CBs + overdue tasks) > 0:
+          Red "N urgent" badge appears next to title in normal mode header
+
+[ ] 12. No regressions
+        - Manual queue still loads normally
+        - Existing CRM nav items work
+        - Phone calls unaffected
+        - /health returns {"ok":true}
+        - No console errors on wallboard load or TV mode toggle
+```
+
+---
+
+## Phase 9C — Wallboard On-Call Indicators
+
+```
+[ ] 1. API: GET /crm/reports/agents includes extensions field
+        - Hit the endpoint (with valid CRM JWT)
+        - Each agent object has "extensions": [] or ["101"] or ["101","102"]
+        - Agents with no owned ACTIVE extension get extensions: []
+        - No schema migration required; extensions come from existing Extension model
+
+[ ] 2. Agent with extension assigned shows ext number in sub-line
+        - Open /crm/wallboard → Agent Activity panel
+        - Agent row sub-line shows "AGENT · ext 101" when extension is owned
+        - Agent without extension shows only "AGENT" (no "· ext" text)
+
+[ ] 3. On-call badge appears during active call
+        - Place an outbound call from an agent's SIP extension
+        - Within the WS refresh cycle, that agent row shows:
+          - Green "On call · Xm Ys" badge with outbound arrow icon
+        - Inbound call to agent's extension shows inbound arrow icon instead
+
+[ ] 4. On-call badge suppresses idle badges
+        - Agent has callbacksDueToday > 0 AND dispositionsToday === 0
+          (would normally show "Needs attention")
+        - While that agent is on a live call:
+          → "On call · Xs" badge shown instead
+          → "Needs attention" badge NOT shown simultaneously
+
+[ ] 5. Agent without extension — no fake badge
+        - Remove extension ownership from a test user
+        - That agent shows no "On call" badge even when other calls are active
+        - Confirm: no crash, no false positive
+
+[ ] 6. Call ends — badge disappears
+        - Hang up the call
+        - On next WS event, "On call" badge disappears from agent row
+        - Idle/attention badge reappears if applicable (next 60s data refresh)
+
+[ ] 7. TV mode — on-call badge is large and readable
+        - Activate ?tv=1
+        - "On call" badge shows in dark green (bg-green-900/70 text-green-300)
+        - Badge is legible from wallboard viewing distance
+
+[ ] 8. Match covers all three call fields
+        - Confirm match works for:
+          a) Extension in call.extensions[] array
+          b) Extension equals call.source_extension
+          c) Extension equals call.destination_extension
+        - (All three are checked by findAgentCall helper)
+
+[ ] 9. API typecheck passes
+        pnpm tsc --noEmit (apps/api)  → 0 errors
+
+[ ] 10. Portal typecheck passes
+        pnpm tsc --noEmit (apps/portal) → 0 errors
+
+[ ] 11. No schema changes
+        - Confirm: no new migration files
+        - Confirm: no changes to packages/db/prisma/schema.prisma
+
+[ ] 12. No telephony regressions
+        - /health returns {"ok":true}
+        - Existing phone calls are unaffected
+        - No new WS connection; useTelephony() shared context unchanged
+```
+
+---
+
 ## Quick Commands
 
 ```bash
