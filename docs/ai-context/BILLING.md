@@ -54,10 +54,32 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 - **Tenant:** **`/billing`** (overview — balances, invoices, usage metrics, activity; configuration links to **`/billing/settings`**), **`/billing/settings`** (same content as **`/settings/billing`**: SOLA/Cardknox tenant config + invoice branding via existing APIs), **`/billing/invoices`**, **`/billing/invoices/[id]`**, **`/billing/payments`**, **`/billing/receipts`** — see `apps/portal/app/(platform)/billing/**`. Uses tenant routes only (`/billing/...`). Invoice detail shows **`BillingEventLog`** via fields on **`GET /billing/platform/invoices/:id`** (no extra events route). Actions call **`POST .../email-invoice`**, **`POST .../email-payment-link`**, **`POST .../pay`**, PDF query on the API host — buttons stay disabled while a request is in flight; email actions require **`billingEmail`** on tenant settings (portal shows a hint when missing).
 - **Platform admin:** **`/admin/billing`** (operational overview, tenant rail, preview, payment methods, recent invoices, platform monthly run) and **`/admin/billing/settings?tenantId=…`** (per-tenant **Monthly Pricing**, invoice branding, **SOLA Gateway** forms) — **`SUPER_ADMIN`** + `can_view_admin_billing`; uses **`/admin/billing/...`** only. Recent failures table comes from **`GET /admin/billing/overview`**. Run history from **`GET /admin/billing/runs/recent`**. Per-invoice **Activity** loads **`GET /admin/billing/invoices/:id/events`**.
 - **Payment Operations page:** **`/admin/billing/invoices`** — cross-tenant operator view with two tabs:
-  - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. Columns: invoice #, tenant, period, total/balance, status, due/paid dates, card last4, last processor ref. Actions per row: Mark Paid, Charge card (if saved card present), Send invoice email, Email payment link, Void, Activity log (inline expand). Disabled **SMS link** placeholder (deferred). Filter by status pill; live search by invoice # or tenant name.
-  - **Transactions tab:** read-only paginated audit of all `PaymentTransaction` records via **`GET /admin/billing/transactions?status=&tenantId=&page=&limit=`**. Columns: date, tenant, invoice #, amount, status, card, processor ref, response code. No action buttons.
+  - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. Actions per row:
+    - **Detail** — opens `InvoiceDetailModal` (slide-over drawer) with full line items, all payment attempts with card/response, and `BillingEventLog` timeline (loaded via `GET /admin/billing/invoices/:id`).
+    - **Cards** — opens `PaymentMethodsModal` to list, set-default, and remove saved cards for the tenant (loaded via `GET /admin/billing/platform/tenants/:tenantId/payment-methods`). Shows last successful charge per card. **Add card from admin is deferred** — placeholder shown.
+    - **Charge card** — opens `ManualPayModal`: pick saved card, enter optional operator note, 2-step confirmation with **LIVE CHARGE** or SANDBOX badge. Calls `POST /admin/billing/invoices/:id/pay` with `{ paymentMethodId, note, confirmLive: true }`.  Duplicate submits disabled; exact API error shown on failure.
+    - **Mark Paid** — direct `POST /admin/billing/invoices/:id/mark-paid` (full balance); now also accepts body `{ amountCents?, note? }` at the API level for partial/noted reconciliation.
+    - **Send invoice**, **Email link**, **Void**, **Activity log** (inline expand) — unchanged.
+    - Disabled **SMS link** placeholder (deferred).
+  - **Transactions tab:** paginated audit of all `PaymentTransaction` records via **`GET /admin/billing/transactions?status=&tenantId=&page=&limit=`**. Each row has a **Detail** button opening `TransactionDetailModal` — shows amount, card, processor ref, response code/message, idempotency key, and full gateway response JSON (loaded via `GET /admin/billing/transactions/:id`).
   - Linked from **`/admin/billing`** via a **Payment Operations** button.
-  - Both routes are `requirePlatformBilling` (`SUPER_ADMIN` only). No DB migration needed — queries existing tables.
+  - All admin billing routes are `requirePlatformBilling` (`SUPER_ADMIN` only). No DB migration needed.
+
+### Admin manual payment flow — safeguards
+- `POST /admin/billing/invoices/:id/pay` checks SOLA config mode: if `isEnabled && mode === "PROD" && !simulate`, it is a **live charge** and requires `confirmLive: true` in the body — returns `400 confirm_live_required` otherwise.
+- UI shows **⚡ LIVE CHARGE** badge and requires a 2-step confirmation before calling the endpoint.
+- Duplicate submits are prevented client-side with a `submitted` ref.
+- The operator's `note` (if provided) is written to `BillingEventLog` as `payment.admin_charge_note` before the charge is attempted.
+- `chargeBillingInvoice` accepts a `note` field in `ChargeBillingInvoiceOptions` and stamps it in the initial event log metadata.
+
+### Admin tenant payment-method management
+| Route | Purpose |
+|-------|---------|
+| `GET /admin/billing/platform/tenants/:tenantId/payment-methods` | List active cards with `lastSuccessfulCharge` and `isLiveCharge` flag |
+| `POST /admin/billing/platform/tenants/:tenantId/payment-methods/:methodId/default` | Set default card (updates `TenantBillingSettings.defaultPaymentMethodId`) |
+| `DELETE /admin/billing/platform/tenants/:tenantId/payment-methods/:methodId` | Soft-deactivate card (sets `active: false`, clears default if matched) |
+
+All three log a `BillingEventLog` event. **Admin add-card (iFields tokenization from the admin portal) is deferred.** Ask customers to add cards via the tenant billing portal (`/billing/payments`) for now.
 
 ## SOLA / Cardknox (implementation facts)
 

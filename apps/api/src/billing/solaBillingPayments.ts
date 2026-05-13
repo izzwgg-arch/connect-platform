@@ -46,6 +46,7 @@ export async function resolvePlatformBillingInvoiceForWebhookRef(ref: string) {
 
 export type ChargeBillingInvoiceOptions = {
   runId?: string | null;
+  note?: string;
   /** Injected adapter for tests — omit to use tenant/env resolution via getBillingSolaAdapter */
   adapter?: SolaCardknoxAdapter;
 };
@@ -66,7 +67,7 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
     runId: options?.runId ?? null,
     type: options?.runId ? "autopay_attempted" : "payment.charge_attempt",
     message: options?.runId ? "Scheduled autopay charge" : `SOLA cc:sale for invoice ${invoice.invoiceNumber}`,
-    metadata: { paymentMethodId: method.id, amountCents },
+    metadata: { paymentMethodId: method.id, amountCents, ...(options?.note ? { operatorNote: options.note } : {}) },
   });
 
   const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);

@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
-import { apiGet, apiPost } from "../../../../../services/apiClient";
+import { apiDelete, apiGet, apiPost } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
@@ -38,6 +38,42 @@ type InvoiceRow = {
 
 type InvoiceListResult = { invoices: InvoiceRow[]; total: number; page: number; pages: number; limit: number };
 
+type InvoiceLineItem = { id: string; description: string | null; quantity: number | null; unitAmountCents: number | null; totalCents: number; taxCents?: number | null };
+
+type InvoiceTxRow = {
+  id: string;
+  amountCents: number;
+  status: string;
+  processorTransactionId: string | null;
+  responseCode: string | null;
+  responseMessage: string | null;
+  createdAt: string;
+  paymentMethod?: { id: string; brand: string | null; last4: string | null } | null;
+};
+
+type InvoiceEventRow = { id: string; type: string; message: string | null; metadata?: unknown; createdAt: string };
+
+type InvoiceDetail = Omit<InvoiceRow, "transactions"> & {
+  lineItems: InvoiceLineItem[];
+  transactions: InvoiceTxRow[];
+  events: InvoiceEventRow[];
+  isLiveCharge: boolean;
+};
+
+type AdminPaymentMethod = {
+  id: string;
+  brand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
+  cardholderName: string | null;
+  billingZip: string | null;
+  isDefault: boolean;
+  lastUsedAt: string | null;
+  createdAt: string;
+  lastSuccessfulCharge: { id: string; amountCents: number; createdAt: string } | null;
+};
+
 type TxRow = {
   id: string;
   tenantId: string;
@@ -53,6 +89,13 @@ type TxRow = {
   tenant: { id: string; name: string };
   invoice: { id: string; invoiceNumber: string | null } | null;
   paymentMethod: { id: string; brand: string | null; last4: string | null } | null;
+};
+
+type TxDetail = TxRow & {
+  paymentMethod: { id: string; brand: string | null; last4: string | null; expMonth: number | null; expYear: number | null } | null;
+  invoice: { id: string; invoiceNumber: string | null; status: string; totalCents: number } | null;
+  rawResponseSafeJson: unknown;
+  idempotencyKey: string | null;
 };
 
 type TxListResult = { transactions: TxRow[]; total: number; page: number; pages: number; limit: number };
@@ -90,6 +133,14 @@ function fmtPeriod(start: string | null, end: string | null) {
   return `${new Date(start).toLocaleDateString()} – ${new Date(end).toLocaleDateString()}`;
 }
 
+function cardLabel(m: { brand: string | null; last4: string | null; expMonth?: number | null; expYear?: number | null; cardholderName?: string | null }) {
+  const brand = m.brand || "Card";
+  const last4 = m.last4 ? `···${m.last4}` : "";
+  const exp = m.expMonth && m.expYear ? ` exp ${m.expMonth}/${String(m.expYear).slice(-2)}` : "";
+  const name = m.cardholderName ? ` · ${m.cardholderName}` : "";
+  return `${brand} ${last4}${exp}${name}`;
+}
+
 function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (p: number) => void }) {
   if (pages <= 1) return null;
   return (
@@ -97,6 +148,489 @@ function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (
       <button className="btn ghost" type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>← Prev</button>
       <span className="muted" style={{ padding: "0 8px", lineHeight: "32px" }}>Page {page} of {pages}</span>
       <button className="btn ghost" type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next →</button>
+    </div>
+  );
+}
+
+const overlayStyle: React.CSSProperties = {
+  position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000,
+  display: "flex", alignItems: "flex-start", justifyContent: "flex-end", overflow: "auto",
+};
+
+const drawerStyle: React.CSSProperties = {
+  background: "var(--surface, #fff)", width: "min(680px, 100vw)", minHeight: "100vh",
+  boxShadow: "-4px 0 24px rgba(0,0,0,0.18)", padding: "24px 28px", overflowY: "auto",
+};
+
+const modalStyle: React.CSSProperties = {
+  background: "var(--surface, #fff)", borderRadius: 10, padding: "28px 32px",
+  width: "min(520px, 96vw)", margin: "60px auto", boxShadow: "0 8px 40px rgba(0,0,0,0.22)",
+};
+
+// ── InvoiceDetailModal ────────────────────────────────────────────────────────
+
+function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: string; onClose: () => void; onAction: () => void }) {
+  const data = useAsyncResource<InvoiceDetail>(() => apiGet<InvoiceDetail>(`/admin/billing/invoices/${invoiceId}`), [invoiceId]);
+  const inv = data.status === "success" ? data.data : null;
+
+  return (
+    <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={drawerStyle}>
+        <div className="row-actions" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0, flex: 1 }}>
+            Invoice {inv?.invoiceNumber || invoiceId.slice(0, 8)}
+          </h3>
+          <button className="btn ghost" type="button" onClick={onClose}>✕ Close</button>
+        </div>
+
+        {data.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
+        {data.status === "error" ? <ErrorState message={data.error} /> : null}
+
+        {inv ? (
+          <div className="stack compact-stack">
+            {/* Summary */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+              <div><span className="muted" style={{ fontSize: 12 }}>Status</span><br /><span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{inv.status}</span></div>
+              <div><span className="muted" style={{ fontSize: 12 }}>Total</span><br /><strong>{dollars(inv.totalCents)}</strong></div>
+              {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
+                <div><span className="muted" style={{ fontSize: 12 }}>Balance due</span><br /><strong style={{ color: "var(--danger, #dc2626)" }}>{dollars(inv.balanceDueCents)}</strong></div>
+              ) : null}
+              {inv.taxCents > 0 ? <div><span className="muted" style={{ fontSize: 12 }}>Tax</span><br />{dollars(inv.taxCents)}</div> : null}
+              <div><span className="muted" style={{ fontSize: 12 }}>Due</span><br />{fmtDate(inv.dueDate)}</div>
+              {inv.paidAt ? <div><span className="muted" style={{ fontSize: 12 }}>Paid</span><br />{fmtDate(inv.paidAt)}</div> : null}
+              <div><span className="muted" style={{ fontSize: 12 }}>Tenant</span><br />{inv.tenant?.name}</div>
+            </div>
+            {inv.paymentMethod ? (
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                Card on invoice: {cardLabel(inv.paymentMethod)}
+              </p>
+            ) : null}
+
+            {/* Line items */}
+            {inv.lineItems?.length > 0 ? (
+              <>
+                <h4 style={{ margin: "16px 0 6px" }}>Line Items</h4>
+                <DataTable
+                  rows={inv.lineItems.map((li) => ({ ...li, id: li.id }))}
+                  columns={[
+                    { key: "desc", label: "Description", render: (r: InvoiceLineItem) => r.description || "—" },
+                    { key: "qty", label: "Qty", render: (r: InvoiceLineItem) => r.quantity ?? "—" },
+                    { key: "unit", label: "Unit", render: (r: InvoiceLineItem) => r.unitAmountCents != null ? dollars(r.unitAmountCents) : "—" },
+                    { key: "tax", label: "Tax", render: (r: InvoiceLineItem) => r.taxCents ? dollars(r.taxCents) : "—" },
+                    { key: "total", label: "Total", render: (r: InvoiceLineItem) => dollars(r.totalCents) },
+                  ]}
+                />
+              </>
+            ) : (
+              <p className="muted" style={{ fontSize: 13 }}>No line items recorded.</p>
+            )}
+
+            {/* Payment transactions */}
+            {inv.transactions?.length > 0 ? (
+              <>
+                <h4 style={{ margin: "16px 0 6px" }}>Payment Attempts</h4>
+                <DataTable
+                  rows={inv.transactions.map((t) => ({ ...t, id: t.id }))}
+                  columns={[
+                    { key: "date", label: "Date", render: (r: InvoiceTxRow) => fmtDatetime(r.createdAt) },
+                    {
+                      key: "status", label: "Status",
+                      render: (r: InvoiceTxRow) => <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{r.status}</span>,
+                    },
+                    { key: "amt", label: "Amount", render: (r: InvoiceTxRow) => dollars(r.amountCents) },
+                    { key: "card", label: "Card", render: (r: InvoiceTxRow) => r.paymentMethod ? cardLabel(r.paymentMethod) : "—" },
+                    { key: "ref", label: "Processor Ref", render: (r: InvoiceTxRow) => r.processorTransactionId || "—" },
+                    { key: "msg", label: "Response", render: (r: InvoiceTxRow) => r.responseMessage || r.responseCode || "—" },
+                  ]}
+                />
+              </>
+            ) : (
+              <p className="muted" style={{ fontSize: 13 }}>No payment attempts recorded.</p>
+            )}
+
+            {/* Event log */}
+            {inv.events?.length > 0 ? (
+              <>
+                <h4 style={{ margin: "16px 0 6px" }}>Activity Log</h4>
+                <DataTable
+                  rows={inv.events.map((e) => ({ ...e, id: e.id || `${invoiceId}-${e.createdAt}` }))}
+                  columns={[
+                    { key: "t", label: "Time", render: (r: InvoiceEventRow) => fmtDatetime(r.createdAt) },
+                    { key: "y", label: "Type", render: (r: InvoiceEventRow) => r.type },
+                    { key: "m", label: "Detail", render: (r: InvoiceEventRow) => r.message || (r.metadata ? JSON.stringify(r.metadata) : "—") },
+                  ]}
+                />
+              </>
+            ) : null}
+
+            <div className="row-actions" style={{ marginTop: 16 }}>
+              <button className="btn primary" type="button" onClick={() => { onAction(); onClose(); }}>Refresh list</button>
+              <button className="btn ghost" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ── ManualPayModal ─────────────────────────────────────────────────────────────
+
+function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; onClose: () => void; onSuccess: () => void }) {
+  const [step, setStep] = useState<"pick" | "confirm" | "done">("pick");
+  const [selectedMethodId, setSelectedMethodId] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submitted = useRef(false);
+
+  const pmData = useAsyncResource<{ methods: AdminPaymentMethod[]; isLiveCharge: boolean }>(
+    () => apiGet(`/admin/billing/platform/tenants/${invoice.tenantId}/payment-methods`),
+    [invoice.tenantId],
+  );
+
+  const methods = pmData.status === "success" ? pmData.data.methods : [];
+  const isLive = pmData.status === "success" ? pmData.data.isLiveCharge : false;
+  const selectedMethod = methods.find((m) => m.id === selectedMethodId) ?? null;
+
+  async function submit() {
+    if (submitted.current || busy) return;
+    submitted.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await apiPost(`/admin/billing/invoices/${invoice.id}/pay`, {
+        paymentMethodId: selectedMethodId,
+        note: note.trim() || undefined,
+        confirmLive: true,
+      });
+      setStep("done");
+      onSuccess();
+    } catch (err) {
+      setError(billingErrorMessage(err, "Charge failed."));
+      submitted.current = false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={modalStyle}>
+        <h3 style={{ margin: "0 0 16px" }}>
+          Charge invoice {invoice.invoiceNumber || invoice.id.slice(0, 8)}
+          {isLive ? (
+            <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
+              ⚡ LIVE CHARGE
+            </span>
+          ) : (
+            <span style={{ marginLeft: 10, fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
+              SANDBOX
+            </span>
+          )}
+        </h3>
+
+        <p style={{ margin: "0 0 16px", fontSize: 13 }}>
+          <strong>{invoice.tenant?.name}</strong> · Balance due: <strong>{dollars(invoice.balanceDueCents)}</strong>
+        </p>
+
+        {step === "done" ? (
+          <>
+            <div style={{ color: "green", marginBottom: 16, fontSize: 14 }}>✓ Charge submitted successfully.</div>
+            <button className="btn primary" type="button" onClick={onClose}>Close</button>
+          </>
+        ) : step === "confirm" ? (
+          <>
+            <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, fontSize: 13 }}>
+              <p style={{ margin: "0 0 8px" }}>
+                You are about to charge <strong>{dollars(invoice.balanceDueCents)}</strong> to{" "}
+                <strong>{selectedMethod ? cardLabel(selectedMethod) : selectedMethodId}</strong>.
+              </p>
+              {note ? <p style={{ margin: 0, color: "#6b7280" }}>Note: {note}</p> : null}
+              {isLive ? (
+                <p style={{ margin: "10px 0 0", fontWeight: 600, color: "#dc2626" }}>
+                  ⚡ This is a LIVE charge. The customer's card will be billed immediately.
+                </p>
+              ) : (
+                <p style={{ margin: "10px 0 0", color: "#6b7280" }}>This is a sandbox charge — no real funds will be moved.</p>
+              )}
+            </div>
+            {error ? <div style={{ color: "#dc2626", marginBottom: 12, fontSize: 13 }}>{error}</div> : null}
+            <div className="row-actions">
+              <button className="btn danger" type="button" disabled={busy} onClick={submit}>
+                {busy ? "Charging…" : isLive ? "⚡ Confirm live charge" : "Confirm charge"}
+              </button>
+              <button className="btn ghost" type="button" disabled={busy} onClick={() => { setStep("pick"); submitted.current = false; }}>
+                ← Back
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {pmData.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+            {pmData.status === "error" ? <ErrorState message={pmData.error} /> : null}
+            {pmData.status === "success" && methods.length === 0 ? (
+              <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>
+                No saved cards for this tenant. Ask the customer to add a card via the billing portal.
+              </div>
+            ) : null}
+
+            {methods.length > 0 ? (
+              <>
+                <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500 }}>Select saved card:</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                  {methods.map((m) => (
+                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "8px 10px", borderRadius: 6, border: `1.5px solid ${selectedMethodId === m.id ? "var(--accent, #2563eb)" : "var(--border, #e0e0e0)"}`, fontSize: 13 }}>
+                      <input type="radio" name="paymentMethod" value={m.id} checked={selectedMethodId === m.id} onChange={() => setSelectedMethodId(m.id)} />
+                      {cardLabel(m)}
+                      {m.isDefault ? <span style={{ marginLeft: 4, fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px" }}>Default</span> : null}
+                      {m.lastSuccessfulCharge ? (
+                        <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7280" }}>
+                          Last: {dollars(m.lastSuccessfulCharge.amountCents)} {fmtDate(m.lastSuccessfulCharge.createdAt)}
+                        </span>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                Operator note (optional — logged to activity):
+              </label>
+              <input
+                type="text"
+                maxLength={500}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. Customer called and requested retry"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <div className="row-actions">
+              <button
+                className="btn primary"
+                type="button"
+                disabled={!selectedMethodId}
+                onClick={() => setStep("confirm")}
+              >
+                Preview charge →
+              </button>
+              <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── PaymentMethodsModal ────────────────────────────────────────────────────────
+
+function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: string; tenantName: string; onClose: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [rev, setRev] = useState(0);
+
+  const data = useAsyncResource<{ methods: AdminPaymentMethod[]; isLiveCharge: boolean }>(
+    () => apiGet(`/admin/billing/platform/tenants/${tenantId}/payment-methods`),
+    [tenantId, rev],
+  );
+  const methods = data.status === "success" ? data.data.methods : [];
+
+  function showToast(kind: "ok" | "err", text: string) {
+    setToast({ kind, text });
+    window.setTimeout(() => setToast(null), 3500);
+  }
+
+  async function setDefault(methodId: string) {
+    setBusy(`default-${methodId}`);
+    try {
+      await apiPost(`/admin/billing/platform/tenants/${tenantId}/payment-methods/${methodId}/default`, {});
+      showToast("ok", "Default card updated.");
+      setRev((r) => r + 1);
+    } catch (err) {
+      showToast("err", billingErrorMessage(err, "Failed to set default."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeCard(methodId: string) {
+    if (!window.confirm("Remove this saved card? This cannot be undone.")) return;
+    setBusy(`remove-${methodId}`);
+    try {
+      await apiDelete(`/admin/billing/platform/tenants/${tenantId}/payment-methods/${methodId}`);
+      showToast("ok", "Card removed.");
+      setRev((r) => r + 1);
+    } catch (err) {
+      showToast("err", billingErrorMessage(err, "Failed to remove card."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ ...modalStyle, width: "min(620px, 96vw)" }}>
+        <div className="row-actions" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0, flex: 1 }}>Saved Cards — {tenantName}</h3>
+          <button className="btn ghost" type="button" onClick={onClose}>✕</button>
+        </div>
+
+        {toast ? (
+          <div className={`billing-toast billing-toast--${toast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%", marginBottom: 12 }} role="status">
+            {toast.text}
+          </div>
+        ) : null}
+
+        {data.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+        {data.status === "error" ? <ErrorState message={data.error} /> : null}
+
+        {data.status === "success" && methods.length === 0 ? (
+          <p className="muted">No saved cards for this tenant.</p>
+        ) : null}
+
+        {methods.map((m) => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border, #e0e0e0)", marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ flex: 1, fontSize: 13 }}>
+              {cardLabel(m)}
+              {m.isDefault ? <span style={{ marginLeft: 6, fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px" }}>Default</span> : null}
+            </span>
+            {m.lastSuccessfulCharge ? (
+              <span style={{ fontSize: 11, color: "#6b7280" }}>
+                Last charge: {dollars(m.lastSuccessfulCharge.amountCents)} on {fmtDate(m.lastSuccessfulCharge.createdAt)}
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>No successful charges</span>
+            )}
+            <div className="row-actions" style={{ margin: 0 }}>
+              {!m.isDefault ? (
+                <button className="btn ghost" type="button" disabled={!!busy} onClick={() => void setDefault(m.id)} style={{ fontSize: 12 }}>
+                  {busy === `default-${m.id}` ? "Setting…" : "Set default"}
+                </button>
+              ) : null}
+              <button className="btn danger" type="button" disabled={!!busy} onClick={() => void removeCard(m.id)} style={{ fontSize: 12 }}>
+                {busy === `remove-${m.id}` ? "Removing…" : "Remove"}
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {/* Deferred add-card placeholder */}
+        <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, border: "1.5px dashed var(--border, #e0e0e0)", color: "#6b7280", fontSize: 13 }}>
+          <strong>Add card from admin is coming next.</strong>
+          {" "}Use the customer billing portal or iFields flow for now.
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <button className="btn ghost" type="button" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TransactionDetailModal ─────────────────────────────────────────────────────
+
+function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () => void }) {
+  const data = useAsyncResource<TxDetail>(() => apiGet<TxDetail>(`/admin/billing/transactions/${txId}`), [txId]);
+  const tx = data.status === "success" ? data.data : null;
+
+  const rawEntries = useMemo(() => {
+    if (!tx?.rawResponseSafeJson || typeof tx.rawResponseSafeJson !== "object") return [];
+    return Object.entries(tx.rawResponseSafeJson as Record<string, unknown>).filter(([, v]) => v != null && v !== "");
+  }, [tx]);
+
+  return (
+    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ ...modalStyle, width: "min(580px, 96vw)" }}>
+        <div className="row-actions" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0, flex: 1 }}>Transaction Detail</h3>
+          <button className="btn ghost" type="button" onClick={onClose}>✕ Close</button>
+        </div>
+
+        {data.status === "loading" ? <LoadingSkeleton rows={5} /> : null}
+        {data.status === "error" ? <ErrorState message={data.error} /> : null}
+
+        {tx ? (
+          <div className="stack compact-stack">
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+              <div><span className="muted" style={{ fontSize: 12 }}>Status</span><br /><span className={`billing-status-pill ${txStatusClass(tx.status)}`}>{tx.status}</span></div>
+              <div><span className="muted" style={{ fontSize: 12 }}>Amount</span><br /><strong>{dollars(tx.amountCents)}</strong></div>
+              <div><span className="muted" style={{ fontSize: 12 }}>Date</span><br />{fmtDatetime(tx.createdAt)}</div>
+              <div><span className="muted" style={{ fontSize: 12 }}>Tenant</span><br />{tx.tenant?.name}</div>
+            </div>
+
+            {tx.invoice ? (
+              <p style={{ fontSize: 13, margin: "0 0 8px" }}>
+                Invoice: <strong>{tx.invoice.invoiceNumber || tx.invoiceId}</strong> · {tx.invoice.status} · {dollars(tx.invoice.totalCents)}
+              </p>
+            ) : null}
+
+            {tx.paymentMethod ? (
+              <p style={{ fontSize: 13, margin: "0 0 8px" }}>
+                Card: {cardLabel(tx.paymentMethod)}
+              </p>
+            ) : null}
+
+            <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse", marginBottom: 12 }}>
+              <tbody>
+                {tx.processorTransactionId ? (
+                  <tr>
+                    <td style={{ padding: "4px 0", color: "#6b7280", width: 160 }}>Processor Ref</td>
+                    <td style={{ padding: "4px 0", fontFamily: "monospace" }}>{tx.processorTransactionId}</td>
+                  </tr>
+                ) : null}
+                {tx.responseCode ? (
+                  <tr>
+                    <td style={{ padding: "4px 0", color: "#6b7280" }}>Response Code</td>
+                    <td style={{ padding: "4px 0" }}>{tx.responseCode}</td>
+                  </tr>
+                ) : null}
+                {tx.responseMessage ? (
+                  <tr>
+                    <td style={{ padding: "4px 0", color: "#6b7280" }}>Response Message</td>
+                    <td style={{ padding: "4px 0" }}>{tx.responseMessage}</td>
+                  </tr>
+                ) : null}
+                {tx.processor ? (
+                  <tr>
+                    <td style={{ padding: "4px 0", color: "#6b7280" }}>Processor</td>
+                    <td style={{ padding: "4px 0" }}>{tx.processor}</td>
+                  </tr>
+                ) : null}
+                {tx.idempotencyKey ? (
+                  <tr>
+                    <td style={{ padding: "4px 0", color: "#6b7280" }}>Idempotency Key</td>
+                    <td style={{ padding: "4px 0", fontFamily: "monospace", fontSize: 11 }}>{tx.idempotencyKey}</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+
+            {rawEntries.length > 0 ? (
+              <>
+                <h4 style={{ margin: "0 0 6px", fontSize: 13 }}>Gateway Response</h4>
+                <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 6, padding: "10px 12px", fontSize: 12, fontFamily: "monospace", maxHeight: 200, overflowY: "auto" }}>
+                  {rawEntries.map(([k, v]) => (
+                    <div key={k} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                      <span style={{ color: "#6b7280", minWidth: 140 }}>{k}</span>
+                      <span>{String(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            <div style={{ marginTop: 16 }}>
+              <button className="btn ghost" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -115,6 +649,12 @@ function InvoicesTab() {
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState("");
 
+  // Modal state
+  const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(null);
+  const [payInvoice, setPayInvoice] = useState<InvoiceRow | null>(null);
+  const [cardsForTenant, setCardsForTenant] = useState<{ tenantId: string; name: string } | null>(null);
+  const [listRev, setListRev] = useState(0);
+
   useEffect(() => {
     const t = setTimeout(() => { setSearch(searchInput); setPage(1); }, 350);
     return () => clearTimeout(t);
@@ -127,7 +667,7 @@ function InvoicesTab() {
     p.set("page", String(page));
     p.set("limit", "50");
     return `/admin/billing/invoices?${p.toString()}`;
-  }, [statusFilter, search, page]);
+  }, [statusFilter, search, page, listRev]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useAsyncResource<InvoiceListResult>(() => apiGet<InvoiceListResult>(url), [url]);
   const rows = data.status === "success" ? data.data.invoices : [];
@@ -137,13 +677,12 @@ function InvoicesTab() {
     window.setTimeout(() => setToast(null), 3500);
   }, []);
 
-  async function act(invoiceId: string, label: string, path: string) {
+  async function act(invoiceId: string, label: string, path: string, body: Record<string, unknown> = {}) {
     setBusy(`${label}-${invoiceId}`);
     try {
-      await apiPost(path, {});
+      await apiPost(path, body);
       showToast("ok", `${label} succeeded.`);
-      // Trigger refetch by changing page state momentarily
-      setPage((p) => p);
+      setListRev((r) => r + 1);
     } catch (err) {
       showToast("err", billingErrorMessage(err, `${label} failed.`));
     } finally {
@@ -264,6 +803,24 @@ function InvoicesTab() {
 
                   {/* Actions */}
                   <div className="row-actions" style={{ flexWrap: "wrap" }}>
+                    {/* Detail drawer */}
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() => setDetailInvoiceId(inv.id)}
+                    >
+                      Detail
+                    </button>
+
+                    {/* Cards modal */}
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() => setCardsForTenant({ tenantId: inv.tenantId, name: inv.tenant?.name || inv.tenantId })}
+                    >
+                      Cards
+                    </button>
+
                     {canAct ? (
                       <button
                         className="btn ghost"
@@ -275,14 +832,15 @@ function InvoicesTab() {
                       </button>
                     ) : null}
 
-                    {canAct && hasCard ? (
+                    {canAct ? (
                       <button
                         className="btn ghost"
                         type="button"
                         disabled={!!busy}
-                        onClick={() => act(inv.id, "Charge", `/admin/billing/invoices/${inv.id}/retry-payment`)}
+                        onClick={() => setPayInvoice(inv)}
+                        title={hasCard ? "Charge with saved card" : "No saved card — use Cards button to check"}
                       >
-                        {isBusy("Charge") ? "Charging…" : "Charge card"}
+                        Charge card
                       </button>
                     ) : null}
 
@@ -360,6 +918,31 @@ function InvoicesTab() {
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />
         </>
       ) : null}
+
+      {/* Modals */}
+      {detailInvoiceId ? (
+        <InvoiceDetailModal
+          invoiceId={detailInvoiceId}
+          onClose={() => setDetailInvoiceId(null)}
+          onAction={() => setListRev((r) => r + 1)}
+        />
+      ) : null}
+
+      {payInvoice ? (
+        <ManualPayModal
+          invoice={payInvoice}
+          onClose={() => setPayInvoice(null)}
+          onSuccess={() => { setListRev((r) => r + 1); }}
+        />
+      ) : null}
+
+      {cardsForTenant ? (
+        <PaymentMethodsModal
+          tenantId={cardsForTenant.tenantId}
+          tenantName={cardsForTenant.name}
+          onClose={() => setCardsForTenant(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -369,6 +952,7 @@ function InvoicesTab() {
 function TransactionsTab() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(1);
+  const [detailTxId, setDetailTxId] = useState<string | null>(null);
 
   const url = useMemo(() => {
     const p = new URLSearchParams();
@@ -395,6 +979,15 @@ function TransactionsTab() {
     { key: "method", label: "Card", render: (r: TxRow) => r.paymentMethod ? `${r.paymentMethod.brand || "Card"} ···${r.paymentMethod.last4 || "----"}` : "—" },
     { key: "ref", label: "Processor Ref", render: (r: TxRow) => r.processorTransactionId || "—" },
     { key: "code", label: "Response", render: (r: TxRow) => r.responseCode || "—" },
+    {
+      key: "detail",
+      label: "",
+      render: (r: TxRow) => (
+        <button className="btn ghost" type="button" onClick={() => setDetailTxId(r.id)} style={{ fontSize: 12, padding: "2px 8px" }}>
+          Detail
+        </button>
+      ),
+    },
   ];
 
   return (
@@ -428,6 +1021,10 @@ function TransactionsTab() {
           )}
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />
         </>
+      ) : null}
+
+      {detailTxId ? (
+        <TransactionDetailModal txId={detailTxId} onClose={() => setDetailTxId(null)} />
       ) : null}
     </>
   );

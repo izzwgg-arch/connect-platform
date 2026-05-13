@@ -771,6 +771,40 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return { invoices, total, page, pages: Math.ceil(total / limit), limit };
   });
 
+  app.get("/admin/billing/invoices/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: { orderBy: { createdAt: "asc" } },
+        transactions: {
+          orderBy: { createdAt: "desc" },
+          include: { paymentMethod: { select: { id: true, brand: true, last4: true } } },
+        },
+        events: {
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: { id: true, type: true, message: true, metadata: true, createdAt: true },
+        },
+        paymentMethod: { select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, cardholderName: true } },
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            billingSettings: { select: { billingEmail: true, defaultPaymentMethodId: true } },
+            billingSolaConfig: { select: { isEnabled: true, mode: true, simulate: true } },
+          },
+        },
+      },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const sc = (invoice as any).tenant?.billingSolaConfig;
+    const isLiveCharge = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    return { ...invoice, isLiveCharge };
+  });
+
   app.get("/admin/billing/transactions", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
@@ -811,6 +845,22 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     ]);
 
     return { transactions, total, page, pages: Math.ceil(total / limit), limit };
+  });
+
+  app.get("/admin/billing/transactions/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const tx = await (db as any).paymentTransaction.findUnique({
+      where: { id },
+      include: {
+        tenant: { select: { id: true, name: true } },
+        invoice: { select: { id: true, invoiceNumber: true, status: true, totalCents: true } },
+        paymentMethod: { select: { id: true, brand: true, last4: true, expMonth: true, expYear: true } },
+      },
+    });
+    if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
+    return tx;
   });
 
   app.get("/admin/billing/invoices/:id/events", async (req, reply) => {
@@ -862,11 +912,109 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return updated;
   });
 
+  // ── Admin tenant payment-method management ──────────────────────────────────
+
+  app.get("/admin/billing/platform/tenants/:tenantId/payment-methods", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const methods = await (db as any).paymentMethod.findMany({
+      where: { tenantId, active: true },
+      select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, cardholderName: true, billingZip: true, isDefault: true, lastUsedAt: true, createdAt: true },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+    });
+    const methodsWithCharge = await Promise.all(
+      methods.map(async (m: any) => {
+        const lastSuccess = await (db as any).paymentTransaction.findFirst({
+          where: { paymentMethodId: m.id, status: "APPROVED" },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, amountCents: true, createdAt: true },
+        });
+        return { ...m, lastSuccessfulCharge: lastSuccess };
+      }),
+    );
+    const sc = await (db as any).billingSolaConfig.findUnique({ where: { tenantId }, select: { isEnabled: true, mode: true, simulate: true } });
+    const isLiveCharge = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    return { methods: methodsWithCharge, isLiveCharge };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/payment-methods/:methodId/default", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId, methodId } = req.params as { tenantId: string; methodId: string };
+    const method = await (db as any).paymentMethod.findFirst({ where: { id: methodId, tenantId, active: true } });
+    if (!method) return reply.code(404).send({ error: "payment_method_not_found" });
+    await (db as any).paymentMethod.updateMany({ where: { tenantId }, data: { isDefault: false } });
+    await (db as any).paymentMethod.update({ where: { id: methodId }, data: { isDefault: true } });
+    await (db as any).tenantBillingSettings.upsert({
+      where: { tenantId },
+      create: { tenantId, defaultPaymentMethodId: methodId },
+      update: { defaultPaymentMethodId: methodId },
+    });
+    await logBillingEvent({ tenantId, type: "payment_method.default_set", message: `Admin set default card`, metadata: { paymentMethodId: methodId, adminUserId: u.sub } });
+    return { ok: true };
+  });
+
+  app.delete("/admin/billing/platform/tenants/:tenantId/payment-methods/:methodId", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId, methodId } = req.params as { tenantId: string; methodId: string };
+    const method = await (db as any).paymentMethod.findFirst({ where: { id: methodId, tenantId, active: true } });
+    if (!method) return reply.code(404).send({ error: "payment_method_not_found" });
+    await (db as any).paymentMethod.update({ where: { id: methodId }, data: { active: false, isDefault: false } });
+    await (db as any).tenantBillingSettings.updateMany({ where: { tenantId, defaultPaymentMethodId: methodId }, data: { defaultPaymentMethodId: null } });
+    await logBillingEvent({ tenantId, type: "payment_method.removed", message: `Admin removed saved card`, metadata: { paymentMethodId: methodId, adminUserId: u.sub } });
+    return { ok: true };
+  });
+
+  // ── Admin explicit charge with saved card ────────────────────────────────────
+
+  app.post("/admin/billing/invoices/:id/pay", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const input = z.object({
+      paymentMethodId: z.string().min(1),
+      note: z.string().max(500).optional(),
+      confirmLive: z.boolean().optional(),
+    }).parse(req.body || {});
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      include: { tenant: { include: { billingSolaConfig: true } } },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
+    if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
+    const sc = invoice.tenant?.billingSolaConfig;
+    const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    if (isLive && !input.confirmLive) {
+      return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this intentional live charge." });
+    }
+    const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId: invoice.tenantId, active: true } });
+    if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
+    if (input.note) {
+      await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "payment.admin_charge_note", message: input.note, metadata: { adminUserId: u.sub } });
+    }
+    const transaction = await chargeBillingInvoice(invoice, method, { note: input.note });
+    const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id } });
+    return { transaction, invoice: updatedInvoice };
+  });
+
+  // ── Mark paid (optional partial amount + note) ───────────────────────────────
+
   app.post("/admin/billing/invoices/:id/mark-paid", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    return markBillingInvoicePaid(id);
+    const input = z.object({
+      amountCents: z.number().int().min(1).optional(),
+      note: z.string().max(500).optional(),
+    }).parse(req.body || {});
+    const result = await markBillingInvoicePaid(id, input.amountCents);
+    if (input.note) {
+      await logBillingEvent({ tenantId: (result as any).tenantId, invoiceId: id, type: "invoice.manual_paid_note", message: input.note, metadata: { adminUserId: u.sub } });
+    }
+    return result;
   });
 
   app.post("/admin/billing/invoices/:id/retry-payment", async (req, reply) => {
