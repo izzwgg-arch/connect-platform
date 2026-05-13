@@ -132,7 +132,7 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
 - **Payment Operations page:** **`/admin/billing/invoices`** — cross-tenant operator view with two tabs:
   - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. Actions per row:
     - **Detail** — opens `InvoiceDetailModal` (slide-over drawer) with full line items, all payment attempts with card/response, and `BillingEventLog` timeline (loaded via `GET /admin/billing/invoices/:id`).
-    - **Cards** — opens `PaymentMethodsModal` to list, set-default, and remove saved cards for the tenant (loaded via `GET /admin/billing/platform/tenants/:tenantId/payment-methods`). Shows last successful charge per card. **Add card from admin is deferred** — placeholder shown.
+    - **Cards** — opens `PaymentMethodsModal` to list, set-default, remove, and **add** saved cards for the tenant. List loaded via `GET /admin/billing/platform/tenants/:tenantId/payment-methods`. Add card uses iFields tokenization (see "Admin add-card iFields" below).
     - **Charge card** — opens `ManualPayModal`: pick saved card, enter optional operator note, 2-step confirmation with **LIVE CHARGE** or SANDBOX badge. Calls `POST /admin/billing/invoices/:id/pay` with `{ paymentMethodId, note, confirmLive: true }`.  Duplicate submits disabled; exact API error shown on failure.
     - **Mark Paid** — direct `POST /admin/billing/invoices/:id/mark-paid` (full balance); now also accepts body `{ amountCents?, note? }` at the API level for partial/noted reconciliation.
     - **Send invoice**, **Email link**, **Void**, **Activity log** (inline expand) — unchanged.
@@ -152,10 +152,48 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
 | Route | Purpose |
 |-------|---------|
 | `GET /admin/billing/platform/tenants/:tenantId/payment-methods` | List active cards with `lastSuccessfulCharge` and `isLiveCharge` flag |
+| `GET /admin/billing/platform/tenants/:tenantId/sola/public-config` | Return `{ configured, enabled, ifieldsKey, mode }` for admin iFields form |
+| `POST /admin/billing/platform/tenants/:tenantId/payment-methods/sola/save` | Save card from SUT token collected by admin iFields form |
 | `POST /admin/billing/platform/tenants/:tenantId/payment-methods/:methodId/default` | Set default card (updates `TenantBillingSettings.defaultPaymentMethodId`) |
 | `DELETE /admin/billing/platform/tenants/:tenantId/payment-methods/:methodId` | Soft-deactivate card (sets `active: false`, clears default if matched) |
 
-All three log a `BillingEventLog` event. **Admin add-card (iFields tokenization from the admin portal) is deferred.** Ask customers to add cards via the tenant billing portal (`/billing/payments`) for now.
+All routes log a `BillingEventLog` event and are `SUPER_ADMIN`-only (`requirePlatformBilling`).
+
+### Admin add-card iFields
+
+Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` inside `/admin/billing/invoices`.
+
+**PCI boundary** — raw PAN and CVV never hit Connect API:
+- The modal fetches `GET .../sola/public-config` which returns only the **public** `ifieldsKey` (safe to expose client-side; no API secret is included).
+- Card number and CVV are entered into Cardknox-hosted `<iframe>` fields (`ifield.htm`). The `getTokens()` call returns a single-use token (SUT) in a hidden `<input name="xCardNum">`. Raw card data never leaves the browser for Cardknox-hosted iframes.
+- Only the SUT is sent to Connect API (`POST .../payment-methods/sola/save` body: `{ xSut, cardholderName?, billingZip?, makeDefault? }`).
+- `xSut` is **not logged** in `BillingEventLog` metadata; only `paymentMethodId`, masked `brand`/`last4`, and `adminUserId` are recorded.
+
+**Server-side flow (`saveAdminCardWithSut` in `apps/api/src/billing/adminCardSave.ts`):**
+1. Validate `xSut.length >= 8` → `400 sola_token_too_short` if not.
+2. Confirm tenant exists → `404 tenant_not_found` if not.
+3. Call `getBillingSolaAdapter(tenantId).saveCardWithSut({ sut: xSut, ... })`.
+4. If `response.approved === false` → `402 card_save_failed`.
+5. Call `storeSolaPaymentMethod(...)` to persist the vault token.
+6. Log `payment_method.saved` event (no SUT in metadata).
+7. Return `{ id, brand, last4, expMonth, expYear, isDefault }`.
+
+**Portal UX (`PaymentMethodsModal` in `apps/portal/app/(platform)/admin/billing/invoices/page.tsx`):**
+- "+ Add card" toggle button below the card list (hidden until clicked).
+- Fetches tenant public config on modal open; loads `ifields.min.js` from CDN once.
+- Shows a **sandbox mode** warning banner if `mode === "sandbox"`.
+- Shows "SOLA iFields not configured" message if not `enabled` or no `ifieldsKey`.
+- Card number iframe + CVV iframe + cardholder name + billing ZIP inputs.
+- On success: toast "Card saved successfully.", collapse form, refresh card list.
+- Duplicate submit prevented via `submittedRef`.
+
+**Tests:** `apps/api/src/billing/adminAddCard.test.ts` — 6 cases:
+1. `xSut` empty → `400 sola_token_too_short`
+2. `xSut` shorter than 8 chars → `400 sola_token_too_short`
+3. Valid `xSut` → adapter `saveCardWithSut` called with correct token
+4. Declined response → `402 card_save_failed`, `storeMethod` never called
+5. Approved response → `storeMethod` + `logEvent` called, returns masked card info; `xSut` absent from log
+6. `canAccessPlatformAdminBillingRoutes` only passes `SUPER_ADMIN`
 
 ### Admin SMS payment links
 

@@ -20,6 +20,7 @@ import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
 import { billingInvoicePdfApiUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { saveAdminCardWithSut } from "./adminCardSave";
 
 type BillingUser = {
   sub: string;
@@ -971,6 +972,27 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
   // ── Admin tenant payment-method management ──────────────────────────────────
 
+  app.get("/admin/billing/platform/tenants/:tenantId/sola/public-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if (!ensureCredentialCrypto(reply)) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+    if (!record) return { configured: false, enabled: false, ifieldsKey: null, mode: null };
+    let secrets: SolaCredentialPayload;
+    try {
+      secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
+    } catch {
+      return reply.code(400).send({ error: "sola_decrypt_failed" });
+    }
+    return {
+      configured: true,
+      enabled: !!record.isEnabled,
+      mode: record.mode === "PROD" ? "prod" : "sandbox",
+      ifieldsKey: secrets.ifieldsKey || null,
+    };
+  });
+
   app.get("/admin/billing/platform/tenants/:tenantId/payment-methods", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
@@ -993,6 +1015,29 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const sc = await (db as any).billingSolaConfig.findUnique({ where: { tenantId }, select: { isEnabled: true, mode: true, simulate: true } });
     const isLiveCharge = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
     return { methods: methodsWithCharge, isLiveCharge };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/payment-methods/sola/save", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const input = z.object({
+      xSut: z.string().min(1),
+      cardholderName: z.string().optional(),
+      billingZip: z.string().optional(),
+      makeDefault: z.boolean().default(false),
+    }).parse(req.body || {});
+    const result = await saveAdminCardWithSut(tenantId, input, u.sub, {
+      findTenant: (id) => (db as any).tenant.findUnique({ where: { id }, select: { id: true } }),
+      getAdapter: getBillingSolaAdapter,
+      storeMethod: storeSolaPaymentMethod,
+      logEvent: logBillingEvent,
+    });
+    if (!result.ok) {
+      if (result.code === 404) return reply.code(404).send({ error: result.error });
+      return reply.code(result.code).send({ error: result.error, ...(result.code === 402 ? { response: (result as any).response } : {}) });
+    }
+    return { id: result.id, brand: result.brand, last4: result.last4, expMonth: result.expMonth, expYear: result.expYear, isDefault: result.isDefault };
   });
 
   app.post("/admin/billing/platform/tenants/:tenantId/payment-methods/:methodId/default", async (req, reply) => {

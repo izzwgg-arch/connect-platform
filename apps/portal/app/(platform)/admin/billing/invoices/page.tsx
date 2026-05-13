@@ -436,10 +436,20 @@ function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; 
 
 // ── PaymentMethodsModal ────────────────────────────────────────────────────────
 
+type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; ifieldsKey: string | null; mode: string | null };
+
 function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: string; tenantName: string; onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [rev, setRev] = useState(0);
+
+  // iFields add-card state
+  const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
+  const [ifieldsReady, setIfieldsReady] = useState(false);
+  const [showAddCard, setShowAddCard] = useState(false);
+  const [addCardBusy, setAddCardBusy] = useState(false);
+  const [addCardMsg, setAddCardMsg] = useState("");
+  const submittedRef = useRef(false);
 
   const data = useAsyncResource<{ methods: AdminPaymentMethod[]; isLiveCharge: boolean }>(
     () => apiGet(`/admin/billing/platform/tenants/${tenantId}/payment-methods`),
@@ -451,6 +461,37 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
     setToast({ kind, text });
     window.setTimeout(() => setToast(null), 3500);
   }
+
+  // Fetch tenant SOLA public config once on open
+  useEffect(() => {
+    let active = true;
+    apiGet<AdminSolaPublicConfig>(`/admin/billing/platform/tenants/${tenantId}/sola/public-config`)
+      .then((cfg) => { if (active) setSolaConfig(cfg); })
+      .catch(() => { if (active) setSolaConfig({ configured: false, enabled: false, ifieldsKey: null, mode: null }); });
+    return () => { active = false; };
+  }, [tenantId]);
+
+  // Load iFields script when public config is ready
+  useEffect(() => {
+    if (!solaConfig?.enabled || !solaConfig?.ifieldsKey) return;
+    const version = "3.4.2602.2001";
+    const scriptId = `cardknox-ifields-${version}`;
+    const configure = () => {
+      if (window.setAccount) {
+        window.setAccount(solaConfig.ifieldsKey!, "ConnectComms", "1.0.0");
+        setIfieldsReady(true);
+      }
+    };
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing) { configure(); return; }
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
+    script.async = true;
+    script.onload = configure;
+    script.onerror = () => setAddCardMsg("Unable to load the secure card form. Contact support.");
+    document.body.appendChild(script);
+  }, [solaConfig]);
 
   async function setDefault(methodId: string) {
     setBusy(`default-${methodId}`);
@@ -479,9 +520,13 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
     }
   }
 
+  const ifieldsVersion = "3.4.2602.2001";
+  const canAddCard = !!solaConfig?.enabled && !!solaConfig?.ifieldsKey;
+  const isSandboxMode = solaConfig?.mode === "sandbox";
+
   return (
     <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ ...modalStyle, width: "min(620px, 96vw)" }}>
+      <div style={{ ...modalStyle, width: "min(640px, 96vw)", maxHeight: "90vh", overflowY: "auto" }}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0, flex: 1 }}>Saved Cards — {tenantName}</h3>
           <button className="btn ghost" type="button" onClick={onClose}>✕</button>
@@ -526,10 +571,119 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
           </div>
         ))}
 
-        {/* Deferred add-card placeholder */}
-        <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, border: "1.5px dashed var(--border, #e0e0e0)", color: "#6b7280", fontSize: 13 }}>
-          <strong>Add card from admin is coming next.</strong>
-          {" "}Use the customer billing portal or iFields flow for now.
+        {/* Add card section */}
+        <div style={{ marginTop: 16, borderTop: "1px solid var(--border, #e0e0e0)", paddingTop: 14 }}>
+          {!showAddCard ? (
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => setShowAddCard(true)}
+              disabled={solaConfig === null}
+              style={{ fontSize: 13 }}
+            >
+              {solaConfig === null ? "Loading…" : canAddCard ? "+ Add card" : "+ Add card (SOLA not configured)"}
+            </button>
+          ) : (
+            <div>
+              <div className="row-actions" style={{ marginBottom: 10 }}>
+                <strong style={{ fontSize: 13 }}>Add a card</strong>
+                <button className="btn ghost" type="button" style={{ fontSize: 12 }} onClick={() => { setShowAddCard(false); setAddCardMsg(""); }}>Cancel</button>
+              </div>
+
+              {isSandboxMode ? (
+                <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 6, background: "#fef9c3", border: "1px solid #fde68a", fontSize: 12, color: "#713f12" }}>
+                  <strong>Sandbox mode</strong> — use test card numbers only. No real charges will be made.
+                </div>
+              ) : null}
+
+              {!canAddCard ? (
+                <div style={{ fontSize: 13, color: "#6b7280", padding: "10px 0" }}>
+                  SOLA iFields is not configured for this tenant. Enable it in Admin → Billing → Settings before adding cards.
+                </div>
+              ) : (
+                <form
+                  className="billing-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (submittedRef.current || addCardBusy) return;
+                    const form = event.currentTarget;
+                    setAddCardBusy(true);
+                    setAddCardMsg("");
+                    if (!window.getTokens) {
+                      setAddCardBusy(false);
+                      setAddCardMsg("The secure card form is not ready yet. Please wait a moment and try again.");
+                      return;
+                    }
+                    window.getTokens(async () => {
+                      submittedRef.current = true;
+                      const formData = new FormData(form);
+                      const xSut = String(formData.get("xCardNum") || "");
+                      if (!xSut) {
+                        setAddCardBusy(false);
+                        submittedRef.current = false;
+                        setAddCardMsg("The secure form did not return a card token. Verify the card number and try again.");
+                        return;
+                      }
+                      try {
+                        await apiPost(`/admin/billing/platform/tenants/${tenantId}/payment-methods/sola/save`, {
+                          xSut,
+                          cardholderName: String(formData.get("cardholderName") || ""),
+                          billingZip: String(formData.get("billingZip") || ""),
+                          makeDefault: methods.length === 0,
+                        });
+                        showToast("ok", "Card saved successfully.");
+                        setShowAddCard(false);
+                        setAddCardMsg("");
+                        setRev((r) => r + 1);
+                      } catch (err: unknown) {
+                        setAddCardMsg(billingErrorMessage(err, "Unable to save this card."));
+                      } finally {
+                        setAddCardBusy(false);
+                        submittedRef.current = false;
+                      }
+                    }, () => {
+                      setAddCardBusy(false);
+                      setAddCardMsg("The secure form could not tokenize the card. Verify the card details and try again.");
+                    }, 30000);
+                  }}
+                >
+                  <label>Cardholder name <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" /></label>
+                  <label>Billing ZIP <input name="billingZip" autoComplete="postal-code" placeholder="10950" /></label>
+                  <label>
+                    Card number
+                    <iframe
+                      className="sola-ifield-frame"
+                      title="Secure card number"
+                      data-ifields-id="card-number"
+                      data-ifields-placeholder="Card Number"
+                      src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                    />
+                  </label>
+                  <label>
+                    CVV
+                    <iframe
+                      className="sola-ifield-frame"
+                      title="Secure CVV"
+                      data-ifields-id="cvv"
+                      data-ifields-placeholder="CVV"
+                      src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                    />
+                  </label>
+                  <input name="xCardNum" data-ifields-id="card-number-token" type="hidden" />
+                  <input name="xCVV" data-ifields-id="cvv-token" type="hidden" />
+                  {addCardMsg ? <div className="billing-status-pill bad">{addCardMsg}</div> : null}
+                  <button
+                    className="btn primary"
+                    type="submit"
+                    disabled={addCardBusy || !ifieldsReady}
+                    style={{ fontSize: 13 }}
+                  >
+                    {addCardBusy ? "Securing…" : ifieldsReady ? "Save card" : "Loading secure form…"}
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ marginTop: 16 }}>
