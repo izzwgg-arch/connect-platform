@@ -19,6 +19,7 @@ import {
   verifyChatSignedDownload,
 } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
+import { crmInboundSmsHook } from "./crm/inboundSmsHook";
 import {
   assertStorageKeyForThread,
   isAllowedChatMime,
@@ -1869,6 +1870,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           : Promise.resolve(),
       ));
     }
+    // CRM Phase 11B — non-blocking inbound SMS timeline hook.
+    // Must not throw or delay the webhook response.
+    crmInboundSmsHook({
+      tenantId: num.tenantId,
+      fromE164: extE164,
+      toE164: nt.e164,
+      body: message,
+      messageId: msg.id,
+      smsProviderMessageId: msg.smsProviderMessageId ?? null,
+    }).catch(() => {});
     return reply.type("text/plain").send("ok");
   }
 

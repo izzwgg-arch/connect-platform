@@ -524,6 +524,18 @@
     - No new API route is needed for CRM recording playback — the existing stream endpoint
       covers all CRM roles (`canViewCustomers` permission includes all authenticated roles).
 
+84. **CRM inbound SMS hook must be non-blocking and must never duplicate the inbound system.**
+    - `crmInboundSmsHook` (API: `apps/api/src/crm/inboundSmsHook.ts`; worker:
+      `apps/worker/src/crmInboundSmsHook.ts`) is fire-and-forget. Callers MUST use
+      `.catch(() => {})` so any error in the CRM hook cannot fail the inbound webhook.
+    - The hook writes `SMS_RECEIVED` CrmTimelineEvent ONLY after the `ConnectChatMessage`
+      row is already persisted. It never creates the chat message itself.
+    - Idempotency: keyed on `linkedId = connectChatMessage.id`. A pre-check prevents
+      duplicate events even if both the webhook path and poll path process the same message.
+    - The hook must check `CrmTenantSettings.enabled` before any further DB queries.
+    - Never add CRM business logic to the inbound webhook response path. Always fire-and-forget.
+    - `SMS_RECEIVED` is for inbound only; `SMS_SENT` (Phase 11A) is for agent-initiated sends.
+
 83. **CRM SMS must use the real tenant SMS provider and must never fake success.**
     - `POST /crm/contacts/:id/sms` must call `provider.sendMessage()` (Twilio or VoIP.ms via
       `packages/integrations`) and only write the `SMS_SENT` CrmTimelineEvent AFTER the provider

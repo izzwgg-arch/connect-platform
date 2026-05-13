@@ -1,6 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { canonicalSmsPhone } from "@connect/shared";
+import { crmInboundSmsHook } from "./crmInboundSmsHook";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 
 export type SmsPushInput = {
@@ -520,6 +521,16 @@ async function importInboundMessage(input: {
       }),
     );
   }
+  // CRM Phase 11B — non-blocking inbound SMS timeline hook.
+  // Must not throw or delay message persistence / push fan-out.
+  crmInboundSmsHook({
+    tenantId: input.tenantId,
+    fromE164: input.row.from,
+    toE164: input.tenantDidE164,
+    body: input.row.body,
+    messageId: msg.id,
+    smsProviderMessageId: (msg as any).smsProviderMessageId ?? null,
+  }).catch(() => {});
 }
 
 let running = false;

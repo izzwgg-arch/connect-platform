@@ -891,6 +891,48 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 11B — Inbound SMS Timeline Events (SMS_RECEIVED)
+
+```
+[ ] 1. Migration applied
+        - CrmTimelineEventType enum has SMS_RECEIVED in Prisma schema
+        - Migration: 20260523020000_crm_sms_received_event/migration.sql
+
+[ ] 2. Hook files in place
+        - apps/api/src/crm/inboundSmsHook.ts registered in connectChatRoutes.ts
+        - apps/worker/src/crmInboundSmsHook.ts imported in voipMsInboundSyncJob.ts
+        - Both hook calls use .catch(() => {}) and do NOT await the webhook response
+
+[ ] 3. No contact match → no event written
+        - Inbound SMS from unknown sender: no CrmTimelineEvent created
+        - Tenant with CRM disabled: no CrmTimelineEvent created
+
+[ ] 4. Contact match → SMS_RECEIVED event created
+        - Inbound from number matching ContactPhone: SMS_RECEIVED event in timeline
+        - Event body = SMS text (first 500 chars)
+        - Event metadata = { from, to, smsProviderMessageId? }
+        - Event linkedId = ConnectChatMessage.id
+
+[ ] 5. Idempotency
+        - Sending same message twice (webhook + poll both fire): only one SMS_RECEIVED
+        - linkedId check prevents duplicate events for same ConnectChatMessage.id
+
+[ ] 6. Portal timeline rendering
+        - SMS_RECEIVED events show purple MessageSquareDot icon
+        - from/to chips + "inbound" badge visible in timeline item
+        - Existing SMS_SENT events unaffected
+
+[ ] 7. No regressions
+        - Inbound VoIP.ms webhook still returns "ok" immediately
+        - Chat/SMS threads still created correctly
+        - Push notifications still fire
+        - API /health OK; telephony unaffected
+
+[ ] 8. Typecheck passes (api + portal + worker) → 0 CRM errors each
+```
+
+---
+
 ## Phase 11A — SMS from CRM Contact
 
 ```

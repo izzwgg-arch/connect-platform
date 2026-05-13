@@ -3089,6 +3089,7 @@ enum CrmTimelineEventType {
   CONTACT_MERGED
   ASSIGNED_TO_USER
   SMS_SENT
+  SMS_RECEIVED
 }
 
 /// Immutable audit-style record of CRM activity for a contact.

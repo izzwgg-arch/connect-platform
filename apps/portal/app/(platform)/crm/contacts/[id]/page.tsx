@@ -61,7 +61,8 @@ type TimelineEventType =
   | "DISPOSITION_SET"
   | "CONTACT_MERGED"
   | "ASSIGNED_TO_USER"
-  | "SMS_SENT";
+  | "SMS_SENT"
+  | "SMS_RECEIVED";
 
 type TimelineEventCreatedBy = { id: string; displayName: string };
 
@@ -197,6 +198,8 @@ function TimelineIcon({ type }: { type: string }) {
     return <User size={sz} style={{ color: "#0ea5e9" }} />;
   if (type === "SMS_SENT")
     return <MessageSquareDot size={sz} style={{ color: "#0891b2" }} />;
+  if (type === "SMS_RECEIVED")
+    return <MessageSquareDot size={sz} style={{ color: "#7c3aed" }} />;
   return <Clock size={sz} style={{ color: "var(--text-dim)" }} />;
 }
 
@@ -320,6 +323,22 @@ function TimelineItem({ event, currentUserId, onEditNote, onDeleteNote }: Timeli
                   {provider.toLowerCase()}
                 </span>
               )}
+            </div>
+          );
+        })()}
+
+        {/* SMS_RECEIVED metadata */}
+        {event.type === "SMS_RECEIVED" && event.metadata && (() => {
+          const m = event.metadata as Record<string, unknown>;
+          const from = typeof m.from === "string" ? m.from : null;
+          const to = typeof m.to === "string" ? m.to : null;
+          return (
+            <div style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.375rem", flexWrap: "wrap" }}>
+              {from && <span style={{ fontSize: "0.75rem", color: "var(--text)", fontFamily: "monospace" }}>from {from}</span>}
+              {to && <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>→ {to}</span>}
+              <span style={{ fontSize: "0.6875rem", fontWeight: 600, padding: "0.1rem 0.3rem", borderRadius: 4, background: "#f3e8ff", color: "#6d28d9" }}>
+                inbound
+              </span>
             </div>
           );
         })()}
