@@ -524,6 +524,23 @@
     - No new API route is needed for CRM recording playback — the existing stream endpoint
       covers all CRM roles (`canViewCustomers` permission includes all authenticated roles).
 
+81. **CRM browser notification reminders are one-time, page-resident, non-background.**
+    - The "Enable reminders" button on the CRM dashboard uses `window.Notification.requestPermission()`
+      — it fires ONE real OS-level notification with current overdue counts when permission is granted.
+    - Do NOT set up `setInterval` for recurring notifications without confirming the page will stay
+      open (no background service worker in this phase).
+    - Do NOT request notification permission automatically on page load — wait for explicit user click.
+    - The button must only render when `'Notification' in window` AND `Notification.permission !== 'denied'`.
+    - This is intentionally simple. Background recurring reminders require a service worker and are
+      deferred to a future phase.
+
+82. **CRM alert strip data must come from real endpoints; counts must never be fabricated.**
+    - Dashboard alert strip reads from `GET /crm/reports/follow-ups` (loaded once on mount).
+    - Queue alert strip reads from `QueueCounts` already returned by `GET /crm/queue` — no extra API call.
+    - If the follow-ups endpoint fails, the alert strip should hide gracefully (null data = no render).
+    - Alert strip must link to real, working pages: `/crm/queue?filter=overdue`, `/crm/queue?filter=due`,
+      `/crm/tasks?due=overdue`, `/crm/tasks?due=today`.
+
 ---
 
 ## Documentation

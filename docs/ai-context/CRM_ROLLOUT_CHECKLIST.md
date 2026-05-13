@@ -891,6 +891,53 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 10B — Callback/Task Alert Strip and Activity Digest
+
+```
+[ ] 1. Dashboard alert strip renders from real data
+        - /crm/dashboard fetches GET /crm/reports/follow-ups on load
+        - Alert strip shows overdue callbacks (red), due today callbacks (amber),
+          overdue tasks (red), due today tasks (amber)
+        - Each item links to the correct real page:
+            - overdue callbacks  → /crm/queue?filter=overdue
+            - due today          → /crm/queue?filter=due
+            - overdue tasks      → /crm/tasks?due=overdue
+            - due today tasks    → /crm/tasks?due=today
+
+[ ] 2. Dashboard "all caught up" state
+        - When all 4 counts are 0 → shows green "All caught up" strip
+        - When endpoint fails gracefully → strip hidden, no crash
+
+[ ] 3. Queue manual-mode alert strip
+        - Compact red/amber banner above the tabs when counts.overdue > 0 or counts.due > 0
+        - "X overdue · Y due today" with "Call overdue →" and "Call due today →" buttons
+        - Clicking the buttons calls switchFilter("overdue") / switchFilter("due") correctly
+        - Strip is HIDDEN when both counts are 0
+        - Strip does NOT appear in power mode (power mode already has health banner)
+
+[ ] 4. Browser notification button
+        - Button "Enable reminders" only appears when:
+            a) 'Notification' in window
+            b) Notification.permission !== 'denied'
+        - NOT shown on page load automatically (explicit user action only)
+        - On click: requests permission; if granted fires ONE OS notification with overdue count
+        - Shows "Reminders on" indicator when permission already granted
+
+[ ] 5. No API changes
+        - Confirm: no changes to apps/api/**
+        - Dashboard uses existing GET /crm/reports/follow-ups (already deployed)
+        - Queue uses already-loaded QueueCounts from GET /crm/queue
+
+[ ] 6. Portal typecheck passes
+        pnpm tsc --noEmit (apps/portal) → 0 errors
+
+[ ] 7. Phone system unaffected
+        - /health returns {"ok":true}
+        - No telephony changes
+```
+
+---
+
 ## Quick Commands
 
 ```bash

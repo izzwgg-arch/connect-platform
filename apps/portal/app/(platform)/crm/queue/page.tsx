@@ -1253,6 +1253,49 @@ function QueuePageInner() {
           return null;
         })()}
 
+        {/* Manual mode callback alert strip — only shown when there are overdue/due callbacks */}
+        {!powerModeActive && !loading && (counts.overdue > 0 || counts.due > 0) && (
+          <div
+            className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm flex-wrap"
+            style={{
+              background: counts.overdue > 0 ? "#fef2f2" : "#fffbeb",
+              border: `1px solid ${counts.overdue > 0 ? "#fca5a5" : "#fcd34d"}`,
+            }}
+          >
+            <AlertCircle
+              className="h-4 w-4 shrink-0"
+              style={{ color: counts.overdue > 0 ? "#dc2626" : "#d97706" }}
+            />
+            <span className="font-medium" style={{ color: counts.overdue > 0 ? "#991b1b" : "#92400e" }}>
+              {counts.overdue > 0 && (
+                <strong className="text-red-700">{counts.overdue} overdue</strong>
+              )}
+              {counts.overdue > 0 && counts.due > 0 && (
+                <span className="text-gray-400 mx-1.5">·</span>
+              )}
+              {counts.due > 0 && (
+                <span className="text-amber-700">{counts.due} due today</span>
+              )}
+            </span>
+            {counts.overdue > 0 && (
+              <button
+                onClick={() => switchFilter("overdue")}
+                className="ml-1 text-xs font-semibold text-red-700 underline hover:no-underline shrink-0"
+              >
+                Call overdue →
+              </button>
+            )}
+            {counts.due > 0 && (
+              <button
+                onClick={() => switchFilter("due")}
+                className="ml-1 text-xs font-semibold text-amber-700 underline hover:no-underline shrink-0"
+              >
+                Call due today →
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
