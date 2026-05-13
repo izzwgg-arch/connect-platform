@@ -318,15 +318,19 @@ export class SolaCardknoxAdapter {
   async testConnection(): Promise<{ ok: boolean; simulated: boolean }> {
     if (this.config.simulate) return { ok: true, simulated: true };
 
-    const path = this.config.transactionPath || this.config.subscriptionPath || this.config.customerPath || this.config.hostedSessionPath || "/hosted-checkout/sessions";
-    await postJson(this.config, path, {
-      validateOnly: true,
-      action: "ping",
+    /** Reachability + xKey check via gatewayjson only (no card, no monetary capture). */
+    const payload = await postGatewayJson(this.config, {
+      xCommand: "cc:auth",
+      xToken: "CONNECT_VALIDATION_INVALID_TOKEN",
       xAmount: "0.00",
-      amountCents: 0,
-      successUrl: "https://app.connectcomunications.com/dashboard/billing?validate=success",
-      cancelUrl: "https://app.connectcomunications.com/dashboard/billing?validate=cancel"
+      xInvoice: `CONNECT_PING_${Date.now()}`,
     });
+    const xr = String((payload as any).xResult || "").toUpperCase();
+    if (xr === "E") {
+      const err: any = new Error("SOLA_GATEWAY_ERROR");
+      err.code = String((payload as any).xError || (payload as any).xStatus || "SOLA_GATEWAY_ERROR");
+      throw err;
+    }
     return { ok: true, simulated: false };
   }
 

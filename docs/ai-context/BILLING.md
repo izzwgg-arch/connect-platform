@@ -12,6 +12,7 @@
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
 | SOLA adapter selection (per-tenant vs env) | `apps/api/src/billing/solaGateway.ts` |
+| Public billing URLs (SOLA webhook) | `apps/api/src/billing/solaPublicUrls.ts` |
 | Token charges, hosted session helper, webhook apply + dedupe | `apps/api/src/billing/solaBillingPayments.ts` |
 | Cardknox client (`gatewayjson`, parse/verify) | `packages/integrations/src/sola-cardknox/index.ts` |
 | Legacy + subscription + `POST /webhooks/sola-cardknox` | `apps/api/src/server.ts` (large file — grep paths) |
@@ -63,6 +64,17 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 - **Duplicates:** repeated deliveries must **not** double-pay — dedupe uses `xRefNum`-derived keys + `PaymentTransaction` OR clause (see `buildBillingWebhookDedupeOrClause`).
 - **Declines / errors:** **`PaymentTransaction` + `BillingEventLog`** rows are still created. **`xResult`:** **`A`** = approved, **`D`** = declined, **`E`** = error (mapped to transaction status and webhook handling in `solaBillingPayments.ts` / adapter `normalizeCardknoxResponse`).
 - **Config precedence:** **`BillingSolaConfig`** for the tenant when enabled; otherwise **env** fallback (`SOLA_CARDKNOX_*` in `getBillingSolaAdapter` in `solaGateway.ts`) — same pattern for webhook verification adapters.
+
+### SOLA setup (operators)
+
+1. **API public base URL:** Set **`PUBLIC_API_BASE_URL`** or **`PUBLIC_API_URL`** on the API service to the HTTPS origin that SOLA and browsers use to reach Connect (same host as other billing links). The webhook URL is derived from this value.
+2. **SOLA API Key (xKey):** From the SOLA/Cardknox merchant dashboard — stored encrypted in **`BillingSolaConfig`** (`credentialsEncrypted.apiKey`).
+3. **Webhook/Postback URL:** Connect exposes exactly **`{PUBLIC_API_BASE_URL or PUBLIC_API_URL}/webhooks/sola-cardknox`** (computed in **`apps/api/src/billing/solaPublicUrls.ts`**). Copy this URL from **Billing → Settings** or **Admin Billing → Settings → SOLA Gateway** into the vendor’s webhook/postback URL field.
+4. **Webhook Verification PIN:** Same secret in Connect (**Webhook Verification PIN**) and in SOLA/Cardknox postback security (supports **`ck-signature`** verification). **Required when mode is Production** — save and enable are rejected without it.
+5. **Optional iFields public key:** Needed only for **Billing → Payments** tokenized card capture; not required for invoice charges if cards are vaulted another way.
+6. **Test configuration:** Calls **`gatewayjson`** with a zero-amount auth-style check only (no real card, no capture). Run after saving xKey; **Enable** stays disabled until the test returns success.
+
+Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**, **`authMode`**, and **`apiSecret`** in the database; the simplified portal forms no longer edit those fields but the API still accepts them for older clients and migrations.
 
 ## Automation & email (BillingInvoice)
 

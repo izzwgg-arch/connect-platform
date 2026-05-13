@@ -16,10 +16,24 @@ import { PermissionGate } from "../../../components/PermissionGate";
  */
 export function TenantBillingSettingsContent() {
   const [busy, setBusy] = useState("");
+  const [webhookCopied, setWebhookCopied] = useState(false);
   const config = useAsyncResource(() => apiGet<any>("/billing/sola/config"), []);
   const tenantBilling = useAsyncResource(() => apiGet<any>("/billing/settings"), []);
   const current = config.status === "success" ? config.data?.config : null;
+  const webhookUrl =
+    (config.status === "success" && (config.data?.webhookUrl || current?.webhookUrl)) || null;
   const bs = tenantBilling.status === "success" ? tenantBilling.data : null;
+
+  async function copyWebhookUrl() {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setWebhookCopied(true);
+      window.setTimeout(() => setWebhookCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  }
 
   return (
     <PermissionGate permission="can_view_settings_billing" fallback={<div className="state-box">You do not have billing settings access.</div>}>
@@ -124,6 +138,17 @@ export function TenantBillingSettingsContent() {
         ) : null}
 
         <DetailCard title="This Tenant SOLA Gateway">
+          {webhookUrl ? (
+            <div className="muted" style={{ marginBottom: 16, lineHeight: 1.5 }}>
+              <strong>Webhook/Postback URL</strong> — paste this exact URL into SOLA/Cardknox webhook or postback settings so payment notifications reach Connect.
+              <div className="row-actions" style={{ marginTop: 8, flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                <code style={{ fontSize: "0.85rem", wordBreak: "break-all", flex: "1 1 240px" }}>{webhookUrl}</code>
+                <button className="btn ghost" type="button" onClick={() => void copyWebhookUrl()}>
+                  {webhookCopied ? "Copied" : "Copy URL"}
+                </button>
+              </div>
+            </div>
+          ) : null}
           <form
             className="billing-form"
             onSubmit={async (event) => {
@@ -131,17 +156,24 @@ export function TenantBillingSettingsContent() {
               setBusy("save");
               try {
                 const form = new FormData(event.currentTarget);
+                const mode = String(form.get("mode") || "sandbox");
+                const simulate = mode === "prod" ? false : form.get("simulate") === "on";
+                const apiKey = String(form.get("apiKey") || "").trim();
+                if (!apiKey && !(current?.masked?.apiKey && String(current.masked.apiKey).includes("*"))) {
+                  window.alert("SOLA API Key (xKey) is required.");
+                  return;
+                }
+                const pin = String(form.get("webhookSecret") || "").trim();
+                if (mode === "prod" && !pin && !(current?.masked?.webhookSecret === "********")) {
+                  window.alert("Production mode requires a Webhook Verification PIN (same value in Connect and in SOLA postback security).");
+                  return;
+                }
                 await apiPut("/billing/sola/config", {
-                  apiBaseUrl: String(form.get("apiBaseUrl") || "https://x1.cardknox.com"),
-                  mode: String(form.get("mode") || "sandbox"),
-                  simulate: form.get("simulate") === "on",
-                  authMode: String(form.get("authMode") || "xkey_body"),
-                  authHeaderName: String(form.get("authHeaderName") || "") || null,
-                  apiKey: String(form.get("apiKey") || "") || undefined,
-                  apiSecret: String(form.get("apiSecret") || "") || undefined,
-                  webhookSecret: String(form.get("webhookSecret") || "") || undefined,
-                  ifieldsKey: String(form.get("ifieldsKey") || "") || undefined,
-                  pathOverrides: { transactionPath: String(form.get("transactionPath") || "/gatewayjson") },
+                  mode,
+                  simulate,
+                  apiKey: apiKey || undefined,
+                  webhookSecret: pin || undefined,
+                  ifieldsKey: String(form.get("ifieldsKey") || "").trim() || undefined,
                 });
                 window.location.reload();
               } finally {
@@ -153,42 +185,29 @@ export function TenantBillingSettingsContent() {
               {current?.isEnabled ? "Enabled" : current ? "Configured but disabled" : "Not configured"}
             </div>
             <label>
-              Gateway URL <input name="apiBaseUrl" defaultValue={current?.apiBaseUrl || "https://x1.cardknox.com"} />
-            </label>
-            <label>
-              Transaction path <input name="transactionPath" defaultValue={current?.pathOverrides?.transactionPath || "/gatewayjson"} />
-            </label>
-            <label>
-              Mode
+              Mode (environment)
               <select name="mode" defaultValue={current?.mode || "sandbox"}>
                 <option value="sandbox">Sandbox</option>
                 <option value="prod">Production</option>
               </select>
             </label>
+            <p className="muted" style={{ fontSize: "0.85rem", marginTop: -6 }}>
+              Production requires a saved webhook PIN and disables simulated gateway responses.
+            </p>
             <label>
-              Auth mode
-              <select name="authMode" defaultValue={current?.authMode || "xkey_body"}>
-                <option value="xkey_body">xKey in body</option>
-                <option value="authorization_header">Authorization header</option>
-              </select>
+              SOLA API Key (xKey){" "}
+              <input name="apiKey" autoComplete="off" placeholder={current?.masked?.apiKey || "From SOLA/Cardknox dashboard"} />
             </label>
             <label>
-              Auth header name <input name="authHeaderName" defaultValue={current?.authHeaderName || ""} placeholder="authorization" />
+              iFields public key (optional){" "}
+              <input name="ifieldsKey" placeholder={current?.masked?.ifieldsKey || "For Billing → Payments secure card fields"} />
             </label>
             <label>
-              API key <input name="apiKey" placeholder={current?.masked?.apiKey || "Enter SOLA/Cardknox API key"} />
-            </label>
-            <label>
-              iFields public key <input name="ifieldsKey" placeholder={current?.masked?.ifieldsKey || "Public key for secure card fields"} />
-            </label>
-            <label>
-              API secret <input name="apiSecret" type="password" placeholder={current?.masked?.apiSecret || "Optional"} />
-            </label>
-            <label>
-              Webhook PIN/secret <input name="webhookSecret" type="password" placeholder={current?.masked?.webhookSecret || "For ck-signature verification"} />
+              Webhook Verification PIN{" "}
+              <input name="webhookSecret" type="password" autoComplete="new-password" placeholder={current?.masked?.webhookSecret || "Same PIN as SOLA postback / ck-signature"} />
             </label>
             <label className="billing-checkbox">
-              <input name="simulate" type="checkbox" defaultChecked={!!current?.simulate} /> Simulate gateway responses
+              <input name="simulate" type="checkbox" defaultChecked={!!current?.simulate} disabled={current?.mode === "prod"} /> Simulate gateway responses (sandbox only)
             </label>
             <div className="row-actions">
               <button className="btn primary" type="submit" disabled={!!busy}>
@@ -208,7 +227,7 @@ export function TenantBillingSettingsContent() {
                   }
                 }}
               >
-                {busy === "test" ? "Testing..." : "Test"}
+                {busy === "test" ? "Testing..." : "Test configuration"}
               </button>
               {current?.isEnabled ? (
                 <button

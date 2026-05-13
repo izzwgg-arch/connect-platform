@@ -12,7 +12,7 @@ export type TenantDetail = {
   invoices: any[];
   paymentMethods: any[];
   taxProfiles: any[];
-  sola: { configured: boolean; config: any | null; decryptFailed?: boolean };
+  sola: { configured: boolean; config: any | null; webhookUrl?: string | null; decryptFailed?: boolean };
 };
 
 function toDollars(cents: number | undefined | null) {
@@ -182,9 +182,34 @@ export function AdminTenantInvoiceBrandingForm({ detail, onSaved }: { detail: Te
 
 export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
   const [busy, setBusy] = useState("");
+  const [webhookCopied, setWebhookCopied] = useState(false);
   const config = detail.sola.config;
+  const webhookUrl = detail.sola.webhookUrl || config?.webhookUrl || null;
+
+  async function copyWebhookUrl() {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setWebhookCopied(true);
+      window.setTimeout(() => setWebhookCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
     <DetailCard title="SOLA Gateway">
+      {webhookUrl ? (
+        <div className="muted" style={{ marginBottom: 16, lineHeight: 1.5 }}>
+          <strong>Webhook/Postback URL</strong> — paste this exact URL into SOLA/Cardknox webhook or postback settings.
+          <div className="row-actions" style={{ marginTop: 8, flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+            <code style={{ fontSize: "0.85rem", wordBreak: "break-all", flex: "1 1 240px" }}>{webhookUrl}</code>
+            <button className="btn ghost" type="button" onClick={() => void copyWebhookUrl()}>
+              {webhookCopied ? "Copied" : "Copy URL"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <form
         className="billing-form"
         onSubmit={async (event) => {
@@ -192,21 +217,24 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
           setBusy("save");
           try {
             const form = new FormData(event.currentTarget);
+            const mode = String(form.get("mode") || "sandbox");
+            const simulate = mode === "prod" ? false : form.get("simulate") === "on";
+            const apiKey = String(form.get("apiKey") || "").trim();
+            if (!apiKey && !(config?.masked?.apiKey && String(config.masked.apiKey).includes("*"))) {
+              window.alert("SOLA API Key (xKey) is required.");
+              return;
+            }
+            const pin = String(form.get("webhookSecret") || "").trim();
+            if (mode === "prod" && !pin && !(config?.masked?.webhookSecret === "********")) {
+              window.alert("Production mode requires a Webhook Verification PIN (same value in Connect and in SOLA postback security).");
+              return;
+            }
             await apiPut(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config`, {
-              apiBaseUrl: String(form.get("apiBaseUrl") || "https://x1.cardknox.com"),
-              mode: String(form.get("mode") || "sandbox"),
-              simulate: form.get("simulate") === "on",
-              authMode: String(form.get("authMode") || "xkey_body"),
-              authHeaderName: String(form.get("authHeaderName") || "") || null,
-              apiKey: String(form.get("apiKey") || "") || undefined,
-              apiSecret: String(form.get("apiSecret") || "") || undefined,
-              webhookSecret: String(form.get("webhookSecret") || "") || undefined,
-              ifieldsKey: String(form.get("ifieldsKey") || "") || undefined,
-              pathOverrides: {
-                transactionPath: String(form.get("transactionPath") || "/gatewayjson"),
-                hostedSessionPath: String(form.get("hostedSessionPath") || ""),
-                chargePath: String(form.get("chargePath") || ""),
-              },
+              mode,
+              simulate,
+              apiKey: apiKey || undefined,
+              webhookSecret: pin || undefined,
+              ifieldsKey: String(form.get("ifieldsKey") || "").trim() || undefined,
             });
             onSaved();
           } finally {
@@ -219,48 +247,27 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
           {config?.status?.lastTestResult ? ` · Last test ${config.status.lastTestResult}` : ""}
         </div>
         <label>
-          Gateway URL <input name="apiBaseUrl" defaultValue={config?.apiBaseUrl || "https://x1.cardknox.com"} />
-        </label>
-        <label>
-          Transaction path <input name="transactionPath" defaultValue={config?.pathOverrides?.transactionPath || "/gatewayjson"} />
-        </label>
-        <label>
-          Hosted session path <input name="hostedSessionPath" defaultValue={config?.pathOverrides?.hostedSessionPath || ""} placeholder="Optional" />
-        </label>
-        <label>
-          Charge path <input name="chargePath" defaultValue={config?.pathOverrides?.chargePath || ""} placeholder="Optional legacy path" />
-        </label>
-        <label>
-          Mode
+          Mode (environment)
           <select name="mode" defaultValue={config?.mode || "sandbox"}>
             <option value="sandbox">Sandbox</option>
             <option value="prod">Production</option>
           </select>
         </label>
+        <p className="muted" style={{ fontSize: "0.85rem", marginTop: -6 }}>
+          Production requires a saved webhook PIN and disables simulated gateway responses.
+        </p>
         <label>
-          Auth mode
-          <select name="authMode" defaultValue={config?.authMode || "xkey_body"}>
-            <option value="xkey_body">xKey in body</option>
-            <option value="authorization_header">Authorization header</option>
-          </select>
+          SOLA API Key (xKey) <input name="apiKey" autoComplete="off" placeholder={config?.masked?.apiKey || "From SOLA/Cardknox dashboard"} />
         </label>
         <label>
-          Auth header name <input name="authHeaderName" defaultValue={config?.authHeaderName || ""} placeholder="authorization" />
+          iFields public key (optional) <input name="ifieldsKey" placeholder={config?.masked?.ifieldsKey || "For tenant Billing → Payments"} />
         </label>
         <label>
-          API key <input name="apiKey" placeholder={config?.masked?.apiKey || "Enter SOLA/Cardknox API key"} />
-        </label>
-        <label>
-          iFields public key <input name="ifieldsKey" placeholder={config?.masked?.ifieldsKey || "Public key for hosted card fields"} />
-        </label>
-        <label>
-          API secret <input name="apiSecret" type="password" placeholder={config?.masked?.apiSecret || "Optional"} />
-        </label>
-        <label>
-          Webhook PIN/secret <input name="webhookSecret" type="password" placeholder={config?.masked?.webhookSecret || "For ck-signature verification"} />
+          Webhook Verification PIN{" "}
+          <input name="webhookSecret" type="password" autoComplete="new-password" placeholder={config?.masked?.webhookSecret || "Same PIN as SOLA postback / ck-signature"} />
         </label>
         <label className="billing-checkbox">
-          <input name="simulate" type="checkbox" defaultChecked={!!config?.simulate} /> Simulate gateway responses
+          <input name="simulate" type="checkbox" defaultChecked={!!config?.simulate && config?.mode !== "prod"} disabled={config?.mode === "prod"} /> Simulate gateway responses (sandbox only)
         </label>
         <div className="row-actions">
           <button className="btn primary" type="submit" disabled={!!busy}>
@@ -280,7 +287,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
               }
             }}
           >
-            {busy === "test" ? "Testing..." : "Test"}
+            {busy === "test" ? "Testing..." : "Test configuration"}
           </button>
           {config?.isEnabled ? (
             <button

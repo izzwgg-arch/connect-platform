@@ -95,9 +95,20 @@ import {
 } from "@connect/shared";
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
+import { registerCrmRoutes } from "./crm/routes";
+import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerBillingRoutes } from "./billing/routes";
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
+import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
+import {
+  resolveSolaPutApiBaseUrl,
+  resolveTenantPutAuthMode,
+  solaEnableBlockedMissingProdPin,
+  solaWebhookPinMissingForProd,
+  tenantPutPathOverridesSource,
+} from "./billing/solaConfigPolicy";
+import { billingSolaCardknoxWebhookUrl } from "./billing/solaPublicUrls";
 import {
   assertExtensionExistsForTenant as assertExtensionExistsForTenantHelper,
   buildExtensionOverrideKeys,
@@ -1010,17 +1021,13 @@ function maskSolaConfigForResponse(input: {
     configured: true,
     isEnabled: !!input.record.isEnabled,
     apiBaseUrl: input.record.apiBaseUrl,
+    webhookUrl: billingSolaCardknoxWebhookUrl(),
     mode: input.record.mode === "PROD" ? "prod" : "sandbox",
     simulate: !!input.record.simulate,
     authMode: input.record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
     authHeaderName: input.record.authHeaderName || null,
     pathOverrides: input.pathOverrides,
-    masked: {
-      apiKey: maskValue(input.secrets.apiKey, 4, 2),
-      apiSecret: input.secrets.apiSecret ? "********" : null,
-      webhookSecret: input.secrets.webhookSecret ? "********" : null,
-      ifieldsKey: input.secrets.ifieldsKey ? maskValue(input.secrets.ifieldsKey, 6, 3) : null
-    },
+    masked: maskSolaSecretsForResponse(input.secrets),
     status: {
       lastTestAt: input.record.lastTestAt,
       lastTestResult: input.record.lastTestResult || null,
@@ -3795,6 +3802,10 @@ async function readApkManifest(): Promise<{
   manifestTimestamp: string | null;
   releaseNotes: string | null;
   commitSha: string | null;
+  /** From `connectcomms-latest.json` when present (Android `versionCode`). */
+  versionCode: number | null;
+  /** Short ship / CI id from publish manifest when present. */
+  buildId: string | null;
 }> {
   const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
   let stat: import("fs").Stats | null = null;
@@ -3807,6 +3818,8 @@ async function readApkManifest(): Promise<{
   let releaseNotes: string | null = null;
   let commitSha: string | null = null;
   let manifestTimestamp: string | null = null;
+  let versionCode: number | null = null;
+  let buildId: string | null = null;
   try {
     const manifestRaw = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
     // Strip a leading UTF-8 BOM (some editors/PowerShell encodings add one).
@@ -3817,6 +3830,8 @@ async function readApkManifest(): Promise<{
       commitSha?: string;
       createdAt?: string;
       publishedAt?: string;
+      versionCode?: number | string;
+      buildId?: string;
     };
     if (parsed && typeof parsed.version === "string" && /^\d+\.\d+\.\d+/.test(parsed.version)) {
       version = parsed.version;
@@ -3826,6 +3841,20 @@ async function readApkManifest(): Promise<{
     }
     if (parsed && typeof parsed.commitSha === "string" && /^[0-9a-f]{7,40}$/i.test(parsed.commitSha.trim())) {
       commitSha = parsed.commitSha.trim().toLowerCase();
+    }
+    if (parsed && parsed.versionCode != null) {
+      const rawVc = parsed.versionCode;
+      const vcNum =
+        typeof rawVc === "number" && Number.isFinite(rawVc)
+          ? Math.trunc(rawVc)
+          : typeof rawVc === "string" && /^\d{1,10}$/.test(rawVc.trim())
+            ? Number.parseInt(rawVc.trim(), 10)
+            : NaN;
+      if (Number.isFinite(vcNum) && vcNum >= 1 && vcNum <= 2_100_000_000) versionCode = vcNum;
+    }
+    if (parsed && typeof parsed.buildId === "string") {
+      const b = parsed.buildId.trim().slice(0, 120);
+      if (b.length > 0 && !/[<>]/.test(b)) buildId = b;
     }
     const tsRaw =
       (parsed && typeof parsed.createdAt === "string" && parsed.createdAt.trim()) ||
@@ -3846,6 +3875,8 @@ async function readApkManifest(): Promise<{
     manifestTimestamp,
     releaseNotes,
     commitSha,
+    versionCode,
+    buildId,
   };
 }
 
@@ -3892,12 +3923,22 @@ function renderAndroidApkDownloadPage(input: {
   commitSha?: string | null;
   /** ISO time from publish manifest or APK file mtime. */
   releasedAt?: string | null;
+  versionCode?: number | null;
+  buildId?: string | null;
 }): string {
   const versionText = input.version ? `Version ${input.version}` : "Latest Android build";
   const sizeText = input.sizeBytes ? `${(input.sizeBytes / 1024 / 1024).toFixed(2)} MB` : "APK download";
   const releasedLine =
     input.releasedAt && input.releasedAt.length > 0
       ? `<div class="meta" style="margin-top:6px;">Build ${escapeHtmlForApkPage(input.releasedAt)}</div>`
+      : "";
+  const vc = typeof input.versionCode === "number" && Number.isFinite(input.versionCode) ? input.versionCode : null;
+  const bid = input.buildId && input.buildId.trim().length > 0 ? input.buildId.trim() : "";
+  const nativeMetaLine =
+    vc !== null || bid.length > 0
+      ? `<div class="meta" style="margin-top:8px;">${vc !== null ? `versionCode ${vc}` : ""}${
+          vc !== null && bid.length > 0 ? " · " : ""
+        }${bid.length > 0 ? `build ${escapeHtmlForApkPage(bid)}` : ""}</div>`
       : "";
   const commitLine =
     input.commitSha && input.commitSha.length > 0
@@ -3932,6 +3973,7 @@ function renderAndroidApkDownloadPage(input: {
     <p>Tap the button below to download the Android app directly from Connect.</p>
     <div class="meta">${versionText} · ${sizeText}</div>
     ${releasedLine}
+    ${nativeMetaLine}
     ${commitLine}
     ${notesBlock}
     <a class="button" href="${input.apkUrl}" download>Download Android App</a>
@@ -3955,6 +3997,8 @@ app.get("/mobile/android/download", async (_req, reply) => {
     releaseNotes: manifest.releaseNotes,
     commitSha: manifest.commitSha,
     releasedAt: manifest.manifestTimestamp || manifest.modifiedAt,
+    versionCode: manifest.versionCode,
+    buildId: manifest.buildId,
   }));
 });
 
@@ -4001,6 +4045,8 @@ app.get("/downloads/:filename", async (req, reply) => {
       releaseNotes: manifest.releaseNotes,
       commitSha: manifest.commitSha,
       releasedAt: manifest.manifestTimestamp || manifest.modifiedAt,
+      versionCode: manifest.versionCode,
+      buildId: manifest.buildId,
     }));
   }
 
@@ -4092,6 +4138,8 @@ app.get("/mobile/android/latest", async (_req, reply) => {
     publishedAt,
     ...(manifest.releaseNotes ? { releaseNotes: manifest.releaseNotes } : {}),
     ...(manifest.commitSha ? { commitSha: manifest.commitSha } : {}),
+    ...(typeof manifest.versionCode === "number" ? { versionCode: manifest.versionCode } : {}),
+    ...(manifest.buildId ? { buildId: manifest.buildId } : {}),
   };
 });
 
@@ -22654,14 +22702,15 @@ app.get("/billing/sola/config", async (req, reply) => {
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
+  const webhookUrl = billingSolaCardknoxWebhookUrl();
   const record = await db.billingSolaConfig.findUnique({ where: { tenantId: admin.tenantId } });
   if (!record) {
-    return { configured: false, config: null };
+    return { configured: false, config: null, webhookUrl };
   }
 
   try {
     const resolved = await getTenantSolaConfig(admin.tenantId, { requireEnabled: false, allowFallbackEnv: false });
-    return { configured: true, config: resolved.masked };
+    return { configured: true, config: resolved.masked, webhookUrl };
   } catch {
     return {
       configured: true,
@@ -22671,6 +22720,7 @@ app.get("/billing/sola/config", async (req, reply) => {
         configured: true,
         isEnabled: !!record.isEnabled,
         apiBaseUrl: record.apiBaseUrl,
+        webhookUrl,
         mode: record.mode === "PROD" ? "prod" : "sandbox",
         simulate: !!record.simulate,
         authMode: record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
@@ -22699,10 +22749,10 @@ app.put("/billing/sola/config", async (req, reply) => {
   if (!ensureCredentialCrypto(reply)) return;
 
   const input = z.object({
-    apiBaseUrl: z.string().url(),
+    apiBaseUrl: z.string().url().optional().nullable(),
     mode: z.enum(["sandbox", "prod"]),
     simulate: z.boolean().default(false),
-    authMode: z.enum(["xkey_body", "authorization_header"]),
+    authMode: z.enum(["xkey_body", "authorization_header"]).optional(),
     authHeaderName: z.string().min(1).max(64).optional().nullable(),
     apiKey: z.string().min(1).optional(),
     apiSecret: z.string().min(1).optional().nullable(),
@@ -22742,19 +22792,28 @@ app.put("/billing/sola/config", async (req, reply) => {
   if (!nextSecrets.apiKey) {
     return reply.status(400).send({ error: "SOLA_API_KEY_REQUIRED" });
   }
+  if (solaWebhookPinMissingForProd(input.mode, nextSecrets.webhookSecret)) {
+    return reply.status(400).send({
+      error: "SOLA_WEBHOOK_PIN_REQUIRED",
+      message: "Production mode requires a webhook verification PIN. Enter the same PIN in Connect and in the SOLA/Cardknox webhook or postback security settings.",
+    });
+  }
+
+  const apiBaseUrl = resolveSolaPutApiBaseUrl(input.apiBaseUrl, existing?.apiBaseUrl);
+  const authMode = resolveTenantPutAuthMode(input.authMode, existing?.authMode);
 
   const encrypted = encryptJson(nextSecrets);
-  const pathOverrides = normalizeSolaPathOverrides(input.pathOverrides || existing?.pathOverrides || {});
+  const pathOverrides = normalizeSolaPathOverrides(tenantPutPathOverridesSource(input.pathOverrides, existing?.pathOverrides));
   const isEnabled = false;
 
   const upserted = await db.billingSolaConfig.upsert({
     where: { tenantId: admin.tenantId },
     create: {
       tenantId: admin.tenantId,
-      apiBaseUrl: input.apiBaseUrl,
+      apiBaseUrl,
       mode: input.mode === "prod" ? "PROD" : "SANDBOX",
       simulate: input.simulate,
-      authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
+      authMode: authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
       authHeaderName: input.authHeaderName || null,
       pathOverrides: pathOverrides as any,
       credentialsEncrypted: encrypted,
@@ -22767,10 +22826,10 @@ app.put("/billing/sola/config", async (req, reply) => {
       lastTestAt: null
     },
     update: {
-      apiBaseUrl: input.apiBaseUrl,
+      apiBaseUrl,
       mode: input.mode === "prod" ? "PROD" : "SANDBOX",
       simulate: input.simulate,
-      authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
+      authMode: authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
       authHeaderName: input.authHeaderName || null,
       pathOverrides: pathOverrides as any,
       credentialsEncrypted: encrypted,
@@ -22836,6 +22895,20 @@ app.post("/billing/sola/config/enable", async (req, reply) => {
   if (!record) return reply.status(404).send({ error: "NOT_CONFIGURED" });
   if (record.lastTestResult !== "SUCCESS") {
     return reply.status(400).send({ error: "SOLA_TEST_REQUIRED", message: "Run test connection successfully before enabling." });
+  }
+  if (record.mode === "PROD") {
+    let secrets: BillingSolaCredentialPayload;
+    try {
+      secrets = decryptJson<BillingSolaCredentialPayload>(record.credentialsEncrypted);
+    } catch {
+      return reply.status(400).send({ error: "SOLA_DECRYPT_FAILED" });
+    }
+    if (solaEnableBlockedMissingProdPin(record.mode, secrets.webhookSecret)) {
+      return reply.status(400).send({
+        error: "SOLA_WEBHOOK_PIN_REQUIRED",
+        message: "Set and save a webhook verification PIN before enabling production SOLA.",
+      });
+    }
   }
 
   const updated = await db.billingSolaConfig.update({ where: { tenantId: admin.tenantId }, data: { isEnabled: true, updatedByUserId: admin.sub } });
@@ -25238,6 +25311,22 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         rawLegCount: { increment: 1 },
       },
     });
+    // ── CRM CDR hook — fire-and-forget, never blocks CDR ingest ──────────────
+    if (tenantPack.tenantId) {
+      fireCrmCdrHook({
+        linkedId: d.linkedId,
+        tenantId: tenantPack.tenantId,
+        fromNumber: d.fromNumber ?? null,
+        toNumber: d.toNumber ?? null,
+        direction: resolvedDirection,
+        disposition: d.disposition,
+        durationSec: d.durationSec,
+        talkSec: d.talkSec,
+        recordingAvailable: recordingPath !== null,
+        startedAt: new Date(d.startedAt),
+      }).catch(() => {}); // fire-and-forget — CDR ingest must never be affected
+    }
+
     if (process.env.CDR_PIPELINE_DIAG?.trim() === "1") {
       app.log.info(
         {
@@ -31273,6 +31362,7 @@ const port = Number(process.env.PORT || 3001);
     },
   });
   registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
+  await registerCrmRoutes(app);
   await app.listen({ host: "0.0.0.0", port });
   startPbxKpiBackgroundRefresh();
   startPbxLiveDashboardWarm();

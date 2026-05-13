@@ -9,6 +9,14 @@ import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
 import { chargeBillingInvoice } from "./solaBillingPayments";
+import { maskSolaSecretsForResponse } from "./solaConfigMasking";
+import {
+  adminPutPathOverridesSource,
+  resolveSolaPutApiBaseUrl,
+  solaEnableBlockedMissingProdPin,
+  solaWebhookPinMissingForProd,
+} from "./solaConfigPolicy";
+import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
 import { billingInvoicePdfApiUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
@@ -60,12 +68,6 @@ function ensureCredentialCrypto(reply: any): boolean {
   return false;
 }
 
-function maskValue(value: string | undefined | null, start = 4, end = 2): string | null {
-  if (!value) return null;
-  if (value.length <= start + end) return "*".repeat(Math.max(4, value.length));
-  return `${value.slice(0, start)}${"*".repeat(value.length - start - end)}${value.slice(-end)}`;
-}
-
 type SolaCredentialPayload = {
   apiKey: string;
   apiSecret?: string | null;
@@ -95,17 +97,13 @@ function maskSolaConfig(record: any, secrets?: SolaCredentialPayload | null) {
     configured: true,
     isEnabled: !!record.isEnabled,
     apiBaseUrl: record.apiBaseUrl,
+    webhookUrl: billingSolaCardknoxWebhookUrl(),
     mode: record.mode === "PROD" ? "prod" : "sandbox",
     simulate: !!record.simulate,
     authMode: record.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
     authHeaderName: record.authHeaderName || null,
     pathOverrides: normalizePathOverrides(record.pathOverrides || {}),
-    masked: {
-      apiKey: maskValue(secrets?.apiKey || null),
-      apiSecret: secrets?.apiSecret ? "********" : null,
-      webhookSecret: secrets?.webhookSecret ? "********" : null,
-      ifieldsKey: maskValue(secrets?.ifieldsKey || null, 6, 3),
-    },
+    masked: maskSolaSecretsForResponse(secrets || undefined),
     status: {
       lastTestAt: record.lastTestAt,
       lastTestResult: record.lastTestResult || null,
@@ -116,13 +114,14 @@ function maskSolaConfig(record: any, secrets?: SolaCredentialPayload | null) {
 }
 
 async function getMaskedSolaConfigForTenant(tenantId: string) {
+  const webhookUrl = billingSolaCardknoxWebhookUrl();
   const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (!record) return { configured: false, config: null };
+  if (!record) return { configured: false, config: null, webhookUrl };
   try {
     const secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
-    return { configured: true, config: maskSolaConfig(record, secrets) };
+    return { configured: true, config: maskSolaConfig(record, secrets), webhookUrl };
   } catch {
-    return { configured: true, config: maskSolaConfig(record, null), decryptFailed: true };
+    return { configured: true, config: maskSolaConfig(record, null), decryptFailed: true, webhookUrl };
   }
 }
 
@@ -535,7 +534,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
     const input = z.object({
-      apiBaseUrl: z.string().url(),
+      apiBaseUrl: z.string().url().optional(),
       mode: z.enum(["sandbox", "prod"]),
       simulate: z.boolean().default(false),
       authMode: z.enum(["xkey_body", "authorization_header"]).default("xkey_body"),
@@ -558,7 +557,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     }
 
     const existing = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-    let existingSecrets: SolaCredentialPayload = { apiKey: "", apiSecret: null, webhookSecret: null };
+    let existingSecrets: SolaCredentialPayload = { apiKey: "", apiSecret: null, webhookSecret: null, ifieldsKey: null };
     if (existing) {
       try {
         existingSecrets = decryptJson<SolaCredentialPayload>(existing.credentialsEncrypted);
@@ -573,13 +572,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       ifieldsKey: input.ifieldsKey !== undefined ? (input.ifieldsKey || null) : (existingSecrets.ifieldsKey || null),
     };
     if (!nextSecrets.apiKey) return reply.code(400).send({ error: "sola_api_key_required" });
+    if (solaWebhookPinMissingForProd(input.mode, nextSecrets.webhookSecret)) {
+      return reply.code(400).send({
+        error: "sola_webhook_pin_required",
+        message: "Production mode requires a webhook verification PIN (store the same value in Connect and in the SOLA/Cardknox webhook/postback settings).",
+      });
+    }
 
-    const pathOverrides = normalizePathOverrides(input.pathOverrides || existing?.pathOverrides || {});
+    const apiBaseUrl = resolveSolaPutApiBaseUrl(input.apiBaseUrl, existing?.apiBaseUrl);
+    const pathOverrides = normalizePathOverrides(adminPutPathOverridesSource(input.pathOverrides, existing?.pathOverrides));
     const saved = await (db as any).billingSolaConfig.upsert({
       where: { tenantId },
       create: {
         tenantId,
-        apiBaseUrl: input.apiBaseUrl,
+        apiBaseUrl,
         mode: input.mode === "prod" ? "PROD" : "SANDBOX",
         simulate: input.simulate,
         authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
@@ -595,7 +601,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         lastTestErrorCode: null,
       },
       update: {
-        apiBaseUrl: input.apiBaseUrl,
+        apiBaseUrl,
         mode: input.mode === "prod" ? "PROD" : "SANDBOX",
         simulate: input.simulate,
         authMode: input.authMode === "authorization_header" ? "AUTHORIZATION_HEADER" : "XKEY_BODY",
@@ -653,6 +659,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
     if (!record) return reply.code(404).send({ error: "sola_not_configured" });
     if (record.lastTestResult !== "SUCCESS") return reply.code(400).send({ error: "sola_test_required" });
+    if (record.mode === "PROD") {
+      let secrets: SolaCredentialPayload;
+      try {
+        secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
+      } catch {
+        return reply.code(400).send({ error: "sola_decrypt_failed" });
+      }
+      if (solaEnableBlockedMissingProdPin(record.mode, secrets.webhookSecret)) {
+        return reply.code(400).send({
+          error: "sola_webhook_pin_required",
+          message: "Set and save a webhook verification PIN before enabling production SOLA.",
+        });
+      }
+    }
     const updated = await (db as any).billingSolaConfig.update({ where: { tenantId }, data: { isEnabled: true, updatedByUserId: u.sub } });
     await logBillingEvent({ tenantId, type: "sola.enabled", message: "SOLA gateway enabled." });
     return { ok: true, config: maskSolaConfig(updated, null) };

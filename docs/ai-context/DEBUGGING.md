@@ -74,6 +74,7 @@ from the edge and from in-process counters:
    and **`/api/admin/sms/provider-health`** on the **same 30 s** cadence from
    **`DesktopNotificationsBridge`** — fixed in portal by valid voicemail query + tenant
    SMS inbox for notifications + per-probe backoff (**`apps/portal/lib/desktopNotificationPoll.ts`**).
+4. **PBX / helper CPU (2026-05):** dense **`POST /voicemail/spool/list`** bursts on **`connect-pbx-helper`** during **`app-worker-1`** scheduled **`voicemail-spool-reconcile-summary`** cycles (full-fleet enumeration). Mitigation: adaptive **`setTimeout`** scheduler + optional **probe skip** + **`sinceOrigtime`** narrowing + env throttles — see **`VOICEMAIL_FLEET_STALE_RISK.md`** §5 and **`TELEPHONY.md`** §Voicemail. Verify with **`journalctl -u connect-pbx-helper`** and worker JSON (**`helper_calls`**, **`skipped_probe_no_new`**, **`next_reconcile_delay_ms`**).
 
 ---
 
@@ -222,12 +223,14 @@ Symptoms: portal **Billing** or **Invoices** loads but API returns **`403`** wit
 
 ## SOLA / Cardknox billing webhook (`POST /webhooks/sola-cardknox`)
 
-1. **HTTP codes:** **`400`** + `missing_event_id` — no **`eventId` / `xRefNum`** after parse, or billing apply returned **`missing_correlation`**. **`403`** + `invalid_signature` — **`ck-signature`** / Sola HMAC did not verify (check tenant **`BillingSolaConfig.webhookSecret`** vs env fallback in `solaGateway.ts`).
-2. **DB:** Inspect **`BillingEventLog`** (e.g. `webhook.deduped`, `webhook.signature_rejected`, `payment_failed`, `payment_succeeded`) and **`PaymentTransaction`** for the invoice — **declined (`D`) and error (`E`)** rows should still exist alongside logs.
-3. **Correlation:** Confirm webhook **`xInvoice`** matches a charge (**`CONNECT:tenantId:invoiceId:…`**) or legacy **`invoiceNumber` / id**; confirm **`processorTransactionId`** / idempotency keys store **`xRefNum` / `xRefNumber` as strings**.
-4. **Double pay:** If a duplicate webhook fired, expect **`webhook.deduped`** (or an existing **`PaymentTransaction`** matching the dedupe OR clause) — see **`buildBillingWebhookDedupeOrClause`** in `solaBillingPayments.ts`.
+1. **Webhook URL:** Must be **`https://<your-api-host>/webhooks/sola-cardknox`** — the Billing Settings UI shows the exact string from **`PUBLIC_API_BASE_URL`** / **`PUBLIC_API_URL`**. If SOLA never hits Connect, confirm the vendor URL matches byte-for-byte (no trailing slash unless your base URL includes one), TLS is valid, and firewalls allow SOLA’s IPs (vendor docs).
+2. **PIN / signature mismatch (`403` + `invalid_signature`):** Connect compares **`ck-signature`** (and Sola HMAC when applicable) using the tenant’s saved **Webhook Verification PIN** (or env fallback in **`solaGateway.ts`**). Regenerate or re-paste the same PIN in both Connect and the SOLA postback security screen. After changing PIN in Connect, save settings again; empty PIN in **Production** is rejected on save and on **Enable**.
+3. **HTTP codes:** **`400`** + `missing_event_id` — no **`eventId` / `xRefNum`** after parse, or billing apply returned **`missing_correlation`**. **`403`** + `invalid_signature` — header/body verification failed (see above).
+4. **DB:** Inspect **`BillingEventLog`** (e.g. `webhook.deduped`, `webhook.signature_rejected`, `payment_failed`, `payment_succeeded`) and **`PaymentTransaction`** for the invoice — **declined (`D`) and error (`E`)** rows should still exist alongside logs.
+5. **Correlation:** Confirm webhook **`xInvoice`** matches a charge (**`CONNECT:tenantId:invoiceId:…`**) or legacy **`invoiceNumber` / id**; confirm **`processorTransactionId`** / idempotency keys store **`xRefNum` / `xRefNumber` as strings**.
+6. **Double pay:** If a duplicate webhook fired, expect **`webhook.deduped`** (or an existing **`PaymentTransaction`** matching the dedupe OR clause) — see **`buildBillingWebhookDedupeOrClause`** in `solaBillingPayments.ts`.
 
-Reference: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox.
+Reference: **`docs/ai-context/BILLING.md`** § SOLA / Cardknox and § SOLA setup (operators).
 
 ---
 
