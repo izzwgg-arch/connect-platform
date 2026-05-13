@@ -238,6 +238,105 @@ curl -s -X POST https://app.connectcomunications.com/api/crm/contacts \
 
 ---
 
+## Phase 8A — Power Dialer Smoke Test
+
+Run after deploying Phase 8A portal changes. All checks are manual browser-based.
+
+### Prerequisites
+- CRM enabled for test tenant (Phase 7A already done)
+- At least 3 PENDING campaign members assigned to your test user
+- SIP softphone registered (portal phone connected)
+
+### Checklist
+
+```
+[ ] 1. Manual queue still works
+       - Navigate to /crm/queue
+       - "Start Power Dialer" button is visible in header
+       - Existing Next Up card, tabs, and actions all work normally
+
+[ ] 2. Power mode starts
+       - Click "Start Power Dialer"
+       - URL changes to /crm/queue?mode=power
+       - Blue sticky action bar appears at top: "Power Dialer • N leads remaining"
+       - Filter tabs disappear (power mode uses pending filter only)
+       - PowerCard shows for first pending member
+       - Large green "Call [phone]" button is visible
+
+[ ] 3. SIP not registered — Call button disabled
+       - Disconnect SIP softphone
+       - Amber warning appears: "SIP phone not registered"
+       - Call button is gray/disabled, cannot be clicked
+       - Reconnect SIP → warning disappears → button re-enables
+
+[ ] 4. Call button dispatches crm:dial
+       - With SIP registered, click "Call [number]"
+       - FloatingDialer / phone dialer activates (same as manual click-to-call)
+       - No automatic second call placed
+
+[ ] 5. Keyboard shortcuts (C / S / D)
+       - With power mode active and SIP registered:
+         - Press C → FloatingDialer activates (same as Call button)
+         - Press S → current lead is skipped → next lead appears automatically
+         - Press D → current lead is deferred (moved to end) → next lead appears
+       - Click in a text input, then press C/S/D → nothing fires
+
+[ ] 6. Skip action advances queue
+       - Click "Skip" on current lead
+       - Brief "Skipped ✓ — loading next lead…" feedback shown
+       - Queue reloads → next PENDING lead becomes the PowerCard
+       - Skipped lead no longer appears at top
+
+[ ] 7. Defer action advances queue
+       - Click "Defer" on current lead
+       - Queue reloads → deferred lead moves to end
+       - Next PENDING lead becomes current card
+
+[ ] 8. DNC action
+       - Click "DNC" → confirmation dialog appears
+       - Confirm → lead disappears → next lead loads
+
+[ ] 9. Pause / Resume
+       - Click "Pause" → PAUSED badge appears in action bar
+       - Pause notice shown on card
+       - Keyboard shortcuts C/S/D do nothing while paused
+       - Skip/Defer buttons also disabled while paused
+       - Click "Resume" → returns to normal
+
+[ ] 10. Open Workspace from power mode
+        - Click "Open Workspace" button on PowerCard
+        - URL: /crm/live-call?contactId=...&memberId=...&mode=power
+        - Back button says "Back to Queue" and returns to /crm/queue?mode=power
+
+[ ] 11. Save Outcome & Next Lead from live workspace
+        - Open workspace from power mode
+        - Select a disposition (e.g. "Contacted")
+        - Button says "Save Outcome & Next Lead →"
+        - Click → brief "Outcome saved" flash → navigates to /crm/queue?mode=power
+        - Queue shows next PENDING lead (not the just-processed one)
+
+[ ] 12. Keyboard shortcut O in live workspace
+        - Open workspace from power mode
+        - Select a disposition
+        - Press O (not in text field) → saves outcome + navigates back to queue
+
+[ ] 13. Queue complete state
+        - Work through all pending leads via skip/defer/outcome until none remain
+        - "Queue Complete!" screen appears with "Exit Power Dialer" button
+        - Clicking exit → /crm/queue (no mode param)
+
+[ ] 14. Stop Power Dialer
+        - Click "Stop" in sticky bar → URL becomes /crm/queue (no mode param)
+        - Normal queue view with tabs restored
+        - "Start Power Dialer" button re-appears
+
+[ ] 15. Manual queue unaffected
+        - Confirm normal MemberCard, tabs, actions still work after stopping
+        - No regressions to skip/defer/DNC/set-callback in manual mode
+```
+
+---
+
 ## Quick Commands
 
 ```bash

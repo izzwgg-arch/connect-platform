@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState, useCallback, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ListOrdered, PhoneCall, ExternalLink, SkipForward, Clock, Ban,
   RefreshCw, CheckCheck, Inbox, CalendarClock, UserCheck, X, Edit2,
-  ChevronRight, AlertCircle,
+  ChevronRight, AlertCircle, Zap, ZapOff, Pause, Play,
 } from "lucide-react";
-import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
+import { apiGet, apiPatch } from "../../../../services/apiClient";
+import { useSipPhone } from "../../../../hooks/useSipPhone";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ function relativeTime(iso: string): string {
 function callbackTimeLabel(iso: string): { label: string; urgent: boolean } {
   const d = new Date(iso);
   const now = new Date();
-  const diff = d.getTime() - now.getTime(); // positive = future
+  const diff = d.getTime() - now.getTime();
   const absDiff = Math.abs(diff) / 1000;
 
   if (diff < -86400) return { label: `Overdue ${Math.floor(absDiff / 86400)}d`, urgent: true };
@@ -85,7 +86,6 @@ function SetCallbackModal({ member, onClose, onSaved }: {
 }) {
   const defaultDatetime = (() => {
     const d = member.callbackAt ? new Date(member.callbackAt) : new Date(Date.now() + 3600_000);
-    // datetime-local format: YYYY-MM-DDTHH:MM
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   })();
@@ -160,7 +160,181 @@ function SetCallbackModal({ member, onClose, onSaved }: {
   );
 }
 
-// ── Member Card ─────────────────────────────────────────────────────────────────
+// ── Power Card ────────────────────────────────────────────────────────────────
+// Shown as the primary card in Power Dialer mode — large Call button, SIP check.
+
+function PowerCard({
+  member,
+  sipReady,
+  paused,
+  acting,
+  feedback,
+  onCall,
+  onAction,
+  onOpenWorkspace,
+}: {
+  member: QueueMember;
+  sipReady: boolean;
+  paused: boolean;
+  acting: boolean;
+  feedback: string | null;
+  onCall: () => void;
+  onAction: (action: string, extra?: Record<string, unknown>) => void;
+  onOpenWorkspace: () => void;
+}) {
+  const contact = member.contact;
+  const phone = contact?.primaryPhone;
+  const isCallback = member.status === "CALLBACK";
+  const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
+
+  return (
+    <div className="bg-white rounded-2xl p-6 border-2 border-blue-400 shadow-lg mb-4">
+      {/* Status badge */}
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Current Lead</span>
+          {member.attemptCount > 0 && (
+            <span className="ml-2 text-xs text-gray-400">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
+          )}
+        </div>
+        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
+          {MEMBER_STATUS_LABELS[member.status]}
+        </span>
+      </div>
+
+      {/* Contact info */}
+      <div className="mb-4">
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">{contact?.displayName ?? "Unknown"}</h2>
+        {phone
+          ? <p className="text-lg text-gray-600 font-mono">{phone}</p>
+          : <p className="text-sm text-gray-400 italic">No phone number on file</p>
+        }
+        {member.campaign && (
+          <span className="inline-block mt-1.5 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+            {member.campaign.name}
+          </span>
+        )}
+      </div>
+
+      {/* Pills: last disposition, last activity */}
+      <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
+        {contact?.crmStage && (
+          <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{contact.crmStage}</span>
+        )}
+        {contact?.lastDisposition && (
+          <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+            <CheckCheck className="h-3 w-3" />Last: {contact.lastDisposition}
+          </span>
+        )}
+        {contact?.lastActivityAt && (
+          <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Active {relativeTime(contact.lastActivityAt)}</span>
+        )}
+      </div>
+
+      {/* Callback banner */}
+      {cb && (
+        <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg mb-4 border ${cb.urgent ? "bg-red-50 text-red-700 border-red-200" : "bg-yellow-50 text-yellow-700 border-yellow-200"}`}>
+          {cb.urgent && <AlertCircle className="h-4 w-4 shrink-0" />}
+          <CalendarClock className="h-4 w-4 shrink-0" />
+          <span>{cb.label}</span>
+          {member.callbackNote && (
+            <span className="ml-1 italic text-xs truncate">&ldquo;{member.callbackNote.slice(0, 50)}&rdquo;</span>
+          )}
+        </div>
+      )}
+
+      {/* SIP warning */}
+      {!sipReady && (
+        <div className="flex items-center gap-2 text-amber-700 bg-amber-50 text-sm px-3 py-2 rounded-lg mb-4 border border-amber-200">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          SIP phone not registered — connect your softphone before calling.
+        </div>
+      )}
+
+      {/* Paused notice */}
+      {paused && (
+        <div className="flex items-center gap-2 text-gray-600 bg-gray-50 text-sm px-3 py-2 rounded-lg mb-4 border border-gray-200">
+          <Pause className="h-4 w-4 shrink-0" />
+          Power Dialer is paused. Resume above to re-enable shortcuts.
+        </div>
+      )}
+
+      {/* Brief action feedback */}
+      {feedback && (
+        <div className="flex items-center gap-2 text-green-700 bg-green-50 text-sm px-3 py-2 rounded-lg mb-4 border border-green-200 font-semibold">
+          <CheckCheck className="h-4 w-4 shrink-0" />
+          {feedback} — loading next lead…
+        </div>
+      )}
+
+      {/* LARGE CALL BUTTON */}
+      <button
+        onClick={onCall}
+        disabled={!phone || !sipReady || acting || paused}
+        className="w-full flex items-center justify-center gap-3 py-4 px-6 rounded-xl font-bold text-white text-lg mb-4 bg-green-500 hover:bg-green-600 active:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed shadow-md disabled:shadow-none transition-all"
+      >
+        <PhoneCall className="h-6 w-6" />
+        {phone ? `Call ${phone}` : "No phone number"}
+      </button>
+
+      {/* Secondary actions */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button
+          onClick={onOpenWorkspace}
+          disabled={acting}
+          className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />Open Workspace
+        </button>
+        {!isCallback && (
+          <button
+            onClick={() => onAction("skip")}
+            disabled={acting || paused}
+            className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+          >
+            <SkipForward className="h-3.5 w-3.5" />Skip
+          </button>
+        )}
+        {!isCallback && (
+          <button
+            onClick={() => onAction("defer")}
+            disabled={acting || paused}
+            className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+          >
+            <Clock className="h-3.5 w-3.5" />Defer
+          </button>
+        )}
+        <button
+          onClick={() => onAction("set-callback-modal")}
+          disabled={acting}
+          className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-lg text-sm hover:bg-yellow-50 disabled:opacity-50"
+        >
+          <CalendarClock className="h-3.5 w-3.5" />
+          {isCallback ? "Edit Callback" : "Set Callback"}
+        </button>
+        <button
+          onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }}
+          disabled={acting || paused}
+          className="flex items-center gap-1.5 px-2.5 py-2 border border-red-200 text-red-600 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50"
+        >
+          <Ban className="h-3.5 w-3.5" />DNC
+        </button>
+      </div>
+
+      {/* Keyboard hints */}
+      {!paused && (
+        <div className="text-xs text-gray-400 text-center select-none">
+          Keyboard shortcuts: &nbsp;
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">C</kbd> call &nbsp;
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">S</kbd> skip &nbsp;
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">D</kbd> defer
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Member Card (manual mode) ──────────────────────────────────────────────────
 
 function MemberCard({
   member,
@@ -215,7 +389,6 @@ function MemberCard({
         </div>
       </div>
 
-      {/* Pills */}
       <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
         {contact?.crmStage && (
           <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{contact.crmStage}</span>
@@ -240,7 +413,6 @@ function MemberCard({
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex flex-wrap gap-2">
         <button onClick={openWorkspace} disabled={acting} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm">
           <PhoneCall className="h-4 w-4" />Open Workspace
@@ -338,9 +510,13 @@ function TabButton({ active, label, count, urgent, onClick }: {
   );
 }
 
-// ── Main Page ──────────────────────────────────────────────────────────────────
+// ── Inner page component (needs useSearchParams) ───────────────────────────────
 
-export default function QueuePage() {
+function QueuePageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const powerModeActive = searchParams.get("mode") === "power";
+
   const [queue, setQueue] = useState<QueueMember[]>([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<QueueCounts>({ pending: 0, due: 0, overdue: 0, upcoming: 0 });
@@ -349,6 +525,12 @@ export default function QueuePage() {
   const [acting, setActing] = useState(false);
   const [error, setError] = useState("");
   const [callbackModalMember, setCallbackModalMember] = useState<QueueMember | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const phone = useSipPhone();
+  const sipReady = phone?.regState === "registered";
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
@@ -377,6 +559,12 @@ export default function QueuePage() {
     load(f);
   }
 
+  function showFeedback(label: string) {
+    setActionFeedback(label);
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setActionFeedback(null), 2000);
+  }
+
   async function handleAction(memberId: string, action: string, extra?: Record<string, unknown>) {
     if (action === "set-callback-modal") {
       const m = queue.find((x) => x.id === memberId);
@@ -386,10 +574,72 @@ export default function QueuePage() {
     setActing(true);
     try {
       await apiPatch(`/crm/queue/${memberId}`, { action, ...extra }, token);
+      if (powerModeActive) {
+        const label =
+          action === "skip" ? "Skipped ✓" :
+          action === "defer" ? "Deferred ✓" :
+          action === "dnc" ? "Marked DNC ✓" :
+          "Updated ✓";
+        showFeedback(label);
+      }
       await load();
-    } catch {}
+    } catch {
+      // Silently ignore; load() will restore current state
+    }
     setActing(false);
   }
+
+  function handlePowerDial(member: QueueMember) {
+    const phoneNumber = member.contact?.primaryPhone;
+    if (!phoneNumber) return;
+    if (!sipReady) return;
+    window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
+  }
+
+  function openWorkspacePowerMode(member: QueueMember) {
+    const params = new URLSearchParams({ contactId: member.contactId });
+    if (member.campaign) params.set("campaignId", member.campaign.id);
+    params.set("memberId", member.id);
+    params.set("mode", "power");
+    router.push(`/crm/live-call?${params}`);
+  }
+
+  // Keyboard shortcuts (C / S / D) — only active in power dialer mode, not while paused, not while typing
+  const nextRef = useRef<QueueMember | null>(null);
+  nextRef.current = queue[0] ?? null;
+
+  useEffect(() => {
+    if (!powerModeActive || paused) return;
+
+    function handleKey(e: KeyboardEvent) {
+      // Never fire while the user is typing in an input/textarea/select or contenteditable
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const current = nextRef.current;
+      if (!current) return;
+
+      if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        handlePowerDial(current);
+      }
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        void handleAction(current.id, "skip");
+      }
+      if (e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        void handleAction(current.id, "defer");
+      }
+    }
+
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  // handleAction and handlePowerDial use queue/sipReady via closure; re-attach when those change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [powerModeActive, paused, sipReady]);
 
   const next = queue[0] ?? null;
   const rest = queue.slice(1);
@@ -404,13 +654,53 @@ export default function QueuePage() {
         />
       )}
 
+      {/* Sticky Power Dialer action bar */}
+      {powerModeActive && (
+        <div className="sticky top-0 z-20 bg-blue-700 text-white shadow-lg">
+          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <Zap className="h-4 w-4 shrink-0" />
+              <span className="font-bold text-sm">Power Dialer</span>
+              {!loading && (
+                <span className="text-xs text-blue-200 shrink-0">
+                  {total === 0 ? "Queue empty" : `${total} lead${total !== 1 ? "s" : ""} remaining`}
+                </span>
+              )}
+              {paused && (
+                <span className="bg-amber-400 text-amber-900 text-xs font-bold px-2 py-0.5 rounded shrink-0">
+                  PAUSED
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => setPaused((p) => !p)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+              >
+                {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+                {paused ? "Resume" : "Pause"}
+              </button>
+              <button
+                onClick={() => router.push("/crm/queue")}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+              >
+                <ZapOff className="h-3.5 w-3.5" />
+                Stop
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-3xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <ListOrdered className="h-6 w-6 text-blue-600" />
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">My Queue</h1>
+              <h1 className="text-2xl font-bold text-gray-900">
+                My Queue{powerModeActive ? "" : ""}
+              </h1>
               {!loading && (
                 <p className="text-sm text-gray-500 mt-0.5">
                   {total === 0 ? "Nothing in this view" : `${total} lead${total !== 1 ? "s" : ""}`}
@@ -418,19 +708,34 @@ export default function QueuePage() {
               )}
             </div>
           </div>
-          <button onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            {!powerModeActive && (
+              <button
+                onClick={() => router.push("/crm/queue?mode=power")}
+                disabled={loading || total === 0}
+                className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                title={total === 0 ? "No pending leads to dial" : "Start Power Dialer mode"}
+              >
+                <Zap className="h-4 w-4" />
+                Start Power Dialer
+              </button>
+            )}
+            <button onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-5 overflow-x-auto">
-          <TabButton active={filter === "pending"} label="Next Up" count={counts.pending} onClick={() => switchFilter("pending")} />
-          <TabButton active={filter === "due"} label="Due Today" count={counts.due} urgent={counts.overdue > 0} onClick={() => switchFilter("due")} />
-          <TabButton active={filter === "overdue"} label="Overdue" count={counts.overdue} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} />
-          <TabButton active={filter === "upcoming"} label="Upcoming" count={counts.upcoming} onClick={() => switchFilter("upcoming")} />
-        </div>
+        {/* Tabs — only shown in manual mode; power mode uses pending filter always */}
+        {!powerModeActive && (
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-5 overflow-x-auto">
+            <TabButton active={filter === "pending"} label="Next Up" count={counts.pending} onClick={() => switchFilter("pending")} />
+            <TabButton active={filter === "due"} label="Due Today" count={counts.due} urgent={counts.overdue > 0} onClick={() => switchFilter("due")} />
+            <TabButton active={filter === "overdue"} label="Overdue" count={counts.overdue} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} />
+            <TabButton active={filter === "upcoming"} label="Upcoming" count={counts.upcoming} onClick={() => switchFilter("upcoming")} />
+          </div>
+        )}
 
         {/* Content */}
         {loading ? (
@@ -438,27 +743,76 @@ export default function QueuePage() {
         ) : error ? (
           <div className="py-24 text-center text-red-500 text-sm">{error}</div>
         ) : !next ? (
-          <div className="py-24 text-center">
-            <Inbox className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-600 font-medium text-lg">
-              {filter === "pending" ? "Queue is empty" :
-               filter === "due" ? "No callbacks due today" :
-               filter === "overdue" ? "No overdue callbacks" :
-               "No upcoming callbacks"}
-            </p>
-            <p className="text-gray-400 text-sm mt-1">
-              {filter === "pending" ? "No active campaigns with leads assigned to you." :
-               "Great! Check the Next Up tab for new leads."}
-            </p>
-            {filter !== "pending" && (
-              <button onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
-                View Next Up →
+          powerModeActive ? (
+            // Power mode — queue exhausted
+            <div className="py-24 text-center">
+              <CheckCheck className="h-14 w-14 text-green-400 mx-auto mb-4" />
+              <p className="text-gray-800 font-bold text-2xl mb-1">Queue Complete!</p>
+              <p className="text-gray-400 text-sm mb-6">You&apos;ve worked through all pending leads.</p>
+              <button
+                onClick={() => router.push("/crm/queue")}
+                className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 shadow"
+              >
+                Exit Power Dialer
               </button>
-            )}
-          </div>
-        ) : (
+            </div>
+          ) : (
+            // Manual mode — empty state
+            <div className="py-24 text-center">
+              <Inbox className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-600 font-medium text-lg">
+                {filter === "pending" ? "Queue is empty" :
+                 filter === "due" ? "No callbacks due today" :
+                 filter === "overdue" ? "No overdue callbacks" :
+                 "No upcoming callbacks"}
+              </p>
+              <p className="text-gray-400 text-sm mt-1">
+                {filter === "pending" ? "No active campaigns with leads assigned to you." :
+                 "Great! Check the Next Up tab for new leads."}
+              </p>
+              {filter !== "pending" && (
+                <button onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
+                  View Next Up →
+                </button>
+              )}
+            </div>
+          )
+        ) : powerModeActive ? (
+          // ── Power Dialer layout ──────────────────────────────────────────────
           <>
-            {/* Primary card */}
+            <PowerCard
+              member={next}
+              sipReady={sipReady}
+              paused={paused}
+              acting={acting}
+              feedback={actionFeedback}
+              onCall={() => handlePowerDial(next)}
+              onAction={(action, extra) => handleAction(next.id, action, extra)}
+              onOpenWorkspace={() => openWorkspacePowerMode(next)}
+            />
+
+            {/* Up next list */}
+            {rest.length > 0 && (
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b bg-gray-50">
+                  <h2 className="text-sm font-semibold text-gray-700">
+                    Up Next ({rest.length + 1} total remaining)
+                  </h2>
+                </div>
+                {rest.map((m, i) => (
+                  <QueueRow key={m.id} member={m} rank={i + 2} filter={filter} />
+                ))}
+                {total > queue.length && (
+                  <div className="px-4 py-3 text-center text-sm text-gray-400">
+                    + {total - queue.length} more in queue
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          // ── Manual mode layout ───────────────────────────────────────────────
+          <>
             <MemberCard
               member={next}
               isTop={true}
@@ -467,7 +821,6 @@ export default function QueuePage() {
               onAction={(action, extra) => handleAction(next.id, action, extra)}
             />
 
-            {/* Remaining list */}
             {rest.length > 0 && (
               <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                 <div className="px-4 py-3 border-b bg-gray-50">
@@ -492,5 +845,15 @@ export default function QueuePage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ── Main page export — wraps inner component in Suspense for useSearchParams ──
+
+export default function QueuePage() {
+  return (
+    <Suspense fallback={<div className="py-24 text-center text-gray-400 text-sm">Loading…</div>}>
+      <QueuePageInner />
+    </Suspense>
   );
 }

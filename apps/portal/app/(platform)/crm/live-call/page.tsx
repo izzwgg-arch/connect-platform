@@ -508,6 +508,8 @@ export default function LiveCallWorkspacePage() {
   const fromNumber = searchParams.get("from");
   const campaignId = searchParams.get("campaignId");
   const memberId = searchParams.get("memberId");
+  // Power Dialer mode: opened from /crm/queue?mode=power — adjusts back nav and Save button
+  const isPowerMode = searchParams.get("mode") === "power" && Boolean(memberId);
 
   const [contact, setContact] = useState<ContactSummary | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -622,6 +624,26 @@ export default function LiveCallWorkspacePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId]);
 
+  // Power mode keyboard shortcut: O = save outcome (when not typing)
+  // Uses a ref to always capture latest saveOutcome without stale closure
+  const saveOutcomeRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    if (!isPowerMode) return;
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === "o" || e.key === "O") && !savingOutcome && disposition) {
+        e.preventDefault();
+        void saveOutcomeRef.current();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPowerMode, disposition, savingOutcome]);
+
   async function saveNote() {
     if (!contactId || !noteBody.trim()) return;
     setSavingNote(true);
@@ -676,19 +698,30 @@ export default function LiveCallWorkspacePage() {
       setFollowUpCustom("");
       // Refresh all data so contact header, tasks, timeline all update
       await refreshAll();
-      setTimeout(() => setOutcomeSaved(false), 4000);
 
       // Update campaign member status + increment attempt count (non-blocking)
       if (memberId) {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
         apiPatch(`/crm/queue/${memberId}`, { action: "outcome", disposition }, token).catch(() => {});
       }
+
+      // Power mode: brief "Saved" flash then return to queue so agent advances to next lead
+      if (isPowerMode && memberId) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 900));
+        router.push("/crm/queue?mode=power");
+        return;
+      }
+
+      setTimeout(() => setOutcomeSaved(false), 4000);
     } catch {
       setOutcomeError("Save failed — please try again.");
     } finally {
       setSavingOutcome(false);
     }
   }
+
+  // Keep ref in sync so keyboard shortcut always calls latest version
+  useEffect(() => { saveOutcomeRef.current = saveOutcome; });
 
   const stageColors = contact?.crmStage ? STAGE_COLORS[contact.crmStage] : null;
 
@@ -716,7 +749,11 @@ export default function LiveCallWorkspacePage() {
       {/* Back nav + live call banner */}
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1.25rem" }}>
         <button
-          onClick={() => memberId ? router.push("/crm/queue") : router.back()}
+          onClick={() => {
+            if (isPowerMode) router.push("/crm/queue?mode=power");
+            else if (memberId) router.push("/crm/queue");
+            else router.back();
+          }}
           style={{
             display: "flex", alignItems: "center", gap: "0.375rem",
             background: "none", border: "none", cursor: "pointer",
@@ -1064,7 +1101,7 @@ export default function LiveCallWorkspacePage() {
                 </div>
               )}
               <button
-                onClick={saveOutcome}
+                onClick={() => void saveOutcome()}
                 disabled={!disposition || savingOutcome}
                 style={{
                   width: "100%", padding: "0.625rem 1rem", borderRadius: 6,
@@ -1075,11 +1112,20 @@ export default function LiveCallWorkspacePage() {
                   transition: "background 0.1s",
                 }}
               >
-                {savingOutcome ? "Saving…" : "Save Outcome"}
+                {savingOutcome
+                  ? "Saving…"
+                  : isPowerMode
+                    ? "Save Outcome & Next Lead →"
+                    : "Save Outcome"}
               </button>
               {!disposition && (
                 <div style={{ fontSize: "0.6875rem", color: "var(--text-dim, #9ca3af)", textAlign: "center", marginTop: "0.375rem" }}>
-                  Select a disposition to enable save
+                  Select a disposition to enable save{isPowerMode ? " — then advances to next lead" : ""}
+                </div>
+              )}
+              {isPowerMode && !savingOutcome && (
+                <div style={{ fontSize: "0.6875rem", color: "var(--text-dim, #9ca3af)", textAlign: "center", marginTop: "0.25rem" }}>
+                  Keyboard: <kbd style={{ padding: "0.0625rem 0.375rem", background: "#f3f4f6", borderRadius: 3, fontFamily: "monospace" }}>O</kbd> to save outcome
                 </div>
               )}
             </div>

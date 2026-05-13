@@ -382,6 +382,37 @@
 
 ---
 
+## CRM Power Dialer (Phase 8A+)
+
+65. **Power Dialer must never bypass the existing dialer path.**
+    - The Call button in Power Dialer mode dispatches `window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }))`.
+    - This fires the existing `FloatingDialer` listener → `phone.dial()` path.
+    - Do not call SIP APIs, JsSIP, or any SIP stack directly from the power dialer UI.
+
+66. **Power Dialer must never auto-dial in Phase 8A.**
+    - No countdown that places a call automatically.
+    - No "dial next" triggered without explicit user action (button click or `C` key press).
+    - Optional countdown UI may show the next lead's info after an action, but must never
+      call `phone.dial()` or dispatch `crm:dial` without the agent pressing the button.
+
+67. **SIP registration gate is mandatory.**
+    - If `phone.regState !== "registered"`, the Call button must be disabled and a visible
+      amber warning must be shown.
+    - Never dispatch `crm:dial` when SIP is not registered.
+
+68. **Power mode state is URL-based (`?mode=power`), not stored in global state.**
+    - This keeps it simple, survives refresh, and allows direct linking.
+    - `pause` state is local React state (intentionally not persisted — resets on page load).
+
+69. **Keyboard shortcuts (C/S/D on queue, O on live-call) must not fire while the user
+    is typing.**
+    - Guard: `if (["INPUT","TEXTAREA","SELECT"].includes(tgt.tagName)) return;`
+    - Guard: `if (tgt.getAttribute("contenteditable") === "true") return;`
+    - Guard: `if (e.metaKey || e.ctrlKey || e.altKey) return;`
+    - These guards must never be removed.
+
+---
+
 ## Documentation
 
 39. **Update `docs/ai-context/KNOWN_ISSUES.md` whenever you discover or fix a fragile
