@@ -9,6 +9,7 @@ import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
+import { BillingActionToast, billingErrorMessage } from "../../../components/BillingActionToast";
 
 /**
  * Tenant billing configuration (SOLA, invoice branding, presentation).
@@ -17,7 +18,9 @@ import { PermissionGate } from "../../../components/PermissionGate";
 export function TenantBillingSettingsContent() {
   const [busy, setBusy] = useState("");
   const [webhookCopied, setWebhookCopied] = useState(false);
-  const config = useAsyncResource(() => apiGet<any>("/billing/sola/config"), []);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [configKey, setConfigKey] = useState(0);
+  const config = useAsyncResource(() => apiGet<any>("/billing/sola/config"), [configKey]);
   const tenantBilling = useAsyncResource(() => apiGet<any>("/billing/settings"), []);
   const current = config.status === "success" ? config.data?.config : null;
   const webhookUrl =
@@ -219,9 +222,13 @@ export function TenantBillingSettingsContent() {
                 disabled={!current || !!busy}
                 onClick={async () => {
                   setBusy("test");
+                  setToast(null);
                   try {
-                    await apiPost("/billing/sola/config/test", {});
-                    window.location.reload();
+                    const result = await apiPost<{ ok: boolean; simulated?: boolean }>("/billing/sola/config/test", {});
+                    setToast({ kind: "ok", text: result.simulated ? "SOLA configuration test passed (simulated)" : "SOLA configuration test passed" });
+                    setConfigKey((k) => k + 1);
+                  } catch (err: unknown) {
+                    setToast({ kind: "err", text: billingErrorMessage(err, "SOLA test failed") });
                   } finally {
                     setBusy("");
                   }
@@ -236,9 +243,12 @@ export function TenantBillingSettingsContent() {
                   disabled={!current || !!busy}
                   onClick={async () => {
                     setBusy("disable");
+                    setToast(null);
                     try {
                       await apiPost("/billing/sola/config/disable", {});
                       window.location.reload();
+                    } catch (err: unknown) {
+                      setToast({ kind: "err", text: billingErrorMessage(err, "Could not disable SOLA") });
                     } finally {
                       setBusy("");
                     }
@@ -253,9 +263,12 @@ export function TenantBillingSettingsContent() {
                   disabled={!current || current?.status?.lastTestResult !== "SUCCESS" || !!busy}
                   onClick={async () => {
                     setBusy("enable");
+                    setToast(null);
                     try {
                       await apiPost("/billing/sola/config/enable", {});
                       window.location.reload();
+                    } catch (err: unknown) {
+                      setToast({ kind: "err", text: billingErrorMessage(err, "Could not enable SOLA") });
                     } finally {
                       setBusy("");
                     }
@@ -265,6 +278,21 @@ export function TenantBillingSettingsContent() {
                 </button>
               )}
             </div>
+            {!current?.isEnabled ? (
+              (() => {
+                const reason = !current
+                  ? "Save an API key first"
+                  : current.status?.lastTestResult === "FAILED"
+                  ? "Last test failed — re-run Test configuration"
+                  : current.status?.lastTestResult !== "SUCCESS"
+                  ? "Run Test configuration first"
+                  : null;
+                return reason ? (
+                  <p className="muted" style={{ fontSize: "0.85rem", marginTop: 6 }}>{reason}</p>
+                ) : null;
+              })()
+            ) : null}
+            {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
           </form>
         </DetailCard>
       </div>

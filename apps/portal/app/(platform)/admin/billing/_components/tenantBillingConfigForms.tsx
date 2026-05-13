@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
+import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 
 export type TenantDetail = {
   tenant: { id: string; name: string; createdAt: string };
@@ -183,6 +184,7 @@ export function AdminTenantInvoiceBrandingForm({ detail, onSaved }: { detail: Te
 export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
   const [busy, setBusy] = useState("");
   const [webhookCopied, setWebhookCopied] = useState(false);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const config = detail.sola.config;
   const webhookUrl = detail.sola.webhookUrl || config?.webhookUrl || null;
 
@@ -279,9 +281,13 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
             disabled={!config || !!busy}
             onClick={async () => {
               setBusy("test");
+              setToast(null);
               try {
-                await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/test`, {});
+                const result = await apiPost<{ ok: boolean; simulated?: boolean }>(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/test`, {});
+                setToast({ kind: "ok", text: result.simulated ? "SOLA configuration test passed (simulated)" : "SOLA configuration test passed" });
                 onSaved();
+              } catch (err: unknown) {
+                setToast({ kind: "err", text: billingErrorMessage(err, "SOLA test failed") });
               } finally {
                 setBusy("");
               }
@@ -296,9 +302,12 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
               disabled={!!busy}
               onClick={async () => {
                 setBusy("disable");
+                setToast(null);
                 try {
                   await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/disable`, {});
                   onSaved();
+                } catch (err: unknown) {
+                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not disable SOLA") });
                 } finally {
                   setBusy("");
                 }
@@ -313,9 +322,12 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
               disabled={!config || config?.status?.lastTestResult !== "SUCCESS" || !!busy}
               onClick={async () => {
                 setBusy("enable");
+                setToast(null);
                 try {
                   await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/enable`, {});
                   onSaved();
+                } catch (err: unknown) {
+                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not enable SOLA") });
                 } finally {
                   setBusy("");
                 }
@@ -325,6 +337,21 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
             </button>
           )}
         </div>
+        {!config?.isEnabled ? (
+          (() => {
+            const reason = !config
+              ? "Save an API key first"
+              : config.status?.lastTestResult === "FAILED"
+              ? "Last test failed — re-run Test configuration"
+              : config.status?.lastTestResult !== "SUCCESS"
+              ? "Run Test configuration first"
+              : null;
+            return reason ? (
+              <p className="muted" style={{ fontSize: "0.85rem", marginTop: 6 }}>{reason}</p>
+            ) : null;
+          })()
+        ) : null}
+        {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
       </form>
     </DetailCard>
   );
