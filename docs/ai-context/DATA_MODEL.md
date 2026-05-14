@@ -312,6 +312,15 @@
 - **Modified by:** `apps/api` `/outbound-routes` and
   `/admin/users/:id/outbound-routes`.
 
+## BillingPlan (platform catalog)
+
+- **Schema:** `BillingPlan` in `packages/db/prisma/schema.prisma`; optional **`tenantId`** (`String?` unique): **catalog** rows use `tenantId = null`; non-null links to at most one tenant-private row (legacy/extension — platform catalog APIs manage **`tenantId` null** only).
+- **Purpose:** Named price template (`code`, `name`, `extensionPriceCents`, `additionalPhoneNumberPriceCents`, `smsPriceCents`, `firstPhoneNumberFree`, `active`). Used as fallback in `buildBillingInvoicePreview` / invoice create when `TenantBillingSettings` price fields are falsy, and as FK targets `TenantBillingSettings.billingPlanId` / `nextBillingPlanId`.
+- **`BillingEventLog` (catalog admin):** SUPER_ADMIN create/update/deactivate/clone emits `billing_plan.created`, `billing_plan.updated`, `billing_plan.deactivated`, `billing_plan.cloned` with **`metadata.catalogScope = billing_plan_catalog`** and **`operatorId`**; `tenantId` on the log row is the lexicographically first `Tenant` (FK requires a tenant — not a null platform row).
+- **Tenant-scoped?** Catalog rows are global; optional `tenantId` ties a row to one tenant.
+- **High-risk?** **High** — changes affect future invoice previews and scheduled plan application.
+- **Modified by:** `apps/api/src/billing/routes.ts` (platform catalog routes) + seed/migrations.
+
 ## TenantBillingSettings (invoice presentation)
 
 - **Schema:** `TenantBillingSettings` in `packages/db/prisma/schema.prisma` — core pricing/autopay plus optional **`invoiceCompanyName`**, **`invoiceLogoUrl`** (https, used in HTML emails only), **`invoiceSupportEmail`**, **`invoiceSupportPhone`**, **`invoiceFooterNote`**, **`invoicePaymentInstructions`** (migration `20260512120000_tenant_invoice_branding`).

@@ -4,6 +4,42 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: platform BillingPlan catalog API (SUPER_ADMIN)
+
+**Task:** billing / billing plan management API  
+**Risk:** medium (Connect billing plans + audit logging; no charges, no SOLA, no worker/dunning edits)
+
+### What changed
+
+**`apps/api/src/billing/billingPlanCatalog.ts`** (new): Slug + price validation (`BILLING_PLAN_PRICE_MAX_CENTS` = 25_000_000), `aggregateBillingPlanUsageCounts`, tenant preview helpers, `catalogBillingPlansListWhere`, `deactivateBillingPlanBlockedReason`, `assertBillingPlanScheduleEligibility`, `logBillingCatalogEvent` (writes `BillingEventLog` with `catalogScope: billing_plan_catalog` on first `Tenant` by id — schema requires FK `tenantId`), `prismaUniqueViolation`.
+
+**`apps/api/src/billing/routes.ts`**: Extended `GET /admin/billing/platform/billing-plans` (`?includeInactive=true`, counts, timestamps, full list fields); added `POST` / `GET :id` / `PATCH :id` / `POST :id/clone` for **catalog plans only** (`tenantId` null). Deactivate blocked if any tenant uses plan as **current** or **scheduled**. No `DELETE`. Scheduled plan POST now uses **`assertBillingPlanScheduleEligibility`** (same inactive response as before).
+
+**`apps/api/src/billing/billingPlanCatalog.test.ts`** (new): Validation, counts, list `where`, schedule eligibility, auth gate parity, clone copy contract.
+
+**`docs/ai-context/BILLING.md`**, **`docs/ai-context/DATA_MODEL.md`** — catalog routes + `BillingPlan` section.
+
+### What was NOT changed
+
+- **Portal** (no UI).
+- **Worker / dunning / SOLA** (no edits to charge paths, webhooks, or worker main loop).
+- **Telephony / PBX / mobile / CRM.**
+- **Prisma migrations** (none).
+- **`PARTIALLY_PAID` / proration** (not implemented).
+
+### Deploy
+
+- **API deploy required** to expose new routes and list shape.
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing
+pnpm --filter @connect/api typecheck
+```
+
+---
+
 ## 2026-05-14 — billing: scheduled plan changes phase 2 (worker consumption)
 
 **Task:** billing / scheduled plan changes phase 2 worker  

@@ -499,7 +499,11 @@ tax                = taxProvider.calculateTaxes({ taxableSubtotalCents })
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/admin/billing/platform/billing-plans` | List all active `BillingPlan` rows (id, code, name, prices) — for plan picker dropdown |
+| `GET` | `/admin/billing/platform/billing-plans` | List **catalog** `BillingPlan` rows (`tenantId` null only). Query `?includeInactive=true` includes inactive rows. Each row includes `active`, `tenantId`, `createdAt`, `updatedAt`, price fields, `currentTenantCount`, `scheduledTenantCount` (coverage of FKs `TenantBillingSettings.billingPlanId` / `nextBillingPlanId`). Default: `active: true` only. Used by portal plan picker. |
+| `POST` | `/admin/billing/platform/billing-plans` | Create **catalog** plan (`tenantId` forced null). Body: `{ code` (ASCII slug `a-z`, `0-9`, `_`, `-`), `name`, price fields (0 … 25 000 000 cents), `firstPhoneNumberFree`, optional `active` }. Logs **`billing_plan.created`** (`BillingEventLog` on sentinel tenant row; `metadata.catalogScope = billing_plan_catalog`, `operatorId`). |
+| `GET` | `/admin/billing/platform/billing-plans/:id` | Full catalog row + usage counts + `currentTenantsPreview` / `scheduledTenantsPreview` (up to 25 tenant id/name pairs each). Non-catalog ids → **404**. |
+| `PATCH` | `/admin/billing/platform/billing-plans/:id` | Update name/prices/`firstPhoneNumberFree`/`active`. **Forbidden:** `code`, `tenantId` (`.strict()` body). `active:false` rejected if **any** tenants reference plan as **current or scheduled** (`billing_plan_deactivate_blocked_current|…_scheduled`). Logs **`billing_plan.updated`** or **`billing_plan.deactivated`** (same catalog audit pattern). |
+| `POST` | `/admin/billing/platform/billing-plans/:id/clone` | Body `{ code, name }`; copies prices + `firstPhoneNumberFree`; **`active: true`**; new slug must be unique. Logs **`billing_plan.cloned`**. |
 | `GET` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Read current scheduled change (fields + resolved plan) |
 | `POST` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Schedule a plan change. Body: `{ nextBillingPlanId, effectiveAt: ISO8601 UTC midnight first-of-month }`. Replaces any existing scheduled change. |
 | `DELETE` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Cancel the scheduled change; clears both fields. Returns `404 no_scheduled_plan_change` if none set. |
@@ -508,7 +512,7 @@ tax                = taxProvider.calculateTaxes({ taxableSubtotalCents })
 - `effectiveAt` must parse as a valid date.
 - Must be UTC midnight on the **1st day of a month** (all UTC components hour/min/sec = 0, day = 1).
 - Must be strictly **after** the first day of the current UTC month (i.e., minimum = first of *next* month).
-- `POST` also checks: plan must exist and `active: true`.
+- `POST` also checks: plan must exist and `active: true` (`assertBillingPlanScheduleEligibility` in `billingPlanCatalog.ts`).
 
 **Invoice preview logic (`invoiceEngine.ts`):**
 `buildBillingInvoicePreview` now checks the scheduled change when building price fallbacks:

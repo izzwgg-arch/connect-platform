@@ -45,6 +45,19 @@ import {
   writeTenantCollectionsConfig,
 } from "./billingCollections";
 import { validateScheduledPlanChangeEffectiveAt } from "./billingScheduledPlan";
+import {
+  aggregateBillingPlanUsageCounts,
+  assertBillingPlanScheduleEligibility,
+  attachUsageCountsToPlans,
+  billingPlanCloneBodySchema,
+  billingPlanCreateBodySchema,
+  billingPlanPatchBodySchema,
+  billingPlanTenantPreviews,
+  catalogBillingPlansListWhere,
+  deactivateBillingPlanBlockedReason,
+  logBillingCatalogEvent,
+  prismaUniqueViolation,
+} from "./billingPlanCatalog";
 
 type BillingUser = {
   sub: string;
@@ -808,18 +821,242 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return buildBillingInvoicePreview({ tenantId });
   });
 
-  // ── Scheduled plan change routes ──────────────────────────────────────────
+  // ── Platform billing catalog (SUPER_ADMIN) — BillingPlan tenantId=null only ─────────
 
-  // List all active BillingPlan rows — used by the plan picker in admin UI.
+  // List catalog BillingPlan rows (plan picker uses active-only subset by default).
   app.get("/admin/billing/platform/billing-plans", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    return (db as any).billingPlan.findMany({
-      where: { active: true },
+    const q = req.query as { includeInactive?: string };
+    const includeInactive = q.includeInactive === "true" || q.includeInactive === "1";
+    const plans = await (db as any).billingPlan.findMany({
+      where: catalogBillingPlansListWhere(includeInactive),
       orderBy: { name: "asc" },
-      select: { id: true, code: true, name: true, extensionPriceCents: true, additionalPhoneNumberPriceCents: true, smsPriceCents: true, firstPhoneNumberFree: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        active: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+        extensionPriceCents: true,
+        additionalPhoneNumberPriceCents: true,
+        smsPriceCents: true,
+        firstPhoneNumberFree: true,
+      },
     });
+    const usage = await aggregateBillingPlanUsageCounts(db as any, plans.map((p: { id: string }) => p.id));
+    return attachUsageCountsToPlans(plans, usage);
   });
+
+  app.post("/admin/billing/platform/billing-plans", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const input = billingPlanCreateBodySchema.safeParse(req.body || {});
+    if (!input.success) {
+      const first = input.error.flatten().fieldErrors.code?.[0] || input.error.errors[0]?.message;
+      return reply.code(400).send({ error: "invalid_body", message: first || "validation_failed", issues: input.error.flatten() });
+    }
+    const b = input.data;
+    try {
+      const created = await (db as any).billingPlan.create({
+        data: {
+          tenantId: null,
+          code: b.code,
+          name: b.name.trim(),
+          extensionPriceCents: b.extensionPriceCents,
+          additionalPhoneNumberPriceCents: b.additionalPhoneNumberPriceCents,
+          smsPriceCents: b.smsPriceCents,
+          firstPhoneNumberFree: b.firstPhoneNumberFree,
+          active: b.active ?? true,
+        },
+      });
+      await logBillingCatalogEvent(db as any, {
+        operatorId: u.sub,
+        type: "billing_plan.created",
+        metadata: {
+          planId: created.id,
+          code: created.code,
+          name: created.name,
+          extensionPriceCents: created.extensionPriceCents,
+          additionalPhoneNumberPriceCents: created.additionalPhoneNumberPriceCents,
+          smsPriceCents: created.smsPriceCents,
+          firstPhoneNumberFree: created.firstPhoneNumberFree,
+          active: created.active,
+        },
+      });
+      const usage = await aggregateBillingPlanUsageCounts(db as any, [created.id]);
+      const counts = usage.get(created.id) ?? { currentTenantCount: 0, scheduledTenantCount: 0 };
+      return { ...created, ...counts };
+    } catch (e) {
+      if (prismaUniqueViolation(e)) {
+        return reply.code(409).send({ error: "billing_plan_code_taken", message: "A plan with this code already exists." });
+      }
+      throw e;
+    }
+  });
+
+  app.get("/admin/billing/platform/billing-plans/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const plan = await (db as any).billingPlan.findUnique({
+      where: { id },
+    });
+    if (!plan || plan.tenantId != null) {
+      return reply.code(404).send({ error: "billing_plan_not_found" });
+    }
+    const usage = await aggregateBillingPlanUsageCounts(db as any, [id]);
+    const counts = usage.get(id) ?? { currentTenantCount: 0, scheduledTenantCount: 0 };
+    const { currentTenantsPreview, scheduledTenantsPreview } = await billingPlanTenantPreviews(db as any, id);
+    return { ...plan, ...counts, currentTenantsPreview, scheduledTenantsPreview };
+  });
+
+  app.patch("/admin/billing/platform/billing-plans/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    let patch: z.infer<typeof billingPlanPatchBodySchema>;
+    try {
+      patch = billingPlanPatchBodySchema.parse(req.body || {});
+    } catch {
+      return reply.code(400).send({ error: "invalid_body", message: "Request body invalid or contained unknown/forbidden keys (code/tenantId cannot be PATCHed)." });
+    }
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ error: "billing_plan_patch_empty" });
+    }
+    const existing = await (db as any).billingPlan.findUnique({
+      where: { id },
+    });
+    if (!existing || existing.tenantId != null) {
+      return reply.code(404).send({ error: "billing_plan_not_found" });
+    }
+    const usage = await aggregateBillingPlanUsageCounts(db as any, [id]);
+    const counts = usage.get(id) ?? { currentTenantCount: 0, scheduledTenantCount: 0 };
+    const deactivating = existing.active === true && patch.active === false;
+    if (deactivating) {
+      const blocked = deactivateBillingPlanBlockedReason(counts);
+      if (blocked) return reply.code(400).send({ error: blocked });
+    }
+    const updated = await (db as any).billingPlan.update({
+      where: { id },
+      data: {
+        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.extensionPriceCents !== undefined ? { extensionPriceCents: patch.extensionPriceCents } : {}),
+        ...(patch.additionalPhoneNumberPriceCents !== undefined ? { additionalPhoneNumberPriceCents: patch.additionalPhoneNumberPriceCents } : {}),
+        ...(patch.smsPriceCents !== undefined ? { smsPriceCents: patch.smsPriceCents } : {}),
+        ...(patch.firstPhoneNumberFree !== undefined ? { firstPhoneNumberFree: patch.firstPhoneNumberFree } : {}),
+        ...(patch.active !== undefined ? { active: patch.active } : {}),
+      },
+    });
+
+    const metaBase = { planId: id, code: updated.code };
+    if (deactivating) {
+      await logBillingCatalogEvent(db as any, {
+        operatorId: u.sub,
+        type: "billing_plan.deactivated",
+        metadata: {
+          ...metaBase,
+          before: {
+            active: existing.active,
+            name: existing.name,
+            extensionPriceCents: existing.extensionPriceCents,
+            additionalPhoneNumberPriceCents: existing.additionalPhoneNumberPriceCents,
+            smsPriceCents: existing.smsPriceCents,
+            firstPhoneNumberFree: existing.firstPhoneNumberFree,
+          },
+          after: {
+            active: updated.active,
+            name: updated.name,
+            extensionPriceCents: updated.extensionPriceCents,
+            additionalPhoneNumberPriceCents: updated.additionalPhoneNumberPriceCents,
+            smsPriceCents: updated.smsPriceCents,
+            firstPhoneNumberFree: updated.firstPhoneNumberFree,
+          },
+        },
+      });
+    } else {
+      await logBillingCatalogEvent(db as any, {
+        operatorId: u.sub,
+        type: "billing_plan.updated",
+        metadata: {
+          ...metaBase,
+          patch,
+          before: {
+            active: existing.active,
+            name: existing.name,
+            extensionPriceCents: existing.extensionPriceCents,
+            additionalPhoneNumberPriceCents: existing.additionalPhoneNumberPriceCents,
+            smsPriceCents: existing.smsPriceCents,
+            firstPhoneNumberFree: existing.firstPhoneNumberFree,
+          },
+          after: {
+            active: updated.active,
+            name: updated.name,
+            extensionPriceCents: updated.extensionPriceCents,
+            additionalPhoneNumberPriceCents: updated.additionalPhoneNumberPriceCents,
+            smsPriceCents: updated.smsPriceCents,
+            firstPhoneNumberFree: updated.firstPhoneNumberFree,
+          },
+        },
+      });
+    }
+
+    const usageAfter = await aggregateBillingPlanUsageCounts(db as any, [id]);
+    const countsAfter = usageAfter.get(id) ?? { currentTenantCount: 0, scheduledTenantCount: 0 };
+    return { ...updated, ...countsAfter };
+  });
+
+  app.post("/admin/billing/platform/billing-plans/:id/clone", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    let cloneBody: z.infer<typeof billingPlanCloneBodySchema>;
+    try {
+      cloneBody = billingPlanCloneBodySchema.parse(req.body || {});
+    } catch {
+      return reply.code(400).send({ error: "invalid_body", message: "Expected { code, name } slug fields only." });
+    }
+    const source = await (db as any).billingPlan.findUnique({ where: { id } });
+    if (!source || source.tenantId != null) {
+      return reply.code(404).send({ error: "billing_plan_not_found" });
+    }
+    try {
+      const created = await (db as any).billingPlan.create({
+        data: {
+          tenantId: null,
+          code: cloneBody.code,
+          name: cloneBody.name.trim(),
+          extensionPriceCents: source.extensionPriceCents,
+          additionalPhoneNumberPriceCents: source.additionalPhoneNumberPriceCents,
+          smsPriceCents: source.smsPriceCents,
+          firstPhoneNumberFree: source.firstPhoneNumberFree,
+          active: true,
+        },
+      });
+      await logBillingCatalogEvent(db as any, {
+        operatorId: u.sub,
+        type: "billing_plan.cloned",
+        metadata: {
+          sourcePlanId: id,
+          planId: created.id,
+          code: created.code,
+          name: created.name,
+        },
+      });
+      const usage = await aggregateBillingPlanUsageCounts(db as any, [created.id]);
+      const counts = usage.get(created.id) ?? { currentTenantCount: 0, scheduledTenantCount: 0 };
+      return { ...created, ...counts };
+    } catch (e) {
+      if (prismaUniqueViolation(e)) {
+        return reply.code(409).send({ error: "billing_plan_code_taken", message: "A plan with this code already exists." });
+      }
+      throw e;
+    }
+  });
+
+  // ── Scheduled plan change routes ──────────────────────────────────────────
 
   // Get the current scheduled plan change for a tenant (null fields = none scheduled).
   app.get("/admin/billing/platform/tenants/:tenantId/scheduled-plan-change", async (req, reply) => {
@@ -855,13 +1092,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     }
     const effectiveAt = effectiveValidation.effectiveAt;
 
-    // Plan must exist and be active
-    const plan = await (db as any).billingPlan.findUnique({
+    const planRow = await (db as any).billingPlan.findUnique({
       where: { id: input.nextBillingPlanId },
       select: { id: true, code: true, name: true, active: true, extensionPriceCents: true, additionalPhoneNumberPriceCents: true, smsPriceCents: true, firstPhoneNumberFree: true },
     });
-    if (!plan) return reply.code(404).send({ error: "billing_plan_not_found" });
-    if (!plan.active) return reply.code(400).send({ error: "billing_plan_inactive" });
+    const scheduleEligibility = assertBillingPlanScheduleEligibility(planRow);
+    if (!scheduleEligibility.ok) {
+      if (scheduleEligibility.error === "billing_plan_not_found") return reply.code(404).send({ error: "billing_plan_not_found" });
+      return reply.code(400).send({ error: "billing_plan_inactive" });
+    }
+    const plan = scheduleEligibility.plan;
 
     // Read current state for audit
     const cur = await (db as any).tenantBillingSettings.findUnique({
