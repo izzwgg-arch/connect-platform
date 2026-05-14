@@ -112,12 +112,9 @@ export default function AdminBillingPage() {
           <Link className="btn primary" href="/admin/billing/invoices">
             Payment Operations
           </Link>
-          <Link
-            className="btn ghost"
-            href={selectedTenant?.id ? `/admin/billing/settings?tenantId=${encodeURIComponent(selectedTenant.id)}` : "/admin/billing/settings"}
-          >
-            Admin Billing settings
-          </Link>
+        <Link className="btn ghost" href="/admin/billing/plans">
+          Catalog plans
+        </Link>
         </div>
         {overview.status === "loading" || tenants.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {overview.status === "error" ? <ErrorState message={overview.error} /> : null}

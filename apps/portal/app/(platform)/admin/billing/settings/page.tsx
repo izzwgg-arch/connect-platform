@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
@@ -134,6 +134,7 @@ type BillingPlanRow = {
   id: string;
   code: string;
   name: string;
+  active: boolean;
   extensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
@@ -212,9 +213,11 @@ function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; on
     } finally {
       setLoading(false);
     }
-  }, [tenantId, selectedPlanId]);
+  }, [tenantId]);
 
   useEffect(() => { void load(); }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const schedulablePlans = useMemo(() => plans.filter((plan) => plan.active !== false), [plans]);
 
   async function scheduleChange() {
     if (!selectedPlanId || !effectiveDate) return;
@@ -291,13 +294,13 @@ function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; on
               <select
                 value={selectedPlanId}
                 onChange={(e) => setSelectedPlanId(e.target.value)}
-                disabled={saving || plans.length === 0}
+                disabled={saving || schedulablePlans.length === 0}
                 style={{ fontSize: 13, minWidth: 180 }}
               >
-                {plans.length === 0 ? (
+                {schedulablePlans.length === 0 ? (
                   <option value="">No active plans</option>
                 ) : (
-                  plans.map((p) => (
+                  schedulablePlans.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))
                 )}
@@ -323,10 +326,10 @@ function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; on
               {saving ? "Scheduling…" : "Schedule plan change"}
             </button>
           </div>
-          {selectedPlanId && plans.find((p) => p.id === selectedPlanId) ? (
+          {selectedPlanId && schedulablePlans.find((p) => p.id === selectedPlanId) ? (
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
               {(() => {
-                const p = plans.find((pp) => pp.id === selectedPlanId)!;
+                const p = schedulablePlans.find((pp) => pp.id === selectedPlanId)!;
                 return `${p.name}: $${(p.extensionPriceCents / 100).toFixed(2)}/ext · $${(p.additionalPhoneNumberPriceCents / 100).toFixed(2)}/phone · $${(p.smsPriceCents / 100).toFixed(2)}/SMS${p.firstPhoneNumberFree ? " · 1st phone free" : ""}`;
               })()}
             </div>
@@ -530,6 +533,9 @@ function AdminBillingSettingsBody() {
       <div className="row-actions">
         <Link className="btn ghost" href="/admin/billing">
           ← Admin Billing overview
+        </Link>
+        <Link className="btn ghost" href="/admin/billing/plans">
+          Catalog plans
         </Link>
       </div>
 
