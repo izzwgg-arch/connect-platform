@@ -534,10 +534,9 @@ New **Scheduled Plan Change** card rendered between the SOLA/Collections section
 - When a change is scheduled: blue notice ("⚡ Scheduled: Switch to plan X effective Y"), "Cancel scheduled change" button (red ghost, no confirm modal).
 - Invoice Preview card now shows a yellow notice when the selected preview period uses the next plan's prices.
 
-### What was NOT changed
+### What was NOT changed (Phase 1 scope)
 
-- No worker changes (Phase 2 deferred).
-- No automatic plan consumption on invoice creation — that is Phase 2 (worker `consumeScheduledPlanChange`).
+- Phase 1 did not include worker consumption (added in **Phase 2** below).
 - No proration.
 - No tenant-facing UI for scheduled changes (operator-only).
 - No SOLA auth/webhook changes.
@@ -564,9 +563,20 @@ New **Scheduled Plan Change** card rendered between the SOLA/Collections section
 - Handles December→January year rollover
 - SUPER_ADMIN accepted; all other roles rejected (uses `canAccessPlatformAdminBillingRoutes`)
 
-### Phase 2 (worker) — deferred
+### Phase 2 (worker) — complete
 
-The worker `runMonthlyBillingAutomation` / `createWorkerBillingInvoice` does NOT yet consume the scheduled change. When Phase 2 is implemented:
-1. After invoice creation, `consumeScheduledPlanChange` checks if `periodStart >= nextBillingPlanEffectiveAt`.
-2. If true: copies next plan prices into direct settings fields, sets `billingPlanId = nextBillingPlanId`, clears `nextBillingPlanId`/`nextBillingPlanEffectiveAt`, logs `billing_plan.change_applied` event.
-3. Idempotent: second call after fields already cleared is a no-op.
+**Module:** `apps/api/src/billing/billingScheduledPlanConsume.ts` — `consumeScheduledPlanChange({ tenantId, periodStart, invoiceId?, runId? })`.
+
+**When:** `apps/worker/src/main.ts` → `runMonthlyBillingAutomation` calls it **after** an invoice exists for the period (existing OPEN invoice or newly created), **before** autopay. `createBillingInvoice` / `buildBillingInvoicePreview` already price the period using the next plan when `periodStart >= nextBillingPlanEffectiveAt` (Phase 1); consumption **persists** the switch for subsequent months.
+
+**Apply rules:**
+- Runs only if `nextBillingPlanId` and `nextBillingPlanEffectiveAt` are set and `periodStart >= nextBillingPlanEffectiveAt` (same threshold as preview).
+- Loads target `BillingPlan` by id. **Missing row** (deleted FK): logs `billing_plan.change_skipped` with `reason: plan_not_found`, **leaves** the schedule in place.
+- **Inactive** plan (`active: false`): logs `billing_plan.change_skipped` with `reason: inactive_plan`, **leaves** the schedule in place.
+- **Active** plan: `tenantBillingSettings.updateMany` with `billingPlanId = plan.id`, copies `extensionPriceCents`, `additionalPhoneNumberPriceCents`, `smsPriceCents`, `firstPhoneNumberFree` from the plan, clears `nextBillingPlanId` and `nextBillingPlanEffectiveAt`, then logs `billing_plan.change_applied` (metadata includes previous/new plan ids, effectiveAt).
+
+**Idempotency:** conditional `updateMany` on the current `(nextBillingPlanId, nextBillingPlanEffectiveAt)` pair; if already cleared, early return `no_schedule`. Race: `count === 0` → `skipped` `concurrent_or_already_applied`, no duplicate `change_applied` log.
+
+**Failure isolation:** worker wraps `consumeScheduledPlanChange` in `try/catch`. Exceptions → `console.warn` + `BillingEventLog` type `billing_plan.change_consume_error`. **Charge path unchanged** (`chargeWorkerInvoice` not modified).
+
+**Tests:** `billingScheduledPlanConsume.test.ts` (apply, before-effective, inactive, idempotent, concurrent, missing plan, DB throw).

@@ -26,6 +26,7 @@ import {
   queueReceiptEmailOnce,
 } from "../../api/src/billing/billingEmailLifecycle";
 import { createBillingInvoice } from "../../api/src/billing/invoiceEngine";
+import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
@@ -1824,6 +1825,30 @@ async function runMonthlyBillingAutomation(): Promise<void> {
       try {
         const existing = await (db as any).billingInvoice.findFirst({ where: { tenantId: setting.tenantId, periodStart, periodEnd, status: { not: "VOID" } } });
         const invoice = existing || await createWorkerBillingInvoice(setting, periodStart, periodEnd);
+        try {
+          await consumeScheduledPlanChange({
+            tenantId: setting.tenantId,
+            periodStart,
+            invoiceId: invoice.id,
+            runId: run.id,
+          });
+        } catch (consumeErr: any) {
+          console.warn(
+            `monthly billing: consumeScheduledPlanChange failed tenant=${setting.tenantId}`,
+            consumeErr?.message || consumeErr,
+          );
+          await (db as any).billingEventLog
+            .create({
+              data: {
+                tenantId: setting.tenantId,
+                invoiceId: invoice.id,
+                runId: run.id,
+                type: "billing_plan.change_consume_error",
+                message: consumeErr?.message ? String(consumeErr.message) : String(consumeErr),
+              },
+            })
+            .catch(() => null);
+        }
         let transaction = null;
         if (setting.defaultPaymentMethod) {
           transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);

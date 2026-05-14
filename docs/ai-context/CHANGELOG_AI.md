@@ -4,6 +4,46 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: scheduled plan changes phase 2 (worker consumption)
+
+**Task:** billing / scheduled plan changes phase 2 worker  
+**Risk:** high (worker + billing settings persistence; **no** SOLA/charge logic edits)
+
+### What changed
+
+**`apps/api/src/billing/billingScheduledPlanConsume.ts`** (new):
+- `consumeScheduledPlanChange` — after monthly invoice exists for `periodStart`, if `periodStart >= nextBillingPlanEffectiveAt` and the next `BillingPlan` exists and is active: sets `billingPlanId`, copies plan price fields + `firstPhoneNumberFree`, clears `nextBillingPlanId` / `nextBillingPlanEffectiveAt`, logs `billing_plan.change_applied`. Inactive or missing plan: logs `billing_plan.change_skipped`, leaves schedule. Idempotent via conditional `updateMany`.
+
+**`apps/worker/src/main.ts`** (modified):
+- `runMonthlyBillingAutomation`: after resolving/creating the period invoice, calls `consumeScheduledPlanChange` in inner `try/catch` (failure → `billing_plan.change_consume_error` + `console.warn`; does not fail tenant billing / charge).
+
+**`apps/api/src/billing/billingScheduledPlanConsume.test.ts`** (new): unit tests for apply, before-effective, inactive, idempotent, concurrent, missing plan, DB error propagation.
+
+**`docs/ai-context/BILLING.md`** — Phase 2 worker section (replaces “deferred” stub).  
+**`docs/ai-context/CHANGELOG_AI.md`** — this entry.
+
+### What was NOT changed
+
+- **Charge / gateway:** `chargeWorkerInvoice`, SOLA adapter calls, idempotency keys, amounts — **unchanged**.
+- No proration, no `PARTIALLY_PAID`.
+- No Portal code (docs only above).
+- No telephony / PBX / mobile / CRM.
+
+### Deploy
+
+- **Worker:** required (`main.ts`).
+- **API:** optional for runtime (new module only used by worker import path); ship same commit for consistency.
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing
+pnpm --filter @connect/api typecheck
+pnpm --filter @connect/worker typecheck
+```
+
+---
+
 ## 2026-05-14 — billing: scheduled plan changes phase 1 (schema + API + preview logic + portal UI)
 
 **Task:** billing / scheduled plan changes phase 1  
