@@ -65,7 +65,7 @@
 
 ### Worker image vs API billing source
 
-`apps/worker` imports `createBillingInvoice` from `apps/api/src/billing/invoiceEngine` (runtime copy inside the worker image). If only `apps/api/src/billing/**` changes, a **worker** deploy must still **rebuild** the image or monthly invoice jobs can run a stale engine. **`scripts/lib/deploy-common.sh`** → **`_deploy_common_service_paths`** for **`worker`** includes **`apps/api/src/billing/`** plus **`scripts/deploy-worker.sh`** and **`scripts/lib/deploy-common.sh`** so billing edits and rebuild-detection script edits both invalidate skips. Symptom of a mistake: **`[deploy-worker] … skipping build/restart`** with **`unrelated_paths`** right after billing changes shipped on **api**.
+`apps/worker` imports `createBillingInvoice` from `apps/api/src/billing/invoiceEngine` (runtime copy inside the worker image). If only `apps/api/src/billing/**` changes, a **worker** deploy must still **rebuild** the image or monthly invoice jobs can run a stale engine. **`scripts/lib/deploy-common.sh`** → **`_deploy_common_service_paths`** for **`worker`** includes **`apps/api/src/billing/`** plus **`scripts/deploy-worker.sh`** and **`scripts/lib/deploy-common.sh`** so billing edits and rebuild-detection script edits both invalidate skips. **`deploy-worker.sh` re-sources `deploy-common.sh` after `git-sync`** so the **checked-out tree’s** globs are used when diffing (**not** the stale in-memory `_deploy_common_service_paths` from before checkout). Symptom of a mistake: **`[deploy-worker] … skipping build/restart`** with **`unrelated_paths`** right after billing changes shipped on **api**.
 
 ---
 

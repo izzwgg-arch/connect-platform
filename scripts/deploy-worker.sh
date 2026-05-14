@@ -26,9 +26,9 @@ cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
-  deploy_common_emit_stage "dry-run"
-  log "DRY RUN — no git/docker changes"
-  log "Would: git sync, pnpm install if lock changed, docker compose build/up ${SERVICE}, container running check"
+  log "DRY RUN — verifying git checkout safety; no git checkout/docker changes"
+  deploy_common_dry_run_checkout_safety "$ROOT" "${BRANCH:-main}" "$COMMIT"
+  log "Would next: pnpm install if lock changed, docker compose build/up ${SERVICE}, container running check"
   log "(branch=${BRANCH:-} commit=${COMMIT:-} requested_by=${REQ})"
   exit 0
 fi
@@ -46,6 +46,11 @@ OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
 NEW_HEAD="$(deploy_common_head_sha)"
 LOCK_AFTER="$(deploy_common_lock_hash)"
 PKG_AFTER="$(deploy_common_pkg_hash)"
+
+# Reload path globs: need_rebuild compares git diff vs _deploy_common_service_paths;
+# sourcing once at startup uses pre-sync definitions. After checkout, reload from disk.
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/deploy-common.sh"
 
 deploy_common_emit_stage "change-detect"
 if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
