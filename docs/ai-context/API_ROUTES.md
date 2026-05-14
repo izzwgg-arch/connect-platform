@@ -455,7 +455,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Import (Phase 1E)
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/crm/import/upload` | CSV upload, auto-maps columns, deduplicates, returns `CrmImportBatch` |
+| POST | `/crm/import/upload` | CSV upload (`multipart/form-data`, field `file`). Uses shared `importPipeline` (parse, header auto-map, dedupe by phone/email, create/update `Contact` + `CrmContactMeta`). Max 5 MB, 5,000 rows. Returns `CrmImportBatch` summary. |
 | GET | `/crm/import/batches` | List batches |
 | GET | `/crm/import/batches/:id` | Single batch detail |
 
@@ -490,6 +490,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | PATCH | `/crm/campaigns/:id` | Update name/description/status/priority/scriptId/checklistId (admin) |
 | DELETE | `/crm/campaigns/:id` | Archive campaign (sets status=ARCHIVED, admin) |
 | POST | `/crm/campaigns/:id/members/add` | Add contacts (by contactId array). Skips duplicates. Only CRM-enrolled contacts. (admin) |
+| POST | `/crm/campaigns/:id/import` | **Multipart** `file` (CSV) + optional text field `assignedToUserId`. Same limits and column auto-mapping as `POST /crm/import/upload` (shared `importPipeline` — dedupe by phone/email, no duplicate contacts). Creates/updates contacts + CRM meta, then adds `CrmCampaignMember` rows; skips contacts already in the campaign. Optional assignee must be a tenant user with CRM access enabled. Returns `batchId`, `createdContacts`, `updatedContacts`, `skippedRows`, `addedMembers`, `skippedExistingMembers`, `errors`, etc. Admin only. |
 | GET | `/crm/campaigns/:id/members` | List members with contact details. Filters: `?status=`, `?assignedToMe=true`, `?assignedToUserId=<id>` (validates userId is in tenant), `?unassigned=true`. All filters combine with `?page=` / `?limit=`. |
 | GET | `/crm/campaigns/:id/workload` | Per-agent assignment summary. Returns `{ workload: [{ userId, displayName, pending, inProgress, callbacks, contacted, converted, skipped, dnc, total }] }`. Includes an Unassigned row. Admin only. |
 | POST | `/crm/campaigns/:id/members/distribute` | Round-robin distribute all unassigned PENDING/IN_PROGRESS members across provided agents. Body: `{ userIds: string[] }` (1–50 users). Validates userIds belong to tenant. Returns `{ distributed, assignments: [{ userId, count }] }`. Admin only. Explicit manager action only — never automatic. |

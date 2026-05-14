@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Play, Pause, Archive, Users, Plus, Search,
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
-  Shuffle, BarChart2,
+  Shuffle, BarChart2, Upload,
 } from "lucide-react";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -68,6 +68,24 @@ type CrmUser = {
   email: string;
   crmRole: string | null;
   crmEnabled: boolean;
+};
+
+type CampaignImportSummary = {
+  batchId: string;
+  campaignId: string;
+  fileName: string;
+  status: string;
+  totalRows: number;
+  createdContacts: number;
+  updatedContacts: number;
+  skippedRows: number;
+  addedMembers: number;
+  skippedExistingMembers: number;
+  errorCount: number;
+  errors: { row: number; reason: string }[];
+  detectedHeaders?: string[];
+  mapping?: Record<string, string>;
+  assignedToUserId: string | null;
 };
 
 type WorkloadRow = {
@@ -396,6 +414,14 @@ export default function CampaignDetailPage() {
   const [distributing, setDistributing] = useState(false);
   const [distributeMsg, setDistributeMsg] = useState("");
 
+  // CSV import into campaign (admin — matches API requireCrmAdmin)
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importAssigneeId, setImportAssigneeId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importErr, setImportErr] = useState("");
+  const [importSummary, setImportSummary] = useState<CampaignImportSummary | null>(null);
+
   // Bulk select
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>(""); // "" = clear
@@ -513,6 +539,40 @@ export default function CampaignDetailPage() {
       setDistributeMsg((err as Error)?.message ?? "Failed to distribute leads.");
     }
     setDistributing(false);
+  }
+
+  async function handleCampaignImport() {
+    if (!importFile) {
+      setImportErr("Choose a CSV file.");
+      return;
+    }
+    setImporting(true);
+    setImportErr("");
+    setImportSummary(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
+      const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const base = typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(`${base}/api/crm/campaigns/${campaignId}/import`, {
+        method: "POST",
+        headers: t ? { Authorization: `Bearer ${t}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.detail === "string" ? data.detail : data.error || `Import failed (${res.status})`,
+        );
+      }
+      setImportSummary(data as CampaignImportSummary);
+      await Promise.all([loadCampaign(), loadMembers(), loadWorkload()]);
+      setImportFile(null);
+    } catch (e: unknown) {
+      setImportErr((e as Error)?.message ?? "Import failed");
+    }
+    setImporting(false);
   }
 
   async function handleBulkAssign() {
@@ -752,6 +812,20 @@ export default function CampaignDetailPage() {
                   >
                     <Shuffle className="h-4 w-4" />Distribute
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportOpen(true);
+                      setImportErr("");
+                      setImportSummary(null);
+                      setImportFile(null);
+                      setImportAssigneeId("");
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
+                    title="Import leads from CSV"
+                  >
+                    <Upload className="h-4 w-4" />Import CSV
+                  </button>
                 </>
               )}
               <button onClick={() => setShowAddContacts(true)} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
@@ -848,6 +922,93 @@ export default function CampaignDetailPage() {
                     <Shuffle className="h-3.5 w-3.5" />
                     {distributing ? "Distributing…" : `Distribute across ${distributeUserIds.size} agent${distributeUserIds.size !== 1 ? "s" : ""}`}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Import CSV modal */}
+          {isAdmin && importOpen && (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-900">Import leads to campaign</h3>
+                  <button type="button" onClick={() => setImportOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+                </div>
+                <p className="text-sm text-gray-600 mb-3">
+                  Upload a CSV (max 5 MB, up to 5,000 rows). Headers are auto-detected — include at least a{" "}
+                  <strong>phone</strong> or <strong>email</strong> column (e.g. &quot;Phone&quot;, &quot;Mobile&quot;, &quot;Email&quot;).
+                  Existing contacts are matched by phone/email and updated (blank fields only); they are not duplicated.
+                  Contacts already in this campaign are skipped for enrollment.
+                </p>
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">CSV file</label>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700"
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Assign new members to (optional)</label>
+                  <select
+                    value={importAssigneeId}
+                    onChange={(e) => setImportAssigneeId(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {crmUsers.filter((u) => u.crmEnabled).map((u) => (
+                      <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
+                    ))}
+                  </select>
+                </div>
+                {importErr && <p className="text-sm text-red-600 mb-3">{importErr}</p>}
+                {importSummary && (
+                  <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm space-y-1">
+                    <p className="font-semibold text-gray-800">Import complete — {importSummary.status}</p>
+                    <p>Rows processed: {importSummary.totalRows}</p>
+                    <p>Contacts created: {importSummary.createdContacts}</p>
+                    <p>Contacts updated: {importSummary.updatedContacts}</p>
+                    <p>Rows skipped (no phone/email): {importSummary.skippedRows}</p>
+                    <p className="text-green-700 font-medium">Members added to campaign: {importSummary.addedMembers}</p>
+                    <p>Already in campaign (skipped): {importSummary.skippedExistingMembers}</p>
+                    {importSummary.errorCount > 0 && (
+                      <p className="text-amber-700">Row errors: {importSummary.errorCount}</p>
+                    )}
+                    {importSummary.errors?.length > 0 && (
+                      <ul className="text-xs text-gray-600 max-h-24 overflow-y-auto list-disc pl-4 mt-1">
+                        {importSummary.errors.slice(0, 10).map((er) => (
+                          <li key={`${er.row}-${er.reason}`}>Row {er.row}: {er.reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end flex-wrap">
+                  {importSummary && (
+                    <button
+                      type="button"
+                      onClick={() => { setImportSummary(null); setImportFile(null); setImportErr(""); }}
+                      className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 mr-auto"
+                    >
+                      Import another
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setImportOpen(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                    {importSummary ? "Close" : "Cancel"}
+                  </button>
+                  {!importSummary && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCampaignImport()}
+                      disabled={importing || !importFile}
+                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      {importing ? "Importing…" : "Run import"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

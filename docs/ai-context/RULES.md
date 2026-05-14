@@ -598,6 +598,12 @@
     - No scheduled, triggered, or event-based redistribution is permitted.
     - Cross-tenant userIds are rejected with 400 before any assignment is written.
 
+90. **CRM campaign CSV import must reuse the shared import pipeline and must not duplicate contacts or campaign members.**
+    - `POST /crm/campaigns/:id/import` must call the same parse/dedup/contact upsert logic as `POST /crm/import/upload` (`importPipeline.ts` — `processImportRow`, limits, column mapping).
+    - Contacts are identified by normalized phone and/or email within the tenant; existing rows are updated (non-destructive fill-in) and must not be re-created.
+    - Enrollment uses `CrmCampaignMember` with the same skip-if-already-member rule as `POST /crm/campaigns/:id/members/add`.
+    - Standalone `/crm/import/upload` remains the general-purpose import; campaign import is an additive enrollment path only.
+
 88. **CRM Queue preference precedence: URL > localStorage > tenant default > hardcoded fallback.**
     - `?sort=` URL param always wins. `?filter=` and `?campaignId=` URL params always win.
     - localStorage keys `crm_queue_sort_mode` and `crm_queue_campaign_id` are second priority.

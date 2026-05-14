@@ -949,6 +949,52 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 13A — Import CSV Leads Directly Into a Campaign
+
+```
+[ ] 1. POST /crm/campaigns/:id/import (multipart: file + optional assignedToUserId)
+        - Same 5 MB / 5,000 row limits as POST /crm/import/upload
+        - Invalid CSV / no phone+email columns returns 400 with clear error
+        - campaign_not_found for wrong tenant / unknown id
+
+[ ] 2. Contact dedupe
+        - Duplicate phone/email updates existing contact, does not create second contact
+        - New rows create Contact with source IMPORTED + CrmContactMeta
+
+[ ] 3. Campaign member enrollment
+        - New contacts and updated contacts get CrmCampaignMember when not already in campaign
+        - Already a member: skippedExistingMembers incremented, no duplicate member row
+
+[ ] 4. assignedToUserId optional
+        - When set, new members have assignedToUserId set
+        - Invalid user or user without CRM access → 400 invalid_assignee
+        - Omitted → members unassigned
+
+[ ] 5. CrmImportBatch
+        - Batch row created with fileName prefixed campaign:<id>:
+        - createdCount / updatedCount / skippedCount align with contact pipeline
+
+[ ] 6. POST /crm/import/upload unchanged
+        - Still works for standalone import (same pipeline module)
+
+[ ] 7. Campaign detail UI (admin)
+        - Import CSV button opens modal
+        - Column guidance shown (no fake preview)
+        - After success: summary counts + members/workload/campaign stats refresh
+
+[ ] 8. Queue
+        - New members appear in GET /crm/campaigns/:id/members and agent queue when assigned
+
+[ ] 9. Safety
+        - No schema migration
+        - No telephony changes
+
+[ ] 10. API typecheck (0 errors)
+[ ] 11. Portal typecheck (0 errors)
+```
+
+---
+
 ## Phase 12D — Queue Assignment and Lead Redistribution
 
 ```
