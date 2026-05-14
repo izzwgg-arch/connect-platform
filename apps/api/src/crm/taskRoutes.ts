@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
+import { todayBounds } from "./crmAggregateBounds";
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
@@ -104,11 +105,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
 
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
+    const { start: todayStart, end: todayEnd } = todayBounds();
 
     const [
       myOpen,
@@ -234,11 +231,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const page = Math.max(0, parseInt(q.page ?? "0", 10));
     const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? "50", 10)));
 
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
+    const { start: todayStart, end: todayEnd } = todayBounds();
 
     // Status filter
     let statusFilter: string[] | undefined;

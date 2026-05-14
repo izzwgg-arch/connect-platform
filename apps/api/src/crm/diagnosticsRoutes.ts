@@ -3,15 +3,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "@connect/db";
 import { requireCrmAdmin } from "./guard";
 import { isCrmOutboundSmsConfigured } from "./smsRoutes";
-
-function todayBounds() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
-  return { now, start, end };
-}
+import { todayBounds, daysAgoBounds, crmCampaignActiveWhere } from "./crmAggregateBounds";
 
 function num(v: bigint | number | null | undefined): number {
   if (v == null) return 0;
@@ -86,11 +78,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
 
     const tenantId = user.tenantId;
     const { start: todayStart, end: todayEnd } = todayBounds();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    thirtyDaysAgo.setHours(0, 0, 0, 0);
-
-    const activeCampaign = { status: "ACTIVE" as const };
+    const { since: thirtyDaysAgo } = daysAgoBounds(30);
 
     const [
       totalActiveMembers,
@@ -121,14 +109,14 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       queueRemainingWallboard,
     ] = await Promise.all([
       db.crmCampaignMember.count({
-        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }, campaign: activeCampaign },
+        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }, campaign: crmCampaignActiveWhere },
       }),
       db.crmCampaignMember.count({
         where: {
           tenantId,
           status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] },
           assignedToUserId: null,
-          campaign: activeCampaign,
+          campaign: crmCampaignActiveWhere,
         },
       }),
       db.crmCampaignMember.count({
@@ -136,7 +124,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
           tenantId,
           status: "CALLBACK",
           callbackAt: { lt: todayStart },
-          campaign: activeCampaign,
+          campaign: crmCampaignActiveWhere,
         },
       }),
       db.$queryRaw<[{ c: bigint }]>(Prisma.sql`
@@ -155,7 +143,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: { not: null },
-          campaign: activeCampaign,
+          campaign: crmCampaignActiveWhere,
           assignedTo: { status: "DISABLED" },
         },
       }),
@@ -225,7 +213,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       db.crmCampaignMember.count({
         where: {
           tenantId,
-          campaign: activeCampaign,
+          campaign: crmCampaignActiveWhere,
           contact: { OR: [{ active: false }, { archivedAt: { not: null } }] },
         },
       }),
@@ -238,7 +226,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
           AND (m."tenantId" <> co."tenantId" OR m."tenantId" <> cp."tenantId")
       `).then((r) => num(r[0]?.c)),
       db.crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: null, campaign: activeCampaign },
+        where: { tenantId, status: "CALLBACK", callbackAt: null, campaign: crmCampaignActiveWhere },
       }),
       db.crmCampaign.count({ where: { tenantId, status: "ACTIVE" } }),
       db.crmCampaign.count({ where: { tenantId, status: "ACTIVE", members: { none: {} } } }),
@@ -277,7 +265,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       `).then((r) => num(r[0]?.c)),
       fetchTelephonyHealthSnapshot(),
       db.crmCampaignMember.count({
-        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: activeCampaign },
+        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: crmCampaignActiveWhere },
       }),
     ]);
 

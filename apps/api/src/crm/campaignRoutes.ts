@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden } from "./guard";
+import { todayBounds, startOfTomorrowFromDayStart } from "./crmAggregateBounds";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
@@ -991,10 +992,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       campaignFilter = { id: campaignIdParam, status: "ACTIVE" };
     }
 
-    const now = new Date();
-    const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
-    const endOfToday = new Date(now); endOfToday.setHours(23, 59, 59, 999);
-    const startOfTomorrow = new Date(startOfToday); startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+    const { now, start: startOfToday, end: endOfToday } = todayBounds();
+    const startOfTomorrow = startOfTomorrowFromDayStart(startOfToday);
     const day7 = new Date(now); day7.setDate(day7.getDate() + 7);
 
     let whereClause: Record<string, unknown>;
