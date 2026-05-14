@@ -17,6 +17,15 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import {
+  clearRegisteredShutdownTimers,
+  isReadyToServeTraffic,
+  markListeningComplete,
+  markNotAcceptingTraffic,
+  registerShutdownTimer,
+  serverListeningCompleted,
+  shutdownRegisteredTimerCount,
+} from "./processLifecycle";
 import { installApiRequestProfiler } from "./apiRequestProfiler";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import {
@@ -3638,6 +3647,19 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
 app.get("/health", async () => ({ ok: true }));
 
+app.get("/ready", async (_req, reply) => {
+  if (!serverListeningCompleted || !isReadyToServeTraffic()) {
+    const reason = !serverListeningCompleted ? "not_listening" : "draining";
+    return reply.code(503).send({ ok: false, ready: false, reason });
+  }
+  try {
+    await db.$queryRawUnsafe("SELECT 1");
+    return { ok: true, ready: true };
+  } catch {
+    return reply.code(503).send({ ok: false, ready: false, reason: "db" });
+  }
+});
+
 // ── Android APK distribution ──────────────────────────────────────────────
 // Serves the published Android APK to invited users. Files live in a
 // host-mounted directory (`APK_DOWNLOAD_DIR`) that is *not* committed to git
@@ -4121,13 +4143,15 @@ async function refreshTurnGauge() {
   } catch { /* DB not ready yet */ }
 }
 refreshTurnGauge();
-setInterval(refreshTurnGauge, 300_000);
+registerShutdownTimer(setInterval(refreshTurnGauge, 300_000));
 
 // Refresh session gauge every 30s from the live call store
-setInterval(() => {
-  liveCallCleanup();
-  webrtcSessionsActive.set(liveCallStore.size);
-}, 30_000);
+registerShutdownTimer(
+  setInterval(() => {
+    liveCallCleanup();
+    webrtcSessionsActive.set(liveCallStore.size);
+  }, 30_000),
+);
 
 // Fastify add-content-type-parser hook for Prometheus text format
 app.addHook("onRequest", async (req, reply) => {
@@ -8702,7 +8726,7 @@ function liveCallCleanup() {
 }
 
 // Periodic cleanup every 30 s
-setInterval(liveCallCleanup, 30_000);
+registerShutdownTimer(setInterval(liveCallCleanup, 30_000));
 
 // ── Root Cause Analysis Engine ───────────────────────────────────────────────
 // Produces structured RCA for every degraded/bad call from captured telemetry.
@@ -13323,8 +13347,8 @@ function startPbxTenantListWarm() {
       app.log.warn({ err: e?.message || String(e) }, "pbx_tenant_list_warm_failed");
     }
   };
-  setTimeout(warm, 3_000);
-  setInterval(warm, PBX_TENANT_LIST_CACHE_TTL_MS);
+  registerShutdownTimer(setTimeout(warm, 3_000));
+  registerShutdownTimer(setInterval(warm, PBX_TENANT_LIST_CACHE_TTL_MS));
 }
 
 /** Explicit backfill: list tenants once, refresh directory + inbound DIDs (same PBX call pattern as GET /admin/pbx/tenants). */
@@ -26798,8 +26822,8 @@ function startPbxKpiBackgroundRefresh() {
     }
   };
 
-  setTimeout(doRefresh, 0);
-  setInterval(doRefresh, PBX_KPI_BG_INTERVAL_MS);
+  registerShutdownTimer(setTimeout(doRefresh, 0));
+  registerShutdownTimer(setInterval(doRefresh, PBX_KPI_BG_INTERVAL_MS));
 }
 
 /**
@@ -28987,14 +29011,18 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
   return { ok: true };
 });
 
-const emailJobTimer = setInterval(() => {
-  processEmailJobsBatch().catch((e) => app.log.error({ err: e }, "email job processor failed"));
-}, 15_000);
+const emailJobTimer = registerShutdownTimer(
+  setInterval(() => {
+    processEmailJobsBatch().catch((e) => app.log.error({ err: e }, "email job processor failed"));
+  }, 15_000),
+);
 emailJobTimer.unref();
 
-const invoiceOverdueTimer = setInterval(() => {
-  processInvoiceOverdueBatch().catch((e) => app.log.error({ err: e }, "invoice overdue processor failed"));
-}, 60_000);
+const invoiceOverdueTimer = registerShutdownTimer(
+  setInterval(() => {
+    processInvoiceOverdueBatch().catch((e) => app.log.error({ err: e }, "invoice overdue processor failed"));
+  }, 60_000),
+);
 invoiceOverdueTimer.unref();
 
 async function processIvrScheduleBatch(): Promise<void> {
@@ -29049,14 +29077,18 @@ async function processAutomationRulesBatch(): Promise<void> {
   }
 }
 
-const ivrScheduleTimer = setInterval(() => {
-  processIvrScheduleBatch().catch((e) => app.log.error({ err: e }, "ivr schedule processor failed"));
-}, 60_000);
+const ivrScheduleTimer = registerShutdownTimer(
+  setInterval(() => {
+    processIvrScheduleBatch().catch((e) => app.log.error({ err: e }, "ivr schedule processor failed"));
+  }, 60_000),
+);
 ivrScheduleTimer.unref();
 
-const automationRuleTimer = setInterval(() => {
-  processAutomationRulesBatch().catch((e) => app.log.error({ err: e }, "automation rule processor failed"));
-}, 60_000);
+const automationRuleTimer = registerShutdownTimer(
+  setInterval(() => {
+    processAutomationRulesBatch().catch((e) => app.log.error({ err: e }, "automation rule processor failed"));
+  }, 60_000),
+);
 automationRuleTimer.unref();
 
 
@@ -29537,8 +29569,8 @@ function startPbxLiveDashboardWarm() {
     }
   };
 
-  setTimeout(doWarm, 2_000);
-  setInterval(doWarm, PBX_LIVE_BG_INTERVAL_MS);
+  registerShutdownTimer(setTimeout(doWarm, 2_000));
+  registerShutdownTimer(setInterval(doWarm, PBX_LIVE_BG_INTERVAL_MS));
 }
 
 // ─── Tenant endpoints ─────────────────────────────────────────────────────────
@@ -31303,6 +31335,35 @@ const port = Number(process.env.PORT || 3001);
   registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
   await registerCrmRoutes(app);
   await app.listen({ host: "0.0.0.0", port });
+  markListeningComplete();
+
+  const shutdownBudgetMs = Math.min(Math.max(Number(process.env.CONNECT_API_SHUTDOWN_MS ?? 55000), 3000), 120_000);
+  const shutdown = async (signal: NodeJS.Signals) => {
+    const t0 = Date.now();
+    app.log.warn(
+      { signal, phase: "shutdown_begin", timers: shutdownRegisteredTimerCount(), budgetMs: shutdownBudgetMs },
+      "api_sigterm_received",
+    );
+    markNotAcceptingTraffic();
+    try {
+      await Promise.race([
+        app.close(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error("shutdown_timeout"), { name: "ShutdownTimeout" })), shutdownBudgetMs),
+        ),
+      ]);
+      app.log.warn({ signal, phase: "shutdown_complete", elapsedMs: Date.now() - t0 }, "api_shutdown_complete");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      app.log.error({ signal, phase: "shutdown_error", elapsedMs: Date.now() - t0, err: msg }, "api_shutdown_forced");
+    } finally {
+      clearRegisteredShutdownTimers();
+      process.exit(0);
+    }
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+
   startPbxKpiBackgroundRefresh();
   startPbxLiveDashboardWarm();
   startPbxTenantListWarm();

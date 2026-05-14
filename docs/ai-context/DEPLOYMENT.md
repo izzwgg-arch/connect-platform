@@ -35,7 +35,8 @@
 
 | Service | Port (host bind) | Notes |
 |---|---|---|
-| `api` | `127.0.0.1:3001:3001` | Builds `apps/api/Dockerfile`. `command:` runs Prisma generate + migrate deploy + `pnpm --filter @connect/api dev`. Mounts `moh-assets`, `ivr-prompts`, `chat-attachments` named volumes; mounts `/opt/connectcomms/downloads` read-only for APK distribution. Joins `default` and external `infra_default` networks. |
+| `api` | `127.0.0.1:3001:3001` | Builds `apps/api/Dockerfile`. **`command`** runs **`pnpm --filter @connect/api start`** (fast listen; **no Prisma migrate** on boot). **`prisma migrate deploy`** runs only in **`scripts/deploy-api.sh`** when schema/migrations changed. **`stop_grace_period: 60s`** for SIGTERM drain. Docker **`healthcheck`** hits **`GET /health`** (liveness). **`GET /ready`** is used by **`scripts/lib/deploy-api-rollout.sh`** for cutover gates. Same volumes/networks as before (`moh-assets`, `ivr-prompts`, `chat-attachments`, downloads mount, `infra_default`). |
+| `api_candidate` | `127.0.0.1:3004:3001` | **Profile `api_rollout` only.** Second API instance for blue/green deploys; **`container_name: app-api-candidate-1`**. Healthcheck uses **`/ready`**. **`restart: no`** — deploy script starts/stops explicitly. Same image stacks as **`api`**. |
 | `portal` | `127.0.0.1:3000:3000` | Builds `apps/portal/Dockerfile`. Build args include `NEXT_PUBLIC_TELEPHONY_WS_URL` and `NEXT_PUBLIC_FORCE_ICE_RELAY`. Same-origin `/api` (no `NEXT_PUBLIC_API_URL` baked in). |
 | `realtime` | `127.0.0.1:3002:3002` | Builds `apps/realtime/Dockerfile`. |
 | `telephony` | `127.0.0.1:3003:3003` | Builds `apps/telephony/Dockerfile`. Reads `JWT_SECRET`, `AMI_PASSWORD`, `ARI_PASSWORD` from env_file directly — do NOT override in compose. Joins `default` and `infra_default`. |
@@ -48,6 +49,24 @@ whether mode is `LOCAL` (local SBC) or `REMOTE`.
 External network: `infra_default` (declared external in compose; presumed to be
 the infra stack with Postgres + Redis on the same Docker network). UNKNOWN exact
 infra compose layout — not in this repo.
+
+### API blue/green (zero-downtime, `DEPLOY_API_BLUEGREEN=1` default)
+
+**Root cause addressed:** **`deploy_common_compose_up`** could stop/remove the **`api`** container before the replacement listened, yielding nginx **`502`** for **`/api/*`** on all clients.
+
+Current approach ( **`scripts/deploy-api.sh`** + **`scripts/lib/deploy-api-rollout.sh`** ):
+
+1. **`prisma migrate deploy`** runs in the deploy script phase **before** starting the candidate container (same rule: only when `packages/db/prisma/**` changed between commits).
+2. Start **`api_candidate`** on **`127.0.0.1:3004`**, poll **`GET /ready`** locally.
+3. Rewrite the **nginx include** ( **`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**, template **`docs/nginx/`** ) to **`127.0.0.1:3004`**, then **`nginx -t`** and **`nginx -s reload`**.
+4. **Recreate stable `api`** on **`3001`** while traffic stays on **`3004`**, wait **`GET /ready`** on **`3001`**, flip nginx back to **`3001`**, reload again, then **`stop` + `rm`** candidate only (**never** **`rm -sf`** stable before cutover).
+5. **`DEPLOY_API_PUBLIC_VERIFY_URL`** optional curl through the public hostname after reloads (**`DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE`** for **`curl -k`** on HTTPS checks).
+
+Failures: candidate never ready → nginx unchanged → stable untouched. Reload failure → upstream restored from **`.pre-<job>`** backup when applicable. Detailed recovery: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
+
+Operators must install the nginx snippet on the application host (**human ops** — see **`docs/nginx/README.md`** and **`AGENTS.md`** forbidding blind `/etc/nginx` edits without process). **`DEPLOY_API_BLUEGREEN=0`** forces legacy single-step **`compose_up`**.
+
+Timing logs in deploy output: **`candidate_start`**, **`candidate_readiness`**, **`cutover_to_candidate`**, **`nginx_reload`**, **`stable_recreate`**, **`stable_readiness`**, **`cutover_to_stable`**, **`candidate_drain_remove`** (via **`deploy_common_log_timing`** where implemented).
 
 ---
 
@@ -1177,11 +1196,20 @@ From `docs/safe-deploy-queue.md` and `scripts/`:
 | Shared helpers | `scripts/lib/deploy-common.sh` |
 | Rollback | `scripts/release/rollback.sh` |
 
-**API post-restart health (`scripts/deploy-api.sh`):** After `docker compose up -d api`, the container entrypoint runs `prisma generate`, `prisma migrate deploy`, and `pnpm --filter @connect/api dev` before Fastify listens on **`:3001`**. The deploy script polls **`http://127.0.0.1:3001/health`** (a static `{ ok: true }` route) with **`deploy_common_wait_http_ok`**: **150 attempts × 2 s sleep** between attempts, giving roughly **five minutes** of polling budget before rollback. Normal retries produce **no** extra log lines. When the budget is exhausted the job log records:
+**API deploy health (`scripts/deploy-api.sh`):** Default **`DEPLOY_API_BLUEGREEN=1`** runs **`scripts/lib/deploy-api-rollout.sh`**. The **`api`** container **`command`** is **`pnpm --filter @connect/api start`** (**no **`prisma migrate deploy`** at boot**). **`prisma migrate deploy`** runs in the deploy script **before** the candidate container starts when migrations changed (**`deploy_common_needs_migrate`**). Rollout probes **`GET /ready`** on **`127.0.0.1:3004`** (candidate), then **`127.0.0.1:3001`** (stable), with nginx include flips between them — see **`DEPLOYMENT.md`** § API blue/green. After rollout succeeds the script probes **`GET /health`** with **`deploy_common_wait_http_ok`**: **150 attempts × ~2 s** (~5 min) before invoking **`rollback`** (git + rebuild + **`deploy_common_compose_up api`**).
 
-1. **`[deploy-common] wait_http_ok FAILED after N tries url=… http_code=… curl_exit=… body_snippet=… stderr_snippet=…`** — from the final diagnostic curl probe (always logs now; prior bug: bash 4.4/5.x could fire the inherited ERR trap inside the command substitution before the log line ran — fixed 2026-05-13 by wrapping the probe in `set +e`/`set -e`).
-2. **`docker compose ps api`** output — shows container state at failure time.
-3. **`docker logs --tail=120 app-api-1`** output — shows the last 120 lines of API startup, including any startup crash, prisma error, or tsx compile error. Captured **before** rollback so the evidence survives container replacement.
+**Manual zero-downtime verification (operator):**
+
+1. In one shell loop **`curl -fsS -o NUL -w "%{http_code}\n" https://…/…`** against the route nginx maps to **`/health`** or **`/ready`** (often same-origin **`/api/health`**) ~**1**/s **during** an **`service: api`** deploy.
+2. Expect **no bursts of **`502`****; **`grep 'connect.*127.0.0.1:3001' /var/log/nginx/error.log`** during rollout — should **not** show **`failed`** churn while clients see healthy responses (traffic may briefly use **`:3004`** via the include).
+
+**Legacy `DEPLOY_API_BLUEGREEN=0`:** **`deploy_common_compose_up api`** replaces the **`api`** container in place; **`/health`** poll on **`:3001`** only.
+
+When the **`wait_http_ok`** budget on **`/health`** is exhausted after blue/green normalization, the job log records:
+
+1. **`[deploy-common] wait_http_ok FAILED …`**
+2. **`docker compose ps api`**
+3. **`docker logs --tail=120 app-api-1`** (captured **before** rollback git/build/restart).
 
 `scripts/build-changed.sh` and `scripts/smoke-fast.sh` exist for local fast checks.
 

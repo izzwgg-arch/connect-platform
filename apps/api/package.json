@@ -6,6 +6,7 @@
   "types": "dist/server.d.ts",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
     "pbx:diagnose": "tsx scripts/run-pbx-diagnostics.ts",
     "pbx:enable-instances": "tsx scripts/enable-pbx-instances.ts",
     "pbx:diagnose-by-name": "tsx scripts/pbx-diagnose-by-tenant-name.ts",

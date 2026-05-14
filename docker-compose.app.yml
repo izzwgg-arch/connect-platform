@@ -87,9 +87,17 @@ services:
       # invitation email. Leave unset to auto-derive from PUBLIC_API_URL.
       ANDROID_APK_DOWNLOAD_URL: ${ANDROID_APK_DOWNLOAD_URL:-}
       ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
-    command: sh -lc "pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma && pnpm --filter @connect/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @connect/api dev"
+    # Migrations run in scripts/deploy-api.sh before containers; boot should listen quickly.
+    command: sh -lc "pnpm --filter @connect/api start"
     ports:
       - "127.0.0.1:3001:3001"
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
     volumes:
       # Persistent MOH asset storage — survives container rebuilds. The
       # connect-media-sync.sh cron on the PBX host pulls files from here via
@@ -103,6 +111,84 @@ services:
       # scripts/android-publish.ps1 (scp on top of an existing release APK).
       # Mounted read-only so a compromised API container cannot tamper with
       # the published binary.
+      - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
+      - chat-attachments:/var/lib/connect/chat-attachments
+    networks:
+      - default
+      - infra_default
+
+  # Blue/green candidate for zero-downtime API deploys (host :3004). See scripts/deploy-api.sh
+  # and docs/nginx/README.md. Not started by default (`profiles`); deploy queue starts explicitly.
+  api_candidate:
+    profiles: ["api_rollout"]
+    restart: "no"
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: app-api-candidate-1
+    env_file:
+      - /opt/connectcomms/env/.env.platform
+    environment:
+      SMS_PROVIDER_TEST_MODE: ${SMS_PROVIDER_TEST_MODE:-false}
+      SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
+      SOLA_CARDKNOX_SIMULATE: ${SOLA_CARDKNOX_SIMULATE:-false}
+      SOLA_CARDKNOX_MODE: ${SOLA_CARDKNOX_MODE:-sandbox}
+      SOLA_CARDKNOX_API_BASE_URL: ${SOLA_CARDKNOX_API_BASE_URL:-}
+      SOLA_CARDKNOX_API_KEY: ${SOLA_CARDKNOX_API_KEY:-}
+      SOLA_CARDKNOX_API_SECRET: ${SOLA_CARDKNOX_API_SECRET:-}
+      SOLA_CARDKNOX_WEBHOOK_SECRET: ${SOLA_CARDKNOX_WEBHOOK_SECRET:-}
+      PBX_SIMULATE: ${PBX_SIMULATE:-false}
+      PBX_BASE_URL: ${PBX_BASE_URL:-}
+      PBX_API_TOKEN: ${PBX_API_TOKEN:-}
+      PBX_API_SECRET: ${PBX_API_SECRET:-}
+      PBX_TIMEOUT_MS: ${PBX_TIMEOUT_MS:-10000}
+      PBX_TIMEZONE: ${PBX_TIMEZONE:-America/New_York}
+      PBX_WS_ENDPOINT: ${PBX_WS_ENDPOINT:-wss://209.145.60.79:8089/ws}
+      STUN_SERVER: ${STUN_SERVER:-stun:stun.l.google.com:19302}
+      TURN_SERVER: ${TURN_SERVER:-}
+      TURN_AUTH_SECRET: ${TURN_AUTH_SECRET:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+      TELEPHONY_INTERNAL_URL: ${TELEPHONY_INTERNAL_URL:-http://telephony:3003}
+      PBX_WEBHOOK_VERIFY_MODE: ${PBX_WEBHOOK_VERIFY_MODE:-token}
+      PBX_WEBHOOK_TOKEN: ${PBX_WEBHOOK_TOKEN:-}
+      PBX_WEBHOOK_SIGNATURE_SECRET: ${PBX_WEBHOOK_SIGNATURE_SECRET:-}
+      PBX_WEBHOOK_ALLOWED_IPS: ${PBX_WEBHOOK_ALLOWED_IPS:-}
+      PBX_WEBHOOK_REGISTER_PATH: ${PBX_WEBHOOK_REGISTER_PATH:-}
+      PBX_WEBHOOK_LIST_PATH: ${PBX_WEBHOOK_LIST_PATH:-}
+      PBX_WEBHOOK_DELETE_PATH: ${PBX_WEBHOOK_DELETE_PATH:-}
+      PBX_ACTIVE_CALLS_PATH: ${PBX_ACTIVE_CALLS_PATH:-}
+      PBX_SUPPORTS_WEBHOOKS: ${PBX_SUPPORTS_WEBHOOKS:-false}
+      PBX_SUPPORTS_ACTIVE_CALL_POLLING: ${PBX_SUPPORTS_ACTIVE_CALL_POLLING:-false}
+      PBX_WEBHOOK_EVENT_TYPES: ${PBX_WEBHOOK_EVENT_TYPES:-}
+      EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+      MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
+      VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
+      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      MOH_STORAGE_DIR: ${MOH_STORAGE_DIR:-/var/lib/connect/moh-assets}
+      MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
+      MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
+      CHAT_STORAGE_DIR: ${CHAT_STORAGE_DIR:-/var/lib/connect/chat-attachments}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
+      PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
+      PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
+      APK_DOWNLOAD_DIR: ${APK_DOWNLOAD_DIR:-/var/lib/connect/downloads}
+      ANDROID_APK_DOWNLOAD_URL: ${ANDROID_APK_DOWNLOAD_URL:-}
+      ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
+    command: sh -lc "pnpm --filter @connect/api start"
+    ports:
+      - "127.0.0.1:3004:3001"
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+    volumes:
+      - moh-assets:/var/lib/connect/moh-assets
+      - ivr-prompts:/var/lib/connect/ivr-prompts
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
     networks:

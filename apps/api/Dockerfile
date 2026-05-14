@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 WORKDIR /app
 ENV CI=true
-RUN apt-get update -y && apt-get install -y openssl ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y openssl ffmpeg curl && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY . .
 # Ensure workspace deps (e.g. mysql2 for Ombutel DID sync) are installed in the image.
@@ -10,4 +10,4 @@ RUN pnpm --filter @connect/integrations build
 # Regenerate Prisma client so it always matches the schema in this image.
 # This is needed when new models are added (e.g. ConnectCdr).
 RUN pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma
-CMD ["sh", "-c", "pnpm --filter @connect/api dev"]
+CMD ["sh", "-c", "pnpm --filter @connect/api start"]
