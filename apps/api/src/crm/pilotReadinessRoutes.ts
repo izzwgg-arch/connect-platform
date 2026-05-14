@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { requireCrmAdmin } from "./guard";
 import { isCrmOutboundSmsConfigured } from "./smsRoutes";
-import { todayBounds, crmCampaignActiveWhere } from "./crmAggregateBounds";
+import { todayBounds } from "./crmAggregateBounds";
+import { crmCallbackOverdueWhere, crmMemberPendingOrInProgressWhere } from "./crmMemberQueryFragments";
 
 /**
  * GET /crm/admin/pilot-readiness
@@ -28,19 +29,10 @@ export async function registerCrmPilotReadinessRoutes(app: FastifyInstance) {
         where: { tenantId, status: "ACTIVE" },
       }),
       (db as any).crmCampaignMember.count({
-        where: {
-          tenantId,
-          status: { in: ["PENDING", "IN_PROGRESS"] },
-          campaign: crmCampaignActiveWhere,
-        },
+        where: { tenantId, ...crmMemberPendingOrInProgressWhere() },
       }),
       (db as any).crmCampaignMember.count({
-        where: {
-          tenantId,
-          status: "CALLBACK",
-          callbackAt: { lt: todayStart },
-          campaign: crmCampaignActiveWhere,
-        },
+        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
       }),
       (db as any).crmUserAccess.count({
         where: { tenantId, enabled: true },

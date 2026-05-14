@@ -4,6 +4,14 @@ import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden } from "./guard";
 import { todayBounds, startOfTomorrowFromDayStart } from "./crmAggregateBounds";
 import {
+  crmCallbackDueLteDayEndWhere,
+  crmCallbackOverdueWhere,
+  crmCallbackUpcomingOrUnsetWhere,
+  crmMemberPendingOrInProgressWhere,
+  crmMemberQueueNonTerminalWhere,
+  crmQueueFilterPendingWhere,
+} from "./crmMemberQueryFragments";
+import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
   parseCsv,
@@ -1002,35 +1010,25 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: "CALLBACK",
-        callbackAt: { lte: endOfToday },
-        campaign: campaignFilter,
+        ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
       };
     } else if (filter === "overdue") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: "CALLBACK",
-        callbackAt: { lt: startOfToday },
-        campaign: campaignFilter,
+        ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
       };
     } else if (filter === "upcoming") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: "CALLBACK",
-        OR: [
-          { callbackAt: { gte: startOfTomorrow } },
-          { callbackAt: null },
-        ],
-        campaign: campaignFilter,
+        ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
       };
     } else if (filter === "all") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: { notIn: ["CONVERTED", "DO_NOT_CALL", "SKIPPED"] },
-        campaign: campaignFilter,
+        ...crmMemberQueueNonTerminalWhere(campaignFilter),
       };
     } else {
       // default: pending
@@ -1038,10 +1036,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
-        status: sortMode === "smart"
-          ? { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }
-          : { in: ["PENDING", "IN_PROGRESS"] },
-        campaign: campaignFilter,
+        ...crmQueueFilterPendingWhere(campaignFilter, sortMode === "smart"),
       };
     }
 
@@ -1112,10 +1107,10 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       }));
 
       const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: campaignFilter } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: campaignFilter } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: campaignFilter } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: campaignFilter } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmMemberPendingOrInProgressWhere(campaignFilter) } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter) } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackOverdueWhere(startOfToday, campaignFilter) } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter) } }),
       ]);
 
       return {
@@ -1159,10 +1154,10 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     // Per-tab counts respect the campaign filter so badge counts are scoped correctly
     const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: campaignFilter } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: campaignFilter } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: campaignFilter } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: campaignFilter } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmMemberPendingOrInProgressWhere(campaignFilter) } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter) } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackOverdueWhere(startOfToday, campaignFilter) } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter) } }),
     ]);
 
     return {

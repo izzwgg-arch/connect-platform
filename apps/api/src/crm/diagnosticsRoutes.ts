@@ -4,6 +4,11 @@ import { db } from "@connect/db";
 import { requireCrmAdmin } from "./guard";
 import { isCrmOutboundSmsConfigured } from "./smsRoutes";
 import { todayBounds, daysAgoBounds, crmCampaignActiveWhere } from "./crmAggregateBounds";
+import {
+  crmCallbackOverdueWhere,
+  crmMemberDiagnosticsActiveBandWhere,
+  crmMemberPendingOrInProgressWhere,
+} from "./crmMemberQueryFragments";
 
 function num(v: bigint | number | null | undefined): number {
   if (v == null) return 0;
@@ -109,23 +114,17 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       queueRemainingWallboard,
     ] = await Promise.all([
       db.crmCampaignMember.count({
-        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }, campaign: crmCampaignActiveWhere },
+        where: { tenantId, ...crmMemberDiagnosticsActiveBandWhere() },
       }),
       db.crmCampaignMember.count({
         where: {
           tenantId,
-          status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] },
           assignedToUserId: null,
-          campaign: crmCampaignActiveWhere,
+          ...crmMemberDiagnosticsActiveBandWhere(),
         },
       }),
       db.crmCampaignMember.count({
-        where: {
-          tenantId,
-          status: "CALLBACK",
-          callbackAt: { lt: todayStart },
-          campaign: crmCampaignActiveWhere,
-        },
+        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
       }),
       db.$queryRaw<[{ c: bigint }]>(Prisma.sql`
         SELECT COUNT(*)::bigint AS c
@@ -265,7 +264,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       `).then((r) => num(r[0]?.c)),
       fetchTelephonyHealthSnapshot(),
       db.crmCampaignMember.count({
-        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: crmCampaignActiveWhere },
+        where: { tenantId, ...crmMemberPendingOrInProgressWhere() },
       }),
     ]);
 

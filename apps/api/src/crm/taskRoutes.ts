@@ -4,6 +4,11 @@ import { db } from "@connect/db";
 import { requireCrmAccess } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
 import { todayBounds } from "./crmAggregateBounds";
+import {
+  crmCallbackDueInCalendarDayWhere,
+  crmCallbackOverdueWhere,
+  crmMemberQueueNonTerminalWhere,
+} from "./crmMemberQueryFragments";
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
@@ -162,26 +167,21 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: userId,
-          status: { notIn: ["CONVERTED", "DO_NOT_CALL", "SKIPPED"] },
-          campaign: { status: "ACTIVE" },
+          ...crmMemberQueueNonTerminalWhere({ status: "ACTIVE" }),
         },
       }),
       (db as any).crmCampaignMember.count({
         where: {
           tenantId,
           assignedToUserId: userId,
-          status: "CALLBACK",
-          callbackAt: { lt: todayStart },
-          campaign: { status: "ACTIVE" },
+          ...crmCallbackOverdueWhere(todayStart),
         },
       }),
       (db as any).crmCampaignMember.count({
         where: {
           tenantId,
           assignedToUserId: userId,
-          status: "CALLBACK",
-          callbackAt: { gte: todayStart, lte: todayEnd },
-          campaign: { status: "ACTIVE" },
+          ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd),
         },
       }),
       (db as any).crmContactTask.count({

@@ -2,6 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { requireCrmAccess } from "./guard";
 import { todayBounds, daysAgoBounds, endOfWeek, startOfTomorrowFromDayStart } from "./crmAggregateBounds";
+import {
+  crmCallbackDueInCalendarDayWhere,
+  crmCallbackDueLteDayEndWhere,
+  crmCallbackDueRestOfWeekWhere,
+  crmCallbackOverdueWhere,
+  crmMemberPendingOrInProgressWhere,
+  crmMemberQueueNonTerminalWhere,
+} from "./crmMemberQueryFragments";
 
 // ── Route registrar ───────────────────────────────────────────────────────────
 
@@ -43,16 +51,16 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: { tenantId, status: { in: ["OPEN", "IN_PROGRESS"] }, dueAt: { lt: todayStart } },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: { lte: todayEnd }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackDueLteDayEndWhere(todayEnd) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: { lt: todayStart }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
       }),
       (db as any).crmCampaign.count({
         where: { tenantId, status: "ACTIVE" },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmMemberPendingOrInProgressWhere() },
       }),
     ]);
 
@@ -200,8 +208,7 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: { in: userIds },
-          status: { notIn: ["CONVERTED", "DO_NOT_CALL", "SKIPPED"] },
-          campaign: { status: "ACTIVE" },
+          ...crmMemberQueueNonTerminalWhere({ status: "ACTIVE" }),
         },
         _count: { id: true },
       }),
@@ -211,9 +218,7 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: { in: userIds },
-          status: "CALLBACK",
-          callbackAt: { lte: todayEnd },
-          campaign: { status: "ACTIVE" },
+          ...crmCallbackDueLteDayEndWhere(todayEnd),
         },
         _count: { id: true },
       }),
@@ -344,13 +349,13 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
     ] = await Promise.all([
       // Counts
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: { lt: todayStart }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: { gte: todayStart, lte: todayEnd }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, status: "CALLBACK", callbackAt: { gte: tomorrow, lte: weekEnd }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
       }),
       (db as any).crmContactTask.count({
         where: { tenantId, status: { in: ["OPEN", "IN_PROGRESS"] }, dueAt: { lt: todayStart } },
@@ -361,19 +366,19 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
 
       // Detail rows (capped at 100 each)
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, status: "CALLBACK", callbackAt: { lt: todayStart }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
       }),
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, status: "CALLBACK", callbackAt: { gte: todayStart, lte: todayEnd }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
       }),
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, status: "CALLBACK", callbackAt: { gte: tomorrow, lte: weekEnd }, campaign: { status: "ACTIVE" } },
+        where: { tenantId, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
