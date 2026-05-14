@@ -333,13 +333,12 @@
   - Existing `billingPlan` relation renamed to `"CurrentBillingPlan"` (Prisma requires names when a model has two FK columns pointing to the same target model).
   - Index `TenantBillingSettings_nextBillingPlanId_idx`.
   - Phase 2 (worker, deferred): worker `consumeScheduledPlanChange` copies plan prices into direct fields and clears these columns after invoice creation for the effective period.
-
-## BillingInvoice / BillingInvoiceLineItem / BillingRun / BillingEventLog
+- **Operator diagnostics (read-only JSON):** `GET /admin/billing/platform/tenants/:id/pricing-diagnostics` (same **`periodMonth`/`periodYear`** as invoice preview); see **`BILLING.md`** — derives **`warnings`**, **`pricingPreviewExplanation`**, **`resetToPlanPreview`**, **`differsFromPlan`** — does not persist anything.
 - **Schema:** lines 683 / 721 / 790 / 809
 - **Purpose:** Connect-owned invoicing pipeline (driven by `apps/worker`
   `runMonthlyBillingAutomation` + `runBillingDunningRetries`, and admin/API actions).
 - **`BillingInvoice.metadata`:** optional JSON. **`dunning`** holds `{ attempts, maxAttempts, nextRetryAt }` for autopay retry backoff (see `billingDunning.ts`). **`taxCalculationAudit`** (set at invoice creation in `invoiceEngine.ts`) stores the tax provider snapshot: provider id/version, inputs, line summaries, notes — see `taxProvider.ts`. Dunning merges preserve existing keys (root object spread).
-- **`BillingEventLog.type` (examples):** `invoice_created`, `invoice_emailed`, `payment_link_emailed`, `autopay_attempted`, `payment_succeeded`, `payment_failed`, `dunning_scheduled`, `dunning_exhausted`, `receipt_emailed` / `payment_failed_emailed` (also used as dedupe markers with `message` = `PaymentTransaction.id`).
+- **`BillingEventLog.type` (examples):** `invoice_created`, `invoice_emailed`, `payment_link_emailed`, `autopay_attempted`, `payment_succeeded`, `payment_failed`, `dunning_scheduled`, `dunning_exhausted`, `receipt_emailed` / `payment_failed_emailed` (also used as dedupe markers with `message` = `PaymentTransaction.id`). **Pricing operators:** **`billing.pricing_reset_to_plan`** (`metadata.before` / **`metadata.after`** pricing snapshots plus **`operatorId`**), **`billing.pricing_mode_changed`** (`operatorId`, **`fromMode`**, **`toMode`**, stored mode key snapshot).
 - **Tenant-scoped?** Yes.
 - **High-risk?** **Extreme** — money.
 - **Modified by:** `apps/worker` (billing run + dunning sweep), `apps/api/src/billing/*`.

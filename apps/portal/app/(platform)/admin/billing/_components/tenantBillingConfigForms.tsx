@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiPost, apiPut } from "../../../../../services/apiClient";
+import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 
@@ -41,13 +41,53 @@ function badgeDisplay(key: string): string {
   return "Legacy";
 }
 
-export function AdminTenantPricingSourceCard({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
+export function AdminTenantPricingSourceCard({
+  detail,
+  onSaved,
+  previewPeriodMonth,
+  previewPeriodYear,
+}: {
+  detail: TenantDetail;
+  onSaved: () => void;
+  /** Align reset/diagnostics preview with Admin Billing invoice preview period (optional). */
+  previewPeriodMonth?: number;
+  previewPeriodYear?: number;
+}) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [resetOverlay, setResetOverlay] = useState(false);
+  const [resetDiagLoading, setResetDiagLoading] = useState(false);
+  const [resetPayload, setResetPayload] = useState<{
+    resetToPlanPreview: {
+      before: Record<string, unknown>;
+      after: Record<string, unknown> | null;
+      canReset: boolean;
+    };
+  } | null>(null);
+
   const settings = detail.settings || {};
-  const pr = detail.preview?.pricingResolution;
+  const pr = detail.preview?.pricingResolution as any;
+  const expl = detail.preview?.pricingPreviewExplanation as any;
   const bp = settings.billingPlan;
   const mode = parseStoredPricingMode(settings.metadata);
+
+  const operatorWarnings: string[] = [];
+  if (mode === "catalog" && expl?.tenantOverridesDetected) {
+    operatorWarnings.push("Catalog mode: stored tenant unit prices differ from what invoices use (catalog/plan rates). Consider reset-to-plan.");
+  }
+  if (mode === "catalog" && !bp) {
+    operatorWarnings.push("Catalog mode is on but no billingPlanId — invoices use platform default pricing until you link a plan.");
+  }
+  if (mode === "custom" && settings.nextBillingPlanId) {
+    operatorWarnings.push("Custom mode while a scheduled plan change exists — invoice line-items still come from the tenant row until you change pricing source or reset.");
+  }
+  if (bp && bp.active === false) {
+    operatorWarnings.push("Current BillingPlan is inactive.");
+  }
+  const nextBp = settings.nextBillingPlan;
+  if (nextBp && settings.nextBillingPlanId && nextBp.active === false) {
+    operatorWarnings.push("Scheduled next BillingPlan is inactive — the billing worker may refuse to apply it.");
+  }
 
   async function saveMode(next: PricingModeUi) {
     setSaving(true);
@@ -65,11 +105,39 @@ export function AdminTenantPricingSourceCard({ detail, onSaved }: { detail: Tena
     }
   }
 
-  async function resetToPlan() {
+  async function openResetConfirmation() {
+    setToast(null);
+    setResetDiagLoading(true);
+    setResetPayload(null);
+    try {
+      const periodQs =
+        previewPeriodMonth != null && previewPeriodYear != null
+          ? `?periodMonth=${encodeURIComponent(String(previewPeriodMonth))}&periodYear=${encodeURIComponent(String(previewPeriodYear))}`
+          : "";
+      const d = await apiGet<{
+        resetToPlanPreview: { canReset: boolean; before: Record<string, unknown>; after: Record<string, unknown> | null };
+      }>(`/admin/billing/platform/tenants/${detail.tenant.id}/pricing-diagnostics${periodQs}`);
+      setResetPayload({ resetToPlanPreview: d.resetToPlanPreview });
+      if (!d.resetToPlanPreview.canReset || !d.resetToPlanPreview.after) {
+        setToast({ kind: "err", text: "Nothing to reset — tenant has no billingPlanId." });
+        setResetDiagLoading(false);
+        return;
+      }
+      setResetOverlay(true);
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: billingErrorMessage(err, "Could not load reset preview.") });
+    } finally {
+      setResetDiagLoading(false);
+    }
+  }
+
+  async function applyResetConfirmed() {
     setSaving(true);
     setToast(null);
     try {
       await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/pricing/reset-to-plan`, {});
+      setResetOverlay(false);
+      setResetPayload(null);
       onSaved();
       setToast({ kind: "ok", text: "Prices reset to current BillingPlan and mode set to Catalog." });
     } catch (err: unknown) {
@@ -99,6 +167,12 @@ export function AdminTenantPricingSourceCard({ detail, onSaved }: { detail: Tena
           Use custom tenant pricing
         </label>
       </div>
+
+      {operatorWarnings.map((w) => (
+        <div key={w} className="billing-status-pill warn" style={{ marginBottom: 10, fontSize: 13, whiteSpace: "normal", lineHeight: 1.45 }}>
+          {w}
+        </div>
+      ))}
 
       {mode === "custom" && pr?.banner?.toLowerCase().includes("override") ? (
         <div className="billing-status-pill warn" style={{ marginBottom: 12, fontSize: 13, whiteSpace: "normal", lineHeight: 1.45 }}>
@@ -147,14 +221,104 @@ export function AdminTenantPricingSourceCard({ detail, onSaved }: { detail: Tena
       ) : null}
 
       <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
-        <button className="btn ghost" type="button" disabled={saving || !bp} onClick={() => void resetToPlan()}>
-          {saving ? "Working…" : "Reset to plan pricing"}
+        <button className="btn ghost" type="button" disabled={saving || resetDiagLoading || !bp} onClick={() => void openResetConfirmation()}>
+          {resetDiagLoading ? "Loading preview…" : saving ? "Working…" : "Reset to plan pricing"}
         </button>
       </div>
       <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
         Reset copies all four unit-pricing fields from the tenant&apos;s current <code>billingPlanId</code> and sets mode to Catalog. Requires a linked plan.
+        You will confirm the before/after diff first.
       </p>
       {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
+
+      {resetOverlay && resetPayload?.resetToPlanPreview.after ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            background: "rgba(15, 23, 42, 0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--card-bg, #fff)",
+              borderRadius: 10,
+              maxWidth: 520,
+              width: "100%",
+              padding: "18px 20px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.2)",
+              color: "var(--text-primary, inherit)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Confirm reset to plan pricing</h3>
+            <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--muted)" }}>
+              This updates the tenant row and sets billing to <strong>catalog</strong> mode. Review the snapshot below — no invoice is created.
+            </p>
+            {(() => {
+              const b = resetPayload.resetToPlanPreview.before;
+              const a = resetPayload.resetToPlanPreview.after;
+              const money = (c: unknown) => toDollars(Number(c ?? 0));
+              const yn = (v: unknown) => (v === false ? "No" : "Yes");
+              const rows: [string, string, string][] = [
+                ["Pricing mode", String(b.pricingMode ?? ""), String(a!.pricingMode ?? "")],
+                ["Extension (unit)", money(b.extensionPriceCents), money(a!.extensionPriceCents)],
+                ["Additional phone (unit)", money(b.additionalPhoneNumberPriceCents), money(a!.additionalPhoneNumberPriceCents)],
+                ["SMS package (unit)", money(b.smsPriceCents), money(a!.smsPriceCents)],
+                ["First phone number free", yn(b.firstPhoneNumberFree), yn(a!.firstPhoneNumberFree)],
+              ];
+              return (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Unit pricing diff</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 10 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)" }}>
+                        <th style={{ textAlign: "left", padding: "6px 4px", fontWeight: 600 }}>Field</th>
+                        <th style={{ textAlign: "right", padding: "6px 4px", fontWeight: 600 }}>Before</th>
+                        <th style={{ textAlign: "right", padding: "6px 4px", fontWeight: 600 }}>After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(([label, bv, av]) => (
+                        <tr key={label} style={{ borderBottom: "1px solid var(--border-light, #f3f4f6)" }}>
+                          <td style={{ padding: "6px 4px" }}>{label}</td>
+                          <td style={{ textAlign: "right", padding: "6px 4px", fontFamily: "ui-monospace, monospace" }}>{bv}</td>
+                          <td style={{ textAlign: "right", padding: "6px 4px", fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>{av}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <details style={{ fontSize: 12, color: "var(--muted)" }}>
+                    <summary style={{ cursor: "pointer", marginBottom: 6 }}>Raw audit snapshot (JSON)</summary>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 160, padding: 8, background: "var(--code-bg,#f8fafc)", borderRadius: 6 }}>
+                        {JSON.stringify(b, null, 2)}
+                      </pre>
+                      <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 160, padding: 8, background: "var(--code-bg,#f0fdf4)", borderRadius: 6 }}>
+                        {JSON.stringify(a, null, 2)}
+                      </pre>
+                    </div>
+                  </details>
+                </div>
+              );
+            })()}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn ghost" type="button" onClick={() => { setResetOverlay(false); }}>
+                Cancel
+              </button>
+              <button className="btn primary" type="button" disabled={saving} onClick={() => void applyResetConfirmed()}>
+                {saving ? "Applying…" : "Apply reset"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </DetailCard>
   );
 }
@@ -182,6 +346,11 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
               {pr.banner}
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {catalogLocked && (detail.preview?.pricingPreviewExplanation as { tenantOverridesDetected?: boolean } | undefined)?.tenantOverridesDetected ? (
+        <div className="billing-status-pill warn" style={{ marginBottom: 12, fontSize: 13, whiteSpace: "normal", lineHeight: 1.45 }}>
+          Stored tenant amounts differ from catalog rates — invoices bill the plan; use reset-to-plan if you want the row to match.
         </div>
       ) : null}
       <div className="billing-status-pill warn" style={{ marginBottom: 12, textAlign: "left", whiteSpace: "normal", lineHeight: 1.45 }}>

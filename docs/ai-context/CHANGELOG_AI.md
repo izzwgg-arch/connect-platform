@@ -4,6 +4,41 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: pricing diagnostics, preview explanation fields, safeguards
+
+**Task:** Pricing mode diagnostics (**GET** **`pricing-diagnostics`**), **`pricingPreviewExplanation`** on previews, **`billing.pricing_mode_changed`** + expanded **`billing.pricing_reset_to_plan`** audit metadata, portal warnings + reset diff UX.  
+**Risk:** medium (**read-only diagnostics** / operator logs; **`invoiceEngine`** line-discount-tax math untouched).
+
+### What changed
+
+- **`billingPricingExplanation.ts`** (already landed): **`buildPricingPreviewExplanation`** — derives structured explanation from resolved pricing (**no cents math**).
+- **`billingPricingDiagnostics.ts`**: **`buildTenantPricingDiagnosticsFromPreview`** (**warnings/notices**, **`differsFromPlan`**, **`resetToPlanPreview`**).
+- **`billingTenantSettingsMetadata.ts`**: **`mergeTenantBillingSettingsMetadata`** for PUT-merge parity tests.
+- **`routes.ts`**: **`GET …/pricing-diagnostics`**; **`PUT …/settings`** logs **`billing.pricing_mode_changed`** when normalized mode differs; **`POST …/pricing/reset-to-plan`** returns **`pricingResetSummary`** + logs **`before`/`after`**.
+- **`billingPricingDiagnostics.test.ts`**: assembler + merge + SUPER_ADMIN gate coverage.
+- **`settings/page.tsx`**, **`tenantBillingConfigForms.tsx`**: shared UTC preview period, diagnostics card, invoice preview explanation block, readable reset diff table (**JSON** collapsible).
+
+**Docs:** **`BILLING.md`**, **`DATA_MODEL.md`**, **`CHANGELOG_AI.md`**.
+
+### What was NOT changed
+
+- **`apps/worker`**, SOLA webhook/charge handlers, telecom/PBX/mobile/CRM surfaces, **`createBillingInvoice`** cent formulas (beyond existing resolver wiring).
+- No Prisma migrations.
+
+### Deploy
+
+- **API** + **portal** (same train recommended).
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing
+pnpm --filter @connect/api typecheck
+pnpm --filter @connect/portal typecheck
+```
+
+---
+
 ## 2026-05-14 — billing: explicit pricing mode (`metadata.billingPricingMode`)
 
 **Task:** tenant billing unit pricing resolution (legacy vs catalog vs custom), admin UI + previews  

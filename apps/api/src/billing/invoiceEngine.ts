@@ -6,6 +6,7 @@ import type { TaxCalculationAuditSnapshot } from "./taxProvider";
 import { resolveTaxProvider } from "./taxProvider";
 import type { BillingPricingResolution } from "./billingPricingResolution";
 import { parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
+import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 
 export type BillingInvoicePreview = {
   tenantId: string;
@@ -40,6 +41,8 @@ export type BillingInvoicePreview = {
   };
   /** Resolved pricing mode + badges for portal / admins (never SOLA payloads). */
   pricingResolution?: BillingPricingResolution;
+  /** Structured operator explanation for this preview (computed from resolution + schedule; no pricing math). */
+  pricingPreviewExplanation?: PricingPreviewExplanation;
 };
 
 export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
@@ -219,6 +222,20 @@ export async function buildBillingInvoicePreview(input: {
         }
       : undefined;
 
+  const pricingPreviewExplanation = buildPricingPreviewExplanation({
+    pricingMode,
+    pricingResolution,
+    tenantPricing: {
+      extensionPriceCents: Number(settings.extensionPriceCents),
+      additionalPhoneNumberPriceCents: Number(settings.additionalPhoneNumberPriceCents),
+      smsPriceCents: Number(settings.smsPriceCents),
+      firstPhoneNumberFree: settings.firstPhoneNumberFree,
+    },
+    hasScheduledChange,
+    scheduledPlanChange,
+    activePlanForPreview: activePlan,
+  });
+
   return {
     tenantId: input.tenantId,
     periodStart: bounds.periodStart,
@@ -232,6 +249,7 @@ export async function buildBillingInvoicePreview(input: {
     taxCalculationAudit: taxResult.audit,
     ...(scheduledPlanChange ? { scheduledPlanChange } : {}),
     pricingResolution,
+    pricingPreviewExplanation,
   };
 }
 

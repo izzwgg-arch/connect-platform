@@ -5,7 +5,9 @@ import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/secu
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
 import { buildBillingInvoicePreview, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
-import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog } from "./billingPricingResolution";
+import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog, parseBillingPricingMode } from "./billingPricingResolution";
+import { buildTenantPricingDiagnosticsFromPreview } from "./billingPricingDiagnostics";
+import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
@@ -617,28 +619,41 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
     let mergedMetadata: Record<string, unknown> | undefined;
+    let pricingModeChangeFrom: ReturnType<typeof parseBillingPricingMode> | null = null;
     if (taxProviderId !== undefined || billingPricingMode !== undefined) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
-      const prevMeta =
-        cur?.metadata && typeof cur.metadata === "object" && !Array.isArray(cur.metadata) ? { ...(cur.metadata as object) } : {};
-      mergedMetadata = { ...prevMeta };
-      if (taxProviderId !== undefined) {
-        mergedMetadata.taxProviderId = taxProviderId;
-      }
       if (billingPricingMode !== undefined) {
-        if (billingPricingMode === null) {
-          delete mergedMetadata[BILLING_PRICING_MODE_METADATA_KEY];
-        } else {
-          mergedMetadata[BILLING_PRICING_MODE_METADATA_KEY] = billingPricingMode;
-        }
+        pricingModeChangeFrom = parseBillingPricingMode(cur?.metadata);
       }
+      mergedMetadata = mergeTenantBillingSettingsMetadata(cur?.metadata, {
+        ...(taxProviderId !== undefined ? { taxProviderId } : {}),
+        ...(billingPricingMode !== undefined ? { billingPricingMode } : {}),
+      });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };
-    return (db as any).tenantBillingSettings.upsert({
+    const saved = await (db as any).tenantBillingSettings.upsert({
       where: { tenantId },
       create: { tenantId, ...createUpdate },
       update: createUpdate,
     });
+    if (billingPricingMode !== undefined && pricingModeChangeFrom !== null) {
+      const meta = saved.metadata;
+      const metaObj = meta && typeof meta === "object" && !Array.isArray(meta) ? (meta as Record<string, unknown>) : {};
+      const toMode = parseBillingPricingMode(metaObj as unknown);
+      if (toMode !== pricingModeChangeFrom) {
+        await logBillingEvent({
+          tenantId,
+          type: "billing.pricing_mode_changed",
+          metadata: {
+            operatorId: u.sub,
+            fromMode: pricingModeChangeFrom,
+            toMode,
+            pricingModeStored: metaObj[BILLING_PRICING_MODE_METADATA_KEY] ?? null,
+          },
+        }).catch(() => undefined);
+      }
+    }
+    return saved;
   });
 
   /** Copy active BillingPlan prices onto tenant settings and set billingPricingMode=catalog. */
@@ -655,6 +670,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       });
     }
     const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+    const beforeMode = parseBillingPricingMode(cur?.metadata ?? undefined);
+    const beforePricing = {
+      pricingMode: beforeMode,
+      extensionPriceCents: Number(cur?.extensionPriceCents ?? 0),
+      additionalPhoneNumberPriceCents: Number(cur?.additionalPhoneNumberPriceCents ?? 0),
+      smsPriceCents: Number(cur?.smsPriceCents ?? 0),
+      firstPhoneNumberFree: cur?.firstPhoneNumberFree !== false,
+      metadataBillingPricingMode: (() => {
+        const m = cur?.metadata;
+        if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+        const v = (m as Record<string, unknown>)[BILLING_PRICING_MODE_METADATA_KEY];
+        return v === "catalog" || v === "custom" ? v : null;
+      })(),
+    };
     const prevMeta =
       cur?.metadata && typeof cur.metadata === "object" && !Array.isArray(cur.metadata) ? { ...(cur.metadata as object) } : {};
     const patch = buildTenantSettingsResetToCatalog(plan, prevMeta);
@@ -663,12 +692,36 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       where: { tenantId },
       data: patch,
     });
+    const updated = await ensureTenantBillingSettings(tenantId);
+    const afterMode = parseBillingPricingMode(updated.metadata);
+    const afterPricing = {
+      pricingMode: afterMode,
+      extensionPriceCents: Number(updated.extensionPriceCents),
+      additionalPhoneNumberPriceCents: Number(updated.additionalPhoneNumberPriceCents),
+      smsPriceCents: Number(updated.smsPriceCents),
+      firstPhoneNumberFree: updated.firstPhoneNumberFree !== false,
+      metadataBillingPricingMode: (() => {
+        const m = updated.metadata;
+        if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+        const v = (m as Record<string, unknown>)[BILLING_PRICING_MODE_METADATA_KEY];
+        return v === "catalog" || v === "custom" ? v : null;
+      })(),
+    };
     await logBillingEvent({
       tenantId,
       type: "billing.pricing_reset_to_plan",
-      metadata: { billingPlanId: plan.id, planCode: plan.code },
+      metadata: {
+        operatorId: u.sub,
+        billingPlanId: plan.id,
+        planCode: plan.code,
+        before: beforePricing,
+        after: afterPricing,
+      },
     }).catch(() => undefined);
-    return ensureTenantBillingSettings(tenantId);
+    return {
+      billingSettings: updated,
+      pricingResetSummary: { before: beforePricing, after: afterPricing },
+    };
   });
 
   app.put("/admin/billing/platform/tenants/:tenantId/sola-config", async (req, reply) => {
@@ -855,6 +908,44 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       periodEnd = new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999));
     }
     return buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
+  });
+
+  app.get("/admin/billing/platform/tenants/:tenantId/pricing-diagnostics", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const q = req.query as { periodMonth?: string; periodYear?: string };
+    const rawMonth = Number.parseInt(String(q.periodMonth || ""), 10);
+    const rawYear = Number.parseInt(String(q.periodYear || ""), 10);
+    let periodStart: Date | undefined;
+    let periodEnd: Date | undefined;
+    if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
+      const m = rawMonth - 1;
+      periodStart = new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0));
+      periodEnd = new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999));
+    }
+    const preview = await buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
+    const settingsRow = await ensureTenantBillingSettings(tenantId);
+    const diag = buildTenantPricingDiagnosticsFromPreview({
+      tenantId,
+      settings: {
+        metadata: settingsRow.metadata,
+        billingPlanId: settingsRow.billingPlanId ?? null,
+        billingPlan: settingsRow.billingPlan ?? null,
+        nextBillingPlanId: settingsRow.nextBillingPlanId ?? null,
+        nextBillingPlanEffectiveAt: settingsRow.nextBillingPlanEffectiveAt ?? null,
+        nextBillingPlan: settingsRow.nextBillingPlan ?? null,
+        extensionPriceCents: settingsRow.extensionPriceCents,
+        additionalPhoneNumberPriceCents: settingsRow.additionalPhoneNumberPriceCents,
+        smsPriceCents: settingsRow.smsPriceCents,
+        firstPhoneNumberFree: settingsRow.firstPhoneNumberFree,
+      },
+      preview,
+    });
+    if (diag.resetToPlanPreview.canReset) {
+      diag.notices.push("Reset-to-plan copies FK plan prices onto the tenant row and sets billingPricingMode=catalog.");
+    }
+    return diag;
   });
 
   app.post("/admin/billing/tenants/:tenantId/invoices/preview", async (req, reply) => {

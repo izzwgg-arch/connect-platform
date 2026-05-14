@@ -8,8 +8,11 @@
 |--------|----------|
 | Tenant + platform REST (`registerBillingRoutes`) | `apps/api/src/billing/routes.ts` |
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
-| Invoice preview / create (+ discount line, pricing modes) | `apps/api/src/billing/invoiceEngine.ts` |
-| Tenant pricing mode resolver (legacy / catalog / custom) | `apps/api/src/billing/billingPricingResolution.ts` |
+| Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |
+| Pricing preview explanations (derived only; **no totals math**) | `apps/api/src/billing/billingPricingExplanation.ts` |
+| Tenant pricing mode resolver + reset payload helpers | `apps/api/src/billing/billingPricingResolution.ts` |
+| Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
+| Settings **metadata merge** (`taxProviderId` + `billingPricingMode`) | `apps/api/src/billing/billingTenantSettingsMetadata.ts` |
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
 | SOLA adapter selection (per-tenant vs env) | `apps/api/src/billing/solaGateway.ts` |
@@ -57,11 +60,15 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 - **Catalog (`"catalog"`):** All four unit-pricing inputs (**extension**, **additional phone**, **SMS**, **`firstPhoneNumberFree`**) come from the **effective plan for that period**: current **`billingPlan`**, or **`nextBillingPlan`** when the preview/run period **`periodStart` ≥ `nextBillingPlanEffectiveAt`**. Missing plan in catalog uses hard-coded fallback rates ( **`pricingResolution.missingCatalogPlan`** on preview ).
 - **Custom (`"custom"`):** All four fields use **`TenantBillingSettings`** columns only; linked plan is informational for badges/overlap warnings.
 
-**Preview:** **`buildBillingInvoicePreview`** returns **`pricingResolution`** (**mode**, **`fieldBadges`**, **`banner`**, plan names). It is advisory metadata on preview responses—not automatically copied onto persisted **`BillingInvoice`** rows.
+**Preview:** **`buildBillingInvoicePreview`** returns **`pricingResolution`** (**mode**, **`fieldBadges`**, **`banner`**, plan names). It also returns **`pricingPreviewExplanation`** (**`pricingMode`**, **`effectiveSource`**, **`activePlanId`** / **`activePlanName`**, **`tenantOverridesDetected`**, **`scheduledPlanApplies`**, **`scheduledPlanSummary`**, **`explanationLines[]`**) — human-readable diagnostics only (no SOLA payloads; cents still come strictly from **`resolveTenantBillingPricing`** + invoice line builders).
 
-**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant’s **`billingPlan`**, sets mode to **`catalog`**, logs **`billing.pricing_reset_to_plan`** (**`400`** if no plan).
+**GET** **`/admin/billing/platform/tenants/:tenantId/pricing-diagnostics`** (**SUPER_ADMIN**): same **`periodMonth` / `periodYear`** query knobs as **`invoice-preview`**. Returns assembled **`warnings[]`**, **`notices[]`**, tenant vs catalog vs effective **`differsFromPlan`**, scheduled plan slice, **`resetToPlanPreview`**, and echoes **`pricingPreviewExplanation`**.
 
-**Portal:** **`/admin/billing/settings`** pricing-source card + catalog read-only monthly unit fields + preview banner; overview **`Invoice Preview`** shows **`pricingResolution.banner`**.
+**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). When the **resolved** normalized mode (**`legacy`** when key absent)** changes**, logs **`billing.pricing_mode_changed`** with **`operatorId`** (JWT **`sub`**), **`fromMode`**, **`toMode`**, and stored **`metadata.billingPricingMode`**. **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant's **`billingPlan`**, sets mode to **`catalog`**, responds with **`billingSettings`** + **`pricingResetSummary`** (`before`/`after` pricing snapshots), logs **`billing.pricing_reset_to_plan`** (**`metadata.operatorId`**, **`before`**, **`after`**) (**`400`** if no **`billingPlanId`**).
+
+Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
+
+**Portal:** **`/admin/billing/settings`** — **Pricing diagnostics** section + shared **preview period**, **billing pricing source** card (warnings + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
 
 Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 

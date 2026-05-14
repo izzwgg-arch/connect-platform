@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
@@ -167,6 +168,66 @@ type InvoicePreviewPricingResolution = {
   mode: string;
   banner: string;
   activePlanName?: string | null;
+  fieldBadges?: Record<string, string>;
+};
+
+type InvoicePreviewExplanation = {
+  pricingMode: string;
+  effectiveSource: string;
+  activePlanId?: string | null;
+  activePlanName?: string | null;
+  tenantOverridesDetected: boolean;
+  scheduledPlanApplies: boolean;
+  scheduledPlanSummary: string | null;
+  explanationLines: string[];
+};
+
+function effectivePricingSourceLabel(source: string): string {
+  if (source === "legacy_chain") return "Legacy";
+  if (source === "billing_plan_catalog") return "From plan";
+  if (source === "billing_plan_defaults") return "From plan (defaults)";
+  if (source === "tenant_row_custom") return "Tenant override";
+  return source;
+}
+
+function modeBadgeStyles(mode: string): CSSProperties {
+  const base: CSSProperties = { fontSize: 11, padding: "2px 10px", borderRadius: 999, fontWeight: 600 };
+  if (mode === "catalog") return { ...base, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" };
+  if (mode === "custom") return { ...base, background: "#fef9c3", color: "#854d0e", border: "1px solid #facc15" };
+  return { ...base, background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1" };
+}
+
+type PricingQuadSnapshot = {
+  extensionPriceCents: number;
+  additionalPhoneNumberPriceCents: number;
+  smsPriceCents: number;
+  firstPhoneNumberFree: boolean;
+};
+
+type TenantPricingDiagnostics = {
+  tenantId: string;
+  fetchedAt: string;
+  mode: string;
+  billingPlanCurrent: { id: string; code: string; name: string; active: boolean } | null;
+  billingPlanEffectiveForPreview: { id: string; name: string; active: boolean } | null;
+  tenantStoredPricing: PricingQuadSnapshot;
+  effectiveInvoicePricing: PricingQuadSnapshot;
+  catalogBaselinePricing: PricingQuadSnapshot | null;
+  differsFromPlan: {
+    tenantRowVsCurrentPlanFk: Record<string, boolean>;
+    tenantRowVsEffectiveInvoice: Record<string, boolean>;
+  };
+  scheduledPlanChange: null | {
+    nextBillingPlanId: string;
+    nextPlanName: string;
+    effectiveAt: string;
+    nextPlanActive: boolean | null;
+  };
+  previewPeriod: { periodStart: string; periodEnd: string };
+  warnings: string[];
+  notices: string[];
+  explanationLines: string[];
+  pricingPreviewExplanation: InvoicePreviewExplanation;
 };
 
 type InvoicePreview = {
@@ -180,6 +241,7 @@ type InvoicePreview = {
   totalCents: number;
   scheduledPlanChange?: InvoicePreviewScheduledChange;
   pricingResolution?: InvoicePreviewPricingResolution;
+  pricingPreviewExplanation?: InvoicePreviewExplanation;
 };
 
 const MONTHS = [
@@ -354,16 +416,200 @@ function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; on
   );
 }
 
-function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
+function AdminPreviewPeriodCard({
+  month,
+  year,
+  onMonth,
+  onYear,
+}: {
+  month: number;
+  year: number;
+  onMonth: (m: number) => void;
+  onYear: (y: number) => void;
+}) {
+  const yearFloor = new Date().getFullYear();
+  const yearOptions: number[] = [];
+  for (let y = yearFloor; y <= yearFloor + 2; y++) yearOptions.push(y);
+
+  return (
+    <DetailCard title="Preview period (UTC calendar month)">
+      <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+        Used for <strong>Pricing diagnostics</strong> and <strong>Invoice preview</strong>. Read-only — nothing is charged from this page.
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select value={month} onChange={(e) => onMonth(Number(e.target.value))} style={{ fontSize: 13 }}>
+          {MONTHS.map((name, i) => (
+            <option key={i + 1} value={i + 1}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select value={year} onChange={(e) => onYear(Number(e.target.value))} style={{ fontSize: 13 }}>
+          {yearOptions.map((yOpt) => (
+            <option key={yOpt} value={yOpt}>
+              {yOpt}
+            </option>
+          ))}
+        </select>
+      </div>
+    </DetailCard>
+  );
+}
+
+function AdminPricingDiagnosticsCard({ tenantId, month, year }: { tenantId: string; month: number; year: number }) {
+  const [data, setData] = useState<TenantPricingDiagnostics | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const d = await apiGet<TenantPricingDiagnostics>(
+        `/admin/billing/platform/tenants/${tenantId}/pricing-diagnostics?periodMonth=${month}&periodYear=${year}`,
+      );
+      setData(d);
+    } catch (e: unknown) {
+      setError(billingErrorMessage(e, "Failed to load pricing diagnostics."));
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, month, year]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const expl = data?.pricingPreviewExplanation;
+
+  return (
+    <DetailCard title="Pricing diagnostics">
+      <div style={{ fontSize: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#475569" }}>
+        Same period as <strong>Preview period</strong>. Explains pricing mode and compares stored row vs catalog vs effective invoice pricing.
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <button className="btn ghost" type="button" onClick={() => void load()} disabled={loading} style={{ fontSize: 13 }}>
+          {loading ? "Refreshing…" : "Refresh diagnostics"}
+        </button>
+      </div>
+      {error ? <div style={{ color: "var(--danger, #dc2626)", fontSize: 13 }}>{error}</div> : null}
+      {!data && loading ? <LoadingSkeleton rows={4} /> : null}
+      {data && !loading ? (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+            <span style={modeBadgeStyles(data.mode)}>{data.mode?.toUpperCase()}</span>
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              Source:&nbsp;<strong>{effectivePricingSourceLabel(String(expl?.effectiveSource ?? ""))}</strong>
+              {expl?.activePlanName ? <> · Plan:&nbsp;<strong>{expl.activePlanName}</strong></> : <> · Plan:&nbsp;<em>(none)</em></>}
+            </span>
+          </div>
+          {expl?.scheduledPlanSummary ? (
+            <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 5, padding: "6px 10px", marginBottom: 10, color: "#92400e" }}>
+              {expl.scheduledPlanSummary}
+            </div>
+          ) : null}
+          {data.billingPlanCurrent && data.billingPlanEffectiveForPreview && data.billingPlanEffectiveForPreview.id !== data.billingPlanCurrent.id ? (
+            <div style={{ fontSize: 12, marginBottom: 10 }}>
+              Current FK plan:&nbsp;<strong>{data.billingPlanCurrent.name}</strong> · Effective for this preview:&nbsp;
+              <strong>{data.billingPlanEffectiveForPreview.name}</strong>
+            </div>
+          ) : null}
+          {(data.warnings || []).length > 0 ? (
+            <div style={{ marginBottom: 12 }}>
+              {data.warnings.map((w: string) => (
+                <div key={w} className="billing-status-pill warn" style={{ marginBottom: 8, whiteSpace: "normal", fontSize: 13, lineHeight: 1.45 }}>
+                  {w}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {(data.notices || []).length > 0 ? (
+            <div style={{ marginBottom: 12, fontSize: 12 }}>
+              {(data.notices || []).map((n: string) => (
+                <div key={n} style={{ color: "var(--muted)", marginBottom: 6 }}>
+                  {n}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {(expl?.explanationLines || []).length > 0 ? (
+            <ul style={{ fontSize: 12, paddingLeft: 18, margin: "0 0 12px", color: "#334155" }}>
+              {(expl!.explanationLines || []).map((line: string, i: number) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)" }}>
+                <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600 }}>Field</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Tenant stored</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Catalog baseline</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Invoice pricing</th>
+                <th style={{ textAlign: "center", padding: "4px 6px", fontWeight: 600 }} title="Compared to FK billingPlanId row">
+                  Row vs plan FK
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                [
+                  ["extensionPriceCents", "Extension"],
+                  ["additionalPhoneNumberPriceCents", "Phone add-on"],
+                  ["smsPriceCents", "SMS"],
+                  ["firstPhoneNumberFree", "1st phone free"],
+                ] as const
+              ).map(([key, label]) => {
+                const isBool = key === "firstPhoneNumberFree";
+                const stored = data.tenantStoredPricing[key];
+                const baseRow = data.catalogBaselinePricing?.[key];
+                const invoiceRow = data.effectiveInvoicePricing[key];
+                const flagged = !!(data.differsFromPlan?.tenantRowVsCurrentPlanFk as Record<string, boolean>)[key];
+                const fmtMoney = (c: unknown) => dollars(Number(c ?? 0));
+                return (
+                  <tr key={key} style={{ borderBottom: "1px solid var(--border-light, #f3f4f6)" }}>
+                    <td style={{ padding: "4px 6px" }}>{label}</td>
+                    <td style={{ textAlign: "right", padding: "4px 6px" }}>{isBool ? (stored ? "Yes" : "No") : fmtMoney(stored)}</td>
+                    <td style={{ textAlign: "right", padding: "4px 6px" }}>
+                      {!data.catalogBaselinePricing ? "—" : isBool ? (baseRow ? "Yes" : "No") : fmtMoney(baseRow)}
+                    </td>
+                    <td style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>
+                      {isBool ? (invoiceRow ? "Yes" : "No") : fmtMoney(invoiceRow)}
+                    </td>
+                    <td style={{ textAlign: "center", padding: "4px 6px" }}>{flagged ? <span style={{ color: "#b45309" }}>Mismatch</span> : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>
+            Labels: Legacy / From plan / Tenant override come from invoice preview badges; see <strong>Billing pricing source</strong>.
+          </div>
+        </div>
+      ) : null}
+      {!loading && !data && !error ? <p style={{ fontSize: 13, color: "var(--muted)" }}>No diagnostics.</p> : null}
+    </DetailCard>
+  );
+}
+
+function AdminInvoicePreviewCard({
+  tenantId,
+  month,
+  year,
+}: {
+  tenantId: string;
+  month: number;
+  year: number;
+}) {
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const yearOptions: number[] = [];
-  for (let y = now.getFullYear(); y <= now.getFullYear() + 2; y++) yearOptions.push(y);
+  useEffect(() => {
+    setPreview(null);
+    setError("");
+  }, [tenantId, month, year]);
 
   async function loadPreview() {
     setLoading(true);
@@ -384,25 +630,9 @@ function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
   return (
     <DetailCard title="Invoice Preview">
       <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#1e40af" }}>
-        <strong>Preview only</strong> — no invoice is created and no charge is run.
+        <strong>Preview only</strong> — no invoice is created and no charge is run. Period matches <strong>Preview period</strong> above.
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <select
-          value={month}
-          onChange={(e) => { setMonth(Number(e.target.value)); setPreview(null); }}
-          style={{ fontSize: 13 }}
-        >
-          {MONTHS.map((name, i) => (
-            <option key={i + 1} value={i + 1}>{name}</option>
-          ))}
-        </select>
-        <select
-          value={year}
-          onChange={(e) => { setYear(Number(e.target.value)); setPreview(null); }}
-          style={{ fontSize: 13 }}
-        >
-          {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
-        </select>
         <button
           className="btn ghost"
           type="button"
@@ -427,6 +657,33 @@ function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
             <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 5, padding: "6px 10px", marginBottom: 8, color: "#92400e" }}>
               ⚡ <strong>Scheduled plan change applied:</strong> This preview uses prices from plan &quot;{preview.scheduledPlanChange.planName}&quot;
               {" "}(effective {formatDate(preview.scheduledPlanChange.effectiveAt)}).
+            </div>
+          ) : null}
+          {preview.pricingPreviewExplanation ? (
+            <div style={{ fontSize: 12, border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "8px 12px", marginBottom: 8, background: "#fafafa" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <span style={modeBadgeStyles(preview.pricingPreviewExplanation.pricingMode)}>
+                  {(preview.pricingPreviewExplanation.pricingMode || "").toUpperCase()}
+                </span>
+                <span style={{ color: "#334155" }}>
+                  Source:&nbsp;<strong>{effectivePricingSourceLabel(preview.pricingPreviewExplanation.effectiveSource)}</strong>
+                  {preview.pricingPreviewExplanation.activePlanName ? (
+                    <> · Active plan:&nbsp;<strong>{preview.pricingPreviewExplanation.activePlanName}</strong></>
+                  ) : null}
+                  {preview.pricingPreviewExplanation.tenantOverridesDetected ? (
+                    <span style={{ color: "#b45309", marginLeft: 6 }}>
+                      Stored tenant cents differ — line items follow the resolved mode, not stale row amounts.
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              {preview.pricingPreviewExplanation.explanationLines?.length ? (
+                <ul style={{ paddingLeft: 18, margin: 0, color: "#475569", lineHeight: 1.45 }}>
+                  {preview.pricingPreviewExplanation.explanationLines.map((line: string, i: number) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
@@ -471,7 +728,9 @@ function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
       ) : null}
 
       {!preview && !loading && !error ? (
-        <p style={{ fontSize: 13, color: "var(--muted)" }}>Select a period and click Preview to see the estimated invoice.</p>
+        <p style={{ fontSize: 13, color: "var(--muted)" }}>
+          Pick the month in <strong>Preview period</strong> above and click Preview to estimate the invoice.
+        </p>
       ) : null}
     </DetailCard>
   );
@@ -490,6 +749,8 @@ function AdminBillingSettingsBody() {
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [previewMonth, setPreviewMonth] = useState(() => new Date().getMonth() + 1);
+  const [previewYear, setPreviewYear] = useState(() => new Date().getFullYear());
 
   const loadTenants = useCallback(async () => {
     setTenantsLoading(true);
@@ -600,7 +861,12 @@ function AdminBillingSettingsBody() {
       {detail && !detailLoading ? (
         <>
           <section className="billing-setup-grid">
-            <AdminTenantPricingSourceCard detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+            <AdminTenantPricingSourceCard
+              detail={detail}
+              onSaved={() => void loadDetail(detail.tenant.id)}
+              previewPeriodMonth={previewMonth}
+              previewPeriodYear={previewYear}
+            />
             <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
             <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>
@@ -609,7 +875,9 @@ function AdminBillingSettingsBody() {
             <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>
           <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
-          <AdminInvoicePreviewCard tenantId={detail.tenant.id} />
+          <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
+          <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+          <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
         </>
       ) : null}
     </div>
