@@ -296,7 +296,8 @@ _deploy_common_service_paths() {
       echo "apps/realtime/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     worker)
-      echo "apps/worker/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      # Worker bundles API billing (invoiceEngine import). scripts/deploy-worker.sh + this file affect whether the queue rebuilds.
+      echo "apps/worker/ apps/api/src/billing/ scripts/deploy-worker.sh scripts/lib/deploy-common.sh packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     *)
       echo ""
