@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden } from "./guard";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
@@ -1224,7 +1224,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { memberId } = req.params as { memberId: string };
 
-    // Only the assigned user or an admin can update their queue item
+    // Tenant scope + ownership: non-admins may only PATCH members assigned to them
+    // (except assign-to-me on unassigned rows). See isCrmQueuePatchOwnershipForbidden.
     const existing = await db.crmCampaignMember.findFirst({
       where: { id: memberId, tenantId },
       select: { id: true, assignedToUserId: true, sortOrder: true, attemptCount: true, campaignId: true },
@@ -1241,6 +1242,18 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const parsed = queueActionSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
+
+    if (
+      isCrmQueuePatchOwnershipForbidden(user.role, userId, existing.assignedToUserId, {
+        action: parsed.data.action,
+        status: parsed.data.status,
+      })
+    ) {
+      return reply.code(403).send({
+        error: "crm_queue_member_forbidden",
+        detail: "You may only update queue members assigned to you",
+      });
+    }
 
     const now = new Date();
     let updateData: Record<string, any> = {};

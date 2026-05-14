@@ -14,6 +14,38 @@ export function isAdminRole(role: string | undefined): boolean {
   return role === "ADMIN" || role === "TENANT_ADMIN" || role === "SUPER_ADMIN";
 }
 
+/** Body fields used to decide queue PATCH ownership (action + raw status path). */
+export type CrmQueuePatchAuthInput = {
+  action?: string;
+  status?: string;
+};
+
+/**
+ * Non–platform-admin CRM users may only PATCH queue members assigned to them.
+ * Exception: `action: "assign-to-me"` is allowed for unassigned members, or when
+ * already assigned to the caller (idempotent).
+ *
+ * Platform admins ({@link isAdminRole}) are never blocked here.
+ *
+ * @returns true when the caller must receive 403 (forbidden), not 404.
+ */
+export function isCrmQueuePatchOwnershipForbidden(
+  role: string | undefined,
+  userId: string,
+  assignedToUserId: string | null | undefined,
+  body: CrmQueuePatchAuthInput,
+): boolean {
+  if (isAdminRole(role)) return false;
+  const assignee = assignedToUserId ?? null;
+  if (body.action === "assign-to-me") {
+    if (assignee == null) return false;
+    if (assignee === userId) return false;
+    return true;
+  }
+  if (assignee == null || assignee !== userId) return true;
+  return false;
+}
+
 // ── CRM Access Guard ───────────────────────────────────────────────────────────
 
 /**
