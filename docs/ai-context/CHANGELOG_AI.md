@@ -4,6 +4,92 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: scheduled plan changes phase 1 (schema + API + preview logic + portal UI)
+
+**Task:** billing / scheduled plan changes phase 1  
+**Risk:** high (schema migration + API + Portal — no worker changes, no charge behavior changes)
+
+### What changed
+
+**`packages/db/prisma/schema.prisma`** (modified):
+- Added `TenantBillingSettings.nextBillingPlanId String?` — FK → `BillingPlan.id`, SetNull on delete, named relation `"NextBillingPlan"`.
+- Added `TenantBillingSettings.nextBillingPlanEffectiveAt DateTime?` — UTC midnight first-of-month when the plan change takes effect.
+- Added index `TenantBillingSettings_nextBillingPlanId_idx`.
+- Renamed existing `billingPlan` / `tenantSettings` relations to `"CurrentBillingPlan"` on both sides (required by Prisma when a model has two FK columns pointing to the same model).
+- Added `BillingPlan.nextPlanSettings TenantBillingSettings[] @relation("NextBillingPlan")`.
+
+**`packages/db/prisma/migrations/20260530000000_billing_scheduled_plan_change/migration.sql`** (new):
+- `ALTER TABLE "TenantBillingSettings" ADD COLUMN "nextBillingPlanId" TEXT, ADD COLUMN "nextBillingPlanEffectiveAt" TIMESTAMP(3);`
+- FK constraint `TenantBillingSettings_nextBillingPlanId_fkey` with SET NULL / CASCADE.
+- Index `TenantBillingSettings_nextBillingPlanId_idx`.
+
+**`apps/api/src/billing/billingScheduledPlan.ts`** (new):
+- `validateScheduledPlanChangeEffectiveAt(rawEffectiveAt, now?)` — validates that effectiveAt is a parseable date, UTC midnight on the 1st of a month, and strictly after the first of the current UTC month. Returns `{ ok: true, effectiveAt }` or `{ ok: false, error }`.
+
+**`apps/api/src/billing/invoiceEngine.ts`** (modified):
+- `ensureTenantBillingSettings` now includes `nextBillingPlan` in the Prisma include clause.
+- `BillingInvoicePreview` type extended with optional `scheduledPlanChange?: { planId, planName, effectiveAt }`.
+- `buildBillingInvoicePreview` resolves `activePlan`: if `nextBillingPlanId` is set and `periodStart >= nextBillingPlanEffectiveAt`, uses `nextBillingPlan` as the price fallback instead of `billingPlan`. Returns `scheduledPlanChange` field in the preview when the next plan is active for the requested period.
+
+**`apps/api/src/billing/routes.ts`** (modified):
+- Added import `validateScheduledPlanChangeEffectiveAt` from `"./billingScheduledPlan"`.
+- Added `GET /admin/billing/platform/billing-plans` — lists all active `BillingPlan` rows (id, code, name, prices). SUPER_ADMIN only.
+- Added `GET /admin/billing/platform/tenants/:tenantId/scheduled-plan-change` — returns current `nextBillingPlanId`, `nextBillingPlanEffectiveAt`, and resolved `nextBillingPlan` object.
+- Added `POST /admin/billing/platform/tenants/:tenantId/scheduled-plan-change` — schedules a plan change. Validates effectiveAt via helper, checks plan `active`, logs `billing_plan.scheduled_change_set` event. Overwrites any existing scheduled change.
+- Added `DELETE /admin/billing/platform/tenants/:tenantId/scheduled-plan-change` — cancels scheduled change, clears both fields, logs `billing_plan.scheduled_change_cancelled`. Returns `404 no_scheduled_plan_change` when nothing is scheduled.
+
+**`apps/portal/app/(platform)/admin/billing/settings/page.tsx`** (modified):
+- Added `apiDelete`, `apiPost` to imports.
+- Added types: `BillingPlanRow`, `ScheduledPlanChange`, `InvoicePreviewScheduledChange`. Extended `InvoicePreview` with optional `scheduledPlanChange`.
+- Added `ScheduledPlanChangeCard` component: loads plans from `GET /admin/billing/platform/billing-plans` and current scheduled change from `GET …/scheduled-plan-change`. When none scheduled: plan dropdown + date picker + "Schedule plan change" button. When scheduled: blue notice + "Cancel scheduled change" button. Calls `POST`/`DELETE` routes accordingly. Logs toast on success/error.
+- Updated `AdminInvoicePreviewCard`: when `preview.scheduledPlanChange` is present, shows a yellow notice "⚡ Scheduled plan change applied: This preview uses prices from plan X (effective Y)."
+- `ScheduledPlanChangeCard` rendered between the SOLA/Collections grid section and `AdminInvoicePreviewCard`.
+
+**`apps/api/src/billing/invoiceEngine.test.ts`** (modified):
+- Added 5 new preview tests for scheduled plan change logic.
+
+**`apps/api/src/billing/billingScheduledPlan.test.ts`** (new):
+- 8 `validateScheduledPlanChangeEffectiveAt` tests (invalid date, non-1st, non-midnight, current month, past month, next month, far future, year rollover).
+- 2 auth tests reusing `canAccessPlatformAdminBillingRoutes` (SUPER_ADMIN passes, all others fail).
+
+**`docs/ai-context/BILLING.md`** — added "Scheduled plan change (Phase 1)" section.  
+**`docs/ai-context/DATA_MODEL.md`** — updated `TenantBillingSettings` entry with new fields.
+
+### What was NOT changed
+
+- Worker (`apps/worker/src/main.ts`) — **untouched**. No `consumeScheduledPlanChange` logic yet (Phase 2 deferred).
+- No invoice creation behavior changes.
+- No charge / SOLA / webhook changes.
+- No dunning changes.
+- No proration.
+- No `PARTIALLY_PAID` implementation.
+- No tenant-facing UI for scheduled changes (operator-only).
+- No CRM / telephony / PBX / mobile changes.
+
+### Verification
+
+```bash
+# Billing tests (should be 146+ passing, 0 fail)
+pnpm --filter @connect/api test:billing
+# Typechecks
+pnpm --filter @connect/api typecheck
+pnpm --filter @connect/portal typecheck
+```
+
+After API deploy with migration:
+- `GET /admin/billing/platform/billing-plans` returns active plans (SUPER_ADMIN JWT).
+- `POST /admin/billing/platform/tenants/:id/scheduled-plan-change` with `{ nextBillingPlanId, effectiveAt: "2027-07-01T00:00:00.000Z" }` sets fields and logs event.
+- `GET /admin/billing/platform/tenants/:id/invoice-preview?periodMonth=7&periodYear=2027` returns `scheduledPlanChange` field.
+- `/admin/billing/settings` shows Scheduled Plan Change card; no change scheduled on fresh tenant.
+
+### Revert
+
+1. Cancel any scheduled change via `DELETE /admin/billing/platform/tenants/:id/scheduled-plan-change`.
+2. Deploy previous API + Portal commits via deploy queue.
+3. The migration columns (`nextBillingPlanId`, `nextBillingPlanEffectiveAt`) are nullable and default to null — leaving them in schema is safe. Do not reverse the migration; rollback of additive null columns is unnecessary.
+
+---
+
 ## 2026-05-13 — billing: invoice preview phase A (discount fix + preview routes + portal UI)
 
 **Task:** billing / invoice preview phase A  

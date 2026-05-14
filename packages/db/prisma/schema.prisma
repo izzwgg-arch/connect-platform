@@ -653,7 +653,8 @@ model BillingPlan {
   createdAt                       DateTime                @default(now())
   updatedAt                       DateTime                @updatedAt
   tenant                          Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantSettings                  TenantBillingSettings[]
+  tenantSettings                  TenantBillingSettings[] @relation("CurrentBillingPlan")
+  nextPlanSettings                TenantBillingSettings[] @relation("NextBillingPlan")
 
   @@index([active, code])
 }
@@ -706,15 +707,21 @@ model TenantBillingSettings {
   /// Plain text, length-capped in API (invoice PDF + email footers).
   invoiceFooterNote             String?
   invoicePaymentInstructions    String?
+  /// Scheduled plan change: new plan to apply at the start of the next billing period.
+  nextBillingPlanId             String?
+  /// UTC midnight on the first day of the billing period when nextBillingPlanId becomes effective.
+  nextBillingPlanEffectiveAt    DateTime?
   createdAt                       DateTime       @default(now())
   updatedAt                       DateTime       @updatedAt
   tenant                          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  billingPlan                     BillingPlan?   @relation(fields: [billingPlanId], references: [id], onDelete: SetNull)
+  billingPlan                     BillingPlan?   @relation("CurrentBillingPlan", fields: [billingPlanId], references: [id], onDelete: SetNull)
+  nextBillingPlan                 BillingPlan?   @relation("NextBillingPlan", fields: [nextBillingPlanId], references: [id], onDelete: SetNull)
   taxProfile                      TaxProfile?    @relation(fields: [taxProfileId], references: [id], onDelete: SetNull)
   defaultPaymentMethod            PaymentMethod? @relation("DefaultTenantBillingPaymentMethod", fields: [defaultPaymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([taxProfileId])
   @@index([autoBillingEnabled, billingDayOfMonth])
+  @@index([nextBillingPlanId])
 }
 
 model BillingInvoice {

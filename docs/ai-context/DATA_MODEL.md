@@ -317,6 +317,13 @@
 - **Schema:** `TenantBillingSettings` in `packages/db/prisma/schema.prisma` — core pricing/autopay plus optional **`invoiceCompanyName`**, **`invoiceLogoUrl`** (https, used in HTML emails only), **`invoiceSupportEmail`**, **`invoiceSupportPhone`**, **`invoiceFooterNote`**, **`invoicePaymentInstructions`** (migration `20260512120000_tenant_invoice_branding`).
 - **Purpose:** Resolved in **`invoiceBranding.ts`** for **`renderBillingInvoicePdf`** (`pdf.ts`) and billing emails (`emailTemplates.ts`, `billingEmailLifecycle.ts`). **`paymentTermsDays`** remains the due offset / “Net N days” source.
 - **`metadata` JSON:** optional. **`taxProviderId`** (`tax_profile_v1` \| `external_telecom_stub`) selects the tax engine for invoice preview/create (`taxProvider.ts`). Other keys may be added later; **`PUT /admin/billing/tenants/:id/settings`** merges **`taxProviderId`** without wiping unrelated metadata.
+- **Scheduled plan change fields (migration `20260530000000_billing_scheduled_plan_change`):**
+  - `nextBillingPlanId String?` — FK → `BillingPlan.id` (SetNull on delete). Named relation `"NextBillingPlan"`.
+  - `nextBillingPlanEffectiveAt DateTime?` — UTC midnight on the first day of the billing period when the new plan takes effect.
+  - Both nullable; null = no change scheduled.
+  - Existing `billingPlan` relation renamed to `"CurrentBillingPlan"` (Prisma requires names when a model has two FK columns pointing to the same target model).
+  - Index `TenantBillingSettings_nextBillingPlanId_idx`.
+  - Phase 2 (worker, deferred): worker `consumeScheduledPlanChange` copies plan prices into direct fields and clears these columns after invoice creation for the effective period.
 
 ## BillingInvoice / BillingInvoiceLineItem / BillingRun / BillingEventLog
 - **Schema:** lines 683 / 721 / 790 / 809

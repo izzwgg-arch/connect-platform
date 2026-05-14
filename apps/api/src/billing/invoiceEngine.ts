@@ -26,6 +26,16 @@ export type BillingInvoicePreview = {
   totalCents: number;
   /** Persisted on invoice `metadata.taxCalculationAudit` at creation. */
   taxCalculationAudit: TaxCalculationAuditSnapshot;
+  /**
+   * Present when a plan change is scheduled and this preview's periodStart
+   * is on or after the effective date — meaning the preview already reflects
+   * the new plan's prices.
+   */
+  scheduledPlanChange?: {
+    planId: string;
+    planName: string;
+    effectiveAt: Date;
+  };
 };
 
 export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
@@ -45,7 +55,7 @@ export async function ensureTenantBillingSettings(tenantId: string) {
     where: { tenantId },
     create: { tenantId },
     update: {},
-    include: { taxProfile: true, billingPlan: true, defaultPaymentMethod: true },
+    include: { taxProfile: true, billingPlan: true, nextBillingPlan: true, defaultPaymentMethod: true },
   });
 }
 
@@ -80,9 +90,17 @@ export async function buildBillingInvoicePreview(input: {
   const dueDate = input.dueDate || addDays(new Date(), Number(settings.paymentTermsDays || 15));
   const usage = await calculateTenantBillingUsage(input.tenantId, settings);
 
-  const extensionPrice = Number(settings.extensionPriceCents || settings.billingPlan?.extensionPriceCents || 3000);
-  const numberPrice = Number(settings.additionalPhoneNumberPriceCents || settings.billingPlan?.additionalPhoneNumberPriceCents || 1000);
-  const smsPrice = Number(settings.smsPriceCents || settings.billingPlan?.smsPriceCents || 1000);
+  // If a plan change is scheduled and this period is on/after the effective date,
+  // use the next plan as the price-fallback instead of the current plan.
+  const hasScheduledChange =
+    settings.nextBillingPlanId &&
+    settings.nextBillingPlanEffectiveAt &&
+    bounds.periodStart >= settings.nextBillingPlanEffectiveAt;
+  const activePlan = hasScheduledChange ? settings.nextBillingPlan : settings.billingPlan;
+
+  const extensionPrice = Number(settings.extensionPriceCents || activePlan?.extensionPriceCents || 3000);
+  const numberPrice = Number(settings.additionalPhoneNumberPriceCents || activePlan?.additionalPhoneNumberPriceCents || 1000);
+  const smsPrice = Number(settings.smsPriceCents || activePlan?.smsPriceCents || 1000);
 
   const lineItems: BillingInvoicePreview["lineItems"] = [];
   if (usage.extensionCount > 0) {
@@ -175,6 +193,15 @@ export async function buildBillingInvoicePreview(input: {
   const taxCents = taxResult.lines.reduce((sum, item) => sum + item.amountCents, 0);
   const totalCents = Math.max(0, subtotalCents + taxCents);
 
+  const scheduledPlanChange: BillingInvoicePreview["scheduledPlanChange"] =
+    hasScheduledChange && settings.nextBillingPlan
+      ? {
+          planId: settings.nextBillingPlanId as string,
+          planName: settings.nextBillingPlan.name as string,
+          effectiveAt: settings.nextBillingPlanEffectiveAt as Date,
+        }
+      : undefined;
+
   return {
     tenantId: input.tenantId,
     periodStart: bounds.periodStart,
@@ -186,6 +213,7 @@ export async function buildBillingInvoicePreview(input: {
     taxCents,
     totalCents,
     taxCalculationAudit: taxResult.audit,
+    ...(scheduledPlanChange ? { scheduledPlanChange } : {}),
   };
 }
 

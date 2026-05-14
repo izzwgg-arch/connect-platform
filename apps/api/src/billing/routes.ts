@@ -44,6 +44,7 @@ import {
   validateTenantCollectionsConfigUpdate,
   writeTenantCollectionsConfig,
 } from "./billingCollections";
+import { validateScheduledPlanChangeEffectiveAt } from "./billingScheduledPlan";
 
 type BillingUser = {
   sub: string;
@@ -805,6 +806,121 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const { tenantId } = req.params as { tenantId: string };
     return buildBillingInvoicePreview({ tenantId });
+  });
+
+  // ── Scheduled plan change routes ──────────────────────────────────────────
+
+  // List all active BillingPlan rows — used by the plan picker in admin UI.
+  app.get("/admin/billing/platform/billing-plans", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    return (db as any).billingPlan.findMany({
+      where: { active: true },
+      orderBy: { name: "asc" },
+      select: { id: true, code: true, name: true, extensionPriceCents: true, additionalPhoneNumberPriceCents: true, smsPriceCents: true, firstPhoneNumberFree: true },
+    });
+  });
+
+  // Get the current scheduled plan change for a tenant (null fields = none scheduled).
+  app.get("/admin/billing/platform/tenants/:tenantId/scheduled-plan-change", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const settings = await (db as any).tenantBillingSettings.findUnique({
+      where: { tenantId },
+      select: { nextBillingPlanId: true, nextBillingPlanEffectiveAt: true, nextBillingPlan: { select: { id: true, code: true, name: true, extensionPriceCents: true, additionalPhoneNumberPriceCents: true, smsPriceCents: true, firstPhoneNumberFree: true } } },
+    });
+    if (!settings) {
+      return { tenantId, nextBillingPlanId: null, nextBillingPlanEffectiveAt: null, nextBillingPlan: null };
+    }
+    return { tenantId, nextBillingPlanId: settings.nextBillingPlanId, nextBillingPlanEffectiveAt: settings.nextBillingPlanEffectiveAt, nextBillingPlan: settings.nextBillingPlan };
+  });
+
+  // Schedule a plan change for a future billing period.
+  // Body: { nextBillingPlanId: string, effectiveAt: ISO8601 UTC date (first of a future month) }
+  // Replaces any existing scheduled change (POST is idempotent-overwrite).
+  app.post("/admin/billing/platform/tenants/:tenantId/scheduled-plan-change", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const input = z.object({
+      nextBillingPlanId: z.string().min(1),
+      effectiveAt: z.string().min(1),
+    }).parse(req.body || {});
+
+    // Parse and validate effectiveAt via shared helper (also unit-tested separately)
+    const effectiveValidation = validateScheduledPlanChangeEffectiveAt(input.effectiveAt);
+    if (!effectiveValidation.ok) {
+      return reply.code(400).send({ error: effectiveValidation.error });
+    }
+    const effectiveAt = effectiveValidation.effectiveAt;
+
+    // Plan must exist and be active
+    const plan = await (db as any).billingPlan.findUnique({
+      where: { id: input.nextBillingPlanId },
+      select: { id: true, code: true, name: true, active: true, extensionPriceCents: true, additionalPhoneNumberPriceCents: true, smsPriceCents: true, firstPhoneNumberFree: true },
+    });
+    if (!plan) return reply.code(404).send({ error: "billing_plan_not_found" });
+    if (!plan.active) return reply.code(400).send({ error: "billing_plan_inactive" });
+
+    // Read current state for audit
+    const cur = await (db as any).tenantBillingSettings.findUnique({
+      where: { tenantId },
+      select: { nextBillingPlanId: true, nextBillingPlanEffectiveAt: true },
+    });
+
+    await (db as any).tenantBillingSettings.upsert({
+      where: { tenantId },
+      create: { tenantId, nextBillingPlanId: input.nextBillingPlanId, nextBillingPlanEffectiveAt: effectiveAt },
+      update: { nextBillingPlanId: input.nextBillingPlanId, nextBillingPlanEffectiveAt: effectiveAt },
+    });
+
+    await logBillingEvent({
+      tenantId,
+      type: "billing_plan.scheduled_change_set",
+      metadata: {
+        operatorId: u.sub,
+        previousNextPlanId: cur?.nextBillingPlanId ?? null,
+        previousEffectiveAt: cur?.nextBillingPlanEffectiveAt ?? null,
+        nextBillingPlanId: input.nextBillingPlanId,
+        planName: plan.name,
+        effectiveAt: effectiveAt.toISOString(),
+      },
+    });
+
+    return { tenantId, nextBillingPlanId: plan.id, nextBillingPlanEffectiveAt: effectiveAt, nextBillingPlan: plan };
+  });
+
+  // Cancel the scheduled plan change — clears both fields.
+  app.delete("/admin/billing/platform/tenants/:tenantId/scheduled-plan-change", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+
+    const cur = await (db as any).tenantBillingSettings.findUnique({
+      where: { tenantId },
+      select: { nextBillingPlanId: true, nextBillingPlanEffectiveAt: true },
+    });
+    if (!cur?.nextBillingPlanId) {
+      return reply.code(404).send({ error: "no_scheduled_plan_change" });
+    }
+
+    await (db as any).tenantBillingSettings.update({
+      where: { tenantId },
+      data: { nextBillingPlanId: null, nextBillingPlanEffectiveAt: null },
+    });
+
+    await logBillingEvent({
+      tenantId,
+      type: "billing_plan.scheduled_change_cancelled",
+      metadata: {
+        operatorId: u.sub,
+        cancelledNextPlanId: cur.nextBillingPlanId,
+        cancelledEffectiveAt: cur.nextBillingPlanEffectiveAt,
+      },
+    });
+
+    return { tenantId, nextBillingPlanId: null, nextBillingPlanEffectiveAt: null };
   });
 
   app.post("/admin/billing/tenants/:tenantId/invoices", async (req, reply) => {

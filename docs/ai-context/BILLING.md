@@ -482,3 +482,91 @@ tax                = taxProvider.calculateTaxes({ taxableSubtotalCents })
 - `discountPercent=0` → no DISCOUNT line
 - Preview with custom `periodStart`/`periodEnd` → correct period bounds
 - `buildBillingInvoicePreview` makes zero `billingInvoice.create` calls
+
+---
+
+## Scheduled plan change (Phase 1 — complete)
+
+### What was added
+
+**Schema migration (`20260530000000_billing_scheduled_plan_change`):**
+- `TenantBillingSettings.nextBillingPlanId` — nullable FK → `BillingPlan.id` (SetNull on delete)
+- `TenantBillingSettings.nextBillingPlanEffectiveAt` — nullable `DateTime` (UTC midnight on first of a future month)
+- Prisma named relations: `"CurrentBillingPlan"` and `"NextBillingPlan"` (required because `TenantBillingSettings` now has two FK columns pointing to `BillingPlan`)
+- Index `TenantBillingSettings_nextBillingPlanId_idx`
+
+**New API routes (all `SUPER_ADMIN` only, `requirePlatformBilling`):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/admin/billing/platform/billing-plans` | List all active `BillingPlan` rows (id, code, name, prices) — for plan picker dropdown |
+| `GET` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Read current scheduled change (fields + resolved plan) |
+| `POST` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Schedule a plan change. Body: `{ nextBillingPlanId, effectiveAt: ISO8601 UTC midnight first-of-month }`. Replaces any existing scheduled change. |
+| `DELETE` | `/admin/billing/platform/tenants/:tenantId/scheduled-plan-change` | Cancel the scheduled change; clears both fields. Returns `404 no_scheduled_plan_change` if none set. |
+
+**Validation (`billingScheduledPlan.ts` — `validateScheduledPlanChangeEffectiveAt`):**
+- `effectiveAt` must parse as a valid date.
+- Must be UTC midnight on the **1st day of a month** (all UTC components hour/min/sec = 0, day = 1).
+- Must be strictly **after** the first day of the current UTC month (i.e., minimum = first of *next* month).
+- `POST` also checks: plan must exist and `active: true`.
+
+**Invoice preview logic (`invoiceEngine.ts`):**
+`buildBillingInvoicePreview` now checks the scheduled change when building price fallbacks:
+```
+activePlan = (nextBillingPlanId && nextBillingPlanEffectiveAt && periodStart >= nextBillingPlanEffectiveAt)
+             ? nextBillingPlan
+             : billingPlan
+extensionPrice = settings.extensionPriceCents || activePlan?.extensionPriceCents || 3000
+```
+When the next plan is active for the requested period, the preview response includes:
+```json
+"scheduledPlanChange": { "planId": "…", "planName": "Growth Plan", "effectiveAt": "2027-07-01T00:00:00.000Z" }
+```
+No DB writes from preview.
+
+**Audit logging:**
+Every `POST` writes `BillingEventLog { type: "billing_plan.scheduled_change_set", metadata: { operatorId, previousNextPlanId, previousEffectiveAt, nextBillingPlanId, planName, effectiveAt } }`.
+Every `DELETE` writes `BillingEventLog { type: "billing_plan.scheduled_change_cancelled", metadata: { operatorId, cancelledNextPlanId, cancelledEffectiveAt } }`.
+
+**Portal — Admin Billing Settings (`/admin/billing/settings`):**
+New **Scheduled Plan Change** card rendered between the SOLA/Collections section and the Invoice Preview card:
+- When no change scheduled: plan dropdown (from `GET /admin/billing/platform/billing-plans`), effective date picker (defaults to first of next month), "Schedule plan change" button. Price summary shown below dropdown.
+- When a change is scheduled: blue notice ("⚡ Scheduled: Switch to plan X effective Y"), "Cancel scheduled change" button (red ghost, no confirm modal).
+- Invoice Preview card now shows a yellow notice when the selected preview period uses the next plan's prices.
+
+### What was NOT changed
+
+- No worker changes (Phase 2 deferred).
+- No automatic plan consumption on invoice creation — that is Phase 2 (worker `consumeScheduledPlanChange`).
+- No proration.
+- No tenant-facing UI for scheduled changes (operator-only).
+- No SOLA auth/webhook changes.
+- No dunning changes.
+- No `PARTIALLY_PAID` implementation.
+
+### Tests added
+
+**`invoiceEngine.test.ts`:**
+- Preview uses current plan prices when no scheduled change
+- Preview uses current prices when `periodStart < nextBillingPlanEffectiveAt`
+- Preview uses next plan prices when `periodStart >= nextBillingPlanEffectiveAt`
+- Preview uses next plan prices on period after effectiveAt
+- `scheduledPlanChange` absent when `nextBillingPlanId` is null
+
+**`billingScheduledPlan.test.ts` (new):**
+- Rejects unparseable date
+- Rejects non-1st-of-month date
+- Rejects non-midnight time on 1st
+- Rejects current month
+- Rejects past month
+- Accepts first of next month
+- Accepts far future month
+- Handles December→January year rollover
+- SUPER_ADMIN accepted; all other roles rejected (uses `canAccessPlatformAdminBillingRoutes`)
+
+### Phase 2 (worker) — deferred
+
+The worker `runMonthlyBillingAutomation` / `createWorkerBillingInvoice` does NOT yet consume the scheduled change. When Phase 2 is implemented:
+1. After invoice creation, `consumeScheduledPlanChange` checks if `periodStart >= nextBillingPlanEffectiveAt`.
+2. If true: copies next plan prices into direct settings fields, sets `billingPlanId = nextBillingPlanId`, clears `nextBillingPlanId`/`nextBillingPlanEffectiveAt`, logs `billing_plan.change_applied` event.
+3. Idempotent: second call after fields already cleared is a no-op.

@@ -84,7 +84,11 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
       firstPhoneNumberFree: true,
       smsBillingEnabled: false,
       creditsCents: 0,
+      discountPercent: 0,
       billingPlan: null,
+      nextBillingPlanId: null,
+      nextBillingPlanEffectiveAt: null,
+      nextBillingPlan: null,
       metadata: {} as Record<string, unknown>,
     },
     lastCreateData: null,
@@ -102,6 +106,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
       upsert: async () => ({
         ...state.settings,
         billingPlan: state.settings.billingPlan,
+        nextBillingPlan: state.settings.nextBillingPlan,
         taxProfile: state.settings.taxProfile,
       }),
     },
@@ -245,6 +250,93 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const previewNoDisc = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   const noDiscountLine = previewNoDisc.lineItems.find((l) => l.type === "DISCOUNT");
   assert.equal(noDiscountLine, undefined, "No DISCOUNT line when discountPercent=0");
+
+  // ── Phase 1: scheduled plan change preview logic ────────────────────────────
+  // Context: 1 extension (e1/101/Sales), default prices.
+  // All scheduled plan change scenarios are in this block to avoid ESM cache issues.
+
+  const nextPlanFixture = {
+    id: "plan-next",
+    name: "Growth Plan",
+    extensionPriceCents: 9900,
+    additionalPhoneNumberPriceCents: 500,
+    smsPriceCents: 500,
+    firstPhoneNumberFree: false,
+  };
+  const currentPlanFixture = {
+    id: "plan-curr",
+    name: "Starter",
+    extensionPriceCents: 3000,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+  };
+  const effectiveAt2027Jul = new Date(Date.UTC(2027, 6, 1, 0, 0, 0, 0));
+
+  // No scheduled change → scheduledPlanChange absent, default prices used
+  state.settings.extensionPriceCents = 3000;
+  state.settings.billingPlan = null;
+  state.settings.nextBillingPlanId = null;
+  state.settings.nextBillingPlanEffectiveAt = null;
+  state.settings.nextBillingPlan = null;
+  state.settings.taxEnabled = false;
+  state.settings.taxProfile = null;
+  const scPreviewNoChange = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const scExtLineNoChange = scPreviewNoChange.lineItems.find((l) => l.type === "EXTENSION");
+  assert.ok(scExtLineNoChange, "EXTENSION line must exist (no scheduled change)");
+  assert.equal(scExtLineNoChange.unitPriceCents, 3000, "no scheduled change: should use extensionPriceCents=3000");
+  assert.equal(scPreviewNoChange.scheduledPlanChange, undefined, "scheduledPlanChange must be absent when nothing scheduled");
+
+  // periodStart before effectiveAt → current plan prices, no scheduledPlanChange
+  state.settings.extensionPriceCents = 0;
+  state.settings.billingPlan = currentPlanFixture;
+  state.settings.nextBillingPlanId = nextPlanFixture.id;
+  state.settings.nextBillingPlanEffectiveAt = effectiveAt2027Jul;
+  state.settings.nextBillingPlan = nextPlanFixture;
+  const previewBeforeEff = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date(Date.UTC(2027, 5, 1, 0, 0, 0, 0)),  // June 2027 (before July eff)
+    periodEnd: new Date(Date.UTC(2027, 6, 0, 23, 59, 59, 999)),
+  });
+  const extBeforeEff = previewBeforeEff.lineItems.find((l) => l.type === "EXTENSION");
+  assert.ok(extBeforeEff, "EXTENSION line must exist (before effective)");
+  assert.equal(extBeforeEff.unitPriceCents, 3000, "before effective date: must use current plan price 3000");
+  assert.equal(previewBeforeEff.scheduledPlanChange, undefined, "scheduledPlanChange must be absent before effective date");
+
+  // periodStart on effectiveAt → next plan prices, scheduledPlanChange present
+  const previewOnEff = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date(Date.UTC(2027, 6, 1, 0, 0, 0, 0)),   // July 2027 (on eff date)
+    periodEnd: new Date(Date.UTC(2027, 7, 0, 23, 59, 59, 999)),
+  });
+  const extOnEff = previewOnEff.lineItems.find((l) => l.type === "EXTENSION");
+  assert.ok(extOnEff, "EXTENSION line must exist (on effective date)");
+  assert.equal(extOnEff.unitPriceCents, 9900, "on effective date: must use next plan extensionPriceCents=9900");
+  assert.ok(previewOnEff.scheduledPlanChange, "scheduledPlanChange must be present on effective date");
+  assert.equal(previewOnEff.scheduledPlanChange!.planId, nextPlanFixture.id, "scheduledPlanChange.planId matches next plan");
+  assert.equal(previewOnEff.scheduledPlanChange!.planName, "Growth Plan", "scheduledPlanChange.planName matches next plan");
+
+  // periodStart after effectiveAt → still uses next plan prices
+  const previewAfterEff = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date(Date.UTC(2027, 7, 1, 0, 0, 0, 0)),   // August 2027 (after eff)
+    periodEnd: new Date(Date.UTC(2027, 8, 0, 23, 59, 59, 999)),
+  });
+  const extAfterEff = previewAfterEff.lineItems.find((l) => l.type === "EXTENSION");
+  assert.ok(extAfterEff, "EXTENSION line must exist (after effective)");
+  assert.equal(extAfterEff.unitPriceCents, 9900, "after effective date: still uses next plan price 9900");
+  assert.ok(previewAfterEff.scheduledPlanChange, "scheduledPlanChange must still be present after effective date");
+
+  // Reset state
+  state.settings.extensionPriceCents = 3000;
+  state.settings.billingPlan = null;
+  state.settings.nextBillingPlanId = null;
+  state.settings.nextBillingPlanEffectiveAt = null;
+  state.settings.nextBillingPlan = null;
+  state.settings.taxEnabled = true;
+  state.settings.taxProfile = fakeTaxProfile;
+  state.settings.taxProfileId = "tp1";
+  state.settings.metadata = {};
 });
 
 // ---------------------------------------------------------------------------
@@ -286,3 +378,6 @@ test("invoiceEngine: buildBillingInvoicePreview does not write to DB (no billing
   await buildBillingInvoicePreview({ tenantId: "t-preview" });
   assert.equal(createCount, 0, "buildBillingInvoicePreview must not call billingInvoice.create");
 });
+
+// Note: Phase 1 scheduled plan change preview tests live inside the main "invoiceEngine preview + create"
+// test block above (state-mutation approach) to avoid Node.js ESM module caching issues.

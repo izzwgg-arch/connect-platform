@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiGet, apiPut } from "../../../../../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
@@ -130,6 +130,22 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
   );
 }
 
+type BillingPlanRow = {
+  id: string;
+  code: string;
+  name: string;
+  extensionPriceCents: number;
+  additionalPhoneNumberPriceCents: number;
+  smsPriceCents: number;
+  firstPhoneNumberFree: boolean;
+};
+
+type ScheduledPlanChange = {
+  nextBillingPlanId: string | null;
+  nextBillingPlanEffectiveAt: string | null;
+  nextBillingPlan: BillingPlanRow | null;
+};
+
 type PreviewLineItem = {
   type: string;
   description: string;
@@ -137,6 +153,12 @@ type PreviewLineItem = {
   unitPriceCents: number;
   amountCents: number;
   taxable: boolean;
+};
+
+type InvoicePreviewScheduledChange = {
+  planId: string;
+  planName: string;
+  effectiveAt: string;
 };
 
 type InvoicePreview = {
@@ -148,12 +170,178 @@ type InvoicePreview = {
   subtotalCents: number;
   taxCents: number;
   totalCents: number;
+  scheduledPlanChange?: InvoicePreviewScheduledChange;
 };
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; onChanged: () => void }) {
+  const [plans, setPlans] = useState<BillingPlanRow[]>([]);
+  const [scheduled, setScheduled] = useState<ScheduledPlanChange | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Default effective date = first of next month UTC
+  const defaultEffective = () => {
+    const d = new Date();
+    const y = d.getUTCMonth() === 11 ? d.getUTCFullYear() + 1 : d.getUTCFullYear();
+    const m = (d.getUTCMonth() + 1) % 12;
+    return new Date(Date.UTC(y, m, 1, 0, 0, 0, 0)).toISOString().slice(0, 10);
+  };
+
+  const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState(defaultEffective);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setToast(null);
+    try {
+      const [p, s] = await Promise.all([
+        apiGet<BillingPlanRow[]>("/admin/billing/platform/billing-plans"),
+        apiGet<ScheduledPlanChange>(`/admin/billing/platform/tenants/${tenantId}/scheduled-plan-change`),
+      ]);
+      setPlans(p);
+      setScheduled(s);
+      if (!selectedPlanId && p.length > 0) setSelectedPlanId(p[0].id);
+    } catch (err: unknown) {
+      setToast({ type: "err", text: billingErrorMessage(err, "Failed to load billing plans.") });
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, selectedPlanId]);
+
+  useEffect(() => { void load(); }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function scheduleChange() {
+    if (!selectedPlanId || !effectiveDate) return;
+    setSaving(true);
+    setToast(null);
+    try {
+      const effectiveAtIso = new Date(effectiveDate + "T00:00:00.000Z").toISOString();
+      const result = await apiPost<ScheduledPlanChange>(
+        `/admin/billing/platform/tenants/${tenantId}/scheduled-plan-change`,
+        { nextBillingPlanId: selectedPlanId, effectiveAt: effectiveAtIso },
+      );
+      setScheduled(result);
+      setToast({ type: "ok", text: `Plan change scheduled: "${result.nextBillingPlan?.name}" effective ${effectiveDate}.` });
+      onChanged();
+    } catch (err: unknown) {
+      setToast({ type: "err", text: billingErrorMessage(err, "Failed to schedule plan change.") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function cancelChange() {
+    setSaving(true);
+    setToast(null);
+    try {
+      await apiDelete<ScheduledPlanChange>(`/admin/billing/platform/tenants/${tenantId}/scheduled-plan-change`);
+      setScheduled({ nextBillingPlanId: null, nextBillingPlanEffectiveAt: null, nextBillingPlan: null });
+      setToast({ type: "ok", text: "Scheduled plan change cancelled." });
+      onChanged();
+    } catch (err: unknown) {
+      setToast({ type: "err", text: billingErrorMessage(err, "Failed to cancel scheduled change.") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <DetailCard title="Scheduled Plan Change"><LoadingSkeleton rows={3} /></DetailCard>;
+
+  const hasScheduled = !!scheduled?.nextBillingPlanId;
+  const effectiveDateLabel = scheduled?.nextBillingPlanEffectiveAt
+    ? formatDate(scheduled.nextBillingPlanEffectiveAt)
+    : null;
+
+  return (
+    <DetailCard title="Scheduled Plan Change">
+      <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#92400e" }}>
+        <strong>Next billing cycle only.</strong> The new plan takes effect when the worker creates the invoice for the effective period. No proration. No mid-cycle changes.
+      </div>
+
+      {hasScheduled ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 5, padding: "8px 12px", marginBottom: 10 }}>
+            <strong>⚡ Scheduled:</strong> Switch to plan <strong>&quot;{scheduled.nextBillingPlan?.name}&quot;</strong>
+            {effectiveDateLabel ? <> effective <strong>{effectiveDateLabel}</strong></> : null}.
+          </div>
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={() => void cancelChange()}
+            disabled={saving}
+            style={{ fontSize: 13, color: "var(--danger, #dc2626)" }}
+          >
+            {saving ? "Cancelling…" : "Cancel scheduled change"}
+          </button>
+        </div>
+      ) : (
+        <div>
+          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+            No plan change scheduled. Select a plan and effective date to schedule one.
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+            <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
+              New plan
+              <select
+                value={selectedPlanId}
+                onChange={(e) => setSelectedPlanId(e.target.value)}
+                disabled={saving || plans.length === 0}
+                style={{ fontSize: 13, minWidth: 180 }}
+              >
+                {plans.length === 0 ? (
+                  <option value="">No active plans</option>
+                ) : (
+                  plans.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
+              Effective (1st of month)
+              <input
+                type="date"
+                value={effectiveDate}
+                onChange={(e) => setEffectiveDate(e.target.value)}
+                disabled={saving}
+                style={{ fontSize: 13 }}
+              />
+            </label>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={() => void scheduleChange()}
+              disabled={saving || !selectedPlanId || !effectiveDate}
+              style={{ fontSize: 13, marginBottom: 0 }}
+            >
+              {saving ? "Scheduling…" : "Schedule plan change"}
+            </button>
+          </div>
+          {selectedPlanId && plans.find((p) => p.id === selectedPlanId) ? (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+              {(() => {
+                const p = plans.find((pp) => pp.id === selectedPlanId)!;
+                return `${p.name}: $${(p.extensionPriceCents / 100).toFixed(2)}/ext · $${(p.additionalPhoneNumberPriceCents / 100).toFixed(2)}/phone · $${(p.smsPriceCents / 100).toFixed(2)}/SMS${p.firstPhoneNumberFree ? " · 1st phone free" : ""}`;
+              })()}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {toast ? (
+        <div className={`billing-status-pill ${toast.type === "ok" ? "ok" : "bad"}`} style={{ fontSize: 13, marginTop: 8 }}>
+          {toast.text}
+        </div>
+      ) : null}
+    </DetailCard>
+  );
+}
 
 function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
   const now = new Date();
@@ -219,6 +407,12 @@ function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
 
       {preview ? (
         <div>
+          {preview.scheduledPlanChange ? (
+            <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 5, padding: "6px 10px", marginBottom: 8, color: "#92400e" }}>
+              ⚡ <strong>Scheduled plan change applied:</strong> This preview uses prices from plan &quot;{preview.scheduledPlanChange.planName}&quot;
+              {" "}(effective {formatDate(preview.scheduledPlanChange.effectiveAt)}).
+            </div>
+          ) : null}
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
             Period: {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)}
             {" · "}
@@ -394,6 +588,7 @@ function AdminBillingSettingsBody() {
             <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
             <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>
+          <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
           <AdminInvoicePreviewCard tenantId={detail.tenant.id} />
         </>
       ) : null}
