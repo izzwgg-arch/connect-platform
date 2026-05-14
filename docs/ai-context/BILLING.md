@@ -8,7 +8,7 @@
 |--------|----------|
 | Tenant + platform REST (`registerBillingRoutes`) | `apps/api/src/billing/routes.ts` |
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
-| Invoice preview / create | `apps/api/src/billing/invoiceEngine.ts` |
+| Invoice preview / create (+ discount line) | `apps/api/src/billing/invoiceEngine.ts` |
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
 | SOLA adapter selection (per-tenant vs env) | `apps/api/src/billing/solaGateway.ts` |
@@ -433,3 +433,52 @@ Use a **non-production** tenant, **sandbox** gateway mode, and test cards only.
 - CI running **`pnpm run test:billing`** on Node with **`--experimental-test-module-mocks`** (already in **`apps/api/package.json`**).
 - Clarify **hosted session vs payment link** with vendor for any future hosted-field UX beyond current **`BILLING.md`** note.
 - External **telecom tax engine** adapter replacing **`external_telecom_stub`** when legally required.
+
+---
+
+## Invoice preview (Phase A — complete)
+
+### What was added
+
+**Discount bug fix (`invoiceEngine.ts`):** `TenantBillingSettings.discountPercent` was stored in the DB but silently ignored in `buildBillingInvoicePreview`. Fixed: when `discountPercent > 0`, a `DISCOUNT` line item (type `BillingLineItemType.DISCOUNT`, `taxable: true`) is inserted covering only service charges (excluding credits). Because it is `taxable: true`, the existing `taxableSubtotalCents` sum automatically reduces the tax base — tax is computed on the post-discount amount.
+
+**New API routes (read-only, no invoice created, no DB writes):**
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| `GET` | `/billing/invoice-preview` | Tenant billing JWT | Preview for the requesting tenant (current month) |
+| `GET` | `/admin/billing/platform/tenants/:tenantId/invoice-preview` | SUPER_ADMIN | Preview for any tenant; optional `?periodMonth=3&periodYear=2027` |
+
+The existing `POST /admin/billing/tenants/:tenantId/invoices/preview` is retained for backward compatibility.
+
+**Portal — Admin Billing Settings (`/admin/billing/settings`):** New "Invoice Preview" card at the bottom of the tenant settings section. Contains month/year dropdowns (current month to +2 years) and a "Preview next invoice" button. Shows line items table (description, qty, unit price, amount), total, tax notice, period, and due date. Blue "Preview only — no invoice created" notice prominent above the table.
+
+**Portal — Customer Billing Overview (`/billing`):** New "Estimated next invoice" collapsible section above the quick nav. Lazy-loaded on first click (no auto-fetch). Shows line items, total, period/due date, and a "Preview only" notice. Does not show charge or send buttons.
+
+### Discount math
+
+```
+serviceChargeCents = sum of line items where type ≠ CREDIT
+discountCents      = -round(serviceChargeCents × discountPercent)
+DISCOUNT line      = { type: "DISCOUNT", taxable: true, amountCents: discountCents }
+taxableSubtotal    = sum of taxable lines (extensions + phones + SMS + DISCOUNT)
+tax                = taxProvider.calculateTaxes({ taxableSubtotalCents })
+```
+
+### What was NOT changed
+
+- No invoice creation side effects (preview is always read-only).
+- No worker changes.
+- No dunning changes.
+- No SOLA auth/webhook changes.
+- No migrations.
+- No `PARTIALLY_PAID` implementation.
+- No proration.
+- `POST /admin/billing/tenants/:tenantId/invoices/preview` retained unchanged.
+
+### Tests added (`invoiceEngine.test.ts`)
+
+- `discountPercent=0.1` → DISCOUNT line = −300 cents, tax on discounted base (293 cents with full fakeTaxProfile)
+- `discountPercent=0` → no DISCOUNT line
+- Preview with custom `periodStart`/`periodEnd` → correct period bounds
+- `buildBillingInvoicePreview` makes zero `billingInvoice.create` calls

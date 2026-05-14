@@ -4,6 +4,74 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-13 — billing: invoice preview phase A (discount fix + preview routes + portal UI)
+
+**Task:** billing / invoice preview phase A  
+**Risk:** medium (API + Portal only — no schema changes, no worker changes, no charge behavior changes)
+
+### What changed
+
+**`apps/api/src/billing/invoiceEngine.ts`** (modified):
+- **Discount bug fix:** `TenantBillingSettings.discountPercent` was stored in the DB but silently not applied in `buildBillingInvoicePreview`. Added a `DISCOUNT` line item (type `DISCOUNT`, `taxable: true`) computed as `−round(serviceChargeCents × discountPercent)`. Applied to service charges only (excludes existing credit lines). Because `taxable: true`, the discount naturally reduces `taxableSubtotalCents` — tax is computed on the post-discount amount. No change when `discountPercent === 0`.
+
+**`apps/api/src/billing/routes.ts`** (modified):
+- Added `GET /billing/invoice-preview` — tenant-billing-scoped, read-only, calls `buildBillingInvoicePreview` for the authenticated tenant. Returns `BillingInvoicePreview`. No DB writes, no invoice created.
+- Added `GET /admin/billing/platform/tenants/:tenantId/invoice-preview` — SUPER_ADMIN only. Accepts optional `?periodMonth=1-12&periodYear=2020-2099` query params to preview any calendar month. Falls back to current month when params are absent or invalid. No DB writes.
+- Existing `POST /admin/billing/tenants/:tenantId/invoices/preview` retained unchanged.
+
+**`apps/portal/app/(platform)/admin/billing/settings/page.tsx`** (modified):
+- Added `AdminInvoicePreviewCard` component. Placed below the SOLA + Collections cards.
+- Month/year period selectors. "Preview next invoice" button loads `GET /admin/billing/platform/tenants/:tenantId/invoice-preview`.
+- Renders line items table (description, qty, unit, amount), total, tax notice, period + due date.
+- Blue "Preview only — no invoice created" notice.
+- Added `import { dollars, formatDate } from "../../../../../lib/billingUi"`.
+
+**`apps/portal/app/(platform)/billing/page.tsx`** (modified):
+- Added `InvoicePreviewSection` component. Shown above the quick nav.
+- Lazy-loaded on first click ("Preview" button). Calls `GET /billing/invoice-preview`.
+- Shows period, due date, line items, estimated total, and tax notice.
+- Blue "Preview only — no invoice created" notice. No charge or send buttons.
+
+**`apps/api/src/billing/invoiceEngine.test.ts`** (modified):
+- Added discount assertions inside the existing `invoiceEngine preview + create` test block (ESM module cache constraint — mutations to `state.settings` are the reliable pattern for this file):
+  - `discountPercent=0.1` → DISCOUNT line = −300 cents; tax computed on discounted base (293 cents: sales + E911 + regulatory on 2700 cent base).
+  - `discountPercent=0` → no DISCOUNT line.
+- Added two standalone tests (isolated mocks via fresh `makePreviewDb` factory):
+  - Period bounds: `periodStart`/`periodEnd` passed to preview returns correct month.
+  - No-DB-write: `billingInvoice.create` call count = 0 after `buildBillingInvoicePreview`.
+
+**`docs/ai-context/BILLING.md`** (modified):
+- Updated "Invoice preview / create" table entry.
+- Added "Invoice preview (Phase A — complete)" section with routes, discount math, what was NOT changed, and test coverage summary.
+
+### What was NOT changed
+
+- No schema migrations.
+- No worker changes.
+- No dunning changes.
+- No SOLA auth/webhook changes.
+- No charge behavior changes.
+- No `PARTIALLY_PAID` implementation.
+- No proration.
+- No add-ons or base fee.
+- `POST /admin/billing/tenants/:tenantId/invoices/preview` retained.
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing    # 136/136 pass
+pnpm --filter @connect/api typecheck       # clean
+pnpm --filter @connect/portal typecheck    # clean
+```
+
+### Revert
+
+API: revert `invoiceEngine.ts` (remove discount block) and `routes.ts` (remove the 2 new GET routes).  
+Portal: revert `settings/page.tsx` (remove `AdminInvoicePreviewCard`) and `billing/page.tsx` (remove `InvoicePreviewSection`).  
+No DB migration to reverse.
+
+---
+
 ## 2026-05-13 — billing: collections controls phase 2 worker enforcement
 
 **Task:** billing / collections controls phase 2 worker enforcement  

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { apiGet } from "../../../services/apiClient";
 import { ErrorState } from "../../../components/ErrorState";
@@ -12,6 +13,93 @@ import {
   invoiceStatusLabel, invoiceStatusClass,
   worstOpenInvoice, nextBillingSummary,
 } from "../../../lib/billingUi";
+
+type PreviewLineItem = {
+  type: string;
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  amountCents: number;
+};
+
+type InvoicePreview = {
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string;
+  lineItems: PreviewLineItem[];
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+};
+
+function InvoicePreviewSection() {
+  const [open, setOpen] = useState(false);
+  const [preview, setPreview] = useState<InvoicePreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function loadPreview() {
+    if (preview) { setOpen((o) => !o); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiGet<InvoicePreview>("/billing/invoice-preview");
+      setPreview(data);
+      setOpen(true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load preview.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="billing-unpaid-callout" style={{ marginTop: 8 }}>
+      <div className="billing-unpaid-callout-head" style={{ alignItems: "center" }}>
+        <span style={{ fontWeight: 600 }}>Estimated next invoice</span>
+        <button
+          className="btn ghost"
+          type="button"
+          style={{ fontSize: 12, padding: "4px 10px" }}
+          onClick={() => void loadPreview()}
+          disabled={loading}
+        >
+          {loading ? "Loading…" : open ? "Hide" : "Preview"}
+        </button>
+      </div>
+      {error ? <p style={{ fontSize: 13, color: "var(--danger, #dc2626)", padding: "6px 0" }}>{error}</p> : null}
+      {open && preview ? (
+        <div style={{ padding: "8px 0" }}>
+          <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 4, padding: "5px 9px", marginBottom: 10, color: "#1e40af" }}>
+            <strong>Preview only</strong> — no invoice created. Period: {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)} · Due {formatDate(preview.dueDate)}.
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <tbody>
+              {preview.lineItems.map((item, idx) => (
+                <tr key={idx} style={{ borderBottom: "1px solid var(--border-light, #f3f4f6)" }}>
+                  <td style={{ padding: "4px 0" }}>{item.description}</td>
+                  <td style={{ textAlign: "right", padding: "4px 0", color: item.amountCents < 0 ? "var(--danger, #dc2626)" : undefined, fontWeight: 500 }}>
+                    {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: "1px solid var(--border, #e5e7eb)" }}>
+                <td style={{ padding: "6px 0", fontWeight: 700 }}>Estimated total</td>
+                <td style={{ textAlign: "right", padding: "6px 0", fontWeight: 700 }}>{dollars(preview.totalCents)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {preview.taxCents > 0 ? (
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Includes {dollars(preview.taxCents)} in taxes and fees.</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function FailedPaymentBanner({ invoice }: { invoice: any }) {
   const isFailed = invoice.status === "FAILED";
@@ -168,6 +256,9 @@ export default function BillingOverviewPage() {
             <p className="muted">No unpaid invoices. Your account is current.</p>
           </div>
         ) : null}
+
+        {/* Next invoice preview */}
+        {!loading ? <InvoicePreviewSection /> : null}
 
         {/* Quick nav */}
         {!loading ? (

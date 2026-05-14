@@ -16,6 +16,7 @@ import {
   AdminTenantMonthlyPricingForm,
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
+import { dollars, formatDate } from "../../../../../lib/billingUi";
 
 type TenantRow = { id: string; name: string };
 
@@ -125,6 +126,143 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
           {saving ? "Saving…" : "Save collections config"}
         </button>
       </form>
+    </DetailCard>
+  );
+}
+
+type PreviewLineItem = {
+  type: string;
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  amountCents: number;
+  taxable: boolean;
+};
+
+type InvoicePreview = {
+  tenantId: string;
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string;
+  lineItems: PreviewLineItem[];
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+};
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
+  const now = new Date();
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [year, setYear] = useState(now.getFullYear());
+  const [preview, setPreview] = useState<InvoicePreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const yearOptions: number[] = [];
+  for (let y = now.getFullYear(); y <= now.getFullYear() + 2; y++) yearOptions.push(y);
+
+  async function loadPreview() {
+    setLoading(true);
+    setError("");
+    setPreview(null);
+    try {
+      const data = await apiGet<InvoicePreview>(
+        `/admin/billing/platform/tenants/${tenantId}/invoice-preview?periodMonth=${month}&periodYear=${year}`,
+      );
+      setPreview(data);
+    } catch (err: unknown) {
+      setError(billingErrorMessage(err, "Failed to load invoice preview."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <DetailCard title="Invoice Preview">
+      <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#1e40af" }}>
+        <strong>Preview only</strong> — no invoice is created and no charge is run.
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <select
+          value={month}
+          onChange={(e) => { setMonth(Number(e.target.value)); setPreview(null); }}
+          style={{ fontSize: 13 }}
+        >
+          {MONTHS.map((name, i) => (
+            <option key={i + 1} value={i + 1}>{name}</option>
+          ))}
+        </select>
+        <select
+          value={year}
+          onChange={(e) => { setYear(Number(e.target.value)); setPreview(null); }}
+          style={{ fontSize: 13 }}
+        >
+          {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <button
+          className="btn ghost"
+          type="button"
+          onClick={() => void loadPreview()}
+          disabled={loading}
+          style={{ fontSize: 13 }}
+        >
+          {loading ? "Loading…" : "Preview next invoice"}
+        </button>
+      </div>
+
+      {error ? <div style={{ color: "var(--danger, #dc2626)", fontSize: 13 }}>{error}</div> : null}
+
+      {preview ? (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+            Period: {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)}
+            {" · "}
+            Due: {formatDate(preview.dueDate)}
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)" }}>
+                <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600 }}>Description</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Qty</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Unit</th>
+                <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.lineItems.map((item, idx) => (
+                <tr key={idx} style={{ borderBottom: "1px solid var(--border-light, #f3f4f6)" }}>
+                  <td style={{ padding: "4px 6px" }}>{item.description}</td>
+                  <td style={{ textAlign: "right", padding: "4px 6px" }}>{item.quantity}</td>
+                  <td style={{ textAlign: "right", padding: "4px 6px" }}>{item.unitPriceCents < 0 ? `(${dollars(-item.unitPriceCents)})` : dollars(item.unitPriceCents)}</td>
+                  <td style={{ textAlign: "right", padding: "4px 6px", color: item.amountCents < 0 ? "var(--danger, #dc2626)" : undefined }}>
+                    {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: "2px solid var(--border, #e5e7eb)" }}>
+                <td colSpan={3} style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600, fontSize: 13 }}>Total</td>
+                <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{dollars(preview.totalCents)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {preview.taxCents > 0 ? (
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+              Includes {dollars(preview.taxCents)} in taxes and fees.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!preview && !loading && !error ? (
+        <p style={{ fontSize: 13, color: "var(--muted)" }}>Select a period and click Preview to see the estimated invoice.</p>
+      ) : null}
     </DetailCard>
   );
 }
@@ -256,6 +394,7 @@ function AdminBillingSettingsBody() {
             <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
             <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>
+          <AdminInvoicePreviewCard tenantId={detail.tenant.id} />
         </>
       ) : null}
     </div>

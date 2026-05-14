@@ -233,6 +233,13 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 }
 
 export async function registerBillingRoutes(app: FastifyInstance) {
+  // Tenant: preview next invoice (read-only, no DB write, no invoice created).
+  app.get("/billing/invoice-preview", async (req, reply) => {
+    const u = await requireTenantBilling(req, reply);
+    if (!u) return;
+    return buildBillingInvoicePreview({ tenantId: u.tenantId });
+  });
+
   app.get("/billing/settings", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
@@ -772,6 +779,25 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const updated = await (db as any).billingSolaConfig.update({ where: { tenantId }, data: { isEnabled: false, updatedByUserId: u.sub } });
     await logBillingEvent({ tenantId, type: "sola.disabled", message: "SOLA gateway disabled." });
     return { ok: true, config: maskSolaConfig(updated, null) };
+  });
+
+  // Admin: GET invoice preview with optional periodMonth (1–12) + periodYear query params.
+  // Read-only — no invoice is created, no DB writes.
+  app.get("/admin/billing/platform/tenants/:tenantId/invoice-preview", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const q = req.query as { periodMonth?: string; periodYear?: string };
+    const rawMonth = Number.parseInt(String(q.periodMonth || ""), 10);
+    const rawYear = Number.parseInt(String(q.periodYear || ""), 10);
+    let periodStart: Date | undefined;
+    let periodEnd: Date | undefined;
+    if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
+      const m = rawMonth - 1;
+      periodStart = new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0));
+      periodEnd = new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999));
+    }
+    return buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
   });
 
   app.post("/admin/billing/tenants/:tenantId/invoices/preview", async (req, reply) => {

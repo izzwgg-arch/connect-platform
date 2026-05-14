@@ -2,6 +2,56 @@ import test, { afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { EXTERNAL_TELECOM_STUB_PROVIDER_ID, TAX_PROFILE_PROVIDER_ID } from "./taxProvider";
 
+// ---------------------------------------------------------------------------
+// Shared fake DB factory for discount / period / preview tests
+// ---------------------------------------------------------------------------
+function makePreviewDb(overrides: { settings?: Record<string, unknown>; extensionCount?: number } = {}) {
+  const settings: Record<string, unknown> = {
+    tenantId: "t-preview",
+    taxEnabled: false,
+    taxProfileId: null,
+    taxProfile: null,
+    paymentTermsDays: 15,
+    extensionPriceCents: 3000,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+    smsBillingEnabled: false,
+    creditsCents: 0,
+    discountPercent: 0,
+    billingPlan: null,
+    metadata: {},
+    ...(overrides.settings ?? {}),
+  };
+  const extCount = overrides.extensionCount ?? 2;
+  const exts = Array.from({ length: extCount }, (_, i) => ({
+    id: `e${i + 1}`,
+    extNumber: `10${i + 1}`,
+    displayName: "Agent",
+  }));
+  return {
+    tenantBillingSettings: {
+      upsert: async () => ({ ...settings }),
+    },
+    extension: { findMany: async () => exts },
+    phoneNumber: { findMany: async () => [] },
+    tenant: {
+      findUnique: async (args: { select?: Record<string, boolean> }) => {
+        if (args?.select?.billingSettings) return { name: "T", billingSettings: { billingEmail: null } };
+        return { smsSubscriptionRequired: false, smsBillingEnforced: false, smsSendMode: null };
+      },
+    },
+    billingInvoice: {
+      count: async () => 0,
+      create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "inv-x", lineItems: [], ...data }),
+      findUnique: async () => null,
+      update: async ({ data }: { data: Record<string, unknown> }) => data,
+    },
+    billingEventLog: { create: async () => ({}) },
+    emailJob: { findFirst: async () => null, create: async () => ({}) },
+  };
+}
+
 afterEach(() => {
   mock.restoreAll();
 });
@@ -164,4 +214,75 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(d3.status, "PAID", "status must be PAID when exact amount passed");
   assert.equal(d3.balanceDueCents, 0, "balanceDueCents must be 0 for exact amount");
   assert.equal(d3.amountPaidCents, 8500, "amountPaidCents must equal the passed amount");
+
+  // ── Phase A: discountPercent line item + tax base reduction ─────────────
+  // Mock state at this point: taxEnabled=true, taxProfile=fakeTaxProfile (8% sales tax),
+  // extensionPriceCents=3000, 1 extension (e1/101/Sales from db.extension.findMany).
+  // Service charges: 1 × $30 = $30 (3000 cents).
+  // discountPercent=0.1 → DISCOUNT line = −300 cents (taxable:true).
+  // Taxable base = 3000 + (−300) = 2700 cents → sales tax = 2700 × 0.08 = 216 cents.
+
+  state.settings.discountPercent = 0.1;
+  state.settings.taxEnabled = true;
+  state.settings.taxProfile = fakeTaxProfile;
+  state.settings.taxProfileId = "tp1";
+  state.settings.metadata = {};
+  const previewDisc = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+
+  const discountLine = previewDisc.lineItems.find((l) => l.type === "DISCOUNT");
+  assert.ok(discountLine, "DISCOUNT line must exist when discountPercent=0.1");
+  assert.equal(discountLine.amountCents, -300, "DISCOUNT = −10% of 1×$30 = −$3.00 (−300 cents)");
+
+  // Tax base (taxable subtotal) = 3000 + (−300) = 2700 cents (discount reduces taxable base).
+  // fakeTaxProfile: salesTax 8% on 2700 = 216, E911 $0.50/ext × 1 = 50, regulatory 1% on 2700 = 27 → total 293.
+  const salesTaxLineDisc = previewDisc.lineItems.find((l) => l.type === "SALES_TAX");
+  assert.ok(salesTaxLineDisc, "SALES_TAX line must exist when tax enabled");
+  assert.equal(salesTaxLineDisc.amountCents, 216, "Sales tax = 8% of discounted base 2700 cents = 216 cents");
+  assert.equal(previewDisc.taxCents, 293, "taxCents = sales(216) + E911(50) + regulatory(27) on discounted base");
+
+  // discountPercent=0 → no DISCOUNT line
+  state.settings.discountPercent = 0;
+  const previewNoDisc = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const noDiscountLine = previewNoDisc.lineItems.find((l) => l.type === "DISCOUNT");
+  assert.equal(noDiscountLine, undefined, "No DISCOUNT line when discountPercent=0");
+});
+
+// ---------------------------------------------------------------------------
+// Phase A: discount line item + tax base reduction
+// ---------------------------------------------------------------------------
+
+
+test("invoiceEngine: buildBillingInvoicePreview with periodMonth/periodYear returns correct period bounds", async () => {
+  const db = makePreviewDb({ extensionCount: 1 });
+  mock.module("@connect/db", { namedExports: { db } });
+  const { buildBillingInvoicePreview } = await import("./invoiceEngine");
+
+  // March 2027: periodStart = 2027-03-01, periodEnd = 2027-03-31
+  const preview = await buildBillingInvoicePreview({
+    tenantId: "t-preview",
+    periodStart: new Date(Date.UTC(2027, 2, 1, 0, 0, 0, 0)),
+    periodEnd: new Date(Date.UTC(2027, 3, 0, 23, 59, 59, 999)),
+  });
+
+  assert.equal(preview.periodStart.getUTCFullYear(), 2027, "year must be 2027");
+  assert.equal(preview.periodStart.getUTCMonth(), 2, "month must be March (index 2)");
+  assert.equal(preview.periodStart.getUTCDate(), 1, "periodStart must be the 1st");
+  assert.equal(preview.periodEnd.getUTCMonth(), 2, "periodEnd must still be in March");
+  assert.equal(preview.periodEnd.getUTCDate(), 31, "March has 31 days");
+});
+
+test("invoiceEngine: buildBillingInvoicePreview does not write to DB (no billingInvoice.create call)", async () => {
+  let createCount = 0;
+  const db = makePreviewDb({ extensionCount: 1 });
+  const originalCreate = db.billingInvoice.create;
+  db.billingInvoice.create = async (args: any) => {
+    createCount++;
+    return originalCreate(args);
+  };
+
+  mock.module("@connect/db", { namedExports: { db } });
+  const { buildBillingInvoicePreview } = await import("./invoiceEngine");
+
+  await buildBillingInvoicePreview({ tenantId: "t-preview" });
+  assert.equal(createCount, 0, "buildBillingInvoicePreview must not call billingInvoice.create");
 });

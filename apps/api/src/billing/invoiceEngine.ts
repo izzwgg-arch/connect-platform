@@ -129,6 +129,27 @@ export async function buildBillingInvoicePreview(input: {
     });
   }
 
+  // Apply discount to service charges (non-credit items). taxable:true so it
+  // reduces the taxable base naturally in the sum below.
+  const discountPercent = Number(settings.discountPercent || 0);
+  if (discountPercent > 0) {
+    const serviceChargeCents = lineItems
+      .filter((item) => item.type !== "CREDIT")
+      .reduce((sum, item) => sum + item.amountCents, 0);
+    if (serviceChargeCents > 0) {
+      const discountCents = -Math.round(serviceChargeCents * discountPercent);
+      const pct = (discountPercent * 100).toFixed(2).replace(/\.?0+$/, "");
+      lineItems.push({
+        type: "DISCOUNT",
+        description: `Discount (${pct}%)`,
+        quantity: 1,
+        unitPriceCents: discountCents,
+        amountCents: discountCents,
+        taxable: true,
+      });
+    }
+  }
+
   const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
   const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
   const taxProvider = resolveTaxProvider(settings);
