@@ -606,6 +606,20 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const filter = q.filter ?? "pending";
     const sortMode = q.sort === "smart" ? "smart" : "original";
 
+    // ── Campaign filter ────────────────────────────────────────────────────────
+    // If ?campaignId= is supplied, validate it belongs to this tenant.
+    // Cross-tenant access returns 404 (never 403, to avoid ID enumeration).
+    const campaignIdParam = q.campaignId ?? null;
+    let campaignFilter: Record<string, unknown> = { status: "ACTIVE" };
+    if (campaignIdParam) {
+      const exists = await db.crmCampaign.findFirst({
+        where: { id: campaignIdParam, tenantId },
+        select: { id: true },
+      });
+      if (!exists) return reply.code(404).send({ error: "campaign_not_found" });
+      campaignFilter = { id: campaignIdParam, status: "ACTIVE" };
+    }
+
     const now = new Date();
     const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
     const endOfToday = new Date(now); endOfToday.setHours(23, 59, 59, 999);
@@ -620,7 +634,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         assignedToUserId: userId,
         status: "CALLBACK",
         callbackAt: { lte: endOfToday },
-        campaign: { status: "ACTIVE" },
+        campaign: campaignFilter,
       };
     } else if (filter === "overdue") {
       whereClause = {
@@ -628,7 +642,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         assignedToUserId: userId,
         status: "CALLBACK",
         callbackAt: { lt: startOfToday },
-        campaign: { status: "ACTIVE" },
+        campaign: campaignFilter,
       };
     } else if (filter === "upcoming") {
       whereClause = {
@@ -639,14 +653,14 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
           { callbackAt: { gte: startOfTomorrow } },
           { callbackAt: null },
         ],
-        campaign: { status: "ACTIVE" },
+        campaign: campaignFilter,
       };
     } else if (filter === "all") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
         status: { notIn: ["CONVERTED", "DO_NOT_CALL", "SKIPPED"] },
-        campaign: { status: "ACTIVE" },
+        campaign: campaignFilter,
       };
     } else {
       // default: pending
@@ -657,7 +671,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         status: sortMode === "smart"
           ? { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] }
           : { in: ["PENDING", "IN_PROGRESS"] },
-        campaign: { status: "ACTIVE" },
+        campaign: campaignFilter,
       };
     }
 
@@ -728,16 +742,17 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       }));
 
       const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: { status: "ACTIVE" } } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: { status: "ACTIVE" } } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: { status: "ACTIVE" } } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: { status: "ACTIVE" } } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: campaignFilter } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: campaignFilter } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: campaignFilter } }),
+        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: campaignFilter } }),
       ]);
 
       return {
         queue: formatted,
         total,
         sort: "smart",
+        campaignId: campaignIdParam ?? null,
         counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },
       };
     }
@@ -772,18 +787,19 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       } : null,
     }));
 
-    // Also return per-tab counts for badge display (cheap grouped count)
+    // Per-tab counts respect the campaign filter so badge counts are scoped correctly
     const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: { status: "ACTIVE" } } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: { status: "ACTIVE" } } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: { status: "ACTIVE" } } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: { status: "ACTIVE" } } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] }, campaign: campaignFilter } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lte: endOfToday }, campaign: campaignFilter } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", callbackAt: { lt: startOfToday }, campaign: campaignFilter } }),
+      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, status: "CALLBACK", OR: [{ callbackAt: { gte: startOfTomorrow } }, { callbackAt: null }], campaign: campaignFilter } }),
     ]);
 
     return {
       queue: formatted,
       total,
       sort: "original",
+      campaignId: campaignIdParam ?? null,
       counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },
     };
   });

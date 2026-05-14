@@ -576,6 +576,13 @@ Key fields: `name`, `description?`, `status` (`CrmCampaignStatus`), `priority` (
 
 ---
 
+### `CrmTenantSettings` — Queue Defaults _(Phase 12C)_
+New fields added to the existing `CrmTenantSettings` model:
+- **`defaultQueueSort`** (`String`, default `"SMART"`): Tenant-wide default sort for agents' queues — `SMART` or `ORIGINAL`. Applied when the agent has no localStorage preference and URL has no `?sort=` param.
+- **`defaultQueueFilter`** (`String`, default `"PENDING"`): Default filter tab — `PENDING | DUE | OVERDUE | UPCOMING`. Applied when URL has no `?filter=` param.
+
+---
+
 ### `CrmCampaignMember` _(Phase 3A)_
 - **Purpose:** A single contact enrolled in a `CrmCampaign` — the primary queue row for agents.
 - **Tenant-scoped?** Yes.

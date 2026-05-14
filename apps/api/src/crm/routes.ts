@@ -74,10 +74,15 @@ async function requireCrmEnabled(
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
+const QUEUE_SORT_VALUES = ["SMART", "ORIGINAL"] as const;
+const QUEUE_FILTER_VALUES = ["PENDING", "DUE", "OVERDUE", "UPCOMING"] as const;
+
 const updateSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   localPresenceEnabled: z.boolean().optional(),
   transcriptionEnabled: z.boolean().optional(),
+  defaultQueueSort: z.enum(QUEUE_SORT_VALUES).optional(),
+  defaultQueueFilter: z.enum(QUEUE_FILTER_VALUES).optional(),
 });
 
 const updateUserAccessSchema = z.object({
@@ -104,6 +109,8 @@ export async function registerCrmRoutes(app: FastifyInstance) {
       enabled: settings?.enabled ?? false,
       localPresenceEnabled: settings?.localPresenceEnabled ?? false,
       transcriptionEnabled: settings?.transcriptionEnabled ?? false,
+      defaultQueueSort: settings?.defaultQueueSort ?? "SMART",
+      defaultQueueFilter: settings?.defaultQueueFilter ?? "PENDING",
     };
   });
 
@@ -129,11 +136,15 @@ export async function registerCrmRoutes(app: FastifyInstance) {
         enabled: data.enabled ?? false,
         localPresenceEnabled: data.localPresenceEnabled ?? false,
         transcriptionEnabled: data.transcriptionEnabled ?? false,
+        defaultQueueSort: data.defaultQueueSort ?? "SMART",
+        defaultQueueFilter: data.defaultQueueFilter ?? "PENDING",
       },
       update: {
         ...(data.enabled !== undefined && { enabled: data.enabled }),
         ...(data.localPresenceEnabled !== undefined && { localPresenceEnabled: data.localPresenceEnabled }),
         ...(data.transcriptionEnabled !== undefined && { transcriptionEnabled: data.transcriptionEnabled }),
+        ...(data.defaultQueueSort !== undefined && { defaultQueueSort: data.defaultQueueSort }),
+        ...(data.defaultQueueFilter !== undefined && { defaultQueueFilter: data.defaultQueueFilter }),
       },
     });
 
@@ -141,6 +152,8 @@ export async function registerCrmRoutes(app: FastifyInstance) {
       enabled: settings.enabled,
       localPresenceEnabled: settings.localPresenceEnabled,
       transcriptionEnabled: settings.transcriptionEnabled,
+      defaultQueueSort: settings.defaultQueueSort,
+      defaultQueueFilter: settings.defaultQueueFilter,
     };
   });
 

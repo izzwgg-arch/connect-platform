@@ -12,6 +12,8 @@ type CrmSettings = {
   enabled: boolean;
   localPresenceEnabled: boolean;
   transcriptionEnabled: boolean;
+  defaultQueueSort: "SMART" | "ORIGINAL";
+  defaultQueueFilter: "PENDING" | "DUE" | "OVERDUE" | "UPCOMING";
 };
 
 type CrmUserRow = {
@@ -389,6 +391,85 @@ export default function CrmSettingsPage() {
           </div>
         )}
       </section>
+
+      {/* ── Queue Defaults panel ────────────────────────────────────────────── */}
+      {settings && (
+        <section className="panel" style={{ padding: "1.5rem" }}>
+          <h3 style={{ margin: "0 0 0.25rem", fontSize: "0.9375rem", fontWeight: 600 }}>Queue Defaults</h3>
+          <p style={{ margin: "0 0 1.25rem", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+            Default sort and filter applied to agents&apos; queues when they have not set a personal preference.
+            Agents can still override these with the UI controls on the queue page.
+          </p>
+
+          {/* Default sort */}
+          <div style={{ marginBottom: "1.25rem" }}>
+            <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem" }}>Default Sort</div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {(["SMART", "ORIGINAL"] as const).map((v) => (
+                <button
+                  key={v}
+                  disabled={settingsSaving}
+                  onClick={() => updateSetting({ defaultQueueSort: v })}
+                  style={{
+                    padding: "0.375rem 1rem",
+                    borderRadius: "0.5rem",
+                    border: "1px solid",
+                    fontSize: "0.875rem",
+                    fontWeight: 500,
+                    cursor: settingsSaving ? "not-allowed" : "pointer",
+                    background: settings.defaultQueueSort === v ? "var(--accent, #3b82f6)" : "var(--surface)",
+                    color: settings.defaultQueueSort === v ? "#fff" : "var(--text)",
+                    borderColor: settings.defaultQueueSort === v ? "var(--accent, #3b82f6)" : "var(--border)",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {v === "SMART" ? "Smart Priority" : "Original Order"}
+                </button>
+              ))}
+            </div>
+            <p style={{ margin: "0.375rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)" }}>
+              {settings.defaultQueueSort === "SMART"
+                ? "Agents' queues default to Smart Priority — overdue callbacks first, then fresh leads by campaign priority."
+                : "Agents' queues default to original import/sort order."}
+            </p>
+          </div>
+
+          {/* Default filter */}
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem" }}>Default Filter Tab</div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {(["PENDING", "DUE", "OVERDUE", "UPCOMING"] as const).map((v) => (
+                <button
+                  key={v}
+                  disabled={settingsSaving}
+                  onClick={() => updateSetting({ defaultQueueFilter: v })}
+                  style={{
+                    padding: "0.375rem 1rem",
+                    borderRadius: "0.5rem",
+                    border: "1px solid",
+                    fontSize: "0.875rem",
+                    fontWeight: 500,
+                    cursor: settingsSaving ? "not-allowed" : "pointer",
+                    background: settings.defaultQueueFilter === v ? "var(--accent, #3b82f6)" : "var(--surface)",
+                    color: settings.defaultQueueFilter === v ? "#fff" : "var(--text)",
+                    borderColor: settings.defaultQueueFilter === v ? "var(--accent, #3b82f6)" : "var(--border)",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {v === "PENDING" ? "Next Up" : v === "DUE" ? "Due Today" : v === "OVERDUE" ? "Overdue" : "Upcoming"}
+                </button>
+              ))}
+            </div>
+            <p style={{ margin: "0.375rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)" }}>
+              Which tab agents see first when they open the queue. Applies when URL has no explicit ?filter= param.
+            </p>
+          </div>
+
+          {settingsSaving && (
+            <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>Saving…</p>
+          )}
+        </section>
+      )}
 
       {/* ── Local Presence pool panel ───────────────────────────────────────── */}
       {settings?.localPresenceEnabled && (

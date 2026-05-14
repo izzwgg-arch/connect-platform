@@ -7,7 +7,7 @@ import {
   RefreshCw, CheckCheck, Inbox, CalendarClock, UserCheck, X, Edit2,
   ChevronRight, AlertCircle, Zap, ZapOff, Pause, Play, ArrowRight,
   PhoneMissed, Voicemail, ThumbsUp, ThumbsDown, CheckCircle2,
-  Sparkles,
+  Sparkles, Megaphone,
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
@@ -42,10 +42,15 @@ type QueueCounts = { pending: number; due: number; overdue: number; upcoming: nu
 
 type QueueFilter = "pending" | "due" | "overdue" | "upcoming";
 
+type CampaignOption = { id: string; name: string };
+
+type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: string };
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const PAUSE_STORAGE_KEY = "crm_power_queue_paused";
 const SORT_MODE_KEY = "crm_queue_sort_mode";
+const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
 const WRAP_UP_SECONDS = 5;
 
 type SortMode = "smart" | "original";
@@ -921,14 +926,33 @@ function QueuePageInner() {
   const [acting, setActing] = useState(false);
   const [error, setError] = useState("");
 
-  // Sort mode — persisted so it survives navigation/reload.
-  // Power mode defaults to "smart"; manual mode defaults to "original".
+  // Tenant defaults — loaded once on mount, used only when URL and localStorage have nothing.
+  // Precedence: URL > localStorage > tenant default > hardcoded fallback.
+  const [tenantDefaults, setTenantDefaults] = useState<CrmSettingsDefaults | null>(null);
+
+  // Active campaigns for the dropdown filter
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+
+  // Campaign filter — driven from URL searchParam, synced to localStorage as soft pref.
+  const urlCampaignId = searchParams.get("campaignId") ?? null;
+  const [campaignId, setCampaignId] = useState<string | null>(() => {
+    if (urlCampaignId) return urlCampaignId;
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(CAMPAIGN_FILTER_KEY) ?? null;
+  });
+
+  // Sort mode — precedence: URL > localStorage > tenant default > hardcoded fallback.
+  // Tenant default is applied after settings load if no URL/LS preference.
+  const urlSort = searchParams.get("sort");
   const [sortMode, setSortMode] = useState<SortMode>(() => {
+    if (urlSort === "smart" || urlSort === "original") return urlSort;
     if (typeof window === "undefined") return powerModeActive ? "smart" : "original";
     const stored = localStorage.getItem(SORT_MODE_KEY) as SortMode | null;
     if (stored === "smart" || stored === "original") return stored;
     return powerModeActive ? "smart" : "original";
   });
+  const sortModeSetFromTenantDefault = useRef(false);
+
   const [callbackModalMember, setCallbackModalMember] = useState<QueueMember | null>(null);
 
   // Pause state — persisted to localStorage so it survives navigation/reload
@@ -949,6 +973,47 @@ function QueuePageInner() {
     if (typeof window !== "undefined") localStorage.setItem(SORT_MODE_KEY, sortMode);
   }, [sortMode]);
 
+  // Persist campaign filter
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (campaignId) localStorage.setItem(CAMPAIGN_FILTER_KEY, campaignId);
+    else localStorage.removeItem(CAMPAIGN_FILTER_KEY);
+  }, [campaignId]);
+
+  // Load active campaigns for the dropdown (non-blocking, silent on error)
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+    apiGet<{ campaigns: CampaignOption[] }>("/crm/campaigns?status=ACTIVE", t)
+      .then((r) => setCampaigns(r.campaigns ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Load tenant defaults once — only apply to sort/filter if URL and localStorage were both empty.
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+    apiGet<CrmSettingsDefaults>("/crm/settings", t)
+      .then((s) => {
+        setTenantDefaults(s);
+        // Apply tenant default sort only if nothing was set from URL or localStorage
+        if (!sortModeSetFromTenantDefault.current && !urlSort && !localStorage.getItem(SORT_MODE_KEY)) {
+          const def = s.defaultQueueSort?.toLowerCase();
+          if (def === "smart" || def === "original") {
+            setSortMode(def as SortMode);
+          }
+          sortModeSetFromTenantDefault.current = true;
+        }
+        // Apply tenant default filter only if URL has no explicit filter and we're not in power mode
+        if (!powerModeActive && !searchParams.get("filter") && !filter) {
+          const def = s.defaultQueueFilter?.toLowerCase();
+          if (def === "pending" || def === "due" || def === "overdue" || def === "upcoming") {
+            setFilter(def as QueueFilter);
+          }
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Wrap-up timer state — shown between leads after a successful outcome save
   const [wrapUpActive, setWrapUpActive] = useState(false);
   const [wrapUpCountdown, setWrapUpCountdown] = useState(WRAP_UP_SECONDS);
@@ -962,15 +1027,19 @@ function QueuePageInner() {
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
-  const load = useCallback(async (f?: QueueFilter, s?: SortMode) => {
+  const load = useCallback(async (f?: QueueFilter, s?: SortMode, cid?: string | null) => {
     // In power mode use the URL-derived filter unless an explicit override is passed
     const activeFilter = f ?? (powerModeActive ? powerFilter : filter);
     const activeSort = s ?? sortMode;
+    // cid=undefined means "use current state", cid=null means "clear", cid=string means "use it"
+    const activeCampaignId = cid !== undefined ? cid : campaignId;
     setLoading(true);
     setError("");
     try {
+      const params = new URLSearchParams({ filter: activeFilter, sort: activeSort });
+      if (activeCampaignId) params.set("campaignId", activeCampaignId);
       const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string }>(
-        `/crm/queue?filter=${activeFilter}&sort=${activeSort}`,
+        `/crm/queue?${params.toString()}`,
         token
       );
       setQueue(res.queue);
@@ -982,7 +1051,7 @@ function QueuePageInner() {
     setLoading(false);
   // powerFilter is derived from searchParams (stable ref) — safe to include
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, powerFilter, powerModeActive, sortMode, token]);
+  }, [filter, powerFilter, powerModeActive, sortMode, campaignId, token]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1038,6 +1107,16 @@ function QueuePageInner() {
     const next: SortMode = sortMode === "smart" ? "original" : "smart";
     setSortMode(next);
     load(undefined, next);
+  }
+
+  function switchCampaign(newCampaignId: string | null) {
+    setCampaignId(newCampaignId);
+    // Update URL to reflect campaign selection (preserves other params)
+    const params = new URLSearchParams(searchParams.toString());
+    if (newCampaignId) params.set("campaignId", newCampaignId);
+    else params.delete("campaignId");
+    router.replace(`/crm/queue?${params.toString()}`);
+    load(undefined, undefined, newCampaignId);
   }
 
   function switchPowerFilter(f: QueueFilter) {
@@ -1277,6 +1356,17 @@ function QueuePageInner() {
                   Smart priority on
                 </span>
               )}
+              {/* Campaign filter indicator */}
+              {campaignId && campaigns.length > 0 && (() => {
+                const c = campaigns.find((c) => c.id === campaignId);
+                if (!c) return null;
+                return (
+                  <span className="flex items-center gap-1 text-blue-100 text-xs shrink-0 max-w-[120px] truncate">
+                    <Megaphone className="h-3 w-3 shrink-0" />
+                    {c.name}
+                  </span>
+                );
+              })()}
             </div>
             <div className="flex gap-2 shrink-0">
               {/* Sort toggle */}
@@ -1440,11 +1530,37 @@ function QueuePageInner() {
 
         {/* Tabs — only shown in manual mode; power mode uses pending filter always */}
         {!powerModeActive && (
-          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-5 overflow-x-auto">
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-4 overflow-x-auto">
             <TabButton active={filter === "pending"} label="Next Up" count={counts.pending} onClick={() => switchFilter("pending")} />
             <TabButton active={filter === "due"} label="Due Today" count={counts.due} urgent={counts.overdue > 0} onClick={() => switchFilter("due")} />
             <TabButton active={filter === "overdue"} label="Overdue" count={counts.overdue} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} />
             <TabButton active={filter === "upcoming"} label="Upcoming" count={counts.upcoming} onClick={() => switchFilter("upcoming")} />
+          </div>
+        )}
+
+        {/* Campaign filter dropdown — both modes */}
+        {campaigns.length > 0 && (
+          <div className="flex items-center gap-2 mb-4">
+            <Megaphone className="h-4 w-4 text-gray-400 shrink-0" />
+            <select
+              value={campaignId ?? ""}
+              onChange={(e) => switchCampaign(e.target.value || null)}
+              className="flex-1 max-w-xs border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              disabled={loading}
+            >
+              <option value="">All campaigns</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            {campaignId && (
+              <button
+                onClick={() => switchCampaign(null)}
+                className="text-xs text-gray-500 hover:text-gray-700 underline shrink-0"
+              >
+                Clear
+              </button>
+            )}
           </div>
         )}
 
@@ -1478,10 +1594,18 @@ function QueuePageInner() {
                  "No upcoming callbacks"}
               </p>
               <p className="text-gray-400 text-sm mt-1">
-                {filter === "pending" ? "No active campaigns with leads assigned to you." :
-                 "Great! Check the Next Up tab for new leads."}
+                {campaignId
+                  ? "No leads in this campaign for this view."
+                  : filter === "pending"
+                    ? "No active campaigns with leads assigned to you."
+                    : "Great! Check the Next Up tab for new leads."}
               </p>
-              {filter !== "pending" && (
+              {campaignId && (
+                <button onClick={() => switchCampaign(null)} className="mt-4 text-sm text-blue-600 hover:underline">
+                  Show all campaigns →
+                </button>
+              )}
+              {!campaignId && filter !== "pending" && (
                 <button onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
                   View Next Up →
                 </button>

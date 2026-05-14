@@ -394,8 +394,8 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Settings & Access (Phase 1A)
 | Method | Path | Guard | Notes |
 |--------|------|-------|-------|
-| GET | `/crm/settings` | any CRM user | Returns `CrmTenantSettings` |
-| PUT | `/crm/settings` | admin | Enable/disable CRM for tenant |
+| GET | `/crm/settings` | any CRM user | Returns `CrmTenantSettings` including `defaultQueueSort` and `defaultQueueFilter` (Phase 12C) |
+| PUT | `/crm/settings` | admin | Update CRM settings. Body fields: `enabled`, `localPresenceEnabled`, `transcriptionEnabled`, `defaultQueueSort: SMART\|ORIGINAL`, `defaultQueueFilter: PENDING\|DUE\|OVERDUE\|UPCOMING` |
 | GET | `/crm/users/:userId` | admin | User's CRM access record |
 | PUT | `/crm/users/:userId` | admin | Enable/set role (AGENT/MANAGER/ADMIN) |
 
@@ -492,7 +492,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | POST | `/crm/campaigns/:id/members/add` | Add contacts (by contactId array). Skips duplicates. Only CRM-enrolled contacts. (admin) |
 | GET | `/crm/campaigns/:id/members` | List members with contact details. Filters: `?status=`, `?assignedToMe=true` |
 | PATCH | `/crm/campaigns/:id/members/:memberId` | Update member status/assignment/sortOrder/attemptCount/callbackAt/callbackNote (Phase 3C: adds callbackAt+callbackNote) |
-| GET | `/crm/queue` | My Queue with filter + sort support. `?filter=pending` (default, PENDING/IN_PROGRESS), `?filter=due` (CALLBACK, callbackAt ≤ end of today), `?filter=overdue` (CALLBACK, callbackAt < today), `?filter=upcoming` (CALLBACK, callbackAt ≥ tomorrow). `?sort=smart` — priority-ranked order using composite score: overdue callbacks (0) → due-today (10) → upcoming (20) → leads ranked by tier×10 + campaignPriorityOffset (URGENT=0, HIGH=1, NORMAL=2, LOW=3) where tier 30=fresh, 40=low-attempt, 50=stale. Campaign priority only affects lead tiers, never callback tiers. On `filter=pending`, smart also includes CALLBACK members so overdue/due callbacks surface first. Candidate cap 500, ranked in-process. `?sort=original` (default) — stable sortOrder/createdAt DB order. Each queue member includes `campaign.priority`. Returns `{ queue, total, sort: "smart"\|"original", counts: { pending, due, overdue, upcoming } }`. |
+| GET | `/crm/queue` | My Queue with filter + sort + campaign scope. `?filter=pending\|due\|overdue\|upcoming`. `?sort=smart\|original`. `?campaignId=<id>` — scope queue to one active campaign (must belong to tenant; returns 404 if not found; cross-tenant blocked). `?sort=smart` — composite-score ranking (callbacks first, then lead tiers with campaign priority offset). Candidate cap 500, ranked in-process. Each member includes `campaign.priority`. Tab counts (pending/due/overdue/upcoming) also respect the campaignId filter. Returns `{ queue, total, sort, campaignId, counts }`. |
 | POST | `/crm/queue/next` | Fetch next PENDING item and set it to IN_PROGRESS |
 | PATCH | `/crm/queue/:memberId` | Queue action. `action`: `skip`, `defer`, `dnc`, `outcome` (maps disposition→status, increments attemptCount), `assign-to-me` (sets assignedToUserId=currentUser), `set-callback` (sets status=CALLBACK, callbackAt, callbackNote), `clear-callback` (sets callbackAt=null, callbackNote=null, status=PENDING). Body also accepts `callbackAt?`, `callbackNote?` alongside explicit `status`. |
 | POST | `/crm/campaigns/:id/members/bulk-assign` | Bulk-assign (or clear) members. Body: `{ memberIds: string[], assignedToUserId: string\|null }`. Returns `{ updated: number }`. Admin only. |

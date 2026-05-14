@@ -2991,6 +2991,11 @@ model CrmTenantSettings {
   enabled              Boolean  @default(false)
   localPresenceEnabled Boolean  @default(false)
   transcriptionEnabled Boolean  @default(false)
+  /// Default sort for the agent queue. One of: SMART | ORIGINAL. Applied when the
+  /// agent has no localStorage preference and the URL has no explicit ?sort= param.
+  defaultQueueSort     String   @default("SMART")
+  /// Default filter tab for the agent queue. One of: PENDING | DUE | OVERDUE | UPCOMING.
+  defaultQueueFilter   String   @default("PENDING")
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

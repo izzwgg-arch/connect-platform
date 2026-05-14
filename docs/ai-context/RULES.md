@@ -591,6 +591,16 @@
     - Sort preference is persisted in `localStorage` (`crm_queue_sort_mode`). Power mode defaults
       to `"smart"` on first use; manual mode defaults to `"original"`.
 
+88. **CRM Queue preference precedence: URL > localStorage > tenant default > hardcoded fallback.**
+    - `?sort=` URL param always wins. `?filter=` and `?campaignId=` URL params always win.
+    - localStorage keys `crm_queue_sort_mode` and `crm_queue_campaign_id` are second priority.
+    - Tenant defaults from `GET /crm/settings` (`defaultQueueSort`, `defaultQueueFilter`) apply only when
+      both URL and localStorage have no value for that preference.
+    - Hardcoded fallback: sort=smart for power mode, sort=original for manual mode, filter=pending.
+    - `?campaignId=` must be validated tenant-scoped. A missing or cross-tenant campaign ID returns 404.
+    - Campaign filter in the UI updates both the URL (via `router.replace`) and localStorage so
+      navigation away and back preserves the selection.
+
 87. **CRM Campaign priority must never override overdue or due-today callbacks.**
     - `CrmCampaign.priority` (`LOW | NORMAL | HIGH | URGENT`) is a tie-breaker within lead tiers
       only (tiers 30–53 in the composite score). It shifts leads within fresh/low-attempt/stale

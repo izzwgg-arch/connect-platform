@@ -949,6 +949,68 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 12C — Queue Campaign Filter + Default Queue Behavior Settings
+
+```
+[ ] 1. Migration applies cleanly
+        - Migration 20260514020000_crm_queue_defaults runs without error
+        - defaultQueueSort column added to CrmTenantSettings, DEFAULT 'SMART'
+        - defaultQueueFilter column added to CrmTenantSettings, DEFAULT 'PENDING'
+        - Existing rows unchanged
+
+[ ] 2. GET /crm/settings returns defaultQueueSort and defaultQueueFilter
+        - Returns SMART and PENDING for tenants with no settings row
+        - Returns correct values for tenants with existing rows
+
+[ ] 3. PUT /crm/settings persists defaultQueueSort and defaultQueueFilter
+        - PATCH { defaultQueueSort: "ORIGINAL" } updates to ORIGINAL
+        - PATCH { defaultQueueFilter: "DUE" } updates to DUE
+        - Invalid values rejected with 400
+
+[ ] 4. GET /crm/queue?campaignId=<id> filters to that campaign
+        - Returns only members of that campaign assigned to current user
+        - Campaign filter combines with sort=smart and sort=original
+        - Campaign filter combines with filter=pending/due/overdue/upcoming
+        - Tab counts (pending/due/overdue/upcoming) scoped to campaignId
+        - Returns 404 if campaign not found for tenant (cross-tenant blocked)
+        - Returns 404 if campaignId belongs to another tenant
+
+[ ] 5. Campaign dropdown on queue page
+        - Shows "All campaigns" + active campaign names
+        - Selecting a campaign reloads queue filtered to that campaign
+        - Clear button removes campaign filter
+        - Selected campaign persisted in URL (?campaignId=) and localStorage
+        - Empty state shows "No leads in this campaign for this view"
+        - Empty state has "Show all campaigns →" link
+
+[ ] 6. Tenant defaults applied on first load
+        - When no URL ?sort= and no localStorage preference: tenant defaultQueueSort used
+        - When no URL ?filter= and no localStorage preference: tenant defaultQueueFilter used
+        - URL params override everything (URL > localStorage > tenant default > fallback)
+
+[ ] 7. CRM Settings — Queue Defaults section
+        - "Smart Priority" / "Original Order" buttons for default sort
+        - "Next Up" / "Due Today" / "Overdue" / "Upcoming" buttons for default filter
+        - Clicking saves immediately to real API via PUT /crm/settings
+        - Section visible to admin users only
+        - Saving indicator shown during save
+
+[ ] 8. Campaign filter in power mode
+        - Power mode sticky header shows campaign name when filtered
+        - Megaphone icon + campaign name visible in power bar
+
+[ ] 9. Safety
+        - No telephony changes
+        - No auto-dial
+        - sort=original unaffected
+
+[ ] 10. API typecheck passes (0 errors)
+[ ] 11. Portal typecheck passes (0 errors)
+[ ] 12. prisma validate passes
+```
+
+---
+
 ## Phase 12B — Campaign Priority Weights + "Why this lead?" explanation
 
 ```
