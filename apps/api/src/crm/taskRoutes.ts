@@ -110,7 +110,19 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const todayEnd = new Date(now);
     todayEnd.setHours(23, 59, 59, 999);
 
-    const [myOpen, dueToday, overdue, callsLinkedToday, dispositionsToday, activeCampaigns, queueRemaining] = await Promise.all([
+    const [
+      myOpen,
+      dueToday,
+      overdue,
+      callsLinkedToday,
+      dispositionsToday,
+      activeCampaigns,
+      queueRemaining,
+      myOverdueCallbacks,
+      myCallbacksDueToday,
+      myTasksOverdue,
+      myTasksDueToday,
+    ] = await Promise.all([
       (db as any).crmContactTask.count({
         where: {
           tenantId,
@@ -157,9 +169,55 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
           campaign: { status: "ACTIVE" },
         },
       }),
+      (db as any).crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          status: "CALLBACK",
+          callbackAt: { lt: todayStart },
+          campaign: { status: "ACTIVE" },
+        },
+      }),
+      (db as any).crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          status: "CALLBACK",
+          callbackAt: { gte: todayStart, lte: todayEnd },
+          campaign: { status: "ACTIVE" },
+        },
+      }),
+      (db as any).crmContactTask.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+          dueAt: { lt: todayStart },
+        },
+      }),
+      (db as any).crmContactTask.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+          dueAt: { gte: todayStart, lte: todayEnd },
+        },
+      }),
     ]);
 
-    return { myOpen, dueToday, overdue, callsLinkedToday, dispositionsToday, activeCampaigns, queueRemaining };
+    return {
+      myOpen,
+      dueToday,
+      overdue,
+      callsLinkedToday,
+      dispositionsToday,
+      activeCampaigns,
+      queueRemaining,
+      myOverdueCallbacks,
+      myCallbacksDueToday,
+      myTasksOverdue,
+      myTasksDueToday,
+    };
   });
 
   // ── GET /crm/tasks ───────────────────────────────────────────────────────

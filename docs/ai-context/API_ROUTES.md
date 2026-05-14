@@ -426,7 +426,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Tasks (Phase 1D)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/tasks/stats` | Dashboard counts: `{ myOpen, dueToday, overdue, callsLinkedToday, dispositionsToday }` |
+| GET | `/crm/tasks/stats` | Dashboard counts: `{ myOpen, dueToday, overdue, callsLinkedToday, dispositionsToday, activeCampaigns, queueRemaining, myOverdueCallbacks, myCallbacksDueToday, myTasksOverdue, myTasksDueToday }`. Per-user callback + task buckets mirror `/crm/reports/follow-ups` logic but scoped to the JWT user (`assignedToUserId`). Tenant-wide `dueToday` / `overdue` remain for backwards compatibility. |
 | GET | `/crm/tasks` | Global tasks list with filters |
 | POST | `/crm/contacts/:id/tasks` | Create task + `TASK_CREATED` event |
 | GET | `/crm/contacts/:id/tasks` | Contact tasks (filter: status, limit) |
@@ -514,6 +514,12 @@ All report endpoints require `requireCrmAccess` (not admin-only). Tenant-isolate
 | GET | `/crm/reports/campaigns` | Per-campaign performance. `?status=all\|ACTIVE\|PAUSED\|COMPLETED` (default: all non-archived). Returns array: `{ id, name, status, total, pending, contacted, callbacks, converted, dnc, conversionRate, totalAttempts, lastActivityAt }`. Uses a single `groupBy` query for member counts. Cap 200 campaigns. |
 | GET | `/crm/reports/agents` | Per-agent activity summary. `?days=1\|7\|30` (default 30, max 90). Returns `{ agents: [...], lookbackDays }` where each agent has: `assignedQueue`, `callbacksDueToday`, `dispositionsToday`, `convertedLast` (in lookback window), `openTasks`. Uses `groupBy` — no per-user loops. Only CRM-enabled users included. |
 | GET | `/crm/reports/follow-ups` | Bucketed follow-up health. Returns `{ callbacks: { overdue, dueToday, dueThisWeek }, tasks: { overdue, dueToday } }`. Each bucket has `{ count, rows[] }` with contact name/phone, assignedTo, campaign, due time. Rows capped at 100 per bucket. |
+
+### CRM Admin — pilot readiness (Phase 15A)
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/crm/admin/pilot-readiness` | **Admin only** (`requireCrmAdmin`). Bounded read-only snapshot for the first-day dashboard: `{ crmEnabled, usersWithCrmAccess, activeCampaigns, queuePendingOrInProgress, overdueCallbacks, smsProviderConfigured, smsReadinessApplicable }`. Uses the same queue/callback definitions as `GET /crm/reports/daily`. `smsReadinessApplicable` is true when the tenant has CRM SMS timeline history and/or a resolvable outbound SMS provider (contact-composer path). |
 
 ---
 

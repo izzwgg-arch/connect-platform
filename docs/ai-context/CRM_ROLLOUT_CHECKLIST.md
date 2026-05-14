@@ -107,6 +107,23 @@
 
 ---
 
+## 7A. First-day pilot dashboard (Phase 15A)
+
+| Step | How to verify |
+|------|--------------|
+| CRM dashboard copy | `/crm/dashboard` describes the pilot first-day mindset (readiness + actions), with no roadmap placeholder. |
+| Admin readiness cards | Log in as TENANT_ADMIN/ADMIN. Section **Pilot readiness** shows CRM enabled, CRM user count, active campaigns, tenant queue depth, tenant overdue callbacks. SMS row appears only when tenant has CRM SMS activity **or** outbound SMS is configured. |
+| Admin-only API | `GET /crm/admin/pilot-readiness` → 200 for admins; → 403 `crm_permission_denied` for agents. |
+| Agent readiness cards | Agent sees **My queue depth**, **Team queue**, **My overdue callbacks** (not tenant-wide callback totals). |
+| Agent alert strip | Non-admin strip uses per-user callback + task buckets from `GET /crm/tasks/stats` (not tenant-wide `follow-ups`). |
+| Admin vs agent actions | **Admin — start here** lists only links the role may access (`can()` gates + platform admin for Diagnostics). **Agent — start here** lists queue, contacts, live workspace per permissions. |
+| Empty campaign CTA | With zero ACTIVE campaigns, admins see **Create or import a campaign** linking `/crm/campaigns`. |
+| Empty queue message | Agent with zero `queueRemaining` sees the manager-assign hint. |
+| Overdue CTA | Personal overdue callbacks link `/crm/queue?filter=overdue`; manual queue honors `?filter=` on first paint. |
+| No polling | Hard reload dashboard — no background interval for these panels. |
+
+---
+
 ## 8. Safety Checks
 
 | Check | Result |
@@ -992,6 +1009,108 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 [ ] 10. API typecheck (0 errors)
 [ ] 11. Portal typecheck (0 errors)
 ```
+
+---
+
+## Phase 13B — Pilot readiness, cleanup, and first day
+
+> Run before pointing a **first real pilot tenant** at CRM in production. Combines
+> database hygiene, API smoke, and ops checks. **Do not hard-delete** CRM rows if soft
+> archive or `ARCHIVED` campaign status is enough — hard deletes can violate FKs.
+
+### Pilot tenant go-live checklist
+
+| Step | Pass if |
+|------|--------|
+| `CrmTenantSettings.enabled = true` for the tenant | Admin sees CRM settings; `GET /crm/settings` returns `"enabled": true` |
+| At least one **admin-class** user can use CRM | `CrmUserAccess` row with `enabled=true` for an admin, or user has `SUPER_ADMIN` / `TENANT_ADMIN` / `ADMIN` and CRM gate passes |
+| At least one **agent-class** user can see CRM nav | `CrmUserAccess` with `role` `AGENT` (or equivalent) + user reloads `/me` so `can_view_section_crm` appears |
+| CRM **Settings** page loads | `/crm/settings` renders; queue defaults save (`defaultQueueSort`, `defaultQueueFilter`) |
+| Queue defaults are sane | e.g. `SMART` + `PENDING` unless the pilot asked for different documented behavior |
+| Core CRM pages return **200** (authenticated) | `/crm/campaigns`, `/crm/import`, `/crm/queue`, `/crm/reports` (API: `GET /crm/campaigns`, `GET /crm/import/batches`, `GET /crm/queue`, `GET /crm/reports/daily`) |
+| **Reports** and **Wallboard** load for permitted roles | `/crm/reports`, `/crm/wallboard` — managers need report permission per product rules |
+| Phone | `GET` telephony **/health** from API host shows `status: ok` / healthy PBX link |
+| Deploy queue idle | `GET /ops/deploy/status` → `runningCount: 0`, `queuedCount: 0` (no surprise deploy during cutover) |
+| **Service SHAs aligned (recommended)** | Compare last log lines `[deploy-api] done <sha>` and `[deploy-portal] done <sha>`. If they diverge widely, confirm portal is not missing CRM UI fixes shipped only on API |
+
+### Cleanup checklist (after smoke / QA naming like `SMOKE13A-*`)
+
+| Step | Notes |
+|------|------|
+| **Campaigns** | Prefer `DELETE /crm/campaigns/:id` (sets `ARCHIVED`) or direct DB `status = ARCHIVED` — keeps history. Do not delete campaigns that still have members unless using an API path that cleans members first. |
+| **Campaign members** | Remove smoke members (`CrmCampaignMember`) for test campaigns before or with campaign archive. |
+| **Contacts** | CRM list/search uses **active** contacts only. Prefer `Contact.active = false`, `archivedAt = now()` for smoke phones/emails rather than hard `DELETE`, unless a supported admin merge/delete path exists. |
+| **Verify list** | `GET /crm/campaigns` should not show `ARCHIVED` smoke names in the default **active** list. |
+| **Verify search** | `GET /crm/contacts?q=<smoke tag>` returns **no** active rows after cleanup. |
+| **Duplicates** | `SELECT campaignId, contactId, count(*) … HAVING count(*) > 1` on `CrmCampaignMember` should return **0** rows. |
+
+### First-day monitoring checklist
+
+| Watch | What “good” looks like |
+|-------|-------------------------|
+| errors | API logs: no spike in `5xx` on `/crm/*` |
+| CDR hook | Inbound/outbound CDR still ingests; CRM timeline receives `CDR_*` when numbers match contacts |
+| queue | Agents can open queue and workspace; power mode unchanged from Phase 8 regressions |
+| telephony | AMI connected, `/health` stable — CRM must not correlate with PBX regressions |
+| wallboard | Refreshes ~60s; WS “live” badge sane; no runaway client polling |
+| deploy queue | Jobs finish with log line `done <expected-sha>` — see `AGENTS.md` post-deploy verification |
+
+---
+
+## Phase 13C — CRM agent (`CrmUserAccess` AGENT) validation
+
+> Validates **non–platform-admin** users with `UserRole` such as `USER` or `EXTENSION_USER`
+> and `CrmUserAccess.role = AGENT`. SUPER_ADMIN / TENANT_ADMIN / ADMIN **bypass** the
+> per-user access row for `requireCrmAccess` but still hit `requireCrmAdmin` on management routes.
+
+### Create / enable pilot agent (one-time)
+
+| Step | Action |
+|------|--------|
+| User | Create tenant user with **`EXTENSION_USER`** or **`USER`** (not `SUPER_ADMIN`). |
+| CRM row | `PUT /crm/users/:userId` from a CRM admin JWT: `{ "enabled": true, "role": "AGENT" }`, or insert/upsert `CrmUserAccess` in DB. |
+| Session | User **reloads** the portal (or re-logs in) so `GET /me` picks up expanded CRM permissions. |
+
+### `/me` permission expectations (AGENT)
+
+| Permission | Expected |
+|------------|----------|
+| `can_view_section_crm` | **true** (via `expandLegacyPortalPermissions(["can_view_crm"]`) when CRM enabled + access row) |
+| `can_view_crm_dashboard`, contacts, tasks, live_call, scripts, checklists, campaigns, queue, **reports** | **true** |
+| `can_view_crm_import`, `can_view_crm_settings` | **false** (manage bundle only — sidebar hides Import + CRM Settings) |
+| Wallboard nav | Uses `can_view_crm_reports` → **visible** for agents |
+
+### API boundary (automated checks)
+
+| Call | AGENT expectation |
+|------|-------------------|
+| `GET /crm/settings` | **200** (read defaults for queue; any authenticated tenant user) |
+| `PUT /crm/settings` | **403** `forbidden` / CRM admin required (`routes.ts` `requireAdmin`) |
+| `GET /crm/users` | **403** CRM admin |
+| `POST /crm/campaigns` | **403** CRM admin |
+| `PATCH /crm/campaigns/:id` (priority, etc.) | **403** CRM admin |
+| `POST /crm/campaigns/:id/members/distribute` | **403** CRM admin |
+| `POST /crm/contacts/bulk-reassign` | **403** `crm_permission_denied` |
+| `GET /crm/reports/*`, `GET /crm/queue`, `GET /crm/import/batches` | **200** with CRM access (`requireCrmAccess` only on import list/upload) |
+| `POST /crm/import/upload` | **200** if CSV valid — **API is not admin-gated**; nav hides Import for agents |
+
+### Browser / workflow (manual — requires live data)
+
+Prerequisites: at least one **ACTIVE** campaign with a **PENDING** (or callback) member **assigned to the agent**; SIP registered for power-dial tests; SMS provider configured for send tests.
+
+```
+[ ] CRM section appears in sidebar; Import + CRM Settings links absent
+[ ] /crm/queue, /crm/contacts, /crm/contacts/:id, /crm/live-call load
+[ ] Power mode: Call / outcomes guarded on SIP registration (no fake auto-dial)
+[ ] SMS panel on contact detail; recording player when timeline has recordingAvailable
+[ ] Save note, disposition, callback — timeline refreshes
+[ ] /crm/reports and /crm/wallboard load (same report permission as agent bundle)
+[ ] Telephony /health still ok after session
+```
+
+### Pilot tenant data note (2026-05-14)
+
+After Phase 13B cleanup, a tenant may have **no ACTIVE campaigns**. Admin must create a campaign and members before **My Queue** and distribute tests return non-empty results.
 
 ---
 

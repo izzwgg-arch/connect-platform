@@ -918,10 +918,21 @@ function QueuePageInner() {
       ? (urlPowerFilter as QueueFilter)
       : "pending";
 
+  const urlManualFilter = !powerModeActive ? searchParams.get("filter") : null;
+  const initialManualFilter: QueueFilter =
+    urlManualFilter === "pending" ||
+    urlManualFilter === "due" ||
+    urlManualFilter === "overdue" ||
+    urlManualFilter === "upcoming"
+      ? urlManualFilter
+      : "pending";
+
   const [queue, setQueue] = useState<QueueMember[]>([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<QueueCounts>({ pending: 0, due: 0, overdue: 0, upcoming: 0 });
-  const [filter, setFilter] = useState<QueueFilter>("pending");
+  const [filter, setFilter] = useState<QueueFilter>(() =>
+    powerModeActive ? (urlPowerFilter === "due" || urlPowerFilter === "overdue" ? (urlPowerFilter as QueueFilter) : "pending") : initialManualFilter,
+  );
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState("");

@@ -13,6 +13,7 @@ import { registerCrmReportRoutes } from "./reportRoutes";
 import { registerCrmCallerIdPoolRoutes } from "./callerIdPoolRoutes";
 import { registerCrmSmsRoutes } from "./smsRoutes";
 import { registerCrmDiagnosticsRoutes } from "./diagnosticsRoutes";
+import { registerCrmPilotReadinessRoutes } from "./pilotReadinessRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -280,4 +281,5 @@ export async function registerCrmRoutes(app: FastifyInstance) {
   await registerCrmSmsRoutes(app);
 
   await registerCrmDiagnosticsRoutes(app);
+  await registerCrmPilotReadinessRoutes(app);
 }

@@ -309,6 +309,7 @@
     - It is included in both `can_view_crm` and `can_manage_crm` permission bundles.
     - Report endpoints use `requireCrmAccess` (not admin-only) — all CRM users can view reports.
     - The `/crm/reports?tab=` URL param enables deep-linking from dashboard stat cards.
+    - **Agent grant via `CrmUserAccess`:** `GET /me` expands `["can_view_crm"]` into `portalPermissionSet`, which includes `can_view_section_crm`, `can_view_crm_reports`, and Wallboard — but **not** `can_view_crm_import` or `can_view_crm_settings` (those sit in the `can_manage_crm` bundle). The portal sidebar hides **Import Leads** and **CRM Settings** for agents. At the HTTP layer, `POST /crm/import/upload` still uses `requireCrmAccess` only; tightening import to admin would be a separate RBAC change.
 
 59. **CRM local presence is advisory only. It does NOT touch the PBX or SIP call setup.**
     - `selectCrmCallerId()` returns a DID to display to the agent, but the actual SIP caller ID
@@ -603,6 +604,11 @@
     - Contacts are identified by normalized phone and/or email within the tenant; existing rows are updated (non-destructive fill-in) and must not be re-created.
     - Enrollment uses `CrmCampaignMember` with the same skip-if-already-member rule as `POST /crm/campaigns/:id/members/add`.
     - Standalone `/crm/import/upload` remains the general-purpose import; campaign import is an additive enrollment path only.
+
+91. **CRM pilot readiness endpoint is read-only and admin-bounded (Phase 15A).**
+    - `GET /crm/admin/pilot-readiness` uses `requireCrmAdmin` and returns only aggregate counts
+      plus SMS applicability flags (same queue/callback definitions as `GET /crm/reports/daily`).
+    - No mutations, no unbounded lists, no implied polling contract.
 
 88. **CRM Queue preference precedence: URL > localStorage > tenant default > hardcoded fallback.**
     - `?sort=` URL param always wins. `?filter=` and `?campaignId=` URL params always win.
