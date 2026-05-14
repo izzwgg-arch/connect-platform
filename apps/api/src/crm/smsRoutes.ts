@@ -72,6 +72,11 @@ async function resolveCrmSmsProvider(tenantId: string): Promise<SmsProviderCtx |
   return { provider: smsProvider, fromNumber, providerName };
 }
 
+/** True when CRM outbound SMS can be sent (provider credentials + from number). */
+export async function isCrmOutboundSmsConfigured(tenantId: string): Promise<boolean> {
+  return (await resolveCrmSmsProvider(tenantId)) != null;
+}
+
 // ── Route schema ──────────────────────────────────────────────────────────────
 
 const sendSmsBodySchema = z.object({

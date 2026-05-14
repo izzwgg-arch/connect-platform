@@ -45,6 +45,7 @@ import {
   Settings2,
   Shield,
   SlidersHorizontal,
+  Stethoscope,
   UserCog,
   Users,
   UsersRound,
@@ -98,6 +99,7 @@ export const navItems: NavItem[] = [
   { id: "crm.reports", href: "/crm/reports", label: "Reports", icon: "CR", lucide: BarChart3, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
   { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
   { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
+  { id: "crm.diagnostics", href: "/crm/admin/diagnostics", label: "CRM Diagnostics", icon: "DX", lucide: Stethoscope, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
 
   { id: "settings.tenant", href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", href: "/settings/email", label: "Email Settings", icon: "EM", lucide: Mail, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_email" },
@@ -154,6 +156,13 @@ export function isNavItemVisibleForUser(
   backendJwtRole: string | undefined,
 ): boolean {
   if (!can(item.sectionPermission) || !can(item.permission)) return false;
+  if (item.id === "crm.diagnostics") {
+    const jwtAdmin =
+      backendJwtRole === "ADMIN" ||
+      backendJwtRole === "TENANT_ADMIN" ||
+      backendJwtRole === "SUPER_ADMIN";
+    if (!jwtAdmin) return false;
+  }
   if ((item.id === "admin.billing" || item.id === "admin.billing_settings") && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }
