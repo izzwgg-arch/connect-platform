@@ -11,6 +11,7 @@ import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type CampaignStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "COMPLETED" | "ARCHIVED";
+type CampaignPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 type MemberStatus = "PENDING" | "IN_PROGRESS" | "CONTACTED" | "CALLBACK" | "CONVERTED" | "SKIPPED" | "DO_NOT_CALL";
 
 type Campaign = {
@@ -18,6 +19,7 @@ type Campaign = {
   name: string;
   description: string | null;
   status: CampaignStatus;
+  priority: CampaignPriority;
   scriptId: string | null;
   checklistId: string | null;
   script: { id: string; name: string } | null;
@@ -80,6 +82,17 @@ const STATUS_COLORS: Record<CampaignStatus, string> = {
   PAUSED: "bg-yellow-100 text-yellow-700",
   COMPLETED: "bg-blue-100 text-blue-700",
   ARCHIVED: "bg-gray-100 text-gray-400",
+};
+
+const PRIORITY_LABELS: Record<CampaignPriority, string> = {
+  LOW: "Low", NORMAL: "Normal", HIGH: "High", URGENT: "Urgent",
+};
+
+const PRIORITY_COLORS: Record<CampaignPriority, string> = {
+  LOW: "bg-gray-100 text-gray-500",
+  NORMAL: "bg-gray-100 text-gray-600",
+  HIGH: "bg-orange-100 text-orange-700",
+  URGENT: "bg-red-100 text-red-700",
 };
 
 const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -524,6 +537,11 @@ export default function CampaignDetailPage() {
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[campaign.status]}`}>
                   {STATUS_LABELS[campaign.status]}
                 </span>
+                {(campaign.priority ?? "NORMAL") !== "NORMAL" && (
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${PRIORITY_COLORS[campaign.priority ?? "NORMAL"]}`}>
+                    {PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority
+                  </span>
+                )}
                 {campaign.script && (
                   <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Script: {campaign.script.name}</span>
                 )}
@@ -569,10 +587,10 @@ export default function CampaignDetailPage() {
           </div>
         </div>
 
-        {/* Script / Checklist */}
+        {/* Script / Checklist / Priority */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
-          <h2 className="font-semibold text-gray-900 mb-4">Script &amp; Checklist</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <h2 className="font-semibold text-gray-900 mb-4">Settings</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Call Script</label>
               <select
@@ -595,6 +613,39 @@ export default function CampaignDetailPage() {
                 {checklists.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-2">Smart Queue Priority</label>
+            <div className="flex gap-2 flex-wrap">
+              {(["LOW", "NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => updateCampaign({ priority: p })}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                    (campaign.priority ?? "NORMAL") === p
+                      ? p === "URGENT"
+                        ? "bg-red-600 text-white border-red-600"
+                        : p === "HIGH"
+                          ? "bg-orange-500 text-white border-orange-500"
+                          : p === "LOW"
+                            ? "bg-gray-400 text-white border-gray-400"
+                            : "bg-blue-600 text-white border-blue-600"
+                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {PRIORITY_LABELS[p]}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">
+              {(campaign.priority ?? "NORMAL") === "URGENT"
+                ? "Leads in this campaign surface above all others in Smart Queue (after callbacks)."
+                : (campaign.priority ?? "NORMAL") === "HIGH"
+                  ? "Leads rank above Normal campaigns in Smart Queue."
+                  : (campaign.priority ?? "NORMAL") === "LOW"
+                    ? "Leads rank below Normal campaigns in Smart Queue."
+                    : "Default ranking — same as other Normal campaigns."}
+            </p>
           </div>
         </div>
 

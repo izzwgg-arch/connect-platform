@@ -29,7 +29,7 @@ type QueueMember = {
     lastDisposition: string | null;
     lastDispositionAt: string | null;
   } | null;
-  campaign: { id: string; name: string; scriptId: string | null; checklistId: string | null } | null;
+  campaign: { id: string; name: string; priority: string; scriptId: string | null; checklistId: string | null } | null;
   status: MemberStatus;
   attemptCount: number;
   lastAttemptAt: string | null;
@@ -83,8 +83,19 @@ function priorityReason(member: QueueMember): string | null {
     if (hours <= 24) return "Due today";
     return "Scheduled callback";
   }
-  if (member.attemptCount === 0) return "Fresh lead";
-  if (member.attemptCount <= 3) return "Fewer attempts";
+  const cp = member.campaign?.priority ?? "NORMAL";
+  if (member.attemptCount === 0) {
+    if (cp === "URGENT") return "Urgent campaign · fresh lead";
+    if (cp === "HIGH") return "High priority · fresh lead";
+    return "Fresh lead, no attempts";
+  }
+  if (member.attemptCount <= 3) {
+    if (cp === "URGENT") return "Urgent campaign · fewer attempts";
+    if (cp === "HIGH") return "High priority · fewer attempts";
+    return "Fewer attempts";
+  }
+  if (cp === "URGENT") return "Urgent campaign";
+  if (cp === "HIGH") return "High priority campaign";
   return null;
 }
 
@@ -308,11 +319,19 @@ function PowerCard({
           {sortMode === "smart" && (() => {
             const reason = priorityReason(member);
             if (!reason) return null;
-            const isUrgent = reason === "Overdue callback" || reason === "Due today";
+            const isUrgent = reason === "Overdue callback" || reason === "Due today" || reason.startsWith("Urgent");
+            const isHigh = !isUrgent && reason.startsWith("High priority");
             return (
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 ${
-                isUrgent ? "bg-red-100 text-red-700" : "bg-indigo-50 text-indigo-700"
-              }`}>
+              <span
+                title="Why this lead?"
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 cursor-default ${
+                  isUrgent
+                    ? "bg-red-100 text-red-700"
+                    : isHigh
+                      ? "bg-orange-100 text-orange-700"
+                      : "bg-indigo-50 text-indigo-700"
+                }`}
+              >
                 <Sparkles className="h-3 w-3" />
                 {reason}
               </span>

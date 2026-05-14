@@ -591,6 +591,17 @@
     - Sort preference is persisted in `localStorage` (`crm_queue_sort_mode`). Power mode defaults
       to `"smart"` on first use; manual mode defaults to `"original"`.
 
+87. **CRM Campaign priority must never override overdue or due-today callbacks.**
+    - `CrmCampaign.priority` (`LOW | NORMAL | HIGH | URGENT`) is a tie-breaker within lead tiers
+      only (tiers 30–53 in the composite score). It shifts leads within fresh/low-attempt/stale
+      bands but NEVER beats callback tiers (0=overdue, 10=due-today, 20=upcoming).
+    - An URGENT campaign's fresh lead (score 30) always ranks after any callback tier (max 20).
+    - Existing campaigns default to `NORMAL`. Migration `20260514010000_crm_campaign_priority`
+      applies `NORMAL` to all existing rows with `ALTER TABLE ... DEFAULT 'NORMAL'`.
+    - `sort=original` is completely unaffected — campaign priority has no effect there.
+    - Campaign priority is visible to managers on the campaign create/edit UI and to agents as
+      the "Why this lead?" badge on PowerCard (e.g. "Urgent campaign · fresh lead").
+
 ---
 
 ## Documentation

@@ -484,15 +484,15 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/campaigns` | List campaigns (default: exclude ARCHIVED). Filter: `?status=` |
-| POST | `/crm/campaigns` | Create campaign (admin). Body: `{ name, description?, status?, scriptId?, checklistId? }` |
-| GET | `/crm/campaigns/:id` | Campaign detail + statusCounts per member status |
-| PATCH | `/crm/campaigns/:id` | Update name/description/status/scriptId/checklistId (admin) |
+| GET | `/crm/campaigns` | List campaigns (default: exclude ARCHIVED). Filter: `?status=`. Each campaign includes `priority`. |
+| POST | `/crm/campaigns` | Create campaign (admin). Body: `{ name, description?, status?, priority?: LOW\|NORMAL\|HIGH\|URGENT, scriptId?, checklistId? }`. Defaults `priority=NORMAL`. |
+| GET | `/crm/campaigns/:id` | Campaign detail + statusCounts per member status. Includes `priority`. |
+| PATCH | `/crm/campaigns/:id` | Update name/description/status/priority/scriptId/checklistId (admin) |
 | DELETE | `/crm/campaigns/:id` | Archive campaign (sets status=ARCHIVED, admin) |
 | POST | `/crm/campaigns/:id/members/add` | Add contacts (by contactId array). Skips duplicates. Only CRM-enrolled contacts. (admin) |
 | GET | `/crm/campaigns/:id/members` | List members with contact details. Filters: `?status=`, `?assignedToMe=true` |
 | PATCH | `/crm/campaigns/:id/members/:memberId` | Update member status/assignment/sortOrder/attemptCount/callbackAt/callbackNote (Phase 3C: adds callbackAt+callbackNote) |
-| GET | `/crm/queue` | My Queue with filter + sort support. `?filter=pending` (default, PENDING/IN_PROGRESS), `?filter=due` (CALLBACK, callbackAt ≤ end of today), `?filter=overdue` (CALLBACK, callbackAt < today), `?filter=upcoming` (CALLBACK, callbackAt ≥ tomorrow). `?sort=smart` — priority-ranked order: overdue callbacks → due-today → upcoming → fresh leads → low-attempt → stale. On `filter=pending`, smart also includes CALLBACK members so overdue/due callbacks surface first. Candidate cap 500, ranked in-process. `?sort=original` (default) — stable sortOrder/createdAt DB order. Returns `{ queue, total, sort: "smart"\|"original", counts: { pending, due, overdue, upcoming } }`. |
+| GET | `/crm/queue` | My Queue with filter + sort support. `?filter=pending` (default, PENDING/IN_PROGRESS), `?filter=due` (CALLBACK, callbackAt ≤ end of today), `?filter=overdue` (CALLBACK, callbackAt < today), `?filter=upcoming` (CALLBACK, callbackAt ≥ tomorrow). `?sort=smart` — priority-ranked order using composite score: overdue callbacks (0) → due-today (10) → upcoming (20) → leads ranked by tier×10 + campaignPriorityOffset (URGENT=0, HIGH=1, NORMAL=2, LOW=3) where tier 30=fresh, 40=low-attempt, 50=stale. Campaign priority only affects lead tiers, never callback tiers. On `filter=pending`, smart also includes CALLBACK members so overdue/due callbacks surface first. Candidate cap 500, ranked in-process. `?sort=original` (default) — stable sortOrder/createdAt DB order. Each queue member includes `campaign.priority`. Returns `{ queue, total, sort: "smart"\|"original", counts: { pending, due, overdue, upcoming } }`. |
 | POST | `/crm/queue/next` | Fetch next PENDING item and set it to IN_PROGRESS |
 | PATCH | `/crm/queue/:memberId` | Queue action. `action`: `skip`, `defer`, `dnc`, `outcome` (maps disposition→status, increments attemptCount), `assign-to-me` (sets assignedToUserId=currentUser), `set-callback` (sets status=CALLBACK, callbackAt, callbackNote), `clear-callback` (sets callbackAt=null, callbackNote=null, status=PENDING). Body also accepts `callbackAt?`, `callbackNote?` alongside explicit `status`. |
 | POST | `/crm/campaigns/:id/members/bulk-assign` | Bulk-assign (or clear) members. Body: `{ memberIds: string[], assignedToUserId: string\|null }`. Returns `{ updated: number }`. Admin only. |

@@ -3064,6 +3064,13 @@ enum CrmCampaignStatus {
   ARCHIVED
 }
 
+enum CrmCampaignPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
 enum CrmCampaignMemberStatus {
   PENDING
   IN_PROGRESS
@@ -3301,16 +3308,17 @@ model CrmChecklistResponse {
 /// A named outbound calling campaign. Members are contacts enrolled in the campaign.
 /// Optionally linked to a CrmScript and/or CrmChecklist for agent use.
 model CrmCampaign {
-  id              String              @id @default(cuid())
+  id              String                  @id @default(cuid())
   tenantId        String
   name            String
   description     String?
-  status          CrmCampaignStatus   @default(DRAFT)
+  status          CrmCampaignStatus       @default(DRAFT)
+  priority        CrmCampaignPriority     @default(NORMAL)
   scriptId        String?
   checklistId     String?
   createdByUserId String
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
 
   tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User         @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)

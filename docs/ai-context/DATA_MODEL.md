@@ -570,8 +570,9 @@ Metadata shape: `{ checklistName, checklistId, responseId, itemsTotal, itemsChec
 - **Status lifecycle:** `DRAFT → ACTIVE → PAUSED → COMPLETED | ARCHIVED`
 - **Optional links:** `scriptId? → CrmScript`, `checklistId? → CrmChecklist` (applied to all members).
 - **Creator:** `createdByUserId → User`.
+- **`priority` _(Phase 12B)_:** `CrmCampaignPriority` enum — `LOW | NORMAL | HIGH | URGENT`. Default `NORMAL`. Controls Smart Queue ranking of non-callback leads within this campaign. URGENT campaigns surface above HIGH above NORMAL above LOW within the same attempt tier. Overdue/due callbacks always outrank any lead regardless of campaign priority. Existing campaigns default to `NORMAL`.
 
-Key fields: `name`, `description?`, `status` (`CrmCampaignStatus`), `scriptId?`, `checklistId?`, `createdByUserId`.
+Key fields: `name`, `description?`, `status` (`CrmCampaignStatus`), `priority` (`CrmCampaignPriority`), `scriptId?`, `checklistId?`, `createdByUserId`.
 
 ---
 

@@ -21,12 +21,14 @@ const MEMBER_INCLUDE = {
 // ── Input schemas ─────────────────────────────────────────────────────────────
 
 const CAMPAIGN_STATUSES = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"] as const;
+const CAMPAIGN_PRIORITIES = ["LOW", "NORMAL", "HIGH", "URGENT"] as const;
 const MEMBER_STATUSES = ["PENDING", "IN_PROGRESS", "CONTACTED", "CALLBACK", "CONVERTED", "SKIPPED", "DO_NOT_CALL"] as const;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   status: z.enum(CAMPAIGN_STATUSES).optional(),
+  priority: z.enum(CAMPAIGN_PRIORITIES).optional(),
   scriptId: z.string().optional().nullable(),
   checklistId: z.string().optional().nullable(),
 });
@@ -35,6 +37,7 @@ const patchCampaignSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(CAMPAIGN_STATUSES).optional(),
+  priority: z.enum(CAMPAIGN_PRIORITIES).optional(),
   scriptId: z.string().optional().nullable(),
   checklistId: z.string().optional().nullable(),
 });
@@ -63,6 +66,7 @@ function formatCampaign(c: any, includeCounts = false) {
     name: c.name,
     description: c.description ?? null,
     status: c.status,
+    priority: c.priority ?? "NORMAL",
     scriptId: c.scriptId ?? null,
     checklistId: c.checklistId ?? null,
     createdByUserId: c.createdByUserId,
@@ -182,6 +186,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         name: parsed.data.name,
         description: parsed.data.description ?? null,
         status: parsed.data.status ?? "DRAFT",
+        priority: parsed.data.priority ?? "NORMAL",
         scriptId: parsed.data.scriptId ?? null,
         checklistId: parsed.data.checklistId ?? null,
         createdByUserId: userId,
@@ -243,6 +248,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
         ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
         ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+        ...(parsed.data.priority !== undefined ? { priority: parsed.data.priority } : {}),
         ...(parsed.data.scriptId !== undefined ? { scriptId: parsed.data.scriptId } : {}),
         ...(parsed.data.checklistId !== undefined ? { checklistId: parsed.data.checklistId } : {}),
       },
@@ -656,25 +662,30 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     }
 
     // ── Smart in-process ranking ──────────────────────────────────────────────
-    // Priority tiers (lower = higher priority):
-    //   0  overdue callback  (callbackAt < now)
-    //   1  due today         (callbackAt <= endOfToday)
-    //   2  upcoming callback (callbackAt in next 7 days)
-    //   3  fresh lead        (attemptCount === 0)
-    //   4  low-attempt lead  (attemptCount 1–3)
-    //   5  stale lead        (attemptCount > 3)
-    // Within each tier: callbacks sort by callbackAt ASC (most overdue first);
-    // leads sort by sortOrder ASC then createdAt ASC.
-    function smartTier(m: { status: string; callbackAt: Date | null; attemptCount: number }): number {
+    // Composite score (lower = higher priority):
+    //   Callback tiers (never overridden by campaign priority):
+    //     0  overdue callback  (callbackAt < now)
+    //    10  due today         (callbackAt <= endOfToday)
+    //    20  upcoming callback (callbackAt in next 7 days)
+    //   Lead tiers (campaign priority is a tie-breaker within each):
+    //     Tier 30–33  fresh lead (attemptCount === 0), URGENT→LOW
+    //     Tier 40–43  low-attempt lead (1–3 attempts), URGENT→LOW
+    //     Tier 50–53  stale lead (>3 attempts), URGENT→LOW
+    //   Campaign priority offset: URGENT=0, HIGH=1, NORMAL=2, LOW=3
+    // Guarantees: overdue callbacks always beat any lead, due-today always beat upcoming,
+    // urgent fresh leads beat normal fresh leads, but never beat any callback tier.
+    const PRIORITY_OFFSET: Record<string, number> = { URGENT: 0, HIGH: 1, NORMAL: 2, LOW: 3 };
+
+    function smartTier(m: { status: string; callbackAt: Date | null; attemptCount: number; campaign?: { priority?: string } | null }): number {
       if (m.status === "CALLBACK" && m.callbackAt) {
         if (m.callbackAt < now) return 0;
-        if (m.callbackAt <= endOfToday) return 1;
-        if (m.callbackAt < day7) return 2;
-        return 2;
+        if (m.callbackAt <= endOfToday) return 10;
+        return 20;
       }
-      if (m.attemptCount === 0) return 3;
-      if (m.attemptCount <= 3) return 4;
-      return 5;
+      const pOffset = PRIORITY_OFFSET[m.campaign?.priority ?? "NORMAL"] ?? 2;
+      if (m.attemptCount === 0) return 30 + pOffset;
+      if (m.attemptCount <= 3) return 40 + pOffset;
+      return 50 + pOffset;
     }
 
     const SMART_CANDIDATE_CAP = 500;
@@ -687,7 +698,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         take: SMART_CANDIDATE_CAP,
         include: {
           ...MEMBER_INCLUDE,
-          campaign: { select: { id: true, name: true, scriptId: true, checklistId: true } },
+          campaign: { select: { id: true, name: true, priority: true, scriptId: true, checklistId: true } },
         },
       });
 
@@ -695,8 +706,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         const ta = smartTier(a);
         const tb = smartTier(b);
         if (ta !== tb) return ta - tb;
-        // Within tier: callbacks by callbackAt ASC; leads by sortOrder then createdAt
-        if (ta <= 2 && a.callbackAt && b.callbackAt) {
+        // Within tier: callbacks by callbackAt ASC (most overdue first); leads by sortOrder/createdAt
+        if (ta <= 20 && a.callbackAt && b.callbackAt) {
           return a.callbackAt.getTime() - b.callbackAt.getTime();
         }
         if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
@@ -707,7 +718,13 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       const page = candidates.slice(0, limit);
       const formatted = page.map((m) => ({
         ...formatMember(m),
-        campaign: m.campaign ? { id: m.campaign.id, name: m.campaign.name, scriptId: m.campaign.scriptId, checklistId: m.campaign.checklistId } : null,
+        campaign: m.campaign ? {
+          id: m.campaign.id,
+          name: m.campaign.name,
+          priority: m.campaign.priority ?? "NORMAL",
+          scriptId: m.campaign.scriptId,
+          checklistId: m.campaign.checklistId,
+        } : null,
       }));
 
       const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
@@ -738,7 +755,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         take: limit,
         include: {
           ...MEMBER_INCLUDE,
-          campaign: { select: { id: true, name: true, scriptId: true, checklistId: true } },
+          campaign: { select: { id: true, name: true, priority: true, scriptId: true, checklistId: true } },
         },
       }),
       db.crmCampaignMember.count({ where: whereClause }),
@@ -746,7 +763,13 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const formatted = members.map((m) => ({
       ...formatMember(m),
-      campaign: m.campaign ? { id: m.campaign.id, name: m.campaign.name, scriptId: m.campaign.scriptId, checklistId: m.campaign.checklistId } : null,
+      campaign: m.campaign ? {
+        id: m.campaign.id,
+        name: m.campaign.name,
+        priority: m.campaign.priority ?? "NORMAL",
+        scriptId: m.campaign.scriptId,
+        checklistId: m.campaign.checklistId,
+      } : null,
     }));
 
     // Also return per-tab counts for badge display (cheap grouped count)

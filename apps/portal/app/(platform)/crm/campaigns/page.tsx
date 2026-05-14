@@ -8,12 +8,14 @@ import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type CampaignStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "COMPLETED" | "ARCHIVED";
+type CampaignPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 
 type Campaign = {
   id: string;
   name: string;
   description: string | null;
   status: CampaignStatus;
+  priority: CampaignPriority;
   scriptId: string | null;
   checklistId: string | null;
   createdAt: string;
@@ -41,6 +43,17 @@ const STATUS_COLORS: Record<CampaignStatus, string> = {
   ARCHIVED: "bg-gray-100 text-gray-400",
 };
 
+const PRIORITY_LABELS: Record<CampaignPriority, string> = {
+  LOW: "Low", NORMAL: "Normal", HIGH: "High", URGENT: "Urgent",
+};
+
+const PRIORITY_COLORS: Record<CampaignPriority, string> = {
+  LOW: "bg-gray-100 text-gray-500",
+  NORMAL: "",  // not shown — normal is the baseline
+  HIGH: "bg-orange-100 text-orange-700",
+  URGENT: "bg-red-100 text-red-700",
+};
+
 // ── Components ─────────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: CampaignStatus }) {
@@ -51,11 +64,23 @@ function StatusBadge({ status }: { status: CampaignStatus }) {
   );
 }
 
+// ── Priority Badge ─────────────────────────────────────────────────────────────
+
+function PriorityBadge({ priority }: { priority: CampaignPriority }) {
+  if (priority === "NORMAL") return null;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${PRIORITY_COLORS[priority]}`}>
+      {PRIORITY_LABELS[priority]}
+    </span>
+  );
+}
+
 // ── Create Campaign Modal ──────────────────────────────────────────────────────
 
 function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCreate: (c: Campaign) => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<CampaignPriority>("NORMAL");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -66,7 +91,11 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
     setError("");
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
-      const res = await apiPost<{ campaign: Campaign }>("/crm/campaigns", { name: name.trim(), description: description.trim() || undefined }, token);
+      const res = await apiPost<{ campaign: Campaign }>("/crm/campaigns", {
+        name: name.trim(),
+        description: description.trim() || undefined,
+        priority,
+      }, token);
       onCreate(res.campaign);
     } catch (err: any) {
       setError(err?.message ?? "Failed to create campaign");
@@ -100,6 +129,36 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
               placeholder="What is this campaign about?"
               maxLength={2000}
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Smart Queue Priority</label>
+            <div className="flex gap-2 flex-wrap">
+              {(["NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPriority(p)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                    priority === p
+                      ? p === "URGENT"
+                        ? "bg-red-600 text-white border-red-600"
+                        : p === "HIGH"
+                          ? "bg-orange-500 text-white border-orange-500"
+                          : "bg-blue-600 text-white border-blue-600"
+                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {PRIORITY_LABELS[p]}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {priority === "URGENT"
+                ? "Leads in this campaign surface above all others in Smart Queue."
+                : priority === "HIGH"
+                  ? "Leads in this campaign rank above Normal campaigns in Smart Queue."
+                  : "Default ranking in Smart Queue."}
+            </p>
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2 justify-end pt-2">
@@ -235,6 +294,7 @@ export default function CampaignsPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 min-w-0">
                     <StatusBadge status={campaign.status} />
+                    <PriorityBadge priority={campaign.priority ?? "NORMAL"} />
                     <span className="font-medium text-gray-900 truncate">{campaign.name}</span>
                     {campaign.description && (
                       <span className="text-sm text-gray-400 hidden sm:block truncate max-w-xs">{campaign.description}</span>

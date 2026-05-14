@@ -949,6 +949,71 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 12B — Campaign Priority Weights + "Why this lead?" explanation
+
+```
+[ ] 1. Migration applies cleanly
+        - Migration 20260514010000_crm_campaign_priority runs without error
+        - CrmCampaignPriority enum created: LOW, NORMAL, HIGH, URGENT
+        - CrmCampaign.priority column added with DEFAULT 'NORMAL'
+        - All existing campaigns have priority = NORMAL after migration
+
+[ ] 2. Campaign CRUD supports priority
+        - POST /crm/campaigns with priority=URGENT creates campaign with URGENT
+        - PATCH /crm/campaigns/:id with priority=HIGH updates priority
+        - GET /crm/campaigns returns priority on every campaign
+        - GET /crm/campaigns/:id returns priority
+        - Omitting priority on create defaults to NORMAL
+
+[ ] 3. Smart Queue ranking: campaign priority affects lead tiers only
+        - Composite score: callback tiers 0/10/20 unaffected by campaign priority
+        - URGENT fresh lead (30) ranks above NORMAL fresh lead (32)
+        - NORMAL fresh lead (32) ranks above HIGH low-attempt (41) — same tier group
+        - Overdue callback (0) outranks URGENT fresh lead (30) ← critical safety check
+        - Due-today callback (10) outranks URGENT fresh lead (30)
+        - Within same score: sortOrder ASC, createdAt ASC
+
+[ ] 4. sort=original completely unaffected
+        - sort=original ignores campaign priority entirely
+        - Results identical to pre-12B behaviour
+
+[ ] 5. Queue response includes campaign.priority
+        - GET /crm/queue returns campaign.priority on each member
+        - Both smart and original modes include it
+
+[ ] 6. Portal: campaign list shows priority badge
+        - URGENT campaigns: red badge "Urgent"
+        - HIGH campaigns: orange badge "High"
+        - NORMAL campaigns: no badge (normal is baseline)
+
+[ ] 7. Portal: campaign create modal has priority selector
+        - Normal / High / Urgent options (no Low in create for simplicity)
+        - Selection reflected in POST body
+
+[ ] 8. Portal: campaign detail page has priority selector
+        - LOW / NORMAL / HIGH / URGENT buttons
+        - Clicking updates campaign immediately via PATCH
+        - Header shows priority badge when not NORMAL
+        - Help text explains Smart Queue impact
+
+[ ] 9. Portal: PowerCard "Why this lead?" badge
+        - "Urgent campaign · fresh lead" — red chip for URGENT
+        - "High priority · fresh lead" — orange chip for HIGH
+        - "Urgent campaign · fewer attempts" — red chip
+        - "Fresh lead, no attempts" — indigo chip for NORMAL fresh
+        - "Overdue callback" still red, still outranks campaign labels
+        - Badge only shown when sort=smart
+
+[ ] 10. No auto-dial, no predictive dial, no telephony changes
+        - Priority only reorders. Agent must still explicitly press Call.
+
+[ ] 11. API typecheck passes (0 errors)
+[ ] 12. Portal typecheck passes (0 errors)
+[ ] 13. prisma validate passes
+```
+
+---
+
 ## Phase 11C — SMS Conversation Panel on Contact Detail
 
 ```
