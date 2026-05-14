@@ -5,6 +5,7 @@ import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/secu
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
 import { buildBillingInvoicePreview, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
+import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog } from "./billingPricingResolution";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
@@ -591,6 +592,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         billingAddress: z.any().optional(),
         serviceAddress: z.any().optional(),
         taxProviderId: z.enum(["tax_profile_v1", "external_telecom_stub"]).optional(),
+        billingPricingMode: z.enum(["catalog", "custom"]).nullable().optional(),
       })
       .merge(invoiceBrandingPutSchema)
       .parse(req.body || {});
@@ -610,15 +612,26 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       invoiceFooterNote: _ifn,
       invoicePaymentInstructions: _ipi,
       taxProviderId,
+      billingPricingMode,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
     let mergedMetadata: Record<string, unknown> | undefined;
-    if (taxProviderId !== undefined) {
+    if (taxProviderId !== undefined || billingPricingMode !== undefined) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       const prevMeta =
         cur?.metadata && typeof cur.metadata === "object" && !Array.isArray(cur.metadata) ? { ...(cur.metadata as object) } : {};
-      mergedMetadata = { ...prevMeta, taxProviderId };
+      mergedMetadata = { ...prevMeta };
+      if (taxProviderId !== undefined) {
+        mergedMetadata.taxProviderId = taxProviderId;
+      }
+      if (billingPricingMode !== undefined) {
+        if (billingPricingMode === null) {
+          delete mergedMetadata[BILLING_PRICING_MODE_METADATA_KEY];
+        } else {
+          mergedMetadata[BILLING_PRICING_MODE_METADATA_KEY] = billingPricingMode;
+        }
+      }
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };
     return (db as any).tenantBillingSettings.upsert({
@@ -626,6 +639,36 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       create: { tenantId, ...createUpdate },
       update: createUpdate,
     });
+  });
+
+  /** Copy active BillingPlan prices onto tenant settings and set billingPricingMode=catalog. */
+  app.post("/admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const settings = await ensureTenantBillingSettings(tenantId);
+    const plan = settings.billingPlan;
+    if (!plan) {
+      return reply.code(400).send({
+        error: "billing_plan_required",
+        message: "Tenant has no current BillingPlan (billingPlanId). Assign or consume a scheduled plan change first.",
+      });
+    }
+    const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+    const prevMeta =
+      cur?.metadata && typeof cur.metadata === "object" && !Array.isArray(cur.metadata) ? { ...(cur.metadata as object) } : {};
+    const patch = buildTenantSettingsResetToCatalog(plan, prevMeta);
+
+    await (db as any).tenantBillingSettings.update({
+      where: { tenantId },
+      data: patch,
+    });
+    await logBillingEvent({
+      tenantId,
+      type: "billing.pricing_reset_to_plan",
+      metadata: { billingPlanId: plan.id, planCode: plan.code },
+    }).catch(() => undefined);
+    return ensureTenantBillingSettings(tenantId);
   });
 
   app.put("/admin/billing/platform/tenants/:tenantId/sola-config", async (req, reply) => {

@@ -250,8 +250,14 @@ export default function AdminBillingPage() {
 
 function InvoicePreviewCard({ detail, busy, setBusy, onSaved }: { detail: TenantDetail; busy: string | null; setBusy: (v: string | null) => void; onSaved: () => void }) {
   const preview = detail.preview;
+  const pr = preview?.pricingResolution;
   return (
     <DetailCard title="Invoice Preview">
+      {pr?.banner ? (
+        <div className="billing-status-pill" style={{ marginBottom: 12, fontSize: 12, whiteSpace: "normal", lineHeight: 1.45, textAlign: "left" }}>
+          <strong>Pricing:</strong> {pr.banner}
+        </div>
+      ) : null}
       <div className="billing-preview-total">
         <span>Monthly amount</span>
         <strong>{dollars(preview.totalCents)}</strong>

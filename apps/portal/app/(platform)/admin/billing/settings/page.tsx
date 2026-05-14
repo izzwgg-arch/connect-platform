@@ -14,6 +14,7 @@ import type { TenantDetail } from "../_components/tenantBillingConfigForms";
 import {
   AdminTenantInvoiceBrandingForm,
   AdminTenantMonthlyPricingForm,
+  AdminTenantPricingSourceCard,
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
 import { dollars, formatDate } from "../../../../../lib/billingUi";
@@ -162,6 +163,12 @@ type InvoicePreviewScheduledChange = {
   effectiveAt: string;
 };
 
+type InvoicePreviewPricingResolution = {
+  mode: string;
+  banner: string;
+  activePlanName?: string | null;
+};
+
 type InvoicePreview = {
   tenantId: string;
   periodStart: string;
@@ -172,6 +179,7 @@ type InvoicePreview = {
   taxCents: number;
   totalCents: number;
   scheduledPlanChange?: InvoicePreviewScheduledChange;
+  pricingResolution?: InvoicePreviewPricingResolution;
 };
 
 const MONTHS = [
@@ -410,6 +418,11 @@ function AdminInvoicePreviewCard({ tenantId }: { tenantId: string }) {
 
       {preview ? (
         <div>
+          {preview.pricingResolution?.banner ? (
+            <div style={{ fontSize: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 5, padding: "6px 10px", marginBottom: 8, color: "#334155" }}>
+              <strong>Pricing:</strong> {preview.pricingResolution.banner}
+            </div>
+          ) : null}
           {preview.scheduledPlanChange ? (
             <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 5, padding: "6px 10px", marginBottom: 8, color: "#92400e" }}>
               ⚡ <strong>Scheduled plan change applied:</strong> This preview uses prices from plan &quot;{preview.scheduledPlanChange.planName}&quot;
@@ -587,6 +600,7 @@ function AdminBillingSettingsBody() {
       {detail && !detailLoading ? (
         <>
           <section className="billing-setup-grid">
+            <AdminTenantPricingSourceCard detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
             <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
             <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
           </section>

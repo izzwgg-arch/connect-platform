@@ -4,6 +4,8 @@ import { clearDunningSlice } from "./billingDunning";
 import { queueInvoiceSentOnFinalize } from "./billingEmailLifecycle";
 import type { TaxCalculationAuditSnapshot } from "./taxProvider";
 import { resolveTaxProvider } from "./taxProvider";
+import type { BillingPricingResolution } from "./billingPricingResolution";
+import { parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
 
 export type BillingInvoicePreview = {
   tenantId: string;
@@ -36,6 +38,8 @@ export type BillingInvoicePreview = {
     planName: string;
     effectiveAt: Date;
   };
+  /** Resolved pricing mode + badges for portal / admins (never SOLA payloads). */
+  pricingResolution?: BillingPricingResolution;
 };
 
 export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
@@ -88,19 +92,34 @@ export async function buildBillingInvoicePreview(input: {
   const settings = await ensureTenantBillingSettings(input.tenantId);
   const bounds = input.periodStart && input.periodEnd ? { periodStart: input.periodStart, periodEnd: input.periodEnd } : monthBounds();
   const dueDate = input.dueDate || addDays(new Date(), Number(settings.paymentTermsDays || 15));
-  const usage = await calculateTenantBillingUsage(input.tenantId, settings);
 
-  // If a plan change is scheduled and this period is on/after the effective date,
-  // use the next plan as the price-fallback instead of the current plan.
   const hasScheduledChange =
     settings.nextBillingPlanId &&
     settings.nextBillingPlanEffectiveAt &&
     bounds.periodStart >= settings.nextBillingPlanEffectiveAt;
   const activePlan = hasScheduledChange ? settings.nextBillingPlan : settings.billingPlan;
 
-  const extensionPrice = Number(settings.extensionPriceCents || activePlan?.extensionPriceCents || 3000);
-  const numberPrice = Number(settings.additionalPhoneNumberPriceCents || activePlan?.additionalPhoneNumberPriceCents || 1000);
-  const smsPrice = Number(settings.smsPriceCents || activePlan?.smsPriceCents || 1000);
+  const pricingMode = parseBillingPricingMode(settings.metadata);
+  const pricingResolution = resolveTenantBillingPricing({
+    mode: pricingMode,
+    settings: {
+      extensionPriceCents: Number(settings.extensionPriceCents),
+      additionalPhoneNumberPriceCents: Number(settings.additionalPhoneNumberPriceCents),
+      smsPriceCents: Number(settings.smsPriceCents),
+      firstPhoneNumberFree: settings.firstPhoneNumberFree,
+    },
+    activePlan,
+  });
+
+  const usage = await calculateTenantBillingUsage(input.tenantId, {
+    firstPhoneNumberFree: pricingResolution.firstPhoneNumberFree,
+    smsBillingEnabled: settings.smsBillingEnabled,
+  });
+
+  const extensionPrice = pricingResolution.extensionPriceCents;
+  const numberPrice = pricingResolution.additionalPhoneNumberPriceCents;
+  const smsPrice = pricingResolution.smsPriceCents;
+  const effectiveFirstFree = pricingResolution.firstPhoneNumberFree;
 
   const lineItems: BillingInvoicePreview["lineItems"] = [];
   if (usage.extensionCount > 0) {
@@ -117,12 +136,12 @@ export async function buildBillingInvoicePreview(input: {
   if (usage.additionalPhoneNumberCount > 0) {
     lineItems.push({
       type: "PHONE_NUMBER",
-      description: settings.firstPhoneNumberFree === false ? "Tenant phone numbers" : "Additional phone numbers",
+      description: effectiveFirstFree === false ? "Tenant phone numbers" : "Additional phone numbers",
       quantity: usage.additionalPhoneNumberCount,
       unitPriceCents: numberPrice,
       amountCents: usage.additionalPhoneNumberCount * numberPrice,
       taxable: true,
-      metadata: { phoneNumberIds: usage.phoneNumberIds, firstFree: settings.firstPhoneNumberFree !== false },
+      metadata: { phoneNumberIds: usage.phoneNumberIds, firstFree: effectiveFirstFree },
     });
   }
   if (usage.smsEnabled) {
@@ -147,8 +166,6 @@ export async function buildBillingInvoicePreview(input: {
     });
   }
 
-  // Apply discount to service charges (non-credit items). taxable:true so it
-  // reduces the taxable base naturally in the sum below.
   const discountPercent = Number(settings.discountPercent || 0);
   if (discountPercent > 0) {
     const serviceChargeCents = lineItems
@@ -214,6 +231,7 @@ export async function buildBillingInvoicePreview(input: {
     totalCents,
     taxCalculationAudit: taxResult.audit,
     ...(scheduledPlanChange ? { scheduledPlanChange } : {}),
+    pricingResolution,
   };
 }
 
@@ -277,9 +295,6 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
   const invoice = await (db as any).billingInvoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new Error("BILLING_INVOICE_NOT_FOUND");
   const paid = amountCents ?? invoice.totalCents;
-  // Phase-0 guard: reject partial amounts until PARTIALLY_PAID status exists.
-  // A PAID invoice with balanceDueCents > 0 is an impossible state: dunning skips it,
-  // the portal hides the Pay button, and the PDF stamps "PAID" on an outstanding balance.
   if (paid < invoice.totalCents) {
     const err: any = new Error("PARTIAL_PAYMENT_NOT_SUPPORTED");
     err.code = "PARTIAL_PAYMENT_NOT_SUPPORTED";

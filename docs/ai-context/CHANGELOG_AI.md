@@ -4,6 +4,42 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: explicit pricing mode (`metadata.billingPricingMode`)
+
+**Task:** tenant billing unit pricing resolution (legacy vs catalog vs custom), admin UI + previews  
+**Risk:** medium (invoice **preview** math and admin settings; persisted invoices unchanged until next create with new settings)
+
+### What changed
+
+- **`apps/api/src/billing/billingPricingResolution.ts`:** `parseBillingPricingMode`, `legacyResolveCents`, **`resolveTenantBillingPricing`**, **`buildTenantSettingsResetToCatalog`** (reset payload helper).
+- **`apps/api/src/billing/invoiceEngine.ts`:** uses resolver for previews/creates feeding the engine; attaches **`pricingResolution`** on **`buildBillingInvoicePreview`** responses.
+- **`apps/api/src/billing/routes.ts`:** **`PUT …/settings`** accepts **`billingPricingMode`** (**merge** **`metadata`**); **`POST …/pricing/reset-to-plan`** resets four fields + catalog mode + audit log type **`billing.pricing_reset_to_plan`**.
+- **`apps/api/src/billing/billingPricingResolution.test.ts`**, **`invoiceEngine.test.ts`:** legacy/catalog/custom pricing, scheduled catalog month, reset payload helper; existing test still asserts previews never call **`billingInvoice.create`**.
+
+**Portal:** **`tenantBillingConfigForms.tsx`** (**`AdminTenantPricingSourceCard`** + catalog-locked **`AdminTenantMonthlyPricingForm`**), **`settings/page.tsx`** (card + **`pricingResolution`** preview banner), **`admin/billing/page.tsx`** overview preview banner.
+
+**Docs:** **`BILLING.md`**, **`DATA_MODEL.md`**, **`CHANGELOG_AI.md`**.
+
+### What was NOT changed
+
+- **No Prisma migration** (metadata-only).
+- **`apps/worker`** not modified for this feature (worker uses the shared **`invoiceEngine`** module when redeployed with API).
+- SOLA webhook, charge amounts, **`PARTIALLY_PAID`**, proration.
+
+### Deploy
+
+- **API** + **portal** (same release recommended).
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing
+pnpm --filter @connect/api typecheck
+pnpm --filter @connect/portal typecheck
+```
+
+---
+
 ## 2026-05-14 — billing: platform BillingPlan catalog API (SUPER_ADMIN)
 
 **Task:** billing / billing plan management API  

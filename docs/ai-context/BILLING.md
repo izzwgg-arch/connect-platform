@@ -8,7 +8,8 @@
 |--------|----------|
 | Tenant + platform REST (`registerBillingRoutes`) | `apps/api/src/billing/routes.ts` |
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
-| Invoice preview / create (+ discount line) | `apps/api/src/billing/invoiceEngine.ts` |
+| Invoice preview / create (+ discount line, pricing modes) | `apps/api/src/billing/invoiceEngine.ts` |
+| Tenant pricing mode resolver (legacy / catalog / custom) | `apps/api/src/billing/billingPricingResolution.ts` |
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
 | SOLA adapter selection (per-tenant vs env) | `apps/api/src/billing/solaGateway.ts` |
@@ -49,6 +50,20 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 - **Settings:** **`TenantBillingSettings.metadata.taxProviderId`** (`tax_profile_v1` \| `external_telecom_stub`). Optional env override: **`BILLING_TAX_PROVIDER`** (same values). Admin UI: **Admin Billing** → tenant → Monthly Pricing (notice + provider select).
 - **Audit trail:** Each **`BillingInvoice`** stores **`metadata.taxCalculationAudit`** (JSON) at creation: provider id/version, `computedAt`, tax enabled flag, `taxProfileId`, jurisdiction summary from the profile, taxable inputs, calculated line summaries, optional notes (e.g. missing profile, stub). **Dunning** still uses **`metadata.dunning`**; merges preserve `taxCalculationAudit` (`billingDunning.ts` spreads root metadata).
 - **Invoice lines:** Tax/fee rows are normal **`BillingInvoiceLineItem`** rows; provider stamps **`metadata.taxProviderId`** on profile-driven tax lines for traceability.
+
+## Tenant pricing mode (`TenantBillingSettings.metadata.billingPricingMode`)
+
+- **Legacy (default):** Key absent or `null`. Matches historic behavior: **cent fields** use **`settings ||`** effective **`BillingPlan` for the invoice period **`||`** platform defaults (**`||`** chain — tenant **`0`** still falls through). **`firstPhoneNumberFree`** is taken only from the tenant row (**`!== false`** means first number free).
+- **Catalog (`"catalog"`):** All four unit-pricing inputs (**extension**, **additional phone**, **SMS**, **`firstPhoneNumberFree`**) come from the **effective plan for that period**: current **`billingPlan`**, or **`nextBillingPlan`** when the preview/run period **`periodStart` ≥ `nextBillingPlanEffectiveAt`**. Missing plan in catalog uses hard-coded fallback rates ( **`pricingResolution.missingCatalogPlan`** on preview ).
+- **Custom (`"custom"`):** All four fields use **`TenantBillingSettings`** columns only; linked plan is informational for badges/overlap warnings.
+
+**Preview:** **`buildBillingInvoicePreview`** returns **`pricingResolution`** (**mode**, **`fieldBadges`**, **`banner`**, plan names). It is advisory metadata on preview responses—not automatically copied onto persisted **`BillingInvoice`** rows.
+
+**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant’s **`billingPlan`**, sets mode to **`catalog`**, logs **`billing.pricing_reset_to_plan`** (**`400`** if no plan).
+
+**Portal:** **`/admin/billing/settings`** pricing-source card + catalog read-only monthly unit fields + preview banner; overview **`Invoice Preview`** shows **`pricingResolution.banner`**.
+
+Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 
 ## Customer billing portal — page inventory
 

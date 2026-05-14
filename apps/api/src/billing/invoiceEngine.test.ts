@@ -149,6 +149,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const preview1 = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.ok(preview1.taxCalculationAudit);
   assert.equal(preview1.taxCalculationAudit.providerId, TAX_PROFILE_PROVIDER_ID);
+  assert.equal(preview1.pricingResolution?.mode, "legacy");
   assert.equal(preview1.taxCalculationAudit.taxProfileId, "tp1");
   assert.ok(preview1.lineItems.some((li) => li.type === "SALES_TAX"));
   for (const li of preview1.lineItems) {
@@ -327,6 +328,94 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(extAfterEff.unitPriceCents, 9900, "after effective date: still uses next plan price 9900");
   assert.ok(previewAfterEff.scheduledPlanChange, "scheduledPlanChange must still be present after effective date");
 
+  // ── Explicit pricing mode (metadata.billingPricingMode) — same invoiceEngine import ──
+  state.settings.taxEnabled = false;
+  state.settings.taxProfile = null;
+  state.settings.taxProfileId = null;
+  state.settings.nextBillingPlanId = null;
+  state.settings.nextBillingPlanEffectiveAt = null;
+  state.settings.nextBillingPlan = null;
+
+  const higherPlanForLegacy = {
+    id: "bp-high",
+    name: "Higher",
+    extensionPriceCents: 9999,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+  };
+  state.settings.metadata = {};
+  state.settings.extensionPriceCents = 3000;
+  state.settings.billingPlan = higherPlanForLegacy;
+  const pmLegacy = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  assert.equal(pmLegacy.pricingResolution?.mode, "legacy");
+  assert.equal(pmLegacy.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 3000);
+
+  state.settings.metadata = { billingPricingMode: "catalog" };
+  state.settings.extensionPriceCents = 3000;
+  state.settings.billingPlan = {
+    id: "bp-cat",
+    name: "Cat",
+    extensionPriceCents: 7777,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+  };
+  const pmCat = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  assert.equal(pmCat.pricingResolution?.mode, "catalog");
+  assert.equal(pmCat.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 7777);
+
+  state.settings.metadata = { billingPricingMode: "custom" };
+  state.settings.extensionPriceCents = 4242;
+  state.settings.additionalPhoneNumberPriceCents = 100;
+  state.settings.smsPriceCents = 50;
+  state.settings.firstPhoneNumberFree = false;
+  state.settings.billingPlan = {
+    id: "bp-cat2",
+    name: "Cat",
+    extensionPriceCents: 7777,
+    additionalPhoneNumberPriceCents: 2000,
+    smsPriceCents: 999,
+    firstPhoneNumberFree: true,
+  };
+  const pmCustom = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  assert.equal(pmCustom.pricingResolution?.mode, "custom");
+  assert.equal(pmCustom.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 4242);
+
+  const effectiveAt2028Jan = new Date(Date.UTC(2028, 0, 1, 0, 0, 0, 0));
+  const currentPlan28 = {
+    id: "p-curr",
+    name: "Curr",
+    extensionPriceCents: 3000,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+  };
+  const nextPlan28 = {
+    id: "p-next",
+    name: "Next",
+    extensionPriceCents: 6600,
+    additionalPhoneNumberPriceCents: 1000,
+    smsPriceCents: 1000,
+    firstPhoneNumberFree: true,
+  };
+  state.settings.metadata = { billingPricingMode: "catalog" };
+  state.settings.extensionPriceCents = 3000;
+  state.settings.additionalPhoneNumberPriceCents = 1000;
+  state.settings.smsPriceCents = 1000;
+  state.settings.firstPhoneNumberFree = true;
+  state.settings.billingPlan = currentPlan28;
+  state.settings.nextBillingPlanId = nextPlan28.id;
+  state.settings.nextBillingPlanEffectiveAt = effectiveAt2028Jan;
+  state.settings.nextBillingPlan = nextPlan28;
+  const pmCatScheduled = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date(Date.UTC(2028, 0, 1, 0, 0, 0, 0)),
+    periodEnd: new Date(Date.UTC(2028, 1, 0, 23, 59, 59, 999)),
+  });
+  assert.equal(pmCatScheduled.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 6600);
+  assert.ok(pmCatScheduled.scheduledPlanChange);
+
   // Reset state
   state.settings.extensionPriceCents = 3000;
   state.settings.billingPlan = null;
@@ -378,6 +467,3 @@ test("invoiceEngine: buildBillingInvoicePreview does not write to DB (no billing
   await buildBillingInvoicePreview({ tenantId: "t-preview" });
   assert.equal(createCount, 0, "buildBillingInvoicePreview must not call billingInvoice.create");
 });
-
-// Note: Phase 1 scheduled plan change preview tests live inside the main "invoiceEngine preview + create"
-// test block above (state-mutation approach) to avoid Node.js ESM module caching issues.
