@@ -64,6 +64,8 @@ Current approach ( **`scripts/deploy-api.sh`** + **`scripts/lib/deploy-api-rollo
 
 Failures: candidate never ready → nginx unchanged → stable untouched. Reload failure → upstream restored from **`.pre-<job>`** backup when applicable. Detailed recovery: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 
+**Readiness probe contract:** **`GET /ready`** (loopback blue/green) and **`GET /api/ready`** (same handler when nginx forwards the `/api` path prefix) are **unauthenticated** on purpose: they bypass the global JWT **`preHandler`** via **`shouldSkipJwtVerification`** in **`apps/api/src/jwtPublicRouteBypass.ts`**. Responses are only **`200`** (listening, accepting traffic, DB `SELECT 1` ok) or **`503`** (boot/drain/DB down). They must not expose secrets, env, tenants, or user payloads — stable JSON flags only. **`deploy-api-rollout.sh`** probes **`http://127.0.0.1:<port>/ready`** with **no `Authorization` header**; do not require JWT on these paths unless the deploy scripts are updated in the same change.
+
 Operators must install the nginx snippet on the application host (**human ops** — see **`docs/nginx/README.md`** and **`AGENTS.md`** forbidding blind `/etc/nginx` edits without process). **`DEPLOY_API_BLUEGREEN=0`** forces legacy single-step **`compose_up`**.
 
 Timing logs in deploy output: **`candidate_start`**, **`candidate_readiness`**, **`cutover_to_candidate`**, **`nginx_reload`**, **`stable_recreate`**, **`stable_readiness`**, **`cutover_to_stable`**, **`candidate_drain_remove`** (via **`deploy_common_log_timing`** where implemented).

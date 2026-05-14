@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import formbody from "@fastify/formbody";
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import jwt from "@fastify/jwt";
@@ -27,6 +27,7 @@ import {
   shutdownRegisteredTimerCount,
 } from "./processLifecycle";
 import { installApiRequestProfiler } from "./apiRequestProfiler";
+import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import {
   acknowledgeVoicemailIngestIncident,
@@ -3647,7 +3648,8 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
 app.get("/health", async () => ({ ok: true }));
 
-app.get("/ready", async (_req, reply) => {
+/** K8s / blue-green / nginx probes: no secrets; 200=ready, 503=not ready (db or drain). */
+const handleReadyProbe = async (_req: FastifyRequest, reply: FastifyReply) => {
   if (!serverListeningCompleted || !isReadyToServeTraffic()) {
     const reason = !serverListeningCompleted ? "not_listening" : "draining";
     return reply.code(503).send({ ok: false, ready: false, reason });
@@ -3658,7 +3660,9 @@ app.get("/ready", async (_req, reply) => {
   } catch {
     return reply.code(503).send({ ok: false, ready: false, reason: "db" });
   }
-});
+};
+app.get("/ready", handleReadyProbe);
+app.get("/api/ready", handleReadyProbe);
 
 // ── Android APK distribution ──────────────────────────────────────────────
 // Serves the published Android APK to invited users. Files live in a
@@ -4551,94 +4555,7 @@ app.post("/admin/dev/generate-observe-token", async (req, reply) => {
 
 app.addHook("preHandler", async (req, reply) => {
   const path = req.url.split("?")[0];
-  // Reverse proxies often mount the API under a prefix (e.g. /api/...); req.url keeps that prefix.
-  const isDevObserveTokenPath =
-    path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
-  const isInternalCdrIngestPath =
-    path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
-  const isInternalMobileRingPath =
-    path === "/internal/mobile-ring-notify" || path.endsWith("/internal/mobile-ring-notify");
-  // Push-wake (Option 2) — called by the PBX dialplan. Authenticated by
-  // CDR_INGEST_SECRET inside the handler.
-  const isInternalPbxWakePath =
-    path === "/internal/pbx/wake-extension"
-    || path.endsWith("/internal/pbx/wake-extension")
-    // Admin/internal one-shot publisher for the wake AstDB keys. Same shared
-    // secret auth model as wake-extension itself.
-    || path === "/internal/pbx/publish-wake-config"
-    || path.endsWith("/internal/pbx/publish-wake-config");
-  const isInternalTelephonyPath =
-    path === "/internal/telephony/pbx-tenant-map"
-    || path.endsWith("/internal/telephony/pbx-tenant-map")
-    || path === "/internal/telephony/user-extensions"
-    || path.endsWith("/internal/telephony/user-extensions");
-  // AMI MessageWaiting → telephony POSTs here to trigger immediate voicemail sync.
-  // Authenticated by the shared CDR_INGEST_SECRET header, not by user JWT.
-  const isInternalVoicemailNotifyPath =
-    path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
-  // PBX-host → Connect audio push pipeline. These endpoints authenticate
-  // with the PROMPT_SYNC_SHARED_SECRET / MOH_SYNC_SHARED_SECRET header
-  // inside their own handlers — they must NOT require a JWT because the
-  // PBX helper is a cron job, not a logged-in user.
-  const isIvrPromptSyncPath =
-    path === "/voice/ivr/prompts/sync-manifest"
-    || path.endsWith("/voice/ivr/prompts/sync-manifest")
-    || path === "/voice/ivr/prompts/upload"
-    || path.endsWith("/voice/ivr/prompts/upload")
-    // /voice/ivr/prompts/download/<storageKey> — HMAC-signed query string
-    // auth (verifySignedDownload), no JWT, no shared secret. Only the PBX
-    // cron helper has a fresh signed URL via the sync-manifest response.
-    || path.startsWith("/voice/ivr/prompts/download/")
-    || path.includes("/voice/ivr/prompts/download/");
-  const isMohSyncPath =
-    path === "/voice/moh/sync-manifest"
-    || path.endsWith("/voice/moh/sync-manifest")
-    || path === "/voice/moh/upload"
-    || path.endsWith("/voice/moh/upload");
-  if (
-    path.includes("/webhooks/pbx")
-    || path.startsWith("/billing/invoices/pay/")
-    || isDevObserveTokenPath
-    || isInternalCdrIngestPath
-    || isInternalMobileRingPath
-    || isInternalPbxWakePath
-    || isInternalTelephonyPath
-    || isInternalVoicemailNotifyPath
-    || isIvrPromptSyncPath
-    || isMohSyncPath
-    || [
-        "/health",
-        // Blue/green deploy + load balancers probe :3001/:3004 without JWT; must not 401.
-        "/ready",
-        "/auth/signup",
-        "/auth/login",
-        "/auth/mobile-qr-exchange",
-        "/auth/invite/validate",
-        "/auth/invite/accept",
-        "/auth/password/forgot",
-        "/auth/password/reset",
-        "/auth/password/reset/validate",
-        "/webhooks/twilio/sms-status",
-        "/webhooks/sola-cardknox",
-        "/webhooks/whatsapp/meta",
-        "/webhooks/whatsapp/twilio/status",
-        "/webhooks/voipms/sms"
-      ].includes(path) || path.endsWith("/webhooks/voipms/sms")
-    || path === "/metrics"
-    || path.endsWith("/metrics")
-    || path.includes("/chat/attachments/download")
-    || path.includes("/chat/a/")
-    // Public Android APK distribution + lightweight manifest used by the
-    // invitation email button and future in-app update checks. Filenames are
-    // tightly allow-listed inside the handler so this is not a directory
-    // browser.
-    || path.startsWith("/downloads/")
-    || /\/downloads\/[^/]+$/.test(path)
-    || path === "/mobile/android/download"
-    || path.endsWith("/mobile/android/download")
-    || path === "/mobile/android/latest"
-    || path.endsWith("/mobile/android/latest")
-  ) return;
+  if (shouldSkipJwtVerification(path)) return;
   // Allow a JWT passed via `?token=` query param (used by <audio> / download <a>
   // tags where you can't set an Authorization header). Copy it to the header
   // BEFORE jwtVerify so the standard auth flow still runs.
