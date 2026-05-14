@@ -11,7 +11,7 @@
 | Service | Path | What it returns |
 |---|---|---|
 | `apps/api` | `GET /health` | **Liveness** — process up; **`{ ok: true }`** when the HTTP server responds. |
-| `apps/api` | `GET /ready` | **Readiness** — **`200`** when accepting real traffic (listening + DB + not draining); **`503`** with reason while booting or after SIGTERM drain. Deploy script gates cutover on this. On the host: **`curl http://127.0.0.1:3001/ready`** (stable) or **`...:3004/...`** (candidate). Through the browser edge, use the same path nginx maps to **`/ready`** on the upstream (often under **`/api/...`** — confirm **`location`** and alias/strip prefixes). |
+| `apps/api` | `GET /ready` | **Readiness** — **`200`** when accepting real traffic (listening + DB + not draining); **`503`** with reason while booting or after SIGTERM drain. Deploy script gates cutover on this **with no JWT** (same global JWT bypass as **`/health`** in `apps/api/src/server.ts`). **`401` on `/ready` blocks blue/green** — the probe never sees a healthy candidate. On the host: **`curl http://127.0.0.1:3001/ready`** (stable) or **`...:3004/...`** (candidate). Through the browser edge, use the same path nginx maps to **`/ready`** on the upstream (often under **`/api/...`** — confirm **`location`** and alias/strip prefixes). |
 | `apps/api` | `GET /metrics` | Prometheus (admin auth required, see `server.ts`). |
 | `apps/api` | `GET /admin/sbc/status` | Live SBC probe (super-admin). |
 | `apps/api` | `GET /voice/sbc/status` | Tenant-admin SBC view incl. active upstream + masked targets. |
@@ -894,7 +894,7 @@ If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
 reviewed, committed/ported, or explicitly restored.
 
-**API health timeout (`DEPLOY_API_BLUEGREEN=1` default):** The **`api`** compose service no longer runs **`prisma migrate deploy`** at container boot; **`prisma migrate deploy`** runs in **`scripts/deploy-api.sh`** before **`api_candidate`** starts when schema changed. Stable boot is **`pnpm --filter @connect/api start`**. **`[timing] restart=`** captures the full blue/green sequence (candidate start → nginx cutovers → stable recreate → drain). If **`[deploy-api] FAIL`** references **`candidate /ready`** or **`stable /ready`**, read **`deploy-api-rollout`** log lines plus **`docker logs app-api-candidate-1`** or **`app-api-1`**. Rollout/recovery procedures: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
+**API health timeout (`DEPLOY_API_BLUEGREEN=1` default):** The **`api`** compose service no longer runs **`prisma migrate deploy`** at container boot; **`prisma migrate deploy`** runs in **`scripts/deploy-api.sh`** before **`api_candidate`** starts when schema changed. Stable boot is **`pnpm --filter @connect/api start`**. **`[timing] restart=`** captures the full blue/green sequence (candidate start → nginx cutovers → stable recreate → drain). If **`[deploy-api] FAIL`** references **`candidate /ready`** or **`stable /ready`**, read **`deploy-api-rollout`** log lines plus **`docker logs app-api-candidate-1`** or **`app-api-1`**. If logs show **`GET /ready`** → **`401`**, the rollout cannot succeed until **`/ready`** is exempt from JWT (same allowlist as **`/health`**). Rollout/recovery procedures: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 
 Legacy **`DEPLOY_API_BLUEGREEN=0`:** queue still polls loopback **`http://127.0.0.1:3001/health`** after **`deploy_common_compose_up`**.
 

@@ -4608,6 +4608,8 @@ app.addHook("preHandler", async (req, reply) => {
     || isMohSyncPath
     || [
         "/health",
+        // Blue/green deploy + load balancers probe :3001/:3004 without JWT; must not 401.
+        "/ready",
         "/auth/signup",
         "/auth/login",
         "/auth/mobile-qr-exchange",

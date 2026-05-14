@@ -8,6 +8,16 @@
 
 ## Normal failure behavior (automated)
 
+### Readiness probe contract (JWT)
+
+`scripts/deploy-api.sh` (blue/green, default) polls **`GET /ready`** on **`127.0.0.1:3004`** (candidate) and **`127.0.0.1:3001`** (stable) **without an `Authorization` header**.
+
+The Fastify app exempts **`/health`** from the global JWT **`preHandler`**; **`/ready` must be exempt too**. If **`/ready` returns `401`**, the candidate never becomes healthy and promotion **cannot** succeed — fix the API allowlist (see `apps/api/src/server.ts` JWT bypass paths next to **`"/health"`**), then re-enqueue.
+
+**`GET /health`** stays the lightweight liveness check (**`200`** quickly); **`GET /ready`** remains readiness (**`200`** when listening + DB + not draining; **`503`** while booting or draining).
+
+---
+
 - **Candidate `/ready` never succeeds:** candidate is stopped/removed; nginx upstream unchanged.
 - **`nginx -t` or reload fails after pointing at candidate:** script restores the previous upstream port from the backup `.pre-<job-tag>` sibling and reloads; candidate stopped.
 - **Public verify URL fails after cutover:** same nginx rollback + candidate stopped.
