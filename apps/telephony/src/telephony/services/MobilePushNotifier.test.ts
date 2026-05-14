@@ -368,6 +368,112 @@ test("outbound external dial from T18_105 → PSTN: zero pushes (self-ring suppr
   }
 });
 
+test("outbound PSTN dial with company CID (no short from): dual AOR still suppresses peer-inferred origin", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = new MobilePushNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "test-out.desk-cid.1",
+        direction: "outbound",
+        state: "up",
+        from: "+19725555432",
+        source_extension: null,
+        to: "12128675309",
+        extensions: ["T2_103", "T2_103_1"],
+        channels: [
+          "PJSIP/T2_103-00001abc",
+          "PJSIP/T2_103_1-00001def",
+        ],
+        tenantId: "vpbx:a_plus_center",
+        metadata: { pbxVitalTenantId: "2" },
+      }),
+    );
+    await flush();
+    assertNoFetch(calls, "company CID outbound + dual AOR self-ring suppressed");
+  } finally {
+    restore();
+  }
+});
+
+test('inbound mislabeled ("inbound"+ext CID+PSTN) desk-outbound phantom: zero pushes', async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = new MobilePushNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "test-mislabeled-inbound.1",
+        direction: "inbound",
+        state: "up",
+        from: "103",
+        source_extension: "103",
+        to: "12124441199",
+        extensions: ["T2_103", "T2_103_1"],
+        channels: ["PJSIP/T2_103-00002abc", "PJSIP/T2_103_1-00002def"],
+        tenantId: "vpbx:a_plus_center",
+        metadata: { pbxVitalTenantId: "2" },
+      }),
+    );
+    await flush();
+    assertNoFetch(calls, "mislabeled inbound self-ring suppressed");
+  } finally {
+    restore();
+  }
+});
+
+test("real inbound PSTN CID + DID to still pushes mobile once", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = new MobilePushNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "test-real-in-pstn-cid.1",
+        direction: "inbound",
+        state: "up",
+        from: "9725558877",
+        source_extension: null,
+        to: "18455449666",
+        extensions: ["T2_103", "T2_103_1"],
+        channels: ["PJSIP/399111_acme-trunk-xyz", "PJSIP/T2_103-00003abc"],
+        tenantId: "vpbx:a_plus_center",
+        metadata: { pbxVitalTenantId: "2" },
+      }),
+    );
+    await flush();
+    assertSinglePush(calls, { toExtension: "103", from: "9725558877" });
+  } finally {
+    restore();
+  }
+});
+
+test("two-extension ring hints (103+104) do not suppress even if direction mislabeled inbound", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = new MobilePushNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "test-mislabeled-ringgroup.1",
+        direction: "inbound",
+        state: "up",
+        from: "103",
+        source_extension: "103",
+        to: "13105551234",
+        extensions: ["T2_103", "T2_104"],
+        channels: ["PJSIP/T2_103-00004abc", "PJSIP/T2_104-00004def"],
+        tenantId: "vpbx:a_plus_center",
+        metadata: { pbxVitalTenantId: "2" },
+      }),
+    );
+    await flush();
+    assert.equal(calls.length, 2, "expect two notifies for two distinct extensions");
+    const xs = [...calls].sort((a, b) => (a.body.toExtension ?? "").localeCompare(b.body.toExtension ?? ""));
+    assert.equal(xs[0]?.body.toExtension, "103");
+    assert.equal(xs[1]?.body.toExtension, "104");
+  } finally {
+    restore();
+  }
+});
+
 // ─── Internal extension-to-extension calls ────────────────────────────────
 //
 // On internal calls the receiver must be pushed (so a backgrounded mobile

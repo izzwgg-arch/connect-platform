@@ -66,6 +66,11 @@ export function normalizeExtensionFromChannel(input: string | null | undefined):
   const tenantPrefixed = /^[A-Za-z]\d+_(\d{2,6})$/.exec(token);
   if (tenantPrefixed) return tenantPrefixed[1] ?? null;
 
+  // 5b. VitalPBX mobile / secondary-contact AOR suffix: `T11_105_1` → `105`
+  // Must run after single-suffix `_105` peeling (5) because `_105` would not match `..._105_1`.
+  const tenantMobileDup = /^[A-Za-z]\d+_(\d{2,6})_\d+$/.exec(token);
+  if (tenantMobileDup) return tenantMobileDup[1] ?? null;
+
   // 6. Already a bare extension? Accept 2-6 digits.
   if (VALID_EXT.test(token)) return token;
 

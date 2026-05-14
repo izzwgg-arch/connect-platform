@@ -1,5 +1,6 @@
 import { childLogger } from "../../logging/logger";
 import { env } from "../../config/env";
+import { normalizeExtensionFromChannel } from "../normalizers/normalizeExtension";
 import type { NormalizedCall } from "../types";
 
 const log = childLogger("MobilePushNotifier");
@@ -22,6 +23,9 @@ function extractShortExtension(raw: string): string | null {
   // VitalPBX multi-tenant: "T{code}_{ext}" e.g. "T8_103" → "103"
   const m = /^T\d+_(\d{2,6})$/i.exec(raw);
   if (m?.[1]) return m[1];
+  // Mobile / sibling contact suffix: "T8_103_1" → "103"
+  const mm = /^T\d+_(\d{2,6})_\d+/i.exec(raw);
+  if (mm?.[1]) return mm[1];
   return null;
 }
 
@@ -33,6 +37,49 @@ function digitsOnly(raw: string | null | undefined): string {
 function isExternalDialTarget(raw: string | null | undefined): boolean {
   const digits = digitsOnly(raw);
   return digits.length >= 10 && digits.length <= 15;
+}
+
+/** Subscriber short extensions inferred from SIP legs + aggregated extension hints. */
+function uniqShortSubscriberPeers(call: NormalizedCall): Set<string> {
+  const out = new Set<string>();
+  for (const ch of call.channels ?? []) {
+    const ex = normalizeExtensionFromChannel(ch);
+    if (ex) out.add(ex);
+  }
+  for (const raw of call.extensions ?? []) {
+    const wrapped = /^PJSIP\//i.test(raw) ? raw : `PJSIP/${raw}`;
+    const ex = normalizeExtensionFromChannel(wrapped);
+    if (ex) out.add(ex);
+  }
+  return out;
+}
+
+/**
+ * VitalPBX can surface carrier/provider legs (`trk-*-in`) that flip live direction to
+ * "inbound" even when the user placed an outbound external call from their desk /
+ * SIP phone. CID is often a company DID (10+ digits), so `selfOriginatingExt` never
+ * fires. Detect the mislabel when all subscriber legs collapse to ONE extension whose
+ * short id matches Caller-ID that is clearly NOT PSTN-shaped.
+ *
+ * IMPORTANT: Genuine PSTN→DID inbound has external Caller-ID; we bail out when
+ * {@link isExternalDialTarget} is true for `call.from` so IVR / DID routes still push.
+ */
+function shouldSuppressInboundMislabeledOutboundSelfRing(call: NormalizedCall): boolean {
+  if (call.direction !== "inbound") return false;
+  if (!isExternalDialTarget(call.to)) return false;
+  if (isExternalDialTarget(call.from)) return false;
+
+  const origin =
+    extractShortExtension(call.source_extension ?? "") ??
+    extractShortExtension(call.from ?? "");
+  if (!origin) return false;
+
+  const peers = uniqShortSubscriberPeers(call);
+  if (peers.size !== 1) return false;
+  const solo = [...peers][0];
+  if (solo !== origin) return false;
+
+  return true;
 }
 
 /** True when PBX channels / dialplan context indicate the caller reached voicemail. */
@@ -193,6 +240,11 @@ export class MobilePushNotifier {
     // appear in `extensions`. We must NOT push that extension's mobile, otherwise
     // the originator's own phone re-rings as if it were an incoming call.
     //
+    // HARD PHONE caveat: Asterisk Caller-IDNum is frequently the company's external DID,
+    // not the bare PBX extension, so `(source_extension || from)` fails to decode a short ext.
+    // When all observed SIP endpoints collapse to ONE subscriber (`uniqShortSubscriberPeers`
+    // size 1), treat that digit as `selfOriginatingExt` alongside the explicit CID path.
+    //
     // CRITICAL: this MUST NOT apply to inbound calls. On VitalPBX-native inbound
     // (DID → IVR-X → T<id>_cos-all → ext) the dialed channel reports
     // `callerIDNum = <dest-ext>` (e.g. "103"), which Asterisk normalizes into
@@ -201,10 +253,41 @@ export class MobilePushNotifier {
     // extension out of its own push list, leading to "mobile-ring: suppressed …"
     // and a silent killed-app mobile (linkedId 1778094072.18393, A plus / T2_103,
     // 2026-05-06). Always gate on direction.
+    const inferOutboundSelfOriginShort = (): string | null => {
+      const direct =
+        extractShortExtension(call.source_extension ?? "") ??
+        extractShortExtension(call.from ?? "");
+      if (direct) return direct;
+      const peers = uniqShortSubscriberPeers(call);
+      if (peers.size === 1) return [...peers][0];
+      return null;
+    };
     const selfOriginatingExt =
       call.direction !== "inbound" && isExternalDialTarget(call.to)
-        ? (extractShortExtension(call.source_extension ?? "") ?? extractShortExtension(call.from ?? ""))
+        ? inferOutboundSelfOriginShort()
         : null;
+
+    if (shouldSuppressInboundMislabeledOutboundSelfRing(call)) {
+      const origin =
+        extractShortExtension(call.source_extension ?? "") ??
+        extractShortExtension(call.from ?? "");
+      const peers = uniqShortSubscriberPeers(call);
+      log.info(
+        {
+          reason: "outbound_same_extension_family",
+          linkedId: call.linkedId,
+          sourceAor: call.source_extension ?? call.from ?? null,
+          targetAor: call.to ?? null,
+          callerExt: origin,
+          targetExt: origin,
+          direction: call.direction,
+          extensions: call.extensions,
+          channels: call.channels,
+        },
+        "mobile-ring: suppressed mislabeled inbound (desk outbound self-ring)",
+      );
+      return;
+    }
 
     // Extract short extension numbers (e.g. "103") from the extensions list.
     // Handles both plain "103" and VitalPBX multi-tenant "T8_103" formats.

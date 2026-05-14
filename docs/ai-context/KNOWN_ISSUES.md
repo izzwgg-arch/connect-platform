@@ -381,6 +381,17 @@ When you find a new fragile area, add it here.
   `b5f8a43`, re-enqueue `service: telephony` from `main`. The pre-fix
   outbound behavior is preserved so a regression in *inbound* paths is the
   only realistic concern, and that path is the one we just fixed.
+- **Desk hard-phone outbound falsely rings sibling mobile (`INCOMING_CALL` / CallKeep)**
+
+  FIXED in **`MobilePushNotifier`** + **`CallStateStore`** + **`normalizeExtensionFromChannel`** (2026-05-13). **Symptom:** subscriber places an **external** call from **`PJSIP/T<id>_<ext>`** while **`T<id>_<ext>_1`** (mobile) is registered → mobile shows incoming call from **own extension**.
+  **Mechanism:**
+  (**a**) Asterisk emits VitalPBX **carrier/CDR contexts** matching **`/^trk-[^-]+-in/`**. Older code lumped those with authoritative **`from-trunk`/`from-pstn`**, overwriting aggregated **`direction` → `inbound`** even after **DialBegin** had marked **`outbound`**.
+  (**b**) Hard phones expose **company DID** as **`CallerIDNum`**, **≥10 digits**, so **`hasStrongOutboundEvidence`** (short caller + PSTN **`to`)** failed and **`selfOriginatingExt`** stayed **`null`** until peer inference shipped.
+  **Mitigation:**
+  (**1**) `CallStateStore.onCdr`: **`suppressTrkInboundDcontextMisclass`** — ambiguous **`trk-*-in`** legs do **not** coerce **`direction=inbound`** when AMI already classified **`outbound`/`internal`**, **`call.to`** is PSTN-shaped, and SIP peers collapse to exactly **one** subscriber short extension.
+  (**2**) `MobilePushNotifier`: infer originating short ext from **`uniqShortSubscriberPeers`** when CID lacks **`2–6`** digit identity; **`shouldSuppressInboundMislabeledOutboundSelfRing`** clears residual bogus **`direction:"inbound"`** only when **`from`** is **not** PSTN-shaped (authentic PSTN Caller-ID **`from`** preserves mobile push).
+  (**3**) `normalizeExtensionFromChannel` peels **`T<id>_<ext>_<slot>`** (mobile / secondary-contact AOR tails).
+  **Diagnostics:** **`reason:"outbound_same_extension_family"`** plus **`mobile-ring: suppressed mislabeled inbound (desk outbound self-ring)`** in **`app-telephony-1`**. Tests: **`pnpm --filter @connect/telephony test`**, cases **company CID outbound**, mislabeled **`inbound`**, PSTN CID inbound parity, two-extension guard.
 - **Deploy queue silently shipped stale code when `git checkout` aborted in the
   shared clone at `/opt/connectcomms/app`** (mitigated in repo 2026-05-06;
   verify the deploy queue itself is running this version before relying on it).
@@ -397,6 +408,7 @@ When you find a new fragile area, add it here.
   failures now exit non-zero. Remaining risk: skipping dry-run, running an older
   deploy queue version, or leaving production-only hand-edits in the shared
   clone still requires post-deploy verification and cleanup.
+- **API deploy 502 on `/api/*`** (historic symptom; mitigated once blue/green ships). **`deploy_common_compose_up`** removed/recreated the **`api`** container while nginx still proxied **`127.0.0.1:3001`**, producing **`connect() failed`** in **`nginx error.log`** during the gap. Mitigation in repo: profile **`api_candidate`** on **`127.0.0.1:3004`**, readiness-gated nginx include (**`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**), **`GET /health`** vs **`GET /ready`**, graceful **`SIGTERM`** drain (**`CONNECT_API_SHUTDOWN_MS`**), **`stop_grace_period: 60s`**, **`scripts/lib/deploy-api-rollout.sh`**. Operators must merge **`docs/nginx/`** snippets and set deploy env on the worker host; rollback: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 - **Production deploy clone (`/opt/connectcomms/app`) has uncommitted
   hand-edits never pushed to `origin`** (open, confirmed today). As of
   2026-05-06 the clone has 57 lines of uncommitted local edits in
@@ -984,6 +996,13 @@ When you find a new fragile area, add it here.
   has no effect beyond saving the boolean. A real implementation requires a separate
   architecture decision (Whisper, Deepgram, etc.) and is explicitly out of scope for
   the current CRM release.
+
+- **Cross-tenant campaign CSV import not exercised in smoke (open, operational gap).**
+  `POST /crm/campaigns/:id/import` is tenant-scoped by JWT like the rest of CRM, but
+  Phase 13A/13B smoke runs used only a single pilot tenant with no second-tenant campaign
+  fixture in the database. **Isolation is enforced in code**, not proven by a two-tenant
+  import test in production. Before treating multi-tenant CRM import as battle-tested,
+  run a controlled second-tenant negative test (expect 404 / empty enrollment).
 
 - **CRM nav requires re-login / hard reload after first access grant (open, documented).**
   When an admin grants `CrmUserAccess` to a user, the portal shows the CRM nav only after

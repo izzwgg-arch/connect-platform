@@ -50,6 +50,52 @@ function isExtensionLegChannel(channel: string | null | undefined): boolean {
   return /^PJSIP\/T\d+_\d+/i.test(channel);
 }
 
+function digitsOnly(value: string | null | undefined): string {
+  const digits = String(value || "").replace(/\D/g, "");
+  return /^1\d{10}$/.test(digits) ? digits.slice(1) : digits;
+}
+
+function isShortExtensionValue(value: string | null | undefined): boolean {
+  const digits = digitsOnly(value);
+  return digits.length >= 2 && digits.length <= 6;
+}
+
+function isExternalDialTarget(value: string | null | undefined): boolean {
+  const digits = digitsOnly(value);
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+function hasStrongOutboundEvidence(call: NormalizedCall): boolean {
+  return isShortExtensionValue(call.source_extension || call.from) && isExternalDialTarget(call.to);
+}
+
+/** All short subscriber extensions seen on SIP legs plus VitalPBX `extensions[]` hints. */
+function collectUniqueShortExtensionPeers(call: NormalizedCall): Set<string> {
+  const out = new Set<string>();
+  for (const ch of call.channels) {
+    const ex = normalizeExtensionFromChannel(ch);
+    if (ex) out.add(ex);
+  }
+  for (const raw of call.extensions) {
+    const wrapped = /^PJSIP\//i.test(raw) ? raw : `PJSIP/${raw}`;
+    const ex = normalizeExtensionFromChannel(wrapped);
+    if (ex) out.add(ex);
+  }
+  return out;
+}
+
+/**
+ * VitalPBX emits `trk-<provider>-in` CDR contexts for BOTH true PSTN ingress and for the
+ * provider-facing leg of an outbound external dial. When live AMI state already settled to
+ * outbound/internal before this CDR, and we see exactly one subscriber extension family
+ * against a PSTN `to`, treat the leg as ambiguous and do NOT force `direction=inbound`.
+ */
+function suppressTrkInboundDcontextMisclass(call: NormalizedCall): boolean {
+  if (call.direction !== "outbound" && call.direction !== "internal") return false;
+  if (!isExternalDialTarget(call.to)) return false;
+  return collectUniqueShortExtensionPeers(call).size === 1;
+}
+
 /** Extract a "vpbx:{slug}" tenantId from a CDR dcontext or accountCode value (or null if none found). */
 function resolveTenantFromCdrFields(dcontext?: string, accountCode?: string): string | null {
   const contextToCheck = dcontext || "";
@@ -474,12 +520,27 @@ export class CallStateStore extends EventEmitter {
     });
     call.connectedLine = params.connectedLineNum || call.connectedLine;
 
-    // Direction priority: inbound > outbound/internal > unknown.
-    // "inbound" can overwrite anything (trunk leg fires after the internal routing leg in VitalPBX,
-    // so we must allow it to win even when a previous channel already said "outbound").
-    // "outbound/internal" only upgrade from "unknown" — they cannot demote "inbound".
+    // Direction priority is evidence-based. Inbound trunk legs can arrive after
+    // extension legs, but VitalPBX outbound calls also create a `trk-*-in` trunk
+    // channel for the outbound provider leg. Do not let that later trunk channel
+    // flip a strongly identified extension -> PSTN call into inbound.
     if (params.direction === "inbound") {
-      call.direction = "inbound"; // always accept inbound from any channel
+      if (call.direction === "unknown" || call.direction === "inbound" || !hasStrongOutboundEvidence(call)) {
+        call.direction = "inbound";
+      } else {
+        log.info(
+          {
+            callId: call.id,
+            currentDirection: call.direction,
+            channel: params.channel,
+            context: params.context,
+            from: call.from,
+            to: call.to,
+            sourceExtension: call.source_extension,
+          },
+          "live_call: ignored inbound trunk hint for outbound extension call",
+        );
+      }
     } else if (call.direction === "unknown" && params.direction !== "unknown") {
       call.direction = params.direction;
     }
@@ -909,9 +970,14 @@ export class CallStateStore extends EventEmitter {
     if (
       dctx.includes("from-trunk") || dctx.includes("from-pstn") ||
       dctx.includes("from-external") || dctx.includes("inbound") ||
-      /^ivr-\d/.test(dctx) ||
-      /^trk-[^-]+-in/.test(dctx)
+      /^ivr-\d/.test(dctx)
     ) {
+      dcontextDir = "inbound";
+    } else if (
+      /^trk-[^-]+-in/.test(dctx) &&
+      !suppressTrkInboundDcontextMisclass(call)
+    ) {
+      // See {@link suppressTrkInboundDcontextMisclass}: `trk-*-in` alone is ambiguous.
       dcontextDir = "inbound";
     } else if (
       dctx.includes("from-internal") || dctx.includes("ext-local") || dctx.includes("outbound") ||
@@ -925,7 +991,18 @@ export class CallStateStore extends EventEmitter {
     }
 
     if (dcontextDir) {
-      if (dcontextDir === "inbound") {
+      if (dcontextDir === "inbound" && hasStrongOutboundEvidence(call)) {
+        log.info(
+          {
+            callId: call.id,
+            dcontext: params.dcontext,
+            from: call.from,
+            to: call.to,
+            sourceExtension: call.source_extension,
+          },
+          "cdr: ignored inbound dcontext for outbound extension call",
+        );
+      } else if (dcontextDir === "inbound") {
         // Authoritative from-trunk CDR: lock the call as inbound and set a permanent flag.
         // Any later from-internal CDR events (outbound PSTN legs of the same linkedId) must
         // NOT flip this direction — those legs are emitted as separate records by CdrNotifier.

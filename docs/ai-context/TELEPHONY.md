@@ -996,22 +996,32 @@ three diagnostic scripts under [scripts/pbx/](scripts/pbx/).
   This is the **primary** wake path for tenants whose DIDs are routed by
   VitalPBX-native IVR/COS-all (i.e. all tenants except `landau_home` as of
   2026-05-06). Source: `apps/telephony/src/telephony/services/MobilePushNotifier.ts`.
-  The `selfOriginatingExt` self-ring guard (lines 135-153) is gated on
-  `call.direction !== "inbound"` so inbound IVR-routed DIDs that share a
-  caller-ID with the destination extension still reach the push pipeline.
-  The matching outbound suppression log message is `"mobile-ring: suppressed
+  The **`selfOriginatingExt`** self-ring guard is gated on **`call.direction !== "inbound"`**
+  so inbound IVR-routed DIDs still reach the push pipeline (regression **`b5f8a43`**, linkedId **`1778094072.18393`**). **Desk phone outbound (2026-05)** added two more
+  mitigations because hard phones commonly present **10-digit CID** (`hasStrongOutboundEvidence`
+  misses) while VitalPBX still mirrors **mobile + desk** SIP legs for the subscriber:
+  (**a**) Infer the originating extension from **unique SIP peer shorts** (`uniqShortSubscriberPeers`)
+  when CID does not normalize to **`2–6` digits`; (**b**) If **`direction` is still wrongly
+  `inbound`**, suppress when **`call.from`/`source_extension`** match **only** subscriber's
+  short ext, **`call.to`** is PSTN-shaped, **`from`** is **not** PSTN-shaped, and SIP peers resolve
+  to **one** short ext — diagnostics log **`reason: "outbound_same_extension_family"`** +
+  **`mobile-ring: suppressed mislabeled inbound (desk outbound self-ring)`**. Complementarily,
+  **`CallStateStore.onCdr`** separates ambiguous **`/^trk-[^-]+-in/`** CDR contexts from
+  authoritative **`from-trunk`** / **`from-pstn`**: **`suppressTrkInboundDcontextMisclass`**
+  keeps aggregated direction **`outbound`/`internal`** through that leg when **`to`** is PSTN-shaped
+  and SIP peers imply a **single** subscriber extension (**see **`DEBUGGING.md`** for triage cues**).
+  The matching outbound suppression log message remains `"mobile-ring: suppressed
   outbound self-ring (extension dialed external from same AOR)"`. **Bug
   history**: prior to commit `b5f8a43` (deployed 2026-05-06), the guard
   was direction-blind and silently dropped pushes for every VitalPBX-native
   inbound call to a multi-AOR extension. See `KNOWN_ISSUES.md` for the
   forensic record (linkedId `1778094072.18393`).
-  **Regression coverage**: 11 tests in
-  `apps/telephony/src/telephony/services/MobilePushNotifier.test.ts` pin
-  the inbound vs outbound vs internal decision across three different
-  tenants (T2/T11/T18) and assert that the decision is tenant-id-,
-  DID-, and extension-number-agnostic. Run with
-  `pnpm --filter @connect/telephony test`. See `TEST_INVENTORY.md` for
-  the per-case detail.
+  **Regression coverage:** `pnpm --filter @connect/telephony test` runs
+  `apps/telephony/src/telephony/services/MobilePushNotifier.test.ts`, which pins the
+  inbound vs outbound vs internal decision across tenants (including **company CID**
+  desk-outbound shapes and **`inbound` mislabeled** phantoms) and asserts the
+  decision is tenant-, DID-, and extension-number-agnostic.
+  See `TEST_INVENTORY.md` for detail.
   **Voicemail stop-ring (2026-05-12):** when AMI already showed a ring push
   for `linkedId`, a later upsert that adds voicemail-class channels or an
   `app-voicemail` dialplan context triggers a **one-shot** POST to

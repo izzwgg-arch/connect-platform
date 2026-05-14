@@ -276,6 +276,27 @@ marks rows that never reach a terminal state and broadcasts a
   the root cause: `setActive()` is now deferred until after
   `sip.answerIncomingInvite()` succeeds (JS calls `telecomMarkActive()`).
   See `KNOWN_ISSUES.md` "Phase 1" for full context.
+- **Desk phone outbound phantom ring (`MobilePushNotifier`, 2026-05).** When a
+  user dials externally from `PJSIP/T<id>_<ext>` (desk hard phone),
+  Asterisk emits **carrier** AMI/CDR contexts such as **`trk-<peer>-in`**
+  alongside the originating extension + mobile sibling (`T<id>_<ext>_1`)
+  ringing legs. VitalPBX reuses **`trk-*-in`** for both true ingress and those
+  **outbound** provider legs; `CallStateStore` historically treated **`trk-*-in`**
+  like **`from-trunk`**, flipping **aggregated** `direction` to **`inbound`**
+  even though **DialBegin** had already promoted **`outbound`**. Caller-IDNum is
+  often the **company DID** (10 digits), so `hasStrongOutboundEvidence` did not fire
+  and `MobilePushNotifier` applied **no `selfOriginatingExt` filter**. Net
+  symptom: **`INCOMING_CALL` / incoming UI on the user's own mobile** while they
+  are placing an outbound call. **Mitigation (dual layer):**
+  (1) `CallStateStore.onCdr` no longer lumps **`/^trk-[^-]+-in/`** with true
+  inbound contexts; **`suppressTrkInboundDcontextMisclass`** skips the **`inbound`**
+  class flip when AMI direction is **`outbound`/`internal`**, **`to`** looks like
+  PSTN, and all subscriber peers collapse to **one** short extension; (2)
+  **`MobilePushNotifier`** infers `selfOriginatingExt` from **unique SIP peers**
+  when CID is ambiguous, treats mislabeled **`inbound` + PSTN to + extension-shaped
+  non-PSTN `from`** as **`outbound_same_extension_family`** (logged), and normalizes
+  **`normalizeExtensionFromChannel`** for **`T<id>_<ext>_<slot>`**. See
+  **`TELEPHONY.md` § AMI-driven mobile-ring** and **`DEBUGGING.md`** for log lines.
 
 ---
 

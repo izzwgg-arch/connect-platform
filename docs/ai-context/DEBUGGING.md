@@ -10,7 +10,8 @@
 
 | Service | Path | What it returns |
 |---|---|---|
-| `apps/api` | `GET /health` | `{ ok: true }` |
+| `apps/api` | `GET /health` | **Liveness** — process up; **`{ ok: true }`** when the HTTP server responds. |
+| `apps/api` | `GET /ready` | **Readiness** — **`200`** when accepting real traffic (listening + DB + not draining); **`503`** with reason while booting or after SIGTERM drain. Deploy script gates cutover on this. On the host: **`curl http://127.0.0.1:3001/ready`** (stable) or **`...:3004/...`** (candidate). Through the browser edge, use the same path nginx maps to **`/ready`** on the upstream (often under **`/api/...`** — confirm **`location`** and alias/strip prefixes). |
 | `apps/api` | `GET /metrics` | Prometheus (admin auth required, see `server.ts`). |
 | `apps/api` | `GET /admin/sbc/status` | Live SBC probe (super-admin). |
 | `apps/api` | `GET /voice/sbc/status` | Tenant-admin SBC view incl. active upstream + masked targets. |
@@ -833,17 +834,24 @@ Look for these `MobilePushNotifier` log lines, in order of severity:
 - `mobile-ring: notifying API` — push WAS sent to `apps/api`. Pair with
   `app-api-1` log `mobile-ring-notify: push sent` to confirm FCM dispatch.
 - `mobile-ring: suppressed outbound self-ring (extension dialed external from same AOR)`
-  — push was **explicitly suppressed** for an outbound dial from an
-  extension that has both desktop (`T<id>_<ext>`) and mobile
-  (`T<id>_<ext>_1`) AORs registered. This is **expected** when
-  `direction:"outbound"` and prevents the originator's own mobile
-  re-ringing. If you see `direction:"inbound"` on this log line you are
-  looking at pre-`b5f8a43` (2026-05-06) behavior — the running container
-  is stale; `KNOWN_ISSUES.md` "Deploy queue silently ships stale code"
-  note explains how that happens and how to recover. The legacy message
-  text was `"mobile-ring: suppressed same-extension outbound self-ring"`
-  — finding that exact message in current logs is also a stale-image
-  signal.
+  — push was **explicitly suppressed** for an **outbound** external dial whose
+  `extensions`/channels expose **desktop + mobile** AOR siblings for **one**
+  subscriber. **Company DID Caller-ID:** hard phones often send **10-digit** `CallerIDNum`
+  while still ringing `PJSIP/T<id>_<ext>` + `…_<ext>_1`; `MobilePushNotifier` now
+  **infers `selfOriginatingExt` from SIP peers** when CID does not shorten to **`2–6` digits**.
+  **`direction:"inbound"` here is NOT automatically stale**: see the next bullet
+  for **`mobile-ring: suppressed mislabeled inbound …`** (**2026-05** onward).
+  Older only: pre-`b5f8a43` logs sometimes showed suppressed self-ring alongside
+  `direction:"inbound"` for VitalPBX IVR inbound — see **`KNOWN_ISSUES.md`**. The legacy
+  text `"mobile-ring: suppressed same-extension outbound self-ring"` in current logs is
+  a stale-image signal.
+- `mobile-ring: suppressed mislabeled inbound (desk outbound self-ring)`
+  accompanies JSON fields **`reason: "outbound_same_extension_family"`**,
+  **`sourceAor`/`targetAor`**, **`callerExt`/`targetExt`**. The aggregator still carried
+  `direction:"inbound"` (typically after ambiguous **`/^trk-[^-]+-in/`** CDR context) but AMI
+  shows **short internal `from`/`source_extension`**, **PSTN-shaped `to`**, and Caller-ID **`from`**
+  that is **not** PSTN-length — i.e. the desk extension “calling itself” phantom. Genuine
+  inbound keeps **PSTN `from`** so this path stays **eligible for push**.
 - `mobile-ring: notify-entry` with `exts:[]` and no later
   `notifying API` — extensions never resolved (helper-only legs); not a
   bug, the next AMI event will retry.
@@ -880,7 +888,13 @@ ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>
 
 If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
-reviewed, committed/ported, or explicitly restored. **API health timeout vs slow startup:** If `[deploy-api] FAIL: health check failed after deploy` appears after a long **`[timing] restart=…ms`** line, see **`DEPLOYMENT.md`** § **API post-restart health**. The queue polls loopback **`/health`** while `prisma generate` + `prisma migrate deploy` + **`tsx`** cold start may still be running inside the container. When the budget (~5 min) is exhausted the job log contains three diagnostic sections — look for them between `stage=health` and `stage=rollback`:
+reviewed, committed/ported, or explicitly restored.
+
+**API health timeout (`DEPLOY_API_BLUEGREEN=1` default):** The **`api`** compose service no longer runs **`prisma migrate deploy`** at container boot; **`prisma migrate deploy`** runs in **`scripts/deploy-api.sh`** before **`api_candidate`** starts when schema changed. Stable boot is **`pnpm --filter @connect/api start`**. **`[timing] restart=`** captures the full blue/green sequence (candidate start → nginx cutovers → stable recreate → drain). If **`[deploy-api] FAIL`** references **`candidate /ready`** or **`stable /ready`**, read **`deploy-api-rollout`** log lines plus **`docker logs app-api-candidate-1`** or **`app-api-1`**. Rollout/recovery procedures: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
+
+Legacy **`DEPLOY_API_BLUEGREEN=0`:** queue still polls loopback **`http://127.0.0.1:3001/health`** after **`deploy_common_compose_up`**.
+
+If **`[deploy-api] FAIL: health check failed after deploy`** appears at **`stage=health`**, when **`wait_http_ok`** exhausts its budget (~5 min) the job log contains three diagnostic sections — find them between **`stage=health`** and **`stage=rollback`**:
 
 ```
 [deploy-common] wait_http_ok FAILED after 150 tries url=… http_code=… curl_exit=… body_snippet=… stderr_snippet=…
