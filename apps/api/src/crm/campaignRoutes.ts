@@ -347,27 +347,43 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
 
     const statusFilter = q.status ? (q.status.split(",") as any[]) : undefined;
+    // ?unassigned=true → only members with no assignee
+    // ?assignedToUserId=<id> → only members assigned to that user (validated to tenant below)
+    // ?assignedToMe=true → shorthand for current user (existing behaviour preserved)
+    const unassignedFilter = q.unassigned === "true";
+    const assignedToUserIdFilter = q.assignedToUserId ?? null;
+
+    const assigneeWhere: Record<string, unknown> = {};
+    if (unassignedFilter) {
+      assigneeWhere.assignedToUserId = null;
+    } else if (assignedToUserIdFilter) {
+      // Validate the userId belongs to this tenant before using it in the query
+      const validUser = await db.user.findFirst({
+        where: { id: assignedToUserIdFilter, tenantId },
+        select: { id: true },
+      });
+      if (!validUser) return reply.code(404).send({ error: "user_not_found" });
+      assigneeWhere.assignedToUserId = assignedToUserIdFilter;
+    } else if (q.assignedToMe === "true") {
+      assigneeWhere.assignedToUserId = user.sub;
+    }
+
+    const baseWhere = {
+      campaignId,
+      tenantId,
+      ...(statusFilter ? { status: { in: statusFilter } } : {}),
+      ...assigneeWhere,
+    };
 
     const [members, total] = await Promise.all([
       db.crmCampaignMember.findMany({
-        where: {
-          campaignId,
-          tenantId,
-          ...(statusFilter ? { status: { in: statusFilter } } : {}),
-          ...(q.assignedToMe === "true" ? { assignedToUserId: user.sub } : {}),
-        },
+        where: baseWhere,
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         skip: (page - 1) * limit,
         take: limit,
         include: MEMBER_INCLUDE,
       }),
-      db.crmCampaignMember.count({
-        where: {
-          campaignId,
-          tenantId,
-          ...(statusFilter ? { status: { in: statusFilter } } : {}),
-        },
-      }),
+      db.crmCampaignMember.count({ where: baseWhere }),
     ]);
 
     return { members: members.map(formatMember), total, page, limit };
@@ -515,6 +531,145 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     });
 
     return { updated: updated.count };
+  });
+
+  // ── GET /crm/campaigns/:id/workload ──────────────────────────────────────
+  // Per-agent assignment summary for a campaign. Admin/manager only.
+  // Returns a row for each user who has at least one member, plus an "Unassigned" row.
+  app.get("/crm/campaigns/:id/workload", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id: campaignId } = req.params as { id: string };
+
+    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
+    if (!campaign) return reply.code(404).send({ error: "not_found" });
+
+    // Aggregate member counts per (assignedToUserId, status)
+    const rows = await db.crmCampaignMember.groupBy({
+      by: ["assignedToUserId", "status"],
+      where: { campaignId, tenantId },
+      _count: { id: true },
+    });
+
+    // Collect unique user IDs (excluding null)
+    const userIds = [...new Set(rows.map((r) => r.assignedToUserId).filter((id): id is string => id !== null))];
+
+    const users = userIds.length > 0
+      ? await db.user.findMany({
+          where: { id: { in: userIds }, tenantId },
+          select: { id: true, displayName: true, email: true, firstName: true },
+        })
+      : [];
+    const userMap = new Map(users.map((u) => [u.id, u.displayName || u.firstName || u.email]));
+
+    // Build summary map keyed by userId (null = unassigned)
+    const summaryMap = new Map<string | null, {
+      userId: string | null; displayName: string;
+      pending: number; inProgress: number; callbacks: number;
+      contacted: number; converted: number; skipped: number; dnc: number; total: number;
+    }>();
+
+    for (const row of rows) {
+      const uid = row.assignedToUserId;
+      const key = uid ?? "__unassigned__";
+      if (!summaryMap.has(key)) {
+        summaryMap.set(key, {
+          userId: uid,
+          displayName: uid ? (userMap.get(uid) ?? "Unknown") : "Unassigned",
+          pending: 0, inProgress: 0, callbacks: 0,
+          contacted: 0, converted: 0, skipped: 0, dnc: 0, total: 0,
+        });
+      }
+      const entry = summaryMap.get(key)!;
+      const count = row._count.id;
+      entry.total += count;
+      if (row.status === "PENDING") entry.pending += count;
+      else if (row.status === "IN_PROGRESS") entry.inProgress += count;
+      else if (row.status === "CALLBACK") entry.callbacks += count;
+      else if (row.status === "CONTACTED") entry.contacted += count;
+      else if (row.status === "CONVERTED") entry.converted += count;
+      else if (row.status === "SKIPPED") entry.skipped += count;
+      else if (row.status === "DO_NOT_CALL") entry.dnc += count;
+    }
+
+    // Sort: named agents first (alphabetical), unassigned last
+    const workload = [...summaryMap.values()].sort((a, b) => {
+      if (a.userId === null) return 1;
+      if (b.userId === null) return -1;
+      return a.displayName.localeCompare(b.displayName);
+    });
+
+    return { workload };
+  });
+
+  // ── POST /crm/campaigns/:id/members/distribute ────────────────────────────
+  // Round-robin distribute all unassigned PENDING/IN_PROGRESS members across
+  // the provided user list. Explicit manager action — never automatic.
+  app.post("/crm/campaigns/:id/members/distribute", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id: campaignId } = req.params as { id: string };
+
+    const distributeSchema = z.object({
+      userIds: z.array(z.string().min(1)).min(1).max(50),
+    });
+    const parsed = distributeSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
+
+    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
+    if (!campaign) return reply.code(404).send({ error: "not_found" });
+
+    const { userIds } = parsed.data;
+
+    // Validate all userIds belong to this tenant
+    const validUsers = await db.user.findMany({
+      where: { id: { in: userIds }, tenantId },
+      select: { id: true },
+    });
+    if (validUsers.length !== userIds.length) {
+      return reply.code(400).send({ error: "invalid_user_ids", detail: "One or more userIds are not valid for this tenant" });
+    }
+
+    // Fetch all unassigned PENDING or IN_PROGRESS members ordered by sort position
+    const unassigned = await db.crmCampaignMember.findMany({
+      where: {
+        campaignId,
+        tenantId,
+        assignedToUserId: null,
+        status: { in: ["PENDING", "IN_PROGRESS"] },
+      },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+    });
+
+    if (unassigned.length === 0) {
+      return { distributed: 0, assignments: [], message: "No unassigned leads to distribute" };
+    }
+
+    // Round-robin assignment
+    const assignments: { userId: string; memberIds: string[] }[] = userIds.map((uid) => ({ userId: uid, memberIds: [] }));
+    unassigned.forEach((m, i) => {
+      assignments[i % userIds.length].memberIds.push(m.id);
+    });
+
+    // Bulk update each user's batch
+    await Promise.all(
+      assignments
+        .filter((a) => a.memberIds.length > 0)
+        .map((a) =>
+          db.crmCampaignMember.updateMany({
+            where: { id: { in: a.memberIds }, campaignId, tenantId },
+            data: { assignedToUserId: a.userId },
+          }),
+        ),
+    );
+
+    return {
+      distributed: unassigned.length,
+      assignments: assignments.map((a) => ({ userId: a.userId, count: a.memberIds.length })),
+    };
   });
 
   // ── GET /crm/campaigns/:id/export.csv ─────────────────────────────────────

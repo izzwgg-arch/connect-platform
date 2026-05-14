@@ -5,8 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Play, Pause, Archive, Users, Plus, Search,
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
+  Shuffle, BarChart2,
 } from "lucide-react";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
+import { useAppContext } from "../../../../../hooks/useAppContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -61,10 +63,24 @@ type AvailableContact = {
 };
 
 type CrmUser = {
-  id: string;
+  userId: string;
   displayName: string;
   email: string;
   crmRole: string | null;
+  crmEnabled: boolean;
+};
+
+type WorkloadRow = {
+  userId: string | null;
+  displayName: string;
+  pending: number;
+  inProgress: number;
+  callbacks: number;
+  contacted: number;
+  converted: number;
+  skipped: number;
+  dnc: number;
+  total: number;
 };
 
 type Script = { id: string; name: string };
@@ -345,6 +361,12 @@ export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const campaignId = params.id;
+  const { backendJwtRole } = useAppContext();
+
+  const isAdmin =
+    backendJwtRole === "ADMIN" ||
+    backendJwtRole === "TENANT_ADMIN" ||
+    backendJwtRole === "SUPER_ADMIN";
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -356,10 +378,23 @@ export default function CampaignDetailPage() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [showAddContacts, setShowAddContacts] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("");
+  // "" = all agents, "UNASSIGNED" = null, else userId
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const [search, setSearch] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [error, setError] = useState("");
+
+  // Workload summary
+  const [workload, setWorkload] = useState<WorkloadRow[]>([]);
+  const [workloadLoading, setWorkloadLoading] = useState(false);
+  const [showWorkload, setShowWorkload] = useState(false);
+
+  // Distribute modal
+  const [distributeOpen, setDistributeOpen] = useState(false);
+  const [distributeUserIds, setDistributeUserIds] = useState<Set<string>>(new Set());
+  const [distributing, setDistributing] = useState(false);
+  const [distributeMsg, setDistributeMsg] = useState("");
 
   // Bulk select
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -379,11 +414,14 @@ export default function CampaignDetailPage() {
     }
   }, [campaignId, token]);
 
-  const loadMembers = useCallback(async () => {
+  const loadMembers = useCallback(async (overrideAssignee?: string) => {
     setMembersLoading(true);
     try {
+      const af = overrideAssignee !== undefined ? overrideAssignee : assigneeFilter;
       const queryParams = new URLSearchParams({ limit: "100" });
       if (statusFilter) queryParams.set("status", statusFilter);
+      if (af === "UNASSIGNED") queryParams.set("unassigned", "true");
+      else if (af) queryParams.set("assignedToUserId", af);
       const res = await apiGet<{ members: Member[]; total: number }>(
         `/crm/campaigns/${campaignId}/members?${queryParams}`,
         token
@@ -392,7 +430,20 @@ export default function CampaignDetailPage() {
       setMembersTotal(res.total);
     } catch {}
     setMembersLoading(false);
-  }, [campaignId, statusFilter, token]);
+  }, [campaignId, statusFilter, assigneeFilter, token]);
+
+  const loadWorkload = useCallback(async () => {
+    if (!isAdmin) return;
+    setWorkloadLoading(true);
+    try {
+      const res = await apiGet<{ workload: WorkloadRow[] }>(
+        `/crm/campaigns/${campaignId}/workload`,
+        token
+      );
+      setWorkload(res.workload ?? []);
+    } catch {}
+    setWorkloadLoading(false);
+  }, [campaignId, isAdmin, token]);
 
   useEffect(() => {
     async function init() {
@@ -407,6 +458,11 @@ export default function CampaignDetailPage() {
     }
     init();
   }, [loadCampaign, token]);
+
+  // Load workload once campaign is loaded (admin only)
+  useEffect(() => {
+    if (!loading) loadWorkload();
+  }, [loading, loadWorkload]);
 
   useEffect(() => { loadMembers(); }, [loadMembers]);
 
@@ -433,6 +489,30 @@ export default function CampaignDetailPage() {
       // Refresh campaign counts after status change (auto-complete may have triggered)
       loadCampaign();
     } catch {}
+  }
+
+  async function handleDistribute() {
+    if (distributeUserIds.size === 0) { setDistributeMsg("Select at least one agent."); return; }
+    setDistributing(true);
+    setDistributeMsg("");
+    try {
+      const res = await apiPost<{ distributed: number; assignments: { userId: string; count: number }[] }>(
+        `/crm/campaigns/${campaignId}/members/distribute`,
+        { userIds: Array.from(distributeUserIds) },
+        token
+      );
+      if (res.distributed === 0) {
+        setDistributeMsg("No unassigned leads to distribute.");
+      } else {
+        setDistributeMsg(`Distributed ${res.distributed} leads across ${res.assignments.filter((a) => a.count > 0).length} agents.`);
+        await loadMembers();
+        await loadWorkload();
+        setDistributeOpen(false);
+      }
+    } catch (err: unknown) {
+      setDistributeMsg((err as Error)?.message ?? "Failed to distribute leads.");
+    }
+    setDistributing(false);
   }
 
   async function handleBulkAssign() {
@@ -651,14 +731,127 @@ export default function CampaignDetailPage() {
 
         {/* Members */}
         <div className="bg-white border border-gray-200 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h2 className="font-semibold text-gray-900">
               Members <span className="text-gray-400 font-normal text-sm">({membersTotal})</span>
             </h2>
-            <button onClick={() => setShowAddContacts(true)} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-              <Plus className="h-4 w-4" />Add Contacts
-            </button>
+            <div className="flex items-center gap-2">
+              {isAdmin && (
+                <>
+                  <button
+                    onClick={() => { setShowWorkload((v) => !v); if (!showWorkload) loadWorkload(); }}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
+                    title="Workload summary"
+                  >
+                    <BarChart2 className="h-4 w-4" />Workload
+                  </button>
+                  <button
+                    onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
+                    title="Distribute unassigned leads"
+                  >
+                    <Shuffle className="h-4 w-4" />Distribute
+                  </button>
+                </>
+              )}
+              <button onClick={() => setShowAddContacts(true)} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+                <Plus className="h-4 w-4" />Add Contacts
+              </button>
+            </div>
           </div>
+
+          {/* Workload summary */}
+          {isAdmin && showWorkload && (
+            <div className="mb-5 p-4 bg-gray-50 border border-gray-200 rounded-xl overflow-x-auto">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-700">Agent Workload</h3>
+                {workloadLoading && <span className="text-xs text-gray-400">Loading…</span>}
+              </div>
+              {workload.length === 0 && !workloadLoading ? (
+                <p className="text-xs text-gray-400">No members assigned yet.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b border-gray-200">
+                      <th className="pb-1.5 font-medium pr-4">Agent</th>
+                      <th className="pb-1.5 font-medium text-right pr-3">Pending</th>
+                      <th className="pb-1.5 font-medium text-right pr-3">Callback</th>
+                      <th className="pb-1.5 font-medium text-right pr-3">Contacted</th>
+                      <th className="pb-1.5 font-medium text-right pr-3">Converted</th>
+                      <th className="pb-1.5 font-medium text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {workload.map((row) => (
+                      <tr key={row.userId ?? "__unassigned__"} className={row.userId === null ? "text-gray-400 italic" : ""}>
+                        <td className="py-1.5 pr-4 font-medium">{row.displayName}</td>
+                        <td className="py-1.5 text-right pr-3">{row.pending + row.inProgress || "—"}</td>
+                        <td className="py-1.5 text-right pr-3">{row.callbacks || "—"}</td>
+                        <td className="py-1.5 text-right pr-3">{row.contacted || "—"}</td>
+                        <td className="py-1.5 text-right pr-3 text-green-600 font-medium">{row.converted || "—"}</td>
+                        <td className="py-1.5 text-right font-semibold">{row.total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Distribute modal */}
+          {isAdmin && distributeOpen && (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-900">Distribute Unassigned Leads</h3>
+                  <button onClick={() => setDistributeOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Unassigned pending leads will be distributed evenly (round-robin) across the agents you select below.
+                  This action only affects unassigned leads — already-assigned leads are untouched.
+                </p>
+                <div className="mb-4 max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {crmUsers.filter((u) => u.crmEnabled).length === 0 ? (
+                    <p className="p-3 text-sm text-gray-400">No CRM-enabled agents found.</p>
+                  ) : (
+                    crmUsers.filter((u) => u.crmEnabled).map((u) => (
+                      <label key={u.userId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={distributeUserIds.has(u.userId)}
+                          onChange={(e) => {
+                            const s = new Set(distributeUserIds);
+                            if (e.target.checked) s.add(u.userId);
+                            else s.delete(u.userId);
+                            setDistributeUserIds(s);
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-sm text-gray-800">{u.displayName || u.email}</span>
+                        <span className="text-xs text-gray-400 ml-auto">{u.crmRole ?? "AGENT"}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+                {distributeMsg && (
+                  <p className={`text-sm mb-3 ${distributeMsg.startsWith("Distributed") ? "text-green-600" : "text-amber-600"}`}>{distributeMsg}</p>
+                )}
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDistribute}
+                    disabled={distributing || distributeUserIds.size === 0}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    <Shuffle className="h-3.5 w-3.5" />
+                    {distributing ? "Distributing…" : `Distribute across ${distributeUserIds.size} agent${distributeUserIds.size !== 1 ? "s" : ""}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Filters */}
           <div className="flex gap-2 mb-4 flex-wrap">
@@ -681,6 +874,22 @@ export default function CampaignDetailPage() {
                 <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
               ))}
             </select>
+            {/* Assignee filter — quick-scope to one agent or unassigned */}
+            <select
+              value={assigneeFilter}
+              onChange={(e) => {
+                const v = e.target.value;
+                setAssigneeFilter(v);
+                loadMembers(v);
+              }}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All agents</option>
+              <option value="UNASSIGNED">Unassigned</option>
+              {crmUsers.filter((u) => u.crmEnabled).map((u) => (
+                <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
+              ))}
+            </select>
           </div>
 
           {/* Bulk action bar */}
@@ -695,8 +904,8 @@ export default function CampaignDetailPage() {
                   className="flex-1 border border-blue-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-0"
                 >
                   <option value="">— Clear assignment —</option>
-                  {crmUsers.map((u) => (
-                    <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
+                  {crmUsers.filter((u) => u.crmEnabled).map((u) => (
+                    <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
                   ))}
                 </select>
               </div>

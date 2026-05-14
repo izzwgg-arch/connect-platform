@@ -591,6 +591,13 @@
     - Sort preference is persisted in `localStorage` (`crm_queue_sort_mode`). Power mode defaults
       to `"smart"` on first use; manual mode defaults to `"original"`.
 
+89. **CRM lead redistribution must always be explicit and never automatic.**
+    - `POST /crm/campaigns/:id/members/distribute` only runs when an admin/manager explicitly triggers it.
+    - The endpoint affects only unassigned PENDING/IN_PROGRESS members — already-assigned leads are never moved.
+    - The UI must show a confirmation step (user list + count) before calling the endpoint.
+    - No scheduled, triggered, or event-based redistribution is permitted.
+    - Cross-tenant userIds are rejected with 400 before any assignment is written.
+
 88. **CRM Queue preference precedence: URL > localStorage > tenant default > hardcoded fallback.**
     - `?sort=` URL param always wins. `?filter=` and `?campaignId=` URL params always win.
     - localStorage keys `crm_queue_sort_mode` and `crm_queue_campaign_id` are second priority.

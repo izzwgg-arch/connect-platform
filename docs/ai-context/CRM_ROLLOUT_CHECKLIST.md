@@ -949,6 +949,68 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 
 ---
 
+## Phase 12D — Queue Assignment and Lead Redistribution
+
+```
+[ ] 1. GET /crm/campaigns/:id/members?assignedToUserId=<id>
+        - Returns only members assigned to that user
+        - Cross-tenant userId returns 404
+        - Combines with ?status= filter
+
+[ ] 2. GET /crm/campaigns/:id/members?unassigned=true
+        - Returns only members with no assignee
+        - Combines with ?status= filter
+
+[ ] 3. GET /crm/campaigns/:id/workload
+        - Returns per-agent row: pending+inProgress, callbacks, contacted, converted, total
+        - Includes Unassigned row
+        - Named agents sorted alphabetically, Unassigned last
+        - Admin only (returns 403 for non-admins)
+
+[ ] 4. POST /crm/campaigns/:id/members/distribute
+        - Distributes unassigned PENDING/IN_PROGRESS members round-robin
+        - Body: { userIds: ["..."] }
+        - Returns { distributed, assignments: [{ userId, count }] }
+        - Returns 400 if userIds empty or cross-tenant
+        - Already-assigned leads untouched
+        - No unassigned leads → { distributed: 0, message: "..." }
+        - Admin only
+
+[ ] 5. Assignee filter dropdown on campaign detail
+        - Options: All agents / Unassigned / each CRM-enabled user
+        - Selecting reloads members from API
+        - Combines with status filter
+
+[ ] 6. Workload panel on campaign detail (admin only)
+        - Toggled by "Workload" button
+        - Shows per-agent table with real counts
+        - Unassigned row at bottom
+
+[ ] 7. Distribute modal (admin only)
+        - Opened by "Distribute" button
+        - Checklist of CRM-enabled agents
+        - No agents selected → blocked
+        - Calls POST /distribute on confirm
+        - Shows result: "Distributed N leads across M agents"
+        - No unassigned leads → useful message
+
+[ ] 8. Bulk-assign dropdown uses correct userId field (not id)
+        - Options have real values (pre-existing bug fixed)
+
+[ ] 9. Tenant isolation
+        - assignedToUserId from another tenant → 404
+        - distribute with cross-tenant userIds → 400
+
+[ ] 10. Safety
+        - No telephony changes
+        - No auto-redistribution
+
+[ ] 11. API typecheck (0 errors)
+[ ] 12. Portal typecheck (0 errors)
+```
+
+---
+
 ## Phase 12C — Queue Campaign Filter + Default Queue Behavior Settings
 
 ```
