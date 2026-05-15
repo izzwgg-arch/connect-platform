@@ -1046,6 +1046,81 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 | **Duplicates** | `SELECT campaignId, contactId, count(*) … HAVING count(*) > 1` on `CrmCampaignMember` should return **0** rows. |
 | **Phase 13D / 15 / smoke naming** | Hunt campaigns and contacts whose names or emails match `SMOKE`, `AGENT-SMOKE`, `Phase13`, `Phase15`, `example.invalid`, or obvious `555` / `+1555` test numbers; archive campaigns and soft-archive contacts the same way as above. |
 
+### CRM Archive Lifecycle Smoke — 16A–16D
+
+> **Single end-to-end operator path** covering **16A** archive/restore, **16B** list scopes, **16C** queue exclusion + PATCH guard, **16D** campaign auto-complete vs archived members. Portal nuances live in **Phase 16B–16D** below; HTTP contracts in **`docs/ai-context/API_ROUTES.md`**; invariants **48–49** in **`docs/ai-context/RULES.md`**.
+
+**Safety (required)**
+
+- Use a **QA tenant** or clearly tagged smoke data — **not** production customer records.
+- **No voice calls** and **no SMS** during this smoke.
+- Prefer emails under **`example.invalid`** and phones in the **`555` / `+1555…`** test range.
+- Set `$env:ADMIN_JWT` and `$env:AGENT_JWT` in your shell; **never** print, log, or paste tokens.
+
+**What this proves**
+
+| Area | Confirmed |
+|------|-----------|
+| History | Timeline, members, and campaign rows stay present after archive where documented — **soft-archive does not hard-delete**. |
+| Live queue | Archived contacts **do not** appear in actionable queue or related live counts (**16C**). |
+| Campaign completion | **`COMPLETED`** when no **live-contact** actionable non-terminal work remains — archived **`PENDING`/`IN_PROGRESS`/`CALLBACK`** rows **do not** block (**16D**). |
+| Restore | **`POST /restore`** does **not** automatically re-open a campaign that already reached **`COMPLETED`** (**16D**). |
+
+**Expected HTTP / error keys**
+
+| Call | Role | Expected |
+|------|------|----------|
+| `DELETE /crm/contacts/:id` | CRM admin | **200** `{ ok: true, contactId }` (soft-archive; idempotent if already archived) |
+| `POST /crm/contacts/:id/restore` | CRM admin | **200** `{ ok: true, contactId }` |
+| `GET /crm/contacts?includeArchived=true` | Agent / non-admin | **403** `crm_permission_denied` (`detail` explains admin requirement) |
+| `GET /crm/contacts?archivedOnly=true` without `includeArchived=true` | Admin | **400** `invalid_query` (`archivedOnly requires includeArchived=true`) |
+| `PATCH /crm/queue/:memberId` (write) | Agent; member’s contact archived | **409** `crm_queue_contact_not_live` |
+
+**Operator flow (recommended order)**
+
+| Step | Action | Pass if |
+|------|--------|---------|
+| 1 | Admin: create **safe** contact (`POST /crm/contacts` or portal) | `contactId` returned; fake email / 555 phone only |
+| 2 | Admin: create **`ACTIVE`** campaign | `campaignId` returned |
+| 3 | Admin: enroll contact + assign member to **agent** user (`members/add`, bulk-assign) | Member **`PENDING`** (or qualifying non-terminal); note `memberId` |
+| 4 | Agent: `GET /crm/queue` | Member **visible**; counts include it |
+| 5 | Admin: `DELETE /crm/contacts/:contactId` | **200** |
+| 6 | Admin: archived list — portal **Contacts → Archived**, or `GET /crm/contacts?includeArchived=true&archivedOnly=true` | Contact **listed** (**16B**) |
+| 7 | Agent: `GET /crm/queue` | Member **absent**; counts dropped (**16C**) |
+| 8 | Agent: `PATCH /crm/queue/:memberId` (e.g. skip / outcome — any write) | **409** `crm_queue_contact_not_live` (**16C**) |
+| 9 | Admin or agent: `GET /crm/campaigns/:campaignId` | Member row **still present** with archived / muted presentation; not actionable in queue (**16A**, **16C**) |
+| 10 | **16D** — campaign completion | If this member was the **only** live-actionable non-terminal row, campaign becomes **`COMPLETED`** after archive (auto-complete runs on archive path — allow a short delay; re-fetch). *Alternatively:* terminal-out other live members or archive their contacts until no live non-terminal rows remain — then **`COMPLETED`**. |
+| 11 | Admin: `POST /crm/contacts/:contactId/restore` | **200** |
+| 12 | Admin: `GET /crm/campaigns/:campaignId` after restore | If step 10 showed **`COMPLETED`**, status stays **`COMPLETED`** — **no auto-reopen** (**16D**) |
+| 13 | Cleanup | Archive campaign (`DELETE /crm/campaigns/:id`), soft-archive contact if still active, per **Cleanup checklist** above |
+
+**PowerShell skeleton** (Invoke-RestMethod; tokens from environment only):
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$Base = 'https://app.connectcomunications.com/api'
+
+function CrmHeaders([string]$Token) {
+  return @{ Authorization = "Bearer $Token"; 'Content-Type' = 'application/json' }
+}
+
+# Set in the shell before running (do not echo):
+#   $env:ADMIN_JWT = '…'
+#   $env:AGENT_JWT = '…'
+
+# Examples (adjust paths / bodies to your tenant):
+# Invoke-RestMethod -Method Get -Uri "$Base/crm/queue" -Headers (CrmHeaders $env:AGENT_JWT)
+# Invoke-RestMethod -Method Delete -Uri "$Base/crm/contacts/<contactId>" -Headers (CrmHeaders $env:ADMIN_JWT)
+# Invoke-RestMethod -Method Patch -Uri "$Base/crm/queue/<memberId>" -Headers (CrmHeaders $env:AGENT_JWT) -Body '{"action":"skip"}'
+```
+
+**curl.exe skeleton** (same env vars; Windows: `curl.exe` avoids PowerShell alias):
+
+```powershell
+curl.exe -sS -H "Authorization: Bearer $env:AGENT_JWT" "$Base/crm/queue"
+curl.exe -sS -X DELETE -H "Authorization: Bearer $env:ADMIN_JWT" "$Base/crm/contacts/<contactId>"
+```
+
 ### Phase 16B — Contacts list: Active / Archived / All (smoke)
 
 Portal `/crm/contacts`: CRM **admin** sees **List** scope **Active** (default), **Archived**, **All**. **Agent** sees no scope control and the list stays **active-only** (default `GET /crm/contacts`). **Real API only** — Archived uses `GET /crm/contacts?includeArchived=true&archivedOnly=true`; All uses `includeArchived=true`; Active uses default query (no archive flags).
