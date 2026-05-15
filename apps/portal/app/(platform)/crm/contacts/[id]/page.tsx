@@ -7,6 +7,7 @@ import {
   GitCommitHorizontal, UserPlus, Pencil, Trash2,
   CheckSquare, Circle, Plus, PhoneIncoming, PhoneOutgoing, Mic,
   ClipboardList, CheckCheck, GitMerge, AlertTriangle, Calendar, MessageSquareDot, Send,
+  Archive, ArchiveRestore,
 } from "lucide-react";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { CrmRecordingPlayer } from "../../../../../components/CrmRecordingPlayer";
@@ -47,6 +48,8 @@ type CrmContactDetail = {
   lastDispositionAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  active?: boolean;
+  archivedAt?: string | null;
 };
 
 type TimelineEventType =
@@ -218,9 +221,16 @@ interface TimelineItemProps {
   currentUserId: string | undefined;
   onEditNote: (linkedId: string, currentBody: string) => void;
   onDeleteNote: (linkedId: string) => void;
+  allowNoteMutations?: boolean;
 }
 
-function TimelineItem({ event, currentUserId, onEditNote, onDeleteNote }: TimelineItemProps) {
+function TimelineItem({
+  event,
+  currentUserId,
+  onEditNote,
+  onDeleteNote,
+  allowNoteMutations = true,
+}: TimelineItemProps) {
   const isNote = event.type === "NOTE_ADDED";
   const isDeleted = event.body === "(deleted)";
 
@@ -362,7 +372,11 @@ function TimelineItem({ event, currentUserId, onEditNote, onDeleteNote }: Timeli
           )}
 
           {/* Note actions — only show for non-deleted NOTE_ADDED events authored by current user */}
-          {isNote && !isDeleted && event.linkedId && event.createdBy?.id === currentUserId && (
+          {allowNoteMutations &&
+            isNote &&
+            !isDeleted &&
+            event.linkedId &&
+            event.createdBy?.id === currentUserId && (
             <>
               <button
                 onClick={() => onEditNote(event.linkedId!, event.body ?? "")}
@@ -422,6 +436,8 @@ export default function CrmContactDetailPage() {
   const [mergeTarget, setMergeTarget] = useState<DuplicateContact | null>(null);
   const [merging, setMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [archivePosting, setArchivePosting] = useState(false);
+  const [restorePosting, setRestorePosting] = useState(false);
 
   // ── Timeline state ─────────────────────────────────────────────────────────
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
@@ -482,6 +498,7 @@ export default function CrmContactDetailPage() {
       setEditStage(c.crmStage ?? "LEAD");
       setEditDoNotCall(c.doNotCall);
       setEditDoNotSms(c.doNotSms);
+      if (c.archivedAt != null || c.active === false) setEditing(false);
     } catch (e: any) {
       setError(e?.message || "Failed to load contact");
     } finally {
@@ -582,6 +599,46 @@ export default function CrmContactDetailPage() {
       setMergeError(e?.message || "Merge failed");
     } finally {
       setMerging(false);
+    }
+  };
+
+  const handleArchiveContact = async () => {
+    if (
+      !window.confirm(
+        "Archive this contact? They will be removed from active CRM lists and search. Timeline, tasks, and campaign history are preserved.",
+      )
+    ) {
+      return;
+    }
+    setArchivePosting(true);
+    setError(null);
+    try {
+      await apiDelete(`/crm/contacts/${id}`);
+      await loadContact();
+      loadTimeline();
+      loadTasks();
+      loadDuplicates();
+    } catch (e: any) {
+      setError(e?.message || "Archive failed");
+    } finally {
+      setArchivePosting(false);
+    }
+  };
+
+  const handleRestoreContact = async () => {
+    if (!window.confirm("Restore this contact to the active CRM list?")) return;
+    setRestorePosting(true);
+    setError(null);
+    try {
+      await apiPost(`/crm/contacts/${id}/restore`, {});
+      await loadContact();
+      loadTimeline();
+      loadTasks();
+      loadDuplicates();
+    } catch (e: any) {
+      setError(e?.message || "Restore failed");
+    } finally {
+      setRestorePosting(false);
     }
   };
 
@@ -760,6 +817,7 @@ export default function CrmContactDetailPage() {
   }
 
   const stage = contact.crmStage ?? "LEAD";
+  const isArchived = !!(contact.archivedAt != null || contact.active === false);
 
   // Derive SMS conversation from timeline — newest-first, capped at 25.
   // No new API call; reuses the timeline already loaded for the Activity feed.
@@ -779,6 +837,23 @@ export default function CrmContactDetailPage() {
       >
         <ArrowLeft size={14} /> Back to Contacts
       </button>
+
+      {isArchived && (
+        <div
+          style={{
+            padding: "0.625rem 0.875rem",
+            borderRadius: "0.375rem",
+            background: "#fef3c7",
+            border: "1px solid #fcd34d",
+            fontSize: "0.8125rem",
+            color: "#92400e",
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Archived</strong> — Hidden from active lists and search. Timeline and history stay available for review.
+          Restore the contact to edit fields or send SMS.
+        </div>
+      )}
 
       {/* ── Profile header ─────────────────────────────────────────────────── */}
       <div
@@ -811,6 +886,22 @@ export default function CrmContactDetailPage() {
             }}>
               {stageLabel(stage)}
             </span>
+            {isArchived && (
+              <span
+                style={{
+                  padding: "0.2rem 0.6rem",
+                  borderRadius: "0.25rem",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  background: "#e5e7eb",
+                  color: "#374151",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                Archived
+              </span>
+            )}
             {contact.doNotCall && (
               <span style={{ fontSize: "0.75rem", color: "#ef4444", fontWeight: 600 }}>✕ DNC</span>
             )}
@@ -832,38 +923,80 @@ export default function CrmContactDetailPage() {
           )}
         </div>
 
-        {/* Edit / Save actions */}
+        {/* Edit / archive actions */}
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-          {!editing ? (
-            <button
-              onClick={() => setEditing(true)}
-              style={{ ...btnSmall, color: "var(--text)" }}
-            >
-              Edit
-            </button>
-          ) : (
+          {!isArchived && (
             <>
-              <button
-                onClick={() => { setEditing(false); setSaveError(null); }}
-                style={btnSmall}
-                disabled={saving}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                style={{ ...btnSmall, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", fontWeight: 600 }}
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
+              {!editing ? (
+                <button
+                  onClick={() => setEditing(true)}
+                  style={{ ...btnSmall, color: "var(--text)" }}
+                >
+                  Edit
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setEditing(false); setSaveError(null); }}
+                    style={btnSmall}
+                    disabled={saving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ ...btnSmall, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", fontWeight: 600 }}
+                  >
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                </>
+              )}
             </>
+          )}
+          {isAdmin && !isArchived && (
+            <button
+              type="button"
+              onClick={handleArchiveContact}
+              disabled={archivePosting}
+              title="Archive contact (soft)"
+              style={{
+                ...btnSmall,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                color: "#991b1b",
+                borderColor: "#fca5a5",
+              }}
+            >
+              <Archive size={13} />
+              {archivePosting ? "…" : "Archive"}
+            </button>
+          )}
+          {isAdmin && isArchived && (
+            <button
+              type="button"
+              onClick={handleRestoreContact}
+              disabled={restorePosting}
+              title="Restore contact to active list"
+              style={{
+                ...btnSmall,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                color: "#065f46",
+                borderColor: "#6ee7b7",
+              }}
+            >
+              <ArchiveRestore size={13} />
+              {restorePosting ? "…" : "Restore"}
+            </button>
           )}
         </div>
       </div>
 
       {/* ── Inline edit panel for identity fields ──────────────────────────────── */}
-      {editing && (
+      {editing && !isArchived && (
         <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
           <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Edit Contact</h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
@@ -1005,17 +1138,19 @@ export default function CrmContactDetailPage() {
               <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
                 Open Tasks {tasks.length > 0 && <span style={{ fontWeight: 400, color: "var(--accent)" }}>({tasks.length})</span>}
               </h3>
-              <button
-                onClick={() => setAddingTask((v) => !v)}
-                title="Add follow-up"
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", padding: "0.125rem", display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.8125rem", fontWeight: 600 }}
-              >
-                <Plus size={13} /> Add
-              </button>
+              {!isArchived && (
+                <button
+                  onClick={() => setAddingTask((v) => !v)}
+                  title="Add follow-up"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", padding: "0.125rem", display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.8125rem", fontWeight: 600 }}
+                >
+                  <Plus size={13} /> Add
+                </button>
+              )}
             </div>
 
             {/* Inline add form */}
-            {addingTask && (
+            {!isArchived && addingTask && (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
                 <input
                   value={newTaskTitle}
@@ -1091,13 +1226,17 @@ export default function CrmContactDetailPage() {
                 const isDue = task.dueAt && new Date(task.dueAt) < new Date();
                 return (
                   <div key={task.id} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingTop: "0.375rem" }}>
-                    <button
-                      onClick={() => handleCompleteTask(task.id)}
-                      title="Mark done"
-                      style={{ background: "none", border: "none", cursor: "pointer", padding: "0.1rem", color: "var(--text-dim)", flexShrink: 0, marginTop: "0.1rem" }}
-                    >
-                      <Circle size={14} />
-                    </button>
+                    {!isArchived ? (
+                      <button
+                        onClick={() => handleCompleteTask(task.id)}
+                        title="Mark done"
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "0.1rem", color: "var(--text-dim)", flexShrink: 0, marginTop: "0.1rem" }}
+                      >
+                        <Circle size={14} />
+                      </button>
+                    ) : (
+                      <span style={{ width: 14, flexShrink: 0, marginTop: "0.1rem" }} aria-hidden />
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: "0.875rem", fontWeight: 500 }}>{task.title}</div>
                       <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.15rem", alignItems: "center" }}>
@@ -1122,7 +1261,7 @@ export default function CrmContactDetailPage() {
           {/* Scratch notes (Contact.notes — single text field) */}
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Scratch Notes</h3>
-            {editing ? (
+            {editing && !isArchived ? (
               <textarea
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
@@ -1155,18 +1294,20 @@ export default function CrmContactDetailPage() {
                     {p.type.toLowerCase()}{p.isPrimary ? " · primary" : ""}
                   </div>
                 </div>
-                <button
-                  onClick={() => handleRemovePhone(p.id)}
-                  title="Remove phone"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
-                >
-                  <Trash2 size={12} />
-                </button>
+                {!isArchived && (
+                  <button
+                    onClick={() => handleRemovePhone(p.id)}
+                    title="Remove phone"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             ))}
 
             {/* Add phone inline form */}
-            {addingPhone ? (
+            {!isArchived && (addingPhone ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem", paddingTop: "0.25rem" }}>
                 <div style={{ display: "flex", gap: "0.375rem" }}>
                   <input
@@ -1211,7 +1352,7 @@ export default function CrmContactDetailPage() {
               >
                 <Plus size={12} /> Add phone
               </button>
-            )}
+            ))}
 
             {/* Divider */}
             <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
@@ -1226,18 +1367,20 @@ export default function CrmContactDetailPage() {
                     {e.type.toLowerCase()}{e.isPrimary ? " · primary" : ""}
                   </div>
                 </div>
-                <button
-                  onClick={() => handleRemoveEmail(e.id)}
-                  title="Remove email"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
-                >
-                  <Trash2 size={12} />
-                </button>
+                {!isArchived && (
+                  <button
+                    onClick={() => handleRemoveEmail(e.id)}
+                    title="Remove email"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             ))}
 
             {/* Add email inline form */}
-            {addingEmail ? (
+            {!isArchived && (addingEmail ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem", paddingTop: "0.25rem" }}>
                 <div style={{ display: "flex", gap: "0.375rem" }}>
                   <input
@@ -1282,7 +1425,7 @@ export default function CrmContactDetailPage() {
               >
                 <Plus size={12} /> Add email
               </button>
-            )}
+            ))}
           </div>
           {/* ── SMS conversation panel — history + composer ─────────────────── */}
           {contact.phones.length > 0 && (
@@ -1350,6 +1493,10 @@ export default function CrmContactDetailPage() {
                   <MessageSquareDot size={12} />
                   SMS disabled — contact has opted out
                 </div>
+              ) : isArchived ? (
+                <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+                  SMS sending is disabled while this contact is archived.
+                </p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
                   {contact.phones.length > 1 && (
@@ -1407,7 +1554,7 @@ export default function CrmContactDetailPage() {
           )}
 
           {/* Possible duplicates panel — shown when the API finds matches */}
-          {duplicates.length > 0 && (
+          {duplicates.length > 0 && !isArchived && (
             <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem", borderLeft: "3px solid #f59e0b" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
                 <AlertTriangle size={13} style={{ color: "#d97706" }} />
@@ -1458,7 +1605,12 @@ export default function CrmContactDetailPage() {
           </h3>
 
           {/* ── Quick note composer ─────────────────────────────────────────── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {isArchived ? (
+            <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.5 }}>
+              Notes cannot be added while this contact is archived. Timeline below is read-only.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
             {/* Inline note edit mode */}
             {editingNoteLinkedId ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
@@ -1516,6 +1668,7 @@ export default function CrmContactDetailPage() {
               </div>
             )}
           </div>
+          )}
 
           {/* ── Timeline feed ───────────────────────────────────────────────── */}
           <div style={{ marginTop: "0.25rem" }}>
@@ -1535,6 +1688,7 @@ export default function CrmContactDetailPage() {
                     currentUserId={appUser?.id}
                     onEditNote={handleEditNote}
                     onDeleteNote={handleDeleteNote}
+                    allowNoteMutations={!isArchived}
                   />
                 );
               })

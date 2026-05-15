@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
 
 // ── Shared include for contact queries ────────────────────────────────────────
@@ -87,12 +87,17 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const activeContactOnly = { contact: { is: { active: true, archivedAt: null } } };
 
     const [total, leads, mine, recentlyAdded] = await Promise.all([
-      db.crmContactMeta.count({ where: { tenantId } }),
-      db.crmContactMeta.count({ where: { tenantId, stage: "LEAD" } }),
-      db.crmContactMeta.count({ where: { tenantId, assignedToUserId: userId } }),
-      db.crmContactMeta.count({ where: { tenantId, createdAt: { gte: sevenDaysAgo } } }),
+      db.crmContactMeta.count({ where: { tenantId, ...activeContactOnly } }),
+      db.crmContactMeta.count({ where: { tenantId, stage: "LEAD", ...activeContactOnly } }),
+      db.crmContactMeta.count({
+        where: { tenantId, assignedToUserId: userId, ...activeContactOnly },
+      }),
+      db.crmContactMeta.count({
+        where: { tenantId, createdAt: { gte: sevenDaysAgo }, ...activeContactOnly },
+      }),
     ]);
 
     return { total, leads, mine, recentlyAdded };
@@ -114,7 +119,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     const phones = await db.contactPhone.findMany({
       where: {
-        contact: { tenantId, active: true },
+        contact: { tenantId, active: true, archivedAt: null },
         OR: [
           { numberNormalized: { endsWith: partial } },
           { numberNormalized: { contains: partial } },
@@ -183,18 +188,24 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
           .transform(Number)
           .pipe(z.number().int().min(1).max(100))
           .optional(),
+        includeArchived: z
+          .string()
+          .optional()
+          .transform((v) => v === "true"),
       })
       .parse(req.query || {});
 
     const page = query.page ?? 0;
     const limit = query.limit ?? 50;
     const search = (query.q || "").trim().toLowerCase();
+    const includeArchived = query.includeArchived === true;
 
-    const crmWhere = {
-      tenantId,
-      ...(query.stage && query.stage !== "all" ? { stage: query.stage } : {}),
-      ...(query.assignedToMe ? { assignedToUserId: userId } : {}),
-    };
+    if (includeArchived && !isAdminRole(user.role)) {
+      return reply.status(403).send({
+        error: "crm_permission_denied",
+        detail: "includeArchived requires CRM admin",
+      });
+    }
 
     // Resolve combined stage+assignment filter on crmMeta without conflicting keys
     const baseCrmMetaFilter = {
@@ -203,52 +214,50 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       ...(query.assignedToMe ? { assignedToUserId: userId } : {}),
     };
 
+    const archiveClause = includeArchived ? {} : { active: true, archivedAt: null };
+
+    const searchWhere = search
+      ? {
+          OR: [
+            { displayName: { contains: search, mode: "insensitive" } },
+            { firstName: { contains: search, mode: "insensitive" } },
+            { lastName: { contains: search, mode: "insensitive" } },
+            { company: { contains: search, mode: "insensitive" } },
+            {
+              phones: {
+                some: {
+                  OR: [
+                    { numberRaw: { contains: search, mode: "insensitive" } },
+                    { numberNormalized: { contains: search, mode: "insensitive" } },
+                  ],
+                },
+              },
+            },
+            {
+              emails: {
+                some: { email: { contains: search, mode: "insensitive" } },
+              },
+            },
+          ],
+        }
+      : {};
+
+    const listWhere = {
+      tenantId,
+      ...archiveClause,
+      crmMeta: { is: baseCrmMetaFilter },
+      ...searchWhere,
+    };
+
     const [rows, total] = await Promise.all([
       (db as any).contact.findMany({
-        where: {
-          tenantId,
-          active: true,
-          archivedAt: null,
-          crmMeta: { is: baseCrmMetaFilter },
-          ...(search
-            ? {
-                OR: [
-                  { displayName: { contains: search, mode: "insensitive" } },
-                  { firstName: { contains: search, mode: "insensitive" } },
-                  { lastName: { contains: search, mode: "insensitive" } },
-                  { company: { contains: search, mode: "insensitive" } },
-                  {
-                    phones: {
-                      some: {
-                        OR: [
-                          { numberRaw: { contains: search, mode: "insensitive" } },
-                          { numberNormalized: { contains: search, mode: "insensitive" } },
-                        ],
-                      },
-                    },
-                  },
-                  {
-                    emails: {
-                      some: { email: { contains: search, mode: "insensitive" } },
-                    },
-                  },
-                ],
-              }
-            : {}),
-        },
+        where: listWhere,
         include: CONTACT_WITH_CRM_INCLUDE,
         orderBy: { updatedAt: "desc" },
         take: limit,
         skip: page * limit,
       }),
-      (db as any).contact.count({
-        where: {
-          tenantId,
-          active: true,
-          archivedAt: null,
-          crmMeta: { is: baseCrmMetaFilter },
-        },
-      }),
+      (db as any).contact.count({ where: listWhere }),
     ]);
 
     return {
@@ -342,16 +351,68 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
   app.get("/crm/contacts/:id", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, role } = user;
     const { id } = req.params as { id: string };
 
+    const where = isAdminRole(role)
+      ? { id, tenantId }
+      : { id, tenantId, active: true, archivedAt: null };
+
     const contact = await (db as any).contact.findFirst({
-      where: { id, tenantId, active: true },
+      where,
       include: CONTACT_WITH_CRM_INCLUDE,
     });
 
     if (!contact) return reply.status(404).send({ error: "not_found" });
     return formatContact(contact);
+  });
+
+  // ── DELETE /crm/contacts/:id — soft-archive (CRM admin) ────────────────────
+  app.delete("/crm/contacts/:id", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+
+    const row = await (db as any).contact.findFirst({
+      where: { id, tenantId },
+      select: { id: true, active: true, archivedAt: true },
+    });
+    if (!row) return reply.status(404).send({ error: "not_found" });
+
+    if (!row.active || row.archivedAt) {
+      return { ok: true, contactId: id };
+    }
+
+    await (db as any).contact.update({
+      where: { id },
+      data: { active: false, archivedAt: new Date() },
+    });
+    return { ok: true, contactId: id };
+  });
+
+  // ── POST /crm/contacts/:id/restore — undo soft-archive (CRM admin) ──────────
+  app.post("/crm/contacts/:id/restore", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+
+    const row = await (db as any).contact.findFirst({
+      where: { id, tenantId },
+      select: { id: true, active: true, archivedAt: true },
+    });
+    if (!row) return reply.status(404).send({ error: "not_found" });
+
+    if (row.active && !row.archivedAt) {
+      return { ok: true, contactId: id };
+    }
+
+    await (db as any).contact.update({
+      where: { id },
+      data: { active: true, archivedAt: null },
+    });
+    return { ok: true, contactId: id };
   });
 
   // ── PATCH /crm/contacts/:id ───────────────────────────────────────────────
@@ -862,6 +923,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       where: {
         tenantId,
         contactId: { in: contactIds },
+        contact: { active: true, archivedAt: null },
       },
       data: { assignedToUserId: assignedToUserId ?? null },
     });
@@ -877,12 +939,16 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
   app.get("/crm/contacts/:id/duplicates", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, role } = user;
     const { id } = req.params as { id: string };
+
+    const anchorWhere = isAdminRole(role)
+      ? { id, tenantId }
+      : { id, tenantId, active: true };
 
     // Load the current contact's phones + emails + name
     const contact = await (db as any).contact.findFirst({
-      where: { id, tenantId, active: true },
+      where: anchorWhere,
       select: {
         id: true,
         displayName: true,
@@ -920,6 +986,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       where: {
         tenantId,
         active: true,
+        archivedAt: null,
         id: { not: id },
         crmMeta: { isNot: null }, // only CRM-enrolled contacts
         OR: orClauses,
@@ -1182,6 +1249,8 @@ function formatContact(c: any) {
     lastActivityAt: c.crmMeta?.lastActivityAt ?? null,
     lastDisposition: c.crmMeta?.lastDisposition ?? null,
     lastDispositionAt: c.crmMeta?.lastDispositionAt ?? null,
+    active: c.active ?? true,
+    archivedAt: c.archivedAt ? new Date(c.archivedAt).toISOString() : null,
     isInCrm: !!c.crmMeta,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,

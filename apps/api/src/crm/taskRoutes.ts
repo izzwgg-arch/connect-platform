@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess } from "./guard";
+import { requireCrmAccess, isAdminRole } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
 import { todayBounds } from "./crmAggregateBounds";
 import {
@@ -34,9 +34,17 @@ const patchTaskSchema = z.object({
 
 // ── Shared contact resolver ────────────────────────────────────────────────────
 
-async function resolveContact(contactId: string, tenantId: string) {
+async function resolveContact(
+  contactId: string,
+  tenantId: string,
+  mode: "read" | "mutate",
+  role: string | undefined,
+) {
+  const allowInactive = mode === "read" && isAdminRole(role);
   return (db as any).contact.findFirst({
-    where: { id: contactId, tenantId, active: true },
+    where: allowInactive
+      ? { id: contactId, tenantId }
+      : { id: contactId, tenantId, active: true },
     select: { id: true, displayName: true },
   });
 }
@@ -268,10 +276,10 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
   app.get("/crm/contacts/:id/tasks", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, role } = user;
     const { id: contactId } = req.params as { id: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const q = req.query as Record<string, string>;
@@ -298,7 +306,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: contactId } = req.params as { id: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const parsed = createTaskSchema.safeParse(req.body);
@@ -357,7 +365,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: contactId, taskId } = req.params as { id: string; taskId: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const existing = await (db as any).crmContactTask.findFirst({
@@ -439,7 +447,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: contactId, taskId } = req.params as { id: string; taskId: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const existing = await (db as any).crmContactTask.findFirst({

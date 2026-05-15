@@ -116,7 +116,7 @@ export async function registerCrmSmsRoutes(app: FastifyInstance) {
 
     // ── Verify contact ─────────────────────────────────────────────────────────
     const contact = await db.contact.findFirst({
-      where: { id: contactId, tenantId: user.tenantId },
+      where: { id: contactId, tenantId: user.tenantId, active: true, archivedAt: null },
       include: {
         phones: { orderBy: { isPrimary: "desc" } },
         crmMeta: { select: { doNotSms: true } },

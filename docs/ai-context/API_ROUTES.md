@@ -402,18 +402,20 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Contacts (Phase 1B)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/contacts` | List CRM contacts with filters (stage, assignedToMe, search, page/limit) |
+| GET | `/crm/contacts` | List CRM contacts with filters (stage, assignedToMe, search, page/limit). **Default** excludes archived (`active=false`). **Phase 16A:** `?includeArchived=true` includes archived rows; **CRM admin only** (`403` otherwise). |
 | POST | `/crm/contacts` | Create contact + CrmContactMeta |
-| GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded |
-| GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. |
-| GET | `/crm/contacts/:id` | Full contact with phones, emails, crmMeta. Includes `lastDisposition`, `lastDispositionAt`. |
-| PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage. Writes `STAGE_CHANGED` only if stage changes. Writes `ASSIGNED_TO_USER` (non-blocking, fire-and-forget) only if `assignedToUserId` changes individually — **not** written for bulk reassign. |
+| GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded (**active, non-archived** contacts only — Phase 16A) |
+| GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. Excludes archived contacts. |
+| GET | `/crm/contacts/:id` | Full contact with phones, emails, crmMeta. Includes `lastDisposition`, `lastDispositionAt`, `active`, `archivedAt`. **Phase 16A:** platform admins (`ADMIN` / `TENANT_ADMIN` / `SUPER_ADMIN`) may load **archived** contacts; other CRM users get `404` if archived. |
+| DELETE | `/crm/contacts/:id` | **Phase 16A — CRM admin only.** Soft-archives: sets `active=false`, `archivedAt=now()`. Does **not** delete phones, timeline, tasks, or campaign members. Idempotent if already archived. Returns `{ ok: true, contactId }`. |
+| POST | `/crm/contacts/:id/restore` | **Phase 16A — CRM admin only.** Sets `active=true`, `archivedAt=null`. Idempotent if already active. Returns `{ ok: true, contactId }`. |
+| PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage. **Active contacts only** (archived → 404). Writes `STAGE_CHANGED` only if stage changes. Writes `ASSIGNED_TO_USER` (non-blocking, fire-and-forget) only if `assignedToUserId` changes individually — **not** written for bulk reassign. |
 | POST | `/crm/contacts/:id/disposition` | **Phase 2D** — save call outcome. Body: `{ disposition, note?, linkedId?, followUpAt?, nextStage?, memberId? }`. Updates `CrmContactMeta.lastDisposition/lastDispositionAt/lastActivityAt`, optionally creates note + task, writes non-blocking timeline events. **Phase 3C:** if `memberId` is provided and disposition contains "callback" and `followUpAt` is set, non-blocking updates `CrmCampaignMember.callbackAt`+`callbackNote`. |
 
 ### Timeline & Notes (Phase 1C — fixed Phase 5C)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/contacts/:id/timeline` | All events, newest-first, max 200. Returns `{ contactId, events[] }` where each event has `id, type, title, body, metadata, linkedId, createdAt, createdBy`. **Phase 5C fix:** removed Phase 1B placeholder from `contactRoutes.ts`; real query in `timelineRoutes.ts` now serves all requests. |
+| GET | `/crm/contacts/:id/timeline` | All events, newest-first, max 200. **Phase 16A:** platform admins may read timeline for **archived** contacts; **note/task mutations** remain blocked for archived rows (`404`). |
 | POST | `/crm/contacts/:id/notes` | Create note + `NOTE_ADDED` event |
 | PATCH | `/crm/contacts/:id/notes/:noteId` | Edit note body/pin; writes `NOTE_EDITED` |
 | DELETE | `/crm/contacts/:id/notes/:noteId` | Soft-delete note |
@@ -444,12 +446,12 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Bulk Contact Reassign (Phase 5B)
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/crm/contacts/bulk-reassign` | **Admin only.** Body: `{ contactIds: string[], assignedToUserId: string \| null }`. Updates `CrmContactMeta.assignedToUserId` for all matching contacts in the tenant. Max 500 IDs per call. `null` clears assignment. Returns `{ ok, updated }`. No timeline events written (bulk action). |
+| POST | `/crm/contacts/bulk-reassign` | **Admin only.** Body: `{ contactIds: string[], assignedToUserId: string \| null }`. Updates `CrmContactMeta.assignedToUserId` for **active, non-archived** contacts only. Max 500 IDs per call. `null` clears assignment. Returns `{ ok, updated }`. No timeline events written (bulk action). |
 
 ### Contact Duplicate Detection & Merge (Phase 5A)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/contacts/:id/duplicates` | Suggests potential duplicate contacts matching by shared normalised phone, email, or exact display name. Returns up to 5 results with `matchReasons[]`. Any CRM user can view; merging is admin-only. |
+| GET | `/crm/contacts/:id/duplicates` | Suggests potential duplicate contacts matching by shared normalised phone, email, or exact display name. Returns up to 5 results with `matchReasons[]`. Any CRM user can view **active** anchor; **platform admins** may run detection from an **archived** anchor (Phase 16A). Merging is admin-only. |
 | POST | `/crm/contacts/merge` | **Admin only.** Body: `{ keepContactId, mergeContactId }`. Both must be active and in the same tenant. Moves CrmTimelineEvent, CrmContactNote, CrmContactTask, CrmChecklistResponse, CrmCampaignMember (skips campaign conflicts), unique phones/emails to `keepContact`. Archives `mergeContact` (`active=false, archivedAt=now`). Writes `CONTACT_MERGED` timeline event on `keepContact`. Returns `{ ok, phonesAdded, emailsAdded, campaignMembersMoved, campaignMembersSkipped }`. |
 
 ### Import (Phase 1E)

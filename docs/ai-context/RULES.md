@@ -67,6 +67,13 @@
 
 ---
 
+## CRM module (Phase 16A)
+
+- **`DELETE /crm/contacts/:id` is soft-archive only** — sets `Contact.active=false` and `archivedAt=now()`. Must not hard-delete contacts, phones, emails, timeline, tasks, notes, or campaign members in that request.
+- **Archiving preserves historical CRM data** — timeline, SMS-linked events, campaign memberships, and tasks stay in the database for admin review. Default list/search and screen-pop exclude archived rows; admins may use `GET /crm/contacts?includeArchived=true` or open an archived contact in the portal to audit before **Restore**.
+
+---
+
 ## Concurrency & duplication
 
 15. **Do not duplicate background workers, telephony consumers, or BullMQ queue

@@ -683,6 +683,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const whereClause: any = {
       tenantId,
       active: true,
+      archivedAt: null,
       crmMeta: { isNot: null },
       ...(excludedIds.length > 0 ? { id: { notIn: excludedIds } } : {}),
     };

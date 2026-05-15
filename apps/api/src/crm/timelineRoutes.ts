@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess } from "./guard";
+import { requireCrmAccess, isAdminRole } from "./guard";
 import { writeTimelineEvent, updateLinkedTimelineBody } from "./timelineHelper";
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
@@ -18,9 +18,17 @@ const patchNoteSchema = z.object({
 
 // ── Helper: resolve contact with tenant guard ──────────────────────────────────
 
-async function resolveContact(contactId: string, tenantId: string) {
+async function resolveContact(
+  contactId: string,
+  tenantId: string,
+  mode: "read" | "mutate",
+  role: string | undefined,
+) {
+  const allowInactive = mode === "read" && isAdminRole(role);
   return (db as any).contact.findFirst({
-    where: { id: contactId, tenantId, active: true },
+    where: allowInactive
+      ? { id: contactId, tenantId }
+      : { id: contactId, tenantId, active: true },
     select: { id: true, displayName: true },
   });
 }
@@ -35,10 +43,10 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
   app.get("/crm/contacts/:id/timeline", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, role } = user;
     const { id } = req.params as { id: string };
 
-    const contact = await resolveContact(id, tenantId);
+    const contact = await resolveContact(id, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const events = await (db as any).crmTimelineEvent.findMany({
@@ -65,7 +73,7 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: contactId } = req.params as { id: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const parsed = createNoteSchema.safeParse(req.body);
@@ -106,10 +114,10 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
   app.get("/crm/contacts/:id/notes", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, role } = user;
     const { id: contactId } = req.params as { id: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const notes = await (db as any).crmContactNote.findMany({
@@ -132,7 +140,7 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: contactId, noteId } = req.params as { id: string; noteId: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const existing = await (db as any).crmContactNote.findFirst({
@@ -186,7 +194,7 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id: contactId, noteId } = req.params as { id: string; noteId: string };
 
-    const contact = await resolveContact(contactId, tenantId);
+    const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
     const existing = await (db as any).crmContactNote.findFirst({

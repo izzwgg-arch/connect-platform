@@ -1039,10 +1039,29 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 |------|------|
 | **Campaigns** | Prefer `DELETE /crm/campaigns/:id` (sets `ARCHIVED`) or direct DB `status = ARCHIVED` — keeps history. Do not delete campaigns that still have members unless using an API path that cleans members first. |
 | **Campaign members** | Remove smoke members (`CrmCampaignMember`) for test campaigns before or with campaign archive. |
-| **Contacts** | CRM list/search uses **active** contacts only. Prefer `Contact.active = false`, `archivedAt = now()` for smoke phones/emails rather than hard `DELETE`, unless a supported admin merge/delete path exists. |
+| **Contacts (Phase 16A)** | **`DELETE /crm/contacts/:id`** (CRM admin JWT) soft-archives (`active=false`, `archivedAt=now()`). **`POST /crm/contacts/:id/restore`** reverses it. **`GET /crm/contacts?includeArchived=true`** (admin only) lists archived contacts for verification. Does not remove timeline, tasks, notes, or campaign members. |
+| **Contacts** | Default CRM list/search uses **active** contacts only. Prefer soft-archive (above) or merge (archives merged-away row) over hard `DELETE`, unless a supported admin path exists. |
 | **Verify list** | `GET /crm/campaigns` should not show `ARCHIVED` smoke names in the default **active** list. |
 | **Verify search** | `GET /crm/contacts?q=<smoke tag>` returns **no** active rows after cleanup. |
 | **Duplicates** | `SELECT campaignId, contactId, count(*) … HAVING count(*) > 1` on `CrmCampaignMember` should return **0** rows. |
+| **Phase 13D / 15 / smoke naming** | Hunt campaigns and contacts whose names or emails match `SMOKE`, `AGENT-SMOKE`, `Phase13`, `Phase15`, `example.invalid`, or obvious `555` / `+1555` test numbers; archive campaigns and soft-archive contacts the same way as above. |
+
+### Phase 15D — Seeded / test portal password hygiene (pre–live pilot)
+
+Any account created for QA or seed scripts (for example `crm.pilot.agent.p13c@connect-internal.test`) may still have a predictable or shared password. **Treat that as high risk until rotated.** Do not paste passwords or reset tokens into logs, chat, or tickets.
+
+**Safe rotation paths (pick one):**
+
+1. **Self-service forgot password (no admin JWT)**  
+   - Portal: use **Forgot password** with the user’s email, **or**  
+   - `POST https://app.connectcomunications.com/api/auth/password/forgot` with JSON `{"email":"<user email>"}` (always returns `{ ok: true }` to callers).  
+   - User completes the link to `/auth/password/reset?token=…` and sets a new password via `POST /api/auth/password/reset` (portal handles this).
+
+2. **Admin resend invite (tenant admin / super admin with user-management permission)**  
+   - `POST https://app.connectcomunications.com/api/admin/users/:id/resend-invite`  
+   - Header: `Authorization: Bearer <ADMIN_JWT>`  
+   - Sends a fresh **INVITE** email and sets the user to invited / force password setup; user finishes at `/auth/invite/accept`.  
+   - Never commit or print the JWT or email token.
 
 ### First-day monitoring checklist
 
