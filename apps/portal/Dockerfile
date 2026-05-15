@@ -36,7 +36,7 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends openssl \
+  && apt-get install -y --no-install-recommends openssl curl \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/apps/portal/.next/standalone ./
 COPY --from=builder /app/apps/portal/.next/static ./apps/portal/.next/static

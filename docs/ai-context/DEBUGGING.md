@@ -16,6 +16,7 @@
 | `apps/api` | `GET /admin/sbc/status` | Live SBC probe (super-admin). |
 | `apps/api` | `GET /voice/sbc/status` | Tenant-admin SBC view incl. active upstream + masked targets. |
 | `apps/api` | `GET /mobile/android/latest` | Android APK manifest (public). |
+| `apps/portal` | `GET /ready` | Deploy readiness only — **`{ ok: true }`** with **`Cache-Control: no-store`**. No auth/DB. Loopback gates in **`scripts/lib/deploy-portal-rollout.sh`** (**`:3005`** candidate, **`:3000`** stable). Public edge only if nginx routes **`/ready`** to **`connect_portal_active`** (optional). |
 | `apps/realtime` | `GET /health` | `{ ok: true }` |
 | `apps/telephony` | `GET /health` | Health from `HealthService.getHealth()` (status, AMI/ARI, active counts). |
 | `apps/telephony` | `GET /metrics` | Prometheus. |
@@ -897,6 +898,8 @@ reviewed, committed/ported, or explicitly restored.
 **API health timeout (`DEPLOY_API_BLUEGREEN=1` default):** The **`api`** compose service no longer runs **`prisma migrate deploy`** at container boot; **`prisma migrate deploy`** runs in **`scripts/deploy-api.sh`** before **`api_candidate`** starts when schema changed. Stable boot is **`pnpm --filter @connect/api start`**. **`[timing] restart=`** captures the full blue/green sequence (candidate start → nginx cutovers → stable recreate → drain). If **`[deploy-api] FAIL`** references **`candidate /ready`** or **`stable /ready`**, read **`deploy-api-rollout`** log lines plus **`docker logs app-api-candidate-1`** or **`app-api-1`**. If logs show **`GET /ready`** → **`401`**, the rollout cannot succeed until **`/ready`** is exempt from JWT (same allowlist as **`/health`**). Rollout/recovery procedures: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 
 Legacy **`DEPLOY_API_BLUEGREEN=0`:** queue still polls loopback **`http://127.0.0.1:3001/health`** after **`deploy_common_compose_up`**.
+
+**Portal blue/green (`DEPLOY_PORTAL_BLUEGREEN=1` default):** Timing keys **`portal_candidate_*`**, **`portal_cutover_*`**, **`portal_stable_*`**, **`nginx_reload`**. Failures on **`candidate /ready`** or **`stable /ready`**: **`docker logs app-portal-candidate-1`** / **`app-portal-1`**. Recovery: **`docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md`**. Legacy **`DEPLOY_PORTAL_BLUEGREEN=0`** still uses **`http://127.0.0.1:3000/login`** (**`deploy_common_wait_http_2xx_3xx`**) after **`deploy_common_compose_up`**.
 
 If **`[deploy-api] FAIL: health check failed after deploy`** appears at **`stage=health`**, when **`wait_http_ok`** exhausts its budget (~5 min) the job log contains three diagnostic sections — find them between **`stage=health`** and **`stage=rollback`**:
 

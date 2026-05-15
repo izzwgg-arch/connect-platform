@@ -37,7 +37,8 @@
 |---|---|---|
 | `api` | `127.0.0.1:3001:3001` | Builds `apps/api/Dockerfile`. **`command`** runs **`pnpm --filter @connect/api start`** (fast listen; **no Prisma migrate** on boot). **`prisma migrate deploy`** runs only in **`scripts/deploy-api.sh`** when schema/migrations changed. **`stop_grace_period: 60s`** for SIGTERM drain. Docker **`healthcheck`** hits **`GET /health`** (liveness). **`GET /ready`** is used by **`scripts/lib/deploy-api-rollout.sh`** for cutover gates. Same volumes/networks as before (`moh-assets`, `ivr-prompts`, `chat-attachments`, downloads mount, `infra_default`). |
 | `api_candidate` | `127.0.0.1:3004:3001` | **Profile `api_rollout` only.** Second API instance for blue/green deploys; **`container_name: app-api-candidate-1`**. Healthcheck uses **`/ready`**. **`restart: no`** — deploy script starts/stops explicitly. Same image stacks as **`api`**. |
-| `portal` | `127.0.0.1:3000:3000` | Builds `apps/portal/Dockerfile`. Build args include `NEXT_PUBLIC_TELEPHONY_WS_URL` and `NEXT_PUBLIC_FORCE_ICE_RELAY`. Same-origin `/api` (no `NEXT_PUBLIC_API_URL` baked in). |
+| `portal` | `127.0.0.1:3000:3000` | Builds `apps/portal/Dockerfile`. Build args include `NEXT_PUBLIC_TELEPHONY_WS_URL` and `NEXT_PUBLIC_FORCE_ICE_RELAY`. Same-origin `/api` (no `NEXT_PUBLIC_API_URL` baked in). **`GET /ready`** Route Handler (**`deploy-portal-rollout.sh`**). |
+| `portal_candidate` | `127.0.0.1:3005:3000` | **Profile `portal_rollout` only.** **`container_name: app-portal-candidate-1`**. Same build/env pattern as **`portal`**. **`restart: no`**. **`stop_grace_period: 45s`**. Healthcheck **`/ready`**. |
 | `realtime` | `127.0.0.1:3002:3002` | Builds `apps/realtime/Dockerfile`. |
 | `telephony` | `127.0.0.1:3003:3003` | Builds `apps/telephony/Dockerfile`. Reads `JWT_SECRET`, `AMI_PASSWORD`, `ARI_PASSWORD` from env_file directly — do NOT override in compose. Joins `default` and `infra_default`. |
 | `worker` | (no port) | Builds `apps/worker/Dockerfile`. `command:` runs Prisma generate + `pnpm --filter @connect/worker dev`. Mounts `chat-attachments`. Joins `default` and `infra_default`. |
@@ -52,7 +53,12 @@ infra compose layout — not in this repo.
 
 ### API blue/green (zero-downtime, `DEPLOY_API_BLUEGREEN=1` default)
 
-**Root cause addressed:** **`deploy_common_compose_up`** could stop/remove the **`api`** container before the replacement listened, yielding nginx **`502`** for **`/api/*`** on all clients.
+**Proven `/api/*` outage (deploy-caused, not PBX):** **`nginx`** saw **`upstream connect() failed`** to **`127.0.0.1:3001`** while clients hit **`502`**. The failure mode was **`deploy_common_compose_up`**: **`docker compose rm -sf api`** removes the healthy listener **before** the replacement container accepts traffic; nginx keeps pointing at **`:3001`**, which is briefly **closed**. **Mitigation verified in production:** **`api_candidate`** on **`127.0.0.1:3004`**, JWT-safe **`GET /ready`**, rewrite **`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`** to **`:3004`**, **`nginx -s reload`**, recreate stable **`api`** on **`:3001`**, **`/ready`** on **`:3001`**, flip include back to **`:3001`**, **`stop + rm`** candidate only (**`DEPLOYMENT_API_ROLLBACK.md`**).
+
+**Standard (locked for routine production):**
+
+- **`DEPLOY_API_BLUEGREEN=1`** on the deploy worker; **`DEPLOY_API_BLUEGREEN=0`** is **break-glass only** (**`AGENTS.md`** hard rule 10).
+- After every successful rollout, **`connect-api-upstream-active.conf`** (**`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**) ends with **`server 127.0.0.1:3001;`**.
 
 Current approach ( **`scripts/deploy-api.sh`** + **`scripts/lib/deploy-api-rollout.sh`** ):
 
@@ -66,11 +72,62 @@ Failures: candidate never ready → nginx unchanged → stable untouched. Reload
 
 **Readiness probe contract:** **`GET /ready`** (loopback blue/green) and **`GET /api/ready`** (same handler when nginx forwards the `/api` path prefix) are **unauthenticated** on purpose: they bypass the global JWT **`preHandler`** via **`shouldSkipJwtVerification`** in **`apps/api/src/jwtPublicRouteBypass.ts`**. Responses are only **`200`** (listening, accepting traffic, DB `SELECT 1` ok) or **`503`** (boot/drain/DB down). They must not expose secrets, env, tenants, or user payloads — stable JSON flags only. **`deploy-api-rollout.sh`** probes **`http://127.0.0.1:<port>/ready`** with **no `Authorization` header**; do not require JWT on these paths unless the deploy scripts are updated in the same change.
 
-Operators must install the nginx snippet on the application host (**human ops** — see **`docs/nginx/README.md`** and **`AGENTS.md`** forbidding blind `/etc/nginx` edits without process). **`DEPLOY_API_BLUEGREEN=0`** forces legacy single-step **`compose_up`**.
+Operators must install the nginx snippet on the application host (**human ops** — see **`docs/nginx/README.md`** — avoid ad-hoc `/etc/nginx` edits outside the scripted include path). **`DEPLOY_API_BLUEGREEN=0`** exists only as **legacy / break-glass** (**`AGENTS.md`** hard rule **10**); routine **`api`** jobs must leave blue/green on.
 
 Timing logs in deploy output: **`candidate_start`**, **`candidate_readiness`**, **`cutover_to_candidate`**, **`nginx_reload`**, **`stable_recreate`**, **`stable_readiness`**, **`cutover_to_stable`**, **`candidate_drain_remove`** (via **`deploy_common_log_timing`** where implemented).
 
 **Queue pin / `commit_already_deployed`:** After a successful **`api`** job the deploy queue remembers that SHA for same-commit skip (`AGENTS.md`). If `/ready`, worker env, and nginx are correct but **`POST /ops/deploy/enqueue`** returns **`commit_already_deployed`**, you still need **a SHA the queue has never successfully deployed for `api`** before a **real** blue/green will run — even when behaviour is unchanged. The intended low-risk bump is **doc-only**: e.g. this file or **`DEPLOYMENT_API_ROLLBACK.md`**, committed and pushed so the next enqueue can pin **`commitHash`** to the new SHA without touching runtime behaviour.
+
+**Operational note (`dryRun` pins):** **`dryRun: true`** successes may consume the **`commitHash`** guard for **`api`** in some queue versions (`DEPLOYMENT_API_ROLLBACK.md`). Prefer **real** enqueue on **the next docs-only bump** rather than pinning the identical SHA twice if **`commit_already_deployed`** blocks **`dryRun: false`**.
+
+### Portal blue/green (zero-downtime, `DEPLOY_PORTAL_BLUEGREEN=1` default)
+
+**Root cause (`502` UI):** same class as legacy API **`deploy_common_compose_up`**: **`docker compose rm -sf portal`** (**`deploy-common.sh`**) frees **`:3000`** before the replacement listens; **`nginx`** **`proxy_pass`** STILL aimed at **`127.0.0.1:3000`** ⇒ **`upstream connect() failed`**, browser **`502`**.
+
+**Mitigation (in repo):** **`portal_candidate`** on **`127.0.0.1:3005`**, **`GET /ready`** (**`apps/portal/app/ready/route.ts`**, **`Cache-Control: no-store`**), **`DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE`** rewritten **`:3005` → `:3000`**, **`deploy-portal-rollout.sh`**. Routine production: **`DEPLOY_PORTAL_BLUEGREEN=1`** (**`AGENTS.md`** hard rule 11).
+
+1. **`docker compose build portal` + `build portal_candidate`** (shared Dockerfile).
+2. **`--profile portal_rollout up -d --force-recreate portal_candidate`** → host **`:3005`**, wait **`/ready`**.
+3. Write nginx include **`:3005`**, **`nginx -t`**, **`reload`**.
+4. **`docker compose up -d --no-deps --force-recreate portal`** (traffic still on **`:3005`**), wait **`/ready`** on **`:3000`**.
+5. Write include **`:3000`**, reload, **`stop + rm portal_candidate`**.
+
+**Static assets:** Next ships content-hashed **`/_next/static/`** files; HTML is generally short-cached. Blue/green does not introduce new chunk skew beyond the brief window where **HTML** and **chunks** could mismatch if a user keeps one tab open across both cutovers — hard refresh recovers. Prefer **`DEPLOY_PORTAL_PUBLIC_VERIFY_URL`** hitting **`/ready`** or **`/login`** after each flip when validating.
+
+**Dry-run:** **`DEPLOY_DRY_RUN=1`** logs blue/green steps without docker (**`scripts/deploy-portal.sh`**). **`deploy_common_needs_rebuild`** treats **`scripts/deploy-portal.sh`** and **`scripts/lib/deploy-portal-rollout.sh`** as portal-relevant.
+
+Roll forward / recovery: **`docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md`**, **`docs/nginx/README.md`**.
+
+Timing keys in deploy log: **`portal_candidate_start`**, **`portal_candidate_readiness`**, **`portal_cutover_to_candidate`**, **`nginx_reload`**, **`portal_stable_recreate`**, **`portal_stable_readiness`**, **`portal_cutover_to_stable`**, **`portal_candidate_drain_remove`**.
+
+**Legacy:** **`DEPLOY_PORTAL_BLUEGREEN=0`** uses **`deploy_common_compose_up`** (**break-glass only**).
+
+### Deploy clone / branch hygiene (operators)
+
+Agents **do not** run **`git checkout`** on **`/opt/connectcomms/app`** (**`AGENTS.md`**).
+
+- Prefer a **tracked** branch (**not** detached **`HEAD`**), matching **`git fetch`** + enqueue **`branch`**; **`git status`** clean aside from known artefacts before relying on deploy outcomes.
+- Uncommitted **`M …`** paths in **`git-sync` logs**: capture diff under **`_latency_logs/`**, restore blocking paths surgically (**`git checkout HEAD -- path`** — **`KNOWN_ISSUES.md`** / **`AGENTS.md`** post-deploy SHA checks).
+- **Workstation:** remove ephemeral enqueue JSON / scratch under **`_tmp_diag/`** when done (no runtime effect; reduces mistaken commits).
+- **Commit discipline:** infra-only or doc-only changes should ship as **narrow** commits/branches — avoid stuffing unrelated billing/mobile/CRM churn into pins meant for deploy-queue smoke.
+
+### Operational backlog (PBX restart, worker, observability)
+
+| Track | Goal |
+|---|---|
+| **PBX reconnect verification** | **Later:** restart VitalPBX/**Asterisk** only (**not** Connect). Confirm telephony AMI/ARI **`pbx_connection_lost`** → reconnect → **`pbxLinkState` healthy**, WS resubscribe — **`TELEPHONY.md`** / **`DEBUGGING.md`**. |
+| **Worker voicemail spool reconcile CPU** | **`apps/worker`** spool reconcile: tune **`INTERVAL`/delay**, then adaptive backoff when zero-insert scans still hammer **`connect-pbx-helper`**. Profile before widening scope. |
+| **Observability** | Retain **`docker`** logs (**`journald`**) or log driver policy so recreated containers aren’t silently discarded; **`docker events`** correlation around deploy timestamps; alerting on **`nginx`** **`upstream`** **`connect()` failed** to **`3001`/`3004`/`3000`**; optional admin runtime profiler (**reduce `CONNECT_API_PROFILE` circus**). Implement incrementally (**ops + queue + monitoring** repo). |
+
+### Regression checklist (target state post-hardening)
+
+| Area | Pass criterion |
+|---|---|
+| **`api`** deploy | No sustained **`502`** on **`/api/*`**; nginx no **`connect() failed`** burst to **`3001`/`3004`** mid-rollout. |
+| **`portal`** deploy | No **`502`** or bursts of **`3000`**/**`3005`** **`connect()` refused** during rollout; nginx settles on **`3000`**. |
+| **PBX-only restart** | **Connect** untouched; telephony **`pbx_connection_lost`** → reconnect → resubscribe → **`pbxLinkState`** healthy. |
+| **`worker`** voicemail reconcile | **`connect-pbx-helper`** sustained CPU stays flat (no reconcile-driven spike). |
+| **Product surfaces** | Dashboard, contacts, chat, voicemail, call history stay reachable during **`api`** / **`portal`** rollouts. |
 
 ---
 

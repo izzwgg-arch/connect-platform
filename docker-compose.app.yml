@@ -219,6 +219,35 @@ services:
     networks:
       - default
 
+  # Blue/green candidate for zero-downtime portal deploys (host :3005). See scripts/deploy-portal.sh
+  # and docs/nginx/README.md. Started only with profile portal_rollout.
+  portal_candidate:
+    profiles: ["portal_rollout"]
+    restart: "no"
+    container_name: app-portal-candidate-1
+    build:
+      context: .
+      dockerfile: apps/portal/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+        NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
+    environment:
+      NEXT_PUBLIC_API_URL: ""
+      PORTAL_API_INTERNAL_URL: http://api:3001
+      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+    ports:
+      - "127.0.0.1:3005:3000"
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/ready"]
+      interval: 15s
+      timeout: 8s
+      retries: 6
+      start_period: 240s
+    networks:
+      - default
+
   realtime:
     restart: unless-stopped
     build:

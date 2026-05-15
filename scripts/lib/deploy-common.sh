@@ -287,7 +287,7 @@ _deploy_common_service_paths() {
       echo "apps/api/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     portal)
-      echo "apps/portal/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/portal/ scripts/deploy-portal.sh scripts/lib/deploy-portal-rollout.sh packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
       ;;
     telephony)
       echo "apps/telephony/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
