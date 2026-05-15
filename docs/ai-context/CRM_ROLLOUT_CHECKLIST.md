@@ -135,6 +135,19 @@
 | Honest gaps | If `errorCount` or `skippedCount` > 0 but `errors` is empty, amber notice explains row-level data missing—no invented rows. |
 | List | Recent Imports keeps listing; highlighted row matches `?batch=`; **Batch detail →** on each card. |
 
+### Phase 18A — CRM Command Center dashboard (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/dashboard` loads for CRM users with `can_view_crm_dashboard`; layout gating unchanged (CRM off → existing enable panel). |
+| Command strip | Greeting + **Today** line uses `GET /crm/reports/daily` (calls linked, dispositions, new contacts); links to `/crm/reports` where allowed. |
+| Next up | Overdue / due chips match tenant admin (`follow-ups`) vs agent (`tasks/stats` buckets); no full-width alert banner for the happy path. |
+| KPI row | Tiles show real counts only (campaigns, leads, queue workload, imports today when import permission, outcomes, calls linked); drilldown links unchanged in spirit (`/crm/campaigns?status=ACTIVE`, `/crm/contacts?stage=LEAD`, queue, import, reports). |
+| Work columns | Queue preview uses `GET /crm/queue` overdue + due (smart sort, limit 4); campaigns lists paused + active from `GET /crm/campaigns`; recent imports from `GET /crm/import/batches?limit=8`. |
+| Admin health | Compact **Workspace health** row still reflects `GET /crm/admin/pilot-readiness` + settings. |
+| No polling | Hard reload — no `setInterval` / polling added on this page. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports
@@ -152,10 +165,12 @@
 
 ## 7A. First-day pilot dashboard (Phase 15A)
 
+**Phase 18A portal note:** the dashboard UI is now a **Command Center** layout (hero, KPI tiles, focused work lists). API expectations below still apply; the large multi-card **Pilot readiness** grid is replaced by a compact **Workspace health** row for admins.
+
 | Step | How to verify |
 |------|--------------|
-| CRM dashboard copy | `/crm/dashboard` describes the pilot first-day mindset (readiness + actions), with no roadmap placeholder. |
-| Admin readiness cards | Log in as TENANT_ADMIN/ADMIN. Section **Pilot readiness** shows CRM enabled, CRM user count, active campaigns, tenant queue depth, tenant overdue callbacks. SMS row appears only when tenant has CRM SMS activity **or** outbound SMS is configured. |
+| CRM dashboard copy | `/crm/dashboard` surfaces priorities, live snapshot, and shortcuts (command-center framing). |
+| Admin readiness cards | Log in as TENANT_ADMIN/ADMIN. **Workspace health** shows CRM enabled, CRM user count, active campaigns, tenant queue depth, tenant overdue callbacks. SMS appears in the same row only when applicable. |
 | Admin-only API | `GET /crm/admin/pilot-readiness` → 200 for admins; → 403 `crm_permission_denied` for agents. |
 | Agent readiness cards | Agent sees **My queue depth**, **Team queue**, **My overdue callbacks** (not tenant-wide callback totals). |
 | Agent alert strip | Non-admin strip uses per-user callback + task buckets from `GET /crm/tasks/stats` (not tenant-wide `follow-ups`). |

@@ -72,6 +72,7 @@
 - **`DELETE /crm/contacts/:id` is soft-archive only** — sets `Contact.active=false` and `archivedAt=now()`. Must not hard-delete contacts, phones, emails, timeline, tasks, notes, or campaign members in that request.
 - **Archiving preserves historical CRM data** — timeline, SMS-linked events, campaign memberships, and tasks stay in the database for admin review. Default list/search and screen-pop exclude archived rows; admins may use `GET /crm/contacts?includeArchived=true` or open an archived contact in the portal to audit before **Restore**.
 - **Archived or inactive contacts are not live actionable queue work (Phase 16C)** — `GET /crm/queue`, its tab counts, `POST /crm/queue/next`, and agent metrics that represent “my queue” / live callbacks exclude members whose `Contact` is `active=false` or `archivedAt != null`. `CrmCampaignMember` rows are not deleted; campaign history and `/crm/reports/campaigns` roster-style totals can still include archived contacts unless the metric is explicitly live-queue scoped.
+- **CRM Command Center dashboard (Phase 18A)** — `/crm/dashboard` is the workflow landing: prioritize actionable counts and short previews backed by existing CRM APIs; avoid vanity KPIs, fake activity feeds, and dense primary tables. Guidance stays inline or in compact empty states—not repeated warning banners.
 
 ---
 
