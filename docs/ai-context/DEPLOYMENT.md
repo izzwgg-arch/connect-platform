@@ -70,6 +70,8 @@ Operators must install the nginx snippet on the application host (**human ops** 
 
 Timing logs in deploy output: **`candidate_start`**, **`candidate_readiness`**, **`cutover_to_candidate`**, **`nginx_reload`**, **`stable_recreate`**, **`stable_readiness`**, **`cutover_to_stable`**, **`candidate_drain_remove`** (via **`deploy_common_log_timing`** where implemented).
 
+**Queue pin / `commit_already_deployed`:** After a successful **`api`** job the deploy queue remembers that SHA for same-commit skip (`AGENTS.md`). If `/ready`, worker env, and nginx are correct but **`POST /ops/deploy/enqueue`** returns **`commit_already_deployed`**, you still need **a SHA the queue has never successfully deployed for `api`** before a **real** blue/green will run — even when behaviour is unchanged. The intended low-risk bump is **doc-only**: e.g. this file or **`DEPLOYMENT_API_ROLLBACK.md`**, committed and pushed so the next enqueue can pin **`commitHash`** to the new SHA without touching runtime behaviour.
+
 ---
 
 ## Persistent volumes (named)
