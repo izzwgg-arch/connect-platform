@@ -60,11 +60,18 @@ deploy_portal_rollout_wait_ready() {
   local delay="${3:-2}"
   local n=0
   local curl_tls=()
+  local curl_resolve=()
   if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE:-0}" == "1" ]] && [[ "$url" =~ ^https:// ]]; then
     curl_tls=(-k)
   fi
+  # Avoid hairpin probes: curl https://public-host/ from the app server may hit nginx deny rules
+  # when the client address is the server's own public IP. Mapping the hostname to 127.0.0.1 keeps
+  # the client as loopback while still exercising TLS + nginx + upstream (SNI unchanged).
+  if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]] && [[ "$url" =~ ^https://([^/:?#]+) ]]; then
+    curl_resolve=(--resolve "${BASH_REMATCH[1]}:443:127.0.0.1")
+  fi
   while [[ "$n" -lt "$attempts" ]]; do
-    if curl "${curl_tls[@]}" -fsS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
+    if curl "${curl_tls[@]}" "${curl_resolve[@]}" -fsS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
       return 0
     fi
     n=$((n + 1))
@@ -149,6 +156,9 @@ deploy_portal_rollout_run() {
 
   local verify_url="${DEPLOY_PORTAL_PUBLIC_VERIFY_URL:-}"
   if [[ -n "$verify_url" ]]; then
+    if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]]; then
+      deploy_common_log "[deploy-portal-rollout] public verify via loopback SNI (DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 curl --resolve host:443:127.0.0.1)"
+    fi
     if ! deploy_portal_rollout_wait_ready "${verify_url}" 30 2; then
       echo "[deploy-portal] FAIL: DEPLOY_PORTAL_PUBLIC_VERIFY_URL not ready after cutover: ${verify_url}" >&2
       deploy_portal_rollout_write_upstream_port "${ACTIVE_BEFORE}" "$UPSTREAM"
@@ -207,7 +217,7 @@ Blue/green portal deploy (when DEPLOY_PORTAL_BLUEGREEN=1 and upstream include ex
   3. wait http://127.0.0.1:3005/ready (lightweight Route Handler JSON)
   4. write DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE -> server 127.0.0.1:3005;
   5. nginx -t && nginx -s reload
-  6. (optional) DEPLOY_PORTAL_PUBLIC_VERIFY_URL — HTTPS root or /login curl
+  6. (optional) DEPLOY_PORTAL_PUBLIC_VERIFY_URL — HTTPS after cutover; set DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 on origin hosts where hairpin public URL gets nginx 403
   7. docker compose up -d --no-deps --force-recreate portal -> 127.0.0.1:3000
   8. wait http://127.0.0.1:3000/ready
   9. write upstream -> server 127.0.0.1:3000; nginx -t && reload

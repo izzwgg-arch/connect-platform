@@ -58,6 +58,7 @@ The deploy user must be able to **rewrite** the portal include and run **`sudo -
 |---------|---------|
 | **`DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE`** | Single-line **`server 127.0.0.1:PORT;`** include for **`connect_portal_active`**. |
 | **`DEPLOY_PORTAL_UPSTREAM_BOOTSTRAP`** | **`1`** once to create include if missing. |
-| **`DEPLOY_PORTAL_PUBLIC_VERIFY_URL`** | Optional public URL after cutovers (e.g. **`https://host/ready`**). |
+| **`DEPLOY_PORTAL_PUBLIC_VERIFY_URL`** | Optional URL after cutovers (e.g. **`https://host/ready`**) — typically unset and rely on loopback **`/ready`** only. |
+| **`DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL`** | **`1`** → for **`https://`** verify URLs only, map the hostname to **`127.0.0.1:443`** with **`curl --resolve`** so the probe does not hairpin via the server’s public IP (avoids nginx **403** on some origins). |
 | **`DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE`** | **`1`** → **`curl -k`**. |
 | **`DEPLOY_PORTAL_BLUEGREEN`** | **`0`** forces legacy **`deploy_common_compose_up`** on **`portal`** (**break-glass**). |

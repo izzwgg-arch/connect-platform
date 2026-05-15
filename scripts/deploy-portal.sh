@@ -9,6 +9,7 @@
 #   DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE — nginx include (single line server 127.0.0.1:PORT;)
 #   DEPLOY_PORTAL_UPSTREAM_BOOTSTRAP=1 — one-time seed include -> :3000
 #   DEPLOY_PORTAL_PUBLIC_VERIFY_URL — optional curl after nginx cutovers
+#   DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 — curl --resolve host:443:127.0.0.1 for HTTPS (avoids hairpin 403)
 #   DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE=1 — curl -k for HTTPS verify URLs
 #   DEPLOY_PORTAL_BLUEGREEN=0 — legacy compose_up (docker rm -sf gap on :3000)
 #

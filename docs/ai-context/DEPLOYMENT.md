@@ -92,7 +92,7 @@ Timing logs in deploy output: **`candidate_start`**, **`candidate_readiness`**, 
 4. **`docker compose up -d --no-deps --force-recreate portal`** (traffic still on **`:3005`**), wait **`/ready`** on **`:3000`**.
 5. Write include **`:3000`**, reload, **`stop + rm portal_candidate`**.
 
-**Static assets:** Next ships content-hashed **`/_next/static/`** files; HTML is generally short-cached. Blue/green does not introduce new chunk skew beyond the brief window where **HTML** and **chunks** could mismatch if a user keeps one tab open across both cutovers — hard refresh recovers. Prefer **`DEPLOY_PORTAL_PUBLIC_VERIFY_URL`** hitting **`/ready`** or **`/login`** after each flip when validating.
+**Static assets:** Next ships content-hashed **`/_next/static/`** files; HTML is generally short-cached. Blue/green does not introduce new chunk skew beyond the brief window where **HTML** and **chunks** could mismatch if a user keeps one tab open across both cutovers — hard refresh recovers. Optional **`DEPLOY_PORTAL_PUBLIC_VERIFY_URL`** must not use a naïve **`curl https://public-host/…`** from the same machine when nginx denies hairpin traffic (**client IP = origin public IP**); either **unset** the variable (loopback **`GET /ready`** gates are sufficient) or set **`DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1`** so verify uses **`curl --resolve host:443:127.0.0.1`** and still exercises TLS + nginx + upstream.
 
 **Dry-run:** **`DEPLOY_DRY_RUN=1`** logs blue/green steps without docker (**`scripts/deploy-portal.sh`**). **`deploy_common_needs_rebuild`** treats **`scripts/deploy-portal.sh`** and **`scripts/lib/deploy-portal-rollout.sh`** as portal-relevant.
 
