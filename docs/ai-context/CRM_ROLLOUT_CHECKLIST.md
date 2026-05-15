@@ -90,7 +90,7 @@
 | Outcome updates member status | Save Outcome → `POST /crm/contacts/:id/disposition` + `PATCH /crm/queue/:memberId { action: "outcome" }` |
 | Callback scheduling | Outcome with "Callback" + date → member `callbackAt` set, member appears in **Due** tab |
 | Export CSV | `GET /crm/campaigns/:id/export.csv` → downloads CSV with all members |
-| Campaign auto-completes | When all members are in terminal status → campaign `status: "COMPLETED"` |
+| Campaign auto-completes | When all **live-contact** non-terminal work is done (Phase 16D) — `PENDING`/`IN_PROGRESS`/`CALLBACK` only on active, non-archived contacts — campaign may become `status: "COMPLETED"` (also re-checked after contact soft-archive). |
 
 ---
 
@@ -1070,6 +1070,16 @@ Portal `/crm/contacts`: CRM **admin** sees **List** scope **Active** (default), 
 | **Campaign detail** | Member row still listed with **Archived** badge and muted styling; agent cannot change status, callback, or **Call** workspace link (controls disabled); admin can still PATCH member for maintenance. |
 | **Restore** | `POST /crm/contacts/:id/restore`. If member status still qualifies, row **returns** to queue and counts. |
 | **Reports alignment (optional)** | `GET /crm/reports/daily` fields `queueRemaining`, `callbacksDueToday`, `overdueCallbacks` move with live queue (exclude archived). `GET /crm/reports/campaigns` campaign totals may still count archived members — historical roster. |
+
+### Phase 16D — Campaign auto-complete vs archived contacts (smoke)
+
+**Setup:** ACTIVE campaign with at least one member whose contact is **live** and in a **non-terminal** status (`PENDING` / `IN_PROGRESS` / `CALLBACK`), plus another member on an archived contact still in `PENDING` (or soft-archive one member’s contact after setup).
+
+| Check | Expected |
+|-------|----------|
+| **Only archived rows non-terminal** | After the last **live** member is terminal (or after soft-archiving every remaining non-terminal contact), campaign becomes **`COMPLETED`** when auto-complete runs (member PATCH / queue PATCH to terminal, or **soft-archive** path that re-checks campaigns). No `CrmCampaignMember` rows mutated solely because the contact archived. |
+| **Campaign detail** | Archived members still visible with badge/muted styling; `queueWorkEligible` false. |
+| **Restore** | Restoring a contact does not by itself revert campaign from `COMPLETED` to `ACTIVE` (no automatic un-complete in 16D). |
 
 ### Phase 15D — Seeded / test portal password hygiene (pre–live pilot)
 

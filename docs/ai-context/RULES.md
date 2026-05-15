@@ -262,13 +262,14 @@
 48. **Campaign auto-completion is non-blocking and fire-and-forget.**
     - `checkAndAutoCompleteCampaign(campaignId, tenantId)` is called with `.catch(() => {})` — never awaited.
     - Terminal statuses (campaign can complete): `CONVERTED`, `SKIPPED`, `DO_NOT_CALL`, `CONTACTED`.
-    - Non-terminal statuses (campaign stays open): `PENDING`, `IN_PROGRESS`, `CALLBACK`.
+    - **Phase 16D — actionable non-terminal:** `PENDING`, `IN_PROGRESS`, `CALLBACK` **only on live contacts** (`active=true` and `archivedAt` null). Archived/inactive contacts do not block auto-completion; historical `CrmCampaignMember` rows are unchanged.
     - Auto-complete only fires on ACTIVE or PAUSED campaigns (uses `updateMany` with status filter).
     - Empty campaigns (zero members) are never auto-completed.
+    - After a contact is soft-archived, affected campaigns are re-checked so a campaign whose only remaining non-terminal rows were archived can move to `COMPLETED` without mutating member rows.
 
 49. **`CALLBACK` is intentionally non-terminal for campaign auto-completion.**
     - A member in `CALLBACK` status means there is still work to do (call them back).
-    - Campaign will not auto-complete while any member is `PENDING`, `IN_PROGRESS`, or `CALLBACK`.
+    - Campaign will not auto-complete while any **live-contact** member is `PENDING`, `IN_PROGRESS`, or `CALLBACK`.
 
 50. **`GET /crm/campaigns/:id/contacts/available` excludes existing members server-side.**
     - Do not load all contacts in the UI and filter client-side.

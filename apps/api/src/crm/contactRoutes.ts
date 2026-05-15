@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
+import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
 
 // ── Shared include for contact queries ────────────────────────────────────────
 
@@ -414,6 +415,16 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       where: { id },
       data: { active: false, archivedAt: new Date() },
     });
+
+    const touchedCampaigns = await db.crmCampaignMember.findMany({
+      where: { contactId: id, tenantId },
+      distinct: ["campaignId"],
+      select: { campaignId: true },
+    });
+    for (const row of touchedCampaigns) {
+      checkAndAutoCompleteCampaign(row.campaignId, tenantId).catch(() => {});
+    }
+
     return { ok: true, contactId: id };
   });
 

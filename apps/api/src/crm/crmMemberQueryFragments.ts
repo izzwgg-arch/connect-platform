@@ -3,6 +3,7 @@
  * Each helper mirrors one historical predicate — no semantic normalization across routes.
  */
 
+import type { Prisma } from "@connect/db";
 import { crmCampaignActiveWhere } from "./crmAggregateBounds";
 
 export type CrmNestedCampaignWhere = Record<string, unknown>;
@@ -17,6 +18,15 @@ export const CRM_CAMPAIGN_MEMBER_QUEUE_TERMINAL_STATUSES = ["CONVERTED", "DO_NOT
 export const crmCampaignMemberQueueLiveContactWhere = {
   contact: { is: { active: true, archivedAt: null } },
 } as const;
+
+/**
+ * Campaign auto-completion (Phase 16D): non-terminal member rows that still block COMPLETED
+ * when the contact is live. Matches `checkAndAutoCompleteCampaign` status band + Phase 16C contact scope.
+ */
+export const crmCampaignMemberActionableNonTerminalWhere: Prisma.CrmCampaignMemberWhereInput = {
+  status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] },
+  ...crmCampaignMemberQueueLiveContactWhere,
+};
 
 const PENDING_IN_PROGRESS = ["PENDING", "IN_PROGRESS"] as const;
 

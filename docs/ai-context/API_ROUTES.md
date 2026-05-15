@@ -407,7 +407,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded (**active, non-archived** contacts only — Phase 16A) |
 | GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. Excludes archived contacts. |
 | GET | `/crm/contacts/:id` | Full contact with phones, emails, crmMeta. Includes `lastDisposition`, `lastDispositionAt`, `active`, `archivedAt`. **Phase 16A:** platform admins (`ADMIN` / `TENANT_ADMIN` / `SUPER_ADMIN`) may load **archived** contacts; other CRM users get `404` if archived. |
-| DELETE | `/crm/contacts/:id` | **Phase 16A — CRM admin only.** Soft-archives: sets `active=false`, `archivedAt=now()`. Does **not** delete phones, timeline, tasks, or campaign members. Idempotent if already archived. Returns `{ ok: true, contactId }`. |
+| DELETE | `/crm/contacts/:id` | **Phase 16A — CRM admin only.** Soft-archives: sets `active=false`, `archivedAt=now()`. Does **not** delete phones, timeline, tasks, or campaign members. Idempotent if already archived. Returns `{ ok: true, contactId }`. **Phase 16D:** non-blocking campaign auto-completion is re-run for each campaign this contact was enrolled in (actionable non-terminal counts use live contacts only). |
 | POST | `/crm/contacts/:id/restore` | **Phase 16A — CRM admin only.** Sets `active=true`, `archivedAt=null`. Idempotent if already active. Returns `{ ok: true, contactId }`. |
 | PATCH | `/crm/contacts/:id` | Update contact fields + CRM stage. **Active contacts only** (archived → 404). Writes `STAGE_CHANGED` only if stage changes. Writes `ASSIGNED_TO_USER` (non-blocking, fire-and-forget) only if `assignedToUserId` changes individually — **not** written for bulk reassign. |
 | POST | `/crm/contacts/:id/disposition` | **Phase 2D** — save call outcome. Body: `{ disposition, note?, linkedId?, followUpAt?, nextStage?, memberId? }`. Updates `CrmContactMeta.lastDisposition/lastDispositionAt/lastActivityAt`, optionally creates note + task, writes non-blocking timeline events. **Phase 3C:** if `memberId` is provided and disposition contains "callback" and `followUpAt` is set, non-blocking updates `CrmCampaignMember.callbackAt`+`callbackNote`. |
@@ -488,7 +488,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 |--------|------|-------|
 | GET | `/crm/campaigns` | List campaigns (default: exclude ARCHIVED). Filter: `?status=`. Each campaign includes `priority`. |
 | POST | `/crm/campaigns` | Create campaign (admin). Body: `{ name, description?, status?, priority?: LOW\|NORMAL\|HIGH\|URGENT, scriptId?, checklistId? }`. Defaults `priority=NORMAL`. |
-| GET | `/crm/campaigns/:id` | Campaign detail + statusCounts per member status. Includes `priority`. |
+| GET | `/crm/campaigns/:id` | Campaign detail + statusCounts per member status. Includes `priority`. **Phase 16D:** when all **live-contact** actionable work reaches terminal statuses (or only archived contacts remain non-terminal), background auto-complete may set campaign `status` to `COMPLETED` (see `checkAndAutoCompleteCampaign` + `DELETE /crm/contacts/:id` re-check). |
 | PATCH | `/crm/campaigns/:id` | Update name/description/status/priority/scriptId/checklistId (admin) |
 | DELETE | `/crm/campaigns/:id` | Archive campaign (sets status=ARCHIVED, admin) |
 | POST | `/crm/campaigns/:id/members/add` | Add contacts (by contactId array). Skips duplicates. Only CRM-enrolled contacts. (admin) |

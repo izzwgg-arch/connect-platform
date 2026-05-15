@@ -12,6 +12,7 @@ import {
   crmCampaignMemberQueueLiveContactWhere,
   crmQueueFilterPendingWhere,
 } from "./crmMemberQueryFragments";
+import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
@@ -138,37 +139,6 @@ function formatMember(m: any) {
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,
   };
-}
-
-// ── Auto-complete helper ──────────────────────────────────────────────────────
-
-/**
- * Non-blocking check: if all members are in terminal statuses, mark campaign COMPLETED.
- * Terminal = CONVERTED | SKIPPED | DO_NOT_CALL | CONTACTED
- * Non-terminal (campaign stays open) = PENDING | IN_PROGRESS | CALLBACK
- */
-async function checkAndAutoCompleteCampaign(campaignId: string, tenantId: string): Promise<void> {
-  try {
-    const nonTerminalCount = await db.crmCampaignMember.count({
-      where: {
-        campaignId,
-        tenantId,
-        status: { in: ["PENDING", "IN_PROGRESS", "CALLBACK"] },
-      },
-    });
-    if (nonTerminalCount === 0) {
-      // Also confirm there is at least one member (don't auto-complete empty campaigns)
-      const totalCount = await db.crmCampaignMember.count({ where: { campaignId, tenantId } });
-      if (totalCount > 0) {
-        await db.crmCampaign.updateMany({
-          where: { id: campaignId, tenantId, status: { in: ["ACTIVE", "PAUSED"] } },
-          data: { status: "COMPLETED" },
-        });
-      }
-    }
-  } catch {
-    // Non-blocking: swallow errors
-  }
 }
 
 // ── Route registrar ───────────────────────────────────────────────────────────
