@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import "../../../admin/billing/_components/billingPhase3.css";
 import "../../../admin/billing/_components/billingPhase4.css";
+import "../../../admin/billing/_components/billingPhase5.css";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
@@ -111,7 +112,7 @@ export default function BillingInvoiceDetailPage() {
   return (
     <PermissionGate permission="can_view_billing_invoices" fallback={<div className="state-box">You do not have invoice access.</div>}>
       <BillingPageChrome toast={toast}>
-        <div className="stack compact-stack">
+        <div className="stack compact-stack billing-p5-scope billing-phase3-tenant">
           <div className="row-actions" style={{ marginBottom: -4 }}>
             <Link className="btn ghost" style={{ fontSize: 12, padding: "4px 10px" }} href="/billing/invoices">
               ← Invoices
@@ -130,7 +131,7 @@ export default function BillingInvoiceDetailPage() {
           {row ? (
             <>
               {/* Invoice header card */}
-              <div className="billing-invoice-header">
+              <div className="billing-p5-calm-panel billing-invoice-header">
                 <div className="billing-invoice-header-top">
                   <div>
                     <h2>{row.invoiceNumber}</h2>

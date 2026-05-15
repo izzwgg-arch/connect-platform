@@ -20,7 +20,7 @@ import {
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
-import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "../_components/adminBillingLinks";
+import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
 
 type TenantRow = { id: string; name: string };
 
@@ -833,8 +833,13 @@ function AdminBillingSettingsBody() {
     {},
   );
 
+  function settingsSectionHref(section: BillingSettingsSection) {
+    if (!effectiveTenantId) return "/admin/billing/settings";
+    return `/admin/billing/settings${mergeSearchParams(new URLSearchParams({ tenantId: effectiveTenantId }), { [BILLING_SECTION_QUERY]: section })}`;
+  }
+
   return (
-    <div className="stack compact-stack billing-admin-shell">
+    <div className="stack compact-stack billing-admin-shell billing-p5-scope">
       <div style={{ marginBottom: 4 }}>
         <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Company billing setup</h2>
         <p className="muted" style={{ margin: 0, fontSize: 13, maxWidth: 720 }}>
@@ -874,59 +879,93 @@ function AdminBillingSettingsBody() {
       {detailError ? <ErrorState message={detailError} /> : null}
 
       {detail && !detailLoading ? (
-        <>
-          <div id="billing-section-plans-pricing" style={sectionAnchorStyle}>
-            <AdminBillingPricingWarningsBanner
-              tenantId={detail.tenant.id}
-              previewMonth={previewMonth}
-              previewYear={previewYear}
-            />
-            <section className="billing-setup-grid">
-              <AdminCurrentBillingPlanAssignCard
+        <div className="billing-p5-settings-shell">
+          <nav className="billing-p5-settings-nav" aria-label="Billing settings sections">
+            <h3>Billing setup</h3>
+            <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; unit pricing</Link>
+            <h3>Payment collection</h3>
+            <Link href={settingsSectionHref("gateway")}>Payment gateway</Link>
+            <Link href={settingsSectionHref("collections")}>Collections automation</Link>
+            <h3>Tax &amp; invoicing</h3>
+            <Link href={settingsSectionHref("tax-billing")}>Branding &amp; tax fields</Link>
+            <h3>Preview &amp; diagnostics</h3>
+            <Link href={settingsSectionHref("preview")}>Schedules &amp; invoice preview</Link>
+            <Link href={settingsSectionHref("pricing-explanation")}>Pricing diagnostics</Link>
+          </nav>
+          <div className="billing-p5-settings-main">
+            <div id="billing-section-plans-pricing" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Plans &amp; unit economics</h3>
+              <p className="billing-p5-settings-section__summary">
+                Connect catalog plans, reconcile pricing sources, and tune recurring line items before invoices generate.
+              </p>
+              <AdminBillingPricingWarningsBanner
                 tenantId={detail.tenant.id}
-                tenantName={detail.tenant.name}
                 previewMonth={previewMonth}
                 previewYear={previewYear}
-                onAssigned={() => void loadDetail(detail.tenant.id)}
               />
-              <AdminTenantPricingSourceCard
-                detail={detail}
-                onSaved={() => void loadDetail(detail.tenant.id)}
-                previewPeriodMonth={previewMonth}
-                previewPeriodYear={previewYear}
-              />
-              <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-            </section>
-          </div>
+              <section className="billing-setup-grid">
+                <AdminCurrentBillingPlanAssignCard
+                  tenantId={detail.tenant.id}
+                  tenantName={detail.tenant.name}
+                  previewMonth={previewMonth}
+                  previewYear={previewYear}
+                  onAssigned={() => void loadDetail(detail.tenant.id)}
+                />
+                <AdminTenantPricingSourceCard
+                  detail={detail}
+                  onSaved={() => void loadDetail(detail.tenant.id)}
+                  previewPeriodMonth={previewMonth}
+                  previewPeriodYear={previewYear}
+                />
+                <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+              </section>
+            </div>
 
-          <div id="billing-section-tax-billing" style={sectionAnchorStyle}>
-            <section className="billing-setup-grid">
-              <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-            </section>
-          </div>
+            <div id="billing-section-tax-billing" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Customer invoice presentation</h3>
+              <p className="billing-p5-settings-section__summary">
+                Names, logos, and support contacts that appear on PDFs and billing emails — tuned for customer trust, not internal jargon.
+              </p>
+              <section className="billing-setup-grid">
+                <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+              </section>
+            </div>
 
-          <div id="billing-section-gateway" style={sectionAnchorStyle}>
-            <section className="billing-setup-grid">
-              <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-            </section>
-          </div>
+            <div id="billing-section-gateway" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Payment gateway</h3>
+              <p className="billing-p5-settings-section__summary">Processor credentials and capture behavior for this company.</p>
+              <section className="billing-setup-grid">
+                <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+              </section>
+            </div>
 
-          <div id="billing-section-collections" style={sectionAnchorStyle}>
-            <section className="billing-setup-grid">
-              <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
-            </section>
-          </div>
+            <div id="billing-section-collections" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Collections automation</h3>
+              <p className="billing-p5-settings-section__summary">Dunning cadence overrides for this tenant — worker enforced on each sweep.</p>
+              <section className="billing-setup-grid">
+                <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
+              </section>
+            </div>
 
-          <div id="billing-section-preview" style={sectionAnchorStyle}>
-            <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
-            <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
-            <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
-          </div>
+            <div id="billing-section-preview" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Schedules &amp; invoice preview</h3>
+              <p className="billing-p5-settings-section__summary">
+                Model upcoming invoices for a UTC month. Nothing here charges a card or posts to the ledger.
+              </p>
+              <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
+              <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
+              <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+            </div>
 
-          <div id="billing-section-pricing-explanation" style={sectionAnchorStyle}>
-            <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+            <div id="billing-section-pricing-explanation" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+              <h3 className="billing-p5-settings-section__title">Pricing diagnostics</h3>
+              <p className="billing-p5-settings-section__summary">
+                Deep read on how catalog rows, tenant overrides, and effective invoice math align for operators.
+              </p>
+              <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+            </div>
           </div>
-        </>
+        </div>
       ) : null}
     </div>
   );

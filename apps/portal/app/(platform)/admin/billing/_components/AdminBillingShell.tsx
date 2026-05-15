@@ -14,8 +14,26 @@ import {
   OPS_TAB_QUERY,
   type AdminOpsTab,
 } from "./adminBillingLinks";
+import {
+  adminTenantStandingHeadline,
+  dollars,
+  lastPaidSummary,
+  nextBillingSummary,
+  nextOpenInvoiceDueSummary,
+  worstNonTerminalInvoiceStatus,
+} from "../../../../../lib/billingUi";
 
-export type TenantOption = { id: string; name: string };
+export type TenantWorkspaceRow = {
+  id: string;
+  name: string;
+  balanceDueCents?: number;
+  invoices?: any[];
+  paymentMethods?: any[];
+  billingSettings?: { autoBillingEnabled?: boolean; billingDayOfMonth?: number } | null;
+};
+
+/** @deprecated use TenantWorkspaceRow */
+export type TenantOption = TenantWorkspaceRow;
 
 type WorkspaceLinkKey =
   | "summary"
@@ -42,7 +60,7 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
   const catalogMode = pathnameIsCatalog(pathname);
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
 
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [tenants, setTenants] = useState<TenantWorkspaceRow[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(canAdmin);
   const [tenantsError, setTenantsError] = useState("");
   const [comboOpen, setComboOpen] = useState(false);
@@ -73,8 +91,8 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     setTenantsLoading(true);
     setTenantsError("");
     try {
-      const rows = await apiGet<Array<{ id: string; name: string }>>("/admin/billing/platform/tenants");
-      setTenants(rows.map((r) => ({ id: r.id, name: r.name })));
+      const rows = await apiGet<TenantWorkspaceRow[]>("/admin/billing/platform/tenants");
+      setTenants(rows);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Could not load companies.";
       setTenantsError(msg);
@@ -141,7 +159,32 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     return tenants.filter((t) => t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q));
   }, [tenants, filter]);
 
-  const selectedName = tenants.find((t) => t.id === effectiveTenantId)?.name || "Company";
+  const selectedRow = tenants.find((t) => t.id === effectiveTenantId);
+  const selectedName = selectedRow?.name || "Company";
+  const cockpitWorst = selectedRow ? worstNonTerminalInvoiceStatus(selectedRow.invoices) : "—";
+  const cockpitChipClass =
+    cockpitWorst === "—" ? "good" : cockpitWorst === "FAILED" ? "bad" : cockpitWorst === "OVERDUE" ? "bad" : "warn";
+  const cockpitStanding = adminTenantStandingHeadline(cockpitWorst);
+  const cockpitBalance = dollars(Number(selectedRow?.balanceDueCents ?? 0));
+  const cockpitAutopay =
+    selectedRow?.billingSettings?.autoBillingEnabled
+      ? `On${selectedRow.billingSettings?.billingDayOfMonth ? ` · day ${selectedRow.billingSettings.billingDayOfMonth}` : ""}`
+      : "Off";
+  const cockpitNextBill = selectedRow?.billingSettings
+    ? nextBillingSummary(selectedRow.billingSettings.billingDayOfMonth, !!selectedRow.billingSettings.autoBillingEnabled)
+    : null;
+  const cockpitLastPaid = selectedRow ? lastPaidSummary(selectedRow.invoices) : null;
+  const cockpitNextDue = selectedRow ? nextOpenInvoiceDueSummary(selectedRow.invoices) : null;
+  const cockpitHasPm = (selectedRow?.paymentMethods || []).length > 0;
+  const cockpitPayHealth = (() => {
+    if (!selectedRow) return "";
+    if (cockpitWorst === "FAILED") return "Failed charge needs attention";
+    if (cockpitWorst === "OVERDUE") return "Past due — collect or align terms";
+    if (!cockpitHasPm && !!selectedRow.billingSettings?.autoBillingEnabled) return "Autopay on with no saved card";
+    if (!cockpitHasPm) return "No default card for autopay runs";
+    if (cockpitWorst === "OPEN") return "Open invoices follow your collections rules";
+    return "Ready for scheduled collection";
+  })();
 
   const billingSection =
     pathname === "/admin/billing/settings" ? rawSearchParams.get(BILLING_SECTION_QUERY) || "plans-pricing" : "";
@@ -214,22 +257,21 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="admin-billing-phase2-root stack compact-stack billing-admin-shell" style={{ maxWidth: 1320, margin: "0 auto", paddingBottom: 32 }}>
+    <div className="admin-billing-phase2-root stack compact-stack billing-admin-shell billing-p5-scope" style={{ maxWidth: 1320, margin: "0 auto", paddingBottom: 32 }}>
       <header
         className="panel admin-billing-shell-header"
         style={{ position: "sticky", top: 8, zIndex: 40, padding: "16px 20px", borderRadius: 14 }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
           <div>
-            <h1 style={{ margin: "0 0 4px", fontSize: "1.35rem", fontWeight: 700, letterSpacing: "-0.02em" }}>Admin Billing</h1>
+            <h1 style={{ margin: "0 0 4px", fontSize: "1.35rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
+              {catalogMode ? "Billing plan catalog" : "Billing workspace"}
+            </h1>
             <p style={{ margin: 0, fontSize: 13, color: "var(--muted, #64748b)", maxWidth: 580 }}>
               {catalogMode ? (
-                <>Platform catalog — edits affect future invoicing.</>
+                <>Edits apply to future invoices across companies. Return to a company to run operational work.</>
               ) : (
-                <>
-                  Managing <strong style={{ color: "var(--text-primary)" }}>{selectedName}</strong>. Use the workspace tabs to move without losing this
-                  company.
-                </>
+                <>Operator cockpit for recurring revenue, collections, and payment health — scoped to one company at a time.</>
               )}
             </p>
           </div>
@@ -245,7 +287,7 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
                   color: "var(--muted)",
                 }}
               >
-                Company
+                Switch company
               </label>
               <button
                 type="button"
@@ -329,8 +371,53 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        <div className="admin-billing-command-row" style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginRight: 4 }}>Quick links</span>
+        {!catalogMode && effectiveTenantId && selectedRow ? (
+          <div className="billing-p5-ws-cockpit" aria-label="Company billing snapshot">
+            <div className="billing-p5-ws-cockpit-main">
+              <p className="billing-p5-ws-kicker">Active company</p>
+              <h2 className="billing-p5-ws-title">{selectedRow.name}</h2>
+              <p className="billing-p5-ws-sub">{cockpitPayHealth}</p>
+              <div className="billing-p5-ws-chip-row">
+                <span className={`billing-p5-status-chip ${cockpitChipClass}`}>{cockpitStanding}</span>
+              </div>
+            </div>
+            <div className="billing-p5-ws-metrics" role="list">
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Open balance</label>
+                <span className="billing-p5-ws-metric-value">{cockpitBalance}</span>
+                <span className="billing-p5-ws-metric-note">Across unpaid invoices</span>
+              </div>
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Autopay</label>
+                <span className="billing-p5-ws-metric-value">{cockpitAutopay}</span>
+                {cockpitNextBill ? <span className="billing-p5-ws-metric-note">{cockpitNextBill}</span> : <span className="billing-p5-ws-metric-note">Manual billing cycle</span>}
+              </div>
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Cards on file</label>
+                <span className="billing-p5-ws-metric-value">{cockpitHasPm ? `${(selectedRow.paymentMethods || []).length} saved` : "None"}</span>
+                <span className="billing-p5-ws-metric-note">{cockpitHasPm ? "Ready for card charges" : "Add from Invoices & payments"}</span>
+              </div>
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Last payment</label>
+                <span className="billing-p5-ws-metric-value">{cockpitLastPaid ? "Recorded" : "—"}</span>
+                <span className="billing-p5-ws-metric-note">{cockpitLastPaid || "No settled payments in loaded history"}</span>
+              </div>
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Next due</label>
+                <span className="billing-p5-ws-metric-value">{cockpitNextDue ? "Scheduled" : "—"}</span>
+                <span className="billing-p5-ws-metric-note">{cockpitNextDue || "No open invoice with a due date"}</span>
+              </div>
+              <div className="billing-p5-ws-metric" role="listitem">
+                <label>Payment health</label>
+                <span className="billing-p5-ws-metric-value">{cockpitWorst === "—" ? "Stable" : "Review"}</span>
+                <span className="billing-p5-ws-metric-note">{cockpitPayHealth}</span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="billing-p5-shell-actions admin-billing-command-row">
+          <span className="billing-p5-shell-actions-label">Shortcuts</span>
           <Link className="btn ghost" style={{ fontSize: 13 }} href="/admin/billing">
             Platform overview
           </Link>
@@ -341,22 +428,12 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
             Company settings
           </Link>
           <Link className="btn ghost" style={{ fontSize: 13 }} href="/admin/billing/plans">
-            Billing plans (catalog)
+            Plan catalog
           </Link>
         </div>
 
         {!catalogMode && effectiveTenantId ? (
-          <nav
-            aria-label="Company billing workspace"
-            style={{
-              marginTop: 16,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 6,
-              borderTop: "1px solid var(--border, #e5e7eb)",
-              paddingTop: 14,
-            }}
-          >
+          <nav className="billing-p5-ws-tabs" aria-label="Company billing workspace">
             {wsLinks.map(([label, key]) => {
               const active = tabActive(label);
               return (

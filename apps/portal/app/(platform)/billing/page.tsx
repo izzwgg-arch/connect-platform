@@ -2,6 +2,7 @@
 
 import "../admin/billing/_components/billingPhase3.css";
 import "../admin/billing/_components/billingPhase4.css";
+import "../admin/billing/_components/billingPhase5.css";
 import Link from "next/link";
 import { useState } from "react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
@@ -115,11 +116,11 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
           {isFailed ? "Payment failed" : "Invoice overdue"} — {invoice.invoiceNumber}
         </strong>
         <p>
-          {dollars(invoice.balanceDueCents)} due
-          {invoice.dueDate ? ` · Due ${formatDate(invoice.dueDate)}` : ""}.{" "}
+          {dollars(invoice.balanceDueCents)} is due
+          {invoice.dueDate ? ` by ${formatDate(invoice.dueDate)}` : ""}.{" "}
           {isFailed
-            ? "Update your payment method or pay manually."
-            : "This invoice is past due. Pay now to avoid service interruption."}
+            ? "Update your card or pay manually to bring the account current."
+            : "Pay now to avoid interruption."}
         </p>
         <div className="billing-alert-actions">
           <Link className="btn primary" href={`/billing/invoices/${invoice.id}`}>
@@ -158,8 +159,8 @@ export default function BillingOverviewPage() {
 
   return (
     <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
-      <div className="stack compact-stack billing-admin-shell billing-phase3-tenant">
-        <PageHeader title="Billing overview" subtitle="Balance, upcoming bill, and quick links to invoices and payments." />
+      <div className="stack compact-stack billing-admin-shell billing-phase3-tenant billing-p5-scope">
+        <PageHeader title="Billing overview" subtitle="Balance, upcoming charges, and quick links to invoices and payment methods." />
 
         {loading ? <LoadingSkeleton rows={4} /> : null}
         {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
@@ -170,7 +171,7 @@ export default function BillingOverviewPage() {
 
         {/* 3-stat summary */}
         {!loading && s ? (
-          <div data-testid="billing-tenant-overview-loaded">
+            <div className="billing-p5-tenant-hero" data-testid="billing-tenant-overview-loaded">
             <div className="billing-stat-grid">
             <div className="billing-stat-card">
               <span className="stat-label">Balance due</span>
@@ -266,7 +267,7 @@ export default function BillingOverviewPage() {
 
         {/* Quick nav */}
         {!loading ? (
-          <div className="row-actions" style={{ flexWrap: "wrap" }}>
+          <div className="billing-p5-tenant-actions">
             <Link className="btn ghost" href="/billing/invoices">View invoices</Link>
             <Link className="btn ghost" href="/billing/payments">Payment methods</Link>
             <Link className="btn ghost" href="/billing/receipts">Receipts</Link>

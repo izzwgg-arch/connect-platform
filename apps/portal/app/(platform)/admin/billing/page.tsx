@@ -20,6 +20,7 @@ import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { BillingEmptyState } from "../../../../components/billing/BillingEmptyState";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import {
+  adminTenantStandingHeadline,
   dollars,
   formatDate,
   nextBillingSummary,
@@ -27,6 +28,7 @@ import {
   billingEventLabel,
   billingEventIcon,
   humanizeStoredPricingMode,
+  worstNonTerminalInvoiceStatus,
 } from "../../../../lib/billingUi";
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
 import { parseStoredPricingMode } from "./_components/tenantBillingConfigForms";
@@ -40,23 +42,6 @@ type TenantRow = {
   paymentMethods?: any[];
   invoices?: any[];
 };
-
-function worstOpenStatus(invoices: any[] | undefined): string {
-  const list = invoices || [];
-  const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)));
-  if (active.some((i) => i.status === "FAILED")) return "FAILED";
-  if (active.some((i) => i.status === "OVERDUE")) return "OVERDUE";
-  if (active.some((i) => i.status === "OPEN" || i.status === "DRAFT")) return "OPEN";
-  return "—";
-}
-
-function billingStatusLabel(status: string): string {
-  if (status === "—") return "In good standing";
-  if (status === "FAILED") return "Payment issue";
-  if (status === "OVERDUE") return "Overdue balance";
-  if (status === "OPEN" || status === "DRAFT") return "Open invoices";
-  return "In good standing";
-}
 
 function readInvoiceCollectionsFlags(invoices: any[]) {
   let paused = 0;
@@ -135,7 +120,7 @@ export default function AdminBillingPage() {
     );
   }
 
-  const payState = selectedTenant ? worstOpenStatus(selectedTenant.invoices) : "—";
+  const payState = selectedTenant ? worstNonTerminalInvoiceStatus(selectedTenant.invoices) : "—";
   const pricingMode = detail ? parseStoredPricingMode(detail.settings?.metadata) : "legacy";
   const expl = detail?.preview?.pricingPreviewExplanation as
     | { tenantOverridesDetected?: boolean; scheduledPlanSummary?: string | null; activePlanName?: string | null }
@@ -151,10 +136,14 @@ export default function AdminBillingPage() {
   const defaultPm = detail?.paymentMethods?.find((m: { isDefault?: boolean }) => m.isDefault);
   const defaultLast4 = defaultPm && typeof (defaultPm as { last4?: string }).last4 === "string" ? (defaultPm as { last4: string }).last4 : null;
 
+  const primaryCollect =
+    !!selectedTenant &&
+    (Number(selectedTenant.balanceDueCents || 0) > 0 || payState === "FAILED" || payState === "OVERDUE");
+
   return (
-    <div className="stack compact-stack">
+    <div className="stack compact-stack billing-p5-scope billing-phase3">
       <p className="b3-muted" style={{ margin: "0 0 12px", maxWidth: 720 }}>
-        Fleet metrics are across all companies. The snapshot and actions below follow the company selected in the header.
+        Fleet strip is all companies; the workspace rail and actions follow the company in the header cockpit.
       </p>
 
       {platformToast ? (
@@ -236,7 +225,7 @@ export default function AdminBillingPage() {
           <div className="billing-tenant-list">
             {tenantRows.map((tenant) => {
               const active = tenant.id === selectedTenant?.id;
-              const w = worstOpenStatus(tenant.invoices);
+              const w = worstNonTerminalInvoiceStatus(tenant.invoices);
               const hasCard = (tenant.paymentMethods || []).length > 0;
               return (
                 <button
@@ -248,7 +237,7 @@ export default function AdminBillingPage() {
                   <span>
                     <strong>{tenant.name}</strong>
                     <small>
-                      {w !== "—" ? `${billingStatusLabel(w)} · ` : ""}
+                      {w !== "—" ? `${adminTenantStandingHeadline(w)} · ` : ""}
                       {hasCard ? "Card on file" : "No card"}
                       {" · "}
                       {dollars(tenant.balanceDueCents || 0)} open
@@ -273,11 +262,11 @@ export default function AdminBillingPage() {
                     </p>
                     <h2>{detail.tenant.name}</h2>
                     <p className="b3-muted" style={{ margin: "6px 0 0", maxWidth: 560 }}>
-                      {billingStatusLabel(worstOpenStatus(detail.invoices))}. Projected monthly total reflects current usage and pricing for the preview period.
+                      {adminTenantStandingHeadline(worstNonTerminalInvoiceStatus(detail.invoices))}. Projected monthly total reflects current usage and pricing for the preview period.
                     </p>
                   </div>
                   <span className={`billing-status-pill ${payState === "—" ? "good" : payState === "FAILED" ? "bad" : "warn"}`} style={{ fontSize: 12 }}>
-                    {billingStatusLabel(payState)}
+                    {adminTenantStandingHeadline(payState)}
                   </span>
                 </div>
                 <div className="b3-snapshot-grid">
@@ -335,52 +324,72 @@ export default function AdminBillingPage() {
                 </div>
               </section>
 
-              <p className="b3-section-title">What do you need to do?</p>
-              <div className="b3-action-grid">
-                <button type="button" className="b3-action-card" onClick={() => document.getElementById("admin-generate-invoice")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-                  <span className="b3-action-title">
-                    <FileText size={18} aria-hidden />
-                    Generate invoice
+              <p className="b3-section-title">Quick actions</p>
+              <div className="billing-p5-action-bar">
+                <div className="billing-p5-action-bar__primary">
+                  {primaryCollect ? (
+                    <Link
+                      className="btn primary"
+                      href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+                    >
+                      Collect payment
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => document.getElementById("admin-generate-invoice")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                    >
+                      Generate invoice
+                    </button>
+                  )}
+                  <span className="muted" style={{ fontSize: 12, lineHeight: 1.35 }}>
+                    {primaryCollect ? "Ledger, receipts, and manual captures live in Invoices & payments." : "When the account is current, generate the next cycle from usage below."}
                   </span>
-                  <span className="b3-action-desc">Create the next invoice for this company from current usage.</span>
-                </button>
-                <Link
-                  className="b3-action-card"
-                  href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
-                >
-                  <span className="b3-action-title">
-                    <Banknote size={18} aria-hidden />
-                    Collect payment
-                  </span>
-                  <span className="b3-action-desc">Charge a card, send reminders, or record a manual payment.</span>
-                </Link>
-                <Link
-                  className="b3-action-card"
-                  href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
-                >
-                  <span className="b3-action-title">
-                    <Receipt size={18} aria-hidden />
-                    View invoices
-                  </span>
-                  <span className="b3-action-desc">Full register with filters and exports.</span>
-                </Link>
-                <Link
-                  className="b3-action-card"
-                  href={`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [BILLING_SECTION_QUERY]: "plans-pricing" })}`}
-                >
-                  <span className="b3-action-title">
-                    <SlidersHorizontal size={18} aria-hidden />
-                    Manage pricing
-                  </span>
-                  <span className="b3-action-desc">Plans, unit rates, and pricing explanation.</span>
-                </Link>
-                <button type="button" className="b3-action-card" onClick={() => document.getElementById("payment-methods")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-                  <span className="b3-action-title">
-                    <CreditCard size={18} aria-hidden />
-                    Payment methods
-                  </span>
-                  <span className="b3-action-desc">See cards on file; add cards from Invoices &amp; payments.</span>
-                </button>
+                </div>
+                <div className="billing-p5-action-bar__sep" aria-hidden />
+                <div className="billing-p5-action-bar__groups">
+                  <div className="billing-p5-action-bar__group">
+                    {primaryCollect ? (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => document.getElementById("admin-generate-invoice")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                      >
+                        <FileText size={16} aria-hidden style={{ marginRight: 6, verticalAlign: "text-bottom" }} />
+                        Generate invoice
+                      </button>
+                    ) : (
+                      <Link
+                        className="btn ghost"
+                        href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+                      >
+                        <Banknote size={16} aria-hidden style={{ marginRight: 6, verticalAlign: "text-bottom" }} />
+                        Collect payment
+                      </Link>
+                    )}
+                    <Link
+                      className="btn ghost"
+                      href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+                    >
+                      <Receipt size={16} aria-hidden style={{ marginRight: 6, verticalAlign: "text-bottom" }} />
+                      Open register
+                    </Link>
+                  </div>
+                  <div className="billing-p5-action-bar__group">
+                    <Link
+                      className="btn ghost"
+                      href={`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [BILLING_SECTION_QUERY]: "plans-pricing" })}`}
+                    >
+                      <SlidersHorizontal size={16} aria-hidden style={{ marginRight: 6, verticalAlign: "text-bottom" }} />
+                      Pricing &amp; plans
+                    </Link>
+                    <button type="button" className="btn ghost" onClick={() => document.getElementById("payment-methods")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                      <CreditCard size={16} aria-hidden style={{ marginRight: 6, verticalAlign: "text-bottom" }} />
+                      Saved cards
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <p className="b3-section-title">Account health</p>

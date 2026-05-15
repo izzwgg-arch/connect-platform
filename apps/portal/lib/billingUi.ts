@@ -204,3 +204,34 @@ export function dunningHintFromInvoice(inv: any | null): string | null {
   if (next) parts.push(`Next try: ${next}.`);
   return parts.join(" ");
 }
+
+/** Worst status among invoices that are not settled (admin / cockpit summaries). */
+export function worstNonTerminalInvoiceStatus(invoices: any[] | undefined | null): string {
+  const list = invoices || [];
+  const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)));
+  if (!active.length) return "—";
+  if (active.some((i) => i.status === "FAILED")) return "FAILED";
+  if (active.some((i) => i.status === "OVERDUE")) return "OVERDUE";
+  if (active.some((i) => i.status === "OPEN" || i.status === "DRAFT")) return "OPEN";
+  return "—";
+}
+
+/** Short operator-facing headline for `worstNonTerminalInvoiceStatus` codes. */
+export function adminTenantStandingHeadline(status: string): string {
+  if (status === "—") return "In good standing";
+  if (status === "FAILED") return "Payment issue";
+  if (status === "OVERDUE") return "Overdue balance";
+  if (status === "OPEN" || status === "DRAFT") return "Open invoices";
+  return "In good standing";
+}
+
+/** Earliest due date among non-settled invoices (display only). */
+export function nextOpenInvoiceDueSummary(invoices: any[] | undefined | null): string | null {
+  const open = (invoices || []).filter((i) =>
+    ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(i.status)) && i.dueDate,
+  );
+  if (!open.length) return null;
+  open.sort((a, b) => new Date(String(a.dueDate)).getTime() - new Date(String(b.dueDate)).getTime());
+  const inv = open[0];
+  return `Next due ${formatDate(inv.dueDate)} · ${inv.invoiceNumber || "Invoice"}`;
+}

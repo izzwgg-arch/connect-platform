@@ -2,6 +2,7 @@
 
 import "../../admin/billing/_components/billingPhase3.css";
 import "../../admin/billing/_components/billingPhase4.css";
+import "../../admin/billing/_components/billingPhase5.css";
 import Link from "next/link";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, getPortalApiBaseUrl } from "../../../../services/apiClient";
@@ -30,7 +31,7 @@ export default function BillingInvoicesPage() {
   return (
     <PermissionGate permission="can_view_billing_invoices" fallback={<div className="state-box">You do not have invoice access.</div>}>
       <BillingPageChrome toast={null}>
-        <div className="stack compact-stack billing-admin-shell billing-phase3-tenant">
+        <div className="stack compact-stack billing-admin-shell billing-phase3-tenant billing-p5-scope">
           <PageHeader title="Invoices" subtitle="History, PDFs, and pay-open balances." />
           <div data-testid="billing-tenant-invoices-root">
             {invoices.status === "loading" ? <LoadingSkeleton rows={7} /> : null}

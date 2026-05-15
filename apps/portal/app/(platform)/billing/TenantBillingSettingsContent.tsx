@@ -1,5 +1,8 @@
 "use client";
 
+import "../admin/billing/_components/billingPhase3.css";
+import "../admin/billing/_components/billingPhase4.css";
+import "../admin/billing/_components/billingPhase5.css";
 import Link from "next/link";
 import { useState } from "react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
@@ -21,12 +24,12 @@ export function TenantBillingSettingsContent() {
 
   return (
     <PermissionGate permission="can_view_settings_billing" fallback={<div className="state-box">You do not have billing settings access.</div>}>
-      <div className="stack compact-stack">
+      <div className="stack compact-stack billing-p5-scope">
         <PageHeader
           title="Billing settings"
-          subtitle="How invoices and customer emails look. Add or update saved cards from Payments — not here."
+          subtitle="How invoices and customer emails look. Add or update saved cards from Payment methods — not on this page."
         />
-        <div className="row-actions" style={{ marginTop: -8, marginBottom: 8 }}>
+        <div className="billing-p5-tenant-actions" style={{ marginTop: -8, marginBottom: 8 }}>
           <Link className="btn ghost" href="/billing">
             ← Billing overview
           </Link>
@@ -34,9 +37,9 @@ export function TenantBillingSettingsContent() {
             Payment methods
           </Link>
         </div>
-        <p className="muted" style={{ fontSize: 13, maxWidth: 640, lineHeight: 1.5 }}>
-          Connecting or changing the payment processor is a platform operation. It is configured in{" "}
-          <strong>Admin Billing</strong> (operators only) and intentionally not exposed on this page.
+        <p className="billing-p5-muted-block">
+          Connecting or changing the payment processor is handled by your platform team in{" "}
+          <strong>Admin Billing</strong> and is not available on this screen.
         </p>
         {tenantBilling.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {tenantBilling.status === "error" ? <ErrorState message={tenantBilling.error} /> : null}

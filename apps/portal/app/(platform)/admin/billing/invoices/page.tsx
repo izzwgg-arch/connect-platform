@@ -2228,10 +2228,10 @@ function AdminBillingInvoicesBody() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell">
-      <div style={{ marginBottom: 4 }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Invoices &amp; payments</h2>
-        <p className="muted" style={{ fontSize: 13, margin: 0, maxWidth: 720 }}>
+    <div className="stack compact-stack billing-admin-shell billing-p5-scope">
+      <div className="billing-p5-page-intro" style={{ marginBottom: 4 }}>
+        <h2>Invoices &amp; payments</h2>
+        <p>
           Cross-tenant invoices, payment ledger, reports, and collections. The company selector above keeps navigation context; bookmark with{" "}
           <code style={{ fontSize: 12 }}>?tenantId=…</code> when you need a direct link.
         </p>
@@ -2246,25 +2246,16 @@ function AdminBillingInvoicesBody() {
         </Link>
       </div>
 
-      <div className="row-actions" style={{ borderBottom: "2px solid var(--border, #e0e0e0)", marginBottom: 16, paddingBottom: 0, gap: 0 }}>
+      <div className="billing-p5-ops-tabs" role="tablist" aria-label="Billing operations">
         {(["invoices", "transactions", "reports", "collections"] as const).map((tab) => (
           <button
             key={tab}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
+            data-active={activeTab === tab ? "true" : "false"}
             data-testid={`billing-admin-ops-tab-${tab}`}
             onClick={() => setActiveTab(tab)}
-            style={{
-              background: "none",
-              border: "none",
-              borderBottom: activeTab === tab ? "2px solid var(--accent, #2563eb)" : "2px solid transparent",
-              padding: "8px 16px",
-              marginBottom: -2,
-              cursor: "pointer",
-              fontWeight: activeTab === tab ? 600 : 400,
-              color: activeTab === tab ? "var(--accent, #2563eb)" : "inherit",
-              fontSize: 14,
-              textTransform: "capitalize",
-            }}
           >
             {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Payments" : tab === "reports" ? "Reports" : "Collections"}
           </button>
