@@ -5,15 +5,17 @@ export type DeployQueueDbForCommitSkip = {
   prepare: (sql: string) => { get: (service: string) => unknown };
 };
 
-/** SQL used for commit pin skip — dry-run rows must be excluded (`dry_run = 0` only). */
-export const COMMIT_ALREADY_DEPLOYED_LOOKUP_SQL = `SELECT deployed_commit FROM jobs
+/** SQL: last successful real job's resolved pin — prefers deployed_commit, else commit_hash (legacy rows). */
+export const COMMIT_ALREADY_DEPLOYED_LOOKUP_SQL = `SELECT COALESCE(NULLIF(TRIM(deployed_commit), ''), commit_hash) AS resolved
+       FROM jobs
        WHERE service = ? AND status = 'success' AND IFNULL(dry_run, 0) = 0
        ORDER BY finished_at DESC LIMIT 1`;
 
 /**
  * Whether a new enqueue with `commitHash` should short-circuit as `commit_already_deployed`.
  * Only successful **real** deploys (`dry_run = 0`) are considered — dry-run successes must never
- * block a live rollout.
+ * block a live rollout. Matching uses the last job's checkout/requested SHA (`deployed_commit`, or
+ * `commit_hash` when `deployed_commit` was not recorded).
  */
 export function shouldSkipCommitAlreadyDeployed(
   db: DeployQueueDbForCommitSkip,
@@ -23,8 +25,10 @@ export function shouldSkipCommitAlreadyDeployed(
   const trimmed = commitHash.trim();
   if (!trimmed) return false;
   const row = db.prepare(COMMIT_ALREADY_DEPLOYED_LOOKUP_SQL).get(service) as
-    | { deployed_commit: string | null }
+    | { resolved: string | null }
     | undefined;
-  return row?.deployed_commit === trimmed;
+  const resolved = row?.resolved != null ? String(row.resolved).trim() : "";
+  if (!resolved) return false;
+  return resolved === trimmed;
 }
 

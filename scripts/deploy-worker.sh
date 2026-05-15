@@ -41,7 +41,8 @@ PKG_BEFORE="$(deploy_common_pkg_hash)"
 # Track what *this service* last shipped, not the checkout HEAD — a prior deploy
 # job may have already advanced the shared working tree to the new commit.
 PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
-PRE_SYNC_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+PRE_SYNC_HEAD=""
+deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" PRE_SYNC_HEAD
 OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
 NEW_HEAD="$(deploy_common_head_sha)"
 LOCK_AFTER="$(deploy_common_lock_hash)"
@@ -51,6 +52,9 @@ PKG_AFTER="$(deploy_common_pkg_hash)"
 # sourcing once at startup uses pre-sync definitions. After checkout, reload from disk.
 # shellcheck disable=SC1091
 source "$ROOT/scripts/lib/deploy-common.sh"
+
+# Re-sourcing resets _DQ_* in-memory state; re-publish checkout SHA for the queue worker.
+deploy_common_emit_deployed_commit "$NEW_HEAD"
 
 deploy_common_emit_stage "change-detect"
 if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then

@@ -342,14 +342,15 @@ export function startWorkerLoop(cfg: WorkerConfig): WorkerHandle {
 
       const done = Date.now();
       const duration = Math.max(0, done - startedAt);
-      if (code === 0 && !errMsg) {
-        cfg.db
-          .prepare(
-            `UPDATE jobs SET status = 'success', finished_at = ?, duration_ms = ?,
-                             current_stage = COALESCE(current_stage, 'done'), error_message = NULL
+        if (code === 0 && !errMsg) {
+          cfg.db
+            .prepare(
+              `UPDATE jobs SET status = 'success', finished_at = ?, duration_ms = ?,
+                               current_stage = COALESCE(current_stage, 'done'), error_message = NULL,
+                               deployed_commit = COALESCE(deployed_commit, commit_hash)
              WHERE id = ?`,
-          )
-          .run(done, duration, job.id);
+            )
+            .run(done, duration, job.id);
       } else {
         cfg.db
           .prepare(

@@ -4,7 +4,7 @@
 
 **Do not** use manual **`docker compose up`** / **`git pull`** for production recovery except break-glass; prefer re-enqueue via the queue (**`AGENTS.md`**).
 
-**Note (`commit_already_deployed`):** Same rule as **`api`**: only **real** (`dryRun: false`) successes count toward the same-**`commitHash`** skip. See **`DEPLOYMENT_API_ROLLBACK.md`** and **`connect-deploy-queue` 1.1.1+**.
+**Note (`commit_already_deployed`):** Same rule as **`api`**: only **real** (`dryRun: false`) successes for that **service** count toward the same-**`commitHash`** skip (**`deployed_commit`** or **`commit_hash`** fallback, **`connect-deploy-queue` 1.1.2+**). See **`DEPLOYMENT_API_ROLLBACK.md`**.
 
 ---
 

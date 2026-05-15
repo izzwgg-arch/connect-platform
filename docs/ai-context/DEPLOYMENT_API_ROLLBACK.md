@@ -4,7 +4,7 @@
 
 **Do not** use manual `docker compose up` / `git pull` for production recovery except break-glass; prefer re-enqueueing a known-good commit via the deploy queue (`AGENTS.md`).
 
-**Operational note (`commit_already_deployed`):** **`commit_already_deployed`** applies only after a **real** **`dryRun: false`** success for that **`commitHash`** (the queue compares the requested pin to **`deployed_commit`** on the latest **non–dry-run** successful job). **Dry-run** jobs must **not** satisfy this skip — if you still see a dry-run blocking live deploys, upgrade **`connect-deploy-queue`** to **1.1.1+**. If you need another live blue/green after a noop skip that does not match running containers, see **`AGENTS.md`** (post-deploy SHA verification) and **`KNOWN_ISSUES.md`**.
+**Operational note (`commit_already_deployed`):** **`commit_already_deployed`** applies only after a **real** **`dryRun: false`** success for that **`service`** and **`commitHash`**. The queue resolves the last success’s SHA from **`deployed_commit`** or **`commit_hash`** (**1.1.2+**). **Dry-run** jobs must **not** satisfy this skip — upgrade **`connect-deploy-queue`** to **1.1.1+** minimum (dry-run excluded), **1.1.2+** for legacy rows where **`deployed_commit`** was null. If you need another live blue/green after a noop skip that does not match running containers, see **`AGENTS.md`** (post-deploy SHA verification) and **`KNOWN_ISSUES.md`**.
 
 ---
 

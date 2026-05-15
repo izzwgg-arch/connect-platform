@@ -67,7 +67,7 @@ curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
 
 ### Dry run (`dryRun: true`)
 
-Logs what **would** happen and performs a non-mutating git checkout-safety preflight. The preflight fetches refs, verifies the target branch/commit/tag exists, compares target-changed paths against dirty non-ignored paths in the production clone, and fails with the exact blocking paths if a real checkout would overwrite local edits. Scripts still exit **before** git checkout/reset/clean, `docker compose` rebuilds, Prisma migrations, service restarts, and health-driven rollbacks. Still consumes a queue slot and respects duplicate protection. **`commit_already_deployed`** (when `commitHash` is supplied) ignores dry-run rows: only a **`dryRun: false`** success can short-circuit a later real enqueue for that SHA (**`connect-deploy-queue` 1.1.1+**).
+Logs what **would** happen and performs a non-mutating git checkout-safety preflight. The preflight fetches refs, verifies the target branch/commit/tag exists, compares target-changed paths against dirty non-ignored paths in the production clone, and fails with the exact blocking paths if a real checkout would overwrite local edits. Scripts still exit **before** git checkout/reset/clean, `docker compose` rebuilds, Prisma migrations, service restarts, and health-driven rollbacks. Still consumes a queue slot and respects duplicate protection. **`commit_already_deployed`** (when `commitHash` is supplied) inspects only **real** (`dryRun: false`) successes for that service: **`connect-deploy-queue` 1.1.1+** excludes dry-run rows; **1.1.2+** also matches the requested SHA against **`deployed_commit`** or, for legacy rows, **`commit_hash`**, and deploy scripts publish **`deployedCommit`** to the state file without subshell loss (see **`deploy_common_git_sync`**).
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
@@ -104,8 +104,8 @@ All `job` objects returned by the API include both snake_case (raw SQLite column
 | `id` | `id` | UUID |
 | `service` | `service` | `api` / `portal` / `telephony` / `realtime` / `worker` / `full-stack` |
 | `branch` | `branch` | Branch (or tag for `full-stack`) |
-| `commitHash` | `commit_hash` | Requested SHA (may be null) |
-| `deployedCommit` | `deployed_commit` | SHA the deploy script actually checked out |
+| `commitHash` | `commit_hash` | Enqueue pin (may be null for branch-only jobs) |
+| `deployedCommit` | `deployed_commit` | SHA written from deploy state (`deployedCommit` JSON); prefer this for audit. **`1.1.2` worker** back-fills with `commit_hash` on success when the state file did not carry a value. |
 | `requestedBy` | `requested_by` | Caller identifier |
 | `status` | `status` | `queued` / `running` / `success` / `failed` / `cancelled` |
 | `dryRun` | `dry_run` | Boolean / 0-1 |
@@ -172,6 +172,10 @@ pnpm approve-builds && pnpm rebuild better-sqlite3   # Linux: native better-sqli
 
 bash scripts/ops/start-deploy-queue-pm2.sh
 ```
+
+### Upgrading `connect-deploy-queue` only (e.g. **1.1.2**)
+
+Pin `/opt/connectcomms/app` to the desired git revision (via your normal queue-driven deploy of **`api`** if this change shipped there, or operator policy). Then **`bash scripts/ops/start-deploy-queue-pm2.sh`** rebuilds **`ops/deploy-queue`** and **`pm2 reload`**s **`connect-deploy-worker`**. Verify **`GET http://127.0.0.1:3910/ops/deploy/status`** shows **`version.deployQueuePackage":"1.1.2"`** (and idle **`runningCount`** / **`queuedCount`** before and after). This path does **not** restart **`api`**, **`portal`**, or **`telephony`** containers by itself — only the PM2 queue process.
 
 ### Env vars
 

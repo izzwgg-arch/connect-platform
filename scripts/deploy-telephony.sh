@@ -25,9 +25,9 @@ cd "$ROOT"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
-  deploy_common_emit_stage "dry-run"
-  log "DRY RUN — no git/docker/health changes"
-  log "Would: git sync, pnpm install if needed, docker compose build/up ${SERVICE}, GET :3003/health"
+  log "DRY RUN — verifying git checkout safety; no git checkout/docker/health changes"
+  deploy_common_dry_run_checkout_safety "$ROOT" "${BRANCH:-main}" "$COMMIT"
+  log "Would next: pnpm install if needed, docker compose build/up ${SERVICE}, GET :3003/health"
   log "(branch=${BRANCH:-} commit=${COMMIT:-} requested_by=${REQ})"
   exit 0
 fi
@@ -40,7 +40,8 @@ PKG_BEFORE="$(deploy_common_pkg_hash)"
 # Track what *this service* last shipped, not the checkout HEAD — a prior deploy
 # job may have already advanced the shared working tree to the new commit.
 PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
-PRE_SYNC_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+PRE_SYNC_HEAD=""
+deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" PRE_SYNC_HEAD
 OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
 NEW_HEAD="$(deploy_common_head_sha)"
 LOCK_AFTER="$(deploy_common_lock_hash)"

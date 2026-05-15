@@ -48,7 +48,8 @@ cd "$ROOT"
 if [[ "${DEPLOY_DRY_RUN:-0}" == "1" ]]; then
   log "DRY RUN — checkout safety + clone sync only (no docker/prisma/build)"
   deploy_common_dry_run_checkout_safety "$ROOT" "${BRANCH:-main}" "$COMMIT"
-  _dry_pre="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+  _dry_pre=""
+  deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" _dry_pre
   _dry_new="$(deploy_common_head_sha)"
   if [[ "$_dry_pre" != "$_dry_new" ]]; then
     log "[deploy-api] DRY RUN: tree advanced ${_dry_pre:0:12}→${_dry_new:0:12}; re-exec for latest deploy-api.sh body"
@@ -70,7 +71,8 @@ PKG_BEFORE="$(deploy_common_pkg_hash)"
 # Track what *this service* last shipped, not the checkout HEAD — a prior deploy
 # job may have already advanced the shared working tree to the new commit.
 PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
-PRE_SYNC_HEAD="$(deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT")"
+PRE_SYNC_HEAD=""
+deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" PRE_SYNC_HEAD
 OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
 NEW_HEAD="$(deploy_common_head_sha)"
 LOCK_AFTER="$(deploy_common_lock_hash)"

@@ -190,16 +190,20 @@ deploy_common_dry_run_checkout_safety() {
   rm -f "$dirty_file" "$changed_file" "$blocking_file"
 }
 
+# Args: ROOT BRANCH [COMMIT] OUT_VAR_NAME
+# OUT_VAR_NAME receives the pre-sync HEAD (40-char SHA). Runs in the caller shell so
+# deploy_common_emit_deployed_commit updates _DQ_DEPLOYED_COMMIT in the same shell as
+# deploy_common_emit_stage — required for job-*.state.json to retain deployedCommit.
+# Do not capture this function with $(...) (subshell would discard _DQ_DEPLOYED_COMMIT).
 deploy_common_git_sync() {
   local ROOT="$1"
   local BRANCH="$2"
   local COMMIT="${3:-}"
+  local outvar="${4:-}"
+  [[ -n "$outvar" ]] || deploy_common_fail "deploy_common_git_sync: 4th argument must be the output variable name (e.g. PRE_SYNC_HEAD)"
   export GIT_TERMINAL_PROMPT=0
   cd "$ROOT" || deploy_common_fail "cd $ROOT"
 
-  # Redirect all git output to stderr so the command substitution that captures
-  # the return value of this function (the old HEAD SHA) is not polluted by
-  # git's fast-forward summary, fetch progress, or checkout messages.
   git fetch origin --prune >&2 || deploy_common_fail "git fetch origin --prune failed"
 
   local old_head
@@ -217,9 +221,7 @@ deploy_common_git_sync() {
   local new_head
   new_head="$(git rev-parse HEAD)"
   deploy_common_emit_deployed_commit "$new_head"
-
-  # Only the SHA reaches stdout — the caller captures it via $()
-  echo "$old_head"
+  printf -v "$outvar" '%s' "$old_head"
 }
 
 deploy_common_head_sha() {
