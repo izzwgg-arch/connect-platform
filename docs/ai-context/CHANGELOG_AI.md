@@ -4,6 +4,43 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-14 — billing: current-plan assignment + normalized pricing state
+
+**Task:** SUPER_ADMIN **`assign-plan-preview`** / **`assign-current-plan`** routes (no invoices/charges), **`deriveBillingPricingState`** (`billingPricingState.ts`), **`pricingState`** on **`pricing-diagnostics`**, portal **Current Billing Plan** card + warnings banner + assign modal; audit **`billing_plan.current_assigned`**.  
+**Risk:** medium (**tenant FK + optional metadata/prices**; invoice cent formulas unchanged).
+
+### What changed
+
+- **`billingPricingResolution.ts`**: **`activeBillingPlanRowForPeriod`** (same timing rule as previews/worker invoice period).
+- **`invoiceEngine.ts`**: shared **`buildBillingInvoicePreviewWithLoadedSettings`** + **`buildBillingInvoicePreviewFromSettings`** for in-memory assign simulation (**math unchanged**).
+- **`billingAssignment.ts`**: **`mergeTenantBillingSettingsForAssignPreview`**, **`validateCatalogBillingPlanForAssignment`**, **`tenantPricingQuadSnapshot`**.
+- **`billingPricingState.ts`**: **`deriveBillingPricingState`**, **`billingPricingSettingsSliceFromLoaded`**.
+- **`billingPricingDiagnostics.ts`**: adds **`pricingState`** to assembler output.
+- **`routes.ts`**: **`GET …/assign-plan-preview`**, **`POST …/assign-current-plan`** (**SUPER_ADMIN**).
+- **`billingPricingState.test.ts`**, **`billingAssignment.test.ts`**, updates to **`billingPricingDiagnostics.test.ts`**, **`billingPricingResolution.test.ts`**.
+- **Portal:** **`tenantBillingConfigForms.tsx`** (**`AdminBillingPricingWarningsBanner`**, **`AdminCurrentBillingPlanAssignCard`**), **`settings/page.tsx`**.
+
+**Docs:** **`BILLING.md`**, **`DATA_MODEL.md`**, **`CHANGELOG_AI.md`**.
+
+### What was NOT changed
+
+- **`apps/worker`**, SOLA/webhooks/charges/dunning, telecom/PBX/mobile/CRM; **`PARTIALLY_PAID`** not implemented.
+- Invoice **subtotal/discount/tax/total** arithmetic semantics unchanged (**only** preview builder refactor + optional snapshot input).
+
+### Deploy
+
+- **API** + **portal**.
+
+### Verification
+
+```bash
+pnpm --filter @connect/api test:billing
+pnpm --filter @connect/api typecheck
+pnpm --filter @connect/portal typecheck
+```
+
+---
+
 ## 2026-05-14 — billing: pricing diagnostics, preview explanation fields, safeguards
 
 **Task:** Pricing mode diagnostics (**GET** **`pricing-diagnostics`**), **`pricingPreviewExplanation`** on previews, **`billing.pricing_mode_changed`** + expanded **`billing.pricing_reset_to_plan`** audit metadata, portal warnings + reset diff UX.  

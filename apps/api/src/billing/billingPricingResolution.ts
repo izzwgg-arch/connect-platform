@@ -128,7 +128,14 @@ export function resolveTenantBillingPricing(params: {
     firstPhoneNumberFree?: boolean | null;
   };
   /** Already accounts for scheduled plan (next vs current). */
-  activePlan: TenantBillingPricingPlanSlice & { id?: string | null; name?: string | null };
+  activePlan:
+    | (TenantBillingPricingPlanSlice & {
+        id?: string | null;
+        name?: string | null;
+        code?: string | null;
+        active?: boolean | null;
+      })
+    | null;
 }): BillingPricingResolution {
   const { mode, settings, activePlan } = params;
 
@@ -244,6 +251,33 @@ export function resolveTenantBillingPricing(params: {
     banner,
     missingCatalogPlan: false,
   };
+}
+
+export type BillingPlanRowForPeriodSelection = TenantBillingPricingPlanSlice & {
+  id?: string | null;
+  name?: string | null;
+  code?: string | null;
+  active?: boolean | null;
+};
+
+/**
+ * BillingPlan row whose prices apply for `periodStart` (scheduled next plan wins once effective).
+ * Same rule as `buildBillingInvoicePreview` / worker invoice creation.
+ */
+export function activeBillingPlanRowForPeriod(
+  settings: {
+    nextBillingPlanId?: string | null;
+    nextBillingPlanEffectiveAt?: Date | null;
+    billingPlan?: BillingPlanRowForPeriodSelection | null;
+    nextBillingPlan?: BillingPlanRowForPeriodSelection | null;
+  },
+  periodStart: Date,
+): BillingPlanRowForPeriodSelection | null {
+  const hasScheduledChange =
+    settings.nextBillingPlanId &&
+    settings.nextBillingPlanEffectiveAt &&
+    periodStart >= settings.nextBillingPlanEffectiveAt;
+  return hasScheduledChange ? settings.nextBillingPlan ?? null : settings.billingPlan ?? null;
 }
 
 /** DB update payload for “reset to plan pricing” (also sets `billingPricingMode` = catalog). */

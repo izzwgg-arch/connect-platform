@@ -3,10 +3,16 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
-import { buildBillingInvoicePreview, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
+import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
 import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog, parseBillingPricingMode } from "./billingPricingResolution";
-import { buildTenantPricingDiagnosticsFromPreview } from "./billingPricingDiagnostics";
+import { buildTenantPricingDiagnosticsFromPreview, rawBillingPricingModeFromMetadata } from "./billingPricingDiagnostics";
+import { billingPricingSettingsSliceFromLoaded, deriveBillingPricingState } from "./billingPricingState";
+import {
+  mergeTenantBillingSettingsForAssignPreview,
+  tenantPricingQuadSnapshot,
+  validateCatalogBillingPlanForAssignment,
+} from "./billingAssignment";
 import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
@@ -97,6 +103,24 @@ async function requirePlatformBilling(req: any, reply: any): Promise<BillingUser
     return null;
   }
   return u;
+}
+
+function parseBillingPeriodBounds(q: { periodMonth?: string; periodYear?: string }): { periodStart: Date; periodEnd: Date } | undefined {
+  const rawMonth = Number.parseInt(String(q.periodMonth || ""), 10);
+  const rawYear = Number.parseInt(String(q.periodYear || ""), 10);
+  if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
+    const m = rawMonth - 1;
+    return {
+      periodStart: new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0)),
+      periodEnd: new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999)),
+    };
+  }
+  return undefined;
+}
+
+function parseBoolQuery(v: unknown): boolean {
+  const s = String(v ?? "").toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
 }
 
 function publicPortalBase(): string {
@@ -943,9 +967,174 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       preview,
     });
     if (diag.resetToPlanPreview.canReset) {
-      diag.notices.push("Reset-to-plan copies FK plan prices onto the tenant row and sets billingPricingMode=catalog.");
+      diag.notices.push(
+        "Reset-to-plan copies prices from the CURRENT linked BillingPlan row only and sets billingPricingMode=catalog.",
+      );
     }
     return diag;
+  });
+
+  const assignCurrentPlanBodySchema = z.object({
+    billingPlanId: z.string().min(1),
+    applyPricingMode: z.enum(["catalog", "custom"]).optional(),
+    copyPlanPrices: z.boolean().optional(),
+  });
+
+  // Read-only simulation for assigning billingPlanId (+ optional meta/prices).
+  app.get("/admin/billing/platform/tenants/:tenantId/assign-plan-preview", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const q = req.query as {
+      billingPlanId?: string;
+      periodMonth?: string;
+      periodYear?: string;
+      copyPlanPrices?: string;
+      applyPricingMode?: string;
+    };
+    const billingPlanId = String(q.billingPlanId || "").trim();
+    if (!billingPlanId) return reply.code(400).send({ error: "billing_plan_id_required" });
+
+    const bounds = parseBillingPeriodBounds(q);
+    const periodStart = bounds?.periodStart;
+    const periodEnd = bounds?.periodEnd;
+
+    const copyPlanPrices = parseBoolQuery(q.copyPlanPrices);
+    let applyPricingMode: "catalog" | "custom" | undefined;
+    if (q.applyPricingMode === "catalog" || q.applyPricingMode === "custom") applyPricingMode = q.applyPricingMode;
+
+    const targetPlan = await (db as any).billingPlan.findUnique({ where: { id: billingPlanId } });
+    const verr = validateCatalogBillingPlanForAssignment(targetPlan);
+    if (verr) return reply.code(404).send({ error: verr });
+
+    const settingsRow = await ensureTenantBillingSettings(tenantId);
+    const merged = mergeTenantBillingSettingsForAssignPreview(settingsRow, targetPlan, { copyPlanPrices, applyPricingMode });
+
+    const previewBefore = await buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
+    const previewAfter = await buildBillingInvoicePreviewFromSettings({
+      tenantId,
+      settings: merged,
+      periodStart,
+      periodEnd,
+    });
+
+    const sliceBefore = billingPricingSettingsSliceFromLoaded(settingsRow);
+    const sliceAfter = billingPricingSettingsSliceFromLoaded(merged);
+
+    const pricingStateBefore = deriveBillingPricingState({ settings: sliceBefore, preview: previewBefore });
+    const pricingStateAfter = deriveBillingPricingState({ settings: sliceAfter, preview: previewAfter });
+
+    const notes: string[] = [
+      "Reset-to-plan copies prices from the CURRENT linked BillingPlan row only — not from a future scheduled plan.",
+    ];
+    if (previewBefore.scheduledPlanChange) {
+      notes.push(
+        "This preview period uses the scheduled next plan for invoice pricing. Assign-current-plan only updates billingPlanId (current FK); it does not consume or swap the scheduled plan.",
+      );
+    }
+
+    return {
+      tenantId,
+      previewPeriod: {
+        periodStart: previewBefore.periodStart.toISOString(),
+        periodEnd: previewBefore.periodEnd.toISOString(),
+      },
+      simulation: { copyPlanPrices, applyPricingMode: applyPricingMode ?? null },
+      targetPlan: {
+        id: targetPlan.id,
+        code: targetPlan.code,
+        name: targetPlan.name,
+        active: targetPlan.active,
+      },
+      pricingStateBefore,
+      pricingStateAfter,
+      tenantPricingQuad: {
+        before: tenantPricingQuadSnapshot(settingsRow),
+        after: tenantPricingQuadSnapshot(merged),
+      },
+      invoiceTotals: {
+        before: { subtotalCents: previewBefore.subtotalCents, totalCents: previewBefore.totalCents },
+        after: { subtotalCents: previewAfter.subtotalCents, totalCents: previewAfter.totalCents },
+      },
+      scheduledPlanActiveForPreviewPeriod: pricingStateBefore.flags.scheduledPlanAppliesToPreviewPeriod,
+      notes,
+    };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/assign-current-plan", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const parsed = assignCurrentPlanBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_body", issues: parsed.error.flatten() });
+    }
+    const body = parsed.data;
+
+    const targetPlan = await (db as any).billingPlan.findUnique({ where: { id: body.billingPlanId } });
+    const verr = validateCatalogBillingPlanForAssignment(targetPlan);
+    if (verr) return reply.code(404).send({ error: verr });
+
+    const cur = await ensureTenantBillingSettings(tenantId);
+    const beforeQuad = tenantPricingQuadSnapshot(cur);
+    const beforeBillingPlanId = cur.billingPlanId ?? null;
+    const beforeModeStored = rawBillingPricingModeFromMetadata(cur.metadata);
+
+    const updatePayload: Record<string, unknown> = {
+      billingPlanId: body.billingPlanId,
+    };
+    if (body.copyPlanPrices) {
+      updatePayload.extensionPriceCents = targetPlan.extensionPriceCents;
+      updatePayload.additionalPhoneNumberPriceCents = targetPlan.additionalPhoneNumberPriceCents;
+      updatePayload.smsPriceCents = targetPlan.smsPriceCents;
+      updatePayload.firstPhoneNumberFree = targetPlan.firstPhoneNumberFree !== false;
+    }
+    if (body.applyPricingMode !== undefined) {
+      updatePayload.metadata = mergeTenantBillingSettingsMetadata(cur.metadata, {
+        billingPricingMode: body.applyPricingMode,
+      });
+    }
+
+    await (db as any).tenantBillingSettings.update({
+      where: { tenantId },
+      data: updatePayload,
+    });
+
+    const updated = await ensureTenantBillingSettings(tenantId);
+    const afterQuad = tenantPricingQuadSnapshot(updated);
+
+    await logBillingEvent({
+      tenantId,
+      type: "billing_plan.current_assigned",
+      metadata: {
+        operatorUserId: u.sub,
+        targetPlanId: targetPlan.id,
+        copyPlanPrices: !!body.copyPlanPrices,
+        applyPricingMode: body.applyPricingMode ?? null,
+        before: {
+          billingPlanId: beforeBillingPlanId,
+          billingPricingMode: beforeModeStored,
+          ...beforeQuad,
+        },
+        after: {
+          billingPlanId: updated.billingPlanId ?? null,
+          billingPricingMode: rawBillingPricingModeFromMetadata(updated.metadata),
+          ...afterQuad,
+        },
+      },
+    }).catch(() => undefined);
+
+    return {
+      billingSettings: updated,
+      summary: {
+        before: { billingPlanId: beforeBillingPlanId, pricing: beforeQuad, billingPricingMode: beforeModeStored },
+        after: {
+          billingPlanId: updated.billingPlanId,
+          pricing: afterQuad,
+          billingPricingMode: rawBillingPricingModeFromMetadata(updated.metadata),
+        },
+      },
+    };
   });
 
   app.post("/admin/billing/tenants/:tenantId/invoices/preview", async (req, reply) => {

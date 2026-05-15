@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BILLING_PRICING_MODE_METADATA_KEY,
+  activeBillingPlanRowForPeriod,
   buildTenantSettingsResetToCatalog,
   legacyResolveCents,
   parseBillingPricingMode,
@@ -10,7 +11,9 @@ import {
 
 const planSample = {
   id: "p1",
+  code: "pro",
   name: "Pro",
+  active: true,
   extensionPriceCents: 5000,
   additionalPhoneNumberPriceCents: 2000,
   smsPriceCents: 1500,
@@ -139,4 +142,53 @@ test("resolveTenantBillingPricing: scheduled next plan as activePlan (catalog)",
   });
   assert.equal(r.activePlanId, "p2");
   assert.equal(r.extensionPriceCents, 12000);
+});
+
+test("activeBillingPlanRowForPeriod: current plan before scheduled effective date", () => {
+  const cur = {
+    ...planSample,
+    id: "cur",
+    code: "cur",
+    name: "Cur",
+  };
+  const next = {
+    ...planSample,
+    id: "next",
+    code: "next",
+    name: "Next",
+    extensionPriceCents: 9000,
+  };
+  const effectiveAt = new Date("2027-09-01T00:00:00.000Z");
+  const row = activeBillingPlanRowForPeriod(
+    {
+      billingPlan: cur,
+      nextBillingPlan: next,
+      nextBillingPlanId: next.id,
+      nextBillingPlanEffectiveAt: effectiveAt,
+    },
+    new Date("2027-08-01T00:00:00.000Z"),
+  );
+  assert.equal(row?.id, cur.id);
+});
+
+test("activeBillingPlanRowForPeriod: scheduled plan on or after effective date", () => {
+  const cur = { ...planSample, id: "cur", code: "cur", name: "Cur" };
+  const next = {
+    ...planSample,
+    id: "next",
+    code: "next",
+    name: "Next",
+    extensionPriceCents: 9000,
+  };
+  const effectiveAt = new Date("2027-09-01T00:00:00.000Z");
+  const row = activeBillingPlanRowForPeriod(
+    {
+      billingPlan: cur,
+      nextBillingPlan: next,
+      nextBillingPlanId: next.id,
+      nextBillingPlanEffectiveAt: effectiveAt,
+    },
+    effectiveAt,
+  );
+  assert.equal(row?.id, next.id);
 });

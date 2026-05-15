@@ -13,6 +13,8 @@ import { billingErrorMessage } from "../../../../../components/BillingActionToas
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { TenantDetail } from "../_components/tenantBillingConfigForms";
 import {
+  AdminBillingPricingWarningsBanner,
+  AdminCurrentBillingPlanAssignCard,
   AdminTenantInvoiceBrandingForm,
   AdminTenantMonthlyPricingForm,
   AdminTenantPricingSourceCard,
@@ -860,7 +862,18 @@ function AdminBillingSettingsBody() {
 
       {detail && !detailLoading ? (
         <>
+          <AdminBillingPricingWarningsBanner
+            tenantId={detail.tenant.id}
+            previewMonth={previewMonth}
+            previewYear={previewYear}
+          />
           <section className="billing-setup-grid">
+            <AdminCurrentBillingPlanAssignCard
+              tenantId={detail.tenant.id}
+              previewMonth={previewMonth}
+              previewYear={previewYear}
+              onAssigned={() => void loadDetail(detail.tenant.id)}
+            />
             <AdminTenantPricingSourceCard
               detail={detail}
               onSaved={() => void loadDetail(detail.tenant.id)}

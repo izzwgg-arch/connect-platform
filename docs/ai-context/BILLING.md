@@ -11,7 +11,9 @@
 | Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |
 | Pricing preview explanations (derived only; **no totals math**) | `apps/api/src/billing/billingPricingExplanation.ts` |
 | Tenant pricing mode resolver + reset payload helpers | `apps/api/src/billing/billingPricingResolution.ts` |
-| Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
+| Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview + **`pricingState`**) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
+| Normalized **`deriveBillingPricingState`** (modes, FK vs scheduled active plan, warnings) | `apps/api/src/billing/billingPricingState.ts` |
+| Assign-plan simulation helpers (merge snapshot; catalog-plan guards) | `apps/api/src/billing/billingAssignment.ts` |
 | Settings **metadata merge** (`taxProviderId` + `billingPricingMode`) | `apps/api/src/billing/billingTenantSettingsMetadata.ts` |
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
@@ -62,13 +64,18 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 **Preview:** **`buildBillingInvoicePreview`** returns **`pricingResolution`** (**mode**, **`fieldBadges`**, **`banner`**, plan names). It also returns **`pricingPreviewExplanation`** (**`pricingMode`**, **`effectiveSource`**, **`activePlanId`** / **`activePlanName`**, **`tenantOverridesDetected`**, **`scheduledPlanApplies`**, **`scheduledPlanSummary`**, **`explanationLines[]`**) — human-readable diagnostics only (no SOLA payloads; cents still come strictly from **`resolveTenantBillingPricing`** + invoice line builders).
 
-**GET** **`/admin/billing/platform/tenants/:tenantId/pricing-diagnostics`** (**SUPER_ADMIN**): same **`periodMonth` / `periodYear`** query knobs as **`invoice-preview`**. Returns assembled **`warnings[]`**, **`notices[]`**, tenant vs catalog vs effective **`differsFromPlan`**, scheduled plan slice, **`resetToPlanPreview`**, and echoes **`pricingPreviewExplanation`**.
+**GET** **`/admin/billing/platform/tenants/:tenantId/pricing-diagnostics`** (**SUPER_ADMIN**): same **`periodMonth` / `periodYear`** query knobs as **`invoice-preview`**. Returns assembled **`warnings[]`**, **`notices[]`**, tenant vs catalog vs effective **`differsFromPlan`**, scheduled plan slice, **`resetToPlanPreview`**, echoes **`pricingPreviewExplanation`**, and **`pricingState`** (**`deriveBillingPricingState`** — mode, current vs effective plan for period, **`effectivePricingSource`**, **`resolution`**, **`flags`**, **`warnings`**, **`explanationLines`**).
 
-**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). When the **resolved** normalized mode (**`legacy`** when key absent)** changes**, logs **`billing.pricing_mode_changed`** with **`operatorId`** (JWT **`sub`**), **`fromMode`**, **`toMode`**, and stored **`metadata.billingPricingMode`**. **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant's **`billingPlan`**, sets mode to **`catalog`**, responds with **`billingSettings`** + **`pricingResetSummary`** (`before`/`after` pricing snapshots), logs **`billing.pricing_reset_to_plan`** (**`metadata.operatorId`**, **`before`**, **`after`**) (**`400`** if no **`billingPlanId`**).
+**Assign current catalog plan (SUPER_ADMIN):**
+
+- **`GET …/assign-plan-preview?billingPlanId=&periodMonth=&periodYear=&copyPlanPrices=&applyPricingMode=`** — read-only; compares **`pricingState`** / tenant quad / invoice totals **before vs after** simulation (**no DB writes**).
+- **`POST …/assign-current-plan`** — body **`{ billingPlanId, applyPricingMode?: "catalog"|"custom", copyPlanPrices?: boolean }`**. Requires **catalog** **`BillingPlan`** (**`tenantId` null**) and **`active`**. Updates **`billingPlanId`** immediately; optionally copies four price columns; optionally merges **`metadata.billingPricingMode`**; **does not** clear or rewrite **`nextBillingPlan*`**; logs **`billing_plan.current_assigned`** with **`operatorUserId`**, **`before`/`after`** pricing quad + stored mode (**no invoice**, **no charge**).
+
+**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). When the **resolved** normalized mode (**`legacy`** when key absent)** changes**, logs **`billing.pricing_mode_changed`** with **`operatorId`** (JWT **`sub`**), **`fromMode`**, **`toMode`**, and stored **`metadata.billingPricingMode`**. **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant's **current** **`billingPlan`** (**scheduled next plan is ignored**), sets mode to **`catalog`**, responds with **`billingSettings`** + **`pricingResetSummary`** (`before`/`after` pricing snapshots), logs **`billing.pricing_reset_to_plan`** (**`metadata.operatorId`**, **`before`**, **`after`**) (**`400`** if no **`billingPlanId`**).
 
 Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
 
-**Portal:** **`/admin/billing/settings`** — **Pricing diagnostics** section + shared **preview period**, **billing pricing source** card (warnings + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
+**Portal:** **`/admin/billing/settings`** — **`pricingState`** warning banners (aligned preview period), **Current Billing Plan** card + assign modal (preview diff, **`POST`** confirm), **Pricing diagnostics** section + shared **preview period**, **billing pricing source** card (catalog stale-row hint + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
 
 Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 

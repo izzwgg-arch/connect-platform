@@ -5,7 +5,7 @@ import { queueInvoiceSentOnFinalize } from "./billingEmailLifecycle";
 import type { TaxCalculationAuditSnapshot } from "./taxProvider";
 import { resolveTaxProvider } from "./taxProvider";
 import type { BillingPricingResolution } from "./billingPricingResolution";
-import { parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
+import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 
 export type BillingInvoicePreview = {
@@ -66,6 +66,8 @@ export async function ensureTenantBillingSettings(tenantId: string) {
   });
 }
 
+export type TenantBillingSettingsLoaded = Awaited<ReturnType<typeof ensureTenantBillingSettings>>;
+
 export async function logBillingEvent(input: {
   tenantId: string;
   invoiceId?: string | null;
@@ -86,13 +88,14 @@ export async function logBillingEvent(input: {
   });
 }
 
-export async function buildBillingInvoicePreview(input: {
+async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   tenantId: string;
+  settings: TenantBillingSettingsLoaded;
   periodStart?: Date;
   periodEnd?: Date;
   dueDate?: Date;
 }): Promise<BillingInvoicePreview> {
-  const settings = await ensureTenantBillingSettings(input.tenantId);
+  const { tenantId, settings } = input;
   const bounds = input.periodStart && input.periodEnd ? { periodStart: input.periodStart, periodEnd: input.periodEnd } : monthBounds();
   const dueDate = input.dueDate || addDays(new Date(), Number(settings.paymentTermsDays || 15));
 
@@ -100,7 +103,7 @@ export async function buildBillingInvoicePreview(input: {
     settings.nextBillingPlanId &&
     settings.nextBillingPlanEffectiveAt &&
     bounds.periodStart >= settings.nextBillingPlanEffectiveAt;
-  const activePlan = hasScheduledChange ? settings.nextBillingPlan : settings.billingPlan;
+  const activePlan = activeBillingPlanRowForPeriod(settings, bounds.periodStart);
 
   const pricingMode = parseBillingPricingMode(settings.metadata);
   const pricingResolution = resolveTenantBillingPricing({
@@ -114,7 +117,7 @@ export async function buildBillingInvoicePreview(input: {
     activePlan,
   });
 
-  const usage = await calculateTenantBillingUsage(input.tenantId, {
+  const usage = await calculateTenantBillingUsage(tenantId, {
     firstPhoneNumberFree: pricingResolution.firstPhoneNumberFree,
     smsBillingEnabled: settings.smsBillingEnabled,
   });
@@ -192,7 +195,7 @@ export async function buildBillingInvoicePreview(input: {
   const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
   const taxProvider = resolveTaxProvider(settings);
   const taxResult = taxProvider.calculateTaxes({
-    tenantId: input.tenantId,
+    tenantId,
     taxEnabled: !!settings.taxEnabled,
     taxProfile: settings.taxProfile || null,
     taxProfileId: settings.taxProfileId || null,
@@ -237,7 +240,7 @@ export async function buildBillingInvoicePreview(input: {
   });
 
   return {
-    tenantId: input.tenantId,
+    tenantId,
     periodStart: bounds.periodStart,
     periodEnd: bounds.periodEnd,
     dueDate,
@@ -251,6 +254,33 @@ export async function buildBillingInvoicePreview(input: {
     pricingResolution,
     pricingPreviewExplanation,
   };
+}
+
+export async function buildBillingInvoicePreview(input: {
+  tenantId: string;
+  periodStart?: Date;
+  periodEnd?: Date;
+  dueDate?: Date;
+}): Promise<BillingInvoicePreview> {
+  const settings = await ensureTenantBillingSettings(input.tenantId);
+  return buildBillingInvoicePreviewWithLoadedSettings({
+    tenantId: input.tenantId,
+    settings,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    dueDate: input.dueDate,
+  });
+}
+
+/** Same math as `buildBillingInvoicePreview`, but uses an in-memory settings snapshot (e.g. assign-plan simulation). */
+export async function buildBillingInvoicePreviewFromSettings(input: {
+  tenantId: string;
+  settings: TenantBillingSettingsLoaded;
+  periodStart?: Date;
+  periodEnd?: Date;
+  dueDate?: Date;
+}): Promise<BillingInvoicePreview> {
+  return buildBillingInvoicePreviewWithLoadedSettings(input);
 }
 
 export async function createBillingInvoice(input: {

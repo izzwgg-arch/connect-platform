@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import type { CSSProperties } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
@@ -74,15 +75,6 @@ export function AdminTenantPricingSourceCard({
   const operatorWarnings: string[] = [];
   if (mode === "catalog" && expl?.tenantOverridesDetected) {
     operatorWarnings.push("Catalog mode: stored tenant unit prices differ from what invoices use (catalog/plan rates). Consider reset-to-plan.");
-  }
-  if (mode === "catalog" && !bp) {
-    operatorWarnings.push("Catalog mode is on but no billingPlanId — invoices use platform default pricing until you link a plan.");
-  }
-  if (mode === "custom" && settings.nextBillingPlanId) {
-    operatorWarnings.push("Custom mode while a scheduled plan change exists — invoice line-items still come from the tenant row until you change pricing source or reset.");
-  }
-  if (bp && bp.active === false) {
-    operatorWarnings.push("Current BillingPlan is inactive.");
   }
   const nextBp = settings.nextBillingPlan;
   if (nextBp && settings.nextBillingPlanId && nextBp.active === false) {
@@ -226,8 +218,8 @@ export function AdminTenantPricingSourceCard({
         </button>
       </div>
       <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-        Reset copies all four unit-pricing fields from the tenant&apos;s current <code>billingPlanId</code> and sets mode to Catalog. Requires a linked plan.
-        You will confirm the before/after diff first.
+        Resets to CURRENT linked plan only — copies all four unit-pricing fields from the tenant&apos;s current <code>billingPlanId</code> (not a future
+        scheduled plan) and sets mode to Catalog. Requires a linked plan. You will confirm the before/after diff first.
       </p>
       {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
 
@@ -688,6 +680,412 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
         ) : null}
         {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
       </form>
+    </DetailCard>
+  );
+}
+
+type TenantPricingDiagApi = {
+  mode: string;
+  billingPlanCurrent: { id: string; code: string; name: string; active: boolean } | null;
+  scheduledPlanChange: { nextBillingPlanId: string; nextPlanName: string; effectiveAt: string } | null;
+  pricingState: {
+    mode: string;
+    warnings: string[];
+    flags: { tenantRowDiffersFromLinkedPlan: boolean };
+    scheduledNext: { plan: { name: string }; effectiveAt: string } | null;
+    activePlanForPeriod: { id: string; name: string } | null;
+    currentPlan: { id: string; name: string; active: boolean } | null;
+  };
+};
+
+type BillingPlanPickerRow = {
+  id: string;
+  code: string;
+  name: string;
+  active: boolean;
+};
+
+function pricingModeBadgeStyle(mode: string): CSSProperties {
+  const base: CSSProperties = { fontSize: 11, padding: "2px 10px", borderRadius: 999, fontWeight: 600 };
+  if (mode === "catalog") return { ...base, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" };
+  if (mode === "custom") return { ...base, background: "#fef9c3", color: "#854d0e", border: "1px solid #facc15" };
+  return { ...base, background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1" };
+}
+
+/** Uses `pricing-diagnostics.pricingState.warnings` (normalized billing pricing flags). */
+export function AdminBillingPricingWarningsBanner({
+  tenantId,
+  previewMonth,
+  previewYear,
+}: {
+  tenantId: string;
+  previewMonth: number;
+  previewYear: number;
+}) {
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const qs = `?periodMonth=${encodeURIComponent(String(previewMonth))}&periodYear=${encodeURIComponent(String(previewYear))}`;
+        const d = await apiGet<TenantPricingDiagApi>(`/admin/billing/platform/tenants/${tenantId}/pricing-diagnostics${qs}`);
+        if (!cancelled) setWarnings(d.pricingState?.warnings ?? []);
+      } catch {
+        if (!cancelled) setWarnings([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId, previewMonth, previewYear]);
+
+  if (loading || warnings.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      {warnings.map((w) => (
+        <div key={w} className="billing-status-pill warn" style={{ marginBottom: 8, fontSize: 13, whiteSpace: "normal", lineHeight: 1.45 }}>
+          {w}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type AssignPlanPreviewApi = {
+  simulation: { copyPlanPrices: boolean; applyPricingMode: string | null };
+  tenantPricingQuad: {
+    before: { extensionPriceCents: number; additionalPhoneNumberPriceCents: number; smsPriceCents: number; firstPhoneNumberFree: boolean };
+    after: { extensionPriceCents: number; additionalPhoneNumberPriceCents: number; smsPriceCents: number; firstPhoneNumberFree: boolean };
+  };
+  invoiceTotals: { before: { totalCents: number }; after: { totalCents: number } };
+  notes: string[];
+  scheduledPlanActiveForPreviewPeriod: boolean;
+};
+
+export function AdminCurrentBillingPlanAssignCard({
+  tenantId,
+  previewMonth,
+  previewYear,
+  onAssigned,
+}: {
+  tenantId: string;
+  previewMonth: number;
+  previewYear: number;
+  onAssigned: () => void;
+}) {
+  const [diag, setDiag] = useState<TenantPricingDiagApi | null>(null);
+  const [diagLoading, setDiagLoading] = useState(true);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const [plans, setPlans] = useState<BillingPlanPickerRow[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [pricingModeOption, setPricingModeOption] = useState<"unchanged" | "catalog" | "custom">("unchanged");
+  const [copyPlanPrices, setCopyPlanPrices] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState<AssignPlanPreviewApi | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const loadDiag = useCallback(async () => {
+    setDiagLoading(true);
+    setToast(null);
+    try {
+      const qs = `?periodMonth=${encodeURIComponent(String(previewMonth))}&periodYear=${encodeURIComponent(String(previewYear))}`;
+      setDiag(await apiGet<TenantPricingDiagApi>(`/admin/billing/platform/tenants/${tenantId}/pricing-diagnostics${qs}`));
+    } catch (err: unknown) {
+      setDiag(null);
+      setToast({ kind: "err", text: billingErrorMessage(err, "Could not load billing diagnostics.") });
+    } finally {
+      setDiagLoading(false);
+    }
+  }, [tenantId, previewMonth, previewYear]);
+
+  useEffect(() => {
+    void loadDiag();
+  }, [loadDiag]);
+
+  async function openModal() {
+    setToast(null);
+    setPreviewData(null);
+    setModalOpen(true);
+    setPricingModeOption("unchanged");
+    setCopyPlanPrices(false);
+    try {
+      const rows = await apiGet<BillingPlanPickerRow[]>("/admin/billing/platform/billing-plans");
+      const active = rows.filter((p) => p.active !== false);
+      setPlans(active);
+      const initial =
+        diag?.billingPlanCurrent?.id && active.some((p) => p.id === diag.billingPlanCurrent!.id)
+          ? diag.billingPlanCurrent!.id
+          : active[0]?.id || "";
+      setSelectedPlanId(initial);
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: billingErrorMessage(err, "Could not load billing plans.") });
+    }
+  }
+
+  const refreshPreview = useCallback(async () => {
+    if (!selectedPlanId) return;
+    setPreviewLoading(true);
+    setToast(null);
+    try {
+      const qs = new URLSearchParams({
+        billingPlanId: selectedPlanId,
+        periodMonth: String(previewMonth),
+        periodYear: String(previewYear),
+      });
+      if (copyPlanPrices) qs.set("copyPlanPrices", "true");
+      if (pricingModeOption === "catalog") qs.set("applyPricingMode", "catalog");
+      if (pricingModeOption === "custom") qs.set("applyPricingMode", "custom");
+      const data = await apiGet<AssignPlanPreviewApi>(
+        `/admin/billing/platform/tenants/${tenantId}/assign-plan-preview?${qs.toString()}`,
+      );
+      setPreviewData(data);
+    } catch (err: unknown) {
+      setPreviewData(null);
+      setToast({ kind: "err", text: billingErrorMessage(err, "Preview failed — check plan selection.") });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [tenantId, selectedPlanId, previewMonth, previewYear, copyPlanPrices, pricingModeOption]);
+
+  useEffect(() => {
+    if (!modalOpen || !selectedPlanId) return;
+    const t = setTimeout(() => void refreshPreview(), 200);
+    return () => clearTimeout(t);
+  }, [modalOpen, selectedPlanId, refreshPreview]);
+
+  async function confirmAssign() {
+    if (!selectedPlanId) return;
+    setSaving(true);
+    setToast(null);
+    try {
+      await apiPost(`/admin/billing/platform/tenants/${tenantId}/assign-current-plan`, {
+        billingPlanId: selectedPlanId,
+        copyPlanPrices,
+        ...(pricingModeOption !== "unchanged" ? { applyPricingMode: pricingModeOption } : {}),
+      });
+      setModalOpen(false);
+      setPreviewData(null);
+      onAssigned();
+      void loadDiag();
+      setToast({ kind: "ok", text: "Current billing plan updated." });
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: billingErrorMessage(err, "Assign failed.") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const ps = diag?.pricingState;
+  const matchBadge = !diag?.billingPlanCurrent ? (
+    <span className="billing-status-pill" style={{ fontSize: 11 }}>
+      No linked plan
+    </span>
+  ) : ps?.flags?.tenantRowDiffersFromLinkedPlan === false ? (
+    <span className="billing-status-pill good" style={{ fontSize: 11 }}>
+      Tenant row matches linked plan
+    </span>
+  ) : (
+    <span className="billing-status-pill warn" style={{ fontSize: 11 }}>
+      Tenant row differs from linked plan
+    </span>
+  );
+
+  return (
+    <DetailCard title="Current Billing Plan">
+      {diagLoading ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : null}
+      {!diagLoading && diag ? (
+        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <span style={pricingModeBadgeStyle(ps?.mode || "legacy")}>{(ps?.mode || "legacy").toUpperCase()}</span>
+            {matchBadge}
+          </div>
+          <p style={{ margin: "0 0 8px" }}>
+            Linked plan (FK):{" "}
+            <strong>{diag.billingPlanCurrent ? `${diag.billingPlanCurrent.name} (${diag.billingPlanCurrent.code})` : "—"}</strong>
+            {diag.billingPlanCurrent && diag.billingPlanCurrent.active === false ? (
+              <span style={{ color: "#b45309", marginLeft: 8 }}>(inactive)</span>
+            ) : null}
+          </p>
+          <p style={{ margin: "0 0 8px", color: "var(--muted)", fontSize: 12 }}>
+            Active plan for preview period:{" "}
+            <strong>{ps?.activePlanForPeriod?.name || "—"}</strong>
+            {ps?.scheduledNext ? (
+              <>
+                {" "}
+                · Scheduled next: <strong>{ps.scheduledNext.plan.name}</strong> effective {new Date(ps.scheduledNext.effectiveAt).toLocaleDateString()}
+              </>
+            ) : (
+              <> · No scheduled plan change</>
+            )}
+          </p>
+          <button className="btn primary" type="button" style={{ fontSize: 13 }} onClick={() => void openModal()}>
+            Assign current plan…
+          </button>
+        </div>
+      ) : null}
+
+      {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
+
+      {modalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2100,
+            background: "rgba(15, 23, 42, 0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--card-bg, #fff)",
+              borderRadius: 10,
+              maxWidth: 560,
+              width: "100%",
+              padding: "18px 20px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.2)",
+              color: "var(--text-primary, inherit)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Assign current billing plan</h3>
+            <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted)" }}>
+              Updates <code>billingPlanId</code> immediately. Optional: copy catalog prices onto the tenant row and/or set pricing mode. Scheduled next plan is not modified.
+              No invoice is created.
+            </p>
+
+            <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+              Catalog plan
+              <select
+                value={selectedPlanId}
+                onChange={(e) => setSelectedPlanId(e.target.value)}
+                style={{ fontSize: 13 }}
+              >
+                {plans.length === 0 ? <option value="">No active plans</option> : null}
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.code})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={{ fontSize: 13, marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Pricing mode</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <input type="radio" name="apm" checked={pricingModeOption === "unchanged"} onChange={() => setPricingModeOption("unchanged")} />
+                Leave unchanged
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <input type="radio" name="apm" checked={pricingModeOption === "catalog"} onChange={() => setPricingModeOption("catalog")} />
+                Set to catalog
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input type="radio" name="apm" checked={pricingModeOption === "custom"} onChange={() => setPricingModeOption("custom")} />
+                Set to custom
+              </label>
+            </div>
+
+            <label className="billing-checkbox" style={{ fontSize: 13, marginBottom: 12, display: "block" }}>
+              <input type="checkbox" checked={copyPlanPrices} onChange={(e) => setCopyPlanPrices(e.target.checked)} />
+              Copy plan pricing into tenant row (all four fields)
+            </label>
+
+            <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 6, padding: "8px 10px", marginBottom: 12, color: "#92400e" }}>
+              <strong>Reset-to-plan</strong> (separate control above) resets to the CURRENT linked plan only — not the future scheduled plan.
+            </div>
+
+            {previewLoading ? <p className="muted" style={{ fontSize: 13 }}>Updating preview…</p> : null}
+
+            {previewData?.scheduledPlanActiveForPreviewPeriod ? (
+              <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 6, padding: "8px 10px", marginBottom: 12, color: "#1e40af" }}>
+                This preview period uses the <strong>scheduled next</strong> plan for invoice math. Assign-current-plan still only changes the current FK — it does not apply the scheduled plan early.
+              </div>
+            ) : null}
+
+            {previewData?.notes?.length ? (
+              <ul style={{ fontSize: 12, color: "var(--muted)", paddingLeft: 18, margin: "0 0 12px" }}>
+                {previewData.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            ) : null}
+
+            {previewData ? (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tenant row pricing (preview)</div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)" }}>
+                      <th style={{ textAlign: "left", padding: 4 }}>Field</th>
+                      <th style={{ textAlign: "right", padding: 4 }}>Before</th>
+                      <th style={{ textAlign: "right", padding: 4 }}>After</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["Extension", "extensionPriceCents"],
+                        ["Phone add-on", "additionalPhoneNumberPriceCents"],
+                        ["SMS", "smsPriceCents"],
+                      ] as const
+                    ).map(([label, key]) => (
+                      <tr key={key} style={{ borderBottom: "1px solid var(--border-light,#f3f4f6)" }}>
+                        <td style={{ padding: 4 }}>{label}</td>
+                        <td style={{ textAlign: "right", padding: 4 }}>{toDollars(previewData.tenantPricingQuad.before[key])}</td>
+                        <td style={{ textAlign: "right", padding: 4, fontWeight: 600 }}>{toDollars(previewData.tenantPricingQuad.after[key])}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderBottom: "1px solid var(--border-light,#f3f4f6)" }}>
+                      <td style={{ padding: 4 }}>1st phone free</td>
+                      <td style={{ textAlign: "right", padding: 4 }}>{previewData.tenantPricingQuad.before.firstPhoneNumberFree ? "Yes" : "No"}</td>
+                      <td style={{ textAlign: "right", padding: 4, fontWeight: 600 }}>
+                        {previewData.tenantPricingQuad.after.firstPhoneNumberFree ? "Yes" : "No"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+                  Invoice totals (preview): before {toDollars(previewData.invoiceTotals.before.totalCents)} · after{" "}
+                  {toDollars(previewData.invoiceTotals.after.totalCents)}
+                </p>
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button className="btn ghost" type="button" disabled={saving} onClick={() => setModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={!selectedPlanId || previewLoading || saving}
+                onClick={() => void refreshPreview()}
+              >
+                Refresh preview
+              </button>
+              <button className="btn primary" type="button" disabled={!selectedPlanId || saving || previewLoading} onClick={() => void confirmAssign()}>
+                {saving ? "Saving…" : "Confirm assign"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </DetailCard>
   );
 }

@@ -203,6 +203,10 @@ test("GET pricing-diagnostics-shaped payload keys (-assembler contract)", () => 
     },
     preview,
   });
+  assert.ok(Array.isArray(diag.pricingState.warnings));
+  assert.equal(diag.pricingState.mode, diag.mode);
+  assert.equal(diag.pricingState.resolution.extensionPriceCents, diag.effectiveInvoicePricing.extensionPriceCents);
+
   for (const k of [
     "tenantId",
     "mode",
@@ -219,6 +223,7 @@ test("GET pricing-diagnostics-shaped payload keys (-assembler contract)", () => 
     "explanationLines",
     "resetToPlanPreview",
     "pricingPreviewExplanation",
+    "pricingState",
     "fetchedAt",
   ] as const) {
     assert.ok(k in diag, `missing ${k}`);

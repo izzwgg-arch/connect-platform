@@ -1,5 +1,10 @@
 import type { BillingInvoicePreview } from "./invoiceEngine";
 import {
+  billingPricingSettingsSliceFromLoaded,
+  deriveBillingPricingState,
+  type DerivedBillingPricingState,
+} from "./billingPricingState";
+import {
   BILLING_PRICING_MODE_METADATA_KEY,
   buildTenantSettingsResetToCatalog,
   parseBillingPricingMode,
@@ -82,6 +87,8 @@ export type TenantPricingDiagnostics = {
   resetToPlanPreview: TenantPricingResetPreview;
   /** Mirrors `BillingInvoicePreview.pricingPreviewExplanation` for the same preview request. */
   pricingPreviewExplanation: NonNullable<BillingInvoicePreview["pricingPreviewExplanation"]>;
+  /** Normalized pricing flags + warnings (`deriveBillingPricingState`). */
+  pricingState: DerivedBillingPricingState;
 };
 
 function boolFirst(v: boolean | null | undefined): boolean {
@@ -253,6 +260,20 @@ export function buildTenantPricingDiagnosticsFromPreview(input: {
     };
   }
 
+  const pricingSlice = billingPricingSettingsSliceFromLoaded({
+    metadata: settings.metadata,
+    billingPlanId: settings.billingPlanId,
+    billingPlan: settings.billingPlan,
+    nextBillingPlanId: settings.nextBillingPlanId,
+    nextBillingPlanEffectiveAt: settings.nextBillingPlanEffectiveAt,
+    nextBillingPlan: settings.nextBillingPlan,
+    extensionPriceCents: settings.extensionPriceCents,
+    additionalPhoneNumberPriceCents: settings.additionalPhoneNumberPriceCents,
+    smsPriceCents: settings.smsPriceCents,
+    firstPhoneNumberFree: settings.firstPhoneNumberFree,
+  });
+  const pricingState = deriveBillingPricingState({ settings: pricingSlice, preview });
+
   return {
     tenantId,
     fetchedAt: new Date().toISOString(),
@@ -276,6 +297,7 @@ export function buildTenantPricingDiagnosticsFromPreview(input: {
     explanationLines: expl.explanationLines,
     resetToPlanPreview,
     pricingPreviewExplanation: expl,
+    pricingState,
   };
 }
 
