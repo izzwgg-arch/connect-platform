@@ -5,6 +5,7 @@
   -webkit-overflow-scrolling: touch;
 }
 
+.billing-ops-table-wrap {
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 88%, transparent);
   overflow: hidden;
