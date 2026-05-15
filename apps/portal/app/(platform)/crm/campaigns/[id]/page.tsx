@@ -91,6 +91,30 @@ type CampaignImportSummary = {
   assignedToUserId: string | null;
 };
 
+type CampaignImportPreview = {
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  wouldCreateContacts: number;
+  wouldUpdateContacts: number;
+  wouldAddMembers: number;
+  wouldSkipExistingMembers: number;
+  sampleRows: {
+    row: number;
+    phone?: string;
+    email?: string;
+    outcome: string;
+    reason?: string;
+    member: string;
+  }[];
+  errors: { row: number; reason: string }[];
+  campaignId?: string;
+  fileName?: string;
+  detectedHeaders?: string[];
+  mapping?: Record<string, string>;
+  assignedToUserId?: string | null;
+};
+
 type WorkloadRow = {
   userId: string | null;
   displayName: string;
@@ -438,6 +462,10 @@ export default function CampaignDetailPage() {
   const [importing, setImporting] = useState(false);
   const [importErr, setImportErr] = useState("");
   const [importSummary, setImportSummary] = useState<CampaignImportSummary | null>(null);
+  const [importPreview, setImportPreview] = useState<CampaignImportPreview | null>(null);
+  const [importPreviewing, setImportPreviewing] = useState(false);
+  /** File fingerprint when preview last succeeded — Import enabled only when it matches current file. */
+  const [importPreviewFileKey, setImportPreviewFileKey] = useState<string | null>(null);
 
   // Bulk select
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -446,6 +474,11 @@ export default function CampaignDetailPage() {
   const [bulkMsg, setBulkMsg] = useState("");
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+
+  useEffect(() => {
+    setImportPreview(null);
+    setImportPreviewFileKey(null);
+  }, [importFile]);
 
   const loadCampaign = useCallback(async () => {
     try {
@@ -563,6 +596,11 @@ export default function CampaignDetailPage() {
       setImportErr("Choose a CSV file.");
       return;
     }
+    const fileKey = `${importFile.name}:${importFile.size}:${importFile.lastModified}`;
+    if (!importPreview || importPreviewFileKey !== fileKey) {
+      setImportErr("Run “Preview import” first. If you changed the file or assignee, preview again.");
+      return;
+    }
     setImporting(true);
     setImportErr("");
     setImportSummary(null);
@@ -586,10 +624,48 @@ export default function CampaignDetailPage() {
       setImportSummary(data as CampaignImportSummary);
       await Promise.all([loadCampaign(), loadMembers(), loadWorkload()]);
       setImportFile(null);
+      setImportPreview(null);
+      setImportPreviewFileKey(null);
     } catch (e: unknown) {
       setImportErr((e as Error)?.message ?? "Import failed");
     }
     setImporting(false);
+  }
+
+  async function handleCampaignImportPreview() {
+    if (!importFile) {
+      setImportErr("Choose a CSV file.");
+      return;
+    }
+    setImportPreviewing(true);
+    setImportErr("");
+    setImportPreview(null);
+    setImportPreviewFileKey(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
+      const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const base = typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(`${base}/api/crm/campaigns/${campaignId}/import/preview`, {
+        method: "POST",
+        headers: t ? { Authorization: `Bearer ${t}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.detail === "string" ? data.detail : data.error || `Preview failed (${res.status})`,
+        );
+      }
+      setImportPreview(data as CampaignImportPreview);
+      setImportPreviewFileKey(`${importFile.name}:${importFile.size}:${importFile.lastModified}`);
+    } catch (e: unknown) {
+      setImportErr((e as Error)?.message ?? "Preview failed");
+      setImportPreview(null);
+      setImportPreviewFileKey(null);
+    }
+    setImportPreviewing(false);
   }
 
   async function handleBulkAssign() {
@@ -840,6 +916,8 @@ export default function CampaignDetailPage() {
                       setImportSummary(null);
                       setImportFile(null);
                       setImportAssigneeId("");
+                      setImportPreview(null);
+                      setImportPreviewFileKey(null);
                     }}
                     className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
                     title="Import leads from CSV"
@@ -983,6 +1061,59 @@ export default function CampaignDetailPage() {
                     ))}
                   </select>
                 </div>
+                <div className="mb-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCampaignImportPreview()}
+                    disabled={importPreviewing || !importFile}
+                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {importPreviewing ? "Previewing…" : "Preview import"}
+                  </button>
+                </div>
+                {importPreview && importFile && importPreviewFileKey === `${importFile.name}:${importFile.size}:${importFile.lastModified}` && (
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm space-y-1">
+                    <p className="font-semibold text-gray-800">Preview (dry-run — nothing saved yet)</p>
+                    <p>Total rows: {importPreview.totalRows} · Valid: {importPreview.validRows} · Invalid / skipped rows: {importPreview.invalidRows}</p>
+                    <p>Would create contacts: {importPreview.wouldCreateContacts}</p>
+                    <p>Would update contacts: {importPreview.wouldUpdateContacts}</p>
+                    <p className="text-green-800 font-medium">Would add campaign members: {importPreview.wouldAddMembers}</p>
+                    <p>Would skip (already in campaign): {importPreview.wouldSkipExistingMembers}</p>
+                    {importPreview.sampleRows?.length > 0 && (
+                      <div className="mt-2 max-h-40 overflow-y-auto border border-blue-100 rounded bg-white">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left text-gray-500 border-b">
+                              <th className="p-1.5">Row</th>
+                              <th className="p-1.5">Phone</th>
+                              <th className="p-1.5">Email</th>
+                              <th className="p-1.5">Contact</th>
+                              <th className="p-1.5">Member</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {importPreview.sampleRows.map((s) => (
+                              <tr key={s.row} className="border-b border-gray-50">
+                                <td className="p-1.5">{s.row}</td>
+                                <td className="p-1.5">{s.phone ?? "—"}</td>
+                                <td className="p-1.5 truncate max-w-[100px]" title={s.email}>{s.email ?? "—"}</td>
+                                <td className="p-1.5">{s.outcome}{s.reason ? ` (${s.reason})` : ""}</td>
+                                <td className="p-1.5">{s.member}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    {importPreview.errors?.length > 0 && (
+                      <ul className="text-xs text-amber-800 list-disc pl-4 mt-1 max-h-24 overflow-y-auto">
+                        {importPreview.errors.map((er) => (
+                          <li key={`${er.row}-${er.reason}`}>Row {er.row}: {er.reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 {importErr && <p className="text-sm text-red-600 mb-3">{importErr}</p>}
                 {importSummary && (
                   <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm space-y-1">
@@ -1009,7 +1140,13 @@ export default function CampaignDetailPage() {
                   {importSummary && (
                     <button
                       type="button"
-                      onClick={() => { setImportSummary(null); setImportFile(null); setImportErr(""); }}
+                      onClick={() => {
+                        setImportSummary(null);
+                        setImportFile(null);
+                        setImportErr("");
+                        setImportPreview(null);
+                        setImportPreviewFileKey(null);
+                      }}
                       className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 mr-auto"
                     >
                       Import another
@@ -1018,17 +1155,24 @@ export default function CampaignDetailPage() {
                   <button type="button" onClick={() => setImportOpen(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
                     {importSummary ? "Close" : "Cancel"}
                   </button>
-                  {!importSummary && (
+                  {!importSummary && (() => {
+                    const importReady =
+                      !!importFile &&
+                      !!importPreview &&
+                      importPreviewFileKey === `${importFile.name}:${importFile.size}:${importFile.lastModified}`;
+                    return (
                     <button
                       type="button"
                       onClick={() => void handleCampaignImport()}
-                      disabled={importing || !importFile}
+                      disabled={importing || importPreviewing || !importReady}
                       className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                      title={!importReady ? "Preview import first" : undefined}
                     >
                       <Upload className="h-3.5 w-3.5" />
                       {importing ? "Importing…" : "Run import"}
                     </button>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             </div>

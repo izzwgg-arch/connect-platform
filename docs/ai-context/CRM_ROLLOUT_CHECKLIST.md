@@ -91,6 +91,15 @@
 | Callback scheduling | Outcome with "Callback" + date → member `callbackAt` set, member appears in **Due** tab |
 | Export CSV | `GET /crm/campaigns/:id/export.csv` → downloads CSV with all members |
 | Campaign auto-completes | When all **live-contact** non-terminal work is done (Phase 16D) — `PENDING`/`IN_PROGRESS`/`CALLBACK` only on active, non-archived contacts — campaign may become `status: "COMPLETED"` (also re-checked after contact soft-archive). |
+| Campaign CSV import preview (17A) | Admin opens Import CSV on campaign detail → select file → **Preview import** → `POST /crm/campaigns/:id/import/preview` returns counts + sample rows (no DB writes) → **Run import** stays disabled until preview succeeds for that file → final **Run import** calls `POST /crm/campaigns/:id/import`. |
+
+### Phase 17A — Campaign CSV import preview (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Preview dry-run | `POST .../import/preview` with test CSV → **200**; response has `wouldCreateContacts` / `wouldUpdateContacts` / `wouldAddMembers` / `wouldSkipExistingMembers`; **no** new `CrmImportBatch` row and **no** new contacts or members until real import. |
+| Changing file | After choosing a different CSV, preview panel clears and **Run import** disabled until preview again. |
+| Real import unchanged | `POST .../import` still creates batch, contacts, and members as before; totals should align with preview for the same file (allow minor timing if DB changed between calls). |
 
 ---
 

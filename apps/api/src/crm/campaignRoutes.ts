@@ -21,6 +21,7 @@ import {
   mappingHasPhoneOrEmail,
   processImportRow,
   readCrmImportMultipart,
+  runCampaignImportPreview,
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
@@ -327,6 +328,95 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     });
 
     return reply.code(201).send({ added: newIds.length, skipped: validIds.length - newIds.length });
+  });
+
+  // ── POST /crm/campaigns/:id/import/preview ───────────────────────────────
+  // Dry-run: same parse/map/dedup/resolution as real import; no DB writes (no batch, contacts, members).
+  app.post("/crm/campaigns/:id/import/preview", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId, sub: userId } = user;
+    const { id: campaignId } = req.params as { id: string };
+
+    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
+    if (!campaign) return reply.code(404).send({ error: "campaign_not_found" });
+
+    if (!(req as any).isMultipart?.()) {
+      return reply.status(400).send({ error: "multipart_required" });
+    }
+
+    let fileBuf: Buffer;
+    let fileName: string;
+    let fields: Record<string, string>;
+    try {
+      const read = await readCrmImportMultipart(req);
+      fileBuf = read.fileBuf;
+      fileName = read.fileName;
+      fields = read.fields;
+    } catch (err: any) {
+      if (err?.code === "file_required") {
+        return reply.status(400).send({ error: "file_required" });
+      }
+      return reply.status(400).send({ error: "multipart_parse_failed", detail: err?.message });
+    }
+
+    if (fileBuf.length > CRM_IMPORT_MAX_FILE_BYTES) {
+      return reply.status(413).send({ error: "file_too_large", limitMb: 5 });
+    }
+
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    if (ext !== "csv") {
+      return reply.status(400).send({ error: "invalid_file_type", detail: "Only CSV files are supported." });
+    }
+
+    const assignRaw = (fields.assignedToUserId ?? "").trim();
+    let assigneeUserId: string | null = assignRaw || null;
+    if (assigneeUserId) {
+      const access = await db.crmUserAccess.findFirst({
+        where: { tenantId, userId: assigneeUserId, enabled: true },
+        select: { id: true },
+      });
+      if (!access) {
+        return reply.status(400).send({ error: "invalid_assignee", detail: "User must belong to tenant and have CRM access enabled." });
+      }
+    }
+
+    let rows: string[][];
+    try {
+      rows = parseCsv(fileBuf.toString("utf-8"));
+    } catch (err: any) {
+      return reply.status(400).send({ error: "csv_parse_failed", detail: err?.message });
+    }
+
+    if (rows.length < 2) {
+      return reply.status(400).send({ error: "csv_empty", detail: "File must have a header row and at least one data row." });
+    }
+
+    const headers = rows[0];
+    const dataRows = rows.slice(1).slice(0, CRM_IMPORT_MAX_ROWS);
+    if (dataRows.length === 0) {
+      return reply.status(400).send({ error: "csv_no_data_rows" });
+    }
+
+    const colMapping = autoMapHeaders(headers);
+    if (!mappingHasPhoneOrEmail(colMapping)) {
+      return reply.status(400).send({
+        error: "no_usable_columns",
+        detail: "CSV must have at least a 'phone' or 'email' column. Check column headers.",
+        detectedHeaders: headers,
+        expectedHeaders: ["first name", "last name", "company", "phone", "email", "notes", "tags"],
+      });
+    }
+
+    const preview = await runCampaignImportPreview(tenantId, campaignId, userId, dataRows, colMapping);
+    return reply.send({
+      ...preview,
+      campaignId,
+      fileName,
+      detectedHeaders: headers,
+      mapping: colMapping,
+      assignedToUserId: assigneeUserId,
+    });
   });
 
   // ── POST /crm/campaigns/:id/import ───────────────────────────────────────
