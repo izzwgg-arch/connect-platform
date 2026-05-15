@@ -17,6 +17,12 @@ export function displayFileNameFromCrmImportBatchStoredName(storedFileName: stri
   return m ? m[2]! : storedFileName;
 }
 
+/** Campaign id when `storedFileName` was written by `POST /crm/campaigns/:id/import`; otherwise null. */
+export function parseCrmImportBatchCampaignId(storedFileName: string): string | null {
+  const m = /^campaign:([^:]+):[\s\S]*$/.exec(storedFileName);
+  return m ? m[1]! : null;
+}
+
 // ── CSV parser ───────────────────────────────────────────────────────────────
 
 export function parseCsv(text: string): string[][] {

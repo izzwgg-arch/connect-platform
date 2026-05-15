@@ -458,8 +458,8 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/crm/import/upload` | CSV upload (`multipart/form-data`, field `file`). Uses shared `importPipeline` (parse, header auto-map, dedupe by phone/email, create/update `Contact` + `CrmContactMeta`). Max 5 MB, 5,000 rows. Returns `CrmImportBatch` summary. |
-| GET | `/crm/import/batches` | List batches |
-| GET | `/crm/import/batches/:id` | Single batch detail |
+| GET | `/crm/import/batches` | List batches (same `formatBatch` shape as detail). |
+| GET | `/crm/import/batches/:id` | Single batch. **`requireCrmAccess`**, tenant-scoped; **404** `not_found` if missing/cross-tenant. Returns display `fileName` (campaign tag stripped), **`importSource`**: `standalone` \| `campaign` (from stored `fileName`), **`campaignId`**: string \| null, status, row/processed counts, `errors` JSON (may be empty), `mapping`, timestamps, `createdBy`. No invented row-level data. |
 
 ### Scripts (Phase 2C)
 | Method | Path | Notes |

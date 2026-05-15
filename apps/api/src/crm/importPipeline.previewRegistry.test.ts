@@ -4,6 +4,7 @@ import {
   CampaignImportPreviewRegistry,
   crmCampaignImportBatchFilePrefix,
   displayFileNameFromCrmImportBatchStoredName,
+  parseCrmImportBatchCampaignId,
 } from "./importPipeline";
 
 test("preview registry dedupes same phone across synthetic creates", () => {
@@ -42,4 +43,9 @@ test("prefix + original reproduces stored campaign import fileName", () => {
   const stored = `${crmCampaignImportBatchFilePrefix(cid)}${orig}`;
   assert.ok(stored.startsWith(crmCampaignImportBatchFilePrefix(cid)));
   assert.equal(displayFileNameFromCrmImportBatchStoredName(stored), orig);
+});
+
+test("parseCrmImportBatchCampaignId extracts campaign id from stored name", () => {
+  assert.equal(parseCrmImportBatchCampaignId("campaign:abc123:file.csv"), "abc123");
+  assert.equal(parseCrmImportBatchCampaignId("normal.csv"), null);
 });

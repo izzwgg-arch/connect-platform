@@ -6,8 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { FileUp, CheckCircle, AlertCircle, Clock, ChevronDown, ChevronUp, X } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
-import { apiGet } from "../../../../services/apiClient";
-import { useAppContext } from "../../../../hooks/useAppContext";
+import { apiGet, ApiError } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -16,6 +15,9 @@ type BatchStatus = "PENDING" | "PROCESSING" | "DONE" | "PARTIAL" | "FAILED";
 type ImportBatch = {
   id: string;
   fileName: string;
+  /** Present on API ≥ Phase 17D; infer standalone when missing. */
+  importSource?: "standalone" | "campaign";
+  campaignId?: string | null;
   status: BatchStatus;
   totalRows: number;
   processedRows: number;
@@ -24,6 +26,7 @@ type ImportBatch = {
   skippedCount: number;
   errorCount: number;
   errors: { row: number; reason: string }[];
+  mapping?: Record<string, string> | null;
   createdAt: string;
   completedAt?: string | null;
   createdBy?: { id: string; displayName: string } | null;
@@ -78,10 +81,11 @@ const EXPECTED_COLUMNS = [
 
 // ── Batch result card ─────────────────────────────────────────────────────────
 
-function BatchCard({ batch }: { batch: ImportBatch }) {
+function BatchCard({ batch, showDetailLink }: { batch: ImportBatch; showDetailLink?: boolean }) {
   const [showErrors, setShowErrors] = useState(false);
   const meta = STATUS_META[batch.status] ?? STATUS_META.PENDING;
   const hasErrors = (batch.errors?.length ?? 0) > 0;
+  const source = batch.importSource ?? (batch.campaignId ? "campaign" : "standalone");
 
   return (
     <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -97,6 +101,20 @@ function BatchCard({ batch }: { batch: ImportBatch }) {
           <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: "0.2rem" }}>
             {formatDate(batch.createdAt)}
             {batch.createdBy && ` · ${batch.createdBy.displayName}`}
+          </div>
+          <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginTop: "0.25rem" }}>
+            {source === "campaign" ? "Campaign CSV import" : "Standalone import"}
+            {source === "campaign" && batch.campaignId && (
+              <>
+                {" · "}
+                <Link
+                  href={`/crm/campaigns/${encodeURIComponent(batch.campaignId)}`}
+                  style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+                >
+                  Campaign
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -134,13 +152,163 @@ function BatchCard({ batch }: { batch: ImportBatch }) {
         </div>
       )}
 
-      {/* Link to contacts after a successful import */}
-      {(batch.status === "DONE" || batch.status === "PARTIAL") && (batch.createdCount + batch.updatedCount > 0) && (
-        <Link
-          href="/crm/contacts"
-          style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
+        {showDetailLink && (
+          <Link
+            href={`/crm/import?batch=${encodeURIComponent(batch.id)}`}
+            style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+          >
+            Batch detail →
+          </Link>
+        )}
+        {/* Link to contacts after a successful import */}
+        {(batch.status === "DONE" || batch.status === "PARTIAL") && (batch.createdCount + batch.updatedCount > 0) && (
+          <Link
+            href="/crm/contacts"
+            style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+          >
+            View imported contacts →
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Full drilldown for `?batch=` — persisted fields only; honest when per-row JSON is missing. */
+function ImportBatchDetailPanel({ batch }: { batch: ImportBatch }) {
+  const meta = STATUS_META[batch.status] ?? STATUS_META.PENDING;
+  const source = batch.importSource ?? (batch.campaignId ? "campaign" : "standalone");
+  const errList = Array.isArray(batch.errors) ? batch.errors : [];
+  const missingStoredRowDetails =
+    (batch.errorCount > 0 || batch.skippedCount > 0) && errList.length === 0;
+  const mappingEntries =
+    batch.mapping && typeof batch.mapping === "object"
+      ? Object.entries(batch.mapping as Record<string, string>)
+      : [];
+
+  return (
+    <div
+      className="panel"
+      style={{
+        padding: "1.25rem",
+        display: "flex",
+        flexDirection: "column",
+        gap: "1rem",
+        border: "1px solid var(--border)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+      }}
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+        <h2 style={{ margin: 0, fontSize: "1.0625rem", fontWeight: 700, color: "var(--text)" }}>Import batch detail</h2>
+        <span
+          style={{
+            fontSize: "0.6875rem",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+            padding: "0.2rem 0.5rem",
+            borderRadius: "0.25rem",
+            background: source === "campaign" ? "#dbeafe" : "var(--surface-hover)",
+            color: source === "campaign" ? "#1d4ed8" : "var(--text-dim)",
+          }}
         >
-          View imported contacts →
+          {source === "campaign" ? "Campaign-linked" : "Standalone"}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.8125rem", fontWeight: 600, color: meta.color }}>
+          {meta.icon} {meta.label}
+        </span>
+      </div>
+
+      <div style={{ fontSize: "0.875rem", lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 0.35rem", fontWeight: 600, color: "var(--text)" }}>{batch.fileName}</p>
+        <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+          <strong style={{ color: "var(--text)" }}>Uploaded:</strong> {formatDate(batch.createdAt)}
+          {batch.completedAt && (
+            <>
+              {" · "}
+              <strong style={{ color: "var(--text)" }}>Finished:</strong> {formatDate(batch.completedAt)}
+            </>
+          )}
+        </p>
+        <p style={{ margin: "0.35rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+          <strong style={{ color: "var(--text)" }}>By:</strong> {batch.createdBy?.displayName ?? "—"}
+          {" · "}
+          <strong style={{ color: "var(--text)" }}>Batch id:</strong>{" "}
+          <code style={{ fontSize: "0.75rem" }}>{batch.id}</code>
+        </p>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "1.25rem", fontSize: "0.8125rem" }}>
+        <span><strong style={{ color: "var(--text)" }}>{batch.totalRows}</strong> <span style={{ color: "var(--text-dim)" }}>rows (file)</span></span>
+        <span><strong style={{ color: "var(--text)" }}>{batch.processedRows}</strong> <span style={{ color: "var(--text-dim)" }}>processed</span></span>
+        <span><strong style={{ color: "#10b981" }}>{batch.createdCount}</strong> <span style={{ color: "var(--text-dim)" }}>created</span></span>
+        <span><strong style={{ color: "#3b82f6" }}>{batch.updatedCount}</strong> <span style={{ color: "var(--text-dim)" }}>updated</span></span>
+        <span><strong style={{ color: "#6b7280" }}>{batch.skippedCount}</strong> <span style={{ color: "var(--text-dim)" }}>skipped</span></span>
+        <span><strong style={{ color: "#ef4444" }}>{batch.errorCount}</strong> <span style={{ color: "var(--text-dim)" }}>row errors</span></span>
+      </div>
+
+      {source === "campaign" && batch.campaignId && (
+        <Link
+          href={`/crm/campaigns/${encodeURIComponent(batch.campaignId)}`}
+          style={{ fontSize: "0.875rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none", width: "fit-content" }}
+        >
+          Open campaign (where this CSV was imported) →
+        </Link>
+      )}
+
+      {mappingEntries.length > 0 && (
+        <div style={{ padding: "0.75rem 1rem", background: "var(--surface-hover)", borderRadius: "0.375rem", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+          <strong style={{ color: "var(--text)" }}>Column mapping (persisted):</strong>{" "}
+          {mappingEntries.slice(0, 24).map(([col, field], i) => (
+            <span key={i} style={{ marginRight: "0.65rem" }}>
+              <code style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>col {col}</code> → <span style={{ color: "var(--accent)" }}>{field}</span>
+            </span>
+          ))}
+          {mappingEntries.length > 24 && <span>…</span>}
+        </div>
+      )}
+
+      {missingStoredRowDetails && (
+        <div
+          style={{
+            padding: "0.65rem 0.85rem",
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: "0.375rem",
+            fontSize: "0.8125rem",
+            color: "#92400e",
+          }}
+        >
+        Row-level details are not stored for this batch—only totals above. This can happen for older imports or when per-row JSON was never written.
+        </div>
+      )}
+
+      {errList.length > 0 && (
+        <div>
+          <p style={{ margin: "0 0 0.35rem", fontSize: "0.8125rem", fontWeight: 700, color: "var(--text-dim)" }}>Row issues (from stored batch)</p>
+          <div
+            style={{
+              maxHeight: 220,
+              overflowY: "auto",
+              border: "1px solid var(--border)",
+              borderRadius: "0.375rem",
+              padding: "0.5rem 0.65rem",
+              background: "var(--surface-hover)",
+            }}
+          >
+            {errList.map((e, i) => (
+              <div key={i} style={{ fontSize: "0.8125rem", color: "#b91c1c", padding: "0.15rem 0" }}>
+                Row {e.row}: {e.reason}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(batch.status === "DONE" || batch.status === "PARTIAL") && (batch.createdCount + batch.updatedCount > 0) && (
+        <Link href="/crm/contacts" style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none", width: "fit-content" }}>
+          View contacts →
         </Link>
       )}
     </div>
@@ -210,10 +378,14 @@ function CrmImportPageInner() {
           setFocusedBatch(b);
           setFocusedBatchErr(null);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
           setFocusedBatch(null);
-          setFocusedBatchErr("Could not load this import batch.");
+          if (err instanceof ApiError && err.status === 404) {
+            setFocusedBatchErr("This import batch was not found, or you don't have access.");
+          } else {
+            setFocusedBatchErr("Could not load this import batch.");
+          }
         }
       } finally {
         if (!cancelled) setFocusedBatchLoading(false);
@@ -307,22 +479,31 @@ function CrmImportPageInner() {
       />
 
       {batchFromQuery?.trim() && (
-        <div className="panel" style={{ padding: "1rem 1.25rem", marginBottom: "1rem", borderLeft: "4px solid var(--accent, #3b82f6)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
-            <p style={{ margin: 0, fontSize: "0.875rem", fontWeight: 600, color: "var(--text)" }}>Import batch from link</p>
+        <div className="panel" style={{ padding: "0 0 1rem 0", marginBottom: "0.25rem", border: "none", boxShadow: "none", background: "transparent" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", marginBottom: "0.65rem" }}>
+            <p style={{ margin: 0, fontSize: "0.8125rem", fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Linked import batch
+            </p>
             <Link href="/crm/import" style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}>
               Clear link
             </Link>
           </div>
-          {focusedBatchLoading && <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>Loading batch…</p>}
+          {focusedBatchLoading && <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-dim)" }}>Loading batch…</p>}
           {focusedBatchErr && !focusedBatchLoading && (
-            <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "#ef4444" }}>{focusedBatchErr}</p>
-          )}
-          {focusedBatch && !focusedBatchLoading && (
-            <div style={{ marginTop: "0.75rem" }}>
-              <BatchCard batch={focusedBatch} />
+            <div
+              className="panel"
+              style={{
+                padding: "1rem 1.25rem",
+                borderLeft: "4px solid #ef4444",
+                background: "#fef2f2",
+                fontSize: "0.875rem",
+                color: "#991b1b",
+              }}
+            >
+              {focusedBatchErr}
             </div>
           )}
+          {focusedBatch && !focusedBatchLoading && <ImportBatchDetailPanel batch={focusedBatch} />}
         </div>
       )}
 
@@ -466,7 +647,25 @@ function CrmImportPageInner() {
             <LoadingSkeleton rows={3} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {history.map((b) => <BatchCard key={b.id} batch={b} />)}
+              {history.map((b) => {
+                const dim = batchFromQuery?.trim() === b.id;
+                return (
+                  <div
+                    key={b.id}
+                    style={
+                      batchFromQuery?.trim()
+                        ? {
+                            borderRadius: "0.5rem",
+                            outline: dim ? "2px solid var(--accent, #3b82f6)" : "none",
+                            outlineOffset: dim ? "2px" : undefined,
+                          }
+                        : undefined
+                    }
+                  >
+                    <BatchCard batch={b} showDetailLink />
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

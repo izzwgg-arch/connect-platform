@@ -615,6 +615,7 @@
     - Enrollment uses `CrmCampaignMember` with the same skip-if-already-member rule as `POST /crm/campaigns/:id/members/add`.
     - Standalone `/crm/import/upload` remains the general-purpose import; campaign import is an additive enrollment path only.
     - **`GET /crm/campaigns/:id/imports` (Phase 17C)** returns **only** persisted `CrmImportBatch` rows for that campaign (`fileName` prefix `campaign:{campaignId}:`). Never synthesize or infer import history from contacts, campaign members, or activity logs.
+    - **`GET /crm/import/batches/:id` + Import Leads `?batch=` (Phase 17D):** Batch drilldown UI must reflect **only** fields persisted on `CrmImportBatch` (counts, `errors` JSON, `mapping`, `fileName` tag metadata). If aggregate `errorCount` / `skippedCount` imply issues but `errors` is empty, show an **honest** message—never fabricate row lines.
 
 91. **CRM pilot readiness endpoint is read-only and admin-bounded (Phase 15A).**
     - `GET /crm/admin/pilot-readiness` uses `requireCrmAdmin` and returns only aggregate counts

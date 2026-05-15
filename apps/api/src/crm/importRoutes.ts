@@ -10,6 +10,7 @@ import {
   processImportRow,
   readCrmImportMultipart,
   displayFileNameFromCrmImportBatchStoredName,
+  parseCrmImportBatchCampaignId,
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
@@ -211,9 +212,12 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
 }
 
 function formatBatch(b: any) {
+  const campaignId = parseCrmImportBatchCampaignId(b.fileName);
   return {
     id: b.id,
     fileName: displayFileNameFromCrmImportBatchStoredName(b.fileName),
+    importSource: campaignId ? "campaign" : ("standalone" as const),
+    campaignId,
     status: b.status as string,
     totalRows: b.totalRows,
     processedRows: b.processedRows,
