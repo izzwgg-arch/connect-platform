@@ -1,0 +1,405 @@
+﻿/* Phase 3 ΓÇö admin billing workspace polish (scoped under .billing-phase3) */
+
+.billing-phase3 {
+  --b3-radius: 12px;
+  --b3-radius-sm: 10px;
+  --b3-border: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 85%, transparent);
+  --b3-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.billing-phase3 .b3-muted {
+  color: var(--muted, #64748b);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.billing-phase3 .b3-fleet-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.billing-phase3 .b3-fleet-metric {
+  background: var(--surface-alt, #f8fafc);
+  border: var(--b3-border);
+  border-radius: var(--b3-radius-sm);
+  padding: 10px 12px;
+  box-shadow: var(--b3-shadow);
+}
+
+.billing-phase3 .b3-fleet-metric strong {
+  display: block;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.billing-phase3 .b3-fleet-metric small {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.billing-phase3 .b3-snapshot {
+  background: var(--surface, #fff);
+  border: var(--b3-border);
+  border-radius: var(--b3-radius);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--b3-shadow);
+}
+
+.billing-phase3 .b3-snapshot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.billing-phase3 .b3-snapshot-head h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.billing-phase3 .b3-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px 16px;
+}
+
+.billing-phase3 .b3-snapshot-cell label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #64748b);
+  margin-bottom: 4px;
+}
+
+.billing-phase3 .b3-snapshot-cell .b3-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.billing-phase3 .b3-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.billing-phase3 a.b3-action-card,
+.billing-phase3 button.b3-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: var(--b3-radius);
+  border: var(--b3-border);
+  background: var(--surface, #fff);
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--b3-shadow);
+  font: inherit;
+}
+
+.billing-phase3 a.b3-action-card:hover,
+.billing-phase3 button.b3-action-card:hover {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 35%, var(--border, #e2e8f0));
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.billing-phase3 .b3-action-card .b3-action-title {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.billing-phase3 .b3-action-card .b3-action-desc {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  line-height: 1.4;
+}
+
+.billing-phase3 .b3-action-card svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.billing-phase3 .b3-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.billing-phase3 .b3-health-card {
+  border-radius: var(--b3-radius-sm);
+  border: var(--b3-border);
+  padding: 12px 14px;
+  background: var(--surface-alt, #fafafa);
+}
+
+.billing-phase3 .b3-health-card.b3-health-ok {
+  border-color: color-mix(in srgb, #86efac 50%, var(--border, #e2e8f0));
+  background: #f8fafc;
+}
+
+.billing-phase3 .b3-health-card.b3-health-warn {
+  border-color: color-mix(in srgb, #fcd34d 55%, var(--border, #e2e8f0));
+  background: #fffbeb;
+}
+
+.billing-phase3 .b3-health-card.b3-health-bad {
+  border-color: color-mix(in srgb, #fca5a5 55%, var(--border, #e2e8f0));
+  background: #fef2f2;
+}
+
+.billing-phase3 .b3-health-card h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.billing-phase3 .b3-health-card p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  line-height: 1.4;
+}
+
+.billing-phase3 .b3-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted, #64748b);
+  margin: 0 0 10px;
+}
+
+.billing-phase3 .b3-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.billing-phase3 .b3-timeline-item {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 70%, transparent);
+}
+
+.billing-phase3 .b3-timeline-item:last-child {
+  border-bottom: none;
+}
+
+.billing-phase3 .b3-timeline-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 5px;
+  background: var(--accent, #2563eb);
+  opacity: 0.55;
+}
+
+.billing-phase3 .b3-timeline-body strong {
+  font-size: 14px;
+}
+
+.billing-phase3 .b3-timeline-body small {
+  display: block;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.billing-phase3 .b3-pm-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.billing-phase3 .b3-pm-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--b3-radius-sm);
+  border: var(--b3-border);
+  background: var(--surface, #fff);
+}
+
+.billing-phase3 .b3-pm-card.b3-pm-default {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 28%, var(--border, #e2e8f0));
+  background: color-mix(in srgb, var(--accent, #2563eb) 6%, var(--surface, #fff));
+}
+
+.billing-phase3 .b3-pm-meta {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+
+.billing-phase3 .b3-pm-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.billing-phase3 .b3-details-muted {
+  border-radius: var(--b3-radius-sm);
+  border: var(--b3-border);
+  padding: 10px 12px;
+  background: var(--surface-alt, #f8fafc);
+  margin-top: 12px;
+}
+
+.billing-phase3 .b3-details-muted summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted, #475569);
+}
+
+.billing-phase3 .b3-details-muted[open] summary {
+  margin-bottom: 10px;
+}
+
+/* Invoice list row ΓÇö admin */
+.billing-phase3 .b3-inv-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 14px;
+  padding: 14px 16px;
+  border: var(--b3-border);
+  border-radius: var(--b3-radius-sm);
+  margin-bottom: 10px;
+  background: var(--surface, #fff);
+}
+
+.billing-phase3 .b3-inv-row-main {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.billing-phase3 .b3-inv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.billing-phase3 .b3-menu {
+  position: relative;
+}
+
+.billing-phase3 .b3-menu summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface-alt, #f8fafc);
+  color: var(--text-primary, inherit);
+}
+
+.billing-phase3 .b3-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.billing-phase3 .b3-menu[open] summary {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 35%, var(--border, #e2e8f0));
+}
+
+.billing-phase3 .b3-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 220px;
+  z-index: 30;
+  background: var(--surface, #fff);
+  border: var(--b3-border);
+  border-radius: var(--b3-radius-sm);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  padding: 6px;
+}
+
+.billing-phase3 .b3-menu-panel button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.billing-phase3 .b3-menu-panel button:hover:not(:disabled) {
+  background: var(--surface-alt, #f1f5f9);
+}
+
+.billing-phase3 .b3-menu-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.billing-phase3 .b3-menu-panel .b3-menu-danger {
+  color: #b91c1c;
+}
+
+.billing-phase3 .b3-filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.billing-phase3 .b3-filter-pills button {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* Tenant billing polish (optional parent .billing-phase3-tenant on pages) */
+.billing-phase3-tenant .billing-stat-card {
+  border-radius: var(--b3-radius-sm, 10px);
+  border: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 90%, transparent);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.billing-phase3-tenant .billing-invoice-row {
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 88%, transparent);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--surface, #fff);
+}
+
+.billing-phase3-tenant .billing-invoice-row .row-actions {
+  gap: 8px;
+}
