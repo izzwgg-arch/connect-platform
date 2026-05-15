@@ -1046,6 +1046,18 @@ docker exec app-portal-1 grep -l "WrapUpOverlay\|WRAP_UP_SECONDS\|crm_power_queu
 | **Duplicates** | `SELECT campaignId, contactId, count(*) … HAVING count(*) > 1` on `CrmCampaignMember` should return **0** rows. |
 | **Phase 13D / 15 / smoke naming** | Hunt campaigns and contacts whose names or emails match `SMOKE`, `AGENT-SMOKE`, `Phase13`, `Phase15`, `example.invalid`, or obvious `555` / `+1555` test numbers; archive campaigns and soft-archive contacts the same way as above. |
 
+### Phase 16B — Contacts list: Active / Archived / All (smoke)
+
+Portal `/crm/contacts`: CRM **admin** sees **List** scope **Active** (default), **Archived**, **All**. **Agent** sees no scope control and the list stays **active-only** (default `GET /crm/contacts`). **Real API only** — Archived uses `GET /crm/contacts?includeArchived=true&archivedOnly=true`; All uses `includeArchived=true`; Active uses default query (no archive flags).
+
+| Check | Expected |
+|-------|----------|
+| **Admin — Active** | Default list matches pre–16B behavior; archived contacts **not** shown; rows are normal (not muted); bulk checkboxes on non-archived rows only. |
+| **Admin — Archived** | Only archived contacts; each row shows **Archived** badge and muted styling; row opens detail; search returns **only** archived matches from the API. |
+| **Admin — All** | Active and archived contacts in one list; archived rows badge + muted; active rows unchanged. |
+| **Agent** | No **List** scope UI; list shows **active** contacts only (no archived rows); search behavior unchanged from default active list. |
+| **API (optional curl)** | Non-admin JWT + `?includeArchived=true` → `403`. `?archivedOnly=true` without `includeArchived` → `400`. |
+
 ### Phase 15D — Seeded / test portal password hygiene (pre–live pilot)
 
 Any account created for QA or seed scripts (for example `crm.pilot.agent.p13c@connect-internal.test`) may still have a predictable or shared password. **Treat that as high risk until rotated.** Do not paste passwords or reset tokens into logs, chat, or tickets.

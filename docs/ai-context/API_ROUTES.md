@@ -402,7 +402,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### Contacts (Phase 1B)
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/crm/contacts` | List CRM contacts with filters (stage, assignedToMe, search, page/limit). **Default** excludes archived (`active=false`). **Phase 16A:** `?includeArchived=true` includes archived rows; **CRM admin only** (`403` otherwise). |
+| GET | `/crm/contacts` | List CRM contacts with filters (stage, assignedToMe, search, page/limit). **Default** excludes archived (`active=false`). **Phase 16A:** `?includeArchived=true` includes active + archived rows; **CRM admin only** (`403` otherwise). **Phase 16B:** `?includeArchived=true&archivedOnly=true` lists **archived only** (same admin gate); `archivedOnly` without `includeArchived` → `400 invalid_query`. Rows include `active`, `archivedAt`. |
 | POST | `/crm/contacts` | Create contact + CrmContactMeta |
 | GET | `/crm/contacts/stats` | Counts: total, leads, mine, recentlyAdded (**active, non-archived** contacts only — Phase 16A) |
 | GET | `/crm/contacts/lookup?phone=` | Phone search. Returns `openTasksCount` + `nextDueTask` per result. Used by screen pop. Excludes archived contacts. |

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Phone, Mail, Plus, Search, X, UserRound, UserCheck } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
@@ -32,6 +32,9 @@ type CrmContact = {
   assignedTo?: AssignedUser | null;
   doNotCall: boolean;
   createdAt: string;
+  /** Phase 16B — present on list when using includeArchived */
+  active?: boolean;
+  archivedAt?: string | null;
 };
 
 type ContactsResponse = {
@@ -68,6 +71,21 @@ const STAGE_COLORS: Record<CrmStage, string> = {
 };
 
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
+
+/** Phase 16B — admin-only CRM list scope (server-backed; agents always behave as active). */
+type ArchiveListScope = "active" | "archived" | "all";
+
+const ARCHIVE_SCOPE_LABELS: Record<ArchiveListScope, string> = {
+  active: "Active",
+  archived: "Archived",
+  all: "All",
+};
+
+function isContactArchived(c: CrmContact): boolean {
+  if (c.archivedAt != null) return true;
+  if (c.active === false) return true;
+  return false;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -307,6 +325,7 @@ export default function CrmContactsPage() {
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState<CrmStage | "all">("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
+  const [archiveScope, setArchiveScope] = useState<ArchiveListScope>("active");
   const [showAdd, setShowAdd] = useState(false);
 
   // Bulk selection
@@ -320,7 +339,7 @@ export default function CrmContactsPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(
-    async (q: string, s: CrmStage | "all", mine: boolean) => {
+    async (q: string, s: CrmStage | "all", mine: boolean, scope: ArchiveListScope) => {
       setLoading(true);
       setError(null);
       try {
@@ -329,6 +348,14 @@ export default function CrmContactsPage() {
         if (s !== "all") params.set("stage", s);
         if (mine) params.set("assignedToMe", "true");
         params.set("limit", "50");
+        if (isAdmin) {
+          if (scope === "all") {
+            params.set("includeArchived", "true");
+          } else if (scope === "archived") {
+            params.set("includeArchived", "true");
+            params.set("archivedOnly", "true");
+          }
+        }
         const res = await apiGet<ContactsResponse>(`/crm/contacts?${params}`);
         setRows(res.rows);
         setTotal(res.total);
@@ -338,17 +365,32 @@ export default function CrmContactsPage() {
         setLoading(false);
       }
     },
-    [],
+    [isAdmin],
   );
 
   useEffect(() => {
-    load(search, stage, assignedToMe);
-  }, [stage, assignedToMe, load]);
+    if (!isAdmin && archiveScope !== "active") {
+      setArchiveScope("active");
+    }
+  }, [isAdmin, archiveScope]);
+
+  useEffect(() => {
+    load(search, stage, assignedToMe, isAdmin ? archiveScope : "active");
+  }, [stage, assignedToMe, archiveScope, load, isAdmin]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBulkAssignUserId("");
+    setBulkError(null);
+  }, [archiveScope]);
 
   const handleSearchChange = (val: string) => {
     setSearch(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => load(val, stage, assignedToMe), 320);
+    debounceRef.current = setTimeout(
+      () => load(val, stage, assignedToMe, isAdmin ? archiveScope : "active"),
+      320,
+    );
   };
 
   const handleContactCreated = (c: CrmContact) => {
@@ -376,10 +418,15 @@ export default function CrmContactsPage() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === rows.length) {
+    const selectable = rows.filter((r) => !isContactArchived(r));
+    const selectableIds = new Set(selectable.map((r) => r.id));
+    const allSelectableSelected =
+      selectable.length > 0 && selectable.every((r) => selectedIds.has(r.id));
+
+    if (allSelectableSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(rows.map((r) => r.id)));
+      setSelectedIds(selectableIds);
     }
   };
 
@@ -420,6 +467,13 @@ export default function CrmContactsPage() {
     }
   };
 
+  const selectableRows = useMemo(() => rows.filter((r) => !isContactArchived(r)), [rows]);
+  const allSelectableSelected =
+    selectableRows.length > 0 && selectableRows.every((r) => selectedIds.has(r.id));
+
+  const hasListFilters =
+    !!search || stage !== "all" || assignedToMe || (isAdmin && archiveScope !== "active");
+
   return (
     <div className="stack compact-stack">
       <PageHeader
@@ -453,7 +507,10 @@ export default function CrmContactsPage() {
           />
           {search && (
             <button
-              onClick={() => { setSearch(""); load("", stage, assignedToMe); }}
+              onClick={() => {
+                setSearch("");
+                load("", stage, assignedToMe, isAdmin ? archiveScope : "active");
+              }}
               style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 0, display: "flex" }}
             >
               <X size={13} />
@@ -483,6 +540,45 @@ export default function CrmContactsPage() {
             </button>
           ))}
         </div>
+
+        {/* Phase 16B — admin-only active / archived / all (real API includeArchived / archivedOnly) */}
+        {isAdmin && (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap" }}>
+            <span
+              style={{
+                fontSize: "0.6875rem",
+                fontWeight: 700,
+                color: "var(--text-dim)",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+                marginRight: "0.15rem",
+              }}
+            >
+              List
+            </span>
+            {(["active", "archived", "all"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setArchiveScope(key)}
+                style={{
+                  padding: "0.3125rem 0.75rem",
+                  border: "1px solid var(--border)",
+                  borderRadius: "2rem",
+                  fontSize: "0.8125rem",
+                  fontWeight: archiveScope === key ? 700 : 400,
+                  cursor: "pointer",
+                  background: archiveScope === key ? "var(--accent)" : "var(--surface-hover)",
+                  color: archiveScope === key ? "#fff" : "var(--text)",
+                  transition: "all 0.12s",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {ARCHIVE_SCOPE_LABELS[key]}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Assigned to me toggle */}
         <button
@@ -586,11 +682,13 @@ export default function CrmContactsPage() {
             <UserRound size={32} style={{ color: "var(--text-dim)", margin: "0 auto 0.75rem" }} />
             <h4 style={{ margin: "0 0 0.375rem", fontWeight: 600, fontSize: "1rem" }}>No contacts found</h4>
             <p style={{ margin: "0 0 1rem", color: "var(--text-dim)", fontSize: "0.875rem" }}>
-              {search || stage !== "all" || assignedToMe
+              {hasListFilters
                 ? "Try clearing your filters."
-                : "Import leads or add a contact to get started."}
+                : isAdmin && archiveScope === "archived"
+                  ? "No archived contacts."
+                  : "Import leads or add a contact to get started."}
             </p>
-            {!search && stage === "all" && !assignedToMe && (
+            {!search && stage === "all" && !assignedToMe && !(isAdmin && archiveScope === "archived") && (
               <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", flexWrap: "wrap" }}>
                 <button
                   onClick={() => setShowAdd(true)}
@@ -618,10 +716,11 @@ export default function CrmContactsPage() {
                     <th style={{ padding: "0.5rem 0.75rem", width: 32 }}>
                       <input
                         type="checkbox"
-                        checked={rows.length > 0 && selectedIds.size === rows.length}
+                        checked={allSelectableSelected}
                         onChange={toggleSelectAll}
-                        style={{ cursor: "pointer" }}
-                        title="Select all"
+                        disabled={selectableRows.length === 0}
+                        style={{ cursor: selectableRows.length === 0 ? "not-allowed" : "pointer" }}
+                        title="Select all active (non-archived) contacts on this page"
                       />
                     </th>
                   )}
@@ -645,7 +744,9 @@ export default function CrmContactsPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((c, idx) => (
+                {rows.map((c, idx) => {
+                  const archived = isContactArchived(c);
+                  return (
                   <tr
                     key={c.id}
                     onClick={(e) => {
@@ -656,23 +757,38 @@ export default function CrmContactsPage() {
                     style={{
                       borderTop: idx === 0 ? undefined : "1px solid var(--border)",
                       cursor: "pointer",
-                      transition: "background 0.1s",
-                      background: selectedIds.has(c.id) ? "var(--accent-muted, #eef2ff)" : undefined,
+                      transition: "background 0.1s, opacity 0.1s",
+                      opacity: archived ? 0.88 : 1,
+                      background: selectedIds.has(c.id) ? "var(--accent-muted, #eef2ff)" : archived ? "var(--surface-hover)" : undefined,
                     }}
-                    onMouseEnter={(e) => { if (!selectedIds.has(c.id)) (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = selectedIds.has(c.id) ? "var(--accent-muted, #eef2ff)" : ""; }}
+                    onMouseEnter={(e) => {
+                      if (!selectedIds.has(c.id)) {
+                        (e.currentTarget as HTMLElement).style.background = archived ? "var(--border)" : "var(--surface-hover)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.background = selectedIds.has(c.id)
+                        ? "var(--accent-muted, #eef2ff)"
+                        : archived
+                          ? "var(--surface-hover)"
+                          : "";
+                    }}
                   >
                   {isAdmin && (
                     <td style={{ padding: "0.625rem 0.75rem", width: 32 }} onClick={(e) => e.stopPropagation()}>
+                      {archived ? (
+                        <span style={{ display: "inline-block", width: 14 }} title="Archived — use detail to restore" />
+                      ) : (
                       <input
                         type="checkbox"
                         checked={selectedIds.has(c.id)}
                         onChange={() => {
                           toggleSelect(c.id);
-                          if (!selectedIds.has(c.id)) loadCrmUsers(); // lazy load on first selection
+                          loadCrmUsers();
                         }}
                         style={{ cursor: "pointer" }}
                       />
+                      )}
                     </td>
                   )}
                     {/* Contact name + avatar */}
@@ -705,6 +821,23 @@ export default function CrmContactsPage() {
                             style={{ fontSize: "0.6875rem", padding: "0.1rem 0.375rem", borderRadius: 3, background: "#ef444420", color: "#ef4444", fontWeight: 700 }}
                           >
                             DNC
+                          </span>
+                        )}
+                        {archived && (
+                          <span
+                            title="Archived — hidden from active lists"
+                            style={{
+                              fontSize: "0.6875rem",
+                              padding: "0.1rem 0.375rem",
+                              borderRadius: 3,
+                              background: "#e5e7eb",
+                              color: "#374151",
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.03em",
+                            }}
+                          >
+                            Archived
                           </span>
                         )}
                       </div>
@@ -756,7 +889,8 @@ export default function CrmContactsPage() {
                       <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>View →</span>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>

@@ -192,6 +192,10 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
           .string()
           .optional()
           .transform((v) => v === "true"),
+        archivedOnly: z
+          .string()
+          .optional()
+          .transform((v) => v === "true"),
       })
       .parse(req.query || {});
 
@@ -199,12 +203,28 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const limit = query.limit ?? 50;
     const search = (query.q || "").trim().toLowerCase();
     const includeArchived = query.includeArchived === true;
+    const archivedOnly = query.archivedOnly === true;
 
     if (includeArchived && !isAdminRole(user.role)) {
       return reply.status(403).send({
         error: "crm_permission_denied",
         detail: "includeArchived requires CRM admin",
       });
+    }
+
+    if (archivedOnly) {
+      if (!includeArchived) {
+        return reply.status(400).send({
+          error: "invalid_query",
+          detail: "archivedOnly requires includeArchived=true",
+        });
+      }
+      if (!isAdminRole(user.role)) {
+        return reply.status(403).send({
+          error: "crm_permission_denied",
+          detail: "archivedOnly requires CRM admin",
+        });
+      }
     }
 
     // Resolve combined stage+assignment filter on crmMeta without conflicting keys
@@ -214,7 +234,13 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       ...(query.assignedToMe ? { assignedToUserId: userId } : {}),
     };
 
-    const archiveClause = includeArchived ? {} : { active: true, archivedAt: null };
+    const archiveClause = !includeArchived
+      ? { active: true, archivedAt: null }
+      : archivedOnly
+        ? {
+            OR: [{ active: false }, { archivedAt: { not: null } }],
+          }
+        : {};
 
     const searchWhere = search
       ? {
