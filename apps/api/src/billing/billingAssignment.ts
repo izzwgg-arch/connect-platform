@@ -26,13 +26,32 @@ export function tenantPricingQuadSnapshot(settings: {
   };
 }
 
+/** Prisma-backed rows include Decimal and other values that structuredClone rejects. */
+function cloneTenantBillingSettingsForSimulation(base: TenantBillingSettingsLoaded): TenantBillingSettingsLoaded {
+  try {
+    return JSON.parse(
+      JSON.stringify(base, (_prop, value) => (typeof value === "bigint" ? value.toString() : value)),
+      reviveBillingSettingsJsonDates,
+    ) as TenantBillingSettingsLoaded;
+  } catch {
+    throw new Error("billing_assign_preview_settings_clone_failed");
+  }
+}
+
+function reviveBillingSettingsJsonDates(key: string, value: unknown): unknown {
+  if (typeof value !== "string" || !key.endsWith("At")) return value;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return value;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d;
+}
+
 /** In-memory snapshot for GET assign-plan-preview (no DB writes). */
 export function mergeTenantBillingSettingsForAssignPreview(
   base: TenantBillingSettingsLoaded,
   targetPlan: CatalogBillingPlanRow,
   opts: { copyPlanPrices: boolean; applyPricingMode?: "catalog" | "custom" },
 ): TenantBillingSettingsLoaded {
-  const merged = structuredClone(base) as TenantBillingSettingsLoaded;
+  const merged = cloneTenantBillingSettingsForSimulation(base);
   merged.billingPlanId = targetPlan.id;
   merged.billingPlan = targetPlan;
   if (opts.copyPlanPrices) {

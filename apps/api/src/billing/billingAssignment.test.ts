@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Decimal } from "@prisma/client/runtime/library";
 import {
   mergeTenantBillingSettingsForAssignPreview,
   tenantPricingQuadSnapshot,
@@ -103,4 +104,39 @@ test("mergeTenantBillingSettingsForAssignPreview applyPricingMode updates metada
   });
   assert.deepEqual((merged.metadata as Record<string, unknown>).billingPricingMode, "custom");
   assert.equal(Number(merged.extensionPriceCents), 999);
+});
+
+test("mergeTenantBillingSettingsForAssignPreview tolerates Prisma Decimal (structuredClone-hostile)", () => {
+  assert.throws(() => structuredClone({ d: new Decimal("0.05") }), /could not be cloned|clone|transfer/i);
+  const schedDate = new Date("2030-02-01T00:00:00.000Z");
+  const base = {
+    billingPlanId: basePlan.id,
+    billingPlan: basePlan,
+    metadata: {},
+    extensionPriceCents: 999,
+    additionalPhoneNumberPriceCents: 888,
+    smsPriceCents: 777,
+    firstPhoneNumberFree: true,
+    discountPercent: new Decimal("0"),
+    taxProfile: {
+      id: "tp1",
+      name: "Ohio",
+      state: "OH",
+      county: null as string | null,
+      salesTaxRate: new Decimal("0.06"),
+      e911FeePerExtension: 75,
+      regulatoryFeePercent: new Decimal("0"),
+      regulatoryFeeEnabled: true,
+      enabled: true,
+      createdAt: new Date("2020-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2020-01-02T00:00:00.000Z"),
+    },
+    nextBillingPlanId: null,
+    nextBillingPlanEffectiveAt: schedDate,
+    nextBillingPlan: null,
+  } as unknown as TenantBillingSettingsLoaded;
+
+  const merged = mergeTenantBillingSettingsForAssignPreview(base, targetPlan as any, { copyPlanPrices: false });
+  assert.ok(merged.nextBillingPlanEffectiveAt instanceof Date);
+  assert.deepEqual(merged.nextBillingPlanEffectiveAt, schedDate);
 });
