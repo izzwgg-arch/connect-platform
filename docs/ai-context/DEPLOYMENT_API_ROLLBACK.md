@@ -4,6 +4,8 @@
 
 **Do not** use manual `docker compose up` / `git pull` for production recovery except break-glass; prefer re-enqueueing a known-good commit via the deploy queue (`AGENTS.md`).
 
+**Operational note (`commit_already_deployed`):** A successful **`api`** job (**including `dryRun: true`** in current queue behaviour) associates the **`commitHash`** pin with **`api`** and may prevent a **`dryRun: false`** enqueue for **that identical SHA**. If you deliberately need another **live** blue/green after a dry-run on the pin, enqueue **real** with a **later commit** first (typically a harmless doc bump on the same branch, e.g. this file).
+
 ---
 
 ## Normal failure behavior (automated)
