@@ -8,6 +8,7 @@ import {
   crmCallbackDueInCalendarDayWhere,
   crmCallbackOverdueWhere,
   crmMemberQueueNonTerminalWhere,
+  crmCampaignMemberQueueLiveContactWhere,
 } from "./crmMemberQueryFragments";
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
@@ -175,6 +176,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmMemberQueueNonTerminalWhere({ status: "ACTIVE" }),
         },
       }),
@@ -182,6 +184,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmCallbackOverdueWhere(todayStart),
         },
       }),
@@ -189,6 +192,7 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd),
         },
       }),

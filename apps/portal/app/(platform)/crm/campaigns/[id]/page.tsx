@@ -33,9 +33,12 @@ type Campaign = {
 type Member = {
   id: string;
   contactId: string;
+  queueWorkEligible?: boolean;
   contact: {
     id: string;
     displayName: string;
+    active?: boolean;
+    archivedAt?: string | null;
     primaryPhone: string | null;
     primaryEmail: string | null;
     crmStage: string | null;
@@ -146,8 +149,9 @@ const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
 
 // ── Callback Cell ─────────────────────────────────────────────────────────────
 
-function CallbackCell({ member, campaignId, onUpdated, token }: {
+function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
   member: Member; campaignId: string; onUpdated: () => void; token: string | undefined;
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(() => {
@@ -184,6 +188,19 @@ function CallbackCell({ member, campaignId, onUpdated, token }: {
       onUpdated();
     } catch {}
     setSaving(false);
+  }
+
+  if (readOnly) {
+    if (member.callbackAt) {
+      const d = new Date(member.callbackAt);
+      return (
+        <span className="text-xs text-gray-500">
+          {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
+          {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      );
+    }
+    return <span className="text-xs text-gray-400">—</span>;
   }
 
   if (editing) {
@@ -612,10 +629,11 @@ export default function CampaignDetailPage() {
   }
 
   function toggleSelectAll() {
-    if (selected.size === filteredMembers.length && filteredMembers.length > 0) {
+    const bulkPool = filteredMembers.filter((m) => isAdmin || m.queueWorkEligible !== false);
+    if (selected.size > 0 && bulkPool.length > 0 && bulkPool.every((m) => selected.has(m.id))) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(filteredMembers.map((m) => m.id)));
+      setSelected(new Set(bulkPool.map((m) => m.id)));
     }
   }
 
@@ -623,6 +641,8 @@ export default function CampaignDetailPage() {
     if (!search) return true;
     return (m.contact?.displayName ?? "").toLowerCase().includes(search.toLowerCase());
   });
+
+  const bulkSelectableMembers = filteredMembers.filter((m) => isAdmin || m.queueWorkEligible !== false);
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-400">Loading…</p></div>;
   if (!campaign) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-red-500">{error || "Campaign not found"}</p></div>;
@@ -1098,8 +1118,8 @@ export default function CampaignDetailPage() {
                 <thead>
                   <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
                     <th className="pb-2 pr-3 w-8">
-                      <button onClick={toggleSelectAll} className="p-0.5 hover:text-blue-600">
-                        {selected.size > 0 && selected.size === filteredMembers.length
+                      <button type="button" onClick={toggleSelectAll} className="p-0.5 hover:text-blue-600">
+                        {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
                           ? <CheckSquare2 className="h-4 w-4 text-blue-600" />
                           : <Square className="h-4 w-4" />}
                       </button>
@@ -1115,59 +1135,89 @@ export default function CampaignDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {filteredMembers.map((m) => (
-                    <tr key={m.id} className={`hover:bg-gray-50 ${selected.has(m.id) ? "bg-blue-50/50" : ""}`}>
-                      <td className="py-3 pr-3">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(m.id)}
-                          onChange={(e) => {
-                            const s = new Set(selected);
-                            if (e.target.checked) s.add(m.id);
-                            else s.delete(m.id);
-                            setSelected(s);
-                          }}
-                          className="rounded"
-                        />
-                      </td>
-                      <td className="py-3">
-                        <button
-                          onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
-                          className="font-medium text-blue-600 hover:underline text-left"
-                        >
-                          {m.contact?.displayName ?? "Unknown"}
-                        </button>
-                      </td>
-                      <td className="py-3 text-gray-600">{m.contact?.primaryPhone ?? "—"}</td>
-                      <td className="py-3 text-gray-500 text-xs">{m.contact?.crmStage ?? "—"}</td>
-                      <td className="py-3">
-                        <select
-                          value={m.status}
-                          onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
-                          className={`text-xs px-2 py-1 rounded border-0 cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none`}
-                        >
-                          {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                            <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="py-3 text-center text-gray-600">{m.attemptCount}</td>
-                      <td className="py-3">
-                        <CallbackCell member={m} campaignId={campaignId} onUpdated={loadMembers} token={token} />
-                      </td>
-                      <td className="py-3 text-gray-500 text-xs">{m.assignedTo?.displayName ?? "Unassigned"}</td>
-                      <td className="py-3">
-                        <button
-                          onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100"
-                          title="Open Live Workspace"
-                        >
-                          <PhoneCall className="h-3 w-3" />
-                          Call
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredMembers.map((m) => {
+                    const archivedLead = m.queueWorkEligible === false;
+                    const agentCannotAct = !isAdmin && archivedLead;
+                    return (
+                      <tr
+                        key={m.id}
+                        className={`hover:bg-gray-50 ${selected.has(m.id) ? "bg-blue-50/50" : ""} ${archivedLead ? "opacity-80 bg-gray-50/80" : ""}`}
+                      >
+                        <td className="py-3 pr-3">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(m.id)}
+                            disabled={agentCannotAct}
+                            onChange={(e) => {
+                              const s = new Set(selected);
+                              if (e.target.checked) s.add(m.id);
+                              else s.delete(m.id);
+                              setSelected(s);
+                            }}
+                            className="rounded disabled:opacity-40"
+                          />
+                        </td>
+                        <td className="py-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
+                              className="font-medium text-blue-600 hover:underline text-left"
+                            >
+                              {m.contact?.displayName ?? "Unknown"}
+                            </button>
+                            {archivedLead && (
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-600 bg-gray-200 px-1.5 py-0.5 rounded">
+                                Archived
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 text-gray-600">{m.contact?.primaryPhone ?? "—"}</td>
+                        <td className="py-3 text-gray-500 text-xs">{m.contact?.crmStage ?? "—"}</td>
+                        <td className="py-3">
+                          {agentCannotAct ? (
+                            <span className={`text-xs px-2 py-1 rounded ${MEMBER_STATUS_COLORS[m.status]}`}>
+                              {MEMBER_STATUS_LABELS[m.status]}
+                            </span>
+                          ) : (
+                            <select
+                              value={m.status}
+                              onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
+                              className={`text-xs px-2 py-1 rounded border-0 cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none`}
+                            >
+                              {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
+                                <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+                        <td className="py-3 text-center text-gray-600">{m.attemptCount}</td>
+                        <td className="py-3">
+                          <CallbackCell
+                            member={m}
+                            campaignId={campaignId}
+                            onUpdated={loadMembers}
+                            token={token}
+                            readOnly={agentCannotAct}
+                          />
+                        </td>
+                        <td className="py-3 text-gray-500 text-xs">{m.assignedTo?.displayName ?? "Unassigned"}</td>
+                        <td className="py-3">
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
+                            disabled={agentCannotAct}
+                            className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={agentCannotAct ? "Lead is archived — not live queue work" : "Open Live Workspace"}
+                          >
+                            <PhoneCall className="h-3 w-3" />
+                            Call
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

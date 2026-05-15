@@ -19,9 +19,13 @@ type MemberStatus = "PENDING" | "IN_PROGRESS" | "CONTACTED" | "CALLBACK" | "CONV
 type QueueMember = {
   id: string;
   contactId: string;
+  /** false when the linked contact is archived/inactive — server excludes these from queue; UI fallback only */
+  queueWorkEligible?: boolean;
   contact: {
     id: string;
     displayName: string;
+    active?: boolean;
+    archivedAt?: string | null;
     primaryPhone: string | null;
     primaryEmail: string | null;
     crmStage: string | null;
@@ -56,6 +60,11 @@ const WRAP_UP_SECONDS = 5;
 type SortMode = "smart" | "original";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Queue list is filtered server-side; this is a safety net if a stale row appears */
+function isQueueMemberActionable(m: QueueMember): boolean {
+  return m.queueWorkEligible !== false;
+}
 
 function relativeTime(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -249,6 +258,7 @@ function PowerCard({
   const phone = contact?.primaryPhone;
   const isCallback = member.status === "CALLBACK";
   const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
+  const actionable = isQueueMemberActionable(member);
 
   // Outcome panel local state
   // Note: all state auto-resets when member changes because the parent renders
@@ -311,6 +321,20 @@ function PowerCard({
   }
 
   const anyBusy = outcomeSaving || acting;
+
+  if (!actionable) {
+    return (
+      <div className="bg-gray-100 rounded-2xl p-6 border-2 border-gray-300 shadow-lg mb-4 opacity-90">
+        <div className="flex items-center gap-2 mb-3 text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>This lead is archived or inactive and is not live queue work. Refresh the queue or contact an admin.</span>
+        </div>
+        <h2 className="text-xl font-bold text-gray-600 mb-1">{contact?.displayName ?? "Unknown"}</h2>
+        {phone ? <p className="text-gray-500 font-mono">{phone}</p> : null}
+        <p className="text-xs text-gray-500 mt-3">Outcomes and queue actions are disabled for this lead.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-2xl p-6 border-2 border-blue-400 shadow-lg mb-4">
@@ -632,6 +656,7 @@ function MemberCard({
   const router = useRouter();
   const contact = member.contact;
   const isCallback = member.status === "CALLBACK";
+  const actionable = isQueueMemberActionable(member);
 
   const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
 
@@ -643,7 +668,13 @@ function MemberCard({
   }
 
   return (
-    <div className={`bg-white rounded-2xl p-5 mb-4 ${isTop ? "border-2 border-blue-400 shadow-md" : "border border-gray-200 shadow-sm"}`}>
+    <div className={`bg-white rounded-2xl p-5 mb-4 ${isTop ? "border-2 border-blue-400 shadow-md" : "border border-gray-200 shadow-sm"} ${!actionable ? "opacity-75 border-amber-200 bg-amber-50/30" : ""}`}>
+      {!actionable && (
+        <div className="mb-3 flex items-center gap-2 text-amber-900 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2 text-xs">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          Archived / inactive lead — not actionable. Refresh if this looks wrong.
+        </div>
+      )}
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
           {isTop && <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">
@@ -694,41 +725,41 @@ function MemberCard({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button onClick={openWorkspace} disabled={acting} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm">
+        <button onClick={openWorkspace} disabled={acting || !actionable} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm">
           <PhoneCall className="h-4 w-4" />Open Workspace
         </button>
         <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
           <ExternalLink className="h-3.5 w-3.5" />Contact
         </button>
         {!isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
+          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
             <CalendarClock className="h-3.5 w-3.5" />Set Callback
           </button>
         )}
         {isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
+          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
             <Edit2 className="h-3.5 w-3.5" />Edit Callback
           </button>
         )}
         {isCallback && (
-          <button onClick={() => onAction("clear-callback")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("clear-callback")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
             <X className="h-3.5 w-3.5" />Clear Callback
           </button>
         )}
-        <button onClick={() => onAction("assign-to-me")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+        <button onClick={() => onAction("assign-to-me")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
           <UserCheck className="h-3.5 w-3.5" />Assign to Me
         </button>
         {!isCallback && (
-          <button onClick={() => onAction("skip")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("skip")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
             <SkipForward className="h-3.5 w-3.5" />Skip
           </button>
         )}
         {!isCallback && (
-          <button onClick={() => onAction("defer")} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("defer")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
             <Clock className="h-3.5 w-3.5" />Defer
           </button>
         )}
-        <button onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-red-200 text-red-600 rounded-xl text-sm hover:bg-red-50">
+        <button onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-red-200 text-red-600 rounded-xl text-sm hover:bg-red-50">
           <Ban className="h-3.5 w-3.5" />DNC
         </button>
       </div>
@@ -741,15 +772,21 @@ function MemberCard({
 function QueueRow({ member, rank, filter }: { member: QueueMember; rank: number; filter: QueueFilter }) {
   const router = useRouter();
   const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
+  const actionable = isQueueMemberActionable(member);
 
   return (
     <div
-      className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
+      className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${!actionable ? "opacity-60 bg-amber-50/40" : ""}`}
       onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
     >
       <span className="text-sm text-gray-400 w-6 text-right shrink-0">{rank}</span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">{member.contact?.displayName ?? "Unknown"}</p>
+        <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-2">
+          {member.contact?.displayName ?? "Unknown"}
+          {!actionable && (
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded">Archived</span>
+          )}
+        </p>
         <p className="text-xs text-gray-500 truncate">
           {cb ? (
             <span className={cb.urgent ? "text-red-600 font-medium" : "text-yellow-700"}>
@@ -1279,6 +1316,7 @@ function QueuePageInner() {
 
       // C / S / D — only active when NOT in wrap-up and a lead is present
       if (!current || wrapUpActive) return;
+      if (!isQueueMemberActionable(current)) return;
 
       if (e.key === "c" || e.key === "C") {
         e.preventDefault();

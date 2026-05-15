@@ -10,6 +10,14 @@ export type CrmNestedCampaignWhere = Record<string, unknown>;
 /** Queue "all" tab: members not in terminal dialing outcomes. */
 export const CRM_CAMPAIGN_MEMBER_QUEUE_TERMINAL_STATUSES = ["CONVERTED", "DO_NOT_CALL", "SKIPPED"] as const;
 
+/**
+ * Live actionable queue work (Phase 16C): member rows whose contact is active and not archived.
+ * Campaign history retains all members; this predicate only scopes agent-facing workload.
+ */
+export const crmCampaignMemberQueueLiveContactWhere = {
+  contact: { is: { active: true, archivedAt: null } },
+} as const;
+
 const PENDING_IN_PROGRESS = ["PENDING", "IN_PROGRESS"] as const;
 
 /** Diagnostics + total active band: PENDING, IN_PROGRESS, CALLBACK on ACTIVE campaigns. */

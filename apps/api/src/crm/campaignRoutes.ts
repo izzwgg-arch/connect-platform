@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden, isAdminRole } from "./guard";
 import { todayBounds, startOfTomorrowFromDayStart } from "./crmAggregateBounds";
 import {
   crmCallbackDueLteDayEndWhere,
@@ -9,6 +9,7 @@ import {
   crmCallbackUpcomingOrUnsetWhere,
   crmMemberPendingOrInProgressWhere,
   crmMemberQueueNonTerminalWhere,
+  crmCampaignMemberQueueLiveContactWhere,
   crmQueueFilterPendingWhere,
 } from "./crmMemberQueryFragments";
 import {
@@ -30,6 +31,8 @@ const MEMBER_INCLUDE = {
     select: {
       id: true,
       displayName: true,
+      active: true,
+      archivedAt: true,
       phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
       emails: { where: { isPrimary: true }, select: { email: true }, take: 1 },
       crmMeta: { select: { stage: true, lastActivityAt: true, lastDisposition: true, lastDispositionAt: true } },
@@ -104,14 +107,18 @@ function formatCampaign(c: any, includeCounts = false) {
 function formatMember(m: any) {
   const phone = m.contact?.phones?.[0]?.numberRaw ?? null;
   const email = m.contact?.emails?.[0]?.email ?? null;
+  const queueWorkEligible = !!(m.contact && m.contact.active && m.contact.archivedAt == null);
   return {
     id: m.id,
     campaignId: m.campaignId,
     contactId: m.contactId,
+    queueWorkEligible,
     contact: m.contact
       ? {
           id: m.contact.id,
           displayName: m.contact.displayName,
+          active: m.contact.active,
+          archivedAt: m.contact.archivedAt ? new Date(m.contact.archivedAt).toISOString() : null,
           primaryPhone: phone,
           primaryEmail: email,
           crmStage: m.contact.crmMeta?.stage ?? null,
@@ -623,12 +630,24 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const existing = await db.crmCampaignMember.findFirst({
       where: { id: memberId, campaignId, tenantId },
-      select: { id: true },
+      select: {
+        id: true,
+        contact: { select: { active: true, archivedAt: true } },
+      },
     });
     if (!existing) return reply.code(404).send({ error: "not_found" });
 
     const parsed = patchMemberSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
+
+    const contactLive =
+      !!existing.contact?.active && existing.contact.archivedAt == null;
+    if (!contactLive && !isAdminRole(user.role)) {
+      return reply.code(403).send({
+        error: "crm_member_contact_not_live",
+        detail: "This lead's contact is archived or inactive and cannot be updated by agents.",
+      });
+    }
 
     const member = await db.crmCampaignMember.update({
       where: { id: memberId },
@@ -774,7 +793,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     // Aggregate member counts per (assignedToUserId, status)
     const rows = await db.crmCampaignMember.groupBy({
       by: ["assignedToUserId", "status"],
-      where: { campaignId, tenantId },
+      where: { campaignId, tenantId, ...crmCampaignMemberQueueLiveContactWhere },
       _count: { id: true },
     });
 
@@ -865,6 +884,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         tenantId,
         assignedToUserId: null,
         status: { in: ["PENDING", "IN_PROGRESS"] },
+        ...crmCampaignMemberQueueLiveContactWhere,
       },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true },
@@ -1011,24 +1031,28 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
+        ...crmCampaignMemberQueueLiveContactWhere,
         ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
       };
     } else if (filter === "overdue") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
+        ...crmCampaignMemberQueueLiveContactWhere,
         ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
       };
     } else if (filter === "upcoming") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
+        ...crmCampaignMemberQueueLiveContactWhere,
         ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
       };
     } else if (filter === "all") {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
+        ...crmCampaignMemberQueueLiveContactWhere,
         ...crmMemberQueueNonTerminalWhere(campaignFilter),
       };
     } else {
@@ -1037,6 +1061,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       whereClause = {
         tenantId,
         assignedToUserId: userId,
+        ...crmCampaignMemberQueueLiveContactWhere,
         ...crmQueueFilterPendingWhere(campaignFilter, sortMode === "smart"),
       };
     }
@@ -1108,10 +1133,38 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       }));
 
       const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmMemberPendingOrInProgressWhere(campaignFilter) } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter) } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackOverdueWhere(startOfToday, campaignFilter) } }),
-        db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter) } }),
+        db.crmCampaignMember.count({
+          where: {
+            tenantId,
+            assignedToUserId: userId,
+            ...crmCampaignMemberQueueLiveContactWhere,
+            ...crmMemberPendingOrInProgressWhere(campaignFilter),
+          },
+        }),
+        db.crmCampaignMember.count({
+          where: {
+            tenantId,
+            assignedToUserId: userId,
+            ...crmCampaignMemberQueueLiveContactWhere,
+            ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
+          },
+        }),
+        db.crmCampaignMember.count({
+          where: {
+            tenantId,
+            assignedToUserId: userId,
+            ...crmCampaignMemberQueueLiveContactWhere,
+            ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
+          },
+        }),
+        db.crmCampaignMember.count({
+          where: {
+            tenantId,
+            assignedToUserId: userId,
+            ...crmCampaignMemberQueueLiveContactWhere,
+            ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
+          },
+        }),
       ]);
 
       return {
@@ -1155,10 +1208,38 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     // Per-tab counts respect the campaign filter so badge counts are scoped correctly
     const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmMemberPendingOrInProgressWhere(campaignFilter) } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter) } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackOverdueWhere(startOfToday, campaignFilter) } }),
-      db.crmCampaignMember.count({ where: { tenantId, assignedToUserId: userId, ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter) } }),
+      db.crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
+          ...crmMemberPendingOrInProgressWhere(campaignFilter),
+        },
+      }),
+      db.crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
+          ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
+        },
+      }),
+      db.crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
+          ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
+        },
+      }),
+      db.crmCampaignMember.count({
+        where: {
+          tenantId,
+          assignedToUserId: userId,
+          ...crmCampaignMemberQueueLiveContactWhere,
+          ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
+        },
+      }),
     ]);
 
     return {
@@ -1182,6 +1263,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         tenantId,
         assignedToUserId: userId,
         status: "PENDING",
+        ...crmCampaignMemberQueueLiveContactWhere,
         campaign: { status: "ACTIVE" },
       },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -1223,7 +1305,14 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     // (except assign-to-me on unassigned rows). See isCrmQueuePatchOwnershipForbidden.
     const existing = await db.crmCampaignMember.findFirst({
       where: { id: memberId, tenantId },
-      select: { id: true, assignedToUserId: true, sortOrder: true, attemptCount: true, campaignId: true },
+      select: {
+        id: true,
+        assignedToUserId: true,
+        sortOrder: true,
+        attemptCount: true,
+        campaignId: true,
+        contact: { select: { active: true, archivedAt: true } },
+      },
     });
     if (!existing) return reply.code(404).send({ error: "not_found" });
 
@@ -1247,6 +1336,14 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return reply.code(403).send({
         error: "crm_queue_member_forbidden",
         detail: "You may only update queue members assigned to you",
+      });
+    }
+
+    const contactLive = !!(existing.contact?.active && existing.contact.archivedAt == null);
+    if (!contactLive && !isAdminRole(user.role)) {
+      return reply.code(409).send({
+        error: "crm_queue_contact_not_live",
+        detail: "This contact is archived or inactive and is not live queue work.",
       });
     }
 

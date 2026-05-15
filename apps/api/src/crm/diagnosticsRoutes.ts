@@ -8,6 +8,7 @@ import {
   crmCallbackOverdueWhere,
   crmMemberDiagnosticsActiveBandWhere,
   crmMemberPendingOrInProgressWhere,
+  crmCampaignMemberQueueLiveContactWhere,
 } from "./crmMemberQueryFragments";
 
 function num(v: bigint | number | null | undefined): number {
@@ -114,17 +115,18 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       queueRemainingWallboard,
     ] = await Promise.all([
       db.crmCampaignMember.count({
-        where: { tenantId, ...crmMemberDiagnosticsActiveBandWhere() },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmMemberDiagnosticsActiveBandWhere() },
       }),
       db.crmCampaignMember.count({
         where: {
           tenantId,
           assignedToUserId: null,
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmMemberDiagnosticsActiveBandWhere(),
         },
       }),
       db.crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackOverdueWhere(todayStart) },
       }),
       db.$queryRaw<[{ c: bigint }]>(Prisma.sql`
         SELECT COUNT(*)::bigint AS c
@@ -264,7 +266,7 @@ export async function registerCrmDiagnosticsRoutes(app: FastifyInstance) {
       `).then((r) => num(r[0]?.c)),
       fetchTelephonyHealthSnapshot(),
       db.crmCampaignMember.count({
-        where: { tenantId, ...crmMemberPendingOrInProgressWhere() },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmMemberPendingOrInProgressWhere() },
       }),
     ]);
 

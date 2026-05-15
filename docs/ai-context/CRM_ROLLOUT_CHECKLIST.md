@@ -1058,6 +1058,19 @@ Portal `/crm/contacts`: CRM **admin** sees **List** scope **Active** (default), 
 | **Agent** | No **List** scope UI; list shows **active** contacts only (no archived rows); search behavior unchanged from default active list. |
 | **API (optional curl)** | Non-admin JWT + `?includeArchived=true` → `403`. `?archivedOnly=true` without `includeArchived` → `400`. |
 
+### Phase 16C — Archived contacts excluded from live queue (smoke)
+
+**Setup:** Pick (or create) a contact that is enrolled in an **ACTIVE** campaign with a `CrmCampaignMember` assigned to a test agent, status `PENDING`/`IN_PROGRESS`/`CALLBACK` so it appears on **My Queue**.
+
+| Check | Expected |
+|-------|----------|
+| **Before archive** | Agent `GET /crm/queue` (and tab counts) includes the member; campaign detail shows the row normally. |
+| **Archive contact** | CRM admin `DELETE /crm/contacts/:id` (soft-archive). |
+| **Queue** | Same agent: member **absent** from `GET /crm/queue` for all relevant filters (`pending`, `due`, `overdue`, `upcoming`, `all`, smart + original sort); tab `counts` drop accordingly; `POST /crm/queue/next` does not return that member. |
+| **Campaign detail** | Member row still listed with **Archived** badge and muted styling; agent cannot change status, callback, or **Call** workspace link (controls disabled); admin can still PATCH member for maintenance. |
+| **Restore** | `POST /crm/contacts/:id/restore`. If member status still qualifies, row **returns** to queue and counts. |
+| **Reports alignment (optional)** | `GET /crm/reports/daily` fields `queueRemaining`, `callbacksDueToday`, `overdueCallbacks` move with live queue (exclude archived). `GET /crm/reports/campaigns` campaign totals may still count archived members — historical roster. |
+
 ### Phase 15D — Seeded / test portal password hygiene (pre–live pilot)
 
 Any account created for QA or seed scripts (for example `crm.pilot.agent.p13c@connect-internal.test`) may still have a predictable or shared password. **Treat that as high risk until rotated.** Do not paste passwords or reset tokens into logs, chat, or tickets.

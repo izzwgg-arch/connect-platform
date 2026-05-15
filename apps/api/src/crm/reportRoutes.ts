@@ -9,6 +9,7 @@ import {
   crmCallbackOverdueWhere,
   crmMemberPendingOrInProgressWhere,
   crmMemberQueueNonTerminalWhere,
+  crmCampaignMemberQueueLiveContactWhere,
 } from "./crmMemberQueryFragments";
 
 // ── Route registrar ───────────────────────────────────────────────────────────
@@ -51,16 +52,16 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: { tenantId, status: { in: ["OPEN", "IN_PROGRESS"] }, dueAt: { lt: todayStart } },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackDueLteDayEndWhere(todayEnd) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackDueLteDayEndWhere(todayEnd) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackOverdueWhere(todayStart) },
       }),
       (db as any).crmCampaign.count({
         where: { tenantId, status: "ACTIVE" },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmMemberPendingOrInProgressWhere() },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmMemberPendingOrInProgressWhere() },
       }),
     ]);
 
@@ -208,6 +209,7 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: { in: userIds },
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmMemberQueueNonTerminalWhere({ status: "ACTIVE" }),
         },
         _count: { id: true },
@@ -218,6 +220,7 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           assignedToUserId: { in: userIds },
+          ...crmCampaignMemberQueueLiveContactWhere,
           ...crmCallbackDueLteDayEndWhere(todayEnd),
         },
         _count: { id: true },
@@ -349,13 +352,13 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
     ] = await Promise.all([
       // Counts
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackOverdueWhere(todayStart) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
       }),
       (db as any).crmCampaignMember.count({
-        where: { tenantId, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
       }),
       (db as any).crmContactTask.count({
         where: { tenantId, status: { in: ["OPEN", "IN_PROGRESS"] }, dueAt: { lt: todayStart } },
@@ -366,19 +369,19 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
 
       // Detail rows (capped at 100 each)
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, ...crmCallbackOverdueWhere(todayStart) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackOverdueWhere(todayStart) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
       }),
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackDueInCalendarDayWhere(todayStart, todayEnd) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
       }),
       (db as any).crmCampaignMember.findMany({
-        where: { tenantId, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
+        where: { tenantId, ...crmCampaignMemberQueueLiveContactWhere, ...crmCallbackDueRestOfWeekWhere(tomorrow, weekEnd) },
         orderBy: { callbackAt: "asc" },
         take: 100,
         include: MEMBER_INCLUDE,
