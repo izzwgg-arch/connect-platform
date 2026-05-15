@@ -175,6 +175,18 @@
 | Workload (admin) | Scannable cards per assignee row from `GET .../workload`; **Redistribute unassigned** opens existing distribute modal. |
 | Import modal | Preview / import guard and Phase 17A/17B preview UI unchanged (`POST .../import/preview`, `POST .../import` via portal proxy). |
 
+### Phase 18D — Campaigns index SaaS UX (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/campaigns` loads; list data from `GET /crm/campaigns` only — summary tiles and cards use fields returned by that response (status counts and `memberCount` aggregated client-side); no contacted/converted/progress on the index unless the list API adds those fields. |
+| Command header | Title **Campaigns**, short operational subtitle, primary **New campaign** for CRM admins only (`ADMIN` / `TENANT_ADMIN` / `SUPER_ADMIN`); secondary **Import leads** when `can_view_crm_import`, **My Queue** when `can_view_crm_queue` — no promotional banners. |
+| Summary row | Tiles for Active, Paused, Completed, Draft, Archived, and **Members (this list)** from the loaded campaigns array; footnote explains API default (All statuses excludes archived until Archived filter). |
+| Filters | Status filter and name search remain compact; no new sort unless added elsewhere. |
+| List | Card-style rows (not a dense primary table); each row: name, status, priority, members, updated/created, **Open campaign** and **View queue** (`?campaignId=`) when queue permission; Start/Pause/Resume/Archive only for admins. |
+| Empty states | No campaigns: create/import guidance; filtered-by-search empty: clear search — professional copy, no fake metrics. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports

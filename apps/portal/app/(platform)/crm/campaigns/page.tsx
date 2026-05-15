@@ -1,9 +1,22 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { Megaphone, Plus, Search, ChevronRight, Play, Pause, Archive, Users } from "lucide-react";
+import Link from "next/link";
+import {
+  Megaphone,
+  Plus,
+  Search,
+  Play,
+  Pause,
+  Archive,
+  Users,
+  FileUp,
+  ListOrdered,
+  ExternalLink,
+} from "lucide-react";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
+import { useAppContext } from "../../../../hooks/useAppContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -22,7 +35,8 @@ type Campaign = {
   updatedAt: string;
   script: { id: string; name: string } | null;
   checklist: { id: string; name: string } | null;
-  memberCount: number;
+  /** Present on list/detail with counts; create response may omit. */
+  memberCount?: number;
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -49,7 +63,7 @@ const PRIORITY_LABELS: Record<CampaignPriority, string> = {
 
 const PRIORITY_COLORS: Record<CampaignPriority, string> = {
   LOW: "bg-gray-100 text-gray-500",
-  NORMAL: "",  // not shown — normal is the baseline
+  NORMAL: "", // not shown — normal is the baseline
   HIGH: "bg-orange-100 text-orange-700",
   URGENT: "bg-red-100 text-red-700",
 };
@@ -64,8 +78,6 @@ function StatusBadge({ status }: { status: CampaignStatus }) {
   );
 }
 
-// ── Priority Badge ─────────────────────────────────────────────────────────────
-
 function PriorityBadge({ priority }: { priority: CampaignPriority }) {
   if (priority === "NORMAL") return null;
   return (
@@ -73,6 +85,18 @@ function PriorityBadge({ priority }: { priority: CampaignPriority }) {
       {PRIORITY_LABELS[priority]}
     </span>
   );
+}
+
+function formatShortDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return "—";
+  }
 }
 
 // ── Create Campaign Modal ──────────────────────────────────────────────────────
@@ -177,6 +201,16 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
 
 export default function CampaignsPage() {
   const router = useRouter();
+  const { backendJwtRole, can } = useAppContext();
+
+  const isAdmin =
+    backendJwtRole === "ADMIN" ||
+    backendJwtRole === "TENANT_ADMIN" ||
+    backendJwtRole === "SUPER_ADMIN";
+
+  const canImport = can("can_view_crm_import");
+  const canQueue = can("can_view_crm_queue");
+
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -200,14 +234,19 @@ export default function CampaignsPage() {
     }
   }, [statusFilter, token]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function handleQuickStatus(id: string, status: CampaignStatus, e: React.MouseEvent) {
+    e.preventDefault();
     e.stopPropagation();
     try {
       await apiPatch(`/crm/campaigns/${id}`, { status }, token);
       setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, status } : c)));
-    } catch {}
+    } catch {
+      void load();
+    }
   }
 
   const filtered = campaigns.filter((c) => {
@@ -215,50 +254,157 @@ export default function CampaignsPage() {
     return c.name.toLowerCase().includes(search.toLowerCase());
   });
 
+  const summary = useMemo(() => {
+    let active = 0;
+    let paused = 0;
+    let completed = 0;
+    let draft = 0;
+    let archived = 0;
+    let members = 0;
+    for (const c of campaigns) {
+      members += c.memberCount ?? 0;
+      switch (c.status) {
+        case "ACTIVE":
+          active += 1;
+          break;
+        case "PAUSED":
+          paused += 1;
+          break;
+        case "COMPLETED":
+          completed += 1;
+          break;
+        case "DRAFT":
+          draft += 1;
+          break;
+        case "ARCHIVED":
+          archived += 1;
+          break;
+        default:
+          break;
+      }
+    }
+    return { active, paused, completed, draft, archived, members };
+  }, [campaigns]);
+
+  const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
+  const listEmptyNoCampaigns = !loading && !error && campaigns.length === 0;
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {showCreate && (
+      {showCreate && isAdmin && (
         <CreateCampaignModal
           onClose={() => setShowCreate(false)}
           onCreate={(c) => {
-            setCampaigns((prev) => [c, ...prev]);
+            const normalized: Campaign = { ...c, memberCount: c.memberCount ?? 0 };
+            setCampaigns((prev) => [normalized, ...prev]);
             setShowCreate(false);
             router.push(`/crm/campaigns/${c.id}`);
           }}
         />
       )}
 
-      <div className="max-w-5xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <Megaphone className="h-6 w-6 text-blue-600" />
-            <h1 className="text-2xl font-bold text-gray-900">Campaigns</h1>
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* Command header */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm mb-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex gap-3 min-w-0">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                <Megaphone className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Campaigns</h1>
+                <p className="mt-1 text-sm text-gray-500 max-w-xl">
+                  Run outbound work by campaign: open a program, pull its queue in My Queue, or adjust lifecycle status from the campaign record.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  <Plus className="h-4 w-4" />
+                  New campaign
+                </button>
+              )}
+              {canImport && (
+                <Link
+                  href="/crm/import"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <FileUp className="h-4 w-4 text-gray-500" />
+                  Import leads
+                </Link>
+              )}
+              {canQueue && (
+                <Link
+                  href="/crm/queue"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <ListOrdered className="h-4 w-4 text-gray-500" />
+                  My Queue
+                </Link>
+              )}
+            </div>
           </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-          >
-            <Plus className="h-4 w-4" />
-            New Campaign
-          </button>
         </div>
 
+        {/* Summary: counts from this GET /crm/campaigns payload only */}
+        {!loading && !error && campaigns.length > 0 && (
+          <div className="mb-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {(
+                [
+                  { key: "active", label: "Active", value: summary.active },
+                  { key: "paused", label: "Paused", value: summary.paused },
+                  { key: "completed", label: "Completed", value: summary.completed },
+                  { key: "draft", label: "Draft", value: summary.draft },
+                  { key: "archived", label: "Archived", value: summary.archived },
+                  { key: "members", label: "Members (this list)", value: summary.members },
+                ] as const
+              ).map((tile) => (
+                <div
+                  key={tile.key}
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm"
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{tile.label}</p>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums text-gray-900">{tile.value}</p>
+                </div>
+              ))}
+            </div>
+            {statusFilter === "all" && (
+              <p className="mt-2 text-xs text-gray-500">
+                <span className="font-medium text-gray-600">All statuses</span> excludes archived campaigns. Choose{" "}
+                <span className="font-medium text-gray-700">Archived</span> in the filter to load them.
+              </p>
+            )}
+            {statusFilter !== "all" && (
+              <p className="mt-2 text-xs text-gray-500">
+                Figures reflect the campaigns returned for the current status filter (and search only hides rows below).
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Filters */}
-        <div className="flex gap-3 mb-5">
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-5">
+          <div className="relative flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Search campaigns..."
+              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Search by name…"
+              aria-label="Search campaigns by name"
             />
           </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-auto w-full"
+            aria-label="Filter by status"
           >
             <option value="all">All statuses</option>
             <option value="DRAFT">Draft</option>
@@ -271,91 +417,154 @@ export default function CampaignsPage() {
 
         {/* Content */}
         {loading ? (
-          <div className="py-20 text-center text-gray-400 text-sm">Loading campaigns...</div>
+          <div className="py-20 text-center text-gray-400 text-sm">Loading campaigns…</div>
         ) : error ? (
           <div className="py-20 text-center text-red-500 text-sm">{error}</div>
-        ) : filtered.length === 0 ? (
-          <div className="py-20 text-center">
-            <Megaphone className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-600 font-semibold text-base">Create your first campaign</p>
-            <p className="text-gray-400 text-sm mt-1">Organize leads into campaigns and assign agents to work them.</p>
-            <button onClick={() => setShowCreate(true)} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-              New Campaign
+        ) : listEmptyNoCampaigns ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center">
+            <Megaphone className="mx-auto mb-3 h-10 w-10 text-gray-300" aria-hidden />
+            <p className="text-base font-medium text-gray-800">No campaigns yet</p>
+            <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+              Create a campaign to group leads and scripts, then route work through My Queue. If leads arrive via file import, start from Import Leads and attach them to a campaign from there.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  <Plus className="h-4 w-4" />
+                  New campaign
+                </button>
+              )}
+              {canImport && (
+                <Link
+                  href="/crm/import"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <FileUp className="h-4 w-4 text-gray-500" />
+                  Import leads
+                </Link>
+              )}
+            </div>
+            {!isAdmin && !canImport && (
+              <p className="mt-4 text-xs text-gray-500">Ask a CRM admin to create a campaign or grant import access if you need to load leads.</p>
+            )}
+          </div>
+        ) : listEmptyAfterFilter ? (
+          <div className="rounded-2xl border border-gray-200 bg-white px-6 py-14 text-center">
+            <p className="text-base font-medium text-gray-800">No campaigns match this search</p>
+            <p className="mt-2 text-sm text-gray-500">Try another name or clear the search to see all loaded campaigns.</p>
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="mt-5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Clear search
             </button>
           </div>
         ) : (
-          <div className="space-y-2">
-            {filtered.map((campaign) => (
-              <div
-                key={campaign.id}
-                onClick={() => router.push(`/crm/campaigns/${campaign.id}`)}
-                className="bg-white border border-gray-200 rounded-xl p-4 hover:border-blue-300 hover:shadow-sm cursor-pointer transition-all"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <StatusBadge status={campaign.status} />
-                    <PriorityBadge priority={campaign.priority ?? "NORMAL"} />
-                    <span className="font-medium text-gray-900 truncate">{campaign.name}</span>
-                    {campaign.description && (
-                      <span className="text-sm text-gray-400 hidden sm:block truncate max-w-xs">{campaign.description}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 ml-3 shrink-0">
-                    <div className="flex items-center gap-1 text-xs text-gray-500">
-                      <Users className="h-3.5 w-3.5" />
-                      <span>{campaign.memberCount}</span>
+          <ul className="space-y-3">
+            {filtered.map((campaign) => {
+              const members = campaign.memberCount ?? 0;
+              return (
+                <li
+                  key={campaign.id}
+                  className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-colors hover:border-gray-300"
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-base font-semibold text-gray-900">{campaign.name}</h2>
+                        <StatusBadge status={campaign.status} />
+                        <PriorityBadge priority={campaign.priority ?? "NORMAL"} />
+                      </div>
+                      {campaign.description ? (
+                        <p className="text-sm text-gray-500 line-clamp-2">{campaign.description}</p>
+                      ) : null}
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1">
+                          <Users className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                          {members} member{members === 1 ? "" : "s"}
+                        </span>
+                        <span>Updated {formatShortDate(campaign.updatedAt)}</span>
+                        <span className="text-gray-400">Created {formatShortDate(campaign.createdAt)}</span>
+                      </div>
+                      {(campaign.script || campaign.checklist) && (
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                          {campaign.script && <span>Script: {campaign.script.name}</span>}
+                          {campaign.checklist && <span>Checklist: {campaign.checklist.name}</span>}
+                        </div>
+                      )}
                     </div>
-                    {campaign.status === "DRAFT" && (
-                      <button
-                        onClick={(e) => handleQuickStatus(campaign.id, "ACTIVE", e)}
-                        className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded text-xs hover:bg-green-100"
-                        title="Start campaign"
+                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end lg:pl-4 shrink-0">
+                      <Link
+                        href={`/crm/campaigns/${campaign.id}`}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
                       >
-                        <Play className="h-3 w-3" />
-                        Start
-                      </button>
-                    )}
-                    {campaign.status === "ACTIVE" && (
-                      <button
-                        onClick={(e) => handleQuickStatus(campaign.id, "PAUSED", e)}
-                        className="flex items-center gap-1 px-2 py-1 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded text-xs hover:bg-yellow-100"
-                        title="Pause campaign"
-                      >
-                        <Pause className="h-3 w-3" />
-                        Pause
-                      </button>
-                    )}
-                    {campaign.status === "PAUSED" && (
-                      <button
-                        onClick={(e) => handleQuickStatus(campaign.id, "ACTIVE", e)}
-                        className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded text-xs hover:bg-green-100"
-                        title="Resume campaign"
-                      >
-                        <Play className="h-3 w-3" />
-                        Resume
-                      </button>
-                    )}
-                    {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
-                      <button
-                        onClick={(e) => handleQuickStatus(campaign.id, "ARCHIVED", e)}
-                        className="p-1 text-gray-400 hover:text-gray-600 rounded"
-                        title="Archive campaign"
-                      >
-                        <Archive className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    <ChevronRight className="h-4 w-4 text-gray-400" />
+                        Open campaign
+                        <ExternalLink className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                      </Link>
+                      {canQueue && (
+                        <Link
+                          href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                        >
+                          View queue
+                          <ListOrdered className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                        </Link>
+                      )}
+                      {isAdmin && campaign.status === "DRAFT" && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleQuickStatus(campaign.id, "ACTIVE", e)}
+                          className="inline-flex items-center justify-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 hover:bg-green-100"
+                          title="Start campaign"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          Start
+                        </button>
+                      )}
+                      {isAdmin && campaign.status === "ACTIVE" && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleQuickStatus(campaign.id, "PAUSED", e)}
+                          className="inline-flex items-center justify-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100"
+                          title="Pause campaign"
+                        >
+                          <Pause className="h-3.5 w-3.5" />
+                          Pause
+                        </button>
+                      )}
+                      {isAdmin && campaign.status === "PAUSED" && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleQuickStatus(campaign.id, "ACTIVE", e)}
+                          className="inline-flex items-center justify-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 hover:bg-green-100"
+                          title="Resume campaign"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          Resume
+                        </button>
+                      )}
+                      {isAdmin && (campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleQuickStatus(campaign.id, "ARCHIVED", e)}
+                          className="inline-flex items-center justify-center rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                          title="Archive campaign"
+                          aria-label="Archive campaign"
+                        >
+                          <Archive className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-                {(campaign.script || campaign.checklist) && (
-                  <div className="mt-2 flex gap-3 text-xs text-gray-500">
-                    {campaign.script && <span>Script: {campaign.script.name}</span>}
-                    {campaign.checklist && <span>Checklist: {campaign.checklist.name}</span>}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </div>
