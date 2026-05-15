@@ -2,6 +2,7 @@ import type { BillingInvoicePreview } from "./invoiceEngine";
 import {
   billingPricingSettingsSliceFromLoaded,
   deriveBillingPricingState,
+  serializeDerivedBillingPricingStateForWire,
   type DerivedBillingPricingState,
 } from "./billingPricingState";
 import {
@@ -272,7 +273,9 @@ export function buildTenantPricingDiagnosticsFromPreview(input: {
     smsPriceCents: settings.smsPriceCents,
     firstPhoneNumberFree: settings.firstPhoneNumberFree,
   });
-  const pricingState = deriveBillingPricingState({ settings: pricingSlice, preview });
+  const pricingState = serializeDerivedBillingPricingStateForWire(
+    deriveBillingPricingState({ settings: pricingSlice, preview }),
+  );
 
   return {
     tenantId,

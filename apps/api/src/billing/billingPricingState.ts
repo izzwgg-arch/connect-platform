@@ -281,3 +281,52 @@ export function deriveBillingPricingState(input: {
     warnings,
   };
 }
+
+/**
+ * Deep plain snapshot for HTTP JSON — breaks any accidental Prisma/object prototypes on nested
+ * plan rows before Fastify/browser tooling walks the graph.
+ */
+export function serializeDerivedBillingPricingStateForWire(state: DerivedBillingPricingState): DerivedBillingPricingState {
+  const r = state.resolution;
+  return {
+    mode: state.mode,
+    currentPlan: state.currentPlan ? { ...state.currentPlan } : null,
+    scheduledNext: state.scheduledNext
+      ? {
+          plan: {
+            id: state.scheduledNext.plan.id,
+            code: state.scheduledNext.plan.code,
+            name: state.scheduledNext.plan.name,
+            active: state.scheduledNext.plan.active !== false,
+            extensionPriceCents: Number(state.scheduledNext.plan.extensionPriceCents),
+            additionalPhoneNumberPriceCents: Number(state.scheduledNext.plan.additionalPhoneNumberPriceCents),
+            smsPriceCents: Number(state.scheduledNext.plan.smsPriceCents),
+            firstPhoneNumberFree: state.scheduledNext.plan.firstPhoneNumberFree !== false,
+          },
+          effectiveAt: state.scheduledNext.effectiveAt,
+        }
+      : null,
+    activePlanForPeriod: state.activePlanForPeriod ? { ...state.activePlanForPeriod } : null,
+    effectivePricingSource: state.effectivePricingSource,
+    resolution: {
+      mode: r.mode,
+      activePlanId: r.activePlanId,
+      activePlanName: r.activePlanName,
+      extensionPriceCents: Number(r.extensionPriceCents),
+      additionalPhoneNumberPriceCents: Number(r.additionalPhoneNumberPriceCents),
+      smsPriceCents: Number(r.smsPriceCents),
+      firstPhoneNumberFree: r.firstPhoneNumberFree,
+      fieldBadges: {
+        extensionPriceCents: r.fieldBadges.extensionPriceCents,
+        additionalPhoneNumberPriceCents: r.fieldBadges.additionalPhoneNumberPriceCents,
+        smsPriceCents: r.fieldBadges.smsPriceCents,
+        firstPhoneNumberFree: r.fieldBadges.firstPhoneNumberFree,
+      },
+      banner: r.banner,
+      missingCatalogPlan: r.missingCatalogPlan,
+    },
+    flags: { ...state.flags },
+    explanationLines: [...state.explanationLines],
+    warnings: [...state.warnings],
+  };
+}

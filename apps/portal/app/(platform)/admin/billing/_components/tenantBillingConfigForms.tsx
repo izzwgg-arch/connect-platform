@@ -26,6 +26,14 @@ function toCents(value: FormDataEntryValue | null) {
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 }
 
+function safeJsonBlock(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2);
+  } catch {
+    return '"[unserializable]"';
+  }
+}
+
 export type PricingModeUi = "legacy" | "catalog" | "custom";
 
 export function parseStoredPricingMode(metadata: unknown): PricingModeUi {
@@ -290,10 +298,10 @@ export function AdminTenantPricingSourceCard({
                     <summary style={{ cursor: "pointer", marginBottom: 6 }}>Raw audit snapshot (JSON)</summary>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 160, padding: 8, background: "var(--code-bg,#f8fafc)", borderRadius: 6 }}>
-                        {JSON.stringify(b, null, 2)}
+                        {safeJsonBlock(b)}
                       </pre>
                       <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 160, padding: 8, background: "var(--code-bg,#f0fdf4)", borderRadius: 6 }}>
-                        {JSON.stringify(a, null, 2)}
+                        {safeJsonBlock(a)}
                       </pre>
                     </div>
                   </details>
@@ -769,6 +777,16 @@ type AssignPlanPreviewApi = {
   scheduledPlanActiveForPreviewPeriod: boolean;
 };
 
+function narrowAssignPlanPreview(data: AssignPlanPreviewApi & Record<string, unknown>): AssignPlanPreviewApi {
+  return {
+    simulation: data.simulation,
+    tenantPricingQuad: data.tenantPricingQuad,
+    invoiceTotals: data.invoiceTotals,
+    notes: data.notes,
+    scheduledPlanActiveForPreviewPeriod: data.scheduledPlanActiveForPreviewPeriod,
+  };
+}
+
 export function AdminCurrentBillingPlanAssignCard({
   tenantId,
   previewMonth,
@@ -847,7 +865,7 @@ export function AdminCurrentBillingPlanAssignCard({
       const data = await apiGet<AssignPlanPreviewApi>(
         `/admin/billing/platform/tenants/${tenantId}/assign-plan-preview?${qs.toString()}`,
       );
-      setPreviewData(data);
+      setPreviewData(narrowAssignPlanPreview(data as AssignPlanPreviewApi & Record<string, unknown>));
     } catch (err: unknown) {
       setPreviewData(null);
       setToast({ kind: "err", text: billingErrorMessage(err, "Preview failed — check plan selection.") });

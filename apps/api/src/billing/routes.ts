@@ -586,7 +586,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       (db as any).taxProfile.findMany({ where: { enabled: true }, orderBy: [{ state: "asc" }, { county: "asc" }] }),
       getMaskedSolaConfigForTenant(tenantId),
     ]);
-    return { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola };
+    const payload = { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola };
+    return JSON.parse(
+      JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
+    ) as typeof payload;
   });
 
   app.get("/admin/billing/tenants/:tenantId/settings", async (req, reply) => {
@@ -1019,10 +1022,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     });
 
     const sliceBefore = billingPricingSettingsSliceFromLoaded(settingsRow);
-    const sliceAfter = billingPricingSettingsSliceFromLoaded(merged);
 
     const pricingStateBefore = deriveBillingPricingState({ settings: sliceBefore, preview: previewBefore });
-    const pricingStateAfter = deriveBillingPricingState({ settings: sliceAfter, preview: previewAfter });
 
     const notes: string[] = [
       "Reset-to-plan copies prices from the CURRENT linked BillingPlan row only — not from a future scheduled plan.",
@@ -1046,8 +1047,6 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         name: targetPlan.name,
         active: targetPlan.active,
       },
-      pricingStateBefore,
-      pricingStateAfter,
       tenantPricingQuad: {
         before: tenantPricingQuadSnapshot(settingsRow),
         after: tenantPricingQuadSnapshot(merged),
