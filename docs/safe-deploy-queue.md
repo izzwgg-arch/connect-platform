@@ -25,6 +25,8 @@ All routine production deploys **must** go through **`ops/deploy-queue`** so the
 
 **Global serialization:** the worker runs **at most one job at a time** (any target). A file lock prevents a second PM2 instance from executing deploy scripts.
 
+**API public verify on the app host:** When **`DEPLOY_API_PUBLIC_VERIFY_URL`** is set, **`scripts/lib/deploy-api-rollout.sh`** curls that URL from the same machine that runs the deploy worker. If nginx returns **`403`** for the public hostname but **`curl --resolve host:443:127.0.0.1 …`** returns **`200`**, set **`DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1`** in the worker environment (see **`docs/nginx/README.md`** and **`docs/ai-context/DEPLOYMENT.md`** § API blue/green).
+
 **Out of scope — PBX-host installers:** The queue is **app-host / container scoped** only. PBX-host root installers (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`, `scripts/pbx/install-connect-tenant-moh-dialplan.sh`, and similar) are **not** queue targets and must not be added as queue targets without a separate cross-host trust review. They are operator-run break-glass actions on the VitalPBX host; see `docs/ai-context/DEPLOYMENT.md` § "VitalPBX host: Connect route helper script" and § "VitalPBX host: Connect tenant MOH enforcement layer".
 
 ---

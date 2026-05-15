@@ -23,6 +23,7 @@ The Fastify app exempts **`/health`**, **`/ready`**, and **`/api/ready`** from t
 - **Candidate `/ready` never succeeds:** candidate is stopped/removed; nginx upstream unchanged.
 - **`nginx -t` or reload fails after pointing at candidate:** script restores the previous upstream port from the backup `.pre-<job-tag>` sibling and reloads; candidate stopped.
 - **Public verify URL fails after cutover:** same nginx rollback + candidate stopped.
+- **Public verify hairpin (false negative):** **`curl https://<public-host>/api/health`** from the **deploy host** returns nginx **`403`**, but **`curl --resolve <public-host>:443:127.0.0.1 https://<public-host>/api/health`** returns **`200`**. Candidate loopback **`/ready`** can still be healthy. Set **`DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1`** on the deploy worker (with **`scripts/lib/deploy-api-rollout.sh`** that implements it) so public verify uses loopback **`--resolve`**; do not assume the API build is bad.
 - **Stable recreate succeeds but `/ready` on :3001 fails:** nginx pointed back at candidate `:3004` (if reload works); deploy exits non-zero — **traffic may remain on candidate** until an operator fixes stable or completes rollback below.
 - **Reload fails while normalizing to :3001:** log says traffic may remain on candidate — fix nginx/upstream manually.
 

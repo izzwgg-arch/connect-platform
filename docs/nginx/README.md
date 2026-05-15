@@ -28,6 +28,7 @@ First API deploy after adding compose services can export:
 | **`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`** | Path to the **single-line** `server 127.0.0.1:PORT;` file nginx includes. |
 | **`DEPLOY_API_UPSTREAM_BOOTSTRAP`** | Set **`1`** once to create the include if missing (then unset). |
 | **`DEPLOY_API_PUBLIC_VERIFY_URL`** | Optional full URL (e.g. public **`https://host/api/ready`**) verified after cutover. May need **`DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE=1`**. |
+| **`DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL`** | Set **`1`** for **`https://`** verify URLs only: map the hostname to **`127.0.0.1:443`** with **`curl --resolve`** so the probe does not hairpin via the server's public IP (avoids nginx **403** on some origins). Same idea as portal **`DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL`**. |
 | **`DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE`** | Set **`1`** to pass **`curl -k`** when verifying **`DEPLOY_API_PUBLIC_VERIFY_URL`**. |
 | **`DEPLOY_API_BLUEGREEN`** | Set **`0`** to force legacy **`deploy_common_compose_up`** (**not** zero-downtime). |
 

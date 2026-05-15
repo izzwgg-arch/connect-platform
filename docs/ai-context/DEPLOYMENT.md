@@ -66,7 +66,7 @@ Current approach ( **`scripts/deploy-api.sh`** + **`scripts/lib/deploy-api-rollo
 2. Start **`api_candidate`** on **`127.0.0.1:3004`**, poll **`GET /ready`** locally.
 3. Rewrite the **nginx include** ( **`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**, template **`docs/nginx/`** ) to **`127.0.0.1:3004`**, then **`nginx -t`** and **`nginx -s reload`**.
 4. **Recreate stable `api`** on **`3001`** while traffic stays on **`3004`**, wait **`GET /ready`** on **`3001`**, flip nginx back to **`3001`**, reload again, then **`stop` + `rm`** candidate only (**never** **`rm -sf`** stable before cutover).
-5. **`DEPLOY_API_PUBLIC_VERIFY_URL`** optional curl through the public hostname after reloads (**`DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE`** for **`curl -k`** on HTTPS checks).
+5. **`DEPLOY_API_PUBLIC_VERIFY_URL`** optional **`curl`** through the public hostname after reloads. On hosts where **`curl https://public-host/...`** from the app server returns nginx **`403`** (hairpin: client IP looks like the origin public IP), set **`DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1`** so verify uses **`curl --resolve host:443:127.0.0.1`** — same pattern as portal (**`DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL`**). **`DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE=1`** adds **`curl -k`** when TLS verification must be relaxed (this does **not** fix hairpin **403**).
 
 Failures: candidate never ready → nginx unchanged → stable untouched. Reload failure → upstream restored from **`.pre-<job>`** backup when applicable. Detailed recovery: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 

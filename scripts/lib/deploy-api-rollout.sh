@@ -60,18 +60,30 @@ deploy_api_rollout_wait_ready() {
   local attempts="${2:-120}"
   local delay="${3:-2}"
   local n=0
-  # Public HTTPS verify URLs may need relaxed TLS during internal checks only.
   local curl_tls=()
+  local curl_resolve=()
   if [[ "${DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE:-0}" == "1" ]] && [[ "$url" =~ ^https:// ]]; then
     curl_tls=(-k)
   fi
+  # Avoid hairpin probes: curl https://public-host/ from the app server may hit nginx deny rules
+  # when the client address is the server's own public IP. Mapping the hostname to 127.0.0.1 keeps
+  # the client as loopback while still exercising TLS + nginx + upstream (SNI unchanged).
+  if [[ "${DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]] && [[ "$url" =~ ^https://([^/:?#]+) ]]; then
+    curl_resolve=(--resolve "${BASH_REMATCH[1]}:443:127.0.0.1")
+  fi
   while [[ "$n" -lt "$attempts" ]]; do
-    if curl "${curl_tls[@]}" -fsS --connect-timeout 2 --max-time 8 "$url" >/dev/null 2>&1; then
+    if curl "${curl_tls[@]}" "${curl_resolve[@]}" -fsS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
       return 0
     fi
     n=$((n + 1))
     sleep "$delay"
   done
+  if [[ "$url" =~ ^https:// ]]; then
+    local http_code=""
+    http_code="$(curl "${curl_tls[@]}" "${curl_resolve[@]}" -o /dev/null -sS -w '%{http_code}' --connect-timeout 2 --max-time 15 "$url" 2>/dev/null || true)"
+    [[ -z "$http_code" ]] && http_code="000"
+    deploy_common_log "[deploy-api-rollout] public verify probe failed: url=${url} http_code=${http_code} resolve_local=${DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL:-0} tls_insecure=${DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE:-0}"
+  fi
   return 1
 }
 
@@ -153,6 +165,9 @@ deploy_api_rollout_run() {
 
   local verify_url="${DEPLOY_API_PUBLIC_VERIFY_URL:-}"
   if [[ -n "$verify_url" ]]; then
+    if [[ "${DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]]; then
+      deploy_common_log "[deploy-api-rollout] public verify via loopback SNI (DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1 curl --resolve host:443:127.0.0.1)"
+    fi
     if ! deploy_api_rollout_wait_ready "${verify_url}" 30 2; then
       echo "[deploy-api] FAIL: public verify URL not ready after cutover: ${verify_url}" >&2
       deploy_api_rollout_write_upstream_port "${ACTIVE_BEFORE}" "$UPSTREAM"
@@ -212,7 +227,7 @@ Blue/green API deploy (when DEPLOY_API_BLUEGREEN=1 and upstream file exists):
   4. wait http://127.0.0.1:3004/ready
   5. write DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE -> server 127.0.0.1:3004;
   6. nginx -t && nginx -s reload
-  7. (optional) DEPLOY_API_PUBLIC_VERIFY_URL — curl GET (add DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE=1 for https + -k)
+  7. (optional) DEPLOY_API_PUBLIC_VERIFY_URL — curl GET; DEPLOY_API_PUBLIC_VERIFY_TLS_INSECURE=1 for https + -k; DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1 to curl --resolve host:443:127.0.0.1 (hairpin nginx 403 from origin)
   8. docker compose up -d --no-deps --force-recreate api  -> 127.0.0.1:3001
   9. wait http://127.0.0.1:3001/ready
  10. write upstream file -> server 127.0.0.1:3001; nginx -t && reload
