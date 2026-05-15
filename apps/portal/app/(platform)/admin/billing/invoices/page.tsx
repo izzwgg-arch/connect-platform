@@ -4,14 +4,23 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
-import { apiDelete, apiGet, apiPost } from "../../../../../services/apiClient";
+import { apiDelete, apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { billingErrorMessage } from "../../../../../components/BillingActionToast";
-import { dollars } from "../../../../../lib/billingUi";
+import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
+import { BillingActivityList } from "../../../../../components/billing/BillingActivityList";
+import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
+import { dollars, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { mergeSearchParams, OPS_TAB_QUERY, isAdminOpsTab, type AdminOpsTab } from "../_components/adminBillingLinks";
+
+function openAdminInvoicePdf(invoiceId: string) {
+  const token = localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  window.open(`${getPortalApiBaseUrl()}/billing/platform/invoices/${encodeURIComponent(invoiceId)}/pdf${qs}`, "_blank", "noopener,noreferrer");
+}
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -194,8 +203,10 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
   const inv = data.status === "success" ? data.data : null;
   const [collectionsMsg, setCollectionsMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [collectionsBusy, setCollectionsBusy] = useState(false);
+  const [collectionsDncConfirm, setCollectionsDncConfirm] = useState(false);
 
   return (
+    <>
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={drawerStyle}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
@@ -244,20 +255,24 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                 />
               </>
             ) : (
-              <p className="muted" style={{ fontSize: 13 }}>No line items recorded.</p>
+              <BillingEmptyState
+                title="No line items"
+                message="This invoice has no service or fee lines yet. It may still be a draft or was created without detail rows."
+              />
             )}
 
             {/* Payment transactions */}
             {inv.transactions?.length > 0 ? (
               <>
                 <h4 style={{ margin: "16px 0 6px" }}>Payment Attempts</h4>
+                <div className="billing-ops-table-wrap billing-ops-scroll">
                 <DataTable
                   rows={inv.transactions.map((t) => ({ ...t, id: t.id }))}
                   columns={[
                     { key: "date", label: "Date", render: (r: InvoiceTxRow) => fmtDatetime(r.createdAt) },
                     {
                       key: "status", label: "Status",
-                      render: (r: InvoiceTxRow) => <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{r.status}</span>,
+                      render: (r: InvoiceTxRow) => <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{transactionStatusLabel(r.status)}</span>,
                     },
                     { key: "amt", label: "Amount", render: (r: InvoiceTxRow) => dollars(r.amountCents) },
                     { key: "card", label: "Card", render: (r: InvoiceTxRow) => r.paymentMethod ? cardLabel(r.paymentMethod) : "—" },
@@ -265,25 +280,25 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                     { key: "msg", label: "Response", render: (r: InvoiceTxRow) => r.responseMessage || r.responseCode || "—" },
                   ]}
                 />
+                </div>
               </>
             ) : (
-              <p className="muted" style={{ fontSize: 13 }}>No payment attempts recorded.</p>
+              <BillingEmptyState
+                title="No payment attempts yet"
+                message="When a card is charged or retried, each attempt appears here with the processor response."
+              />
             )}
 
             {/* Event log */}
-            {inv.events?.length > 0 ? (
-              <>
-                <h4 style={{ margin: "16px 0 6px" }}>Activity Log</h4>
-                <DataTable
-                  rows={inv.events.map((e) => ({ ...e, id: e.id || `${invoiceId}-${e.createdAt}` }))}
-                  columns={[
-                    { key: "t", label: "Time", render: (r: InvoiceEventRow) => fmtDatetime(r.createdAt) },
-                    { key: "y", label: "Type", render: (r: InvoiceEventRow) => r.type },
-                    { key: "m", label: "Detail", render: (r: InvoiceEventRow) => r.message || (r.metadata ? JSON.stringify(r.metadata) : "—") },
-                  ]}
-                />
-              </>
-            ) : null}
+            <h4 style={{ margin: "16px 0 6px" }}>Activity</h4>
+            {inv.events?.length ? (
+              <BillingActivityList events={inv.events.map((e) => ({ ...e, id: e.id || `${invoiceId}-${e.createdAt}` }))} />
+            ) : (
+              <BillingEmptyState
+                title="No activity on this invoice"
+                message="Audit events (emails, charges, plan changes) will show here as they occur."
+              />
+            )}
 
             {/* Collections controls */}
             {(() => {
@@ -292,14 +307,14 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
               return (
                 <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
                   <div className="row-actions" style={{ marginBottom: 8 }}>
-                    <strong style={{ fontSize: 13 }}>Collections Controls</strong>
+                    <strong style={{ fontSize: 13 }}>Automatic retries</strong>
                     <span className={`billing-status-pill ${cs.status === "DO_NOT_CHARGE" ? "bad" : cs.status === "PAUSED" ? "warn" : "ok"}`} style={{ fontSize: 11 }}>
-                      {cs.status}
+                      {cs.status === "DO_NOT_CHARGE" ? "Auto-charge off" : cs.status === "PAUSED" ? "Paused" : "Active"}
                     </span>
                   </div>
-                  <div style={{ fontSize: 12, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 5, padding: "5px 9px", marginBottom: 10, color: "#166534" }}>
-                    ✓ Worker enforcement active — changes take effect on the next dunning sweep (every 6 h).
-                  </div>
+                  <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>
+                    These controls change what happens on the next scheduled retry window. They do not charge immediately.
+                  </p>
                   {cs.paused && (
                     <p style={{ fontSize: 12, margin: "0 0 6px", color: "#6b7280" }}>
                       Paused by {cs.pausedBy || "operator"}{cs.pauseReason ? ` — ${cs.pauseReason}` : ""}
@@ -383,18 +398,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                         type="button"
                         disabled={collectionsBusy}
                         style={{ fontSize: 12, color: "var(--danger, #dc2626)", borderColor: "var(--danger, #dc2626)" }}
-                        onClick={async () => {
-                          if (!window.confirm("Mark this invoice as Do Not Auto-Charge? The worker will not attempt autopay. You can Resume later.")) return;
-                          setCollectionsBusy(true);
-                          setCollectionsMsg(null);
-                          try {
-                            await apiPost(`/admin/billing/invoices/${invoiceId}/collections/do-not-charge`, {});
-                            setCollectionsMsg({ type: "ok", text: "Marked do-not-charge. Worker enforcement in Phase 2." });
-                            setRev((r) => r + 1);
-                          } catch (err: unknown) {
-                            setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Failed.") });
-                          } finally { setCollectionsBusy(false); }
-                        }}
+                        onClick={() => setCollectionsDncConfirm(true)}
                       >
                         🚫 Do not auto-charge
                       </button>
@@ -412,10 +416,59 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
         ) : null}
       </div>
     </div>
+
+    {collectionsDncConfirm && inv && !["PAID", "VOID"].includes(inv.status) ? (() => {
+      const cs = readInvoiceCollections(inv.metadata);
+      return (
+        <BillingActionPanel
+          layout="center"
+          centerWidth="min(520px, 96vw)"
+          variant="danger"
+          onClose={() => { if (!collectionsBusy) setCollectionsDncConfirm(false); }}
+          eyebrow={inv.tenant?.name || "Company"}
+          title="Turn off automatic charging?"
+          subtitle="The billing worker will skip autopay attempts for this invoice until you resume collections."
+          summary={(
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Invoice</strong> {inv.invoiceNumber || invoiceId.slice(0, 8)}</li>
+              <li><strong>Balance due</strong> {dollars(inv.balanceDueCents)}</li>
+              <li><strong>Retry state now</strong> {cs.status === "PAUSED" ? "Paused" : cs.status === "DO_NOT_CHARGE" ? "Already off" : "Active"}</li>
+            </ul>
+          )}
+          notice="You can still collect manually (charge card or mark paid). Use Resume when the customer is ready for autopay again."
+          warning="This is an operational collections change — confirm it matches what the customer agreed to."
+          footer={(
+            <>
+              <button className="btn ghost" type="button" disabled={collectionsBusy} onClick={() => setCollectionsDncConfirm(false)}>Cancel</button>
+              <button
+                className="btn danger"
+                type="button"
+                disabled={collectionsBusy}
+                onClick={async () => {
+                  setCollectionsBusy(true);
+                  setCollectionsMsg(null);
+                  try {
+                    await apiPost(`/admin/billing/invoices/${invoiceId}/collections/do-not-charge`, {});
+                    setCollectionsMsg({ type: "ok", text: "Marked do-not-charge. Worker enforcement in Phase 2." });
+                    setCollectionsDncConfirm(false);
+                    setRev((r) => r + 1);
+                  } catch (err: unknown) {
+                    setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Failed.") });
+                  } finally {
+                    setCollectionsBusy(false);
+                  }
+                }}
+              >
+                {collectionsBusy ? "Applying…" : "Turn off auto-charge"}
+              </button>
+            </>
+          )}
+        />
+      );
+    })() : null}
+    </>
   );
 }
-
-// ── ManualPayModal ─────────────────────────────────────────────────────────────
 
 function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; onClose: () => void; onSuccess: () => void }) {
   const [step, setStep] = useState<"pick" | "confirm" | "done">("pick");
@@ -455,116 +508,156 @@ function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; 
     }
   }
 
+  const isRetryFlow = invoice.status === "FAILED" || invoice.status === "OVERDUE";
+  const sortedTx = [...(invoice.transactions || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const lastBad = sortedTx.find((t) => String(t.status).toUpperCase() !== "APPROVED");
+
+  const flowSummary = (
+    <ul style={{ margin: 0, paddingLeft: 18 }}>
+      <li><strong>Invoice</strong> {invoice.invoiceNumber || invoice.id.slice(0, 8)}</li>
+      <li><strong>Company</strong> {invoice.tenant?.name || invoice.tenantId}</li>
+      <li><strong>Balance due</strong> {dollars(invoice.balanceDueCents)}</li>
+      <li><strong>Status</strong> {invoiceStatusLabel(invoice.status)}</li>
+      {invoice.paymentMethod ? (
+        <li><strong>Card on invoice</strong> {cardLabel(invoice.paymentMethod)}</li>
+      ) : null}
+      {isRetryFlow && lastBad ? (
+        <li>
+          <strong>Last attempt</strong> {transactionStatusLabel(lastBad.status)} · {fmtDatetime(lastBad.createdAt)}
+          {lastBad.responseCode ? ` · ${lastBad.responseCode}` : ""}
+        </li>
+      ) : null}
+      {isRetryFlow && !lastBad ? <li><strong>Last attempt</strong> No declined rows on this list yet — check Activity after charging.</li> : null}
+    </ul>
+  );
+
+  const envBadge = isLive ? (
+    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
+      LIVE
+    </span>
+  ) : (
+    <span style={{ marginLeft: 8, fontSize: 11, color: "#64748b", background: "#f1f5f9", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
+      Sandbox
+    </span>
+  );
+
   return (
-    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modalStyle}>
-        <h3 style={{ margin: "0 0 16px" }}>
-          Charge invoice {invoice.invoiceNumber || invoice.id.slice(0, 8)}
-          {isLive ? (
-            <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
-              ⚡ LIVE CHARGE
-            </span>
-          ) : (
-            <span style={{ marginLeft: 10, fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 4, padding: "2px 7px", verticalAlign: "middle" }}>
-              SANDBOX
-            </span>
-          )}
-        </h3>
-
-        <p style={{ margin: "0 0 16px", fontSize: 13 }}>
-          <strong>{invoice.tenant?.name}</strong> · Balance due: <strong>{dollars(invoice.balanceDueCents)}</strong>
-        </p>
-
-        {step === "done" ? (
-          <>
-            <div style={{ color: "green", marginBottom: 16, fontSize: 14 }}>✓ Charge submitted successfully.</div>
-            <button className="btn primary" type="button" onClick={onClose}>Close</button>
-          </>
+    <BillingActionPanel
+      layout="drawer"
+      drawerWidth="min(520px, 100vw)"
+      variant={step === "confirm" && isLive ? "danger" : "default"}
+      onClose={() => { if (!busy) onClose(); }}
+      eyebrow={invoice.tenant?.name || "Company"}
+      title={<span>{isRetryFlow ? "Retry payment" : "Collect payment"}{envBadge}</span>}
+      subtitle={
+        step === "done"
+          ? "The charge was submitted to the processor."
+          : isRetryFlow
+            ? "Run a new attempt with a saved card. Confirm the amount and environment before submitting."
+            : "Charge a saved card for the open balance. Confirm the amount and environment before submitting."
+      }
+      summary={step === "done" ? undefined : flowSummary}
+      footer={
+        step === "done" ? (
+          <button className="btn primary" type="button" onClick={onClose}>
+            Close
+          </button>
         ) : step === "confirm" ? (
           <>
-            <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 8, padding: "14px 16px", marginBottom: 16, fontSize: 13 }}>
-              <p style={{ margin: "0 0 8px" }}>
-                You are about to charge <strong>{dollars(invoice.balanceDueCents)}</strong> to{" "}
-                <strong>{selectedMethod ? cardLabel(selectedMethod) : selectedMethodId}</strong>.
-              </p>
-              {note ? <p style={{ margin: 0, color: "#6b7280" }}>Note: {note}</p> : null}
-              {isLive ? (
-                <p style={{ margin: "10px 0 0", fontWeight: 600, color: "#dc2626" }}>
-                  ⚡ This is a LIVE charge. The customer's card will be billed immediately.
-                </p>
-              ) : (
-                <p style={{ margin: "10px 0 0", color: "#6b7280" }}>This is a sandbox charge — no real funds will be moved.</p>
-              )}
-            </div>
-            {error ? <div style={{ color: "#dc2626", marginBottom: 12, fontSize: 13 }}>{error}</div> : null}
-            <div className="row-actions">
-              <button className="btn danger" type="button" disabled={busy} onClick={submit}>
-                {busy ? "Charging…" : isLive ? "⚡ Confirm live charge" : "Confirm charge"}
-              </button>
-              <button className="btn ghost" type="button" disabled={busy} onClick={() => { setStep("pick"); submitted.current = false; }}>
-                ← Back
-              </button>
-            </div>
+            <button className="btn ghost" type="button" disabled={busy} onClick={() => { setStep("pick"); submitted.current = false; }}>
+              ← Back
+            </button>
+            <button className="btn danger" type="button" disabled={busy} onClick={submit}>
+              {busy ? "Charging…" : isLive ? "Submit live charge" : "Submit charge"}
+            </button>
           </>
         ) : (
           <>
-            {pmData.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
-            {pmData.status === "error" ? <ErrorState message={pmData.error} /> : null}
-            {pmData.status === "success" && methods.length === 0 ? (
-              <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>
-                No saved cards for this tenant. Ask the customer to add a card via the billing portal.
-              </div>
-            ) : null}
-
-            {methods.length > 0 ? (
-              <>
-                <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500 }}>Select saved card:</p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
-                  {methods.map((m) => (
-                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "8px 10px", borderRadius: 6, border: `1.5px solid ${selectedMethodId === m.id ? "var(--accent, #2563eb)" : "var(--border, #e0e0e0)"}`, fontSize: 13 }}>
-                      <input type="radio" name="paymentMethod" value={m.id} checked={selectedMethodId === m.id} onChange={() => setSelectedMethodId(m.id)} />
-                      {cardLabel(m)}
-                      {m.isDefault ? <span style={{ marginLeft: 4, fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px" }}>Default</span> : null}
-                      {m.lastSuccessfulCharge ? (
-                        <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7280" }}>
-                          Last: {dollars(m.lastSuccessfulCharge.amountCents)} {fmtDate(m.lastSuccessfulCharge.createdAt)}
-                        </span>
-                      ) : null}
-                    </label>
-                  ))}
-                </div>
-              </>
-            ) : null}
-
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
-                Operator note (optional — logged to activity):
-              </label>
-              <input
-                type="text"
-                maxLength={500}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="e.g. Customer called and requested retry"
-                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
-              />
-            </div>
-
-            <div className="row-actions">
-              <button
-                className="btn primary"
-                type="button"
-                disabled={!selectedMethodId}
-                onClick={() => setStep("confirm")}
-              >
-                Preview charge →
-              </button>
-              <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
-            </div>
+            <button className="btn ghost" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn primary" type="button" disabled={!selectedMethodId} onClick={() => setStep("confirm")}>
+              Review charge →
+            </button>
           </>
-        )}
-      </div>
-    </div>
+        )
+      }
+    >
+      {step === "done" ? (
+        <div style={{ color: "#15803d", fontSize: 15, fontWeight: 600 }}>Charge submitted successfully.</div>
+      ) : step === "confirm" ? (
+        <>
+          <p style={{ margin: "0 0 12px", fontSize: 14 }}>
+            You are about to charge <strong>{dollars(invoice.balanceDueCents)}</strong> to{" "}
+            <strong>{selectedMethod ? cardLabel(selectedMethod) : selectedMethodId}</strong>.
+          </p>
+          {note ? <p className="muted" style={{ margin: "0 0 12px", fontSize: 13 }}>Operator note: {note}</p> : null}
+          {isLive ? (
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#991b1b" }}>
+              This runs against the live gateway — funds move for real.
+            </p>
+          ) : (
+            <p className="muted" style={{ margin: 0, fontSize: 13 }}>Sandbox — no real funds are moved.</p>
+          )}
+          {error ? <div style={{ color: "#dc2626", marginTop: 12, fontSize: 13 }}>{error}</div> : null}
+        </>
+      ) : (
+        <>
+          {pmData.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+          {pmData.status === "error" ? <ErrorState message={pmData.error} /> : null}
+          {pmData.status === "success" && methods.length === 0 ? (
+            <BillingEmptyState
+              title="No saved cards"
+              message="Ask the customer to add a card from their billing portal, or use Cards on the invoice row to add one on their behalf when the gateway is configured."
+            />
+          ) : null}
+
+          {methods.length > 0 ? (
+            <>
+              <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 600 }}>Payment method</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                {methods.map((m) => (
+                  <label
+                    key={m.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      cursor: "pointer",
+                      padding: "10px 12px",
+                      borderRadius: 8,
+                      border: `1.5px solid ${selectedMethodId === m.id ? "var(--accent, #2563eb)" : "var(--border, #e2e8f0)"}`,
+                      fontSize: 13,
+                    }}
+                  >
+                    <input type="radio" name="paymentMethod" value={m.id} checked={selectedMethodId === m.id} onChange={() => setSelectedMethodId(m.id)} />
+                    {cardLabel(m)}
+                    {m.isDefault ? <span style={{ marginLeft: 4, fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px" }}>Default</span> : null}
+                    {m.lastSuccessfulCharge ? (
+                      <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>
+                        Last ok: {dollars(m.lastSuccessfulCharge.amountCents)} {fmtDate(m.lastSuccessfulCharge.createdAt)}
+                      </span>
+                    ) : null}
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
+            Operator note (optional, stored on activity)
+          </label>
+          <input
+            type="text"
+            maxLength={500}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Customer approved retry over the phone"
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border, #e2e8f0)", fontSize: 13, boxSizing: "border-box" }}
+          />
+        </>
+      )}
+    </BillingActionPanel>
   );
 }
 
@@ -576,6 +669,7 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [rev, setRev] = useState(0);
+  const [removeTarget, setRemoveTarget] = useState<AdminPaymentMethod | null>(null);
 
   // iFields add-card state
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
@@ -641,12 +735,12 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
   }
 
   async function removeCard(methodId: string) {
-    if (!window.confirm("Remove this saved card? This cannot be undone.")) return;
     setBusy(`remove-${methodId}`);
     try {
       await apiDelete(`/admin/billing/platform/tenants/${tenantId}/payment-methods/${methodId}`);
       showToast("ok", "Card removed.");
       setRev((r) => r + 1);
+      setRemoveTarget(null);
     } catch (err) {
       showToast("err", billingErrorMessage(err, "Failed to remove card."));
     } finally {
@@ -659,6 +753,7 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
   const isSandboxMode = solaConfig?.mode === "sandbox";
 
   return (
+    <>
     <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ ...modalStyle, width: "min(640px, 96vw)", maxHeight: "90vh", overflowY: "auto" }}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
@@ -676,7 +771,10 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
         {data.status === "error" ? <ErrorState message={data.error} /> : null}
 
         {data.status === "success" && methods.length === 0 ? (
-          <p className="muted">No saved cards for this tenant.</p>
+          <BillingEmptyState
+            title="No payment methods on file"
+            message="When this company saves a card, it appears here for autopay and manual charges. You can add a card below when the gateway is configured."
+          />
         ) : null}
 
         {methods.map((m) => (
@@ -698,7 +796,7 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
                   {busy === `default-${m.id}` ? "Setting…" : "Set default"}
                 </button>
               ) : null}
-              <button className="btn danger" type="button" disabled={!!busy} onClick={() => void removeCard(m.id)} style={{ fontSize: 12 }}>
+              <button className="btn danger" type="button" disabled={!!busy} onClick={() => setRemoveTarget(m)} style={{ fontSize: 12 }}>
                 {busy === `remove-${m.id}` ? "Removing…" : "Remove"}
               </button>
             </div>
@@ -825,10 +923,29 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
         </div>
       </div>
     </div>
+    {removeTarget ? (
+      <BillingActionPanel
+        layout="center"
+        centerWidth="min(440px, 96vw)"
+        variant="danger"
+        onClose={() => { if (!busy) setRemoveTarget(null); }}
+        eyebrow={tenantName}
+        title="Remove saved card?"
+        summary={<p style={{ margin: 0, fontSize: 14 }}>{cardLabel(removeTarget)}</p>}
+        warning="The token is removed at the gateway. If this was the default card, pick a new default before the next autopay run."
+        footer={(
+          <>
+            <button className="btn ghost" type="button" disabled={!!busy} onClick={() => setRemoveTarget(null)}>Cancel</button>
+            <button className="btn danger" type="button" disabled={!!busy} onClick={() => void removeCard(removeTarget.id)}>
+              {busy === `remove-${removeTarget.id}` ? "Removing…" : "Remove card"}
+            </button>
+          </>
+        )}
+      />
+    ) : null}
+    </>
   );
 }
-
-// ── TransactionDetailModal ─────────────────────────────────────────────────────
 
 function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () => void }) {
   const data = useAsyncResource<TxDetail>(() => apiGet<TxDetail>(`/admin/billing/transactions/${txId}`), [txId]);
@@ -853,7 +970,7 @@ function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () =
         {tx ? (
           <div className="stack compact-stack">
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
-              <div><span className="muted" style={{ fontSize: 12 }}>Status</span><br /><span className={`billing-status-pill ${txStatusClass(tx.status)}`}>{tx.status}</span></div>
+              <div><span className="muted" style={{ fontSize: 12 }}>Status</span><br /><span className={`billing-status-pill ${txStatusClass(tx.status)}`}>{transactionStatusLabel(tx.status)}</span></div>
               <div><span className="muted" style={{ fontSize: 12 }}>Amount</span><br /><strong>{dollars(tx.amountCents)}</strong></div>
               <div><span className="muted" style={{ fontSize: 12 }}>Date</span><br />{fmtDatetime(tx.createdAt)}</div>
               <div><span className="muted" style={{ fontSize: 12 }}>Tenant</span><br />{tx.tenant?.name}</div>
@@ -1110,6 +1227,8 @@ function InvoicesTab() {
   const [cardsForTenant, setCardsForTenant] = useState<{ tenantId: string; name: string } | null>(null);
   const [smsInvoice, setSmsInvoice] = useState<InvoiceRow | null>(null);
   const [listRev, setListRev] = useState(0);
+  const [markPaidTarget, setMarkPaidTarget] = useState<InvoiceRow | null>(null);
+  const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => { setSearch(searchInput); setPage(1); }, 350);
@@ -1133,14 +1252,16 @@ function InvoicesTab() {
     window.setTimeout(() => setToast(null), 3500);
   }, []);
 
-  async function act(invoiceId: string, label: string, path: string, body: Record<string, unknown> = {}) {
+  async function act(invoiceId: string, label: string, path: string, body: Record<string, unknown> = {}): Promise<boolean> {
     setBusy(`${label}-${invoiceId}`);
     try {
       await apiPost(path, body);
       showToast("ok", `${label} succeeded.`);
       setListRev((r) => r + 1);
+      return true;
     } catch (err) {
       showToast("err", billingErrorMessage(err, `${label} failed.`));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -1172,15 +1293,18 @@ function InvoicesTab() {
 
       {/* Filter bar */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-        <div className="row-actions" style={{ margin: 0, flexWrap: "wrap" }}>
+        <div className="b3-filter-pills" style={{ margin: 0 }}>
           {INV_STATUSES.map((s) => (
             <button
               key={s}
               type="button"
               className={`btn ${statusFilter === s ? "primary" : "ghost"}`}
-              onClick={() => { setStatusFilter(s); setPage(1); }}
+              onClick={() => {
+                setStatusFilter(s);
+                setPage(1);
+              }}
             >
-              {s}
+              {s === "ALL" ? "All" : s}
             </button>
           ))}
         </div>
@@ -1204,154 +1328,141 @@ function InvoicesTab() {
             {search ? ` · matching "${search}"` : ""}
           </p>
           <div className="billing-invoice-stack">
-            {rows.length === 0 ? <p className="muted">No invoices match these filters.</p> : null}
+            {rows.length === 0 ? (
+              <BillingEmptyState
+                title="No invoices in this view"
+                message="Try clearing the status filter or widening your search. Invoices appear here as soon as they are generated for any company."
+              />
+            ) : null}
             {rows.map((inv) => {
               const canAct = inv.status !== "PAID" && inv.status !== "VOID";
-              const hasCard = !!(inv.paymentMethod || inv.tenant?.billingSettings?.defaultPaymentMethodId);
-              const lastTx = inv.transactions[0] ?? null;
               const period = fmtPeriod(inv.periodStart, inv.periodEnd);
               const isLogOpen = logInvoiceId === inv.id;
               const isBusy = (label: string) => busy === `${label}-${inv.id}`;
 
               return (
-                <div className="billing-invoice-row" key={inv.id} style={{ flexWrap: "wrap", gap: 6 }}>
-                  {/* Identity */}
-                  <span style={{ minWidth: 160 }}>
+                <div className="b3-inv-row" key={inv.id}>
+                  <div className="b3-inv-row-main">
                     <strong>{inv.invoiceNumber || inv.id.slice(0, 8)}</strong>
-                    <small>{inv.tenant?.name || inv.tenantId}</small>
-                    {period ? <small>{period}</small> : null}
-                  </span>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {inv.tenant?.name || inv.tenantId}
+                      {period ? ` · ${period}` : ""}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 12 }} className="muted">
+                      Due {fmtDate(inv.dueDate)}
+                      {inv.paidAt ? ` · Paid ${fmtDate(inv.paidAt)}` : ""}
+                      {inv.failedAt && !inv.paidAt ? ` · Failed ${fmtDate(inv.failedAt)}` : ""}
+                    </div>
+                  </div>
 
-                  {/* Amounts */}
-                  <em style={{ minWidth: 100, textAlign: "right" }}>
+                  <em style={{ minWidth: 88, textAlign: "right", fontStyle: "normal", fontWeight: 600 }}>
                     {dollars(inv.totalCents)}
                     {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
-                      <small> bal {dollars(inv.balanceDueCents)}</small>
+                      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--muted)" }}>Due {dollars(inv.balanceDueCents)}</div>
                     ) : null}
                   </em>
 
-                  {/* Status */}
-                  <span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{inv.status}</span>
+                  <span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{invoiceStatusLabel(inv.status)}</span>
 
-                  {/* Dates */}
-                  <span style={{ minWidth: 160 }} className="muted">
-                    <small>Due {fmtDate(inv.dueDate)}</small>
-                    {inv.paidAt ? <small>Paid {fmtDate(inv.paidAt)}</small> : null}
-                    {inv.failedAt && !inv.paidAt ? <small>Failed {fmtDate(inv.failedAt)}</small> : null}
-                  </span>
-
-                  {/* Card / last txn */}
-                  <span style={{ minWidth: 140 }} className="muted">
-                    {inv.paymentMethod ? (
-                      <small>{inv.paymentMethod.brand || "Card"} ···{inv.paymentMethod.last4 || "----"}</small>
-                    ) : null}
-                    {lastTx?.processorTransactionId ? (
-                      <small title="Last processor transaction ID">Ref: {lastTx.processorTransactionId}</small>
-                    ) : null}
-                    {lastTx ? (
-                      <small>
-                        <span className={`billing-status-pill ${txStatusClass(lastTx.status)}`} style={{ fontSize: 10, padding: "1px 5px" }}>
-                          {lastTx.status}
-                        </span>
-                      </small>
-                    ) : null}
-                  </span>
-
-                  {/* Actions */}
-                  <div className="row-actions" style={{ flexWrap: "wrap" }}>
-                    {/* Detail drawer */}
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      onClick={() => setDetailInvoiceId(inv.id)}
-                    >
-                      Detail
+                  <div className="b3-inv-actions">
+                    <button className="btn primary" type="button" onClick={() => setDetailInvoiceId(inv.id)}>
+                      View
                     </button>
 
-                    {/* Cards modal */}
+                    <details className="b3-menu">
+                      <summary>More actions</summary>
+                      <div className="b3-menu-panel" onClick={(e) => e.stopPropagation()}>
+                        {canAct ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            {isBusy("Send") ? "Sending…" : "Email invoice"}
+                          </button>
+                        ) : null}
+                        {canAct ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              void act(inv.id, "Email link", `/billing/platform/invoices/${inv.id}/email-payment-link`);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            {isBusy("Email link") ? "Sending…" : "Email payment link"}
+                          </button>
+                        ) : null}
+                        {canAct ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              setPayInvoice(inv);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            Retry payment…
+                          </button>
+                        ) : null}
+                        {canAct ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              setMarkPaidTarget(inv);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            Mark paid…
+                          </button>
+                        ) : null}
+                        <button type="button" onClick={() => openAdminInvoicePdf(inv.id)}>
+                          Download PDF
+                        </button>
+                        {canAct ? (
+                          <button
+                            type="button"
+                            className="b3-menu-danger"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              setVoidTarget(inv);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            Void invoice…
+                          </button>
+                        ) : null}
+                        {canAct ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={(e) => {
+                              setSmsInvoice(inv);
+                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            SMS payment link
+                          </button>
+                        ) : null}
+                      </div>
+                    </details>
+
                     <button
                       className="btn ghost"
                       type="button"
                       onClick={() => setCardsForTenant({ tenantId: inv.tenantId, name: inv.tenant?.name || inv.tenantId })}
+                      title="Manage saved cards"
                     >
                       Cards
                     </button>
 
-                    {canAct ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => act(inv.id, "Mark paid", `/admin/billing/invoices/${inv.id}/mark-paid`)}
-                      >
-                        {isBusy("Mark paid") ? "Marking…" : "Mark Paid"}
-                      </button>
-                    ) : null}
-
-                    {canAct ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => setPayInvoice(inv)}
-                        title={hasCard ? "Charge with saved card" : "No saved card — use Cards button to check"}
-                      >
-                        Charge card
-                      </button>
-                    ) : null}
-
-                    {canAct ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`)}
-                      >
-                        {isBusy("Send") ? "Sending…" : "Send invoice"}
-                      </button>
-                    ) : null}
-
-                    {canAct ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => act(inv.id, "Email link", `/billing/platform/invoices/${inv.id}/email-payment-link`)}
-                      >
-                        {isBusy("Email link") ? "Sending…" : "Email link"}
-                      </button>
-                    ) : null}
-
-                    {canAct ? (
-                      <button
-                        className="btn danger"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => act(inv.id, "Void", `/admin/billing/invoices/${inv.id}/void`)}
-                      >
-                        {isBusy("Void") ? "Voiding…" : "Void"}
-                      </button>
-                    ) : null}
-
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      onClick={() => void toggleLog(inv.id)}
-                    >
+                    <button className="btn ghost" type="button" onClick={() => void toggleLog(inv.id)}>
                       {isLogOpen ? "Hide log" : "Activity"}
                     </button>
-
-                    {canAct ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => setSmsInvoice(inv)}
-                        title="Send payment link via SMS"
-                      >
-                        SMS link
-                      </button>
-                    ) : null}
                   </div>
 
                   {/* Inline event log */}
@@ -1360,16 +1471,14 @@ function InvoicesTab() {
                       {logLoading ? <p className="muted">Loading events…</p> : null}
                       {logError ? <ErrorState message={logError} /> : null}
                       {!logLoading && !logError && logEvents.length === 0 ? (
-                        <p className="muted">No events recorded for this invoice.</p>
+                        <BillingEmptyState
+                          title="No activity for this row"
+                          message="Open the invoice drawer for the full ledger. Inline activity loads the same audit trail in compact form."
+                        />
                       ) : null}
                       {!logLoading && !logError && logEvents.length > 0 ? (
-                        <DataTable
-                          rows={logEvents.map((e) => ({ ...e, id: e.id ?? `${inv.id}-${e.createdAt}` }))}
-                          columns={[
-                            { key: "t", label: "Time", render: (r) => fmtDatetime(r.createdAt) },
-                            { key: "y", label: "Type", render: (r) => r.type },
-                            { key: "m", label: "Detail", render: (r) => r.message || (r.metadata ? JSON.stringify(r.metadata) : "—") },
-                          ]}
+                        <BillingActivityList
+                          events={logEvents.map((e) => ({ ...e, id: e.id ?? `${inv.id}-${e.createdAt}` }))}
                         />
                       ) : null}
                     </div>
@@ -1414,6 +1523,79 @@ function InvoicesTab() {
           onSuccess={() => setListRev((r) => r + 1)}
         />
       ) : null}
+
+      {markPaidTarget ? (
+        <BillingActionPanel
+          layout="drawer"
+          drawerWidth="min(440px, 100vw)"
+          onClose={() => { if (!busy) setMarkPaidTarget(null); }}
+          eyebrow={markPaidTarget.tenant?.name || "Company"}
+          title="Record invoice as paid?"
+          subtitle="Use this when funds already cleared outside autopay (wire, check, or manual processor). The balance will read zero and the invoice will show Paid."
+          summary={(
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Invoice</strong> {markPaidTarget.invoiceNumber || markPaidTarget.id.slice(0, 8)}</li>
+              <li><strong>Total</strong> {dollars(markPaidTarget.totalCents)}</li>
+              <li><strong>Balance due</strong> {dollars(markPaidTarget.balanceDueCents)}</li>
+              <li><strong>Status</strong> {invoiceStatusLabel(markPaidTarget.status)}</li>
+            </ul>
+          )}
+          notice="Recommended next step: attach your internal reference in your accounting system — Connect stores the status change only."
+          footer={(
+            <>
+              <button className="btn ghost" type="button" disabled={!!busy} onClick={() => setMarkPaidTarget(null)}>Cancel</button>
+              <button
+                className="btn primary"
+                type="button"
+                disabled={!!busy}
+                onClick={async () => {
+                  const ok = await act(markPaidTarget.id, "Mark paid", `/admin/billing/invoices/${markPaidTarget.id}/mark-paid`);
+                  if (ok) setMarkPaidTarget(null);
+                }}
+              >
+                {busy === `Mark paid-${markPaidTarget.id}` ? "Recording…" : "Record as paid"}
+              </button>
+            </>
+          )}
+        />
+      ) : null}
+
+      {voidTarget ? (
+        <BillingActionPanel
+          layout="drawer"
+          drawerWidth="min(440px, 100vw)"
+          variant="danger"
+          onClose={() => { if (!busy) setVoidTarget(null); }}
+          eyebrow={voidTarget.tenant?.name || "Company"}
+          title="Void this invoice?"
+          subtitle="Voiding freezes this invoice for payment. Use it for incorrect or duplicate bills — not as a substitute for refunds on settled charges."
+          summary={(
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Invoice</strong> {voidTarget.invoiceNumber || voidTarget.id.slice(0, 8)}</li>
+              <li><strong>Total</strong> {dollars(voidTarget.totalCents)}</li>
+              <li><strong>Balance due</strong> {dollars(voidTarget.balanceDueCents)}</li>
+              <li><strong>Status</strong> {invoiceStatusLabel(voidTarget.status)}</li>
+            </ul>
+          )}
+          warning="This cannot be undone in the portal. If the customer still owes, create a replacement invoice after voiding."
+          footer={(
+            <>
+              <button className="btn ghost" type="button" disabled={!!busy} onClick={() => setVoidTarget(null)}>Cancel</button>
+              <button
+                className="btn danger"
+                type="button"
+                disabled={!!busy}
+                onClick={async () => {
+                  const ok = await act(voidTarget.id, "Void", `/admin/billing/invoices/${voidTarget.id}/void`);
+                  if (ok) setVoidTarget(null);
+                }}
+              >
+                {busy === `Void-${voidTarget.id}` ? "Voiding…" : "Void invoice"}
+              </button>
+            </>
+          )}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1444,7 +1626,7 @@ function TransactionsTab() {
       key: "status",
       label: "Status",
       render: (r: TxRow) => (
-        <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{r.status}</span>
+        <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{transactionStatusLabel(r.status)}</span>
       ),
     },
     { key: "method", label: "Card", render: (r: TxRow) => r.paymentMethod ? `${r.paymentMethod.brand || "Card"} ···${r.paymentMethod.last4 || "----"}` : "—" },
@@ -1486,9 +1668,14 @@ function TransactionsTab() {
             {statusFilter !== "ALL" ? ` · status: ${statusFilter}` : ""}
           </p>
           {data.data.transactions.length === 0 ? (
-            <p className="muted">No transactions match these filters.</p>
+            <BillingEmptyState
+              title="No transactions in this view"
+              message="Adjust the status chips above or load a different page. Each row is a processor attempt tied to an invoice when available."
+            />
           ) : (
-            <DataTable rows={data.data.transactions} columns={txColumns} />
+            <div className="billing-ops-table-wrap billing-ops-scroll">
+              <DataTable rows={data.data.transactions} columns={txColumns} />
+            </div>
           )}
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />
         </>
@@ -1700,9 +1887,12 @@ function ReportsTab() {
               {agingData.capped ? " (capped)" : ""}
             </p>
             {agingData.rows.length === 0 ? (
-              <p className="muted">No open invoices with outstanding balance. 🎉</p>
+              <BillingEmptyState
+                title="Nothing overdue in this report"
+                message="Either every open balance is healthy, or run the report after generating invoices. Export CSV when you need a wider slice."
+              />
             ) : (
-              <div style={{ overflowX: "auto" }}>
+              <div className="billing-ops-table-wrap billing-ops-scroll">
                 <DataTable rows={agingData.rows.map((r) => ({ ...r, id: r.invoiceId }))} columns={agingColumns} />
               </div>
             )}
@@ -1750,9 +1940,12 @@ function ReportsTab() {
               {failedData.capped ? " (capped)" : ""}
             </p>
             {failedData.rows.length === 0 ? (
-              <p className="muted">No failed invoices. 🎉</p>
+              <BillingEmptyState
+                title="No failed payments in this report"
+                message="When cards decline, they land here with the processor message. Refresh after the next billing run or retry from the Invoices tab."
+              />
             ) : (
-              <div style={{ overflowX: "auto" }}>
+              <div className="billing-ops-table-wrap billing-ops-scroll">
                 <DataTable rows={failedData.rows.map((r) => ({ ...r, id: r.invoiceId }))} columns={failedColumns} />
               </div>
             )}
@@ -1809,10 +2002,16 @@ function collectionsStatusPill(s: string) {
   return "ok";
 }
 
+function collectionsHumanLabel(s: string) {
+  if (s === "DO_NOT_CHARGE") return "Auto-charge off";
+  if (s === "PAUSED") return "Paused";
+  return "Active";
+}
+
 function CollectionsRowTable({ rows, onOpenInvoice }: { rows: CollectionsRow[]; onOpenInvoice: (id: string) => void }) {
   if (rows.length === 0) return <p className="muted" style={{ fontSize: 13 }}>None.</p>;
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div className="billing-ops-table-wrap billing-ops-scroll">
       <DataTable
         rows={rows.map((r) => ({ ...r, id: r.invoiceId }))}
         columns={[
@@ -1821,9 +2020,9 @@ function CollectionsRowTable({ rows, onOpenInvoice }: { rows: CollectionsRow[]; 
               {r.invoiceNumber || r.invoiceId.slice(0, 8)}
             </button>
           )},
-          { key: "tenant", label: "Tenant", render: (r: CollectionsRow) => r.tenantName },
-          { key: "status", label: "Status", render: (r: CollectionsRow) => <span className={`billing-status-pill ${invStatusClass(r.status)}`}>{r.status}</span> },
-          { key: "col", label: "Collections", render: (r: CollectionsRow) => <span className={`billing-status-pill ${collectionsStatusPill(r.collections.status)}`}>{r.collections.status}</span> },
+          { key: "tenant", label: "Company", render: (r: CollectionsRow) => r.tenantName },
+          { key: "status", label: "Invoice status", render: (r: CollectionsRow) => <span className={`billing-status-pill ${invStatusClass(r.status)}`}>{invoiceStatusLabel(r.status)}</span> },
+          { key: "col", label: "Retry state", render: (r: CollectionsRow) => <span className={`billing-status-pill ${collectionsStatusPill(r.collections.status)}`}>{collectionsHumanLabel(r.collections.status)}</span> },
           { key: "bal", label: "Balance", render: (r: CollectionsRow) => <strong style={{ color: "var(--danger, #dc2626)" }}>{dollars(r.balanceDueCents)}</strong> },
           { key: "att", label: "Attempts", render: (r: CollectionsRow) => `${r.dunningAttempts}/${r.dunningMaxAttempts}` },
           { key: "next", label: "Next retry", render: (r: CollectionsRow) => r.nextRetryAt ? fmtDatetime(r.nextRetryAt) : "—" },
@@ -1895,20 +2094,18 @@ function CollectionsTab() {
 
   return (
     <div className="stack compact-stack" data-testid="billing-admin-tab-panel-collections">
-      <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, color: "#166534", marginBottom: 4 }}>
-        <strong>Worker enforcement active.</strong>
-        {" "}Pause, skip, and do-not-charge controls are honoured by the dunning worker on every sweep (every 6 h).
-        Per-tenant dunning overrides (max attempts, retry delay) are also applied.
-      </div>
+      <p className="b3-muted" style={{ marginBottom: 12, maxWidth: 720 }}>
+        Track automatic payment retries. Pausing or skipping affects the next scheduled run only — changes are picked up on the regular retry cycle.
+      </p>
 
       {/* Overview section */}
-      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 8 }}>
+      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 10 }}>
         <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0 }}>Collections Overview</h4>
+          <h4 style={{ margin: 0, fontWeight: 700 }}>Queue overview</h4>
           <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={overviewLoading} onClick={() => {
             if (!overviewLoaded) { void loadOverview(); } else { setOverviewRev((r) => r + 1); }
           }}>
-            {overviewLoading ? "Loading…" : overviewLoaded ? "↺ Refresh" : "Load overview"}
+            {overviewLoading ? "Loading…" : overviewLoaded ? "Refresh" : "Load queue"}
           </button>
         </div>
         {overviewError ? <ErrorState message={overviewError} /> : null}
@@ -1918,11 +2115,11 @@ function CollectionsTab() {
             {/* Count badges */}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
               {[
-                { label: "Failed/Open", value: overview.counts.failed, style: "bad" },
-                { label: "Retry eligible", value: overview.counts.retryEligible, style: "warn" },
+                { label: "Open / failed", value: overview.counts.failed, style: "bad" },
+                { label: "Ready to retry", value: overview.counts.retryEligible, style: "warn" },
                 { label: "Paused", value: overview.counts.paused, style: "warn" },
-                { label: "Exhausted", value: overview.counts.exhausted, style: "bad" },
-                { label: "Do-not-charge", value: overview.counts.doNotCharge, style: "bad" },
+                { label: "Max retries hit", value: overview.counts.exhausted, style: "bad" },
+                { label: "Auto-charge off", value: overview.counts.doNotCharge, style: "bad" },
               ].map(({ label, value, style }) => (
                 <div key={label} style={{ textAlign: "center" }}>
                   <div className={`billing-status-pill ${style}`} style={{ fontSize: 18, fontWeight: 700, padding: "4px 14px" }}>{value}</div>
@@ -1934,7 +2131,7 @@ function CollectionsTab() {
             {/* Retry-eligible */}
             {overview.retryEligible.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px" }}>Ready to retry</h5>
+                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Ready for next retry</h5>
                 <CollectionsRowTable rows={overview.retryEligible} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
@@ -1942,7 +2139,7 @@ function CollectionsTab() {
             {/* Paused */}
             {overview.paused.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px" }}>Paused / Do-not-charge</h5>
+                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Paused or auto-charge off</h5>
                 <CollectionsRowTable rows={overview.paused} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
@@ -1950,26 +2147,29 @@ function CollectionsTab() {
             {/* Exhausted */}
             {overview.exhausted.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px" }}>Retries exhausted</h5>
+                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Retries exhausted</h5>
                 <CollectionsRowTable rows={overview.exhausted} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
 
             {overview.retryEligible.length === 0 && overview.paused.length === 0 && overview.exhausted.length === 0 && (
-              <p className="muted" style={{ fontSize: 13 }}>No invoices in collections at this time.</p>
+              <BillingEmptyState
+                title="Collections queue is clear"
+                message="Nothing needs operator attention in this snapshot. Load the next sweep preview to see what the worker would pick up."
+              />
             )}
           </div>
         ) : null}
       </div>
 
       {/* Preview next sweep */}
-      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 8 }}>
+      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 10 }}>
         <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0 }}>Preview Next Dunning Sweep</h4>
+          <h4 style={{ margin: 0, fontWeight: 700 }}>Next automated sweep (preview)</h4>
           <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={previewLoading} onClick={() => {
             if (!previewLoaded) { void loadPreview(); } else { setPreviewRev((r) => r + 1); }
           }}>
-            {previewLoading ? "Loading…" : previewLoaded ? "↺ Refresh" : "Load preview"}
+            {previewLoading ? "Loading…" : previewLoaded ? "Refresh" : "Load preview"}
           </button>
         </div>
         {previewError ? <ErrorState message={previewError} /> : null}
@@ -1978,7 +2178,10 @@ function CollectionsTab() {
           <div>
             <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>{preview.note}</div>
             {preview.rows.length === 0 ? (
-              <p className="muted" style={{ fontSize: 13 }}>No invoices would be picked up by the next sweep.</p>
+              <BillingEmptyState
+                title="No invoices in the next sweep"
+                message="Either retries are not scheduled yet, or filters exclude these rows. Refresh after the billing worker runs."
+              />
             ) : (
               <CollectionsRowTable rows={preview.rows} onOpenInvoice={setOpenInvoiceId} />
             )}

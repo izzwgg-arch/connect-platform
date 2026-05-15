@@ -1,5 +1,7 @@
 "use client";
 
+import "../admin/billing/_components/billingPhase3.css";
+import "../admin/billing/_components/billingPhase4.css";
 import Link from "next/link";
 import { useState } from "react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
@@ -71,8 +73,8 @@ function InvoicePreviewSection() {
       {error ? <p style={{ fontSize: 13, color: "var(--danger, #dc2626)", padding: "6px 0" }}>{error}</p> : null}
       {open && preview ? (
         <div style={{ padding: "8px 0" }}>
-          <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 4, padding: "5px 9px", marginBottom: 10, color: "#1e40af" }}>
-            <strong>Preview only</strong> — no invoice created. Period: {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)} · Due {formatDate(preview.dueDate)}.
+          <div style={{ fontSize: 12, background: "var(--surface-alt, #f8fafc)", border: "1px solid var(--border, #e5e7eb)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, color: "var(--muted, #475569)" }}>
+            <strong>Preview only</strong> — no invoice is created. Period {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)} · Due {formatDate(preview.dueDate)}.
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <tbody>
@@ -156,8 +158,8 @@ export default function BillingOverviewPage() {
 
   return (
     <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
-      <div className="stack compact-stack billing-admin-shell">
-        <PageHeader title="Billing" subtitle="Invoices, payments, and account balance." />
+      <div className="stack compact-stack billing-admin-shell billing-phase3-tenant">
+        <PageHeader title="Billing overview" subtitle="Balance, upcoming bill, and quick links to invoices and payments." />
 
         {loading ? <LoadingSkeleton rows={4} /> : null}
         {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
@@ -168,7 +170,8 @@ export default function BillingOverviewPage() {
 
         {/* 3-stat summary */}
         {!loading && s ? (
-          <div className="billing-stat-grid">
+          <div data-testid="billing-tenant-overview-loaded">
+            <div className="billing-stat-grid">
             <div className="billing-stat-card">
               <span className="stat-label">Balance due</span>
               <span className={`stat-value ${openBalance > 0 ? "bad" : ""}`}>{dollars(openBalance)}</span>
@@ -196,6 +199,7 @@ export default function BillingOverviewPage() {
                 </span>
               ) : null}
             </div>
+          </div>
           </div>
         ) : null}
 

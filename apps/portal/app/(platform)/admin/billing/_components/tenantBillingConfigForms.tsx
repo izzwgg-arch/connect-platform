@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
+import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
+import { humanizePricingStateMode, humanizeStoredPricingMode } from "../../../../../lib/billingUi";
 
 export type TenantDetail = {
   tenant: { id: string; name: string; createdAt: string };
@@ -46,8 +48,8 @@ export function parseStoredPricingMode(metadata: unknown): PricingModeUi {
 
 function badgeDisplay(key: string): string {
   if (key === "from_plan") return "From plan";
-  if (key === "tenant_override") return "Tenant override";
-  return "Legacy";
+  if (key === "tenant_override") return "Custom row";
+  return "Standard";
 }
 
 export function AdminTenantPricingSourceCard({
@@ -82,7 +84,9 @@ export function AdminTenantPricingSourceCard({
 
   const operatorWarnings: string[] = [];
   if (mode === "catalog" && expl?.tenantOverridesDetected) {
-    operatorWarnings.push("Catalog mode: stored tenant unit prices differ from what invoices use (catalog/plan rates). Consider reset-to-plan.");
+    operatorWarnings.push(
+      "Company row still has custom unit amounts while pricing is set to follow the billing plan. Invoices use the plan — reset to plan pricing if you want the row to match.",
+    );
   }
   const nextBp = settings.nextBillingPlan;
   if (nextBp && settings.nextBillingPlanId && nextBp.active === false) {
@@ -139,7 +143,7 @@ export function AdminTenantPricingSourceCard({
       setResetOverlay(false);
       setResetPayload(null);
       onSaved();
-      setToast({ kind: "ok", text: "Prices reset to current BillingPlan and mode set to Catalog." });
+      setToast({ kind: "ok", text: "Prices aligned to the current billing plan. Pricing mode set to follow plan." });
     } catch (err: unknown) {
       setToast({ kind: "err", text: billingErrorMessage(err, "Reset failed — tenant may have no billingPlanId.") });
     } finally {
@@ -148,23 +152,24 @@ export function AdminTenantPricingSourceCard({
   }
 
   return (
-    <DetailCard title="Billing pricing source">
+    <DetailCard title="How prices are calculated">
       <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12, lineHeight: 1.45 }}>
-        <strong>Legacy</strong> matches historical behavior (tenant row can shadow catalog). <strong>Catalog</strong> always bills the active plan for the preview period
-        (including scheduled future plans). <strong>Custom</strong> uses only the tenant row — specify when you need negotiated rates.
+        <strong>Standard</strong> uses the historical blend of company row and plan defaults.{" "}
+        <strong>Follow company billing plan</strong> always uses the active plan for the preview month (including scheduled plan changes).{" "}
+        <strong>Custom company pricing</strong> locks amounts to the company row — use for negotiated deals.
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }} role="radiogroup" aria-label="Pricing source">
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: saving ? "default" : "pointer" }}>
           <input type="radio" name="pricingMode" checked={mode === "legacy"} disabled={saving} onChange={() => void saveMode("legacy")} />
-          Legacy (historical resolution)
+          {humanizeStoredPricingMode("legacy")}
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: saving ? "default" : "pointer" }}>
           <input type="radio" name="pricingMode" checked={mode === "catalog"} disabled={saving} onChange={() => void saveMode("catalog")} />
-          Use catalog billing plan pricing
+          {humanizeStoredPricingMode("catalog")}
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: saving ? "default" : "pointer" }}>
           <input type="radio" name="pricingMode" checked={mode === "custom"} disabled={saving} onChange={() => void saveMode("custom")} />
-          Use custom tenant pricing
+          {humanizeStoredPricingMode("custom")}
         </label>
       </div>
 
@@ -182,7 +187,7 @@ export function AdminTenantPricingSourceCard({
 
       {pr ? (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Per-field source (current month preview)</div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Where each amount comes from (preview month)</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <tbody>
               {(
@@ -206,16 +211,16 @@ export function AdminTenantPricingSourceCard({
           </table>
           {bp?.name ? (
             <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-              Current plan FK: <strong>{bp.name}</strong>
+              Linked plan: <strong>{bp.name}</strong>
               {pr.activePlanName && pr.activePlanName !== bp.name ? (
                 <>
                   {" "}
-                  · Preview active plan: <strong>{pr.activePlanName}</strong>
+                  · Effective for this preview: <strong>{pr.activePlanName}</strong>
                 </>
               ) : null}
             </p>
           ) : (
-            <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>No billingPlanId on tenant — catalog mode uses defaults until a plan is linked.</p>
+            <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>No plan linked yet — following the plan mode will use catalog defaults until you assign one.</p>
           )}
         </div>
       ) : null}
@@ -232,42 +237,28 @@ export function AdminTenantPricingSourceCard({
         </button>
       </div>
       <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-        Resets to CURRENT linked plan only — copies all four unit-pricing fields from the tenant&apos;s current <code>billingPlanId</code> (not a future
-        scheduled plan) and sets mode to Catalog. Requires a linked plan. You will confirm the before/after diff first.
+        Resets to the currently linked plan only — copies the four unit prices from that plan (not a future scheduled plan) and switches pricing to{" "}
+        <strong>follow company billing plan</strong>. Requires a linked plan. You confirm a before/after snapshot first.
       </p>
       {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
 
       {resetOverlay && resetPayload?.resetToPlanPreview.after ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          data-testid="billing-admin-reset-plan-dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 2000,
-            background: "rgba(15, 23, 42, 0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "var(--card-bg, #fff)",
-              borderRadius: 10,
-              maxWidth: 520,
-              width: "100%",
-              padding: "18px 20px",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.2)",
-              color: "var(--text-primary, inherit)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Confirm reset to plan pricing</h3>
-            <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--muted)" }}>
-              This updates the tenant row and sets billing to <strong>catalog</strong> mode. Review the snapshot below — no invoice is created.
-            </p>
+        <BillingActionPanel
+          layout="center"
+          centerWidth="min(540px, 96vw)"
+          variant="danger"
+          onClose={() => { if (!saving) setResetOverlay(false); }}
+          eyebrow={detail.tenant.name}
+          title="Reset pricing to the linked plan?"
+          subtitle={
+            <>
+              Copies the four catalog unit prices from the <strong>current</strong> linked plan (not a future scheduled plan) and switches pricing to{" "}
+              <strong>follow company billing plan</strong>. No invoice is created.
+            </>
+          }
+          warning="Queued invoices already used resolved pricing — this affects future previews and the next bill run."
+          children={(
+            <div data-testid="billing-admin-reset-plan-dialog">
             {(() => {
               const b = resetPayload.resetToPlanPreview.before;
               const a = resetPayload.resetToPlanPreview.after;
@@ -281,7 +272,7 @@ export function AdminTenantPricingSourceCard({
                 ["First phone number free", yn(b.firstPhoneNumberFree), yn(a!.firstPhoneNumberFree)],
               ];
               return (
-                <div style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 4 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Unit pricing diff</div>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 10 }}>
                     <thead>
@@ -315,11 +306,15 @@ export function AdminTenantPricingSourceCard({
                 </div>
               );
             })()}
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            </div>
+          )}
+          footer={(
+            <>
               <button
                 className="btn ghost"
                 type="button"
                 data-testid="billing-admin-reset-plan-cancel"
+                disabled={saving}
                 onClick={() => {
                   setResetOverlay(false);
                 }}
@@ -329,9 +324,9 @@ export function AdminTenantPricingSourceCard({
               <button className="btn primary" type="button" disabled={saving} onClick={() => void applyResetConfirmed()}>
                 {saving ? "Applying…" : "Apply reset"}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       ) : null}
     </DetailCard>
   );
@@ -354,7 +349,7 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
     <DetailCard title="Monthly Pricing" key={`mp-${detail.tenant.id}-${pricingMode}-${String(settings.updatedAt ?? "")}`}>
       {catalogLocked ? (
         <div style={{ fontSize: 13, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
-          <strong>Catalog pricing mode:</strong> unit rates below reflect the active billing plan for the invoice preview period (read-only). Taxes, autopay, and credits still save from this form.
+          <strong>Following billing plan:</strong> unit rates below mirror the active plan for the preview month (read-only here). Taxes, autopay, and credits can still be saved from this form.
           {pr?.banner ? (
             <div style={{ marginTop: 6, fontSize: 12 }}>
               {pr.banner}
@@ -364,7 +359,7 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
       ) : null}
       {catalogLocked && (detail.preview?.pricingPreviewExplanation as { tenantOverridesDetected?: boolean } | undefined)?.tenantOverridesDetected ? (
         <div className="billing-status-pill warn" style={{ marginBottom: 12, fontSize: 13, whiteSpace: "normal", lineHeight: 1.45 }}>
-          Stored tenant amounts differ from catalog rates — invoices bill the plan; use reset-to-plan if you want the row to match.
+          Stored row amounts differ from the plan — invoices still follow the plan until you align or use reset to plan pricing.
         </div>
       ) : null}
       <div className="billing-status-pill warn" style={{ marginBottom: 12, textAlign: "left", whiteSpace: "normal", lineHeight: 1.45 }}>
@@ -804,11 +799,13 @@ function narrowAssignPlanPreview(data: AssignPlanPreviewApi & Record<string, unk
 
 export function AdminCurrentBillingPlanAssignCard({
   tenantId,
+  tenantName,
   previewMonth,
   previewYear,
   onAssigned,
 }: {
   tenantId: string;
+  tenantName?: string | null;
   previewMonth: number;
   previewYear: number;
   onAssigned: () => void;
@@ -938,7 +935,7 @@ export function AdminCurrentBillingPlanAssignCard({
       {!diagLoading && diag ? (
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
-            <span style={pricingModeBadgeStyle(ps?.mode || "legacy")}>{(ps?.mode || "legacy").toUpperCase()}</span>
+            <span style={pricingModeBadgeStyle(ps?.mode || "legacy")}>{humanizePricingStateMode(ps?.mode || "legacy")}</span>
             {matchBadge}
           </div>
           <p style={{ margin: "0 0 8px" }}>
@@ -975,40 +972,16 @@ export function AdminCurrentBillingPlanAssignCard({
       {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
 
       {modalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          data-testid="billing-admin-assign-plan-dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 2100,
-            background: "rgba(15, 23, 42, 0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "var(--card-bg, #fff)",
-              borderRadius: 10,
-              maxWidth: 560,
-              width: "100%",
-              padding: "18px 20px",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.2)",
-              color: "var(--text-primary, inherit)",
-              maxHeight: "90vh",
-              overflowY: "auto",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Assign current billing plan</h3>
-            <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted)" }}>
-              Updates <code>billingPlanId</code> immediately. Optional: copy catalog prices onto the tenant row and/or set pricing mode. Scheduled next plan is not modified.
-              No invoice is created.
-            </p>
-
+        <BillingActionPanel
+          layout="center"
+          centerWidth="min(580px, 96vw)"
+          onClose={() => { if (!saving) setModalOpen(false); }}
+          eyebrow={tenantName || undefined}
+          title="Assign current billing plan"
+          subtitle="Updates the linked plan immediately. Optionally copy catalog prices to the company row and/or change how prices are calculated. The scheduled next plan is not changed here. No invoice is created."
+          warning="Invoice preview totals below may use the scheduled plan for the selected month — assigning still only updates the current plan pointer."
+          children={(
+            <div data-testid="billing-admin-assign-plan-dialog" style={{ maxHeight: "min(70vh, 640px)", overflowY: "auto" }}>
             <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
               Catalog plan
               <select
@@ -1033,11 +1006,11 @@ export function AdminCurrentBillingPlanAssignCard({
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                 <input type="radio" name="apm" checked={pricingModeOption === "catalog"} onChange={() => setPricingModeOption("catalog")} />
-                Set to catalog
+                Follow company billing plan
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input type="radio" name="apm" checked={pricingModeOption === "custom"} onChange={() => setPricingModeOption("custom")} />
-                Set to custom
+                Custom company pricing
               </label>
             </div>
 
@@ -1106,8 +1079,10 @@ export function AdminCurrentBillingPlanAssignCard({
                 </p>
               </div>
             ) : null}
-
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+            </div>
+          )}
+          footer={(
+            <>
               <button
                 className="btn ghost"
                 type="button"
@@ -1128,9 +1103,9 @@ export function AdminCurrentBillingPlanAssignCard({
               <button className="btn primary" type="button" disabled={!selectedPlanId || saving || previewLoading} onClick={() => void confirmAssign()}>
                 {saving ? "Saving…" : "Confirm assign"}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       ) : null}
     </DetailCard>
   );

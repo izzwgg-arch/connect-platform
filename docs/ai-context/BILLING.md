@@ -18,6 +18,11 @@
 
 Portal UIs documented in this file use the **`BillingInvoice`** stack unless noted otherwise. Future changes: extend **`billing/routes.ts`** for new platform billing behavior; do not “fix” admin invoice UI by editing legacy **`server.ts`** handlers unless deliberately migrating a path. **`KNOWN_ISSUES.md`** § Billing calls this **dual billing surfaces**.
 
+## Portal UX phases (display only)
+
+- **Phase 3 (2026-05):** Admin billing shell + company workspace layout; calmer invoices register (View + More actions); humanized pricing mode labels (`billingUi.ts`).
+- **Phase 4 (2026-05):** Guided **`BillingActionPanel`** drawers for collect/retry pay, mark paid, void, remove card, collections “do not auto-charge”, assign plan, reset-to-plan; **`BillingActivityList`** + humanized **`billingEventLabel`** / **`billingEventIcon`** for audit text; operational **`BillingEmptyState`** blocks; **`billingPhase4.css`** table/timeline polish. **No** API, Prisma, worker, or invoice-engine changes in this phase.
+
 ## Where the code lives
 
 | Concern | Location |
@@ -54,7 +59,7 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 
 1. **Tenant routes** under `apps/api/src/billing/routes.ts` (`/billing/settings`, `/billing/platform/*`, `/billing/payment-methods`, …): allowed DB roles are **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`** — aligned with `canManageBilling()` in `server.ts`. Portal must still pass prefix permission `can_view_billing_overview` (see `PORTAL_API_PERMISSION_RULES` in `server.ts`).
 
-2. **Platform admin routes** (`/admin/billing/*` in the same file): **`SUPER_ADMIN` only** inside the route handler. Portal: **Admin Billing** and **Company billing setup** nav and **`/admin/billing`** / **`/admin/billing/settings`** pages require **`backendJwtRole === "SUPER_ADMIN"`** and `can_view_admin_billing`. The admin billing area uses a shared shell with **`?tenantId=`** (and **`opsTab`** / **`billingSection`** query params) so operators keep company context while switching pages.
+2. **Platform admin routes** (`/admin/billing/*` in the same file): **`SUPER_ADMIN` only** inside the route handler. Portal: **Admin Billing** and **Company billing setup** nav and **`/admin/billing`** / **`/admin/billing/settings`** pages require **`backendJwtRole === "SUPER_ADMIN"`** and `can_view_admin_billing`. The admin billing area uses a shared shell with **`?tenantId=`** (and **`opsTab`** / **`billingSection`** query params) so operators keep company context while switching pages. **Phase 3 (2026-05) portal UX:** `/admin/billing` is a **company summary dashboard** (snapshot, health cards, five primary actions); **Invoices & payments** lists use **View** plus a **More actions** menu for email / charge / mark paid / PDF / void / SMS; pricing copy uses **`humanizeStoredPricingMode`** / **`humanizePricingStateMode`** in `apps/portal/lib/billingUi.ts` (display only — API field names unchanged).
 
 ## Tests
 

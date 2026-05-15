@@ -1,5 +1,7 @@
 "use client";
 
+import "../admin/billing/_components/billingPhase3.css";
+import "../admin/billing/_components/billingPhase4.css";
 import Link from "next/link";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, getPortalApiBaseUrl } from "../../../../services/apiClient";
@@ -28,15 +30,16 @@ export default function BillingInvoicesPage() {
   return (
     <PermissionGate permission="can_view_billing_invoices" fallback={<div className="state-box">You do not have invoice access.</div>}>
       <BillingPageChrome toast={null}>
-        <div className="stack compact-stack billing-admin-shell">
-          <PageHeader title="Invoices" subtitle="Invoice history, PDFs, and payment actions." />
-          {invoices.status === "loading" ? <LoadingSkeleton rows={7} /> : null}
-          {invoices.status === "error" ? <ErrorState message={invoices.error} /> : null}
-          {invoices.status === "success" && rows.length === 0 ? (
-            <EmptyState title="No invoices yet" message="Invoices will appear here once billing begins for your account." />
-          ) : null}
-          {invoices.status === "success" && rows.length > 0 ? (
-            <div className="billing-invoice-stack">
+        <div className="stack compact-stack billing-admin-shell billing-phase3-tenant">
+          <PageHeader title="Invoices" subtitle="History, PDFs, and pay-open balances." />
+          <div data-testid="billing-tenant-invoices-root">
+            {invoices.status === "loading" ? <LoadingSkeleton rows={7} /> : null}
+            {invoices.status === "error" ? <ErrorState message={invoices.error} /> : null}
+            {invoices.status === "success" && rows.length === 0 ? (
+              <EmptyState title="No invoices yet" message="Invoices will appear here once billing begins for your account." />
+            ) : null}
+            {invoices.status === "success" && rows.length > 0 ? (
+              <div className="billing-invoice-stack">
               {rows.map((invoice) => {
                 const status = String(invoice.status || "");
                 const period =
@@ -74,6 +77,7 @@ export default function BillingInvoicesPage() {
               })}
             </div>
           ) : null}
+          </div>
         </div>
       </BillingPageChrome>
     </PermissionGate>

@@ -55,6 +55,63 @@ export function transactionStatusClass(status: string | undefined | null): strin
   }
 }
 
+/** Human-readable title for dotted / namespaced billing audit types (display only). */
+export function humanizeRawBillingEventType(type: string): string {
+  const t = String(type || "").trim();
+  if (!t) return "Billing activity";
+
+  const billingPlanSub: Record<string, string> = {
+    current_assigned: "Company billing plan linked",
+    scheduled_set: "Future plan change scheduled",
+    scheduled_cleared: "Scheduled plan change removed",
+    changed: "Billing plan updated",
+    unlinked: "Billing plan unlinked",
+  };
+  if (t.startsWith("billing_plan.")) {
+    const sub = t.slice("billing_plan.".length);
+    return billingPlanSub[sub] || `Billing plan: ${sub.replace(/_/g, " ")}`;
+  }
+
+  if (t.startsWith("tenant_settings.")) {
+    const sub = t.slice("tenant_settings.".length);
+    return `Company settings: ${sub.replace(/_/g, " ")}`;
+  }
+
+  if (t.startsWith("collections.")) {
+    const sub = t.slice("collections.".length);
+    const map: Record<string, string> = {
+      paused: "Collections paused",
+      resumed: "Collections resumed",
+      do_not_charge: "Auto-charge turned off for invoice",
+      skip_next_retry: "Next autopay retry skipped",
+    };
+    return map[sub] || `Collections: ${sub.replace(/_/g, " ")}`;
+  }
+
+  if (t.startsWith("billing.")) {
+    return t
+      .slice("billing.".length)
+      .replace(/\./g, " — ")
+      .replace(/_/g, " ");
+  }
+
+  return t.replace(/\./g, " · ").replace(/_/g, " ");
+}
+
+export function billingEventIcon(type: string | undefined | null): string {
+  const t = String(type || "").toLowerCase();
+  if (t.includes("void")) return "⌀";
+  if (t.includes("fail") || t.includes("declin") || t.includes("error")) return "!";
+  if (t.includes("success") || t.includes("paid") || t.includes("approv")) return "✓";
+  if (t.includes("email") || t.includes("sms") || t.includes("link")) return "✉";
+  if (t.includes("invoice_created") || t.includes("created")) return "+";
+  if (t.includes("webhook")) return "↩";
+  if (t.includes("billing_plan") || t.includes("plan")) return "◇";
+  if (t.includes("tenant") || t.includes("settings") || t.includes("pricing")) return "⚙";
+  if (t.includes("collections") || t.includes("pause") || t.includes("retry")) return "⏱";
+  return "•";
+}
+
 export function billingEventLabel(type: string | undefined | null): string {
   switch (String(type || "")) {
     case "invoice_created": return "Invoice created";
@@ -70,8 +127,34 @@ export function billingEventLabel(type: string | undefined | null): string {
     case "payment_failed_emailed": return "Failure notice emailed";
     case "billing.sms_payment_link_sent": return "SMS payment link sent";
     case "billing.sms_payment_link_failed": return "SMS payment link failed";
-    default: return type || "Event";
+    default: {
+      const raw = String(type || "").trim();
+      if (!raw) return "Billing activity";
+      return humanizeRawBillingEventType(raw);
+    }
   }
+}
+
+/** Operator-facing label for stored `billingPricingMode` (portal copy only). */
+export function humanizeStoredPricingMode(mode: "legacy" | "catalog" | "custom" | null | undefined): string {
+  switch (mode) {
+    case "catalog":
+      return "Follow company billing plan";
+    case "custom":
+      return "Custom company pricing";
+    case "legacy":
+    default:
+      return "Standard (blended rates)";
+  }
+}
+
+/** Maps API / diagnostics `mode` strings to short operator labels. */
+export function humanizePricingStateMode(mode: string | undefined | null): string {
+  const m = String(mode || "").toLowerCase();
+  if (m === "catalog") return "Plan-based";
+  if (m === "custom") return "Custom pricing";
+  if (m === "legacy") return "Standard";
+  return mode || "—";
 }
 
 export function nextBillingSummary(billingDayOfMonth: number | undefined | null, autoBillingEnabled: boolean): string | null {

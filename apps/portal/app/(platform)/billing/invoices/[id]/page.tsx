@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
+import "../../../admin/billing/_components/billingPhase3.css";
+import "../../../admin/billing/_components/billingPhase4.css";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
@@ -12,11 +14,13 @@ import { PageHeader } from "../../../../../components/PageHeader";
 import { PermissionGate } from "../../../../../components/PermissionGate";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingPageChrome, billingErrorMessage } from "../../../../../components/BillingActionToast";
+import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
+import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
 import {
   dollars, formatDate, formatDateTime,
   invoiceStatusLabel, invoiceStatusClass,
   transactionStatusLabel, transactionStatusClass,
-  billingEventLabel,
+  billingEventLabel, billingEventIcon,
 } from "../../../../../lib/billingUi";
 
 function openPdf(id: string) {
@@ -169,27 +173,46 @@ export default function BillingInvoiceDetailPage() {
                 <DetailCard title="Pay this invoice">
                   {hasDefaultPm ? (
                     confirmPay ? (
-                      <div className="billing-pay-confirm">
-                        <p>
-                          Charge <strong>{dollars(row.balanceDueCents || row.totalCents)}</strong> to your default card?
+                      <div>
+                        <p className="muted" style={{ marginBottom: 12, fontSize: 14 }}>
+                          Confirm the amount and your default card in the secure panel. You can cancel anytime.
                         </p>
-                        <div className="row-actions">
-                          <button
-                            className="btn ghost"
-                            type="button"
-                            disabled={pending === "pay"}
-                            onClick={() => setConfirmPay(false)}
-                          >
-                            Cancel
+                        <div className="row-actions" style={{ flexWrap: "wrap" }}>
+                          <button className="btn ghost" type="button" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>
+                            Cancel payment
                           </button>
-                          <button
-                            className="btn primary"
-                            type="button"
-                            disabled={pending === "pay"}
-                            onClick={handlePay}
-                          >
-                            {pending === "pay" ? "Charging…" : `Yes — charge ${dollars(row.balanceDueCents || row.totalCents)}`}
-                          </button>
+                          {billingEmailSet ? (
+                            <>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                disabled={!!pending}
+                                onClick={() =>
+                                  runAction("email-inv", async () => {
+                                    await apiPost(`/billing/platform/invoices/${row.id}/email-invoice`, {});
+                                    showToast("ok", "Invoice emailed.");
+                                    bump();
+                                  })
+                                }
+                              >
+                                {pending === "email-inv" ? "Sending…" : "Email invoice"}
+                              </button>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                disabled={!!pending}
+                                onClick={() =>
+                                  runAction("email-pay", async () => {
+                                    await apiPost(`/billing/platform/invoices/${row.id}/email-payment-link`, {});
+                                    showToast("ok", "Payment link emailed.");
+                                    bump();
+                                  })
+                                }
+                              >
+                                {pending === "email-pay" ? "Sending…" : "Email payment link"}
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     ) : (
@@ -275,6 +298,29 @@ export default function BillingInvoiceDetailPage() {
                 </DetailCard>
               ) : null}
 
+              {canPay && hasDefaultPm && confirmPay ? (
+                <BillingActionPanel
+                  layout="center"
+                  centerWidth="min(460px, 94vw)"
+                  onClose={() => { if (pending !== "pay") setConfirmPay(false); }}
+                  eyebrow="Balance due"
+                  title={row.invoiceNumber || "Pay invoice"}
+                  subtitle="Your default card on file is charged once for the open balance. Match this amount to your purchase approval before continuing."
+                  summary={<p style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>{dollars(row.balanceDueCents || row.totalCents)}</p>}
+                  notice={`Due ${formatDate(row.dueDate)}. You will see Approved or Declined as soon as the processor responds.`}
+                  footer={(
+                    <>
+                      <button className="btn ghost" type="button" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>
+                        Cancel
+                      </button>
+                      <button className="btn primary" type="button" disabled={pending === "pay"} onClick={handlePay}>
+                        {pending === "pay" ? "Charging…" : `Pay ${dollars(row.balanceDueCents || row.totalCents)}`}
+                      </button>
+                    </>
+                  )}
+                />
+              ) : null}
+
               {/* Paid banner */}
               {row.status === "PAID" ? (
                 <div className="state-box" style={{ textAlign: "center" }}>
@@ -303,7 +349,10 @@ export default function BillingInvoiceDetailPage() {
               {/* Line items */}
               <DetailCard title="Line items">
                 {lineItems.length === 0 ? (
-                  <p className="muted">No line items on this invoice.</p>
+                  <BillingEmptyState
+                    title="No line items"
+                    message="Line items appear when the invoice includes billable usage or fees. Contact your administrator if this looks wrong."
+                  />
                 ) : (
                   <DataTable
                     rows={lineItems}
@@ -350,17 +399,25 @@ export default function BillingInvoiceDetailPage() {
               {/* Activity timeline */}
               <DetailCard title="Activity">
                 {events.length === 0 ? (
-                  <p className="muted">No billing events recorded for this invoice.</p>
+                  <BillingEmptyState
+                    title="No activity yet"
+                    message="Payments, emails, and status changes will appear here. Open this page again after paying to see the full trail."
+                  />
                 ) : (
-                  <div className="billing-timeline">
+                  <div className="billing-timeline-v2">
                     {events.map((e) => {
                       const isGood = e.type === "payment_succeeded" || e.type === "invoice_marked_paid" || e.type === "receipt_emailed";
-                      const isBad = e.type === "payment_failed" || e.type.includes("failed");
+                      const isBad = e.type === "payment_failed" || String(e.type || "").includes("failed");
                       return (
-                        <div className={`billing-timeline-item ${isGood ? "good" : isBad ? "bad" : ""}`} key={e.id}>
-                          <span className="tl-label">{billingEventLabel(e.type)}</span>
-                          <span className="tl-time"> · {formatDateTime(e.createdAt)}</span>
-                          {e.message ? <div className="tl-msg">{e.message}</div> : null}
+                        <div className="billing-timeline-v2__item" key={e.id}>
+                          <div className={`billing-timeline-v2__icon ${isGood ? "good" : isBad ? "bad" : ""}`} aria-hidden>
+                            {billingEventIcon(e.type)}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 14 }}>{billingEventLabel(e.type)}</div>
+                            <div className="billing-timeline-v2__time">{formatDateTime(e.createdAt)}</div>
+                            {e.message ? <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{e.message}</div> : null}
+                          </div>
                         </div>
                       );
                     })}

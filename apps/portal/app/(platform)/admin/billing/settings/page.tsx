@@ -19,7 +19,7 @@ import {
   AdminTenantPricingSourceCard,
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
-import { dollars, formatDate } from "../../../../../lib/billingUi";
+import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
 import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "../_components/adminBillingLinks";
 
 type TenantRow = { id: string; name: string };
@@ -185,10 +185,10 @@ type InvoicePreviewExplanation = {
 };
 
 function effectivePricingSourceLabel(source: string): string {
-  if (source === "legacy_chain") return "Legacy";
-  if (source === "billing_plan_catalog") return "From plan";
-  if (source === "billing_plan_defaults") return "From plan (defaults)";
-  if (source === "tenant_row_custom") return "Tenant override";
+  if (source === "legacy_chain") return "Standard blend";
+  if (source === "billing_plan_catalog") return "Active billing plan";
+  if (source === "billing_plan_defaults") return "Plan defaults";
+  if (source === "tenant_row_custom") return "Custom company row";
   return source;
 }
 
@@ -507,7 +507,7 @@ function AdminPricingDiagnosticsCard({ tenantId, month, year }: { tenantId: stri
       {data && !loading ? (
         <div style={{ fontSize: 13 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-            <span style={modeBadgeStyles(data.mode)}>{data.mode?.toUpperCase()}</span>
+            <span style={modeBadgeStyles(data.mode)}>{humanizePricingStateMode(data.mode)}</span>
             <span style={{ color: "var(--muted)", fontSize: 12 }}>
               Source:&nbsp;<strong>{effectivePricingSourceLabel(String(expl?.effectiveSource ?? ""))}</strong>
               {expl?.activePlanName ? <> · Plan:&nbsp;<strong>{expl.activePlanName}</strong></> : <> · Plan:&nbsp;<em>(none)</em></>}
@@ -672,7 +672,7 @@ function AdminInvoicePreviewCard({
             <div style={{ fontSize: 12, border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "8px 12px", marginBottom: 8, background: "#fafafa" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 6 }}>
                 <span style={modeBadgeStyles(preview.pricingPreviewExplanation.pricingMode)}>
-                  {(preview.pricingPreviewExplanation.pricingMode || "").toUpperCase()}
+                  {humanizePricingStateMode(preview.pricingPreviewExplanation.pricingMode)}
                 </span>
                 <span style={{ color: "#334155" }}>
                   Source:&nbsp;<strong>{effectivePricingSourceLabel(preview.pricingPreviewExplanation.effectiveSource)}</strong>
@@ -681,7 +681,7 @@ function AdminInvoicePreviewCard({
                   ) : null}
                   {preview.pricingPreviewExplanation.tenantOverridesDetected ? (
                     <span style={{ color: "#b45309", marginLeft: 6 }}>
-                      Stored tenant cents differ — line items follow the resolved mode, not stale row amounts.
+                      Company row amounts differ — line items follow the resolved rules, not stale row values.
                     </span>
                   ) : null}
                 </span>
@@ -884,6 +884,7 @@ function AdminBillingSettingsBody() {
             <section className="billing-setup-grid">
               <AdminCurrentBillingPlanAssignCard
                 tenantId={detail.tenant.id}
+                tenantName={detail.tenant.name}
                 previewMonth={previewMonth}
                 previewYear={previewYear}
                 onAssigned={() => void loadDetail(detail.tenant.id)}

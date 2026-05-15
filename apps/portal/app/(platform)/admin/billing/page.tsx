@@ -1,6 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import {
+  Banknote,
+  CreditCard,
+  FileText,
+  Receipt,
+  SlidersHorizontal,
+  Wallet,
+} from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
@@ -9,10 +17,20 @@ import { DataTable } from "../../../../components/DataTable";
 import { DetailCard } from "../../../../components/DetailCard";
 import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
-import { MetricCard } from "../../../../components/MetricCard";
+import { BillingEmptyState } from "../../../../components/billing/BillingEmptyState";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import {
+  dollars,
+  formatDate,
+  nextBillingSummary,
+  invoiceStatusLabel,
+  billingEventLabel,
+  billingEventIcon,
+  humanizeStoredPricingMode,
+} from "../../../../lib/billingUi";
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
-import { OPS_TAB_QUERY } from "./_components/adminBillingLinks";
+import { parseStoredPricingMode } from "./_components/tenantBillingConfigForms";
+import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "./_components/adminBillingLinks";
 
 type TenantRow = {
   id: string;
@@ -23,10 +41,6 @@ type TenantRow = {
   invoices?: any[];
 };
 
-function dollars(cents: number) {
-  return `$${(Number(cents || 0) / 100).toFixed(2)}`;
-}
-
 function worstOpenStatus(invoices: any[] | undefined): string {
   const list = invoices || [];
   const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)));
@@ -34,6 +48,26 @@ function worstOpenStatus(invoices: any[] | undefined): string {
   if (active.some((i) => i.status === "OVERDUE")) return "OVERDUE";
   if (active.some((i) => i.status === "OPEN" || i.status === "DRAFT")) return "OPEN";
   return "—";
+}
+
+function billingStatusLabel(status: string): string {
+  if (status === "—") return "In good standing";
+  if (status === "FAILED") return "Payment issue";
+  if (status === "OVERDUE") return "Overdue balance";
+  if (status === "OPEN" || status === "DRAFT") return "Open invoices";
+  return "In good standing";
+}
+
+function readInvoiceCollectionsFlags(invoices: any[]) {
+  let paused = 0;
+  let doNotCharge = 0;
+  for (const inv of invoices) {
+    const root = inv?.metadata && typeof inv.metadata === "object" ? (inv.metadata as Record<string, unknown>) : {};
+    const c = root.collections && typeof root.collections === "object" ? (root.collections as Record<string, unknown>) : {};
+    if (c.paused) paused += 1;
+    if (c.doNotCharge) doNotCharge += 1;
+  }
+  return { paused, doNotCharge };
 }
 
 export default function AdminBillingPage() {
@@ -101,203 +135,406 @@ export default function AdminBillingPage() {
     );
   }
 
+  const payState = selectedTenant ? worstOpenStatus(selectedTenant.invoices) : "—";
+  const pricingMode = detail ? parseStoredPricingMode(detail.settings?.metadata) : "legacy";
+  const expl = detail?.preview?.pricingPreviewExplanation as
+    | { tenantOverridesDetected?: boolean; scheduledPlanSummary?: string | null; activePlanName?: string | null }
+    | undefined;
+  const planName =
+    (detail?.settings?.billingPlan?.name as string | undefined) ||
+    (expl?.activePlanName as string | undefined) ||
+    "—";
+  const colFlags = detail ? readInvoiceCollectionsFlags(detail.invoices || []) : { paused: 0, doNotCharge: 0 };
+  const unpaidCount = detail ? (detail.invoices || []).filter((i: { status?: string }) => !["PAID", "VOID"].includes(String(i.status))).length : 0;
+  const failedCount = detail ? (detail.invoices || []).filter((i: { status?: string }) => String(i.status) === "FAILED").length : 0;
+  const nextBill = detail?.settings ? nextBillingSummary(detail.settings.billingDayOfMonth, !!detail.settings.autoBillingEnabled) : null;
+  const defaultPm = detail?.paymentMethods?.find((m: { isDefault?: boolean }) => m.isDefault);
+  const defaultLast4 = defaultPm && typeof (defaultPm as { last4?: string }).last4 === "string" ? (defaultPm as { last4: string }).last4 : null;
+
   return (
     <div className="stack compact-stack">
-        <div style={{ marginBottom: 4 }}>
-          <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Platform &amp; company summary</h2>
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-            Metrics below are fleet-wide; the highlighted company matches the workspace selector above.
-          </p>
+      <p className="b3-muted" style={{ margin: "0 0 12px", maxWidth: 720 }}>
+        Fleet metrics are across all companies. The snapshot and actions below follow the company selected in the header.
+      </p>
+
+      {platformToast ? (
+        <div className={`billing-toast billing-toast--${platformToast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
+          {platformToast.text}
         </div>
-        {platformToast ? (
-          <div className={`billing-toast billing-toast--${platformToast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
-            {platformToast.text}
+      ) : null}
+
+      {overview.status === "loading" || tenants.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
+      {overview.status === "error" ? <ErrorState message={overview.error} /> : null}
+      {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}
+
+      {overview.status === "success" ? (
+        <div className="b3-fleet-strip">
+          <div className="b3-fleet-metric">
+            <small>Recurring (est.)</small>
+            <strong>{dollars(overview.data.mrrCents)}</strong>
           </div>
-        ) : null}
-        {overview.status === "loading" || tenants.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
-        {overview.status === "error" ? <ErrorState message={overview.error} /> : null}
-        {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}
-        {overview.status === "success" ? (
-          <section className="metric-grid">
-            <MetricCard label="MRR" value={dollars(overview.data.mrrCents)} />
-            <MetricCard label="Open Balance" value={dollars(overview.data.openCents)} />
-            <MetricCard label="Failed" value={String(overview.data.counts?.failed || 0)} />
-            <MetricCard label="No Card" value={String(overview.data.counts?.tenantsWithoutCards || 0)} />
-          </section>
-        ) : null}
+          <div className="b3-fleet-metric">
+            <small>Open balance</small>
+            <strong>{dollars(overview.data.openCents)}</strong>
+          </div>
+          <div className="b3-fleet-metric">
+            <small>Needs attention</small>
+            <strong>{String(overview.data.counts?.failed || 0)}</strong>
+          </div>
+          <div className="b3-fleet-metric">
+            <small>No card on file</small>
+            <strong>{String(overview.data.counts?.tenantsWithoutCards || 0)}</strong>
+          </div>
+        </div>
+      ) : null}
 
-        {overview.status === "success" && (overview.data.recentFailures?.length > 0) ? (
-          <DetailCard title="Recent failed / overdue invoices">
-            <DataTable
-              rows={overview.data.recentFailures as any[]}
-              columns={[
-                { key: "t", label: "Tenant", render: (r) => r.tenantName || r.tenantId },
-                { key: "inv", label: "Invoice", render: (r) => r.invoiceNumber || r.invoiceId },
-                { key: "st", label: "Status", render: (r) => r.status },
-                { key: "bal", label: "Balance", render: (r) => dollars(r.balanceDueCents) },
-                { key: "fail", label: "Failed at", render: (r) => (r.failedAt ? new Date(r.failedAt).toLocaleString() : "—") },
-              ]}
-            />
-          </DetailCard>
-        ) : null}
+      {overview.status === "success" && (overview.data.recentFailures?.length > 0) ? (
+        <DetailCard title="Invoices needing attention (fleet)">
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+            Open a company above, then use <strong>Collect payment</strong> or <strong>View invoices</strong> for that account.
+          </p>
+          <DataTable
+            rows={overview.data.recentFailures as any[]}
+            columns={[
+              { key: "t", label: "Company", render: (r) => r.tenantName || r.tenantId },
+              { key: "inv", label: "Invoice", render: (r) => r.invoiceNumber || r.invoiceId },
+              { key: "st", label: "Status", render: (r) => r.status },
+              { key: "bal", label: "Balance", render: (r) => dollars(r.balanceDueCents) },
+              { key: "fail", label: "Updated", render: (r) => (r.failedAt ? new Date(r.failedAt).toLocaleString() : "—") },
+            ]}
+          />
+        </DetailCard>
+      ) : null}
 
-        {runs.status === "success" && runs.data.runs?.length ? (
-          <DetailCard title="Recent billing runs">
-            <div className="billing-line-list">
-              {runs.data.runs.map((run: any) => (
-                <div key={run.id}>
+      {runs.status === "success" && runs.data.runs?.length ? (
+        <details className="b3-details-muted">
+          <summary>Recent platform billing runs</summary>
+          <div className="billing-line-list">
+            {runs.data.runs.map((run: any) => (
+              <div key={run.id}>
+                <span>
+                  <strong>{run.dryRun ? "Dry run" : "Live run"}</strong>
+                  <small>
+                    {run.status} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}
+                    {run.tenantId ? ` · one company` : " · all companies"}
+                  </small>
+                </span>
+                <strong>{run.finishedAt ? "Done" : "In progress"}</strong>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {runs.status === "error" ? <ErrorState message={runs.error} /> : null}
+
+      <div className="billing-admin-grid">
+        <aside className="billing-tenant-rail">
+          <div className="billing-panel-head">
+            <span>Companies</span>
+            <strong>{tenantRows.length}</strong>
+          </div>
+          <div className="billing-tenant-list">
+            {tenantRows.map((tenant) => {
+              const active = tenant.id === selectedTenant?.id;
+              const w = worstOpenStatus(tenant.invoices);
+              const hasCard = (tenant.paymentMethods || []).length > 0;
+              return (
+                <button
+                  key={tenant.id}
+                  type="button"
+                  className={`billing-tenant-item ${active ? "active" : ""}`}
+                  onClick={() => router.push(`/admin/billing?tenantId=${encodeURIComponent(tenant.id)}`)}
+                >
                   <span>
-                    <strong>{run.dryRun ? "Dry run" : "Live run"}</strong>
+                    <strong>{tenant.name}</strong>
                     <small>
-                      {run.status} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}
-                      {run.tenantId ? ` · tenant ${run.tenantId}` : " · all tenants"}
+                      {w !== "—" ? `${billingStatusLabel(w)} · ` : ""}
+                      {hasCard ? "Card on file" : "No card"}
+                      {" · "}
+                      {dollars(tenant.balanceDueCents || 0)} open
                     </small>
                   </span>
-                  <strong>{run.finishedAt ? "Done" : "In progress"}</strong>
-                </div>
-              ))}
-            </div>
-          </DetailCard>
-        ) : null}
-        {runs.status === "error" ? <ErrorState message={runs.error} /> : null}
-
-        <div className="billing-admin-grid">
-          <aside className="billing-tenant-rail">
-            <div className="billing-panel-head">
-              <span>Tenants</span>
-              <strong>{tenantRows.length}</strong>
-            </div>
-            <div className="billing-tenant-list">
-              {tenantRows.map((tenant) => {
-                const active = tenant.id === selectedTenant?.id;
-                const payState = worstOpenStatus(tenant.invoices);
-                const hasCard = (tenant.paymentMethods || []).length > 0;
-                return (
-                  <button
-                    key={tenant.id}
-                    type="button"
-                    className={`billing-tenant-item ${active ? "active" : ""}`}
-                    onClick={() => router.push(`/admin/billing?tenantId=${encodeURIComponent(tenant.id)}`)}
-                  >
-                    <span>
-                      <strong>{tenant.name}</strong>
-                      <small>
-                        Autopay {tenant.billingSettings?.autoBillingEnabled ? "on" : "off"}
-                        {tenant.billingSettings?.autoBillingEnabled ? ` · day ${tenant.billingSettings.billingDayOfMonth}` : ""}
-                        {" · "}Card {hasCard ? "on file" : "missing"}
-                        {payState !== "—" ? ` · ${payState}` : ""}
-                      </small>
-                    </span>
-                    <em>{dollars(tenant.balanceDueCents || 0)}</em>
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
-
-          <main className="billing-tenant-workspace">
-            {detailLoading ? <LoadingSkeleton rows={6} /> : null}
-            {detailError ? <ErrorState message={detailError} /> : null}
-            {detail ? (
-              <>
-                <section className="billing-tenant-hero">
-                  <div>
-                    <span className="eyebrow">Company workspace</span>
-                    <h2>{detail.tenant.name}</h2>
-                    <p className="muted">Projected monthly total is based on current billable usage, pricing, SMS, credits, and tax settings.</p>
-                    <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
-                      <Link
-                        className="btn ghost"
-                        style={{ fontSize: 13 }}
-                        href={`/admin/billing/settings?tenantId=${encodeURIComponent(detail.tenant.id)}`}
-                      >
-                        Plans &amp; pricing
-                      </Link>
-                      <Link
-                        className="btn ghost"
-                        style={{ fontSize: 13 }}
-                        href={`/admin/billing/invoices?tenantId=${encodeURIComponent(detail.tenant.id)}&${OPS_TAB_QUERY}=invoices`}
-                      >
-                        Invoices &amp; payments
-                      </Link>
-                    </div>
-                  </div>
-                  <div className="billing-hero-metrics">
-                    <span><strong>{dollars(projectedMrr)}</strong><small>Projected monthly</small></span>
-                    <span><strong>{detail.usage.extensionCount}</strong><small>Extensions</small></span>
-                    <span><strong>{detail.usage.phoneNumberCount}</strong><small>Numbers</small></span>
-                    <span><strong>{detail.settings?.autoBillingEnabled ? `Day ${detail.settings.billingDayOfMonth}` : "Manual"}</strong><small>Autopay</small></span>
-                    <span><strong>{detail.settings?.smsBillingEnabled ? "On" : "Off"}</strong><small>SMS billing</small></span>
-                    <span><strong>{detail.sola.config?.isEnabled ? "Enabled" : detail.sola.configured ? "Configured" : "Missing"}</strong><small>Gateway</small></span>
-                  </div>
-                </section>
-
-                <section className="billing-setup-grid">
-                  <DetailCard title="Billing configuration">
-                    <p className="muted" style={{ marginBottom: 12 }}>
-                      Plans, taxes, payment gateway, collections, and invoice branding are grouped under company settings.
-                    </p>
-                    <div className="row-actions">
-                      <Link className="btn primary" href={`/admin/billing/settings?tenantId=${encodeURIComponent(detail.tenant.id)}`}>
-                        Open company settings
-                      </Link>
-                    </div>
-                  </DetailCard>
-                  <div id="payment-methods" style={{ scrollMarginTop: 120 }}>
-                    <PaymentMethodsCard detail={detail} />
-                  </div>
-                </section>
-
-                <section className="billing-setup-grid">
-                  <InvoicePreviewCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
-                </section>
-
-                <div id="recent-activity" style={{ scrollMarginTop: 120 }}>
-                  <RecentInvoicesCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
-                </div>
-              </>
-            ) : null}
-          </main>
-        </div>
-
-        <DetailCard title="Platform Monthly Run">
-          <p className="muted">Dry-run previews the billing batch. A real run creates invoices and attempts autopay where enabled and a default saved card exists.</p>
-          <div className="row-actions">
-            <button className="btn ghost" type="button" disabled={!!busy} onClick={() => runMonthly(true)}>{busy === "dry-run" ? "Running..." : "Dry Run All Tenants"}</button>
-            <button className="btn primary" type="button" disabled={!!busy} onClick={() => runMonthly(false)}>{busy === "monthly" ? "Running..." : "Run Monthly Billing"}</button>
+                </button>
+              );
+            })}
           </div>
-        </DetailCard>
+        </aside>
+
+        <main className="billing-tenant-workspace">
+          {detailLoading ? <LoadingSkeleton rows={6} /> : null}
+          {detailError ? <ErrorState message={detailError} /> : null}
+          {detail ? (
+            <>
+              <section className="b3-snapshot">
+                <div className="b3-snapshot-head">
+                  <div>
+                    <p className="b3-section-title" style={{ marginBottom: 6 }}>
+                      Company snapshot
+                    </p>
+                    <h2>{detail.tenant.name}</h2>
+                    <p className="b3-muted" style={{ margin: "6px 0 0", maxWidth: 560 }}>
+                      {billingStatusLabel(worstOpenStatus(detail.invoices))}. Projected monthly total reflects current usage and pricing for the preview period.
+                    </p>
+                  </div>
+                  <span className={`billing-status-pill ${payState === "—" ? "good" : payState === "FAILED" ? "bad" : "warn"}`} style={{ fontSize: 12 }}>
+                    {billingStatusLabel(payState)}
+                  </span>
+                </div>
+                <div className="b3-snapshot-grid">
+                  <div className="b3-snapshot-cell">
+                    <label>Balance due</label>
+                    <div className="b3-value">{dollars(selectedTenant?.balanceDueCents ?? 0)}</div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Projected monthly</label>
+                    <div className="b3-value">{dollars(projectedMrr)}</div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Autopay</label>
+                    <div className="b3-value">{detail.settings?.autoBillingEnabled ? `On · day ${detail.settings.billingDayOfMonth}` : "Off"}</div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Next billing</label>
+                    <div className="b3-value" style={{ fontSize: 14 }}>
+                      {nextBill || "—"}
+                    </div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Active plan</label>
+                    <div className="b3-value" style={{ fontSize: 14 }}>
+                      {planName}
+                    </div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Pricing mode</label>
+                    <div className="b3-value" style={{ fontSize: 14 }}>
+                      {humanizeStoredPricingMode(pricingMode)}
+                    </div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Payment methods</label>
+                    <div className="b3-value" style={{ fontSize: 14 }}>
+                      {detail.paymentMethods?.length
+                        ? `${detail.paymentMethods.length} saved${defaultLast4 ? ` · default ···${defaultLast4}` : " · default on file"}`
+                        : "None on file"}
+                    </div>
+                  </div>
+                  <div className="b3-snapshot-cell">
+                    <label>Collections</label>
+                    <div className="b3-value" style={{ fontSize: 14 }}>
+                      {colFlags.paused || colFlags.doNotCharge
+                        ? [
+                            colFlags.paused ? `${colFlags.paused} paused` : null,
+                            colFlags.doNotCharge ? `${colFlags.doNotCharge} do not charge` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : "No holds on open invoices"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <p className="b3-section-title">What do you need to do?</p>
+              <div className="b3-action-grid">
+                <button type="button" className="b3-action-card" onClick={() => document.getElementById("admin-generate-invoice")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                  <span className="b3-action-title">
+                    <FileText size={18} aria-hidden />
+                    Generate invoice
+                  </span>
+                  <span className="b3-action-desc">Create the next invoice for this company from current usage.</span>
+                </button>
+                <Link
+                  className="b3-action-card"
+                  href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+                >
+                  <span className="b3-action-title">
+                    <Banknote size={18} aria-hidden />
+                    Collect payment
+                  </span>
+                  <span className="b3-action-desc">Charge a card, send reminders, or record a manual payment.</span>
+                </Link>
+                <Link
+                  className="b3-action-card"
+                  href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+                >
+                  <span className="b3-action-title">
+                    <Receipt size={18} aria-hidden />
+                    View invoices
+                  </span>
+                  <span className="b3-action-desc">Full register with filters and exports.</span>
+                </Link>
+                <Link
+                  className="b3-action-card"
+                  href={`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [BILLING_SECTION_QUERY]: "plans-pricing" })}`}
+                >
+                  <span className="b3-action-title">
+                    <SlidersHorizontal size={18} aria-hidden />
+                    Manage pricing
+                  </span>
+                  <span className="b3-action-desc">Plans, unit rates, and pricing explanation.</span>
+                </Link>
+                <button type="button" className="b3-action-card" onClick={() => document.getElementById("payment-methods")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                  <span className="b3-action-title">
+                    <CreditCard size={18} aria-hidden />
+                    Payment methods
+                  </span>
+                  <span className="b3-action-desc">See cards on file; add cards from Invoices &amp; payments.</span>
+                </button>
+              </div>
+
+              <p className="b3-section-title">Account health</p>
+              <div className="b3-health-grid">
+                <div className={`b3-health-card ${unpaidCount ? "b3-health-warn" : "b3-health-ok"}`}>
+                  <h4>Unpaid invoices</h4>
+                  <p>{unpaidCount ? `${unpaidCount} open — review payment or terms.` : "No open invoices for this company."}</p>
+                </div>
+                <div className={`b3-health-card ${failedCount ? "b3-health-bad" : "b3-health-ok"}`}>
+                  <h4>Failed charges</h4>
+                  <p>{failedCount ? `${failedCount} invoice(s) need a successful payment.` : "No failed payment state on recent invoices."}</p>
+                </div>
+                <div className={`b3-health-card ${colFlags.paused || colFlags.doNotCharge ? "b3-health-warn" : "b3-health-ok"}`}>
+                  <h4>Collections</h4>
+                  <p>
+                    {colFlags.paused || colFlags.doNotCharge
+                      ? "Some invoices have retries paused or auto-charge turned off. Review in Invoices → Collections."
+                      : "No collection holds detected on this company’s open invoices."}
+                  </p>
+                </div>
+                <div className={`b3-health-card ${!(detail.paymentMethods || []).length ? "b3-health-warn" : "b3-health-ok"}`}>
+                  <h4>Payment method</h4>
+                  <p>{!(detail.paymentMethods || []).length ? "No saved card — autopay cannot run until a card is added." : "At least one card is saved."}</p>
+                </div>
+                <div className={`b3-health-card ${pricingMode === "custom" || expl?.tenantOverridesDetected ? "b3-health-warn" : "b3-health-ok"}`}>
+                  <h4>Pricing</h4>
+                  <p>
+                    {expl?.tenantOverridesDetected && pricingMode === "catalog"
+                      ? "Row amounts differ from the active plan — invoices still follow the plan until you align or reset."
+                      : pricingMode === "custom"
+                        ? "Custom company pricing is active."
+                        : "Pricing follows the standard rules for this company."}
+                  </p>
+                </div>
+                <div className={`b3-health-card ${expl?.scheduledPlanSummary ? "b3-health-warn" : "b3-health-ok"}`}>
+                  <h4>Scheduled plan change</h4>
+                  <p>{expl?.scheduledPlanSummary || "No upcoming plan switch scheduled."}</p>
+                </div>
+              </div>
+
+              <div id="payment-methods" style={{ scrollMarginTop: 120 }}>
+                <PaymentMethodsCard detail={detail} />
+              </div>
+
+              <div id="admin-generate-invoice" style={{ scrollMarginTop: 120 }}>
+                <InvoicePreviewCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
+              </div>
+
+              <div id="recent-activity" style={{ scrollMarginTop: 120 }}>
+                <RecentActivityCard detail={detail} />
+              </div>
+            </>
+          ) : null}
+        </main>
       </div>
+
+      <details className="b3-details-muted">
+        <summary>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <Wallet size={16} aria-hidden />
+            Platform billing run (all companies)
+          </span>
+        </summary>
+        <p className="b3-muted" style={{ marginTop: 0 }}>
+          Runs the monthly job for <strong>every</strong> company. Prefer generating a single invoice above unless you intend a fleet-wide cycle.
+        </p>
+        <div className="row-actions">
+          <button className="btn ghost" type="button" disabled={!!busy} onClick={() => runMonthly(true)}>
+            {busy === "dry-run" ? "Running…" : "Dry run (all companies)"}
+          </button>
+          <button className="btn primary" type="button" disabled={!!busy} onClick={() => runMonthly(false)}>
+            {busy === "monthly" ? "Running…" : "Run monthly billing (all companies)"}
+          </button>
+        </div>
+      </details>
+    </div>
   );
 }
 
-function InvoicePreviewCard({ detail, busy, setBusy, onSaved }: { detail: TenantDetail; busy: string | null; setBusy: (v: string | null) => void; onSaved: () => void }) {
+function InvoicePreviewCard({
+  detail,
+  busy,
+  setBusy,
+  onSaved,
+}: {
+  detail: TenantDetail;
+  busy: string | null;
+  setBusy: (v: string | null) => void;
+  onSaved: () => void;
+}) {
   const preview = detail.preview;
   const pr = preview?.pricingResolution;
   return (
-    <DetailCard title="Invoice Preview">
+    <DetailCard title="Generate invoice" dataTestId="admin-billing-generate-invoice">
       {pr?.banner ? (
-        <div className="billing-status-pill" style={{ marginBottom: 12, fontSize: 12, whiteSpace: "normal", lineHeight: 1.45, textAlign: "left" }}>
-          <strong>Pricing:</strong> {pr.banner}
+        <div className="billing-status-pill warn" style={{ marginBottom: 12, fontSize: 12, whiteSpace: "normal", lineHeight: 1.45, textAlign: "left" }}>
+          <strong>Pricing note:</strong> {pr.banner}
         </div>
       ) : null}
       <div className="billing-preview-total">
-        <span>Monthly amount</span>
+        <span>Estimated monthly amount</span>
         <strong>{dollars(preview.totalCents)}</strong>
-        <small>Subtotal {dollars(preview.subtotalCents)} · Taxes/fees {dollars(preview.taxCents)}</small>
+        <small>
+          Subtotal {dollars(preview.subtotalCents)} · Taxes &amp; fees {dollars(preview.taxCents)}
+        </small>
       </div>
       <div className="billing-line-list">
         {preview.lineItems.map((item: any) => (
           <div key={`${item.type}-${item.description}`}>
-            <span>{item.description}<small>{item.quantity} × {dollars(item.unitPriceCents)}</small></span>
+            <span>
+              {item.description}
+              <small>
+                {item.quantity} × {dollars(item.unitPriceCents)}
+              </small>
+            </span>
             <strong>{dollars(item.amountCents)}</strong>
           </div>
         ))}
       </div>
+      <p className="muted" style={{ fontSize: 12, margin: "12px 0" }}>
+        <strong>Generate invoice</strong> creates this company’s next invoice. <strong>Run monthly billing</strong> runs the automated cycle for this company only (respects autopay rules).
+      </p>
       <div className="row-actions">
-        <button className="btn primary" type="button" disabled={!!busy} onClick={async () => { setBusy("generate"); try { await apiPost(`/admin/billing/tenants/${detail.tenant.id}/invoices`, {}); onSaved(); } finally { setBusy(null); } }}>{busy === "generate" ? "Generating..." : "Generate Invoice"}</button>
-        <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy("run-one"); try { await apiPost("/admin/billing/runs/monthly", { dryRun: false, tenantId: detail.tenant.id }); onSaved(); } finally { setBusy(null); } }}>
-          {busy === "run-one" ? "Running..." : "Run monthly billing (this company)"}
+        <button
+          className="btn primary"
+          type="button"
+          disabled={!!busy}
+          onClick={async () => {
+            setBusy("generate");
+            try {
+              await apiPost(`/admin/billing/tenants/${detail.tenant.id}/invoices`, {});
+              onSaved();
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {busy === "generate" ? "Generating…" : "Generate invoice"}
+        </button>
+        <button
+          className="btn ghost"
+          type="button"
+          disabled={!!busy}
+          onClick={async () => {
+            setBusy("run-one");
+            try {
+              await apiPost("/admin/billing/runs/monthly", { dryRun: false, tenantId: detail.tenant.id });
+              onSaved();
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {busy === "run-one" ? "Running…" : "Run monthly billing (this company only)"}
         </button>
       </div>
     </DetailCard>
@@ -305,16 +542,35 @@ function InvoicePreviewCard({ detail, busy, setBusy, onSaved }: { detail: Tenant
 }
 
 function PaymentMethodsCard({ detail }: { detail: TenantDetail }) {
+  const methods = detail.paymentMethods || [];
   return (
-    <DetailCard title="Payment Methods">
-      {detail.paymentMethods.length === 0 ? (
-        <p className="muted">No saved cards yet. Workspace users can add a saved card from Billing → Payments.</p>
+    <DetailCard title="Saved payment methods">
+      {methods.length === 0 ? (
+        <div className="b3-health-card b3-health-warn" style={{ marginBottom: 0 }}>
+          <h4>No card on file</h4>
+          <p style={{ marginBottom: 10 }}>Add a card from <strong>Invoices &amp; payments</strong> using the payment methods dialog for this company.</p>
+          <Link
+            className="btn primary"
+            style={{ fontSize: 13 }}
+            href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
+          >
+            Open invoices &amp; payments
+          </Link>
+        </div>
       ) : (
-        <div className="billing-line-list">
-          {detail.paymentMethods.map((method) => (
-            <div key={method.id}>
-              <span>{method.brand || "Card"} ending {method.last4 || "----"}<small>{method.cardholderName || "No cardholder"} · exp {[method.expMonth, method.expYear].filter(Boolean).join("/") || "-"}</small></span>
-              <strong>{method.isDefault ? "Default" : "Backup"}</strong>
+        <div className="b3-pm-grid">
+          {methods.map((method: any) => (
+            <div key={method.id} className={`b3-pm-card ${method.isDefault ? "b3-pm-default" : ""}`}>
+              <div>
+                <strong>
+                  {(method.brand || "Card").toString()} ···{method.last4 || "----"}
+                </strong>
+                {method.isDefault ? <span className="b3-pm-badge">Default</span> : null}
+                <div className="b3-pm-meta">
+                  {method.cardholderName || "Cardholder not set"}
+                  {method.expMonth && method.expYear ? ` · Expires ${method.expMonth}/${method.expYear}` : ""}
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -323,80 +579,93 @@ function PaymentMethodsCard({ detail }: { detail: TenantDetail }) {
   );
 }
 
-function RecentInvoicesCard({ detail, busy, setBusy, onSaved }: { detail: TenantDetail; busy: string | null; setBusy: (v: string | null) => void; onSaved: () => void }) {
-  const [logInvoiceId, setLogInvoiceId] = useState<string | null>(null);
-  const [logEvents, setLogEvents] = useState<{ id: string; type: string; message: string | null; createdAt: string; metadata?: unknown }[]>([]);
-  const [logLoading, setLogLoading] = useState(false);
-  const [logError, setLogError] = useState("");
+function RecentActivityCard({ detail }: { detail: TenantDetail }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [events, setEvents] = useState<{ id: string; type: string; message: string | null; createdAt: string; metadata?: unknown }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
-  async function toggleLog(invoiceId: string) {
-    if (logInvoiceId === invoiceId) {
-      setLogInvoiceId(null);
+  async function toggle(invoiceId: string) {
+    if (openId === invoiceId) {
+      setOpenId(null);
       return;
     }
-    setLogInvoiceId(invoiceId);
-    setLogLoading(true);
-    setLogError("");
-    setLogEvents([]);
+    setOpenId(invoiceId);
+    setLoading(true);
+    setErr("");
+    setEvents([]);
     try {
       const res = await apiGet<{ events: any[] }>(`/admin/billing/invoices/${invoiceId}/events`);
-      setLogEvents(res.events || []);
-    } catch (err: any) {
-      setLogError(err?.message || "Unable to load billing events.");
+      setEvents(res.events || []);
+    } catch (e: any) {
+      setErr(e?.message || "Unable to load activity.");
     } finally {
-      setLogLoading(false);
+      setLoading(false);
     }
   }
 
+  const recent = [...(detail.invoices || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8);
+
   return (
-    <DetailCard title="Recent Invoices">
-      {detail.invoices.length === 0 ? <p className="muted">No invoices yet for this tenant.</p> : null}
-      <div className="billing-invoice-stack">
-        {detail.invoices.map((invoice) => (
-          <div className="billing-invoice-row" key={invoice.id} style={{ flexWrap: "wrap" }}>
-            <span><strong>{invoice.invoiceNumber}</strong><small>{invoice.status} · due {new Date(invoice.dueDate).toLocaleDateString()}</small></span>
-            <em>{dollars(invoice.totalCents)}</em>
-            <div className="row-actions">
-              <button className="btn ghost" type="button" disabled={!!busy} onClick={() => { void toggleLog(invoice.id); }}>{logInvoiceId === invoice.id ? "Hide log" : "Activity"}</button>
-              <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy(`send-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/send`, {}); onSaved(); } finally { setBusy(null); } }}>Send</button>
-              {invoice.status !== "PAID" && invoice.status !== "VOID" ? <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy(`paid-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/mark-paid`, {}); onSaved(); } finally { setBusy(null); } }}>Mark Paid</button> : null}
-              {invoice.status !== "PAID" && invoice.status !== "VOID" && (detail.settings?.defaultPaymentMethodId || (detail.paymentMethods?.length ?? 0) > 0) ? (
-                <button
-                  className="btn ghost"
-                  type="button"
-                  disabled={!!busy}
-                  onClick={async () => {
-                    setBusy(`retry-${invoice.id}`);
-                    try {
-                      await apiPost(`/admin/billing/invoices/${invoice.id}/retry-payment`, {});
-                      onSaved();
-                    } finally {
-                      setBusy(null);
-                    }
-                  }}
-                >
-                  {busy === `retry-${invoice.id}` ? "Charging…" : "Charge card"}
+    <DetailCard title="Recent activity">
+      {recent.length === 0 ? (
+        <BillingEmptyState
+          title="No invoices yet"
+          message="Once this company has billing activity, recent invoices and their audit trail will show here."
+        />
+      ) : null}
+      <div className="b3-timeline">
+        {recent.map((invoice) => (
+          <div className="b3-timeline-item" key={invoice.id}>
+            <div className="b3-timeline-dot" aria-hidden />
+            <div className="b3-timeline-body">
+              <strong>
+                {invoice.invoiceNumber || "Invoice"}{" "}
+                <span className={`billing-status-pill ${invoice.status === "PAID" ? "good" : invoice.status === "FAILED" ? "bad" : "warn"}`} style={{ fontSize: 10, marginLeft: 6 }}>
+                  {invoiceStatusLabel(invoice.status)}
+                </span>
+              </strong>
+              <small>
+                {formatDate((invoice.createdAt || invoice.dueDate) as string)} · {dollars(invoice.totalCents)}
+                {invoice.dueDate ? ` · Due ${formatDate(invoice.dueDate)}` : ""}
+              </small>
+              <div className="row-actions" style={{ marginTop: 8 }}>
+                <button className="btn ghost" type="button" style={{ fontSize: 12 }} onClick={() => void toggle(invoice.id)}>
+                  {openId === invoice.id ? "Hide activity" : "View activity"}
                 </button>
-              ) : null}
-              {invoice.status !== "PAID" && invoice.status !== "VOID" ? <button className="btn danger" type="button" disabled={!!busy} onClick={async () => { setBusy(`void-${invoice.id}`); try { await apiPost(`/admin/billing/invoices/${invoice.id}/void`, {}); onSaved(); } finally { setBusy(null); } }}>Void</button> : null}
-            </div>
-            {logInvoiceId === invoice.id ? (
-              <div style={{ width: "100%", marginTop: 10 }}>
-                {logLoading ? <p className="muted">Loading events…</p> : null}
-                {logError ? <ErrorState message={logError} /> : null}
-                {!logLoading && !logError && logEvents.length === 0 ? <p className="muted">No BillingEventLog rows for this invoice.</p> : null}
-                {!logLoading && !logError && logEvents.length > 0 ? (
-                  <DataTable
-                    rows={logEvents}
-                    columns={[
-                      { key: "c", label: "Time", render: (r) => new Date(r.createdAt).toLocaleString() },
-                      { key: "t", label: "Type", render: (r) => r.type },
-                      { key: "m", label: "Detail", render: (r) => r.message || (r.metadata ? JSON.stringify(r.metadata) : "—") },
-                    ]}
-                  />
-                ) : null}
+                <Link className="btn ghost" style={{ fontSize: 12 }} href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}>
+                  Open in register
+                </Link>
               </div>
-            ) : null}
+              {openId === invoice.id ? (
+                <div style={{ marginTop: 10 }}>
+                  {loading ? <p className="muted">Loading…</p> : null}
+                  {err ? <ErrorState message={err} /> : null}
+                  {!loading && !err && events.length === 0 ? (
+                    <BillingEmptyState
+                      title="No events on this invoice"
+                      message="Charges, emails, and plan changes will appear after they happen."
+                    />
+                  ) : null}
+                  {!loading && !err && events.length > 0 ? (
+                    <div className="billing-timeline-v2" style={{ marginTop: 8 }}>
+                      {events.slice(0, 12).map((ev) => (
+                        <div className="billing-timeline-v2__item" key={ev.id}>
+                          <div className="billing-timeline-v2__icon" aria-hidden>{billingEventIcon(ev.type)}</div>
+                          <div>
+                            <strong>{billingEventLabel(ev.type)}</strong>
+                            <div className="billing-timeline-v2__time">
+                              {new Date(ev.createdAt).toLocaleString()}
+                              {ev.message ? ` · ${ev.message}` : ""}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         ))}
       </div>

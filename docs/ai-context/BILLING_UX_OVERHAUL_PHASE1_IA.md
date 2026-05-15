@@ -395,4 +395,36 @@ Use these as **interaction references** — not screenshots to clone.
 
 ---
 
+## Phase 3 implementation notes (2026-05)
+
+**Summary page (`/admin/billing`):** Rebuilt as an **operational dashboard** — fleet strip (compact metrics), company **snapshot** (balance, autopay, next billing, plan, pricing mode humanized, payment methods, collections flags), **five primary action cards** (generate, collect, view invoices, manage pricing, payment methods), **account health** cards (unpaid, failed, collections, card on file, pricing drift, scheduled plan), improved **saved payment methods** and **recent activity** timeline. Platform-wide monthly run moved under **`<details>`** (“Platform billing run (all companies)”) to reduce accidental clicks.
+
+**Invoices & payments:** Invoice rows use **View** as the primary control; secondary actions live in a **“More actions”** `<details>` menu (email invoice, payment link, retry payment, mark paid, PDF, void, SMS). Status filters use pill styling; **Collections** tab copy is calmer (queue overview, human-readable retry state labels, removed large green worker banner in favor of a short intro line). Invoice detail drawer **collections** block reworded (“Automatic retries”).
+
+**Pricing copy:** Shared helpers in `lib/billingUi.ts` — `humanizeStoredPricingMode`, `humanizePricingStateMode`. **Billing pricing source** card retitled “How prices are calculated”; assign-plan modal and monthly pricing notices use operator language while keeping the same APIs and diagnostics payloads.
+
+**Tenant billing:** Light polish on **`/billing`** and **`/billing/invoices`** — shared `billingPhase3.css` (tenant subsection), overview subtitle, softer preview callout, card-style invoice rows.
+
+**Styles:** New `admin/billing/_components/billingPhase3.css`; shell root adds class **`billing-phase3`** (imported from `admin/billing/layout.tsx`).
+
+---
+
+## Phase 4 implementation notes (2026-05) — guided operator workflows
+
+**Pattern:** Shared **`BillingActionPanel`** (`apps/portal/components/billing/BillingActionPanel.tsx`) — eyebrow, title, subtitle, summary, notice, warning, footer — used for destructive or high-impact actions instead of **`window.confirm`**.
+
+**Admin invoices register:** Collect / retry payment uses a **right drawer** with invoice + company summary and last decline row when applicable. **Mark paid** and **Void** use the same panel pattern. **Collections → Do not auto-charge** confirms in a **center** panel from the invoice detail drawer. **Saved cards** removal uses a center confirm. Inline **Activity** uses **`BillingActivityList`** (icons + **`billingEventLabel`** humanization).
+
+**Reports / collections / transactions:** Tables wrapped in **`billing-ops-table-wrap`**; empty states use **`BillingEmptyState`**. Transaction status cells use **`transactionStatusLabel`**.
+
+**Company billing setup:** **Reset to plan pricing** and **Assign current plan** dialogs re-skinned onto **`BillingActionPanel`** (same APIs; `tenantName` passed for assign eyebrow).
+
+**Tenant invoice detail:** Pay confirmation uses **`BillingActionPanel`**; activity list uses timeline v2 + icons; line-item / activity empty states added.
+
+**Copy engine:** **`humanizeRawBillingEventType`**, **`billingEventIcon`** in `apps/portal/lib/billingUi.ts` (display only).
+
+**Styles:** `admin/billing/_components/billingPhase4.css` (+ imports from admin billing layout and key tenant billing pages).
+
+---
+
 *Document maintainer: product/design + owning engineer for billing portal. Update when IA changes before implementation.*
