@@ -25,6 +25,8 @@ All routine production deploys **must** go through **`ops/deploy-queue`** so the
 
 **Global serialization:** the worker runs **at most one job at a time** (any target). A file lock prevents a second PM2 instance from executing deploy scripts.
 
+**Out of scope — PBX-host installers:** The queue is **app-host / container scoped** only. PBX-host root installers (`scripts/pbx/install-vitalpbx-inbound-route-helper.sh`, `scripts/pbx/install-connect-tenant-moh-dialplan.sh`, and similar) are **not** queue targets and must not be added as queue targets without a separate cross-host trust review. They are operator-run break-glass actions on the VitalPBX host; see `docs/ai-context/DEPLOYMENT.md` § "VitalPBX host: Connect route helper script" and § "VitalPBX host: Connect tenant MOH enforcement layer".
+
 ---
 
 ## How to enqueue (examples)
@@ -65,7 +67,7 @@ curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
 
 ### Dry run (`dryRun: true`)
 
-Logs what **would** happen; scripts exit **before** git writes, `docker compose` rebuilds, and health-driven rollbacks. Still consumes a queue slot and respects duplicate protection.
+Logs what **would** happen and performs a non-mutating git checkout-safety preflight. The preflight fetches refs, verifies the target branch/commit/tag exists, compares target-changed paths against dirty non-ignored paths in the production clone, and fails with the exact blocking paths if a real checkout would overwrite local edits. Scripts still exit **before** git checkout/reset/clean, `docker compose` rebuilds, Prisma migrations, service restarts, and health-driven rollbacks. Still consumes a queue slot and respects duplicate protection. **`commit_already_deployed`** (when `commitHash` is supplied) ignores dry-run rows: only a **`dryRun: false`** success can short-circuit a later real enqueue for that SHA (**`connect-deploy-queue` 1.1.1+**).
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:3910/ops/deploy/enqueue" \
@@ -193,7 +195,7 @@ bash scripts/ops/start-deploy-queue-pm2.sh
 4. **Duplicate api:** second enqueue while first `queued`/`running` → **409**.
 5. **Serialize:** enqueue `portal`, then `api` — second starts only after first completes.
 6. **Log API:** `GET /ops/deploy/jobs/<id>/log?lines=50` returns text.
-7. **Dry run:** enqueue with `"dryRun":true` — log shows “DRY RUN”, no container churn (inspect `docker ps` timestamps).
+7. **Dry run:** enqueue with `"dryRun":true` — log shows “DRY RUN checkout safety”, target ref verification, and either `OK` or exact blocking paths; no checkout or container churn occurs (inspect `docker ps` timestamps).
 8. **Infra:** confirm no intentional edits to port 22 / nginx / Postgres platform schema from this feature.
 
 ---
@@ -203,3 +205,4 @@ bash scripts/ops/start-deploy-queue-pm2.sh
 - `full-stack` jobs use the same global lock as single-service jobs; tag must exist on `origin` after `git fetch`.
 - Rollback in per-service scripts is best-effort (rebuild previous git state).
 - Windows dev hosts may skip running the queue locally if `better-sqlite3` is not built.
+- A successful dry-run only proves checkout safety at that moment. Operators must still run the real deploy through the queue and verify the final `done <sha>` log line / container contents for production-impact changes.

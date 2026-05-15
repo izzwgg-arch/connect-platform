@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import type Database from "better-sqlite3";
-import { countQueued, isDeployService, openQueueDb, resetStaleRunning, DEPLOY_SERVICES, type JobRow } from "./db.js";
+import { shouldSkipCommitAlreadyDeployed } from "./commitSkip.js";
+import { countQueued, isDeployService, openQueueDb, resetStaleRunning, DEPLOY_SERVICES, type DeployService, type JobRow } from "./db.js";
 import { startWorkerLoop } from "./worker.js";
 
 const JOB_COLUMNS = `id, service, branch, commit_hash, deployed_commit, requested_by, status, dry_run,
@@ -350,19 +351,14 @@ export function createApp(opts: CreateAppOptions) {
       }
     }
 
-    // Skip if this exact commit is already deployed (success) for this service.
-    if (commitHash) {
-      const lastSuccess = db.prepare(
-        `SELECT deployed_commit FROM jobs WHERE service = ? AND status = 'success' ORDER BY finished_at DESC LIMIT 1`
-      ).get(service) as { deployed_commit: string | null } | undefined;
-      if (lastSuccess?.deployed_commit === commitHash) {
-        res.status(200).json({
-          skipped: true,
-          reason: "commit_already_deployed",
-          detail: `Commit ${commitHash} was already successfully deployed for '${service}'.`,
-        });
-        return;
-      }
+    // Skip if this exact commit is already deployed (real success only — dry-run must never count).
+    if (commitHash && shouldSkipCommitAlreadyDeployed(db, service as DeployService, commitHash)) {
+      res.status(200).json({
+        skipped: true,
+        reason: "commit_already_deployed",
+        detail: `Commit ${commitHash} was already successfully deployed for '${service}'.`,
+      });
+      return;
     }
 
     const q = countQueued(db);

@@ -4,7 +4,7 @@
 
 **Do not** use manual **`docker compose up`** / **`git pull`** for production recovery except break-glass; prefer re-enqueue via the queue (**`AGENTS.md`**).
 
-**Note (`commit_already_deployed`):** Same pattern as **`api`** — pinning a SHA twice may skip (**`dryRun`** behaviour documented in **`DEPLOYMENT_API_ROLLBACK.md`**).
+**Note (`commit_already_deployed`):** Same rule as **`api`**: only **real** (`dryRun: false`) successes count toward the same-**`commitHash`** skip. See **`DEPLOYMENT_API_ROLLBACK.md`** and **`connect-deploy-queue` 1.1.1+**.
 
 ---
 

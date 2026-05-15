@@ -1,10 +1,11 @@
 {
   "name": "connect-deploy-queue",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/commitSkip.test.ts",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts"
   },
