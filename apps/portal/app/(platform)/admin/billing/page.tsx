@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet, apiPost } from "../../../../services/apiClient";
@@ -9,9 +10,9 @@ import { DetailCard } from "../../../../components/DetailCard";
 import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { MetricCard } from "../../../../components/MetricCard";
-import { PageHeader } from "../../../../components/PageHeader";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
+import { OPS_TAB_QUERY } from "./_components/adminBillingLinks";
 
 type TenantRow = {
   id: string;
@@ -36,10 +37,11 @@ function worstOpenStatus(invoices: any[] | undefined): string {
 }
 
 export default function AdminBillingPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const [busy, setBusy] = useState<string | null>(null);
-  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
@@ -48,6 +50,11 @@ export default function AdminBillingPage() {
   const runs = useAsyncResource(() => apiGet<{ runs: any[] }>("/admin/billing/runs/recent?limit=8"), []);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
+  const tidParam = String(searchParams.get("tenantId") || "").trim();
+  const selectedTenantId = useMemo(() => {
+    if (tidParam && tenantRows.some((t) => t.id === tidParam)) return tidParam;
+    return tenantRows[0]?.id || "";
+  }, [tidParam, tenantRows]);
   const selectedTenant = tenantRows.find((tenant) => tenant.id === selectedTenantId) || tenantRows[0] || null;
 
   const loadDetail = useCallback(async (tenantId: string) => {
@@ -62,12 +69,6 @@ export default function AdminBillingPage() {
       setDetailLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    if (!selectedTenantId && tenantRows[0]?.id) {
-      setSelectedTenantId(tenantRows[0].id);
-    }
-  }, [selectedTenantId, tenantRows]);
 
   useEffect(() => {
     if (selectedTenantId) void loadDetail(selectedTenantId);
@@ -101,21 +102,18 @@ export default function AdminBillingPage() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell">
-        <PageHeader title="Admin Billing" subtitle="Operational overview: balances, invoices, payment methods, preview, and platform monthly run. Per-tenant pricing and gateway setup live under Billing configuration." />
+    <div className="stack compact-stack">
+        <div style={{ marginBottom: 4 }}>
+          <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Platform &amp; company summary</h2>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+            Metrics below are fleet-wide; the highlighted company matches the workspace selector above.
+          </p>
+        </div>
         {platformToast ? (
           <div className={`billing-toast billing-toast--${platformToast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
             {platformToast.text}
           </div>
         ) : null}
-        <div className="row-actions" style={{ marginBottom: -4 }}>
-          <Link className="btn primary" href="/admin/billing/invoices">
-            Payment Operations
-          </Link>
-        <Link className="btn ghost" href="/admin/billing/plans">
-          Catalog plans
-        </Link>
-        </div>
         {overview.status === "loading" || tenants.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {overview.status === "error" ? <ErrorState message={overview.error} /> : null}
         {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}
@@ -175,7 +173,12 @@ export default function AdminBillingPage() {
                 const payState = worstOpenStatus(tenant.invoices);
                 const hasCard = (tenant.paymentMethods || []).length > 0;
                 return (
-                  <button key={tenant.id} type="button" className={`billing-tenant-item ${active ? "active" : ""}`} onClick={() => setSelectedTenantId(tenant.id)}>
+                  <button
+                    key={tenant.id}
+                    type="button"
+                    className={`billing-tenant-item ${active ? "active" : ""}`}
+                    onClick={() => router.push(`/admin/billing?tenantId=${encodeURIComponent(tenant.id)}`)}
+                  >
                     <span>
                       <strong>{tenant.name}</strong>
                       <small>
@@ -199,9 +202,25 @@ export default function AdminBillingPage() {
               <>
                 <section className="billing-tenant-hero">
                   <div>
-                    <span className="eyebrow">Tenant billing setup</span>
+                    <span className="eyebrow">Company workspace</span>
                     <h2>{detail.tenant.name}</h2>
                     <p className="muted">Projected monthly total is based on current billable usage, pricing, SMS, credits, and tax settings.</p>
+                    <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
+                      <Link
+                        className="btn ghost"
+                        style={{ fontSize: 13 }}
+                        href={`/admin/billing/settings?tenantId=${encodeURIComponent(detail.tenant.id)}`}
+                      >
+                        Plans &amp; pricing
+                      </Link>
+                      <Link
+                        className="btn ghost"
+                        style={{ fontSize: 13 }}
+                        href={`/admin/billing/invoices?tenantId=${encodeURIComponent(detail.tenant.id)}&${OPS_TAB_QUERY}=invoices`}
+                      >
+                        Invoices &amp; payments
+                      </Link>
+                    </div>
                   </div>
                   <div className="billing-hero-metrics">
                     <span><strong>{dollars(projectedMrr)}</strong><small>Projected monthly</small></span>
@@ -209,36 +228,40 @@ export default function AdminBillingPage() {
                     <span><strong>{detail.usage.phoneNumberCount}</strong><small>Numbers</small></span>
                     <span><strong>{detail.settings?.autoBillingEnabled ? `Day ${detail.settings.billingDayOfMonth}` : "Manual"}</strong><small>Autopay</small></span>
                     <span><strong>{detail.settings?.smsBillingEnabled ? "On" : "Off"}</strong><small>SMS billing</small></span>
-                    <span><strong>{detail.sola.config?.isEnabled ? "Enabled" : detail.sola.configured ? "Configured" : "Missing"}</strong><small>SOLA</small></span>
+                    <span><strong>{detail.sola.config?.isEnabled ? "Enabled" : detail.sola.configured ? "Configured" : "Missing"}</strong><small>Gateway</small></span>
                   </div>
                 </section>
 
                 <section className="billing-setup-grid">
                   <DetailCard title="Billing configuration">
                     <p className="muted" style={{ marginBottom: 12 }}>
-                      Monthly pricing, taxes, SOLA gateway, and invoice branding for this tenant are on Admin Billing Settings.
+                      Plans, taxes, payment gateway, collections, and invoice branding are grouped under company settings.
                     </p>
                     <div className="row-actions">
                       <Link className="btn primary" href={`/admin/billing/settings?tenantId=${encodeURIComponent(detail.tenant.id)}`}>
-                        Open billing settings
+                        Open company settings
                       </Link>
                     </div>
                   </DetailCard>
-                  <PaymentMethodsCard detail={detail} />
+                  <div id="payment-methods" style={{ scrollMarginTop: 120 }}>
+                    <PaymentMethodsCard detail={detail} />
+                  </div>
                 </section>
 
                 <section className="billing-setup-grid">
                   <InvoicePreviewCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
                 </section>
 
-                <RecentInvoicesCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
+                <div id="recent-activity" style={{ scrollMarginTop: 120 }}>
+                  <RecentInvoicesCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
+                </div>
               </>
             ) : null}
           </main>
         </div>
 
         <DetailCard title="Platform Monthly Run">
-          <p className="muted">Dry-run previews the billing batch. Real run creates invoices and charges default SOLA cards only for tenants with auto billing enabled.</p>
+          <p className="muted">Dry-run previews the billing batch. A real run creates invoices and attempts autopay where enabled and a default saved card exists.</p>
           <div className="row-actions">
             <button className="btn ghost" type="button" disabled={!!busy} onClick={() => runMonthly(true)}>{busy === "dry-run" ? "Running..." : "Dry Run All Tenants"}</button>
             <button className="btn primary" type="button" disabled={!!busy} onClick={() => runMonthly(false)}>{busy === "monthly" ? "Running..." : "Run Monthly Billing"}</button>
@@ -273,7 +296,9 @@ function InvoicePreviewCard({ detail, busy, setBusy, onSaved }: { detail: Tenant
       </div>
       <div className="row-actions">
         <button className="btn primary" type="button" disabled={!!busy} onClick={async () => { setBusy("generate"); try { await apiPost(`/admin/billing/tenants/${detail.tenant.id}/invoices`, {}); onSaved(); } finally { setBusy(null); } }}>{busy === "generate" ? "Generating..." : "Generate Invoice"}</button>
-        <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy("run-one"); try { await apiPost("/admin/billing/runs/monthly", { dryRun: false, tenantId: detail.tenant.id }); onSaved(); } finally { setBusy(null); } }}>Run This Tenant</button>
+        <button className="btn ghost" type="button" disabled={!!busy} onClick={async () => { setBusy("run-one"); try { await apiPost("/admin/billing/runs/monthly", { dryRun: false, tenantId: detail.tenant.id }); onSaved(); } finally { setBusy(null); } }}>
+          {busy === "run-one" ? "Running..." : "Run monthly billing (this company)"}
+        </button>
       </div>
     </DetailCard>
   );
@@ -283,7 +308,7 @@ function PaymentMethodsCard({ detail }: { detail: TenantDetail }) {
   return (
     <DetailCard title="Payment Methods">
       {detail.paymentMethods.length === 0 ? (
-        <p className="muted">No saved cards yet. Tenant admins can add a tokenized SOLA card from Billing → Payments.</p>
+        <p className="muted">No saved cards yet. Workspace users can add a saved card from Billing → Payments.</p>
       ) : (
         <div className="billing-line-list">
           {detail.paymentMethods.map((method) => (

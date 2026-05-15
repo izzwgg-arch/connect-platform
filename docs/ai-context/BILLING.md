@@ -2,6 +2,22 @@
 
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 
+## Canonical production hostname
+
+- **Portal + same-origin API:** `https://app.connectcomunications.com` (browser calls `/api/...` on that host unless `NEXT_PUBLIC_API_URL` overrides in a custom build).
+- **Avoid typo domains** such as `app.connect.communications.com` (extra dot — *connect.communications*) — they are **not** the production app and cause confusing auth, API origin, or caching issues.
+
+**Operator smoke, capture list for incidents, caps, dangerous actions:** see **`docs/ai-context/BILLING_OPERATOR_RUNBOOK.md`**.
+
+## Two billing HTTP stacks (do not mix accidentally)
+
+| Stack | Location | Typical paths |
+|-------|----------|----------------|
+| **Current platform billing (`BillingInvoice`)** | `apps/api/src/billing/routes.ts` | Tenant: `/billing/settings`, **`/billing/platform/invoices`** (`/billing/invoice-preview`, payment methods, etc.). Admin: **`/admin/billing/...`** (invoices, reports, collections, platform tenants, catalog plans). |
+| **Legacy (subscription-era) routes** | `apps/api/src/server.ts` (grep `app.get/post("/billing/`)`) | Older **`/billing/invoices`**-style endpoints **without** **`/platform/`**. Still present; **not** interchangeable with **`BillingInvoice`**. |
+
+Portal UIs documented in this file use the **`BillingInvoice`** stack unless noted otherwise. Future changes: extend **`billing/routes.ts`** for new platform billing behavior; do not “fix” admin invoice UI by editing legacy **`server.ts`** handlers unless deliberately migrating a path. **`KNOWN_ISSUES.md`** § Billing calls this **dual billing surfaces**.
+
 ## Where the code lives
 
 | Concern | Location |
@@ -28,8 +44,8 @@
 | Monthly autopay + dunning sweep | `apps/worker/src/main.ts` (`runMonthlyBillingAutomation`, `runBillingDunningRetries`, `chargeWorkerInvoice`) |
 | Platform admin billing UI (overview) | `apps/portal/app/(platform)/admin/billing/page.tsx` |
 | Platform admin billing catalog (BillingPlan CRUD) | `apps/portal/app/(platform)/admin/billing/plans/page.tsx` |
-| Platform admin payment operations UI (invoices + transactions) | `apps/portal/app/(platform)/admin/billing/invoices/page.tsx` |
-| Platform admin billing settings UI | `apps/portal/app/(platform)/admin/billing/settings/page.tsx` |
+| Platform admin invoices & payments UI (invoices + transactions + reports + collections) | `apps/portal/app/(platform)/admin/billing/invoices/page.tsx` |
+| Platform admin company billing setup UI (settings) | `apps/portal/app/(platform)/admin/billing/settings/page.tsx` |
 | Nav visibility for Admin Billing | `apps/portal/navigation/navConfig.ts` → `isNavItemVisibleForUser` |
 | Tenant billing settings UI (shared) | `apps/portal/app/(platform)/billing/TenantBillingSettingsContent.tsx` |
 | Admin per-tenant config forms (pricing, branding, SOLA) | `apps/portal/app/(platform)/admin/billing/_components/tenantBillingConfigForms.tsx` |
@@ -38,7 +54,7 @@
 
 1. **Tenant routes** under `apps/api/src/billing/routes.ts` (`/billing/settings`, `/billing/platform/*`, `/billing/payment-methods`, …): allowed DB roles are **`SUPER_ADMIN`, `TENANT_ADMIN`, `ADMIN`, `BILLING_ADMIN`, `BILLING`** — aligned with `canManageBilling()` in `server.ts`. Portal must still pass prefix permission `can_view_billing_overview` (see `PORTAL_API_PERMISSION_RULES` in `server.ts`).
 
-2. **Platform admin routes** (`/admin/billing/*` in the same file): **`SUPER_ADMIN` only** inside the route handler. Portal: **Admin Billing** and **Admin Billing Settings** nav and **`/admin/billing`** / **`/admin/billing/settings`** pages require **`backendJwtRole === "SUPER_ADMIN"`** and `can_view_admin_billing`.
+2. **Platform admin routes** (`/admin/billing/*` in the same file): **`SUPER_ADMIN` only** inside the route handler. Portal: **Admin Billing** and **Company billing setup** nav and **`/admin/billing`** / **`/admin/billing/settings`** pages require **`backendJwtRole === "SUPER_ADMIN"`** and `can_view_admin_billing`. The admin billing area uses a shared shell with **`?tenantId=`** (and **`opsTab`** / **`billingSection`** query params) so operators keep company context while switching pages.
 
 ## Tests
 
@@ -75,7 +91,7 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
 
-**Portal:** **`/admin/billing/settings`** — **`pricingState`** warning banners (aligned preview period), **Current Billing Plan** card + assign modal (preview diff, **`POST`** confirm), **Pricing diagnostics** section + shared **preview period**, **billing pricing source** card (catalog stale-row hint + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
+**Portal:** **`/admin/billing/settings`** — **`pricingState`** warning banners (aligned preview period), **Current Billing Plan** card + assign modal (preview diff, **`POST`** confirm), **Pricing explanation** (diagnostics) section + shared **preview period**, **billing pricing source** card (catalog stale-row hint + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
 
 Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 
@@ -157,17 +173,17 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
 
 ## Operator portal (billing)
 
-- **Tenant:** **`/billing`** (overview — balances, invoices, usage metrics, activity; configuration links to **`/billing/settings`**), **`/billing/settings`** (same content as **`/settings/billing`**: SOLA/Cardknox tenant config + invoice branding via existing APIs), **`/billing/invoices`**, **`/billing/invoices/[id]`**, **`/billing/payments`**, **`/billing/receipts`** — see `apps/portal/app/(platform)/billing/**`. Uses tenant routes only (`/billing/...`). Invoice detail shows **`BillingEventLog`** via fields on **`GET /billing/platform/invoices/:id`** (no extra events route). Actions call **`POST .../email-invoice`**, **`POST .../email-payment-link`**, **`POST .../pay`**, PDF query on the API host — buttons stay disabled while a request is in flight; email actions require **`billingEmail`** on tenant settings (portal shows a hint when missing).
-- **Platform admin:** **`/admin/billing`** (operational overview, tenant rail, preview, payment methods, recent invoices, platform monthly run) and **`/admin/billing/settings?tenantId=…`** (per-tenant **Monthly Pricing**, invoice branding, **SOLA Gateway** forms) — **`SUPER_ADMIN`** + `can_view_admin_billing`; uses **`/admin/billing/...`** only. Recent failures table comes from **`GET /admin/billing/overview`**. Run history from **`GET /admin/billing/runs/recent`**. Per-invoice **Activity** loads **`GET /admin/billing/invoices/:id/events`**.
-- **Catalog plans:** **`/admin/billing/plans`** — list/create/edit/clone/deactivate platform **`BillingPlan`** rows (`tenantId=null`) via **`GET/POST/PATCH /admin/billing/platform/billing-plans`** and **`POST …/:id/clone`**. Optional **`?includeInactive=true`** on list for retired plans. Inactive plans are excluded from the **Scheduled Plan Change** dropdown on Admin Billing Settings (API also rejects scheduling an inactive plan). Linked from **`/admin/billing`** and **`/admin/billing/settings`** as **Catalog plans**.
-- **Payment Operations page:** **`/admin/billing/invoices`** — cross-tenant operator view with two tabs:
-  - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. Actions per row:
-    - **Detail** — opens `InvoiceDetailModal` (slide-over drawer) with full line items, all payment attempts with card/response, and `BillingEventLog` timeline (loaded via `GET /admin/billing/invoices/:id`).
+- **Tenant:** **`/billing`** (overview — balances, invoices, usage metrics, activity; configuration links to **`/billing/settings`**), **`/billing/settings`** (invoice presentation preferences; processor setup lives under **Company billing setup**), **`/billing/invoices`**, **`/billing/invoices/[id]`**, **`/billing/payments`**, **`/billing/receipts`** — see `apps/portal/app/(platform)/billing/**`. Uses tenant routes only (`/billing/...`). Invoice detail shows **`BillingEventLog`** via fields on **`GET /billing/platform/invoices/:id`** (no extra events route). Actions call **`POST .../email-invoice`**, **`POST .../email-payment-link`**, **`POST .../pay`**, PDF query on the API host — buttons stay disabled while a request is in flight; email actions require **`billingEmail`** on tenant settings (portal shows a hint when missing).
+- **Platform admin:** **`/admin/billing`** (operational overview, tenant rail, preview, payment methods, recent invoices, platform monthly run) and **`/admin/billing/settings?tenantId=…`** (per-tenant **Monthly Pricing**, invoice branding, **Payment gateway** UI — still backed by SOLA/Cardknox endpoints) — **`SUPER_ADMIN`** + `can_view_admin_billing`; uses **`/admin/billing/...`** only. Recent failures table comes from **`GET /admin/billing/overview`**. Run history from **`GET /admin/billing/runs/recent`**. Per-invoice **Activity** loads **`GET /admin/billing/invoices/:id/events`**.
+- **Billing plans catalog:** **`/admin/billing/plans`** — list/create/edit/clone/deactivate platform **`BillingPlan`** rows (`tenantId=null`) via **`GET/POST/PATCH /admin/billing/platform/billing-plans`** and **`POST …/:id/clone`**. Optional **`?includeInactive=true`** on list for retired plans. Inactive plans are excluded from the **Scheduled Plan Change** dropdown on Company billing setup (API also rejects scheduling an inactive plan). Linked from **`/admin/billing`** as **Billing plans (catalog)**.
+- **Invoices & payments page:** **`/admin/billing/invoices`** — cross-tenant operator view with **Invoices**, **Payments** (transactions audit), **Collections**, and **Reports** sections. Tab selection is persisted as **`?opsTab=`** (`invoices` \| `transactions` \| `reports` \| `collections`):
+  - **Invoices tab:** paginated list of all `BillingInvoice` records via **`GET /admin/billing/invoices?status=&search=&page=&limit=`**. **Dangerous actions:** **`Charge card`** uses the live gateway unless the deployment is sandbox — confirm environment before any confirmation; **`Mark paid`** is **full balance only** — **`PARTIAL_PAYMENT_NOT_SUPPORTED`** is intentional (see **`BILLING_OPERATOR_RUNBOOK.md`**). Do **not** run charges or live platform batch as part of casual smoke testing. Per-row actions:
+    - **Detail** — opens `InvoiceDetailModal` (slide-over drawer) with full line items, all payment attempts with card/response, and `BillingEventLog` timeline (loaded via `GET /admin/billing/invoices/:id`). (slide-over drawer) with full line items, all payment attempts with card/response, and `BillingEventLog` timeline (loaded via `GET /admin/billing/invoices/:id`).
     - **Cards** — opens `PaymentMethodsModal` to list, set-default, remove, and **add** saved cards for the tenant. List loaded via `GET /admin/billing/platform/tenants/:tenantId/payment-methods`. Add card uses iFields tokenization (see "Admin add-card iFields" below).
     - **Charge card** — opens `ManualPayModal`: pick saved card, enter optional operator note, 2-step confirmation with **LIVE CHARGE** or SANDBOX badge. Calls `POST /admin/billing/invoices/:id/pay` with `{ paymentMethodId, note, confirmLive: true }`.  Duplicate submits disabled; exact API error shown on failure.
     - **Mark Paid** — direct `POST /admin/billing/invoices/:id/mark-paid` (full balance only). **Phase-0 guard (2026-05):** `markBillingInvoicePaid` now rejects any `amountCents` less than `invoice.totalCents` with `PARTIAL_PAYMENT_NOT_SUPPORTED` before touching the DB. Passing no amount or passing the exact total still marks the invoice `PAID` with `balanceDueCents = 0`. This prevents a `PAID + balanceDueCents > 0` impossible state until a `PARTIALLY_PAID` enum is added in Phase 1.
     - **Send invoice**, **Email link**, **Void**, **Activity log** (inline expand) — unchanged.
-    - Disabled **SMS link** placeholder (deferred).
+    - **SMS link** — sends a **payment link SMS** when the tenant can send SMS. **Capability:** **`GET /admin/billing/platform/tenants/:tenantId/sms-capability`** — if false, configure **Twilio** or **VoIP.ms** tenant messaging first. **Send:** **`POST /admin/billing/invoices/:id/sms-payment-link`** (**real SMS** when configured; not a placeholder).
   - **Transactions tab:** paginated audit of all `PaymentTransaction` records via **`GET /admin/billing/transactions?status=&tenantId=&page=&limit=`**. Each row has a **Detail** button opening `TransactionDetailModal` — shows amount, card, processor ref, response code/message, idempotency key, and full gateway response JSON (loaded via `GET /admin/billing/transactions/:id`).
   - **Collections tab:** operator-grade dunning visibility and per-invoice controls. All data is lazy-loaded. Phase 2 active (worker fully enforces all controls). Two sections:
     - **Collections Overview** — on-demand via `GET /admin/billing/collections/overview`. Shows count badges (failed/open, retry-eligible, paused, exhausted, do-not-charge) and three tables: "Ready to retry", "Paused / Do-not-charge", "Retries exhausted". Each row has an invoice button that opens `InvoiceDetailModal`.
@@ -177,11 +193,24 @@ Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenan
     - **CSV Exports** — direct `<a download>` links to `GET /admin/billing/reports/export/invoices` and `GET /admin/billing/reports/export/transactions`. Optional status filter. Files named `billing-invoices-YYYY-MM-DD.csv` / `billing-transactions-YYYY-MM-DD.csv`. Generated-At and Generated-By metadata rows at the top.
     - **Aging Report** — on-demand load via `GET /admin/billing/reports/aging`. Shows all OPEN/FAILED/OVERDUE invoices with outstanding balance: tenant, invoice #, status, due date, days overdue (red/bold when > 30), balance due. "⬇ CSV" button (`GET /admin/billing/reports/aging/export`, file `billing-aging-YYYY-MM-DD.csv`) appears after load.
     - **Failed Payments** — on-demand load via `GET /admin/billing/reports/failed-payments`. Shows FAILED/OVERDUE invoices with last processor response code and reason. "⬇ CSV" button (`GET /admin/billing/reports/failed-payments/export`, file `billing-failed-payments-YYYY-MM-DD.csv`) appears after load.
-    - A **"results capped"** yellow banner appears when the row cap is reached (2 000 aging, 1 000 failed, 5 000 exports).
+    - A **"results capped"** yellow banner appears when the row cap is reached — see **Report row caps** below.
     - All tables are read-only. Overflow is scrollable for mobile.
-  - Linked from **`/admin/billing`** via a **Payment Operations** button.
+  - Linked from the **`/admin/billing`** shell as **Invoices & payments**.
   - All admin billing routes are `requirePlatformBilling` (`SUPER_ADMIN` only). No DB migration needed.
-- **Admin Billing Settings** (`/admin/billing/settings`): now includes a **Collections Automation** card (alongside Monthly Pricing, Invoice Branding, SOLA Gateway). Calls `GET/PUT /admin/billing/platform/tenants/:tenantId/collections-config` to read/write `TenantBillingSettings.metadata.collections`. Shows green "Worker enforcement active" notice.
+- **Company billing setup** (`/admin/billing/settings`): includes **Collections Automation** (alongside Monthly Pricing, Invoice Branding, **Payment gateway** card — same SOLA-backed APIs). Calls `GET/PUT /admin/billing/platform/tenants/:tenantId/collections-config` to read/write `TenantBillingSettings.metadata.collections`. Shows green "Worker enforcement active" notice.
+
+### Report row caps and filtering
+
+On-screen loads and CSV downloads are **hard-capped**:
+
+| Report / export | Max rows |
+|-----------------|---------:|
+| Aging (JSON + CSV) | **2 000** |
+| Failed payments (JSON + CSV) | **1 000** |
+| Full invoice CSV export | **5 000** |
+| Full transaction CSV export | **5 000** |
+
+When the **results capped** banner appears, the underlying data may extend **beyond** what is shown — the export is **not** guaranteed complete for audit. **Mitigation:** use supported filters (**`tenantId`**, **`status`** on invoice/transaction exports where applicable), run **multiple narrower exports**, or use approved **database / BI** reporting for unconstrained extracts. Operator checklist: **`BILLING_OPERATOR_RUNBOOK.md`**.
 
 ### Billing reports — API routes
 
@@ -373,7 +402,7 @@ Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` in
 
 1. **API public base URL:** Set **`PUBLIC_API_BASE_URL`** or **`PUBLIC_API_URL`** on the API service to the HTTPS origin that SOLA and browsers use to reach Connect (same host as other billing links). The webhook URL is derived from this value.
 2. **SOLA API Key (xKey):** From the SOLA/Cardknox merchant dashboard — stored encrypted in **`BillingSolaConfig`** (`credentialsEncrypted.apiKey`).
-3. **Webhook/Postback URL:** Connect exposes exactly **`{PUBLIC_API_BASE_URL or PUBLIC_API_URL}/webhooks/sola-cardknox`** (computed in **`apps/api/src/billing/solaPublicUrls.ts`**). Copy this URL from **Billing → Settings** or **Admin Billing → Settings → SOLA Gateway** into the vendor’s webhook/postback URL field.
+3. **Webhook/Postback URL:** Connect exposes exactly **`{PUBLIC_API_BASE_URL or PUBLIC_API_URL}/webhooks/sola-cardknox`** (computed in **`apps/api/src/billing/solaPublicUrls.ts`**). Copy this URL from **Admin Billing → Company billing setup → Payment gateway** (tenant self-serve settings do not expose gateway wiring) into the vendor’s webhook/postback URL field.
 4. **Webhook Verification PIN:** Same secret in Connect (**Webhook Verification PIN**) and in SOLA/Cardknox postback security (supports **`ck-signature`** verification). **Required when mode is Production** — save and enable are rejected without it.
 5. **Optional iFields public key:** Needed only for **Billing → Payments** tokenized card capture; not required for invoice charges if cards are vaulted another way.
 6. **Test configuration:** Calls **`gatewayjson`** with a zero-amount auth-style check only (no real card, no capture). Run after saving xKey; **Enable** stays disabled until the test returns success.
@@ -405,7 +434,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 | `invoiceFooterNote` / `invoicePaymentInstructions` | Plain text, length-capped — PDF footer + email body blocks. |
 | `paymentTermsDays` | Existing field — “Net N days” copy in invoice emails and PDF header. |
 
-**API:** `PUT /billing/settings/branding` (tenant JWT billing roles) and optional keys on `PUT /admin/billing/tenants/:tenantId/settings`. **Portal:** **`/billing/settings`** and **`/settings/billing`** (shared `TenantBillingSettingsContent`), and Admin Billing Settings (**`/admin/billing/settings`**) branding card.
+**API:** `PUT /billing/settings/branding` (tenant JWT billing roles) and optional keys on `PUT /admin/billing/tenants/:tenantId/settings`. **Portal:** **`/billing/settings`** and **`/settings/billing`** (shared `TenantBillingSettingsContent`), and Company billing setup (**`/admin/billing/settings`**) branding card.
 
 **Code:** `apps/api/src/billing/invoiceBranding.ts` (sanitize + resolve), `emailTemplates.ts` (shared HTML shell), `pdf.ts` (`renderBillingInvoicePdf`), `billingEmailLifecycle.ts` (passes resolved brand into templates).
 
@@ -482,7 +511,7 @@ Use a **non-production** tenant, **sandbox** gateway mode, and test cards only.
 
 The existing `POST /admin/billing/tenants/:tenantId/invoices/preview` is retained for backward compatibility.
 
-**Portal — Admin Billing Settings (`/admin/billing/settings`):** New "Invoice Preview" card at the bottom of the tenant settings section. Contains month/year dropdowns (current month to +2 years) and a "Preview next invoice" button. Shows line items table (description, qty, unit price, amount), total, tax notice, period, and due date. Blue "Preview only — no invoice created" notice prominent above the table.
+**Portal — Company billing setup (`/admin/billing/settings`):** New "Invoice Preview" card at the bottom of the tenant settings section. Contains month/year dropdowns (current month to +2 years) and a "Preview next invoice" button. Shows line items table (description, qty, unit price, amount), total, tax notice, period, and due date. Blue "Preview only — no invoice created" notice prominent above the table.
 
 **Portal — Customer Billing Overview (`/billing`):** New "Estimated next invoice" collapsible section above the quick nav. Lazy-loaded on first click (no auto-fetch). Shows line items, total, period/due date, and a "Preview only" notice. Does not show charge or send buttons.
 
@@ -563,7 +592,7 @@ No DB writes from preview.
 Every `POST` writes `BillingEventLog { type: "billing_plan.scheduled_change_set", metadata: { operatorId, previousNextPlanId, previousEffectiveAt, nextBillingPlanId, planName, effectiveAt } }`.
 Every `DELETE` writes `BillingEventLog { type: "billing_plan.scheduled_change_cancelled", metadata: { operatorId, cancelledNextPlanId, cancelledEffectiveAt } }`.
 
-**Portal — Admin Billing Settings (`/admin/billing/settings`):**
+**Portal — Company billing setup (`/admin/billing/settings`):**
 New **Scheduled Plan Change** card rendered between the SOLA/Collections section and the Invoice Preview card:
 - When no change scheduled: plan dropdown (from `GET /admin/billing/platform/billing-plans`), effective date picker (defaults to first of next month), "Schedule plan change" button. Price summary shown below dropdown.
 - When a change is scheduled: blue notice ("⚡ Scheduled: Switch to plan X effective Y"), "Cancel scheduled change" button (red ghost, no confirm modal).

@@ -3,12 +3,11 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../../../components/PageHeader";
 import { billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { TenantDetail } from "../_components/tenantBillingConfigForms";
@@ -21,6 +20,7 @@ import {
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
 import { dollars, formatDate } from "../../../../../lib/billingUi";
+import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "../_components/adminBillingLinks";
 
 type TenantRow = { id: string; name: string };
 
@@ -434,9 +434,9 @@ function AdminPreviewPeriodCard({
   for (let y = yearFloor; y <= yearFloor + 2; y++) yearOptions.push(y);
 
   return (
-    <DetailCard title="Preview period (UTC calendar month)">
+    <DetailCard title="Preview period (UTC calendar month)" dataTestId="billing-admin-preview-period-card">
       <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
-        Used for <strong>Pricing diagnostics</strong> and <strong>Invoice preview</strong>. Read-only — nothing is charged from this page.
+        Used for <strong>Pricing explanation</strong> and <strong>Invoice preview</strong>. Read-only — nothing is charged from this page.
       </p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <select value={month} onChange={(e) => onMonth(Number(e.target.value))} style={{ fontSize: 13 }}>
@@ -486,13 +486,20 @@ function AdminPricingDiagnosticsCard({ tenantId, month, year }: { tenantId: stri
   const expl = data?.pricingPreviewExplanation;
 
   return (
-    <DetailCard title="Pricing diagnostics">
+    <DetailCard title="Pricing explanation" dataTestId="billing-admin-pricing-diagnostics">
       <div style={{ fontSize: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#475569" }}>
-        Same period as <strong>Preview period</strong>. Explains pricing mode and compares stored row vs catalog vs effective invoice pricing.
+        Same period as <strong>Preview period</strong>. Shows how amounts are derived (catalog vs tenant row vs effective plan for this month).
       </div>
       <div style={{ marginBottom: 12 }}>
-        <button className="btn ghost" type="button" onClick={() => void load()} disabled={loading} style={{ fontSize: 13 }}>
-          {loading ? "Refreshing…" : "Refresh diagnostics"}
+        <button
+          className="btn ghost"
+          type="button"
+          data-testid="billing-admin-refresh-diagnostics"
+          onClick={() => void load()}
+          disabled={loading}
+          style={{ fontSize: 13 }}
+        >
+          {loading ? "Refreshing…" : "Refresh explanation"}
         </button>
       </div>
       {error ? <div style={{ color: "var(--danger, #dc2626)", fontSize: 13 }}>{error}</div> : null}
@@ -630,7 +637,7 @@ function AdminInvoicePreviewCard({
   }
 
   return (
-    <DetailCard title="Invoice Preview">
+    <DetailCard title="Invoice Preview" dataTestId="billing-admin-invoice-preview-card">
       <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 5, padding: "6px 10px", marginBottom: 12, color: "#1e40af" }}>
         <strong>Preview only</strong> — no invoice is created and no charge is run. Period matches <strong>Preview period</strong> above.
       </div>
@@ -739,7 +746,6 @@ function AdminInvoicePreviewCard({
 }
 
 function AdminBillingSettingsBody() {
-  const router = useRouter();
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const searchParams = useSearchParams();
@@ -792,6 +798,28 @@ function AdminBillingSettingsBody() {
     if (effectiveTenantId) void loadDetail(effectiveTenantId);
   }, [effectiveTenantId, loadDetail]);
 
+  const billingSectionRaw = searchParams.get(BILLING_SECTION_QUERY);
+
+  useEffect(() => {
+    if (!billingSectionRaw || typeof document === "undefined") return;
+    const map: Record<string, string> = {
+      "plans-pricing": "billing-section-plans-pricing",
+      collections: "billing-section-collections",
+      "tax-billing": "billing-section-tax-billing",
+      gateway: "billing-section-gateway",
+      preview: "billing-section-preview",
+      "pricing-explanation": "billing-section-pricing-explanation",
+    };
+    const id = map[billingSectionRaw];
+    if (!id) return;
+    const t = window.setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [billingSectionRaw, detail?.tenant.id]);
+
+  const sectionAnchorStyle: CSSProperties = { scrollMarginTop: 108 };
+
   if (!canPlatformAdminBilling) {
     return (
       <div className="state-box">
@@ -800,18 +828,38 @@ function AdminBillingSettingsBody() {
     );
   }
 
+  const qp = mergeSearchParams(
+    new URLSearchParams({ ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}) }),
+    {},
+  );
+
   return (
     <div className="stack compact-stack billing-admin-shell">
-      <PageHeader
-        title="Admin Billing — Settings"
-        subtitle="Per-tenant pricing, taxes, SOLA gateway, and invoice branding. Operational overview stays on Admin Billing."
-      />
-      <div className="row-actions">
-        <Link className="btn ghost" href="/admin/billing">
-          ← Admin Billing overview
+      <div style={{ marginBottom: 4 }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Company billing setup</h2>
+        <p className="muted" style={{ margin: 0, fontSize: 13, maxWidth: 720 }}>
+          Plans, gateway, collections, branding, and tax details for the company selected above. Operational actions stay under{" "}
+          <strong>Invoices &amp; payments</strong> and <strong>Summary</strong>.
+        </p>
+        {tenantIdParam && tenants.length > 0 && !tenants.some((t) => t.id === tenantIdParam) ? (
+          <p className="muted" style={{ marginTop: 8, marginBottom: 0, fontSize: 13 }}>
+            The URL company id did not match a tenant — loaded <strong>{tenants.find((t) => t.id === effectiveTenantId)?.name || "first company"}</strong> instead.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
+        <Link className="btn ghost" href={`/admin/billing${qp}`}>
+          ← Billing overview
+        </Link>
+        <Link
+          className="btn ghost"
+          href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: effectiveTenantId, [OPS_TAB_QUERY]: "invoices" })}`}
+        >
+          Invoices &amp; payments
         </Link>
         <Link className="btn ghost" href="/admin/billing/plans">
-          Catalog plans
+          Billing plans (catalog)
         </Link>
       </div>
 
@@ -822,75 +870,61 @@ function AdminBillingSettingsBody() {
         <div className="state-box">No tenants found.</div>
       ) : null}
 
-      {!tenantsLoading && tenants.length > 0 ? (
-        <DetailCard title="Tenant">
-          <label className="muted" style={{ display: "block", marginBottom: 8 }}>
-            Select tenant
-            <select
-              className="input"
-              style={{ marginTop: 6, width: "100%", maxWidth: 480 }}
-              value={effectiveTenantId}
-              onChange={(e) => {
-                const id = e.target.value;
-                router.replace(`/admin/billing/settings?tenantId=${encodeURIComponent(id)}`);
-                void loadDetail(id);
-              }}
-            >
-              {tenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {!tenantIdParam && tenants[0] ? (
-            <p className="muted" style={{ marginTop: 8 }}>
-              No <code>tenantId</code> in URL — showing <strong>{tenants[0].name}</strong>. Bookmark this page with{" "}
-              <code>?tenantId=…</code> for a direct link.
-            </p>
-          ) : null}
-          {tenantIdParam && tenants.length > 0 && !tenants.some((t) => t.id === tenantIdParam) ? (
-            <p className="muted" style={{ marginTop: 8 }}>
-              Unknown <code>tenantId</code> in URL — loaded <strong>{tenants.find((t) => t.id === effectiveTenantId)?.name || "first tenant"}</strong> instead.
-            </p>
-          ) : null}
-        </DetailCard>
-      ) : null}
-
       {detailLoading ? <LoadingSkeleton rows={6} /> : null}
       {detailError ? <ErrorState message={detailError} /> : null}
 
       {detail && !detailLoading ? (
         <>
-          <AdminBillingPricingWarningsBanner
-            tenantId={detail.tenant.id}
-            previewMonth={previewMonth}
-            previewYear={previewYear}
-          />
-          <section className="billing-setup-grid">
-            <AdminCurrentBillingPlanAssignCard
+          <div id="billing-section-plans-pricing" style={sectionAnchorStyle}>
+            <AdminBillingPricingWarningsBanner
               tenantId={detail.tenant.id}
               previewMonth={previewMonth}
               previewYear={previewYear}
-              onAssigned={() => void loadDetail(detail.tenant.id)}
             />
-            <AdminTenantPricingSourceCard
-              detail={detail}
-              onSaved={() => void loadDetail(detail.tenant.id)}
-              previewPeriodMonth={previewMonth}
-              previewPeriodYear={previewYear}
-            />
-            <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-            <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-          </section>
-          <section className="billing-setup-grid">
-            <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-            <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
-          </section>
-          <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
-          <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
-          <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
-          <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+            <section className="billing-setup-grid">
+              <AdminCurrentBillingPlanAssignCard
+                tenantId={detail.tenant.id}
+                previewMonth={previewMonth}
+                previewYear={previewYear}
+                onAssigned={() => void loadDetail(detail.tenant.id)}
+              />
+              <AdminTenantPricingSourceCard
+                detail={detail}
+                onSaved={() => void loadDetail(detail.tenant.id)}
+                previewPeriodMonth={previewMonth}
+                previewPeriodYear={previewYear}
+              />
+              <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+            </section>
+          </div>
+
+          <div id="billing-section-tax-billing" style={sectionAnchorStyle}>
+            <section className="billing-setup-grid">
+              <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+            </section>
+          </div>
+
+          <div id="billing-section-gateway" style={sectionAnchorStyle}>
+            <section className="billing-setup-grid">
+              <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
+            </section>
+          </div>
+
+          <div id="billing-section-collections" style={sectionAnchorStyle}>
+            <section className="billing-setup-grid">
+              <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
+            </section>
+          </div>
+
+          <div id="billing-section-preview" style={sectionAnchorStyle}>
+            <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
+            <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
+            <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+          </div>
+
+          <div id="billing-section-pricing-explanation" style={sectionAnchorStyle}>
+            <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
+          </div>
         </>
       ) : null}
     </div>

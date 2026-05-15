@@ -321,8 +321,8 @@ export default function AdminBillingPlansPage() {
   return (
     <div className="stack compact-stack billing-admin-shell">
       <PageHeader
-        title="Admin Billing — Catalog plans"
-        subtitle="Manage platform BillingPlan rows (tenantId=null). Scheduled plan changes and per-tenant pricing are configured on Admin Billing Settings."
+        title="Admin Billing — Billing plans (catalog)"
+        subtitle="Platform-wide plan definitions. Scheduled plan changes and per-company rates are edited in Company billing setup."
       />
 
       <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
@@ -330,9 +330,9 @@ export default function AdminBillingPlansPage() {
           ← Admin Billing overview
         </Link>
         <Link className="btn ghost" href="/admin/billing/settings">
-          Admin Billing settings
+          Company billing setup
         </Link>
-        <button className="btn primary" type="button" onClick={startCreate}>
+        <button className="btn primary" type="button" data-testid="billing-admin-plans-open-create" onClick={startCreate}>
           Create plan
         </button>
       </div>
@@ -341,10 +341,10 @@ export default function AdminBillingPlansPage() {
         <strong>Catalog changes apply to future cycles only.</strong> Editing a plan affects new invoice previews and invoices not yet issued; PDFs and totals on invoices already sent are fixed snapshots.
       </div>
       <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 5, padding: "8px 12px", color: "#1e40af" }}>
-        <strong>Tenant overrides may apply.</strong> Per-tenant extension, phone, and SMS amounts on Admin Billing Settings can differ from these catalog defaults.
+        Per-tenant extension, phone, and SMS amounts in <strong>Company billing setup</strong> can differ from these catalog defaults.
       </div>
       <div style={{ fontSize: 12, background: "#f9fafb", border: "1px solid var(--border, #e5e7eb)", borderRadius: 5, padding: "8px 12px", color: "var(--muted, #6b7280)" }}>
-        Plans are never hard-deleted here. <strong>Plan code is immutable</strong> after create (use Clone for a new slug). <strong>Inactive plans</strong> stay out of the scheduled plan dropdown on Admin Billing Settings.
+        Plans are never hard-deleted here. <strong>Plan code is immutable</strong> after create (use Clone for a new slug). <strong>Inactive plans</strong> stay out of the scheduled plan dropdown in Company billing setup.
       </div>
 
       <DetailCard title="Filters">
@@ -373,7 +373,7 @@ export default function AdminBillingPlansPage() {
       {listError ? <ErrorState message={listError} /> : null}
 
       {!loading && !listError ? (
-        <DetailCard title="Plans">
+        <DetailCard title="Plans" dataTestId="billing-admin-plans-list-card">
           {visiblePlans.length === 0 ? (
             <p className="muted">No plans match the current filter.</p>
           ) : (
@@ -409,7 +409,14 @@ export default function AdminBillingPlansPage() {
                         <button className="btn ghost" type="button" style={{ fontSize: 12 }} onClick={() => startEdit(r)} disabled={saving}>
                           Edit
                         </button>
-                        <button className="btn ghost" type="button" style={{ fontSize: 12 }} onClick={() => startClone(r)} disabled={saving}>
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          data-testid={`billing-admin-plans-clone-${r.id}`}
+                          style={{ fontSize: 12 }}
+                          onClick={() => startClone(r)}
+                          disabled={saving}
+                        >
                           Clone
                         </button>
                         {r.active ? (
@@ -451,7 +458,7 @@ export default function AdminBillingPlansPage() {
       ) : null}
 
       {panel === "create" ? (
-        <DetailCard title="Create catalog plan">
+        <DetailCard title="Create catalog plan" dataTestId="billing-admin-plans-panel-create">
           <div style={{ fontSize: 12, marginBottom: 12, color: "var(--muted)" }}>
             Use a stable slug/code (lowercase letters, numbers, hyphens, underscores — 2–64 chars). It cannot be changed later.
           </div>
@@ -489,7 +496,7 @@ export default function AdminBillingPlansPage() {
               <button className="btn primary" type="button" disabled={saving} onClick={() => void submitCreate()}>
                 {saving ? "Saving…" : "Create plan"}
               </button>
-              <button className="btn ghost" type="button" disabled={saving} onClick={closePanel}>
+              <button className="btn ghost" type="button" data-testid="billing-admin-plans-create-cancel" disabled={saving} onClick={closePanel}>
                 Cancel
               </button>
             </div>
@@ -541,7 +548,7 @@ export default function AdminBillingPlansPage() {
       ) : null}
 
       {panel === "clone" && focusPlan ? (
-        <DetailCard title={`Clone plan — ${focusPlan.code}`}>
+        <DetailCard title={`Clone plan — ${focusPlan.code}`} dataTestId="billing-admin-plans-panel-clone">
           <p style={{ fontSize: 13, color: "var(--muted)" }}>
             Copies catalog prices and &quot;first phone free&quot; from <strong>{focusPlan.name}</strong>. The new plan is created active.
           </p>
@@ -559,7 +566,7 @@ export default function AdminBillingPlansPage() {
               <button className="btn primary" type="button" disabled={saving} onClick={() => void submitClone()}>
                 {saving ? "Cloning…" : "Clone plan"}
               </button>
-              <button className="btn ghost" type="button" disabled={saving} onClick={closePanel}>
+              <button className="btn ghost" type="button" data-testid="billing-admin-plans-clone-cancel" disabled={saving} onClick={closePanel}>
                 Cancel
               </button>
             </div>

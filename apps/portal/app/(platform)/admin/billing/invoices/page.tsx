@@ -1,16 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../../../components/PageHeader";
-import { BillingPageChrome, billingErrorMessage } from "../../../../../components/BillingActionToast";
+import { billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { dollars } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
+import { mergeSearchParams, OPS_TAB_QUERY, isAdminOpsTab, type AdminOpsTab } from "../_components/adminBillingLinks";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -714,7 +715,7 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
               disabled={solaConfig === null}
               style={{ fontSize: 13 }}
             >
-              {solaConfig === null ? "Loading…" : canAddCard ? "+ Add card" : "+ Add card (SOLA not configured)"}
+              {solaConfig === null ? "Loading…" : canAddCard ? "+ Add card" : "+ Add card (gateway not configured)"}
             </button>
           ) : (
             <div>
@@ -731,7 +732,7 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
 
               {!canAddCard ? (
                 <div style={{ fontSize: 13, color: "#6b7280", padding: "10px 0" }}>
-                  SOLA iFields is not configured for this tenant. Enable it in Admin → Billing → Settings before adding cards.
+                  Hosted card capture is not configured for this company yet. Configure the payment gateway in Admin Billing → Company billing setup before adding cards.
                 </div>
               ) : (
                 <form
@@ -1162,7 +1163,7 @@ function InvoicesTab() {
   }
 
   return (
-    <>
+    <div data-testid="billing-admin-tab-panel-invoices">
       {toast ? (
         <div className={`billing-toast billing-toast--${toast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
           {toast.text}
@@ -1413,7 +1414,7 @@ function InvoicesTab() {
           onSuccess={() => setListRev((r) => r + 1)}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -1621,9 +1622,7 @@ function ReportsTab() {
   ];
 
   return (
-    <div className="stack compact-stack">
-
-      {/* ── CSV Exports ─────────────────────────────────────────────────── */}
+    <div className="stack compact-stack" data-testid="billing-admin-tab-panel-reports">
       <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
         <h4 style={{ margin: "0 0 10px" }}>CSV Exports</h4>
         <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
@@ -1895,8 +1894,7 @@ function CollectionsTab() {
   }
 
   return (
-    <div className="stack compact-stack">
-      {/* Collections status — Phase 2 worker active */}
+    <div className="stack compact-stack" data-testid="billing-admin-tab-panel-collections">
       <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, color: "#166534", marginBottom: 4 }}>
         <strong>Worker enforcement active.</strong>
         {" "}Pause, skip, and do-not-charge controls are honoured by the dunning worker on every sweep (every 6 h).
@@ -2001,10 +1999,21 @@ function CollectionsTab() {
 
 // ── Page root ─────────────────────────────────────────────────────────────────
 
-export default function AdminBillingInvoicesPage() {
+function AdminBillingInvoicesBody() {
   const { can, backendJwtRole } = useAppContext();
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
-  const [activeTab, setActiveTab] = useState<"invoices" | "transactions" | "reports" | "collections">("invoices");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const rawOps = searchParams.get(OPS_TAB_QUERY);
+  const activeTab: AdminOpsTab = isAdminOpsTab(rawOps) ? rawOps : "invoices";
+
+  const navQ = mergeSearchParams(new URLSearchParams(searchParams.toString()), {});
+
+  const setActiveTab = (tab: AdminOpsTab) => {
+    const next = mergeSearchParams(new URLSearchParams(searchParams.toString()), { [OPS_TAB_QUERY]: tab });
+    router.replace(`/admin/billing/invoices${next}`, { scroll: false });
+  };
 
   if (!canAdmin) {
     return (
@@ -2016,45 +2025,58 @@ export default function AdminBillingInvoicesPage() {
   }
 
   return (
-    <BillingPageChrome toast={null}>
-      <div className="stack compact-stack billing-admin-shell">
-        <PageHeader
-          title="Payment Operations"
-          subtitle="Cross-tenant invoice list and payment transaction audit. Use the Invoices tab to act on open invoices; Transactions is read-only."
-        />
-
-        <div className="row-actions" style={{ marginBottom: 4 }}>
-          <Link className="btn ghost" href="/admin/billing">← Admin Billing</Link>
-          <Link className="btn ghost" href="/admin/billing/settings">Billing Settings</Link>
-        </div>
-
-        {/* Tab bar */}
-        <div className="row-actions" style={{ borderBottom: "2px solid var(--border, #e0e0e0)", marginBottom: 16, paddingBottom: 0, gap: 0 }}>
-          {(["invoices", "transactions", "reports", "collections"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              style={{
-                background: "none",
-                border: "none",
-                borderBottom: activeTab === tab ? "2px solid var(--accent, #2563eb)" : "2px solid transparent",
-                padding: "8px 16px",
-                marginBottom: -2,
-                cursor: "pointer",
-                fontWeight: activeTab === tab ? 600 : 400,
-                color: activeTab === tab ? "var(--accent, #2563eb)" : "inherit",
-                fontSize: 14,
-                textTransform: "capitalize",
-              }}
-            >
-              {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Transactions" : tab === "reports" ? "Reports" : "Collections"}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : activeTab === "reports" ? <ReportsTab /> : <CollectionsTab />}
+    <div className="stack compact-stack billing-admin-shell">
+      <div style={{ marginBottom: 4 }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Invoices &amp; payments</h2>
+        <p className="muted" style={{ fontSize: 13, margin: 0, maxWidth: 720 }}>
+          Cross-tenant invoices, payment ledger, reports, and collections. The company selector above keeps navigation context; bookmark with{" "}
+          <code style={{ fontSize: 12 }}>?tenantId=…</code> when you need a direct link.
+        </p>
       </div>
-    </BillingPageChrome>
+
+      <div className="row-actions" style={{ marginBottom: 4, flexWrap: "wrap", gap: 8 }}>
+        <Link className="btn ghost" href={`/admin/billing${navQ}`}>
+          ← Billing overview
+        </Link>
+        <Link className="btn ghost" href={`/admin/billing/settings${navQ}`}>
+          Company billing setup
+        </Link>
+      </div>
+
+      <div className="row-actions" style={{ borderBottom: "2px solid var(--border, #e0e0e0)", marginBottom: 16, paddingBottom: 0, gap: 0 }}>
+        {(["invoices", "transactions", "reports", "collections"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            data-testid={`billing-admin-ops-tab-${tab}`}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              background: "none",
+              border: "none",
+              borderBottom: activeTab === tab ? "2px solid var(--accent, #2563eb)" : "2px solid transparent",
+              padding: "8px 16px",
+              marginBottom: -2,
+              cursor: "pointer",
+              fontWeight: activeTab === tab ? 600 : 400,
+              color: activeTab === tab ? "var(--accent, #2563eb)" : "inherit",
+              fontSize: 14,
+              textTransform: "capitalize",
+            }}
+          >
+            {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Payments" : tab === "reports" ? "Reports" : "Collections"}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : activeTab === "reports" ? <ReportsTab /> : <CollectionsTab />}
+    </div>
+  );
+}
+
+export default function AdminBillingInvoicesPage() {
+  return (
+    <Suspense fallback={<LoadingSkeleton rows={6} />}>
+      <AdminBillingInvoicesBody />
+    </Suspense>
   );
 }

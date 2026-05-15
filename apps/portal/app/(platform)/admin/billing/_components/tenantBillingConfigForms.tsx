@@ -221,7 +221,13 @@ export function AdminTenantPricingSourceCard({
       ) : null}
 
       <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
-        <button className="btn ghost" type="button" disabled={saving || resetDiagLoading || !bp} onClick={() => void openResetConfirmation()}>
+        <button
+          className="btn ghost"
+          type="button"
+          data-testid="billing-admin-reset-plan-open"
+          disabled={saving || resetDiagLoading || !bp}
+          onClick={() => void openResetConfirmation()}
+        >
           {resetDiagLoading ? "Loading preview…" : saving ? "Working…" : "Reset to plan pricing"}
         </button>
       </div>
@@ -235,6 +241,7 @@ export function AdminTenantPricingSourceCard({
         <div
           role="dialog"
           aria-modal="true"
+          data-testid="billing-admin-reset-plan-dialog"
           style={{
             position: "fixed",
             inset: 0,
@@ -309,7 +316,14 @@ export function AdminTenantPricingSourceCard({
               );
             })()}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button className="btn ghost" type="button" onClick={() => { setResetOverlay(false); }}>
+              <button
+                className="btn ghost"
+                type="button"
+                data-testid="billing-admin-reset-plan-cancel"
+                onClick={() => {
+                  setResetOverlay(false);
+                }}
+              >
                 Cancel
               </button>
               <button className="btn primary" type="button" disabled={saving} onClick={() => void applyResetConfirmed()}>
@@ -465,12 +479,13 @@ export function AdminTenantInvoiceBrandingForm({ detail, onSaved }: { detail: Te
   const [saving, setSaving] = useState(false);
   const settings = detail.settings || {};
   return (
-    <DetailCard title="Invoice & email branding">
+    <DetailCard title="Invoice & email branding" dataTestId="billing-admin-invoice-branding-card">
       <p className="muted" style={{ marginBottom: 12 }}>
         HTTPS logo URL is used in HTML emails only. PDF uses a clean text header.
       </p>
       <form
         className="billing-form"
+        data-testid="billing-admin-branding-form"
         onSubmit={async (event) => {
           event.preventDefault();
           setSaving(true);
@@ -508,7 +523,7 @@ export function AdminTenantInvoiceBrandingForm({ detail, onSaved }: { detail: Te
         <label>
           Payment instructions <textarea name="invoicePaymentInstructions" rows={2} defaultValue={settings.invoicePaymentInstructions || ""} />
         </label>
-        <button className="btn primary" type="submit" disabled={saving}>
+        <button className="btn primary" type="submit" data-testid="billing-admin-save-branding" disabled={saving}>
           {saving ? "Saving…" : "Save branding"}
         </button>
       </form>
@@ -535,7 +550,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
   }
 
   return (
-    <DetailCard title="SOLA Gateway">
+    <DetailCard title="Payment gateway">
       {webhookUrl ? (
         <div className="muted" style={{ marginBottom: 16, lineHeight: 1.5 }}>
           <strong>Webhook/Postback URL</strong> — paste this exact URL into SOLA/Cardknox webhook or postback settings.
@@ -608,7 +623,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
         </label>
         <div className="row-actions">
           <button className="btn primary" type="submit" disabled={!!busy}>
-            {busy === "save" ? "Saving..." : "Save SOLA"}
+            {busy === "save" ? "Saving..." : "Save gateway"}
           </button>
           <button
             className="btn ghost"
@@ -619,10 +634,10 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
               setToast(null);
               try {
                 const result = await apiPost<{ ok: boolean; simulated?: boolean }>(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/test`, {});
-                setToast({ kind: "ok", text: result.simulated ? "SOLA configuration test passed (simulated)" : "SOLA configuration test passed" });
+                setToast({ kind: "ok", text: result.simulated ? "Gateway test passed (simulated)" : "Gateway test passed" });
                 onSaved();
               } catch (err: unknown) {
-                setToast({ kind: "err", text: billingErrorMessage(err, "SOLA test failed") });
+                setToast({ kind: "err", text: billingErrorMessage(err, "Gateway test failed") });
               } finally {
                 setBusy("");
               }
@@ -642,7 +657,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
                   await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/disable`, {});
                   onSaved();
                 } catch (err: unknown) {
-                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not disable SOLA") });
+                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not disable gateway") });
                 } finally {
                   setBusy("");
                 }
@@ -662,7 +677,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
                   await apiPost(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config/enable`, {});
                   onSaved();
                 } catch (err: unknown) {
-                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not enable SOLA") });
+                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not enable gateway") });
                 } finally {
                   setBusy("");
                 }
@@ -918,7 +933,7 @@ export function AdminCurrentBillingPlanAssignCard({
   );
 
   return (
-    <DetailCard title="Current Billing Plan">
+    <DetailCard title="Current Billing Plan" dataTestId="billing-admin-current-plan-card">
       {diagLoading ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : null}
       {!diagLoading && diag ? (
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
@@ -945,7 +960,13 @@ export function AdminCurrentBillingPlanAssignCard({
               <> · No scheduled plan change</>
             )}
           </p>
-          <button className="btn primary" type="button" style={{ fontSize: 13 }} onClick={() => void openModal()}>
+          <button
+            className="btn primary"
+            type="button"
+            style={{ fontSize: 13 }}
+            data-testid="billing-admin-assign-plan-open"
+            onClick={() => void openModal()}
+          >
             Assign current plan…
           </button>
         </div>
@@ -957,6 +978,7 @@ export function AdminCurrentBillingPlanAssignCard({
         <div
           role="dialog"
           aria-modal="true"
+          data-testid="billing-admin-assign-plan-dialog"
           style={{
             position: "fixed",
             inset: 0,
@@ -1086,7 +1108,13 @@ export function AdminCurrentBillingPlanAssignCard({
             ) : null}
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button className="btn ghost" type="button" disabled={saving} onClick={() => setModalOpen(false)}>
+              <button
+                className="btn ghost"
+                type="button"
+                data-testid="billing-admin-assign-plan-cancel"
+                disabled={saving}
+                onClick={() => setModalOpen(false)}
+              >
                 Cancel
               </button>
               <button
