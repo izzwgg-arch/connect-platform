@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, Play, Pause, Archive, Users, Plus, Search,
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
-  Shuffle, BarChart2, Upload, History,
+  Shuffle, BarChart2, Upload, History, ListOrdered, ChevronDown,
 } from "lucide-react";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -325,6 +325,30 @@ const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
   DO_NOT_CALL: "bg-red-100 text-red-700",
 };
 
+function HealthTile({
+  label,
+  value,
+  hint,
+  urgent,
+}: {
+  label: string;
+  value: string | number;
+  hint?: string;
+  urgent?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2.5 ${
+        urgent ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-gray-50/80"
+      }`}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</p>
+      <p className={`text-xl font-bold tabular-nums ${urgent ? "text-amber-900" : "text-gray-900"}`}>{value}</p>
+      {hint ? <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">{hint}</p> : null}
+    </div>
+  );
+}
+
 // ── Callback Cell ─────────────────────────────────────────────────────────────
 
 function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
@@ -598,10 +622,9 @@ export default function CampaignDetailPage() {
   const [nameInput, setNameInput] = useState("");
   const [error, setError] = useState("");
 
-  // Workload summary
+  // Workload summary (admin — loaded automatically for health + workload strip)
   const [workload, setWorkload] = useState<WorkloadRow[]>([]);
   const [workloadLoading, setWorkloadLoading] = useState(false);
-  const [showWorkload, setShowWorkload] = useState(false);
 
   // Distribute modal
   const [distributeOpen, setDistributeOpen] = useState(false);
@@ -899,6 +922,42 @@ export default function CampaignDetailPage() {
 
   const bulkSelectableMembers = filteredMembers.filter((m) => isAdmin || m.queueWorkEligible !== false);
 
+  const queueFilteredHref = `/crm/queue?campaignId=${encodeURIComponent(campaignId)}`;
+
+  const healthDerived = useMemo(() => {
+    if (!campaign) return null;
+    const sc = campaign.statusCounts;
+    const pending = sc["PENDING"] ?? 0;
+    const inProgress = sc["IN_PROGRESS"] ?? 0;
+    const callback = sc["CALLBACK"] ?? 0;
+    const contactedOnly = sc["CONTACTED"] ?? 0;
+    const converted = sc["CONVERTED"] ?? 0;
+    const skipped = sc["SKIPPED"] ?? 0;
+    const dnc = sc["DO_NOT_CALL"] ?? 0;
+    const total = campaign.memberCount;
+    const activeQueueWork = pending + inProgress;
+    const unassignedRow = workload.find((w) => w.userId === null);
+    const unassignedMembers = unassignedRow?.total ?? 0;
+    const contactedProgress = contactedOnly + callback + converted;
+    const terminal = converted + skipped + dnc;
+    const archivedInLoaded = members.filter((m) => m.queueWorkEligible === false).length;
+    return {
+      pending,
+      inProgress,
+      callback,
+      contactedOnly,
+      converted,
+      skipped,
+      dnc,
+      total,
+      activeQueueWork,
+      unassignedMembers,
+      contactedProgress,
+      terminal,
+      archivedInLoaded,
+    };
+  }, [campaign, workload, members]);
+
   const importCtxKey = importFile ? importPreviewContextKey(importFile, importAssigneeId) : null;
   const importReady =
     !!importFile && !!importPreview && !!importCtxKey && importPreviewContextKeyState === importCtxKey;
@@ -927,10 +986,7 @@ export default function CampaignDetailPage() {
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-400">Loading…</p></div>;
   if (!campaign) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-red-500">{error || "Campaign not found"}</p></div>;
 
-  const pending = campaign.statusCounts["PENDING"] ?? 0;
-  const contacted = (campaign.statusCounts["CONTACTED"] ?? 0) + (campaign.statusCounts["CALLBACK"] ?? 0);
-  const converted = campaign.statusCounts["CONVERTED"] ?? 0;
-  const total = campaign.memberCount;
+  const hd = healthDerived!;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -949,88 +1005,274 @@ export default function CampaignDetailPage() {
           Campaigns
         </button>
 
-        {/* Campaign header card */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
+        {/* Campaign hero + primary actions */}
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-6 mb-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
               {editingName ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <input
                     autoFocus
                     value={nameInput}
                     onChange={(e) => setNameInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
-                    className="text-xl font-bold border border-gray-300 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full max-w-sm"
+                    className="text-xl font-bold border border-gray-300 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full max-w-md"
                   />
-                  <button onClick={saveName} className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"><Save className="h-4 w-4" /></button>
-                  <button onClick={() => setEditingName(false)} className="p-1.5 border border-gray-300 rounded hover:bg-gray-50"><X className="h-4 w-4" /></button>
+                  <button type="button" onClick={saveName} className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"><Save className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => setEditingName(false)} className="p-1.5 border border-gray-300 rounded hover:bg-gray-50"><X className="h-4 w-4" /></button>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl font-bold text-gray-900">{campaign.name}</h1>
-                  <button onClick={() => setEditingName(true)} className="p-1 text-gray-400 hover:text-gray-600 rounded"><Edit2 className="h-4 w-4" /></button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{campaign.name}</h1>
+                  <button type="button" onClick={() => setEditingName(true)} className="p-1 text-gray-400 hover:text-gray-600 rounded" aria-label="Edit campaign name"><Edit2 className="h-4 w-4" /></button>
                 </div>
               )}
-              {campaign.description && <p className="text-sm text-gray-500 mt-1">{campaign.description}</p>}
-
-              <div className="flex flex-wrap items-center gap-3 mt-3">
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[campaign.status]}`}>
+              <p className="text-sm text-gray-600 mt-1.5">
+                {campaign.description?.trim()
+                  ? campaign.description
+                  : `${STATUS_LABELS[campaign.status]} · ${PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority · ${hd.total} member${hd.total !== 1 ? "s" : ""}`}
+              </p>
+              <div className="flex flex-wrap items-center gap-2 mt-2.5">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold ${STATUS_COLORS[campaign.status]}`}>
                   {STATUS_LABELS[campaign.status]}
                 </span>
-                {(campaign.priority ?? "NORMAL") !== "NORMAL" && (
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${PRIORITY_COLORS[campaign.priority ?? "NORMAL"]}`}>
-                    {PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority
-                  </span>
-                )}
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold ${PRIORITY_COLORS[campaign.priority ?? "NORMAL"]}`}>
+                  {PRIORITY_LABELS[campaign.priority ?? "NORMAL"]}
+                </span>
                 {campaign.script && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Script: {campaign.script.name}</span>
+                  <span className="text-xs text-gray-500">Script: <span className="font-medium text-gray-700">{campaign.script.name}</span></span>
                 )}
                 {campaign.checklist && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Checklist: {campaign.checklist.name}</span>
+                  <span className="text-xs text-gray-500">Checklist: <span className="font-medium text-gray-700">{campaign.checklist.name}</span></span>
                 )}
               </div>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              {campaign.status === "DRAFT" && (
-                <button onClick={() => updateCampaign({ status: "ACTIVE" })} className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                  <Play className="h-4 w-4" />Start
-                </button>
-              )}
-              {campaign.status === "ACTIVE" && (
-                <button onClick={() => updateCampaign({ status: "PAUSED" })} className="flex items-center gap-1.5 px-3 py-2 bg-yellow-500 text-white rounded-lg text-sm font-medium hover:bg-yellow-600">
-                  <Pause className="h-4 w-4" />Pause
-                </button>
-              )}
-              {campaign.status === "PAUSED" && (
-                <button onClick={() => updateCampaign({ status: "ACTIVE" })} className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                  <Play className="h-4 w-4" />Resume
-                </button>
-              )}
-              {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
-                <button onClick={() => { if (confirm("Archive this campaign?")) updateCampaign({ status: "ARCHIVED" }); }} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50">
-                  <Archive className="h-4 w-4" />Archive
-                </button>
-              )}
-              <button onClick={exportCsv} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50" title="Export CSV">
-                <Download className="h-4 w-4" />Export
-              </button>
-            </div>
           </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-5 pt-5 border-t border-gray-100">
-            <div className="text-center"><p className="text-2xl font-bold text-gray-900">{total}</p><p className="text-xs text-gray-500 mt-0.5">Total</p></div>
-            <div className="text-center"><p className="text-2xl font-bold text-gray-600">{pending}</p><p className="text-xs text-gray-500 mt-0.5">Pending</p></div>
-            <div className="text-center"><p className="text-2xl font-bold text-blue-600">{contacted}</p><p className="text-xs text-gray-500 mt-0.5">Contacted</p></div>
-            <div className="text-center"><p className="text-2xl font-bold text-green-600">{converted}</p><p className="text-xs text-gray-500 mt-0.5">Converted</p></div>
+          <div className="flex flex-wrap gap-2 mt-5 pt-4 border-t border-gray-100">
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setImportOpen(true);
+                  setImportErr("");
+                  setImportSummary(null);
+                  setImportFile(null);
+                  setImportAssigneeId("");
+                  setImportPreview(null);
+                  setImportPreviewContextKeyState(null);
+                  setImportCompareBaseline(null);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
+              >
+                <Upload className="h-4 w-4 shrink-0" />
+                Import leads
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowAddContacts(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              Add existing contacts
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+              >
+                <Shuffle className="h-4 w-4 shrink-0" />
+                Distribute leads
+              </button>
+            )}
+            <Link
+              href={queueFilteredHref}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-blue-200 text-blue-800 bg-blue-50/80 hover:bg-blue-100"
+            >
+              <ListOrdered className="h-4 w-4 shrink-0" />
+              View My Queue
+            </Link>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mt-3">
+            {campaign.status === "DRAFT" && (
+              <button type="button" onClick={() => updateCampaign({ status: "ACTIVE" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-green-200 text-green-800 bg-green-50 hover:bg-green-100">
+                <Play className="h-3.5 w-3.5" />Start campaign
+              </button>
+            )}
+            {campaign.status === "ACTIVE" && (
+              <button type="button" onClick={() => updateCampaign({ status: "PAUSED" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-amber-200 text-amber-900 bg-amber-50 hover:bg-amber-100">
+                <Pause className="h-3.5 w-3.5" />Pause
+              </button>
+            )}
+            {campaign.status === "PAUSED" && (
+              <button type="button" onClick={() => updateCampaign({ status: "ACTIVE" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-green-200 text-green-800 bg-green-50 hover:bg-green-100">
+                <Play className="h-3.5 w-3.5" />Resume
+              </button>
+            )}
+            {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
+              <button type="button" onClick={() => { if (confirm("Archive this campaign?")) updateCampaign({ status: "ARCHIVED" }); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50">
+                <Archive className="h-3.5 w-3.5" />Archive
+              </button>
+            )}
+            <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50" title="Export member CSV">
+              <Download className="h-3.5 w-3.5" />Export CSV
+            </button>
           </div>
         </div>
 
-        {/* Script / Checklist / Priority */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
-          <h2 className="font-semibold text-gray-900 mb-4">Settings</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        {/* Health snapshot — real aggregates only */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+          <HealthTile label="Total members" value={hd.total} />
+          <HealthTile label="Active queue work" value={hd.activeQueueWork} hint="Pending + in progress" />
+          <HealthTile label="Callbacks scheduled" value={hd.callback} hint="Members in CALLBACK status" urgent={hd.callback > 0} />
+          {isAdmin ? (
+            <HealthTile label="Unassigned" value={hd.unassignedMembers} hint="No owner on member rows" urgent={hd.unassignedMembers > 0} />
+          ) : (
+            <HealthTile label="Terminal outcomes" value={hd.terminal} hint="Converted, skipped, DNC" />
+          )}
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 mb-5 text-sm text-gray-700 flex flex-wrap gap-x-6 gap-y-1 items-center">
+          <span>
+            <span className="text-gray-500">Converted</span>{" "}
+            <strong className="text-gray-900 tabular-nums">{hd.converted}</strong>
+            <span className="text-gray-400"> / {hd.total}</span>
+          </span>
+          <span className="text-gray-300 hidden sm:inline">|</span>
+          <span>
+            <span className="text-gray-500">Contacted + engaged</span>{" "}
+            <strong className="text-gray-900 tabular-nums">{hd.contactedProgress}</strong>
+            <span className="text-gray-400"> with outcomes or callbacks</span>
+          </span>
+          {importHistory[0] ? (
+            <>
+              <span className="text-gray-300 hidden sm:inline">|</span>
+              <span className="text-gray-500">
+                Last import: <span className="text-gray-800 font-medium">{formatImportTimestamp(importHistory[0].createdAt)}</span>
+                {importHistory[0].fileName ? ` · ${importHistory[0].fileName}` : ""}
+              </span>
+            </>
+          ) : !importHistoryLoading ? (
+            <>
+              <span className="text-gray-300 hidden sm:inline">|</span>
+              <span className="text-gray-500">No campaign CSV imports recorded yet.</span>
+            </>
+          ) : null}
+          {hd.archivedInLoaded > 0 ? (
+            <>
+              <span className="text-gray-300 hidden sm:inline">|</span>
+              <span className="text-amber-800 text-xs">
+                Read-only / archived in this list: {hd.archivedInLoaded}
+                {membersTotal > members.length ? " (visible page)" : ""}
+              </span>
+            </>
+          ) : null}
+        </div>
+
+        {/* Manager next steps — links and modals only; no invented metrics */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4 sm:p-5 mb-5 shadow-sm">
+          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Next operational actions</h2>
+          <ul className="space-y-2.5">
+            {isAdmin && hd.unassignedMembers > 0 ? (
+              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Unassigned members</p>
+                  <p className="text-xs text-gray-600 mt-0.5">{hd.unassignedMembers} lead{hd.unassignedMembers !== 1 ? "s" : ""} still need an owner — distribute across agents.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                  >
+                    Distribute…
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white"
+                  >
+                    Filter members
+                  </button>
+                </div>
+              </li>
+            ) : null}
+            {hd.callback > 0 ? (
+              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Scheduled callbacks</p>
+                  <p className="text-xs text-gray-600 mt-0.5">{hd.callback} member{hd.callback !== 1 ? "s" : ""} in CALLBACK status — work them from the queue.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <Link href={`${queueFilteredHref}&filter=overdue`} className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                    Overdue queue
+                  </Link>
+                  <Link href={`${queueFilteredHref}&filter=due`} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                    Due today
+                  </Link>
+                </div>
+              </li>
+            ) : null}
+            {hd.total === 0 ? (
+              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-blue-100 bg-blue-50/40 px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">No members yet</p>
+                  <p className="text-xs text-gray-600 mt-0.5">Import a CSV or add existing contacts to populate this campaign.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportOpen(true);
+                        setImportErr("");
+                        setImportSummary(null);
+                        setImportFile(null);
+                        setImportAssigneeId("");
+                        setImportPreview(null);
+                        setImportPreviewContextKeyState(null);
+                        setImportCompareBaseline(null);
+                      }}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      Import leads
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setShowAddContacts(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                    Add contacts
+                  </button>
+                </div>
+              </li>
+            ) : null}
+            {isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading ? (
+              <li className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5 text-sm text-gray-700">
+                <span className="font-semibold text-gray-900">Import history is empty.</span>{" "}
+                <span className="text-xs text-gray-600">When you run a campaign CSV import, batches will appear in Recent imports below.</span>
+              </li>
+            ) : null}
+            {hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin ? (
+              <li className="rounded-lg border border-gray-100 px-3 py-2.5 text-xs text-gray-600">
+                High pending volume ({hd.pending}) — review workload below and balance assignments if needed.
+              </li>
+            ) : null}
+            {!((isAdmin && hd.unassignedMembers > 0) || hd.callback > 0 || hd.total === 0 || (isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading) || (hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin)) ? (
+              <li className="text-xs text-gray-500 px-1 py-1">
+                No extra alerts for this snapshot — use members, queue, or imports above as needed.
+              </li>
+            ) : null}
+          </ul>
+        </div>
+
+        {/* Script / Checklist / Priority — collapsed by default to reduce clutter */}
+        <details className="group rounded-xl border border-gray-200 bg-white mb-5 shadow-sm open:ring-1 open:ring-gray-100">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-gray-900 hover:bg-gray-50/80 rounded-xl [&::-webkit-details-marker]:hidden">
+            <span>Campaign settings</span>
+            <ChevronDown className="h-4 w-4 text-gray-400 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="px-4 pb-4 pt-0 border-t border-gray-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 pt-4">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Call Script</label>
               <select
@@ -1087,13 +1329,14 @@ export default function CampaignDetailPage() {
                     : "Default ranking — same as other Normal campaigns."}
             </p>
           </div>
-        </div>
+          </div>
+        </details>
 
         {/* Campaign CSV import history (real CrmImportBatch rows only) */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5 mb-5 shadow-sm">
           <div className="flex items-center gap-2 mb-3">
             <History className="h-4 w-4 text-gray-500" />
-            <h2 className="font-semibold text-gray-900">Recent imports</h2>
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight">Recent imports</h2>
           </div>
           {importHistoryLoading ? (
             <p className="text-sm text-gray-400">Loading import history…</p>
@@ -1105,12 +1348,12 @@ export default function CampaignDetailPage() {
               </p>
             </div>
           ) : (
-            <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+            <ul className="space-y-2">
               {importHistory.map((row) => {
                 const st = CAMPAIGN_IMPORT_STATUS_STYLE[row.status] ?? "bg-gray-50 text-gray-800 border-gray-200";
                 const hasIssues = row.errorCount > 0 || row.status === "PARTIAL" || row.status === "FAILED";
                 return (
-                  <li key={row.id} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 bg-white hover:bg-gray-50/80">
+                  <li key={row.id} className="rounded-xl border border-gray-100 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 hover:border-gray-200 shadow-sm">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-gray-900 truncate" title={row.fileName}>
@@ -1160,87 +1403,65 @@ export default function CampaignDetailPage() {
         </div>
 
         {/* Members */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <h2 className="font-semibold text-gray-900">
-              Members <span className="text-gray-400 font-normal text-sm">({membersTotal})</span>
-            </h2>
-            <div className="flex items-center gap-2">
-              {isAdmin && (
-                <>
-                  <button
-                    onClick={() => { setShowWorkload((v) => !v); if (!showWorkload) loadWorkload(); }}
-                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
-                    title="Workload summary"
-                  >
-                    <BarChart2 className="h-4 w-4" />Workload
-                  </button>
-                  <button
-                    onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
-                    title="Distribute unassigned leads"
-                  >
-                    <Shuffle className="h-4 w-4" />Distribute
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setImportOpen(true);
-                      setImportErr("");
-                      setImportSummary(null);
-                      setImportFile(null);
-                      setImportAssigneeId("");
-                      setImportPreview(null);
-                      setImportPreviewContextKeyState(null);
-                      setImportCompareBaseline(null);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
-                    title="Import leads from CSV"
-                  >
-                    <Upload className="h-4 w-4" />Import CSV
-                  </button>
-                </>
-              )}
-              <button onClick={() => setShowAddContacts(true)} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-                <Plus className="h-4 w-4" />Add Contacts
-              </button>
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 tracking-tight">
+                Members <span className="text-gray-400 font-semibold text-sm">({membersTotal})</span>
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Filters apply server-side (100 per load). Import, distribute, and queue shortcuts live in the header above.
+              </p>
             </div>
           </div>
 
-          {/* Workload summary */}
-          {isAdmin && showWorkload && (
-            <div className="mb-5 p-4 bg-gray-50 border border-gray-200 rounded-xl overflow-x-auto">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700">Agent Workload</h3>
-                {workloadLoading && <span className="text-xs text-gray-400">Loading…</span>}
+          {/* Workload — admin only; always visible when data exists */}
+          {isAdmin && (
+            <div className="mb-5 rounded-xl border border-gray-100 bg-gray-50/80 p-3 sm:p-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <BarChart2 className="h-3.5 w-3.5" />
+                  Team workload
+                </h3>
+                {workloadLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
               </div>
               {workload.length === 0 && !workloadLoading ? (
-                <p className="text-xs text-gray-400">No members assigned yet.</p>
+                <p className="text-xs text-gray-500">No assignment rows yet — add or import members first.</p>
               ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-gray-500 border-b border-gray-200">
-                      <th className="pb-1.5 font-medium pr-4">Agent</th>
-                      <th className="pb-1.5 font-medium text-right pr-3">Pending</th>
-                      <th className="pb-1.5 font-medium text-right pr-3">Callback</th>
-                      <th className="pb-1.5 font-medium text-right pr-3">Contacted</th>
-                      <th className="pb-1.5 font-medium text-right pr-3">Converted</th>
-                      <th className="pb-1.5 font-medium text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {workload.map((row) => (
-                      <tr key={row.userId ?? "__unassigned__"} className={row.userId === null ? "text-gray-400 italic" : ""}>
-                        <td className="py-1.5 pr-4 font-medium">{row.displayName}</td>
-                        <td className="py-1.5 text-right pr-3">{row.pending + row.inProgress || "—"}</td>
-                        <td className="py-1.5 text-right pr-3">{row.callbacks || "—"}</td>
-                        <td className="py-1.5 text-right pr-3">{row.contacted || "—"}</td>
-                        <td className="py-1.5 text-right pr-3 text-green-600 font-medium">{row.converted || "—"}</td>
-                        <td className="py-1.5 text-right font-semibold">{row.total}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {workload.map((row) => {
+                    const active = row.pending + row.inProgress;
+                    const terminal = row.converted + row.skipped + row.dnc;
+                    return (
+                      <div
+                        key={row.userId ?? "__unassigned__"}
+                        className={`rounded-xl border bg-white px-3 py-2.5 ${row.userId === null ? "border-amber-200 bg-amber-50/40" : "border-gray-200"}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className={`text-sm font-semibold truncate ${row.userId === null ? "text-amber-900 italic" : "text-gray-900"}`}>
+                            {row.displayName}
+                          </p>
+                          <span className="text-xs font-bold text-gray-700 tabular-nums shrink-0">{row.total}</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-600">
+                          <span><span className="text-gray-400">Active</span> {active}</span>
+                          <span><span className="text-gray-400">CB</span> {row.callbacks}</span>
+                          <span><span className="text-gray-400">Contacted</span> {row.contacted}</span>
+                          <span><span className="text-gray-400">Terminal</span> {terminal}</span>
+                        </div>
+                        {row.userId === null && row.total > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+                            className="mt-2 w-full sm:w-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                          >
+                            Redistribute unassigned…
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
@@ -1682,87 +1903,80 @@ export default function CampaignDetailPage() {
               <button onClick={() => setShowAddContacts(true)} className="mt-3 text-sm text-blue-600 hover:underline">Add contacts to get started</button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
-                    <th className="pb-2 pr-3 w-8">
-                      <button type="button" onClick={toggleSelectAll} className="p-0.5 hover:text-blue-600">
-                        {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
-                          ? <CheckSquare2 className="h-4 w-4 text-blue-600" />
-                          : <Square className="h-4 w-4" />}
-                      </button>
-                    </th>
-                    <th className="pb-2 font-medium">Contact</th>
-                    <th className="pb-2 font-medium">Phone</th>
-                    <th className="pb-2 font-medium">Stage</th>
-                    <th className="pb-2 font-medium">Status</th>
-                    <th className="pb-2 font-medium">Attempts</th>
-                    <th className="pb-2 font-medium">Callback</th>
-                    <th className="pb-2 font-medium">Assigned</th>
-                    <th className="pb-2 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {filteredMembers.map((m) => {
-                    const archivedLead = m.queueWorkEligible === false;
-                    const agentCannotAct = !isAdmin && archivedLead;
-                    return (
-                      <tr
-                        key={m.id}
-                        className={`hover:bg-gray-50 ${selected.has(m.id) ? "bg-blue-50/50" : ""} ${archivedLead ? "opacity-80 bg-gray-50/80" : ""}`}
-                      >
-                        <td className="py-3 pr-3">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(m.id)}
-                            disabled={agentCannotAct}
-                            onChange={(e) => {
-                              const s = new Set(selected);
-                              if (e.target.checked) s.add(m.id);
-                              else s.delete(m.id);
-                              setSelected(s);
-                            }}
-                            className="rounded disabled:opacity-40"
-                          />
-                        </td>
-                        <td className="py-3">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
-                              className="font-medium text-blue-600 hover:underline text-left"
-                            >
-                              {m.contact?.displayName ?? "Unknown"}
-                            </button>
-                            {archivedLead && (
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-600 bg-gray-200 px-1.5 py-0.5 rounded">
-                                Archived
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-3 text-gray-600">{m.contact?.primaryPhone ?? "—"}</td>
-                        <td className="py-3 text-gray-500 text-xs">{m.contact?.crmStage ?? "—"}</td>
-                        <td className="py-3">
-                          {agentCannotAct ? (
-                            <span className={`text-xs px-2 py-1 rounded ${MEMBER_STATUS_COLORS[m.status]}`}>
-                              {MEMBER_STATUS_LABELS[m.status]}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 px-1 pb-1">
+                <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-gray-200 hover:bg-gray-50" aria-label="Select all visible members">
+                  {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
+                    ? <CheckSquare2 className="h-4 w-4 text-blue-600" />
+                    : <Square className="h-4 w-4 text-gray-400" />}
+                </button>
+                <span className="text-xs text-gray-500">Select all eligible in this list</span>
+              </div>
+              {filteredMembers.map((m) => {
+                const archivedLead = m.queueWorkEligible === false;
+                const agentCannotAct = !isAdmin && archivedLead;
+                return (
+                  <div
+                    key={m.id}
+                    className={`rounded-xl border px-3 py-3 transition-colors ${
+                      selected.has(m.id) ? "border-blue-300 bg-blue-50/40" : "border-gray-200 bg-white hover:border-gray-300"
+                    } ${archivedLead ? "opacity-85 bg-gray-50/90" : ""}`}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-start gap-3">
+                      <div className="flex items-start gap-2 shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(m.id)}
+                          disabled={agentCannotAct}
+                          onChange={(e) => {
+                            const s = new Set(selected);
+                            if (e.target.checked) s.add(m.id);
+                            else s.delete(m.id);
+                            setSelected(s);
+                          }}
+                          className="rounded mt-1 disabled:opacity-40"
+                          aria-label={`Select ${m.contact?.displayName ?? "member"}`}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
+                            className="font-semibold text-blue-700 hover:underline text-left"
+                          >
+                            {m.contact?.displayName ?? "Unknown"}
+                          </button>
+                          {archivedLead && (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">
+                              Archived
                             </span>
-                          ) : (
-                            <select
-                              value={m.status}
-                              onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
-                              className={`text-xs px-2 py-1 rounded border-0 cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none`}
-                            >
-                              {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                                <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
-                              ))}
-                            </select>
                           )}
-                        </td>
-                        <td className="py-3 text-center text-gray-600">{m.attemptCount}</td>
-                        <td className="py-3">
+                        </div>
+                        <p className="text-xs text-gray-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                          <span>{m.contact?.primaryPhone ?? "—"}</span>
+                          <span className="text-gray-400">Stage: {m.contact?.crmStage ?? "—"}</span>
+                          <span className="text-gray-400">{m.attemptCount} attempt{m.attemptCount !== 1 ? "s" : ""}</span>
+                          <span className="text-gray-400">{m.assignedTo?.displayName ?? "Unassigned"}</span>
+                        </p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row flex-wrap gap-2 lg:justify-end lg:items-center shrink-0">
+                        {agentCannotAct ? (
+                          <span className={`text-xs px-2 py-1.5 rounded-lg ${MEMBER_STATUS_COLORS[m.status]}`}>
+                            {MEMBER_STATUS_LABELS[m.status]}
+                          </span>
+                        ) : (
+                          <select
+                            value={m.status}
+                            onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
+                            className={`text-xs px-2 py-1.5 rounded-lg border border-gray-200 cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                          >
+                            {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
+                              <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
+                            ))}
+                          </select>
+                        )}
+                        <div className="min-w-[8rem]">
                           <CallbackCell
                             member={m}
                             campaignId={campaignId}
@@ -1770,25 +1984,22 @@ export default function CampaignDetailPage() {
                             token={token}
                             readOnly={agentCannotAct}
                           />
-                        </td>
-                        <td className="py-3 text-gray-500 text-xs">{m.assignedTo?.displayName ?? "Unassigned"}</td>
-                        <td className="py-3">
-                          <button
-                            type="button"
-                            onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
-                            disabled={agentCannotAct}
-                            className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={agentCannotAct ? "Lead is archived — not live queue work" : "Open Live Workspace"}
-                          >
-                            <PhoneCall className="h-3 w-3" />
-                            Call
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
+                          disabled={agentCannotAct}
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={agentCannotAct ? "Lead is archived — not live queue work" : "Open Live Workspace"}
+                        >
+                          <PhoneCall className="h-3.5 w-3.5 shrink-0" />
+                          Workspace
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

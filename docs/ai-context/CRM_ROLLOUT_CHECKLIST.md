@@ -161,6 +161,20 @@
 | Power campaign | Campaign filter available in power mode (same `campaignId` / clear behavior as manual). |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 18C — Campaign detail SaaS UX (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/campaigns/[id]` loads; campaign, members, imports, and workload data from existing CRM APIs only — no fabricated metrics. |
+| Hero | Campaign name, status, priority, description or factual status line; primary actions: **Import leads** (admin), **Add existing contacts**, **Distribute leads** (admin), **View My Queue** with `campaignId` filter; secondary: start/pause/resume, archive, export CSV. |
+| Health row | Tiles use real `statusCounts` / `memberCount`; unassigned total from admin `GET .../workload` when available; callback count labeled as CALLBACK status (not implied overdue totals); progress line uses converted / total and honest import timestamp. |
+| Next operational actions | Conditional rows only (unassigned → distribute / filter; CALLBACK → queue due/overdue links; empty campaign → import/add; optional high-pending note). No fake “insights.” |
+| Settings | Script, checklist, smart priority in collapsible **Campaign settings** — same `PATCH` behavior as before. |
+| Recent imports | Phase 17C data unchanged; card-style list; **Batch details →** still links to `/crm/import?batch=`. |
+| Members | Compact cards (not primary wide table); archived / `queueWorkEligible === false` remains non-actionable; status `PATCH`, callback cell, bulk assign, filters, and workspace link unchanged. |
+| Workload (admin) | Scannable cards per assignee row from `GET .../workload`; **Redistribute unassigned** opens existing distribute modal. |
+| Import modal | Preview / import guard and Phase 17A/17B preview UI unchanged (`POST .../import/preview`, `POST .../import` via portal proxy). |
+
 ---
 
 ## 7. Reports
