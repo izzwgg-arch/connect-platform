@@ -9,6 +9,7 @@ import {
   mappingHasPhoneOrEmail,
   processImportRow,
   readCrmImportMultipart,
+  displayFileNameFromCrmImportBatchStoredName,
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
@@ -212,7 +213,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
 function formatBatch(b: any) {
   return {
     id: b.id,
-    fileName: b.fileName,
+    fileName: displayFileNameFromCrmImportBatchStoredName(b.fileName),
     status: b.status as string,
     totalRows: b.totalRows,
     processedRows: b.processedRows,

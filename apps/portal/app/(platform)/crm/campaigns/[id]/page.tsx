@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   ArrowLeft, Play, Pause, Archive, Users, Plus, Search,
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
-  Shuffle, BarChart2, Upload,
+  Shuffle, BarChart2, Upload, History,
 } from "lucide-react";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -72,6 +73,57 @@ type CrmUser = {
   crmRole: string | null;
   crmEnabled: boolean;
 };
+
+type CampaignImportHistoryRow = {
+  id: string;
+  createdAt: string;
+  completedAt: string | null;
+  status: string;
+  fileName: string;
+  totalRows: number;
+  processedRows: number;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  errorCount: number;
+  createdBy: { id: string; displayName: string } | null;
+};
+
+const CAMPAIGN_IMPORT_STATUS_STYLE: Record<string, string> = {
+  PENDING: "bg-gray-100 text-gray-700 border-gray-200",
+  PROCESSING: "bg-blue-50 text-blue-800 border-blue-200",
+  DONE: "bg-green-50 text-green-800 border-green-200",
+  PARTIAL: "bg-amber-50 text-amber-900 border-amber-200",
+  FAILED: "bg-red-50 text-red-800 border-red-200",
+};
+
+function campaignImportStatusLabel(s: string) {
+  switch (s) {
+    case "PENDING":
+      return "Pending";
+    case "PROCESSING":
+      return "Processing";
+    case "DONE":
+      return "Done";
+    case "PARTIAL":
+      return "Partial";
+    case "FAILED":
+      return "Failed";
+    default:
+      return s;
+  }
+}
+
+function formatImportTimestamp(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 type CampaignImportSummary = {
   batchId: string;
@@ -577,7 +629,28 @@ export default function CampaignDetailPage() {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkMsg, setBulkMsg] = useState("");
 
+  const [importHistory, setImportHistory] = useState<CampaignImportHistoryRow[]>([]);
+  const [importHistoryLoading, setImportHistoryLoading] = useState(false);
+
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+
+  const loadCampaignImports = useCallback(async () => {
+    setImportHistoryLoading(true);
+    try {
+      const res = await apiGet<{ imports: CampaignImportHistoryRow[] }>(
+        `/crm/campaigns/${campaignId}/imports?limit=20`,
+        token
+      );
+      setImportHistory(res.imports ?? []);
+    } catch {
+      setImportHistory([]);
+    }
+    setImportHistoryLoading(false);
+  }, [campaignId, token]);
+
+  useEffect(() => {
+    void loadCampaignImports();
+  }, [loadCampaignImports]);
 
   useEffect(() => {
     setImportPreview(null);
@@ -728,7 +801,7 @@ export default function CampaignDetailPage() {
       }
       setImportSummary(data as CampaignImportSummary);
       setImportCompareBaseline(baseline);
-      await Promise.all([loadCampaign(), loadMembers(), loadWorkload()]);
+      await Promise.all([loadCampaign(), loadMembers(), loadWorkload(), loadCampaignImports()]);
       setImportFile(null);
       setImportPreview(null);
       setImportPreviewContextKeyState(null);
@@ -1014,6 +1087,76 @@ export default function CampaignDetailPage() {
                     : "Default ranking — same as other Normal campaigns."}
             </p>
           </div>
+        </div>
+
+        {/* Campaign CSV import history (real CrmImportBatch rows only) */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <History className="h-4 w-4 text-gray-500" />
+            <h2 className="font-semibold text-gray-900">Recent imports</h2>
+          </div>
+          {importHistoryLoading ? (
+            <p className="text-sm text-gray-400">Loading import history…</p>
+          ) : importHistory.length === 0 ? (
+            <div className="text-sm text-gray-600 space-y-1">
+              <p>No campaign-linked import batches yet.</p>
+              <p className="text-gray-500 text-xs">
+                CSV runs started with <strong>Import CSV</strong> on this page appear here. Standalone imports from Import Leads stay on that page only. Older data may be missing if it predates this linkage.
+              </p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+              {importHistory.map((row) => {
+                const st = CAMPAIGN_IMPORT_STATUS_STYLE[row.status] ?? "bg-gray-50 text-gray-800 border-gray-200";
+                const hasIssues = row.errorCount > 0 || row.status === "PARTIAL" || row.status === "FAILED";
+                return (
+                  <li key={row.id} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 bg-white hover:bg-gray-50/80">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900 truncate" title={row.fileName}>
+                          {row.fileName}
+                        </span>
+                        <span
+                          className={`text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded border ${st}`}
+                        >
+                          {campaignImportStatusLabel(row.status)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {formatImportTimestamp(row.createdAt)}
+                        {row.createdBy ? ` · ${row.createdBy.displayName}` : ""}
+                        {row.totalRows > 0
+                          ? ` · ${row.totalRows} row${row.totalRows !== 1 ? "s" : ""}`
+                          : ""}
+                      </p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        <span className="text-green-700 font-medium">{row.createdCount}</span> created
+                        <span className="text-gray-400 mx-1">·</span>
+                        <span className="text-blue-700 font-medium">{row.updatedCount}</span> updated
+                        <span className="text-gray-400 mx-1">·</span>
+                        <span className="text-gray-600 font-medium">{row.skippedCount}</span> skipped
+                        {row.errorCount > 0 && (
+                          <>
+                            <span className="text-gray-400 mx-1">·</span>
+                            <span className="text-red-700 font-medium">{row.errorCount}</span> errors
+                          </>
+                        )}
+                      </p>
+                      {hasIssues && row.errorCount === 0 && (
+                        <p className="text-[11px] text-amber-800 mt-1">Review import details for skipped rows or enrollment notes.</p>
+                      )}
+                    </div>
+                    <Link
+                      href={`/crm/import?batch=${encodeURIComponent(row.id)}`}
+                      className="text-sm font-medium text-blue-600 hover:text-blue-800 shrink-0"
+                    >
+                      Batch details →
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
         {/* Members */}

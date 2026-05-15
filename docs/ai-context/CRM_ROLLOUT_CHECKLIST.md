@@ -93,6 +93,7 @@
 | Campaign auto-completes | When all **live-contact** non-terminal work is done (Phase 16D) — `PENDING`/`IN_PROGRESS`/`CALLBACK` only on active, non-archived contacts — campaign may become `status: "COMPLETED"` (also re-checked after contact soft-archive). |
 | Campaign CSV import preview (17A) | Admin opens Import CSV on campaign detail → select file → **Preview import** → `POST /crm/campaigns/:id/import/preview` returns counts + sample rows (no DB writes) → **Run import** stays disabled until preview succeeds for that file **and assignee** → final **Run import** calls `POST /crm/campaigns/:id/import`. |
 | Campaign CSV import preview UX (17B) | Preview shows **bucket cards** (new contacts, updated, new members, already in campaign, invalid rows), **warnings** when invalid or already-enrolled rows > 0, **grouped sample tables** by outcome (fallback flat table if grouping is not possible), **Ready to import** only when preview matches current file+assignee. After import, **comparison table** preview vs actual with mismatch callout if core totals diverge. |
+| Campaign import history (17C) | Campaign detail shows **Recent imports**: rows from `GET /crm/campaigns/:id/imports` only; **Batch details →** opens `/crm/import?batch=…` (full batch from `GET /crm/import/batches/:id`). Empty state when no tagged batches. |
 
 ### Phase 17A — Campaign CSV import preview (smoke)
 
@@ -112,6 +113,16 @@
 | Sample grouping | Sample rows render in outcome groups when `outcome` / `member` are present; otherwise a single flat table with an honest caption. |
 | Import guard | **Run import** disabled until preview succeeded for the current CSV **and** assignee selection. |
 | Post-import compare | After a successful import, modal shows preview vs actual table; **Data may have changed since preview** appears when created/updated/added/skipped counts diverge. |
+
+### Phase 17C — Campaign import history (smoke)
+
+| Check | Expected |
+|-------|----------|
+| API empty | `GET /crm/campaigns/:id/imports` on campaign with no CSV imports → **200**, `imports: []`. |
+| API populated | After `POST /crm/campaigns/:id/import`, same campaign → newest batch appears with correct `fileName` (human name, no `campaign:…` prefix), counts, status, `createdBy`. |
+| Tenant scope | Unknown or other-tenant `campaignId` in the URL path → **404** `not_found`. Listed batches are always `tenantId`-scoped. |
+| Portal panel | **Recent imports** lists same data; **Batch details** deep-links to Import Leads with batch expanded. |
+| No fake rows | Panel must **not** list imports inferred only from membership changes. |
 
 ---
 

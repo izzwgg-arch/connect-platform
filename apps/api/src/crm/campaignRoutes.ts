@@ -22,6 +22,8 @@ import {
   processImportRow,
   readCrmImportMultipart,
   runCampaignImportPreview,
+  crmCampaignImportBatchFilePrefix,
+  displayFileNameFromCrmImportBatchStoredName,
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
@@ -225,6 +227,58 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     statusCounts.forEach((r) => { counts[r.status] = r._count.id; });
 
     return { campaign: { ...formatCampaign(campaign, true), statusCounts: counts } };
+  });
+
+  // ── GET /crm/campaigns/:id/imports ─────────────────────────────────────────
+  // Real `CrmImportBatch` rows for CSV imports into this campaign (`fileName` prefix `campaign:{id}:`).
+  app.get("/crm/campaigns/:id/imports", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id: campaignId } = req.params as { id: string };
+
+    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
+    if (!campaign) return reply.code(404).send({ error: "not_found" });
+
+    const q = req.query as Record<string, string>;
+    const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? "20", 10)));
+    const prefix = crmCampaignImportBatchFilePrefix(campaignId);
+
+    const batches = await db.crmImportBatch.findMany({
+      where: { tenantId, fileName: { startsWith: prefix } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
+        },
+      },
+    });
+
+    return {
+      imports: batches.map((b) => ({
+        id: b.id,
+        createdAt: b.createdAt,
+        completedAt: b.completedAt,
+        status: b.status,
+        fileName: displayFileNameFromCrmImportBatchStoredName(b.fileName),
+        totalRows: b.totalRows,
+        processedRows: b.processedRows,
+        createdCount: b.createdCount,
+        updatedCount: b.updatedCount,
+        skippedCount: b.skippedCount,
+        errorCount: b.errorCount,
+        createdBy: b.createdBy
+          ? {
+              id: b.createdBy.id,
+              displayName:
+                b.createdBy.displayName ||
+                [b.createdBy.firstName, b.createdBy.lastName].filter(Boolean).join(" ") ||
+                b.createdBy.email,
+            }
+          : null,
+      })),
+    };
   });
 
   // ── PATCH /crm/campaigns/:id ───────────────────────────────────────────────
@@ -501,7 +555,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const batch = await db.crmImportBatch.create({
       data: {
         tenantId,
-        fileName: `campaign:${campaignId}:${fileName}`,
+        fileName: `${crmCampaignImportBatchFilePrefix(campaignId)}${fileName}`,
         status: "PROCESSING",
         totalRows: dataRows.length,
         mapping: colMapping as any,

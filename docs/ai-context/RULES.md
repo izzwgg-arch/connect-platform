@@ -614,6 +614,7 @@
     - Contacts are identified by normalized phone and/or email within the tenant; existing rows are updated (non-destructive fill-in) and must not be re-created.
     - Enrollment uses `CrmCampaignMember` with the same skip-if-already-member rule as `POST /crm/campaigns/:id/members/add`.
     - Standalone `/crm/import/upload` remains the general-purpose import; campaign import is an additive enrollment path only.
+    - **`GET /crm/campaigns/:id/imports` (Phase 17C)** returns **only** persisted `CrmImportBatch` rows for that campaign (`fileName` prefix `campaign:{campaignId}:`). Never synthesize or infer import history from contacts, campaign members, or activity logs.
 
 91. **CRM pilot readiness endpoint is read-only and admin-bounded (Phase 15A).**
     - `GET /crm/admin/pilot-readiness` uses `requireCrmAdmin` and returns only aggregate counts

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { FileUp, CheckCircle, AlertCircle, Clock, ChevronDown, ChevronUp, X } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
@@ -146,9 +147,18 @@ function BatchCard({ batch }: { batch: ImportBatch }) {
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
-
 export default function CrmImportPage() {
+  return (
+    <Suspense fallback={<div className="py-24 text-center text-gray-400 text-sm">Loading…</div>}>
+      <CrmImportPageInner />
+    </Suspense>
+  );
+}
+
+function CrmImportPageInner() {
+  const searchParams = useSearchParams();
+  const batchFromQuery = searchParams.get("batch");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Upload state
@@ -163,6 +173,11 @@ export default function CrmImportPage() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [showGuide, setShowGuide] = useState(false);
 
+  // Batch highlighted from campaign import history (?batch=id)
+  const [focusedBatch, setFocusedBatch] = useState<ImportBatch | null>(null);
+  const [focusedBatchLoading, setFocusedBatchLoading] = useState(false);
+  const [focusedBatchErr, setFocusedBatchErr] = useState<string | null>(null);
+
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -176,6 +191,38 @@ export default function CrmImportPage() {
   }, []);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  useEffect(() => {
+    if (!batchFromQuery?.trim()) {
+      setFocusedBatch(null);
+      setFocusedBatchErr(null);
+      setFocusedBatchLoading(false);
+      return;
+    }
+    const id = batchFromQuery.trim();
+    let cancelled = false;
+    setFocusedBatchLoading(true);
+    setFocusedBatchErr(null);
+    (async () => {
+      try {
+        const b = await apiGet<ImportBatch>(`/crm/import/batches/${encodeURIComponent(id)}`);
+        if (!cancelled) {
+          setFocusedBatch(b);
+          setFocusedBatchErr(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setFocusedBatch(null);
+          setFocusedBatchErr("Could not load this import batch.");
+        }
+      } finally {
+        if (!cancelled) setFocusedBatchLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [batchFromQuery]);
 
   // ── File selection handlers ───────────────────────────────────────────────
 
@@ -258,6 +305,26 @@ export default function CrmImportPage() {
         title="Import Leads"
         subtitle="Upload a CSV to bulk-import or enroll contacts into CRM. Existing contacts are matched by phone or email and never duplicated."
       />
+
+      {batchFromQuery?.trim() && (
+        <div className="panel" style={{ padding: "1rem 1.25rem", marginBottom: "1rem", borderLeft: "4px solid var(--accent, #3b82f6)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+            <p style={{ margin: 0, fontSize: "0.875rem", fontWeight: 600, color: "var(--text)" }}>Import batch from link</p>
+            <Link href="/crm/import" style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}>
+              Clear link
+            </Link>
+          </div>
+          {focusedBatchLoading && <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>Loading batch…</p>}
+          {focusedBatchErr && !focusedBatchLoading && (
+            <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "#ef4444" }}>{focusedBatchErr}</p>
+          )}
+          {focusedBatch && !focusedBatchLoading && (
+            <div style={{ marginTop: "0.75rem" }}>
+              <BatchCard batch={focusedBatch} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Upload card ────────────────────────────────────────────────────── */}
       <div className="panel" style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>

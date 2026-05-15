@@ -6,6 +6,17 @@ import { db } from "@connect/db";
 export const CRM_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 export const CRM_IMPORT_MAX_ROWS = 5_000;
 
+/** Prefix stored on `CrmImportBatch.fileName` for `POST /crm/campaigns/:id/import` runs (tenant + id scoped in query). */
+export function crmCampaignImportBatchFilePrefix(campaignId: string) {
+  return `campaign:${campaignId}:`;
+}
+
+/** Human-readable CSV name for API/UI. Strips `campaign:{id}:` when present; standalone uploads unchanged. */
+export function displayFileNameFromCrmImportBatchStoredName(storedFileName: string) {
+  const m = /^campaign:([^:]+):([\s\S]*)$/.exec(storedFileName);
+  return m ? m[2]! : storedFileName;
+}
+
 // ── CSV parser ───────────────────────────────────────────────────────────────
 
 export function parseCsv(text: string): string[][] {

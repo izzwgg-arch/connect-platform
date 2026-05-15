@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CampaignImportPreviewRegistry } from "./importPipeline";
+import {
+  CampaignImportPreviewRegistry,
+  crmCampaignImportBatchFilePrefix,
+  displayFileNameFromCrmImportBatchStoredName,
+} from "./importPipeline";
 
 test("preview registry dedupes same phone across synthetic creates", () => {
   const reg = new CampaignImportPreviewRegistry();
@@ -15,4 +19,27 @@ test("registerAliasesForExisting links new email to synthetic id", () => {
   const id = reg.createSyntheticFromRow({ phoneNorm: "111", emailRaw: "" });
   reg.registerAliasesForExisting(id, "111", "x@example.test");
   assert.equal(reg.lookup("111", "x@example.test"), id);
+});
+
+test("campaign import batch file prefix is stable for DB queries", () => {
+  const cid = "clxyzcampaignid012";
+  assert.equal(crmCampaignImportBatchFilePrefix(cid), `campaign:${cid}:`);
+});
+
+test("display name strips campaign tag for known campaign", () => {
+  const cid = "camp1";
+  const stored = `${crmCampaignImportBatchFilePrefix(cid)}leads-may.csv`;
+  assert.equal(displayFileNameFromCrmImportBatchStoredName(stored), "leads-may.csv");
+});
+
+test("display name leaves standalone imports unchanged", () => {
+  assert.equal(displayFileNameFromCrmImportBatchStoredName("normal-upload.csv"), "normal-upload.csv");
+});
+
+test("prefix + original reproduces stored campaign import fileName", () => {
+  const cid = "c2";
+  const orig = "foo.csv";
+  const stored = `${crmCampaignImportBatchFilePrefix(cid)}${orig}`;
+  assert.ok(stored.startsWith(crmCampaignImportBatchFilePrefix(cid)));
+  assert.equal(displayFileNameFromCrmImportBatchStoredName(stored), orig);
 });
