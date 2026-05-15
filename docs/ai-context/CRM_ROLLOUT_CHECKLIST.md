@@ -148,6 +148,19 @@
 | No polling | Hard reload — no `setInterval` / polling added on this page. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 18B — My Queue SaaS UX (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/queue` loads; data from existing `GET /crm/queue` (and related) only — no placeholder leads or fake recommendations. |
+| Work header (manual) | **My Queue** title, compact counts (pending / due / overdue / upcoming), smart vs original sort, campaign filter, refresh — visually grouped, not a dense default table as the primary surface. |
+| Next best lead | First queue item shown as the primary card with contact, campaign, stage, priority reason, attempts / last attempt, callback when set; **Open workspace**, **Call** only when SIP ready, outcome / skip / defer / DNC per existing gates; archived / `queueWorkEligible === false` rows read-only, not actionable. |
+| Queue list | Remaining items as compact cards or split layout — scanable, no wide table overflow as the default experience on tablet width. |
+| Empty states | Contextual copy (e.g. no due / caught up / switch to pending) with real navigation to filters — no invented coaching. |
+| Power mode | Sticky session bar, pause and wrap-up behavior unchanged; due/overdue filter toggle intact; SIP gating and keyboard guards unchanged; no auto-dial. |
+| Power campaign | Campaign filter available in power mode (same `campaignId` / clear behavior as manual). |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports

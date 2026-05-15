@@ -341,7 +341,7 @@ function PowerCard({
       {/* Status badge */}
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Current Lead</span>
+          <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Next best lead</span>
           {member.attemptCount > 0 && (
             <span className="text-xs text-gray-400">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
           )}
@@ -646,12 +646,16 @@ function MemberCard({
   filter,
   onAction,
   acting,
+  sipReady,
+  onDial,
 }: {
   member: QueueMember;
   isTop: boolean;
   filter: QueueFilter;
   onAction: (action: string, extra?: Record<string, unknown>) => void;
   acting: boolean;
+  sipReady?: boolean;
+  onDial?: () => void;
 }) {
   const router = useRouter();
   const contact = member.contact;
@@ -677,15 +681,21 @@ function MemberCard({
       )}
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          {isTop && <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">
-            {filter === "pending" ? "Next Up" : filter === "due" ? "Due Now" : filter === "overdue" ? "Overdue" : "Upcoming"}
-          </p>}
+          {isTop ? (
+            <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-1">Next best lead</p>
+          ) : null}
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className={`font-bold text-gray-900 truncate ${isTop ? "text-xl" : "text-base"}`}>{contact?.displayName ?? "Unknown"}</h2>
             {member.campaign && (
               <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded shrink-0">{member.campaign.name}</span>
             )}
           </div>
+          {isTop && priorityReason(member) && (
+            <p className="text-xs text-slate-600 mt-1 flex items-center gap-1">
+              <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
+              {priorityReason(member)}
+            </p>
+          )}
           {contact?.primaryPhone && (
             <p className="text-sm text-gray-600 mt-0.5">{contact.primaryPhone}</p>
           )}
@@ -726,10 +736,21 @@ function MemberCard({
 
       <div className="flex flex-wrap gap-2">
         <button onClick={openWorkspace} disabled={acting || !actionable} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm">
-          <PhoneCall className="h-4 w-4" />Open Workspace
+          <PhoneCall className="h-4 w-4" />Open workspace
         </button>
-        <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
-          <ExternalLink className="h-3.5 w-3.5" />Contact
+        {isTop && onDial && contact?.primaryPhone && (
+          <button
+            type="button"
+            onClick={onDial}
+            disabled={acting || !actionable || !sipReady}
+            className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50 shadow-sm"
+            title={!sipReady ? "Register your softphone to place calls" : undefined}
+          >
+            <PhoneCall className="h-4 w-4" />Call
+          </button>
+        )}
+        <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-emerald-300 text-emerald-800 rounded-xl text-sm hover:bg-emerald-50">
+          <CheckCheck className="h-3.5 w-3.5" />Log outcome
         </button>
         {!isCallback && (
           <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
@@ -767,62 +788,95 @@ function MemberCard({
   );
 }
 
-// ── Queue Row (rest list) ──────────────────────────────────────────────────────
-
-function QueueRow({ member, rank, filter }: { member: QueueMember; rank: number; filter: QueueFilter }) {
-  const router = useRouter();
-  const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
-  const actionable = isQueueMemberActionable(member);
-
-  return (
-    <div
-      className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${!actionable ? "opacity-60 bg-amber-50/40" : ""}`}
-      onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-    >
-      <span className="text-sm text-gray-400 w-6 text-right shrink-0">{rank}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-2">
-          {member.contact?.displayName ?? "Unknown"}
-          {!actionable && (
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded">Archived</span>
-          )}
-        </p>
-        <p className="text-xs text-gray-500 truncate">
-          {cb ? (
-            <span className={cb.urgent ? "text-red-600 font-medium" : "text-yellow-700"}>
-              {cb.urgent ? "⚠ " : ""}Callback {cb.label.toLowerCase()}
-            </span>
-          ) : (
-            member.contact?.primaryPhone ?? member.campaign?.name ?? ""
-          )}
-        </p>
-      </div>
-      <span className={`text-xs px-2 py-0.5 rounded font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
-        {MEMBER_STATUS_LABELS[member.status]}
-      </span>
-      <ChevronRight className="h-4 w-4 text-gray-400 shrink-0" />
-    </div>
-  );
-}
-
-// ── Tabs ───────────────────────────────────────────────────────────────────────
-
-function TabButton({ active, label, count, urgent, onClick }: {
-  active: boolean; label: string; count: number; urgent?: boolean; onClick: () => void;
+// ── Count pills & compact queue cards ─────────────────────────────────────────
+function CountPill({
+  label,
+  count,
+  active,
+  urgent,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  urgent?: boolean;
+  onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`relative flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg transition-colors ${
-        active ? "bg-white shadow-sm text-blue-700 border border-blue-200" : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+      disabled={disabled}
+      className={`flex flex-col items-start min-w-[4.5rem] px-2.5 py-2 rounded-xl border text-left transition-colors disabled:opacity-50 ${
+        active
+          ? "bg-white border-blue-300 shadow-sm ring-1 ring-blue-100"
+          : "bg-gray-50/80 border-gray-200 hover:bg-white hover:border-gray-300"
       }`}
     >
-      {label}
-      {count > 0 && (
-        <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${urgent ? "bg-red-500 text-white" : active ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"}`}>
-          {count}
-        </span>
-      )}
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+      <span className={`text-lg font-bold tabular-nums ${urgent && count > 0 ? "text-red-600" : "text-gray-900"}`}>{count}</span>
+    </button>
+  );
+}
+
+/** Lead row → card (replaces dense table-style list rows) */
+function QueueLeadCard({ member, rank }: { member: QueueMember; rank: number }) {
+  const router = useRouter();
+  const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
+  const actionable = isQueueMemberActionable(member);
+  const pr = priorityReason(member);
+
+  return (
+    <button
+      type="button"
+      onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
+      className={`w-full text-left rounded-xl border px-3 py-3 mb-2 transition-colors ${
+        actionable ? "border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/40" : "border-amber-200 bg-amber-50/50 opacity-90"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span className="text-xs text-gray-400 font-mono w-6 text-right shrink-0 pt-0.5">{rank}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-gray-900 truncate">{member.contact?.displayName ?? "Unknown"}</span>
+            {!actionable && (
+              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">Read-only</span>
+            )}
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
+              {MEMBER_STATUS_LABELS[member.status]}
+            </span>
+          </div>
+          {member.campaign && (
+            <p className="text-xs text-gray-500 mt-0.5 truncate flex items-center gap-1">
+              <Megaphone className="h-3 w-3 shrink-0" />
+              {member.campaign.name}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5 mt-1.5 text-[11px] text-gray-600">
+            {member.contact?.crmStage && (
+              <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{member.contact.crmStage}</span>
+            )}
+            {pr && (
+              <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{pr}</span>
+            )}
+            {cb && (
+              <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-red-50 text-red-700 font-medium" : "bg-yellow-50 text-yellow-800"}`}>
+                {cb.urgent && <AlertCircle className="h-3 w-3" />}
+                {cb.label}
+              </span>
+            )}
+            {member.attemptCount > 0 && (
+              <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                {member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}
+                {member.lastAttemptAt ? ` · ${relativeTime(member.lastAttemptAt)}` : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <ChevronRight className="h-4 w-4 text-gray-300 shrink-0 mt-1" />
+      </div>
     </button>
   );
 }
@@ -1103,7 +1157,7 @@ function QueuePageInner() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Sync URL power filter → local filter state so TabButtons reflect it
+  // Sync URL power filter → local filter state
   useEffect(() => {
     if (powerModeActive && powerFilter !== filter) setFilter(powerFilter);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1432,6 +1486,15 @@ function QueuePageInner() {
                 {sortMode === "smart" ? "Smart" : "Original"}
               </button>
               <button
+                onClick={() => load()}
+                disabled={loading || acting}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                title="Reload queue"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+              <button
                 onClick={() => { setPaused((p) => !p); setWrapUpActive(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
               >
@@ -1447,154 +1510,51 @@ function QueuePageInner() {
               </button>
             </div>
           </div>
+          <div className="max-w-3xl mx-auto px-4 pb-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-blue-100/95 border-t border-blue-600/50 pt-2">
+            <span className="inline-flex items-center gap-1">
+              <CalendarClock className="h-3 w-3 opacity-80" />
+              Upcoming <strong className="text-white">{counts.upcoming}</strong>
+            </span>
+            {!sipReady && (
+              <span className="inline-flex items-center gap-1 text-amber-200">
+                <AlertCircle className="h-3 w-3 shrink-0" />
+                SIP not registered — Call disabled
+              </span>
+            )}
+            {!paused && counts.overdue > 0 && filter === "pending" && (
+              <button
+                type="button"
+                onClick={() => switchPowerFilter("overdue")}
+                className="text-amber-200 hover:text-white underline underline-offset-2"
+              >
+                {counts.overdue} overdue — switch view
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        {/* Queue health banner — power mode sticky status (SIP, pause, overdue) */}
-        {powerModeActive && !loading && (() => {
-          if (!sipReady) return (
-            <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-amber-50 border border-amber-300 rounded-xl text-sm text-amber-800">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              SIP disconnected — calls will not go through until you re-register
-            </div>
-          );
-          if (paused) return (
-            <div className="mb-4 flex items-center justify-between gap-2 px-4 py-3 bg-amber-50 border border-amber-300 rounded-xl text-sm text-amber-800">
-              <span className="flex items-center gap-2">
-                <Pause className="h-4 w-4 shrink-0" />
-                Queue paused — press <kbd className="bg-amber-100 px-1 rounded mx-0.5">P</kbd> or Resume to continue
-              </span>
-            </div>
-          );
-          if (counts.overdue > 0 && filter === "pending") return (
-            <div className="mb-4 flex items-center justify-between gap-2 px-4 py-3 bg-red-50 border border-red-300 rounded-xl text-sm text-red-800">
-              <span className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                {counts.overdue} callback{counts.overdue !== 1 ? "s" : ""} overdue
-              </span>
-              <button
-                onClick={() => switchPowerFilter("overdue")}
-                className="text-xs text-red-700 underline hover:no-underline shrink-0"
-              >
-                Switch to Overdue →
-              </button>
-            </div>
-          );
-          return null;
-        })()}
-
-        {/* Manual mode callback alert strip — only shown when there are overdue/due callbacks */}
-        {!powerModeActive && !loading && (counts.overdue > 0 || counts.due > 0) && (
-          <div
-            className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm flex-wrap"
-            style={{
-              background: counts.overdue > 0 ? "#fef2f2" : "#fffbeb",
-              border: `1px solid ${counts.overdue > 0 ? "#fca5a5" : "#fcd34d"}`,
-            }}
-          >
-            <AlertCircle
-              className="h-4 w-4 shrink-0"
-              style={{ color: counts.overdue > 0 ? "#dc2626" : "#d97706" }}
-            />
-            <span className="font-medium" style={{ color: counts.overdue > 0 ? "#991b1b" : "#92400e" }}>
-              {counts.overdue > 0 && (
-                <strong className="text-red-700">{counts.overdue} overdue</strong>
-              )}
-              {counts.overdue > 0 && counts.due > 0 && (
-                <span className="text-gray-400 mx-1.5">·</span>
-              )}
-              {counts.due > 0 && (
-                <span className="text-amber-700">{counts.due} due today</span>
-              )}
-            </span>
-            {counts.overdue > 0 && (
-              <button
-                onClick={() => switchFilter("overdue")}
-                className="ml-1 text-xs font-semibold text-red-700 underline hover:no-underline shrink-0"
-              >
-                Call overdue →
-              </button>
-            )}
-            {counts.due > 0 && (
-              <button
-                onClick={() => switchFilter("due")}
-                className="ml-1 text-xs font-semibold text-amber-700 underline hover:no-underline shrink-0"
-              >
-                Call due today →
-              </button>
-            )}
+      <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
+        {powerModeActive && !loading && (
+          <div className="mb-4 rounded-xl border border-gray-200 bg-white/90 px-3 py-2 text-sm text-gray-700 flex flex-wrap items-center gap-2">
+            <ListOrdered className="h-4 w-4 text-blue-600 shrink-0" />
+            <span className="font-semibold text-gray-900">My Queue</span>
+            <span className="text-gray-400">·</span>
+            <span className="text-gray-600">Power session</span>
+            <span className="text-gray-400">·</span>
+            <span className="text-gray-500">{total} in this view</span>
           </div>
         )}
 
-        {/* Header */}
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-3">
-            <ListOrdered className="h-6 w-6 text-blue-600" />
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                My Queue{powerModeActive ? "" : ""}
-              </h1>
-              {!loading && (
-                <p className="text-sm text-gray-500 mt-0.5">
-                  {total === 0 ? "Nothing in this view" : `${total} lead${total !== 1 ? "s" : ""}`}
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {!powerModeActive && (
-              <>
-                {/* Sort toggle — manual mode */}
-                <button
-                  onClick={toggleSortMode}
-                  disabled={loading}
-                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
-                    sortMode === "smart"
-                      ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
-                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
-                  }`}
-                  title={sortMode === "smart" ? "Smart priority order — click for original" : "Original sort order — click for smart priority"}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {sortMode === "smart" ? "Smart" : "Original"}
-                </button>
-                <button
-                  onClick={() => router.push("/crm/queue?mode=power")}
-                  disabled={loading || total === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                  title={total === 0 ? "No pending leads to dial" : "Start Power Dialer mode"}
-                >
-                  <Zap className="h-4 w-4" />
-                  Start Power Dialer
-                </button>
-              </>
-            )}
-            <button onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              Refresh
-            </button>
-          </div>
-        </div>
-
-        {/* Tabs — only shown in manual mode; power mode uses pending filter always */}
-        {!powerModeActive && (
-          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-4 overflow-x-auto">
-            <TabButton active={filter === "pending"} label="Next Up" count={counts.pending} onClick={() => switchFilter("pending")} />
-            <TabButton active={filter === "due"} label="Due Today" count={counts.due} urgent={counts.overdue > 0} onClick={() => switchFilter("due")} />
-            <TabButton active={filter === "overdue"} label="Overdue" count={counts.overdue} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} />
-            <TabButton active={filter === "upcoming"} label="Upcoming" count={counts.upcoming} onClick={() => switchFilter("upcoming")} />
-          </div>
-        )}
-
-        {/* Campaign filter dropdown — both modes */}
-        {campaigns.length > 0 && (
-          <div className="flex items-center gap-2 mb-4">
+        {powerModeActive && campaigns.length > 0 && (
+          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
             <Megaphone className="h-4 w-4 text-gray-400 shrink-0" />
+            <label htmlFor="crm-queue-campaign-power" className="text-xs font-semibold text-gray-500 uppercase shrink-0">Campaign</label>
             <select
+              id="crm-queue-campaign-power"
               value={campaignId ?? ""}
               onChange={(e) => switchCampaign(e.target.value || null)}
-              className="flex-1 max-w-xs border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              className="flex-1 min-w-[10rem] max-w-md border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-gray-50/80"
               disabled={loading}
             >
               <option value="">All campaigns</option>
@@ -1602,13 +1562,106 @@ function QueuePageInner() {
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
-            {campaignId && (
-              <button
-                onClick={() => switchCampaign(null)}
-                className="text-xs text-gray-500 hover:text-gray-700 underline shrink-0"
-              >
+            {campaignId ? (
+              <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-blue-600 font-medium hover:underline">
                 Clear
               </button>
+            ) : null}
+          </div>
+        )}
+
+        {/* Manual mode — work header + counts (replaces separate tabs + banner) */}
+        {!powerModeActive && (
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 mb-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <ListOrdered className="h-7 w-7 text-blue-600 shrink-0" />
+                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">My Queue</h1>
+                </div>
+                {!loading && (
+                  <p className="text-sm text-gray-500 mt-1">
+                    {total === 0 ? "Nothing in this view" : `${total} lead${total !== 1 ? "s" : ""} · use counts below to switch focus`}
+                  </p>
+                )}
+                {!loading && (counts.overdue > 0 || counts.due > 0) && (
+                  <p className="text-xs text-gray-600 mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {counts.overdue > 0 && (
+                      <button type="button" onClick={() => switchFilter("overdue")} className="font-semibold text-red-700 hover:underline">
+                        {counts.overdue} overdue
+                      </button>
+                    )}
+                    {counts.overdue > 0 && counts.due > 0 && <span className="text-gray-300">·</span>}
+                    {counts.due > 0 && (
+                      <button type="button" onClick={() => switchFilter("due")} className="font-semibold text-amber-800 hover:underline">
+                        {counts.due} due today
+                      </button>
+                    )}
+                    <span className="text-gray-400 hidden sm:inline">— tap or pick a column</span>
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleSortMode}
+                  disabled={loading}
+                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-xl text-sm font-medium transition-colors disabled:opacity-50 ${
+                    sortMode === "smart"
+                      ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                  }`}
+                  title={sortMode === "smart" ? "Smart priority — click for original order" : "Original order — click for smart priority"}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {sortMode === "smart" ? "Smart sort" : "Original sort"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/crm/queue?mode=power")}
+                  disabled={loading || total === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  title={total === 0 ? "No leads in this view" : "Focused power session"}
+                >
+                  <Zap className="h-4 w-4" />
+                  Power mode
+                </button>
+                <button type="button" onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                  <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-5">
+              <CountPill label="Pending" count={counts.pending} active={filter === "pending"} onClick={() => switchFilter("pending")} disabled={loading} />
+              <CountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} onClick={() => switchFilter("due")} disabled={loading} />
+              <CountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} disabled={loading} />
+              <CountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} onClick={() => switchFilter("upcoming")} disabled={loading} />
+            </div>
+
+            {campaigns.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-gray-100">
+                <Megaphone className="h-4 w-4 text-gray-400 shrink-0" />
+                <label htmlFor="crm-queue-campaign" className="text-xs font-semibold text-gray-500 uppercase tracking-wide shrink-0">Campaign</label>
+                <select
+                  id="crm-queue-campaign"
+                  value={campaignId ?? ""}
+                  onChange={(e) => switchCampaign(e.target.value || null)}
+                  className="flex-1 min-w-[12rem] max-w-md border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50/80"
+                  disabled={loading}
+                >
+                  <option value="">All campaigns</option>
+                  {campaigns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                {campaignId ? (
+                  <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-blue-600 hover:underline font-medium">
+                    Clear filter
+                  </button>
+                ) : null}
+              </div>
             )}
           </div>
         )}
@@ -1634,29 +1687,29 @@ function QueuePageInner() {
             </div>
           ) : (
             // Manual mode — empty state
-            <div className="py-24 text-center">
+            <div className="py-24 text-center max-w-md mx-auto px-2">
               <Inbox className="h-12 w-12 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-600 font-medium text-lg">
-                {filter === "pending" ? "Queue is empty" :
-                 filter === "due" ? "No callbacks due today" :
+                {filter === "pending" ? "You're caught up" :
+                 filter === "due" ? "No due callbacks" :
                  filter === "overdue" ? "No overdue callbacks" :
                  "No upcoming callbacks"}
               </p>
               <p className="text-gray-400 text-sm mt-1">
                 {campaignId
-                  ? "No leads in this campaign for this view."
+                  ? "Nothing in this campaign for this view. Try clearing the campaign filter or another snapshot above."
                   : filter === "pending"
-                    ? "No active campaigns with leads assigned to you."
-                    : "Great! Check the Next Up tab for new leads."}
+                    ? "No pending leads are assigned to you right now."
+                    : "Nothing scheduled in this bucket. Pending leads may still be waiting."}
               </p>
               {campaignId && (
-                <button onClick={() => switchCampaign(null)} className="mt-4 text-sm text-blue-600 hover:underline">
-                  Show all campaigns →
+                <button type="button" onClick={() => switchCampaign(null)} className="mt-4 text-sm text-blue-600 hover:underline">
+                  Clear campaign filter
                 </button>
               )}
               {!campaignId && filter !== "pending" && (
-                <button onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
-                  View Next Up →
+                <button type="button" onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
+                  Switch to pending
                 </button>
               )}
             </div>
@@ -1699,19 +1752,19 @@ function QueuePageInner() {
 
             {/* Up next list */}
             {rest.length > 0 && (
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <h2 className="text-sm font-semibold text-gray-700">
-                    Up Next ({rest.length + 1} total remaining)
-                  </h2>
+              <div className="rounded-2xl border border-gray-200 bg-white/80 p-3 sm:p-4 shadow-sm">
+                <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3 px-1">
+                  Up next ({rest.length + 1} in this pull)
+                </h2>
+                <div>
+                  {rest.map((m, i) => (
+                    <QueueLeadCard key={m.id} member={m} rank={i + 2} />
+                  ))}
                 </div>
-                {rest.map((m, i) => (
-                  <QueueRow key={m.id} member={m} rank={i + 2} filter={filter} />
-                ))}
                 {total > queue.length && (
-                  <div className="px-4 py-3 text-center text-sm text-gray-400">
+                  <p className="text-center text-xs text-gray-400 mt-3 px-1">
                     + {total - queue.length} more in queue
-                  </div>
+                  </p>
                 )}
               </div>
             )}
@@ -1724,26 +1777,28 @@ function QueuePageInner() {
               isTop={true}
               filter={filter}
               acting={acting}
+              sipReady={sipReady}
+              onDial={() => handlePowerDial(next)}
               onAction={(action, extra) => handleAction(next.id, action, extra)}
             />
 
             {rest.length > 0 && (
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <h2 className="text-sm font-semibold text-gray-700">
-                    {filter === "pending" ? `Up Next (${rest.length + 1} total remaining)` :
-                     filter === "overdue" ? `Also Overdue (${rest.length + 1} total)` :
-                     filter === "due" ? `Also Due Today (${rest.length + 1} total)` :
-                     `Upcoming Callbacks (${rest.length + 1} total)`}
-                  </h2>
+              <div className="rounded-2xl border border-gray-200 bg-white/80 p-3 sm:p-4 shadow-sm">
+                <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3 px-1">
+                  {filter === "pending" ? `More in queue (${rest.length + 1} shown)` :
+                   filter === "overdue" ? `Also overdue (${rest.length + 1} shown)` :
+                   filter === "due" ? `Also due today (${rest.length + 1} shown)` :
+                   `Upcoming (${rest.length + 1} shown)`}
+                </h2>
+                <div className="space-y-0">
+                  {rest.map((m, i) => (
+                    <QueueLeadCard key={m.id} member={m} rank={i + 2} />
+                  ))}
                 </div>
-                {rest.map((m, i) => (
-                  <QueueRow key={m.id} member={m} rank={i + 2} filter={filter} />
-                ))}
                 {total > queue.length && (
-                  <div className="px-4 py-3 text-center text-sm text-gray-400">
-                    + {total - queue.length} more in queue
-                  </div>
+                  <p className="text-center text-xs text-gray-400 mt-3 px-1">
+                    + {total - queue.length} more in queue (open filters or refresh)
+                  </p>
                 )}
               </div>
             )}
