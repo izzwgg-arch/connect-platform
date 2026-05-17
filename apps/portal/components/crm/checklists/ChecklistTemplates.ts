@@ -8,12 +8,76 @@ export type TemplateItem = {
   required: boolean;
 };
 
+/** Visual accent for template cards (dark SaaS operational palette). */
+export type ChecklistTemplateAccent =
+  | "cyan"
+  | "amber"
+  | "blue"
+  | "green"
+  | "violet"
+  | "teal";
+
 export type ChecklistTemplate = {
   id: string;
   name: string;
   description: string;
   icon: string;
+  accent: ChecklistTemplateAccent;
   items: TemplateItem[];
+};
+
+/** Tailwind class bundles per template accent — keep in sync with crm.checklistTpl* tokens. */
+export const TEMPLATE_ACCENT_CLASSES: Record<
+  ChecklistTemplateAccent,
+  {
+    strip: string;
+    iconBox: string;
+    card: string;
+    meta: string;
+  }
+> = {
+  cyan: {
+    strip: "bg-crm-accent",
+    iconBox:
+      "border-crm-accent/35 bg-crm-accent/12 text-crm-accent shadow-[0_0_20px_-4px_rgba(56,189,248,0.35)]",
+    card: "hover:border-crm-accent/45 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.22)]",
+    meta: "text-crm-accent",
+  },
+  amber: {
+    strip: "bg-crm-warning",
+    iconBox:
+      "border-crm-warning/35 bg-crm-warning/12 text-crm-warning shadow-[0_0_20px_-4px_rgba(245,158,11,0.3)]",
+    card: "hover:border-crm-warning/40 hover:shadow-[0_0_28px_-8px_rgba(245,158,11,0.18)]",
+    meta: "text-crm-warning",
+  },
+  blue: {
+    strip: "bg-sky-400",
+    iconBox:
+      "border-sky-400/35 bg-sky-400/12 text-sky-300 shadow-[0_0_20px_-4px_rgba(56,189,248,0.28)]",
+    card: "hover:border-sky-400/40 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.16)]",
+    meta: "text-sky-300",
+  },
+  green: {
+    strip: "bg-crm-success",
+    iconBox:
+      "border-crm-success/35 bg-crm-success/12 text-crm-success shadow-[0_0_20px_-4px_rgba(52,211,153,0.28)]",
+    card: "hover:border-crm-success/40 hover:shadow-[0_0_28px_-8px_rgba(52,211,153,0.16)]",
+    meta: "text-crm-success",
+  },
+  violet: {
+    strip: "bg-violet-400",
+    iconBox:
+      "border-violet-400/35 bg-violet-400/12 text-violet-300 shadow-[0_0_20px_-4px_rgba(167,139,250,0.28)]",
+    card: "hover:border-violet-400/40 hover:shadow-[0_0_28px_-8px_rgba(167,139,250,0.16)]",
+    meta: "text-violet-300",
+  },
+  teal: {
+    strip: "bg-teal-400",
+    iconBox:
+      "border-teal-400/35 bg-teal-400/12 text-teal-300 shadow-[0_0_20px_-4px_rgba(45,212,191,0.28)]",
+    card: "hover:border-teal-400/40 hover:shadow-[0_0_28px_-8px_rgba(45,212,191,0.16)]",
+    meta: "text-teal-300",
+  },
 };
 
 export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
@@ -22,6 +86,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Cold Call Qualification",
     description: "Qualify a new prospect on an outbound cold call",
     icon: "📞",
+    accent: "cyan",
     items: [
       { label: "Confirm you have the decision maker", required: true },
       { label: "Introduce yourself and company", required: true },
@@ -40,6 +105,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Appointment Booking",
     description: "Book a discovery call or demo with a qualified lead",
     icon: "📅",
+    accent: "amber",
     items: [
       { label: "Confirm contact name and role", required: true },
       { label: "Reference previous interaction or lead source", required: false },
@@ -57,6 +123,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Insurance Verification",
     description: "Verify client insurance information on an inbound or outbound call",
     icon: "🛡️",
+    accent: "blue",
     items: [
       { label: "Verify caller identity (name, DOB, policy number)", required: true },
       { label: "Confirm primary insurance carrier", required: true },
@@ -75,6 +142,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Callback Workflow",
     description: "Follow through on a scheduled callback with context continuity",
     icon: "🔁",
+    accent: "green",
     items: [
       { label: "Review previous call notes before dialing", required: true },
       { label: "Reference the scheduled callback date/time", required: true },
@@ -92,6 +160,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Objection Handling",
     description: "Structured flow for handling common sales objections",
     icon: "🎯",
+    accent: "violet",
     items: [
       { label: "Acknowledge the objection without dismissing it", required: true },
       { label: "Clarify the objection (ask open-ended question)", required: true },
@@ -108,6 +177,7 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     name: "Follow-Up Call",
     description: "Post-demo or post-proposal follow-up to advance the deal",
     icon: "✅",
+    accent: "teal",
     items: [
       { label: "Review demo / proposal notes before calling", required: true },
       { label: "Reference the specific solution discussed", required: true },

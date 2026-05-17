@@ -224,13 +224,14 @@
     - `CrmChecklistItem` rows are deleted only when their parent checklist's items are replaced via `PATCH /crm/checklists/:id` with a new `items` array (full replace).
     - `CrmChecklistResponse` rows are immutable once created. No update or delete endpoints.
 
-93. **`/crm/scripts` must use the scripts playbook visual system (Phase 19I).**
-    - Layout: `crm.pageInnerScripts` + `crm.scriptsWorkspace` (dark token lock) + `crm.scriptsGrid`.
-    - No `bg-white`, `bg-gray-50`, `style={{background:'#fff'}}`, or `var(--input-bg, #fff)` on any script-route element.
-    - Script body is stored as freetext; sections are parsed client-side by `---` delimiters. No schema change needed.
-    - `ScriptEditModal` serializes sections via `serializeScriptSections()` — keep this as the single serialization path.
-    - Templates (`SCRIPT_TEMPLATES`) are client-only starter strings; they do not create backend records until the user saves.
-    - Checklist mode is a UI-only step-through toggle — it does NOT write `CrmChecklistResponse` rows (that is the live-call checklist panel's job).
+93. **`/crm/scripts` must use the scripts playbook visual system (Phase 19I / 19I.1).**
+    - Layout: `ScriptCommandHeader` + 3/6/3 grid (`scriptsLibraryCol` / `scriptsWorkspaceCol` / `scriptsSideCol`) + `ScriptQuickTipsStrip`.
+    - Premium surfaces: `scriptsHero`, `scriptsPanelPrimary`, accent template cards via `SCRIPT_TEMPLATE_ACCENT_CLASSES` — no flat gray template slabs.
+    - Idle center uses `ScriptWorkspaceIdle` (onboarding + CTAs), not `CRMEmptyState` alone.
+    - No `bg-white`, `bg-gray-50`, or `var(--input-bg, #fff)` on script routes.
+    - Script body = freetext; sections parsed by `---`. `ScriptEditModal` uses `serializeScriptSections()` only.
+    - Checklist mode is UI-only — does NOT write `CrmChecklistResponse` rows.
+    - `N` keyboard shortcut opens new script (same guard pattern as tasks/queue).
 
 42. **Disposition saves are transactional for primary data, non-blocking for timeline.**
     - `POST /crm/contacts/:id/disposition` wraps `CrmContactMeta` update + optional `CrmContactNote` + optional `CrmContactTask` in a single `db.$transaction([...])`.
@@ -242,9 +243,11 @@
     - Compare `nextStage` against `CrmContactMeta.stage` before writing the event.
     - Do not write `STAGE_CHANGED` if `nextStage === currentStage` or if `nextStage` is not provided.
 
-92. **CRM checklist workspace (Phase 19J) uses the 3-column dark workspace pattern.**
+92. **CRM checklist workspace (Phase 19J / 19J.1) uses the 3-column dark workspace pattern.**
     - `/crm/checklists` uses `crm.pageInnerChecklist` + **`crm.checklistWorkspace`** dark token lock (same as campaign/task/script routes).
     - Layout: library (`checklistLibraryCol`) · workspace (`checklistWorkspaceCol`) · progress panel (`checklistSideCol`).
+    - **Visual hierarchy (19J.1):** center = `crm.checklistPanelPrimary` (gradient command surface); sides = `crm.checklistPanelSupport`. No flat gray slabs — ban uniform `crm.card` on all three columns.
+    - Template cards use per-playbook accents (`ChecklistTemplates.accent` + `TEMPLATE_ACCENT_CLASSES`). Empty state = command-center hero, not static centered block.
     - Items render as **numbered workflow steps** — not plain textarea rows. Required steps use `crm.checklistStepRequired` (warning accent); optional use `crm.checklistStepPending`.
     - 6 starter templates (`ChecklistTemplates.ts`) pre-fill the create form; they never call the API directly — the user confirms.
     - **No light-token leakage:** ban `bg-white`, `bg-gray-*`, inline `style={{ background }}`, native white inputs. Use `crm.input`, `crm.checkbox`, `crm.btn*`.

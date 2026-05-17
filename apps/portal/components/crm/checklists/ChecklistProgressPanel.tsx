@@ -1,6 +1,12 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, ClipboardCheck, ExternalLink } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ClipboardCheck,
+  ExternalLink,
+  ListChecks,
+} from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 
@@ -21,20 +27,28 @@ type Props = {
   checklist: Checklist | null;
 };
 
-// ── Progress ring SVG ─────────────────────────────────────────────────────────
-
 function ProgressRing({
-  pct,
-  size = 56,
-  stroke = 5,
+  requiredCount,
+  total,
+  size = 72,
+  stroke = 6,
 }: {
-  pct: number;
+  requiredCount: number;
+  total: number;
   size?: number;
   stroke?: number;
 }) {
+  const pct =
+    total > 0 ? Math.round((requiredCount / total) * 100) : 0;
   const radius = (size - stroke * 2) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - pct / 100);
+  const ringColor =
+    pct >= 75
+      ? "text-crm-warning"
+      : pct >= 40
+        ? "text-crm-accent"
+        : "text-crm-muted";
 
   return (
     <svg width={size} height={size} className="-rotate-90" aria-hidden>
@@ -45,7 +59,7 @@ function ProgressRing({
         fill="none"
         stroke="currentColor"
         strokeWidth={stroke}
-        className="text-crm-border/60"
+        className="text-crm-border/50"
       />
       <circle
         cx={size / 2}
@@ -57,22 +71,65 @@ function ProgressRing({
         strokeDasharray={circumference}
         strokeDashoffset={offset}
         strokeLinecap="round"
-        className="text-crm-accent transition-[stroke-dashoffset] duration-500"
+        className={cn(ringColor, "transition-[stroke-dashoffset] duration-500")}
+        style={{
+          filter:
+            pct > 0
+              ? "drop-shadow(0 0 6px rgba(56,189,248,0.25))"
+              : undefined,
+        }}
       />
     </svg>
   );
 }
 
-// ── Main panel ─────────────────────────────────────────────────────────────────
+function StatRow({
+  dotClass,
+  label,
+  value,
+  valueClass,
+}: {
+  dotClass: string;
+  label: string;
+  value: number;
+  valueClass?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-crm border border-crm-border/40 bg-[#101923]/50 px-2.5 py-1.5">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={cn("h-2 w-2 shrink-0 rounded-full", dotClass)} />
+        <span className="text-[11px] text-crm-muted">{label}</span>
+      </div>
+      <span
+        className={cn(
+          "text-sm font-bold tabular-nums",
+          valueClass ?? "text-crm-text"
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
 
 export function ChecklistProgressPanel({ checklist }: Props) {
   if (!checklist) {
     return (
-      <div className={cn(crm.card, crm.cardPad, "flex flex-col gap-4")}>
+      <div className={cn(crm.checklistPanelSupport, crm.checklistProgressCard)}>
         <span className={crm.label}>Progress</span>
-        <div className={cn(crm.emptyWrap, "py-8")}>
-          <ClipboardCheck size={20} className="mx-auto mb-2 text-crm-muted/40" />
-          <p className="text-[11px] text-crm-muted">Select a checklist</p>
+        <div
+          className={cn(
+            crm.emptyWrap,
+            "mt-3 border-crm-border/40 bg-[#101923]/40 py-8"
+          )}
+        >
+          <ClipboardCheck
+            size={22}
+            className="mx-auto mb-2 text-crm-muted/40"
+          />
+          <p className="text-[11px] text-crm-muted">
+            Select a checklist to see structure and readiness
+          </p>
         </div>
       </div>
     );
@@ -83,54 +140,63 @@ export function ChecklistProgressPanel({ checklist }: Props) {
   const optional = checklist.items.filter((i) => !i.required);
   const requiredCount = required.length;
   const optionalCount = optional.length;
-
-  // Progress percentages (based on item counts — not live completions; this is management view)
-  const coveragePct = total > 0 ? Math.round((requiredCount / total) * 100) : 0;
+  const coveragePct =
+    total > 0 ? Math.round((requiredCount / total) * 100) : 0;
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Summary card */}
-      <div className={cn(crm.card, crm.cardPad, "flex flex-col gap-4")}>
-        <span className={crm.label}>Checklist overview</span>
+    <div className="flex flex-col gap-2.5">
+      <div className={cn(crm.checklistProgressCard, "flex flex-col gap-4")}>
+        <div className="flex items-center justify-between gap-2">
+          <span className={crm.label}>Checklist overview</span>
+          {checklist.isActive && total > 0 && requiredCount > 0 && (
+            <span className="checklist-live-dot h-1.5 w-1.5 shrink-0 rounded-full bg-crm-success" />
+          )}
+        </div>
 
-        {/* Progress ring + stats */}
         <div className="flex items-center gap-4">
           <div className="relative shrink-0">
-            <ProgressRing pct={total === 0 ? 0 : Math.round((requiredCount / (total || 1)) * 100)} />
+            <div
+              className="absolute inset-0 rounded-full bg-crm-accent/5 blur-md"
+              aria-hidden
+            />
+            <ProgressRing
+              requiredCount={requiredCount}
+              total={total}
+              size={76}
+              stroke={6}
+            />
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-base font-bold tabular-nums text-crm-text">
-                {total}
+              <span className="text-lg font-bold tabular-nums leading-none text-crm-text">
+                {coveragePct}%
               </span>
-              <span className="text-[9px] text-crm-muted">steps</span>
-            </div>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-crm-warning" />
-              <span className="text-xs text-crm-muted">
-                <strong className="tabular-nums text-crm-text">{requiredCount}</strong>{" "}
+              <span className="text-[9px] uppercase tracking-wide text-crm-muted">
                 required
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-crm-border" />
-              <span className="text-xs text-crm-muted">
-                <strong className="tabular-nums text-crm-text">{optionalCount}</strong>{" "}
-                optional
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-crm-accent" />
-              <span className="text-xs text-crm-muted">
-                <strong className="tabular-nums text-crm-text">{coveragePct}%</strong>{" "}
-                required ratio
-              </span>
-            </div>
+          </div>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <StatRow
+              dotClass="bg-crm-warning"
+              label="Required steps"
+              value={requiredCount}
+              valueClass={
+                requiredCount > 0 ? "text-crm-warning" : "text-crm-text"
+              }
+            />
+            <StatRow
+              dotClass="bg-crm-border"
+              label="Optional steps"
+              value={optionalCount}
+            />
+            <StatRow
+              dotClass="bg-crm-accent"
+              label="Total steps"
+              value={total}
+            />
           </div>
         </div>
 
-        {/* Status */}
         {!checklist.isActive && (
           <div
             className={cn(
@@ -182,15 +248,17 @@ export function ChecklistProgressPanel({ checklist }: Props) {
         )}
       </div>
 
-      {/* Required items list */}
       {required.length > 0 && (
-        <div className={cn(crm.card, crm.cardPad, "flex flex-col gap-3")}>
-          <span className={crm.label}>Required steps</span>
-          <div className="flex flex-col gap-1.5">
-            {required.map((item, i) => (
+        <div className={cn(crm.checklistProgressCard, "flex flex-col gap-3")}>
+          <div className="flex items-center gap-2">
+            <ListChecks size={12} className="text-crm-warning" />
+            <span className={crm.label}>Required steps</span>
+          </div>
+          <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+            {required.map((item) => (
               <div
                 key={item.id}
-                className="flex items-start gap-2 rounded-crm border border-crm-warning/25 bg-crm-warning/5 px-2.5 py-2"
+                className="flex items-start gap-2 rounded-crm border border-crm-warning/25 bg-gradient-to-r from-crm-warning/8 to-transparent px-2.5 py-2"
               >
                 <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-crm-warning/40 bg-crm-warning/10 text-[9px] font-bold tabular-nums text-crm-warning">
                   {checklist.items.indexOf(item) + 1}
@@ -204,25 +272,22 @@ export function ChecklistProgressPanel({ checklist }: Props) {
         </div>
       )}
 
-      {/* Quick actions */}
-      <div className={cn(crm.card, crm.cardPad, "flex flex-col gap-3")}>
+      <div className={cn(crm.checklistPanelSupport, "p-3 flex flex-col gap-2")}>
         <span className={crm.label}>Quick actions</span>
-        <div className="flex flex-col gap-2">
-          <a
-            href="/crm/live-call"
-            className={cn(crm.btnSecondary, "justify-start text-xs")}
-          >
-            <ExternalLink size={12} />
-            Open live call workspace
-          </a>
-          <a
-            href="/crm/campaigns"
-            className={cn(crm.btnSecondary, "justify-start text-xs")}
-          >
-            <ExternalLink size={12} />
-            Assign to campaign
-          </a>
-        </div>
+        <a
+          href="/crm/live-call"
+          className={cn(crm.btnSecondary, "justify-start text-xs")}
+        >
+          <ExternalLink size={12} />
+          Open live call workspace
+        </a>
+        <a
+          href="/crm/campaigns"
+          className={cn(crm.btnGhost, "justify-start px-2 text-xs")}
+        >
+          <ExternalLink size={12} />
+          Assign to campaign
+        </a>
       </div>
     </div>
   );

@@ -98,6 +98,58 @@
   opacity: 1 !important;
 }
 
+/* Phase 19J.1 — checklist workspace depth + live indicators */
+@keyframes checklist-live-dot {
+  0%,
+  100% {
+    opacity: 0.45;
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 8px 1px rgba(52, 211, 153, 0.35);
+  }
+}
+.crm-checklist-workspace .checklist-live-dot {
+  animation: checklist-live-dot 2.6s ease-in-out infinite;
+}
+.crm-checklist-workspace .checklist-template-card {
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+@keyframes checklist-orb-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.55;
+  }
+}
+.crm-checklist-workspace .checklist-orb-pulse {
+  animation: checklist-orb-pulse 3.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crm-checklist-workspace .checklist-live-dot {
+    animation: none;
+    opacity: 1;
+  }
+  .crm-checklist-workspace .checklist-template-card {
+    transition: border-color 0.15s ease;
+  }
+  .crm-checklist-workspace .checklist-template-card:hover {
+    transform: none;
+  }
+  .crm-checklist-workspace .checklist-orb-pulse {
+    animation: none;
+    opacity: 0.4;
+  }
+}
+
 :root[data-theme="light"] {
   --bg-app: #f6f8fb;
   --bg-gradient-start: #f8fafc;

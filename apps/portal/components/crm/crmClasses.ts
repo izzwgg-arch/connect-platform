@@ -211,76 +211,137 @@ export const crm = {
     "mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
   /** Forces dark CRM tokens on checklist routes when portal data-theme=light */
   checklistWorkspace:
-    "crm-checklist-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+    "crm-checklist-workspace [color-scheme:dark] [--panel:#101a2d] [--panel-2:#13203a] [--bg-soft:#081120] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#101a2d] [--crm-surface-2:#13203a] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  checklistCommandHeader:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/60 bg-gradient-to-br from-[#13203a] via-[#101a2d] to-[#081120] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.05)]",
+  checklistCommandHeaderGlow:
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_80%_at_10%_-20%,rgba(56,189,248,0.12),transparent_50%),radial-gradient(ellipse_50%_60%_at_90%_100%,rgba(99,102,241,0.06),transparent_55%)]",
+  checklistCommandIcon:
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-crm-lg border border-crm-accent/35 bg-crm-accent/12 text-crm-accent shadow-[0_0_28px_-6px_rgba(56,189,248,0.4)]",
+  checklistKpiTile:
+    "rounded-crm border px-3 py-2.5 transition-colors hover:border-crm-border/80",
+  checklistTab:
+    "rounded-crm px-3.5 py-1.5 text-xs font-medium text-crm-muted transition-all hover:bg-crm-surface-2/50 hover:text-crm-text",
+  checklistTabActive:
+    "rounded-crm border border-crm-accent/45 bg-crm-accent/12 px-3.5 py-1.5 text-xs font-semibold text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+  checklistTipsStrip:
+    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-r from-[#101a2d] via-[#0d1522] to-[#101a2d] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+  checklistTipSegment:
+    "flex min-w-0 flex-1 items-center gap-2.5 rounded-crm border border-transparent px-2.5 py-2 transition-colors hover:border-crm-border/40 hover:bg-[#13203a]/60",
+  checklistOnboardingOrb:
+    "relative flex h-24 w-24 items-center justify-center rounded-full border border-crm-accent/30 bg-crm-accent/10 shadow-[0_0_48px_-8px_rgba(56,189,248,0.45)]",
+  checklistOnboardingOrbPulse:
+    "pointer-events-none absolute inset-0 rounded-full bg-crm-accent/15 checklist-orb-pulse",
+  checklistFeatureCard:
+    "flex flex-col gap-1 rounded-crm border border-crm-border/50 bg-[#101923]/80 px-3 py-2.5 transition-all hover:border-crm-border/80 hover:bg-[#13203a]/90",
   checklistGrid: "grid gap-3 lg:grid-cols-12 lg:items-start",
   checklistLibraryCol:
     "lg:col-span-3 xl:col-span-3 flex flex-col gap-2.5 min-w-0",
   checklistWorkspaceCol:
-    "lg:col-span-6 xl:col-span-6 flex flex-col gap-3 min-w-0",
+    "lg:col-span-6 xl:col-span-6 flex flex-col gap-2.5 min-w-0 min-h-[28rem]",
   checklistSideCol:
-    "lg:col-span-3 xl:col-span-3 flex flex-col gap-3 min-w-0",
+    "lg:col-span-3 xl:col-span-3 flex flex-col gap-2.5 min-w-0",
+  /** Quieter support column (library + progress) */
+  checklistPanelSupport:
+    "rounded-crm-lg border border-crm-border/45 bg-[#121a24]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-[2px]",
+  /** Primary center workspace — layered navy depth */
+  checklistPanelPrimary:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/70 bg-gradient-to-b from-[#1c2a3a] via-[#141f2b] to-[#0f1720] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.05)]",
+  checklistPanelPrimaryGlow:
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(56,189,248,0.08),transparent_55%)]",
+  checklistWorkspaceHeader:
+    "border-b border-crm-border/50 bg-gradient-to-r from-crm-surface-2/40 via-transparent to-transparent px-4 py-3",
+  checklistHeroBand:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/50 bg-gradient-to-br from-crm-surface-2/80 via-[#141f2b] to-[#101923] px-4 py-4 sm:px-5",
+  checklistHeroGlow:
+    "pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-crm-accent/10 blur-2xl",
   /** Checklist card in library */
   checklistCard:
-    "group relative flex items-stretch rounded-crm border border-crm-border bg-crm-surface transition-all hover:border-crm-border/90 hover:shadow-crm cursor-pointer",
+    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 hover:shadow-[0_4px_16px_-6px_rgba(0,0,0,0.4)] cursor-pointer",
   checklistCardActive:
-    "border-crm-accent/45 bg-crm-accent/8 ring-1 ring-crm-accent/20",
-  checklistCardArchived: "opacity-55",
+    "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 shadow-[0_0_20px_-8px_rgba(56,189,248,0.2)]",
+  checklistCardArchived: "opacity-50",
   checklistStatusStrip: "w-1 shrink-0 rounded-l-crm",
   /** Workflow step card in workspace */
   checklistStepCard:
-    "flex w-full items-start gap-3 rounded-crm border px-3 py-3 text-left text-sm transition-colors",
+    "flex w-full items-start gap-3 rounded-crm border px-3 py-2.5 text-left text-sm transition-all duration-200",
   checklistStepPending:
-    "border-crm-border bg-crm-surface-2/50 text-crm-text hover:border-crm-border/90",
+    "border-crm-border/60 bg-[#1a2635]/80 text-crm-text shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] hover:border-crm-border hover:bg-[#1e2d3d]/90",
   checklistStepRequired:
-    "border-crm-warning/35 bg-crm-warning/5 text-crm-text",
+    "border-crm-warning/40 bg-gradient-to-r from-crm-warning/8 to-transparent text-crm-text shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_0_16px_-8px_rgba(245,158,11,0.15)]",
   checklistStepNum:
-    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/80 bg-crm-surface text-[11px] font-bold tabular-nums text-crm-muted",
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/70 bg-[#101923] text-[11px] font-bold tabular-nums text-crm-muted",
   checklistStepNumRequired:
-    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-warning/50 bg-crm-warning/10 text-[11px] font-bold tabular-nums text-crm-warning",
-  /** Template card in empty state */
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-warning/50 bg-crm-warning/15 text-[11px] font-bold tabular-nums text-crm-warning shadow-[0_0_10px_-4px_rgba(245,158,11,0.35)]",
+  /** Template card base (accent via TEMPLATE_ACCENT_CLASSES) */
   checklistTemplateCard:
-    "flex flex-col gap-1.5 rounded-crm border border-crm-border/70 border-dashed bg-crm-surface-2/50 p-3 transition-colors hover:border-crm-accent/40 hover:bg-crm-accent/8 cursor-pointer",
+    "checklist-template-card group relative flex w-full flex-col gap-2 overflow-hidden rounded-crm-lg border border-crm-border/55 bg-gradient-to-br from-[#1a2635]/90 to-[#101923]/95 p-3.5 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
+  checklistTemplateStrip: "absolute left-0 top-0 bottom-0 w-1 rounded-l-crm-lg",
+  checklistTemplateIcon:
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-lg transition-transform duration-200 group-hover:scale-105",
+  checklistMetricChip:
+    "inline-flex items-center gap-1 rounded-crm border border-crm-border/50 bg-[#101923]/60 px-2 py-0.5 text-[10px] font-medium tabular-nums text-crm-muted",
+  checklistProgressCard:
+    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-b from-[#161f2b] to-[#101923] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
 
-  /** Phase 19I — scripts playbook workspace */
+  /** Phase 19I / 19I.1 — scripts premium playbook command center */
   pageInnerScripts:
-    "mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
-  /** Forces dark CRM tokens on script routes when portal data-theme=light */
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
   scriptsWorkspace:
-    "crm-scripts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
-  scriptsGrid: "grid gap-3 lg:grid-cols-12 lg:items-start",
-  scriptsLibraryCol:
-    "lg:col-span-4 xl:col-span-3 flex flex-col gap-2.5 min-w-0",
-  scriptsWorkspaceCol:
-    "lg:col-span-8 xl:col-span-9 flex flex-col gap-3 min-w-0",
-  /** Script card in library panel */
+    "crm-scripts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#0a0e14] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  scriptsHero:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/60 bg-gradient-to-br from-[#1c2a3a] via-[#141f2b] to-[#0d1218] px-4 py-4 sm:px-5 sm:py-5 shadow-[0_8px_32px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.05)]",
+  scriptsHeroGlow:
+    "pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-crm-accent/12 blur-3xl",
+  scriptsHeroIcon:
+    "flex h-12 w-12 shrink-0 items-center justify-center rounded-crm-lg border border-crm-accent/30 bg-crm-accent/10 text-crm-accent shadow-[0_0_32px_-8px_rgba(56,189,248,0.45)]",
+  scriptsKpiTile:
+    "flex min-w-[5.5rem] flex-col gap-0.5 rounded-crm border border-crm-border/50 bg-[#101923]/70 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[2px]",
+  scriptsGrid: "grid gap-3 lg:grid-cols-12 lg:items-stretch",
+  scriptsLibraryCol: "lg:col-span-3 flex flex-col gap-2.5 min-w-0",
+  scriptsWorkspaceCol: "lg:col-span-6 flex flex-col gap-2.5 min-w-0 min-h-[28rem]",
+  scriptsSideCol: "lg:col-span-3 flex flex-col gap-2.5 min-w-0",
+  scriptsPanelSupport:
+    "rounded-crm-lg border border-crm-border/45 bg-[#121a24]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-[2px]",
+  scriptsPanelPrimary:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/70 bg-gradient-to-b from-[#1c2a3a] via-[#141f2b] to-[#0f1720] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.05)]",
+  scriptsPanelPrimaryGlow:
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(56,189,248,0.1),transparent_55%)]",
+  scriptsSidePanel:
+    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-b from-[#161f2b] to-[#101923] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
   scriptCard:
-    "group relative flex items-stretch rounded-crm border border-crm-border bg-crm-surface transition-all hover:border-crm-border/90 hover:shadow-crm cursor-pointer",
+    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 hover:shadow-[0_4px_16px_-6px_rgba(0,0,0,0.4)] cursor-pointer",
   scriptCardActive:
-    "border-crm-accent/45 bg-crm-accent/8 ring-1 ring-crm-accent/20",
-  scriptCardArchived: "opacity-60",
+    "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 shadow-[0_0_20px_-8px_rgba(56,189,248,0.2)]",
+  scriptCardArchived: "opacity-50",
   scriptStatusStrip: "w-1 shrink-0 rounded-l-crm",
-  /** Section block in workspace */
+  scriptTplCard:
+    "script-template-card group relative flex w-full items-center gap-2.5 overflow-hidden rounded-crm-lg border border-crm-border/55 bg-gradient-to-br from-[#1a2635]/90 to-[#101923]/95 p-3 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
+  scriptTplStrip: "absolute left-0 top-0 bottom-0 w-1 rounded-l-crm-lg",
+  scriptTplIcon:
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-base transition-transform duration-200 group-hover:scale-105",
   scriptSectionCard:
-    "rounded-crm border border-crm-border bg-crm-surface-2/60 transition-colors",
-  scriptSectionCardOpen: "border-crm-border/90",
-  /** Checklist step in checklist mode */
+    "rounded-crm border border-crm-border/60 bg-[#1a2635]/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-200",
+  scriptSectionCardOpen:
+    "border-crm-border/80 shadow-[0_4px_20px_-10px_rgba(0,0,0,0.5)]",
   scriptCheckStep:
-    "flex w-full items-start gap-2.5 rounded-crm border px-3 py-2.5 text-left text-sm transition-colors",
+    "flex w-full items-start gap-2.5 rounded-crm border px-3 py-2.5 text-left text-sm transition-all duration-200",
   scriptCheckStepDone:
     "border-crm-success/35 bg-crm-success/8 text-crm-muted",
   scriptCheckStepPending:
-    "border-crm-border bg-crm-surface-2/50 text-crm-text hover:border-crm-border/90",
-  /** Template card in empty state */
-  scriptTemplateCard:
-    "flex flex-col gap-1.5 rounded-crm border border-crm-border/70 border-dashed bg-crm-surface-2/50 p-3 transition-colors hover:border-crm-accent/40 hover:bg-crm-accent/8 cursor-pointer",
-  /** Section nav pill */
+    "border-crm-border/60 bg-[#101923]/60 text-crm-text hover:border-crm-border hover:bg-[#1a2635]/80",
   scriptSectionPill:
-    "rounded-crm border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-[11px] font-medium text-crm-muted transition-colors hover:border-crm-border hover:bg-crm-surface-2 hover:text-crm-text",
+    "rounded-crm border border-crm-border/60 bg-[#101923]/60 px-2.5 py-1 text-[11px] font-medium text-crm-muted transition-colors hover:border-crm-border hover:bg-crm-surface-2 hover:text-crm-text",
   scriptSectionPillActive:
     "rounded-crm border border-crm-accent/40 bg-crm-accent/10 px-2.5 py-1 text-[11px] font-medium text-crm-accent",
-  /** Mode toggle (view / checklist) */
   scriptModeTab:
-    "inline-flex items-center gap-1.5 rounded-crm border border-crm-border/70 bg-crm-surface-2/60 px-3 py-1.5 text-xs font-medium text-crm-muted transition-colors hover:border-crm-border hover:text-crm-text",
+    "inline-flex items-center gap-1.5 rounded-crm border border-crm-border/70 bg-[#101923]/60 px-3 py-1.5 text-xs font-medium text-crm-muted transition-colors hover:border-crm-border hover:text-crm-text",
   scriptModeTabActive:
     "inline-flex items-center gap-1.5 rounded-crm border border-crm-accent/50 bg-crm-accent/12 px-3 py-1.5 text-xs font-medium text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+  scriptsTipsStrip:
+    "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-crm-lg border border-crm-border/45 bg-[#101923]/80 px-4 py-2.5 text-[11px] text-crm-muted shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+  scriptsFeatureCard:
+    "flex flex-col gap-1 rounded-crm border border-crm-border/40 bg-[#101923]/50 px-3 py-2.5 transition-colors hover:border-crm-border/70 hover:bg-[#141f2b]/80",
+  scriptsLiveCta:
+    "flex w-full items-center justify-center gap-2 rounded-crm border border-crm-accent/40 bg-gradient-to-r from-crm-accent/20 to-crm-accent/5 px-4 py-3 text-sm font-semibold text-crm-accent shadow-[0_0_24px_-8px_rgba(56,189,248,0.35)] transition-all hover:border-crm-accent/60 hover:shadow-[0_0_32px_-8px_rgba(56,189,248,0.45)]",
 } as const;
